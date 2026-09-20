@@ -31,6 +31,8 @@ from experiments.domain_phase_mix.starcoder_epoch_matching import canonical_sha2
 
 REPO = Path(__file__).resolve().parents[2]
 TPU = ResourceConfig.with_tpu("v5p-8", regions=(experiment.REGION,), zone=experiment.ZONE)
+# The lock resolves jax twice since 2026-09-15; TPU children install Levanter's TPU extra.
+TPU_EXTRA = "extra-14-marin-levanter-tpu"
 
 
 @dataclass(frozen=True)
@@ -69,10 +71,18 @@ def code_pins() -> dict[str, str]:
 
 
 def runtime_versions() -> dict[str, str]:
+    """Versions the TPU child must observe: unique in the lock, or the Levanter TPU-extra resolution."""
     lock = tomllib.loads((REPO / "uv.lock").read_text())
     versions = {}
     for name in ("jax", "jaxlib", "numpy", "tokenizers"):
-        values = {package["version"] for package in lock["package"] if package["name"] == name}
+        entries = [package for package in lock["package"] if package["name"] == name]
+        values = {package["version"] for package in entries}
+        if len(values) != 1:
+            values = {
+                package["version"]
+                for package in entries
+                if any(f"extra == '{TPU_EXTRA}'" in marker for marker in package.get("resolution-markers", ()))
+            }
         if len(values) != 1:
             raise ValueError(f"Ambiguous lock version: {name}")
         versions[name] = values.pop()

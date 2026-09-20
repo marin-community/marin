@@ -1,0 +1,16 @@
+{
+  "approved": true,
+  "reviewer": "User authorized in chat on 2026-09-19 ('I think we should sweep target scale for FLAN') after the proxy sweep showed a 1.6-epoch optimum on all five QA-format evaluations.",
+  "plan_sha256": "0e4fb75956f1fa8890c96c10c358a8604f2e7d6c76bfe1b407da434fabcf421e",
+  "approved_at": "2026-09-19T22:05:00+00:00",
+  "scope": "Eight single-seed Dolmino FLAN target points (301M parameters, 3.01B tokens each) on the frozen TPP-10 grid (p = 0, 5, 10, 20, 30, 50, 70, 100 percent), the p=100 point first as the execution check, then the remaining seven. The p=0 target is retrained so the QA evaluations are scored on every point. No unmatched arm, no replicates, no refinement. 5.3e19 FLOPs.",
+  "pool": "The proxy stage's verified 190,316,544-token FLAN parent pool (frozen parent permutation); identical geometry, tokenizer, optimizer, allocator and Nemotron-CC blend to the Wikipedia, FineMath and arXiv sweeps.",
+  "evaluation": "Same caches as the proxy stage: seven Uncheatable components, Paloma programming languages, five QA-format document sets (ARC-Easy, ARC-Challenge, OpenBookQA, QASC, SciQ) and the held-out FLAN shard, scored at the final step with max_eval_batches=None.",
+  "parent_priority": "interactive",
+  "parent_preemptible": false,
+  "parent_timeout": 172800,
+  "parent_failure_retries": 0,
+  "parent_preemption_retries": 0,
+  "child_policy": "Regional v5p-8 workers in us-central1-a, inherited interactive band; existing Fray zero task-failure retries and preemption recovery.",
+  "manual_resume": "Only after the old parent and descendants are terminal and leases are absent or expired; exact successful artifacts are skipped and unfinished recipes resumed by resubmitting the same plan and release."
+}

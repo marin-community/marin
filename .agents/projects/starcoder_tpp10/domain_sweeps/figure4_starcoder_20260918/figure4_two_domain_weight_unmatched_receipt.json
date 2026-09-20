@@ -1,0 +1,80 @@
+{
+  "flan_eval": "sciq_bpb",
+  "finemath_eval": "gsm8k",
+  "excess_rows": [
+    {
+      "domain": "dolmino_flan",
+      "benchmark": "sciq_bpb",
+      "policy": "finemath_3plus optimum",
+      "epochs": 11.097925275482094,
+      "target_bpb": 1.3845323324203491,
+      "excess_bpb": 0.15112805366516113,
+      "excess_percent": 12.252921144208042
+    },
+    {
+      "domain": "dolmino_flan",
+      "benchmark": "sciq_bpb",
+      "policy": "simulated epoching",
+      "epochs": 1.5767045454545454,
+      "target_bpb": 1.233404278755188,
+      "excess_bpb": 0.0,
+      "excess_percent": 0.0
+    },
+    {
+      "domain": "finemath_3plus",
+      "benchmark": "gsm8k",
+      "policy": "dolmino_flan optimum",
+      "epochs": 1.5767045454545454,
+      "target_bpb": 1.1378084421157837,
+      "excess_bpb": 0.23568040132522583,
+      "excess_percent": 26.124939107168544
+    },
+    {
+      "domain": "finemath_3plus",
+      "benchmark": "gsm8k",
+      "policy": "simulated epoching",
+      "epochs": 11.097925275482094,
+      "target_bpb": 0.9021280407905579,
+      "excess_bpb": 0.0,
+      "excess_percent": 0.0
+    }
+  ],
+  "left_minima": {
+    "dolmino_flan/matched": {
+      "epochs": 1.5763671875,
+      "bpb": 1.4702534675598145
+    },
+    "dolmino_flan/target": {
+      "epochs": 1.5767045454545454,
+      "bpb": 1.233404278755188
+    },
+    "dolmino_flan/unmatched": {
+      "epochs": 0.1743801652892562,
+      "bpb": 1.4565856456756592
+    },
+    "finemath_3plus/matched": {
+      "epochs": 11.098046875,
+      "bpb": 1.5756418704986572
+    },
+    "finemath_3plus/target": {
+      "epochs": 11.097925275482094,
+      "bpb": 0.9021280407905579
+    },
+    "finemath_3plus/unmatched": {
+      "epochs": 0.871900826446281,
+      "bpb": 1.524896
+    }
+  },
+  "source_sha256": {
+    "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/starcoder_tpp10_assets/design.json": "bbcbfffb09ff23654abe115ecdc58bfe4bd5f073bff772246469eafcf917d781",
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/native_closeout_20260912/plots/curves.json": "7420a579400a8ffcc3b592d6e118e3218c99a91d5aaf0083aa5c1302bdb4d770",
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/target_math_complete_20260912/results/c788d33ddd3b357a7f80de6ed1d5ecb632104e4beabd5cc0934d580ecac77d39/receipt.json": "7f0994dc178adb4663621389a8895cd3df7505ceec90d4d55ff38c939e610f47",
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/instruction_sweep/results/measurements.csv": "94162b237fea84b32eedd363272b33dc94da0503864e1a7ffb92df73fb236412",
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/instruction_sweep/results_target/measurements.csv": "4166a0bac2aa57281cd779921ebc7409225d3a4a6bc5ea8476299dac322a9702",
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/figure4_starcoder_20260918/build_two_domain_preview.py": "3eecb13acd294f73fb06e9ce41099b194f553593635ab2e284a2feb9cdc5fd07"
+  },
+  "output_sha256": {
+    "pdf": "8557783210fe1cdf90d68c317b755d8dfefc2613423c11ab3e7e7afb356a71f5",
+    "png": "f39a6ca1f3f99e2ae01ad482cf164ec38afedfd04f500de68894cdb4631140ff"
+  }
+}

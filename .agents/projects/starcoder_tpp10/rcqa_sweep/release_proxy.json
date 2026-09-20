@@ -1,0 +1,16 @@
+{
+  "approved": true,
+  "reviewer": "User authorized in chat on 2026-09-19 ('Build and launch the rcQA proxy sweep') after the proposal of Wikipedia-as-QA as the same-evaluation counterpart of the FLAN sweep.",
+  "plan_sha256": "41a8f6ed5f282e07a5584925320ce93d3a3c9bee219bd3739de2e36e0aceb53b",
+  "approved_at": "2026-09-19T21:43:05Z",
+  "scope": "Eight single-seed wiki_to_rcqa matched-proxy points on the frozen TPP-10 grid (p = 0, 5, 10, 20, 30, 50, 70, 100 percent), one matched subset (seed 20260912), the p=100 point first as the execution check, then the remaining seven. No target arm, no unmatched arm, no replicates, no refinement. The p=0 point is retrained so the held-out rcQA stream is scored on every point.",
+  "pool": "190,316,544-token parent packed from 1400 pinned Dolmino-pool wiki_to_rcqa zstd shards in four groups of 350 (seeded selection rule of the earlier domains), frozen parent permutation, one nested 10,485,760-token matched subset; identical geometry, tokenizer, optimizer, allocator and Nemotron-CC blend to the other sweeps.",
+  "evaluation": "Seven Uncheatable components (existing caches), Paloma programming languages (frozen), the instruction sweep's five QA-format document sets (existing caches), and a 4,194,304-token held-out rcQA stream from 32 further pinned shards; all scored at the final step with max_eval_batches=None. On-target candidates: the five QA sets, the held-out rcQA stream, and Uncheatable Wikipedia English.",
+  "parent_priority": "interactive",
+  "parent_preemptible": false,
+  "parent_timeout": 172800,
+  "parent_failure_retries": 0,
+  "parent_preemption_retries": 0,
+  "child_policy": "Preparation CPU tasks at 2 CPU / 4 GiB; regional v5p-8 workers in us-central1-a, inherited interactive band; existing Fray zero task-failure retries and preemption recovery.",
+  "manual_resume": "Only after the old parent and descendants are terminal and leases are absent or expired; exact successful artifacts are skipped and unfinished recipes resumed by resubmitting the same plan and release."
+}

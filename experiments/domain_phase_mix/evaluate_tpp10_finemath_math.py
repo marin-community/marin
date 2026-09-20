@@ -150,16 +150,16 @@ def code_pins() -> dict[str, str]:
     return pins
 
 
-def build_spec() -> dict:
-    survey = repair.read_json(str(SURVEY))
+def build_spec(plan_path: Path = SURVEY, arm: str = "matched") -> dict:
+    """Spec over the FineMath proxies of ``arm`` in ``plan_path`` plus the shared zero-fraction control."""
+    survey = repair.read_json(str(plan_path))
     repaired = repair.read_json(str(REPAIR))
     controls = [a for a in repaired["audits"] if a["request"]["run_name"] == "tpp10_unmatched_p000_s20260910"]
     if len(controls) != 1:
         raise ValueError("Expected the unique frozen zero-fraction proxy control")
     control = controls[0]
-    requests = [control["request"]] + [
-        r for r in survey["runs"] if r["domain"] == "finemath_3plus" and r["arm"] == "matched"
-    ]
+    proxies = [r for r in survey["runs"] if r["domain"] == "finemath_3plus" and r["arm"] == arm]
+    requests = [control["request"], *proxies]
     if tuple(r["percent"] for r in requests) != GRID:
         requests.sort(key=lambda r: r["percent"])
     if tuple(r["percent"] for r in requests) != GRID:
@@ -192,8 +192,10 @@ def build_spec() -> dict:
         )
     spec = {
         "purpose": (
-            "Exploratory math likelihood on the complete existing FineMath proxy grid; no training or target evaluation"
+            f"Exploratory math likelihood on the complete existing FineMath {arm} proxy grid; "
+            "no training or target evaluation"
         ),
+        "proxy_arm": arm,
         "endpoints": endpoints,
         "sources": sources,
         "tokenizer_pins": original.read_json(str(experiment.ASSETS / "pins.json")),
@@ -336,13 +338,15 @@ async def submit(spec: dict) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--spec", type=Path, default=DIRECTORY / "spec.json")
+    parser.add_argument("--plan", type=Path, default=SURVEY, help="Training plan whose FineMath proxies are scored.")
+    parser.add_argument("--arm", choices=["matched", "unmatched"], default="matched")
     action = parser.add_mutually_exclusive_group(required=True)
     action.add_argument("--build", action="store_true")
     action.add_argument("--submit", action="store_true")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
     if args.build:
-        spec = build_spec()
+        spec = build_spec(args.plan, args.arm)
         args.spec.parent.mkdir(parents=True, exist_ok=True)
         args.spec.write_text(json.dumps(spec, indent=2) + "\n")
         print(

@@ -1,0 +1,127 @@
+{
+  "excess_source": "fitted MARINER target curves (dense 2001-point scan, linear interpolation)",
+  "excess_rows": [
+    {
+      "domain": "wikipedia",
+      "benchmark": "wikipedia_english",
+      "policy": "4 epochs",
+      "epochs": 4.0,
+      "target_bpb": 1.0121783766698262,
+      "excess_bpb": 0.021565979479225894,
+      "excess_percent": 2.1770350886368384
+    },
+    {
+      "domain": "wikipedia",
+      "benchmark": "wikipedia_english",
+      "policy": "8 epochs",
+      "epochs": 8.0,
+      "target_bpb": 0.9943240145188531,
+      "excess_bpb": 0.0037116173282527587,
+      "excess_percent": 0.3746790711260016
+    },
+    {
+      "domain": "wikipedia",
+      "benchmark": "wikipedia_english",
+      "policy": "12 epochs",
+      "epochs": 12.0,
+      "target_bpb": 0.9915444174573667,
+      "excess_bpb": 0.0009320202667663091,
+      "excess_percent": 0.09408526174410295
+    },
+    {
+      "domain": "wikipedia",
+      "benchmark": "wikipedia_english",
+      "policy": "simulated epoching",
+      "epochs": 7.607267421993582,
+      "target_bpb": 0.9954012340442028,
+      "excess_bpb": 0.0047888368536024295,
+      "excess_percent": 0.48342185775018376
+    },
+    {
+      "domain": "finemath_3plus",
+      "benchmark": "math500",
+      "policy": "4 epochs",
+      "epochs": 4.0,
+      "target_bpb": 0.8879516547118738,
+      "excess_bpb": 0.12144551322652841,
+      "excess_percent": 15.844036551512785
+    },
+    {
+      "domain": "finemath_3plus",
+      "benchmark": "math500",
+      "policy": "8 epochs",
+      "epochs": 8.0,
+      "target_bpb": 0.8132738522362079,
+      "excess_bpb": 0.0467677107508625,
+      "excess_percent": 6.101413702992052
+    },
+    {
+      "domain": "finemath_3plus",
+      "benchmark": "math500",
+      "policy": "12 epochs",
+      "epochs": 12.0,
+      "target_bpb": 0.7750300378020502,
+      "excess_bpb": 0.008523896316704804,
+      "excess_percent": 1.1120454038616168
+    },
+    {
+      "domain": "finemath_3plus",
+      "benchmark": "math500",
+      "policy": "simulated epoching",
+      "epochs": 13.27981125284341,
+      "target_bpb": 0.7688879803936615,
+      "excess_bpb": 0.002381838908316114,
+      "excess_percent": 0.310739703102777
+    },
+    {
+      "domain": "starcoder",
+      "benchmark": "programming_languages",
+      "policy": "4 epochs",
+      "epochs": 4.0,
+      "target_bpb": 0.7965811022679228,
+      "excess_bpb": 0.02363372774983541,
+      "excess_percent": 3.0576114919298907
+    },
+    {
+      "domain": "starcoder",
+      "benchmark": "programming_languages",
+      "policy": "8 epochs",
+      "epochs": 8.0,
+      "target_bpb": 0.7742427775888366,
+      "excess_bpb": 0.001295403070749268,
+      "excess_percent": 0.16759266069787976
+    },
+    {
+      "domain": "starcoder",
+      "benchmark": "programming_languages",
+      "policy": "12 epochs",
+      "epochs": 12.0,
+      "target_bpb": 0.7739103275499863,
+      "excess_bpb": 0.0009629530318989721,
+      "excess_percent": 0.1245819655574027
+    },
+    {
+      "domain": "starcoder",
+      "benchmark": "programming_languages",
+      "policy": "simulated epoching",
+      "epochs": 8.307444657832455,
+      "target_bpb": 0.7738427694910516,
+      "excess_bpb": 0.000895394972964203,
+      "excess_percent": 0.11584164750187016
+    }
+  ],
+  "clipped_left": [],
+  "domain_fits_sha256": "4a00c39c026fc836e913dd3c33cf9b4b11a8b98311919df67536542e2e76ca47",
+  "source_sha256": {
+    "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260912_outline_figures/data/epoch_matching_analysis.json": "b2372efc978c4fc0ed316883414721d9e0b1ec3685b0795748200535eb824582",
+    "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260912_outline_figures/data/allocation_audit.json": "561124284d1d90b4e25fcb873f232ff5b9cbd6afb9f81dbaf20faed770497167",
+    "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/starcoder_tpp10_assets/design.json": "bbcbfffb09ff23654abe115ecdc58bfe4bd5f073bff772246469eafcf917d781",
+    "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/fit_starcoder_tpp10_mariner_20260911.py": "f7f94f00dcd47ad5d53f3908c9ef0d84e0c32df193d35c2a395ce114b032f863",
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/figure4_starcoder_20260918/build_tall_preview.py": "b0c4315c14e77660f8d1d3e656197db4d0cead60630b61413870744b1768eda3",
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/figure4_starcoder_20260918/build_preview.py": "53b3a84a2b08d4dc49b3e2ca6d656c365272dde1192fe518ab8e3c0e0ad1790f"
+  },
+  "output_sha256": {
+    "pdf": "0de5224136048c2a62a7284793426858f36ac49624fd7733721690ed8656cb61",
+    "png": "7cd3700acd3eb757c1b3a17f68daea83edba40eb34e37a0a4bfc6fb1f178c884"
+  }
+}

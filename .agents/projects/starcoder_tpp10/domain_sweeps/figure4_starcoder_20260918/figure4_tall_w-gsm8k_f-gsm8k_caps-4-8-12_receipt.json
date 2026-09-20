@@ -1,0 +1,200 @@
+{
+  "wikipedia_eval": "gsm8k",
+  "finemath_eval": "gsm8k",
+  "caps": [
+    4.0,
+    8.0,
+    12.0
+  ],
+  "excess_source": "fitted MARINER target curves (dense 2001-point scan, linear interpolation)",
+  "excess_rows": [
+    {
+      "domain": "wikipedia",
+      "benchmark": "gsm8k",
+      "policy": "4 epochs",
+      "epochs": 4.0,
+      "target_bpb": 1.322814490067756,
+      "excess_bpb": 0.0020558879247669637,
+      "excess_percent": 0.15565962784048462
+    },
+    {
+      "domain": "wikipedia",
+      "benchmark": "gsm8k",
+      "policy": "8 epochs",
+      "epochs": 8.0,
+      "target_bpb": 1.335476881932915,
+      "excess_bpb": 0.014718279789925903,
+      "excess_percent": 1.114380763149666
+    },
+    {
+      "domain": "wikipedia",
+      "benchmark": "gsm8k",
+      "policy": "12 epochs",
+      "epochs": 12.0,
+      "target_bpb": 1.3708787448666313,
+      "excess_bpb": 0.05012014272364218,
+      "excess_percent": 3.794799643350423
+    },
+    {
+      "domain": "wikipedia",
+      "benchmark": "gsm8k",
+      "policy": "simulated epoching",
+      "epochs": 0.6614757979509223,
+      "target_bpb": 1.3225909169099321,
+      "excess_bpb": 0.0018323147669430107,
+      "excess_percent": 0.1387319956856612
+    },
+    {
+      "domain": "finemath_3plus",
+      "benchmark": "gsm8k",
+      "policy": "4 epochs",
+      "epochs": 4.0,
+      "target_bpb": 1.0228669251134266,
+      "excess_bpb": 0.10751834312027908,
+      "excess_percent": 11.746163727720068
+    },
+    {
+      "domain": "finemath_3plus",
+      "benchmark": "gsm8k",
+      "policy": "8 epochs",
+      "epochs": 8.0,
+      "target_bpb": 0.952331951826534,
+      "excess_bpb": 0.03698336983338646,
+      "excess_percent": 4.040359111373302
+    },
+    {
+      "domain": "finemath_3plus",
+      "benchmark": "gsm8k",
+      "policy": "12 epochs",
+      "epochs": 12.0,
+      "target_bpb": 0.9227593987908137,
+      "excess_bpb": 0.007410816797666198,
+      "excess_percent": 0.8096168982454027
+    },
+    {
+      "domain": "finemath_3plus",
+      "benchmark": "gsm8k",
+      "policy": "simulated epoching",
+      "epochs": 12.936417906680186,
+      "target_bpb": 0.9190984346234995,
+      "excess_bpb": 0.003749852630351991,
+      "excess_percent": 0.40966389243612367
+    },
+    {
+      "domain": "starcoder",
+      "benchmark": "programming_languages",
+      "policy": "4 epochs",
+      "epochs": 4.0,
+      "target_bpb": 0.7965811022679228,
+      "excess_bpb": 0.02363372774983541,
+      "excess_percent": 3.0576114919298907
+    },
+    {
+      "domain": "starcoder",
+      "benchmark": "programming_languages",
+      "policy": "8 epochs",
+      "epochs": 8.0,
+      "target_bpb": 0.7742427775888366,
+      "excess_bpb": 0.001295403070749268,
+      "excess_percent": 0.16759266069787976
+    },
+    {
+      "domain": "starcoder",
+      "benchmark": "programming_languages",
+      "policy": "12 epochs",
+      "epochs": 12.0,
+      "target_bpb": 0.7739103275499863,
+      "excess_bpb": 0.0009629530318989721,
+      "excess_percent": 0.1245819655574027
+    },
+    {
+      "domain": "starcoder",
+      "benchmark": "programming_languages",
+      "policy": "simulated epoching",
+      "epochs": 8.307444657832455,
+      "target_bpb": 0.7738427694910516,
+      "excess_bpb": 0.000895394972964203,
+      "excess_percent": 0.11584164750187016
+    }
+  ],
+  "clipped_left": [
+    {
+      "domain": "wikipedia",
+      "arm": "matched",
+      "epochs": 11.098046875,
+      "percent": 70,
+      "bpb": 2.056635856628418,
+      "run_name": "tpp10_wikipedia_matched_p070_s20260910"
+    },
+    {
+      "domain": "wikipedia",
+      "arm": "matched",
+      "epochs": 15.825,
+      "percent": 100,
+      "bpb": 3.595331907272339,
+      "run_name": "tpp10_wikipedia_matched_p100_s20260910"
+    },
+    {
+      "domain": "wikipedia",
+      "arm": "target",
+      "epochs": 15.827823691460056,
+      "percent": 100,
+      "bpb": 2.6275405883789062,
+      "run_name": "tpp10_wikipedia_target_p100_s20260910"
+    }
+  ],
+  "fits": {
+    "wikipedia/matched/gsm8k": {
+      "observed_minimum_epochs": 3.1619140625,
+      "predicted_minimum_epochs": 0.6613577903462055,
+      "predicted_minimum_bpb": 1.9124223639100588,
+      "fit_rmse_bpb": 0.029766437515164317
+    },
+    "wikipedia/target/gsm8k": {
+      "observed_minimum_epochs": 3.1609740874655645,
+      "predicted_minimum_epochs": 1.9226741942969559,
+      "predicted_minimum_bpb": 1.3207586021429891,
+      "fit_rmse_bpb": 0.010790542397807775
+    },
+    "finemath_3plus/matched/gsm8k": {
+      "observed_minimum_epochs": 11.098046875,
+      "predicted_minimum_epochs": 12.934110043421226,
+      "predicted_minimum_bpb": 1.570521327510478,
+      "fit_rmse_bpb": 0.014128250786466583
+    },
+    "finemath_3plus/target/gsm8k": {
+      "observed_minimum_epochs": 11.097925275482094,
+      "predicted_minimum_epochs": 14.933764497471772,
+      "predicted_minimum_bpb": 0.9153485819931475,
+      "fit_rmse_bpb": 0.016550678579024942
+    },
+    "starcoder/matched/programming_languages": {
+      "observed_minimum_epochs": 7.937890625,
+      "predicted_minimum_epochs": 8.305962605656966,
+      "predicted_minimum_bpb": 1.1325974170558384,
+      "fit_rmse_bpb": 0.014664863499403059
+    },
+    "starcoder/target/programming_languages": {
+      "observed_minimum_epochs": 11.097925275482094,
+      "predicted_minimum_epochs": 9.990068742540045,
+      "predicted_minimum_bpb": 0.7729473745180874,
+      "fit_rmse_bpb": 0.009836371550183251
+    }
+  },
+  "domain_fits_sha256": "4a00c39c026fc836e913dd3c33cf9b4b11a8b98311919df67536542e2e76ca47",
+  "source_sha256": {
+    "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260912_outline_figures/data/epoch_matching_analysis.json": "b2372efc978c4fc0ed316883414721d9e0b1ec3685b0795748200535eb824582",
+    "/Users/calvinxu/Library/CloudStorage/GoogleDrive-pinlinxu@stanford.edu/My Drive/Research/Marin/data_mixing_paper_one_phase/revision_notes/20260912_outline_figures/data/allocation_audit.json": "561124284d1d90b4e25fcb873f232ff5b9cbd6afb9f81dbaf20faed770497167",
+    "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/starcoder_tpp10_assets/design.json": "bbcbfffb09ff23654abe115ecdc58bfe4bd5f073bff772246469eafcf917d781",
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/native_closeout_20260912/plots/curves.json": "7420a579400a8ffcc3b592d6e118e3218c99a91d5aaf0083aa5c1302bdb4d770",
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/target_math_complete_20260912/results/c788d33ddd3b357a7f80de6ed1d5ecb632104e4beabd5cc0934d580ecac77d39/receipt.json": "7f0994dc178adb4663621389a8895cd3df7505ceec90d4d55ff38c939e610f47",
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/native_closeout_20260912/plots/preflight.json": "17d8728a5705b407698f9621842e678a38a69e5a8f4d31ba6a99295638231d6f",
+    "/Users/calvinxu/Projects/Work/Marin/marin/experiments/domain_phase_mix/exploratory/two_phase_many/fit_starcoder_tpp10_mariner_20260911.py": "f7f94f00dcd47ad5d53f3908c9ef0d84e0c32df193d35c2a395ce114b032f863",
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/figure4_starcoder_20260918/build_tall_preview.py": "a9640ed7b33856006dbe6253acad508059f8807cacfd3673fc84cf052ea79fec",
+    "/Users/calvinxu/Projects/Work/Marin/marin/.agents/projects/starcoder_tpp10/domain_sweeps/figure4_starcoder_20260918/build_preview.py": "53b3a84a2b08d4dc49b3e2ca6d656c365272dde1192fe518ab8e3c0e0ad1790f"
+  },
+  "output_sha256": {
+    "pdf": "6342b1b30d317fa540b24828dc0b5e97ff8b9bd62ed52b7b100dd67f66ade967",
+    "png": "cec60f31c10236452f027fe2f4bfba0f3f4ceff87f13ef2634416eb753864702"
+  }
+}

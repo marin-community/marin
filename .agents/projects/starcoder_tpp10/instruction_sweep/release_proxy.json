@@ -1,0 +1,16 @@
+{
+  "approved": true,
+  "reviewer": "User authorized in chat on 2026-09-19 ('Do that') after the swarm marginal-optimum check: sweep an instruction/QA-format domain at proxy scale, evaluating on QA-format BPB, to find a low on-target optimal epoch count for Figure 4.",
+  "plan_sha256": "ce880b54525425fe242b327a57a40b9cb31a5ecc8203be1a39748e15a191bbf2",
+  "approved_at": "2026-09-19T06:30:00+00:00",
+  "scope": "Eight single-seed Dolmino FLAN matched-proxy points on the frozen TPP-10 grid (p = 0, 5, 10, 20, 30, 50, 70, 100 percent), one matched subset (seed 20260912), the p=100 point first as the execution check, then the remaining seven. No target arm, no unmatched arm, no replicates, no refinement. The p=0 point is retrained so the QA evaluations are scored on every point.",
+  "pool": "190,316,544-token parent from four pinned Dolmino-pool FLAN shards (the swarm's dolmino_synth_instruction bucket; shards 0020, 0206, 0131, 0207 by the seeded selection rule of the earlier domains) and one nested 10,485,760-token matched subset; identical geometry, tokenizer, optimizer, allocator and Nemotron-CC blend to the Wikipedia, FineMath and arXiv sweeps.",
+  "evaluation": "Seven Uncheatable components (existing TPP-10 caches), Paloma programming languages (frozen), five QA validation sets rendered as 'Question: ...\\nAnswer: ...' documents (ARC-Easy, ARC-Challenge, OpenBookQA, QASC, SciQ; new caches under qa/<name>-tpp10/2026.09.19) and a 4,194,304-token held-out FLAN shard (0133); all scored at the final step with max_eval_batches=None. On-target candidates: the five QA sets and the held-out FLAN shard.",
+  "parent_priority": "interactive",
+  "parent_preemptible": false,
+  "parent_timeout": 172800,
+  "parent_failure_retries": 0,
+  "parent_preemption_retries": 0,
+  "child_policy": "Preparation CPU tasks at 2 CPU / 4 GiB (the 8 GiB class queued for hours on 18-19 September); regional v5p-8 workers in us-central1-a, inherited interactive band; existing Fray zero task-failure retries and preemption recovery.",
+  "manual_resume": "Only after the old parent and descendants are terminal and leases are absent or expired; exact successful artifacts are skipped and unfinished recipes resumed by resubmitting the same plan and release."
+}

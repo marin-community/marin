@@ -42,7 +42,6 @@ DEFAULT_EXCLUDE = re.compile(
     | \.jpg$
     | \.jpeg$
     | \.pkl$                         # data artifacts
-    | \.html$
     | \.zip$                         # archive files
     | \.csv\.gz$                     # compressed data
     | \.joblib$                      # serialized models

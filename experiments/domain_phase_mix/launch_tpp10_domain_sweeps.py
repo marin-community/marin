@@ -27,6 +27,7 @@ from experiments.domain_phase_mix import launch_starcoder_tpp10 as original
 from experiments.domain_phase_mix import prepare_starcoder_tpp10 as original_data
 from experiments.domain_phase_mix import prepare_tpp10_domain_sweeps as preparation
 from experiments.domain_phase_mix import starcoder_tpp10 as experiment
+from experiments.domain_phase_mix import tpp10_execution_check as execution_check
 from experiments.domain_phase_mix.starcoder_epoch_matching import canonical_sha256, file_sha256
 
 logger = logging.getLogger(__name__)
@@ -77,8 +78,8 @@ def dispatch_training(recipe: DomainTrainingRecipe) -> None:
 
 def training_step(design: dict, domain: str, request: experiment.RunSpec, caches: dict) -> ArtifactStep:
     """Keep the original optimizer, allocator and source keys; add held-out evals."""
-    if domain not in preparation.DOMAINS or request.arm not in (experiment.Arm.MATCHED, experiment.Arm.TARGET):
-        raise ValueError("Release includes only the two domains and target/matched arms")
+    if domain not in preparation.DOMAINS or request.arm not in tuple(experiment.Arm):
+        raise ValueError("Release includes only the two domains")
     base = original.training_step(design, request, caches)
     extension_code = code_pins()
     eval_paths = preparation.evaluation_paths()
@@ -111,13 +112,20 @@ def training_step(design: dict, domain: str, request: experiment.RunSpec, caches
     return replace(step, expected_fingerprint=step.fingerprint())
 
 
-def build_plan() -> tuple[dict, tuple[ArtifactStep, ...]]:
+# The survey trains matched and target arms for both domains; an "<domain>_unmatched" stage trains the proxy on the
+# full parent pool of one domain (no downsampling, at most one domain epoch), the no-simulated-epoching comparison.
+STAGES = {"domain_survey": (tuple(preparation.DOMAINS), (experiment.Arm.MATCHED, experiment.Arm.TARGET))}
+STAGES.update({f"{domain}_unmatched": ((domain,), (experiment.Arm.UNMATCHED,)) for domain in preparation.DOMAINS})
+
+
+def build_plan(stage: str = "domain_survey") -> tuple[dict, tuple[ArtifactStep, ...]]:
     validate_evaluation_population()
     design = experiment.load_design()
     old = original_data.data_steps(design)
     new = preparation.data_steps(design)
+    domains, arms = STAGES[stage]
     rows, steps = [], []
-    for domain in preparation.DOMAINS:
+    for domain in domains:
         # The internal focus alias deliberately stays "starcoder": this retains
         # the frozen allocator ordering and name-derived random key in both domains.
         caches = {
@@ -125,7 +133,7 @@ def build_plan() -> tuple[dict, tuple[ArtifactStep, ...]]:
             "starcoder": new[f"{domain}/parent"],
             f"subset_{experiment.SUBSET_SEEDS[0]}": new[f"{domain}/matched"],
         }
-        for arm in (experiment.Arm.MATCHED, experiment.Arm.TARGET):
+        for arm in arms:
             model = design["models"]["target" if arm == experiment.Arm.TARGET else "unmatched"]
             for percent in GRID:
                 name = f"tpp10_{domain}_{arm.value}_p{percent:03d}_s20260910"
@@ -153,7 +161,7 @@ def build_plan() -> tuple[dict, tuple[ArtifactStep, ...]]:
     controls = json.loads((preparation.ASSETS / "control_evaluation.json").read_text())
     plan = {
         "schema_version": 1,
-        "stage": "domain_survey",
+        "stage": stage,
         "design_sha256": design["design_sha256"],
         "primary_metric": experiment.PRIMARY_METRIC,
         "selection_metric": uncheatable.METRIC,
@@ -167,7 +175,9 @@ def build_plan() -> tuple[dict, tuple[ArtifactStep, ...]]:
         "runs": rows,
         "evaluation_paths": preparation.evaluation_paths(),
         "control_eval_spec_sha256": controls["spec_sha256"],
-        "training_flops": 14 * sum(model["training_flops"] for model in design["models"].values()),
+        "training_flops": sum(
+            design["models"]["target" if r["arm"] == "target" else "unmatched"]["training_flops"] for r in rows
+        ),
     }
     plan["plan_sha256"] = canonical_sha256(plan)
     return plan, tuple(steps)
@@ -323,6 +333,23 @@ def submit(plan: dict, steps: tuple[ArtifactStep, ...], release: dict, output: P
     original.persist_submission_plan(audit, uri + "/preflight.json")
     original.persist_submission_plan(release, uri + "/release.json")
     selected = list(zip(plan["runs"], steps, strict=True))
+    if plan["stage"] != "domain_survey":
+        canaries = [(row, step) for row, step in selected if row["percent"] == 100]
+        remaining = [(row, step) for row, step in selected if row["percent"] != 100]
+        if len(canaries) != 1 or len(remaining) != len(GRID) - 1:
+            raise ValueError("A single-arm stage releases one execution check and the remaining grid points")
+        canary_step = canaries[0][1]
+        execution_check.run_with_early_release(
+            original.pending_training_steps((canary_step,), marin_prefix=experiment.PREFIX),
+            original.pending_training_steps(tuple(s for _, s in remaining), marin_prefix=experiment.PREFIX),
+            release_ready=lambda: execution_check.committed_checkpoint_exists(canary_step.path(experiment.PREFIX)),
+        )
+        collect(subplan(plan, [r for r, _ in canaries]), output / "execution_checks.csv")
+        results = collect(plan, output / "measurements.csv")
+        original.persist_submission_plan(
+            {"status": "succeeded", "plan_sha256": plan["plan_sha256"], "results": results}, uri + "/results.json"
+        )
+        return
     canaries = [(row, step) for row, step in selected if row["arm"] == "matched" and row["percent"] == 100]
     remaining = [(row, step) for row, step in selected if row not in [r for r, _ in canaries]]
     if len(canaries) != 2 or len(remaining) != 26:
@@ -367,12 +394,13 @@ def main() -> None:
     action.add_argument("--submit", action="store_true")
     action.add_argument("--collect", type=Path)
     parser.add_argument("--release", type=Path)
+    parser.add_argument("--stage", choices=sorted(STAGES), default="domain_survey")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
     if args.collect:
         collect(json.loads(args.plan.read_text()), args.collect)
         return
-    plan, steps = build_plan()
+    plan, steps = build_plan(args.stage)
     if args.plan.exists() and json.loads(args.plan.read_text()) != plan:
         raise ValueError("Archived domain plan differs; do not overwrite its identities")
     args.plan.parent.mkdir(parents=True, exist_ok=True)
