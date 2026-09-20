@@ -36,10 +36,9 @@ logger = logging.getLogger(__name__)
 
 ARXIV_PHYSICS_NAME = "arxiv/physics-compatible-novel-abstracts"
 ARXIV_METADATA_PAGE = "https://www.kaggle.com/datasets/Cornell-University/arxiv"
-ARXIV_METADATA_URL = (
-    "https://www.kaggle.com/api/v1/datasets/download/"
-    "Cornell-University/arxiv/arxiv-metadata-oai-snapshot.json"
-)
+ARXIV_METADATA_API = "https://www.kaggle.com/api/v1/datasets/download"
+ARXIV_METADATA_FILE = "Cornell-University/arxiv/arxiv-metadata-oai-snapshot.json"
+ARXIV_METADATA_URL = f"{ARXIV_METADATA_API}/{ARXIV_METADATA_FILE}"
 ARXIV_LICENSE_HELP_URL = "https://info.arxiv.org/help/license/index.html"
 ARXIV_SNAPSHOT_DATE = "2026-09-19"
 ARXIV_SNAPSHOT_BYTES = 5_545_506_967
