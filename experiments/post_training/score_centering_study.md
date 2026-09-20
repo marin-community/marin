@@ -63,7 +63,7 @@ failures count toward the campaign's total task cost.
 | r8 | Yes | The fully async plain-chat HTTP client omitted behavior top-k from request and response. |
 | r9 | Yes | Top-k reached Megatron, but selected-logprob gathering assumed padded response positions survived left-padding compaction. |
 | r10 | Yes | Two Qwen optimizer updates completed with captured top-k 32, score centering, and exact sampled-token alignment. The terminal HF export is a separate child job. |
-| r11 | Yes | Top-k 128 score-centering cost control; two updates trained, export pending. |
+| r11 | Yes | Top-k 128 score-centering cost control; two updates trained. Iris later left the second GPU child pending after deleting its pod, so the idle parent was canceled without a terminal export. |
 | r12 | Yes | Top-k 32 capture with score centering disabled; succeeded. |
 | r13 | Yes | TIS with sampled-token logprobs but no top-k capture; succeeded. |
 | r14 | Yes | Full-cap default schedule, TIS plus top-k 32 capture, eight-update age calibration; succeeded with terminal export. |
@@ -71,6 +71,26 @@ failures count toward the campaign's total task cost.
 | r16 | Yes | Top-k 8 score-centering cost control; two updates trained, export pending. |
 | r17 | Yes | Explicit W&B finish worked: the primary run reports `finished` and retains step 2. Tail-mass mean telemetry became NaN on padded rows; correction stayed finite. |
 | r18 | Yes | Four updates tested finite masked tail-mass telemetry and every-two-step weight publication. |
+
+Iris's `task_attempts` records include every started accelerator attempt, including retries and
+killed probes. Summing `(finished_at_ms - started_at_ms) * 8 / 3,600,000` for each eight-H100
+child task gives this complete cost ledger through r18. It counts startup, training, in-run
+evaluation, terminal export, and failed attempts. CPU-only coordinators contribute no GPU-hours.
+
+| Runs | H100 GPU-hours | Detail |
+| --- | ---: | --- |
+| r1, r6 | 0.00 | Failed before an accelerator child started. |
+| r2–r5, r7–r9 | 9.00 | Failed integration probes, including their retries. |
+| r10–r13, r16–r18 | 20.22 | Successful smoke/diagnostic training, plus r11's trained but canceled width-128 control. |
+| r14–r15 | 16.31 | Two eight-update full-cap age calibrations. |
+| **r1–r18 total** | **45.53** | All completed GPU attempts, regardless of outcome. |
+
+The per-run values, in run order r2–r5 and r7–r18, are 1.244, 0.886, 0.874, 0.954, 1.870,
+1.500, 1.673, 3.049, 3.467, 2.936, 2.600, 7.415, 8.892, 2.709, 2.641, and 2.822 GPU-hours.
+The raw read-only Iris query was
+`SELECT task_id,attempt_id,state,started_at_ms,finished_at_ms FROM task_attempts WHERE task_id LIKE '/romain/score-centering-qwen-%01a0bb6f%' AND task_id LIKE '%/users-%'`.
+Only attempts with both timestamps entered the completed ledger; r19–r23 were still running at
+this accounting checkpoint.
 
 The r8 retained trajectory archive confirms sampled-token logprobs and exact engine token IDs
 reached generation without alignment alerts. It does not contain top-k evidence; the learner
@@ -122,7 +142,8 @@ as current `p`. On these 48 deterministic contexts, behavior's mean omitted prob
 behavior-weighted absolute log ratio 0.00370 and no behavior mass above the configured TIS cap
 2.0. The exact correction gradient and k8/k32/k128 approximation error were zero to numerical
 precision in that case. At a diagnostic cap of 1.05, k32's mean L1 gradient error was
-4.24e-7, or 0.17% of the mean exact correction L1 norm.
+4.24e-7, or 0.17% of the mean exact correction L1 norm. This two-checkpoint pair is an offline
+test, not the exact behavior/current pair from any one consumed training token.
 
 The training GPU's trainer-versus-behavior absolute log ratio was about 0.016 at measured age
 five, so the same script also makes a **synthetic sensitivity check**: it perturbs the real Qwen
@@ -152,6 +173,14 @@ respectively, including setup and each eight-GPU terminal export; the parent wal
 30:55 and 36:38. This establishes age separation but is a scheduling comparison, not an SC
 effect estimate.
 
+The resumable checkpoint's `data_consumption_state.pt` identifies consumed prompt UIDs. At
+update 5, each calibration had consumed 160 unique prompts, of which 152 were shared
+(Jaccard 0.905); the different schedules changed exposure to eight prompts per arm even with
+the same seed. `analyze_score_centering_exposure.py` compares such checkpoints at equal steps.
+The update-8 terminal checkpoints had already advanced the tracker to a new epoch and cleared
+its UID set, so they cannot support an update-8 membership comparison; the script rejects that
+empty-set case.
+
 The r18 cadence probe used top-k 8 and SC with a two-update publication interval. Its four
 updates published weights after updates 2 and 4; `timing/sync_weights` was zero after updates 1
 and 3. Behavior, stored-old, and current top-k tail-mass means were finite, around 0.006–0.008.
@@ -169,6 +198,8 @@ expectation and the implemented head-plus-tail correction have zero gradient. Th
 cap fraction stayed at or below 0.000189 through the eight-update calibrations, including mean
 consumed age five. A null effect under this preset would show that the correction is largely
 inactive here; it would not establish that SC cannot help when caps or clips are active.
+The reported absolute correction *loss value* can still be nonzero from finite-precision
+head/tail arithmetic; it is not evidence of a material correction gradient.
 
 ## Comparison contract
 
@@ -206,7 +237,8 @@ will not claim non-inferiority or time-to-target until one is fixed before confi
 
 The first 40-update screen uses seed 17, an evaluation every ten updates plus step zero and
 terminal evaluation, the frozen `.08.29.1` pool and `.08.29` model, and MarinSkyRL
-`a7b51d31`. All four TIS arms capture behavior top-k 32, including the SC-disabled controls.
+`a7b51d31`. The Iris parent bundles came from Marin commit `3abefce4f8`. All four TIS arms
+capture behavior top-k 32, including the SC-disabled controls.
 The older schedule uses 128 generation workers, a 32-group buffer, age limit eight, and weight
 publication after each update. The near-fresh schedule uses 32 workers, a 16-group buffer, and
 age limit zero. The five jobs are:
