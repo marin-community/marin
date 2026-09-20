@@ -132,6 +132,7 @@ class GrugModelConfig:
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     # Dense (no-MoE) mode: every block is a single DenseMLP(hidden, intermediate_dim) SwiGLU; the MoE fields are ignored.
     dense_mlp: bool = False
+    tie_embeddings: bool = False  # share token_embed with the lm_head (no separate output_proj).
 
     def __post_init__(self) -> None:
         if not self.dense_mlp and self.num_experts_per_token >= self.num_experts:
@@ -714,7 +715,7 @@ class Transformer(eqx.Module):
     token_embed: jax.Array
     embed_norm: RMSNorm
     embed_gated_norm: GatedNorm
-    output_proj: jax.Array
+    output_proj: jax.Array | None
     stacked_blocks: ArrayStacked[Block]
     final_norm: RMSNorm
     final_gated_norm: GatedNorm
@@ -745,8 +746,12 @@ class Transformer(eqx.Module):
         token_embed = reshard(
             _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), P(None, None)
         )
-        output_proj = reshard(
-            _init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), _LM_HEAD_PARTITION_SPEC
+        output_proj = (
+            None
+            if cfg.tie_embeddings
+            else reshard(
+                _init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), _LM_HEAD_PARTITION_SPEC
+            )
         )
         stacked_blocks = ArrayStacked.init(cfg.num_layers, Block)(cfg, key=jnp.stack(block_keys))
         return Transformer(
@@ -763,6 +768,10 @@ class Transformer(eqx.Module):
     @property
     def Vocab(self) -> Axis:
         return Axis("vocab", self.config.vocab_size)
+
+    def _lm_head_weight(self) -> jax.Array:
+        # Tied: reuse the [vocab, hidden] token_embed transposed as the [hidden, vocab] output weight.
+        return self.token_embed.T if self.output_proj is None else self.output_proj
 
     @named_call
     def __call__(
@@ -852,7 +861,7 @@ class Transformer(eqx.Module):
     ) -> Float[Array, "B S V"]:
         batch_spec = _batch_spec()
         hidden, _ = self(token_ids, mask=mask)
-        return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=batch_spec)
+        return jnp.einsum("bsh,hd->bsd", hidden, self._lm_head_weight(), out_sharding=batch_spec)
 
     def next_token_loss(
         self,
@@ -871,7 +880,7 @@ class Transformer(eqx.Module):
 
         cross_entropy_loss = fused_linear_softmax_cross_entropy_loss(
             hidden,
-            self.output_proj,
+            self._lm_head_weight(),
             labels,
             weight=loss_weight,
             reduction=reduction,
