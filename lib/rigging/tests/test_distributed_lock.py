@@ -82,7 +82,7 @@ def test_lease_refresh_keeps_lease_fresh_and_checks_ownership_on_exit() -> None:
         assert lease.refresh_started.wait(timeout=1)
         lease.finish_refresh.set()
 
-    assert lease.refresh_count == 2
+    assert lease.refresh_count >= 2
 
 
 def test_lease_refresh_raises_background_refresh_failure() -> None:

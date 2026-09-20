@@ -211,6 +211,7 @@ def lease_refresh(
             try:
                 lease.refresh()
             except Exception as error:
+                logger.error("Failed to refresh distributed lease %s", lease.lock_path, exc_info=True)
                 errors.append(error)
                 stop.set()
 

@@ -11,6 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import fsspec
+from rigging.filesystem.distributed_lock import LeaseLostError
 
 import pytest
 
@@ -87,6 +88,29 @@ def test_custom_complete_marker(tmp_path):
 
     cache_to_prefix(cache_path, populate, complete_marker=".done")
     assert len(calls) == 1
+
+
+def test_cache_does_not_publish_marker_after_losing_lease(tmp_path, monkeypatch):
+    class LostLease:
+        lock_path = str(tmp_path / "cache.lock")
+
+        def try_acquire(self) -> bool:
+            return True
+
+        def refresh(self) -> None:
+            raise LeaseLostError("lease changed owners")
+
+        def release(self) -> None:
+            pass
+
+    cache_path = str(tmp_path / "cache" / "model")
+    populate = _make_populate([], threading.Lock())
+    monkeypatch.setattr(model_cache, "create_lock", lambda _path: LostLease())
+
+    with pytest.raises(LeaseLostError, match="changed owners"):
+        cache_to_prefix(cache_path, populate)
+
+    assert not Path(cache_path, DEFAULT_COMPLETE_MARKER).exists()
 
 
 def test_cache_hf_model_streams_one_file_at_a_time(tmp_path, monkeypatch):
