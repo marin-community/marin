@@ -44,6 +44,7 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
 from marin.experiment.data import mixture
 from marin.experiment.namespacing import user_namespaced_name
+from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.training.training import LevanterCheckpoint, resolve_checkpointer_output_path
 
 from experiments.grug.paper_rep.data import fineweb_10bt_train, fineweb_validation
@@ -243,11 +244,29 @@ _ARMS = {
 }
 
 
+def materialize_data(*, version: str | None = None) -> list[ArtifactStep[TokenizedCache]]:
+    """Materialize the FineWeb caches once, before any training arm.
+
+    Returns the two tokenized-cache handles; running this step downloads and
+    tokenizes FineWeb (sample/10BT + the held-out validation file). The
+    training arms depend on the same handles, so they reuse the caches and
+    hold their reserved TPU only for training.
+    """
+    return [fineweb_10bt_train(), fineweb_validation()]
+
+
 @click.command()
-@click.option("--arm", type=click.Choice(sorted(_ARMS)), required=True, help="Which Table 6 arm to run.")
+@click.option(
+    "--arm",
+    type=click.Choice([*sorted(_ARMS), "data"]),
+    required=True,
+    help="Which Table 6 arm to run, or 'data' to materialize the FineWeb caches only.",
+)
 @build_options
 def build(arm: str):
-    """Build one paper-replication base-size arm."""
+    """Build one paper-replication base-size arm (or materialize the data)."""
+    if arm == "data":
+        return materialize_data()
     return _ARMS[arm]()
 
 
