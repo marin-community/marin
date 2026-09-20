@@ -68,7 +68,7 @@ Use separate agent contexts for all four roles. A repair is a new curriculum ver
 holistic review and blind-fit judgment against the same frozen blind tasks. Regenerate blind tasks only when they are
 invalid, leaked the curriculum, or the subject definition changed.
 
-### Post-v1 source survey
+### Curriculum source survey
 
 After the first D-series catalog pass, audit each root against at least two public undergraduate course sequences
 from independent institutions and one established introductory or survey textbook table of contents. Record the

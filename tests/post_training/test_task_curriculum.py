@@ -325,6 +325,17 @@ def test_learning_progression_validates_cross_subject_edges_against_catalog() ->
 
     progression.validate_against_catalog(catalog)
 
+    reversed_progression = LearningProgression.model_validate(
+        {
+            "catalog_version": catalog.catalog_version,
+            "prompt_version": "learning-v1",
+            "scope_subject_ids": ["C01"],
+            "edges": [_learning_edge("practice.processes.logs", "files.search")],
+        }
+    )
+    with pytest.raises(ValueError, match="out-of-scope dependents"):
+        reversed_progression.validate_against_catalog(catalog)
+
 
 def test_learning_progression_rejects_cycles() -> None:
     with pytest.raises(ValueError):
