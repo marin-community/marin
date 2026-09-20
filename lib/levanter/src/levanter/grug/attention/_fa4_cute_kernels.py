@@ -253,7 +253,8 @@ def segmented_flash_attention_forward_launcher(
             mV: cute.Tensor,
             mLowerBounds: cute.Tensor,
             mValid: cute.Tensor,
-            mRelBias: cute.Tensor,
+            mR: cute.Tensor,
+            mProj: cute.Tensor,
             mO: cute.Tensor,
             mLSE: cute.Tensor,
             softmax_scale: cutlass.Float32,
@@ -360,7 +361,8 @@ def segmented_flash_attention_forward_launcher(
                 mV,
                 mLowerBounds,
                 mValid,
-                mRelBias,
+                mR,
+                mProj,
                 mO,
                 mLSE,
                 softmax_scale_log2,
@@ -382,7 +384,8 @@ def segmented_flash_attention_forward_launcher(
             mV: cute.Tensor,
             mLowerBounds: cute.Tensor,
             mValid: cute.Tensor,
-            mRelBias: cute.Tensor,
+            mR: cute.Tensor,
+            mProj: cute.Tensor,
             mO: cute.Tensor,
             mLSE: cute.Tensor,
             softmax_scale_log2: cutlass.Float32,
@@ -541,7 +544,8 @@ def segmented_flash_attention_forward_launcher(
                 mK=mK,
                 mLowerBounds=mLowerBounds,
                 mValid=mValid,
-                mRelBias=mRelBias,
+                mR=mR,
+                mProj=mProj,
             )
             mma_params = SimpleNamespace(
                 thr_mma=thr_mma, tiled_mma=tiled_mma, tSrQ=tSrQ, tSrK=tSrK, tOrVt=tOrVt, acc_O=acc_O
@@ -826,25 +830,27 @@ def segmented_flash_attention_forward_launcher(
                     )
                     if not keep:
                         acc_S_mn[r, c] = -cutlass.Float32.inf
-                    # Inkling relative-position bias: add A[query, delta=query-key] (natural units) to the
-                    # logit for kept positions. acc_S is in raw-qk units and the softmax multiplies it by
-                    # softmax_scale_log2 inside exp2, so scale the bias by LOG2E/softmax_scale_log2 = 1/scale.
-                    rel_extent = basic_params.mRelBias.shape[1]
+                    # Inkling relative-position bias, computed ON THE FLY from the low-rank factors:
+                    # A[query, delta] = sum_r R[query, r, q_head, batch] * proj[r, delta]. This avoids
+                    # materializing/streaming the [B,Hq,S,L] bias tensor (the dominant cost at scale).
+                    # acc_S is raw-qk units and softmax multiplies by softmax_scale_log2 inside exp2, so
+                    # scale the natural-unit bias by LOG2E/softmax_scale_log2 = 1/scale.
+                    rel_extent = basic_params.mProj.shape[1]
+                    rel_dim = cutlass.const_expr(basic_params.mProj.shape[0])
                     delta = query_idx - key_idx
-                    # cute evaluates the GMEM load unconditionally, so clamp the gather index into
-                    # [0, rel_extent) (masked positions can have delta < 0); gate the actual add on
-                    # keep and 0 <= delta < rel_extent. Non-Inkling callers pass a zero [.,1] bias.
+                    # cute evaluates GMEM loads unconditionally, so clamp the distance into [0, rel_extent)
+                    # (masked positions can have delta < 0); gate the actual add on keep and in-band.
                     delta_safe = cutlass.min(cutlass.max(delta, cutlass.Int32(0)), rel_extent - 1)
-                    bias_val = basic_params.mRelBias[
-                        query_meta_idx, delta_safe, basic_params.q_head, basic_params.batch_idx
-                    ]
+                    bias_acc = cutlass.Float32(0.0)
+                    for ri in cutlass.range_constexpr(rel_dim):
+                        bias_acc = bias_acc + basic_params.mR[
+                            query_meta_idx, ri, basic_params.q_head, basic_params.batch_idx
+                        ].to(cutlass.Float32) * basic_params.mProj[ri, delta_safe].to(cutlass.Float32)
                     in_band = keep and cute.elem_less(delta, rel_extent) and cute.elem_less(cutlass.Int32(-1), delta)
                     if in_band:
                         acc_S_mn[r, c] = (
                             acc_S_mn[r, c]
-                            + bias_val.to(cutlass.Float32)
-                            * cutlass.Float32(1.4426950408889634)
-                            / softmax_params.softmax_scale_log2
+                            + bias_acc * cutlass.Float32(1.4426950408889634) / softmax_params.softmax_scale_log2
                         )
 
                 acc_S_row = acc_S_mn[r, None].load()
@@ -956,13 +962,14 @@ def segmented_flash_attention_forward_launcher(
         v: cute.Tensor,
         lower_bounds: cute.Tensor,
         valid: cute.Tensor,
-        rel_bias: cute.Tensor,
+        rel_r: cute.Tensor,
+        rel_proj: cute.Tensor,
         out: cute.Tensor,
         lse: cute.Tensor,
         *,
         softmax_scale: cutlass.Float32,
     ):
-        kernel(q, k, v, lower_bounds, valid, rel_bias, out, lse, softmax_scale, stream)
+        kernel(q, k, v, lower_bounds, valid, rel_r, rel_proj, out, lse, softmax_scale, stream)
 
     return _launch_segmented_flash_attention_forward
 
@@ -1393,7 +1400,8 @@ def segmented_flash_attention_backward_sm90_launcher(
         mask_block_idx: cute.Tensor,
         full_block_cnt: cute.Tensor,
         full_block_idx: cute.Tensor,
-        rel_bias: cute.Tensor,
+        rel_r: cute.Tensor,
+        rel_proj: cute.Tensor,
         dq_accum: cute.Tensor,
         dk_accum: cute.Tensor,
         dv_accum: cute.Tensor,
@@ -1447,7 +1455,9 @@ def segmented_flash_attention_backward_sm90_launcher(
                 softmax_scale,
                 aux_data=AuxData(
                     tensors=(
-                        (lower_bounds, valid, rel_bias, rel_bias_grad_gmem) if use_rel_bias else (lower_bounds, valid)
+                        (lower_bounds, valid, rel_r, rel_proj, rel_bias_grad_gmem)
+                        if use_rel_bias
+                        else (lower_bounds, valid)
                     )
                 ),
                 blocksparse_tensors=blocksparse_tensors,
