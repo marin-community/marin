@@ -250,6 +250,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 return "adam"
             if "output_proj" in path_lower or "lm_head" in path_lower:
                 return "adamh"
+            # LayerScale residual gains are per-channel 1-D vectors (like norm gains): route to Adam.
+            if path_lower.endswith("_gain"):
+                return "adam"
             # GatedNorms route to muonh (NS + Frobenius hyperball), same as matrices.
             if "gated_norm" in path_lower:
                 return "muonh"
