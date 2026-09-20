@@ -783,9 +783,10 @@ restore problem. No step-three checkpoint or terminal export is claimed.
 A 2,000 GB retry, r5, was canceled before any GPU task started: Kueue could
 not fit five tasks because the free H100 nodes had about 1,999.5 GiB each
 after existing memory requests. The [same-source, three-step r6 retry](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fscore-centering-snowball-resume-smoke-01a0bb6f-r6)
-uses MarinSkyRL `cd040079` and requests 1,980 GB per GPU task to test the
-checkpoint path before longer Snowball training. Ray's 95% kill threshold
-would then be about 1,881 GB, above the 1,712 GB observed at the r4 kill.
+used MarinSkyRL `cd040079` and requested 1,980 GB per GPU task. It restored
+the full optimizer and completed another update, then reached the new Ray
+95% kill threshold of 1,881 GB during the full-optimizer save. The later
+DP-local save qualification below addresses that specific failure.
 
 ## Matched-weight Qwen mismatch probe
 
@@ -980,7 +981,8 @@ occurred in this probe.
 
 The [round-two diagnostic cost ledger](results/score_centering_round2_diagnostic_cost.csv)
 records the three Qwen probes, their two failed setup attempts, the Snowball
-model-only recovery, and six failed Snowball resume attempts. It uses
+model-only recovery, six failed Snowball resume attempts, and the successful
+r8 full-optimizer resume and DP-local save. It uses
 the durations of every GPU task shown by `iris job describe`, multiplied by
 eight H100s per task; coscheduled siblings still reserve GPUs until a failed
 head task exits. These finished jobs used 9.02 Qwen and 57.86 Snowball reserved
@@ -989,10 +991,11 @@ and r7's setup failure added 3.16, bringing the round-two diagnostic total
 to 99.50. The 17.42-hour Snowball recovery in this
 ledger is the same job described above, so it is counted once. The six completed
 Qwen confirmation runs used another 148.82 reserved H100-hours, including
-training and terminal export. Thus the completed round-two diagnostic and Qwen
-confirmation tasks total 248.32 H100-hours before the r8 Snowball retry. These
-are reserved task-hours, not a billing estimate; r8 enters the total once its
-task durations become final.
+training and terminal export. The successful r8 training job used 31.38 more.
+Thus the completed round-two diagnostic and Qwen confirmation tasks total
+279.70 H100-hours before r8's separate terminal export. These are reserved
+task-hours, not a billing estimate; the export enters the total once its task
+durations become final.
 
 ## Matched Qwen confirmation design
 
@@ -1074,7 +1077,12 @@ and [derived step metrics](results/score_centering_qwen_confirm_metrics.csv)
 show mean consumed-token age 4.60–4.62 updates, 89.0–89.7% of consumed tokens
 at age four or older, no stale rejection, mean absolute pooled log ratio
 0.0152–0.0154, and TIS caps on 5.3–5.4% of loss tokens. Each arm consumed
-13.05–13.24 million loss tokens through step 40. The [checkpoint data trackers](results/score_centering_qwen_confirm_exposure.csv)
+13.05–13.24 million loss tokens through step 40. The reported group rejection
+rate is zero at every one of the 240 optimizer steps. In the final response
+dumps, 69.4–73.5% of answers completed before the token limit, length stops
+were 26.5–30.6%, and mean response length was 2,087–2,245 tokens. Aborted
+generation around weight publication is reflected in GPU task time but was
+not separately counted as discarded tokens. The [checkpoint data trackers](results/score_centering_qwen_confirm_exposure.csv)
 show that pairs consumed 1,276–1,280 of the same 1,280 distinct prompt IDs by
 step 40; earlier checkpoints also agree to within four prompt IDs. The
 [Iris-attempt cost analysis](results/score_centering_qwen_confirm_cost.csv)
@@ -1110,10 +1118,17 @@ so the job stopped before restore because `WANDB_API_KEY` was absent. The
 [r8 retry](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fscore-centering-snowball-resume-smoke-01a0bb6f-r8)
 uses the wrapper and the same original step-two full checkpoint, geometry,
 model, pool, 1,980 GB request, and code pin, changing only the optimizer
-checkpoint sharding type to `dp_reshardable`. The Snowball quality pilot
-remains gated on r8 completing its full save and terminal export. A DP-local checkpoint
-requires the same tensor, pipeline, context, and expert parallel geometry
-when resumed.
+checkpoint sharding type to `dp_reshardable`. It restored the original full
+optimizer in 1,698.56 seconds, completed step three, and saved a full checkpoint
+in 153.31 seconds. All five Iris GPU tasks succeeded without a retry. The
+retained [qualification record](results/score_centering_snowball_r8_qualification.json)
+reads the checkpoint's `policy/common.pt` and records `param_state_sharding_type=dp_reshardable`
+for both optimizer partitions. This is a successful full-optimizer save. Its
+separate [terminal export](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fscore-centering-snowball-resume-smoke-01a0bb6f-r8-export-3)
+is running; the Snowball quality pilot remains gated on export success. A
+DP-local checkpoint requires the same tensor, pipeline, context, and expert
+parallel geometry when resumed. The launcher now selects this format for
+Snowball and leaves Qwen's checkpoint config unchanged.
 
 If r8 finishes, run one matched Snowball TIS-versus-TIS-plus-SC32
 pair from the same SFT model and frozen pool as the smoke. Use seed 17, the
