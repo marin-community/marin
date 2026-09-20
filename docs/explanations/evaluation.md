@@ -83,6 +83,11 @@ the resulting bounded feature capture, and discards those features with the temp
 Changing the draft optimizer or epoch count therefore reuses the same generated responses; changing
 the target checkpoint recomputes verifier features without regenerating the responses.
 
+`ArtifactEagleDraft` composes the published checkpoint into a later `skyrl_step`. At resolution time
+Marin injects the draft URI and revision into speculative decoding, so the downstream run depends on
+the exact draft artifact without hard-coding its object-store path. Omit the speculative-decoding
+`training` block in that run to keep the draft frozen during RL.
+
 ### Rollout run catalog
 
 Completed and failed attempts are discoverable in Finelog's `marin.rollout_runs` table. Each row
