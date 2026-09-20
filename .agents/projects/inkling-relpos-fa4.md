@@ -141,3 +141,21 @@ Neither alone reaches the <10%-impact target (>7.24% MFU). Must fix BOTH.
 ### Risks
 - CuTe DSL per-lane aux gather/scatter inside a @cute.jit score_mod (vec_size lanes): extract `q_idx_ssa[j]`, build result via rmem tensor + `.load()`. Idiom mirrors apply_score_mod_inner's per-lane index extraction; validate with a GPU grad probe FIRST (correctness before MFU).
 - fwd (Ampere, materialized A) and bwd (score_mod reading same A) must add identical A. Both use same aux A, same band gate ⇒ P matches.
+
+## STEP 1 debugging (2026-09-20) — sm90 score_mod NaN root cause
+Bisected on GPU (grad probe vs reference, B2 S256 Hq4 Hkv1 D128 L128, FUSED_BWD=1):
+- NO-BIAS sm90 path: PASS (dispatch/plumbing correct; base Hopper bwd unchanged).
+- score_mod=identity: dq/dk/dv FINITE (score_mod presence + LOG2E scale switch OK).
+- score_mod=const (per-lane loop, no gmem read): FINITE (rmem-loop / if-in-band / tensor-write OK).
+- score_mod=head0 (real read, head hardcoded 0): FINITE (read mechanism OK; in-range).
+- => NaN was an **OOB gmem read**: head_idx[j] out of range.
+ROOT CAUSE: `apply_score_mod_inner`/`floor_if_packed` (flash_attn.cute b28 softmax.py) UNCONDITIONALLY
+assume Pack-GQA when qhead_per_kvhead>1: they hand score_mod `q_idx = realQ // rep` and
+`head_idx = trueQhead*rep + (realQ % rep)`. But `segmented_flash_attention_backward_sm90` tiles over
+real q-heads (head_idx_kv = head_idx//rep; mQ indexed by head_idx directly) and is NON-packed, so the
+index tensor holds real Q. The packed head overshoots Hq -> OOB -> NaN.
+FIX (in _grug_inkling_score_mod): invert the packing with rep=qhead_per_kvhead (build-time const):
+  q_head = head_idx[j] // rep ;  q_pos = q_idx[j]*rep + (head_idx[j] % rep) ;  delta = q_pos - kv_idx[j]
+  bias = rel_bias_t[q_pos, delta_safe, q_head, b0]   # kernel layout [S,L,Hq,B]
+Debug modes retained behind FAST_TRACK_INKLING_SM_DEBUG=identity|const|head0 (remove before final).
+dA (standalone rel_bias_backward) PASSES throughout (rel ~5e-3).
