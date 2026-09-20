@@ -22,27 +22,34 @@ from marin.experiment.namespacing import user_owned_name
 from marin.rl.eagle import EagleRolloutCorpus, eagle_rollout_corpus_step
 from marin.rl.skyrl import (
     ArtifactDataSource,
+    ArtifactEagleDraft,
     ArtifactHfModel,
     EagleDraftDistillationSpec,
     EagleDraftModel,
     EagleDraftSource,
     IrisSkyRLExecution,
+    SkyRLModel,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
     SkyRLRuntime,
     SkyRLRuntimeProfile,
+    SkyRLSpec,
     SkyRLTopology,
     eagle_draft_distillation_step,
+    skyrl_step,
 )
 
 from experiments.evaluation.evals import EVALS, EvalchemyDefinition, evalchemy_run_config
 from experiments.post_training.curriculum_rl.launch import (
     MARIN_TOKENIZER,
     MARIN_TOKENIZER_REVISION,
+    POOL_ARTIFACT_NAME,
     SNOWBALL_MODEL,
 )
+from experiments.post_training.curriculum_rl.pool import VALIDATION_FILENAME, pool_step
 
 ARTIFACT_NAME = "models/snowball-67b-a2b-eagle3-distilled"
+RL_ARTIFACT_NAME = "checkpoints/snowball-67b-a2b-eagle3-frozen-draft-smoke"
 ROLLOUT_VERSION = "2026.09.20"
 CORPUS_ARTIFACT_NAME = "data/snowball-67b-a2b-eagle3-math-corpus"
 CORPUS_VERSION = "2026.09.20"
@@ -51,6 +58,7 @@ INITIAL_DRAFT_REVISION = "4bdb47c08e5b5190bea3c7a93c3e14470230e469"
 CLUSTER = "cw-rno2a"
 GPUS_PER_NODE = 8
 MARINSKYRL_COMMIT = "b304c134c87797168b7bba0cb01c56d263950c9c"
+RL_DATA_VERSION = "2026.09.18"
 
 DISTILLATION_CONFIG = """
 entrypoint: generate
@@ -140,6 +148,98 @@ data:
   shuffle: false
   eagle_replay: true
   eagle_replay_batch_size: 4096
+
+extra_env:
+  PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+"""
+
+RL_SMOKE_CONFIG = """
+entrypoint: standard
+
+context_budget:
+  request_window_tokens: 9856
+  max_new_tokens_per_turn: 8192
+  max_turns: 1
+
+environment:
+  env_class: aime
+
+trainer:
+  strategy: megatron
+  flash_attn: false
+  use_sample_packing: false
+  offload_optimizer_during_rollouts: true
+  gradient_checkpointing: true
+  algorithm:
+    advantage_estimator: rloo_n
+    use_kl_loss: false
+  epochs: 1
+  max_steps: 1
+  update_epochs_per_batch: 1
+  train_batch_size: 512
+  policy_mini_batch_size: 64
+  eval_batch_size: 512
+  micro_forward_batch_size_per_gpu: 1
+  micro_train_batch_size_per_gpu: 1
+  eval_before_train: false
+  eval_interval: -1
+  ckpt_interval: 100
+  resume_mode: none
+  logger: console
+  policy:
+    optimizer_config:
+      lr: 1.0e-6
+      max_grad_norm: 1.0
+    megatron_config:
+      tensor_model_parallel_size: 1
+      pipeline_model_parallel_size: 2
+      context_parallel_size: 1
+      expert_model_parallel_size: 8
+      expert_tensor_parallel_size: 1
+      optimizer_checkpoint_sharding_type: dp_reshardable
+      ddp_config:
+        overlap_grad_reduce: true
+        overlap_param_gather: true
+        grad_reduce_in_fp32: false
+  placement:
+    colocate_all: false
+    policy_num_nodes: 4
+    policy_num_gpus_per_node: 8
+
+generator:
+  backend: vllm
+  model_dtype: bfloat16
+  vllm_attention_backend: FLASH_ATTN
+  inference_engine_tensor_parallel_size: 1
+  inference_engine_pipeline_parallel_size: 1
+  inference_engine_data_parallel_size: 8
+  inference_engine_expert_parallel_size: 8
+  # Eight engines are eight node-local pools, not eight GPU workers.
+  num_inference_engines: 8
+  n_samples_per_prompt: 16
+  gpu_memory_utilization: 0.75
+  max_num_seqs: 16
+  max_num_batched_tokens: 16384
+  enforce_eager: false
+  run_engines_locally: true
+  weight_sync_backend: nccl
+  async_engine: true
+  batched: false
+  engine_init_kwargs:
+    async_scheduling: false
+  speculative_decoding:
+    method: eagle3
+    model: {}
+    num_speculative_tokens: 3
+  sampling_params:
+    temperature: 1.0
+    top_p: 1.0
+
+data:
+  kind: parquet
+  train_data: []
+  val_data: []
+  shuffle: false
 
 extra_env:
   PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
@@ -246,12 +346,69 @@ def build_distillation(
     )
 
 
+def build_rl_smoke(
+    draft: ArtifactStep[EagleDraftModel],
+    version: str | None = None,
+) -> ArtifactStep[SkyRLModel]:
+    """Run one production-shaped RLOO-N step with the frozen distilled draft."""
+    resolved_version = version or resolve_version(RL_ARTIFACT_NAME, None)
+    pool = pool_step(POOL_ARTIFACT_NAME, RL_DATA_VERSION)
+    return skyrl_step(
+        SkyRLSpec(
+            name=user_owned_name(RL_ARTIFACT_NAME),
+            version=resolved_version,
+            config_yaml=RL_SMOKE_CONFIG,
+            runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON, commit=MARINSKYRL_COMMIT),
+            model=ArtifactHfModel(
+                step=SNOWBALL_MODEL,
+                tokenizer_uri=MARIN_TOKENIZER,
+                tokenizer_revision=MARIN_TOKENIZER_REVISION,
+            ),
+            train_data=(ArtifactDataSource(pool, relative_path=VALIDATION_FILENAME),),
+            validation_data=(),
+            topology=SkyRLTopology(
+                num_nodes=12,
+                gpus_per_node=GPUS_PER_NODE,
+                gpu_variant="H100",
+                role_plan=SkyRLRolePlan(
+                    colocate_all=False,
+                    policy_num_nodes=4,
+                    policy_num_gpus_per_node=GPUS_PER_NODE,
+                    num_inference_engines=8,
+                    inference_engine_tensor_parallel_size=1,
+                    inference_engine_pipeline_parallel_size=1,
+                    inference_engine_data_parallel_size=8,
+                    inference_engine_expert_parallel_size=8,
+                    train_batch_size=512,
+                    policy_mini_batch_size=64,
+                    micro_train_batch_size_per_gpu=1,
+                    n_samples_per_prompt=16,
+                ),
+            ),
+            retention=SkyRLRetentionPolicy(),
+            seed=17,
+            draft_model=ArtifactEagleDraft(draft),
+        ),
+        IrisSkyRLExecution(
+            cluster=CLUSTER,
+            cluster_config=f"lib/iris/config/{CLUSTER}.yaml",
+            cpu=16,
+            memory="512GB",
+            disk="2TB",
+            priority="interactive",
+            max_retries=1,
+            wandb_entity="marin-community",
+        ),
+    )
+
+
 @click.command(help=__doc__)
 @build_options
 def main() -> dict[str, ArtifactStep]:
     corpus = build_rollout_corpus()
     draft = build_distillation(corpus=corpus)
-    return {"corpus": corpus, "draft": draft}
+    smoke = build_rl_smoke(draft)
+    return {"corpus": corpus, "draft": draft, "smoke": smoke}
 
 
 if __name__ == "__main__":
