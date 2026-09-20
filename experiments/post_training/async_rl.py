@@ -351,6 +351,7 @@ TOPOLOGY_OWNED_SETTINGS = frozenset(
         "generator.num_inference_engines",
         "generator.rollout_num_nodes",
         "generator.inference_engine_tensor_parallel_size",
+        "generator.inference_engine_pipeline_parallel_size",
         "trainer.train_batch_size",
         "trainer.policy_mini_batch_size",
         "trainer.micro_train_batch_size_per_gpu",
@@ -632,13 +633,7 @@ def config_keys(node: dict, prefix: str = "") -> set[str]:
 
 
 def request_overrides(policy: PolicySpec, config: dict) -> tuple[str, ...]:
-    """The policy's inherited Hydra overrides minus every key this launcher writes itself.
-
-    MarinSkyRL applies the request's overrides as Hydra arguments after the config, so an inherited
-    override on a key the launcher writes would win over the rendered value and a recipe edit would
-    change nothing. The launcher's written value wins: an inherited override survives only where the
-    config says nothing about its key.
-    """
+    """Keep inherited Hydra overrides only for keys absent from the rendered config."""
     written = config_keys(config)
     return tuple(
         override

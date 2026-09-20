@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import csv
 import itertools
+from dataclasses import dataclass
 from pathlib import Path
 
 import torch
@@ -32,7 +33,14 @@ FIELDS = (
 )
 
 
-def read_state(uri: str, s3_endpoint: str) -> tuple[int, int, set[str]]:
+@dataclass(frozen=True)
+class ConsumedState:
+    step: int
+    epoch: int
+    uids: set[str]
+
+
+def read_state(uri: str, s3_endpoint: str) -> ConsumedState:
     """Read a trusted, agent-owned SkyRL data-consumption checkpoint."""
     fs, path = _filesystem(uri, s3_endpoint)
     with fs.open(path, "rb") as stream:
@@ -46,7 +54,7 @@ def read_state(uri: str, s3_endpoint: str) -> tuple[int, int, set[str]]:
         raise ValueError(f"{uri}: total consumed count is smaller than its UID set")
     if not uids and state["total_samples_consumed"]:
         raise ValueError(f"{uri}: UID set was cleared at an epoch boundary; use an earlier checkpoint")
-    return step, epoch, uids
+    return ConsumedState(step, epoch, uids)
 
 
 def compare_states(states: dict[tuple[int, str], tuple[int, set[str]]]) -> list[dict]:
@@ -88,10 +96,10 @@ def main() -> None:
         label, separator, uri = item.partition("=")
         if not separator or not label or not uri:
             parser.error(f"invalid --state {item!r}; expected RUN=STATE_URI")
-        step, epoch, uids = read_state(uri, args.s3_endpoint)
-        if (step, label) in states:
-            parser.error(f"duplicate state for {label} at step {step}")
-        states[step, label] = (epoch, uids)
+        state = read_state(uri, args.s3_endpoint)
+        if (state.step, label) in states:
+            parser.error(f"duplicate state for {label} at step {state.step}")
+        states[state.step, label] = (state.epoch, state.uids)
     rows = compare_states(states)
     if not rows:
         parser.error("at least two runs must have a state at the same step")

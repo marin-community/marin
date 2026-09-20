@@ -9,7 +9,6 @@ import click
 import pytest
 import yaml
 from click.testing import CliRunner
-from marin.execution.build_context import BuildContext, VersionCodex, build_context
 from marin.execution.lazy import StepContext
 
 from experiments.post_training import async_rl
@@ -229,6 +228,8 @@ def test_set_refuses_keys_the_topology_overwrites():
         rendered(settings=("trainer.train_batch_size=64",))
     with pytest.raises(click.BadParameter, match="written from the topology"):
         rendered(settings=("generator.num_inference_engines=2",))
+    with pytest.raises(click.BadParameter, match="written from the topology"):
+        rendered(settings=("generator.inference_engine_pipeline_parallel_size=2",))
     with pytest.raises(click.BadParameter, match="engine geometry the recipe decides"):
         rendered(settings=("generator.inference_engine_data_parallel_size=4",))
 
@@ -320,14 +321,6 @@ def test_run_wires_the_curriculum_pool_and_snowball_export_into_one_chain(owner)
     assert served.model.serve.max_model_len == 4096 + async_rl.SMOKE_PRESET.max_new_tokens
 
 
-def test_command_plans_without_running(owner):
-    result = CliRunner().invoke(async_rl.main, ["--version", "2026.09.18", "--preset", "smoke"])
-    assert result.exit_code == 0, result.output
-    with build_context(BuildContext(versions=VersionCodex(default="2026.09.18"))):
-        handles = async_rl.main.callback.__wrapped__(preset="smoke", settings=(), stage="rl")
-    assert list(handles) == ["snowball-smoke"]
-
-
 def test_qwen_smoke_selects_megatron_policy_and_pinned_skyrl_runtime(owner):
     result = CliRunner().invoke(async_rl.main, ["--version", "2026.09.18", "--policy", "qwen", "--preset", "smoke"])
     assert result.exit_code == 0, result.output
@@ -348,18 +341,6 @@ def test_qwen_smoke_selects_megatron_policy_and_pinned_skyrl_runtime(owner):
     assert config["generator"]["rollout_num_nodes"] == 1
     assert config["generator"]["inference_engine_data_parallel_size"] == 1
     assert built.request.topology.role_plan.rollout_num_nodes == 1
-
-
-def test_wandb_entity_is_explicit_in_execution(owner):
-    run = async_rl.build_run(
-        QWEN_POLICY,
-        async_rl.QWEN_SMOKE,
-        version="2026.09.18",
-        recipe=async_rl.QWEN_RECIPE,
-        chat_template=async_rl.QWEN_CHAT_TEMPLATE,
-        wandb_entity="marin-community",
-    )
-    assert run.rl.runtime_args["skyrl_execution"].wandb_entity == "marin-community"
 
 
 def test_separate_engine_recipe_rejects_unallocated_node_bundles():

@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import csv
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -33,6 +34,13 @@ FIELDS = (
 )
 
 
+@dataclass(frozen=True)
+class TaskAttempt:
+    task_id: str
+    started_at_ms: int
+    finished_at_ms: int | None
+
+
 def _milliseconds(instant: str) -> int:
     parsed = datetime.fromisoformat(instant)
     if parsed.tzinfo is None:
@@ -40,7 +48,7 @@ def _milliseconds(instant: str) -> int:
     return round(parsed.timestamp() * 1000)
 
 
-def _attempts(path: Path) -> list[tuple[str, int, int | None]]:
+def _attempts(path: Path) -> list[TaskAttempt]:
     with path.open(newline="") as stream:
         rows = list(csv.DictReader(stream))
     seen: set[tuple[str, str]] = set()
@@ -56,7 +64,7 @@ def _attempts(path: Path) -> list[tuple[str, int, int | None]]:
         end = int(row["finished_at_ms"]) if row["finished_at_ms"] else None
         if end is not None and end < start:
             raise ValueError(f"Iris task attempt finishes before it starts: {identity}")
-        result.append((row["task_id"], start, end))
+        result.append(TaskAttempt(row["task_id"], start, end))
     return result
 
 
@@ -73,11 +81,11 @@ def summarize_cost(
     if not eval_rows:
         raise ValueError("evaluation CSV has no all-dataset rows")
     all_attempts = _attempts(attempts)
-    by_run: dict[str, list[tuple[str, int, int | None]]] = defaultdict(list)
+    by_run: dict[str, list[TaskAttempt]] = defaultdict(list)
     for run, prefixes in task_prefixes.items():
-        for task_id, start, end in all_attempts:
-            if "/users-" in task_id and any(task_id.startswith(prefix + "/") for prefix in prefixes):
-                by_run[run].append((task_id, start, end))
+        for attempt in all_attempts:
+            if "/users-" in attempt.task_id and any(attempt.task_id.startswith(prefix + "/") for prefix in prefixes):
+                by_run[run].append(attempt)
 
     output = []
     seen_evals: set[tuple[str, int]] = set()
@@ -90,12 +98,21 @@ def summarize_cost(
         if not matched:
             raise ValueError(f"{run}: no started Iris GPU task attempts match its prefixes")
         eval_ms = _milliseconds(row["eval_dump_written_utc"])
-        first_start = min(start for _, start, _ in matched)
+        first_start = min(attempt.started_at_ms for attempt in matched)
         if eval_ms < first_start:
             raise ValueError(f"{run} step {step}: evaluation predates its GPU tasks")
-        reserved_ms = sum(max(0, min(end if end is not None else eval_ms, eval_ms) - start) for _, start, end in matched)
-        full_ms = sum(end - start for _, start, end in matched if end is not None)
-        all_finished = all(end is not None for _, _, end in matched)
+        reserved_ms = sum(
+            max(
+                0,
+                min(attempt.finished_at_ms if attempt.finished_at_ms is not None else eval_ms, eval_ms)
+                - attempt.started_at_ms,
+            )
+            for attempt in matched
+        )
+        full_ms = sum(
+            attempt.finished_at_ms - attempt.started_at_ms for attempt in matched if attempt.finished_at_ms is not None
+        )
+        all_finished = all(attempt.finished_at_ms is not None for attempt in matched)
         output.append(
             {
                 "run": run,

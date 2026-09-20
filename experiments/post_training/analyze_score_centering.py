@@ -29,6 +29,8 @@ from pathlib import Path
 from typing import Any
 
 import fsspec
+from fsspec.spec import AbstractFileSystem
+from rigging.filesystem.storage_path import prefix_join
 
 ACCEPTED_STOPS = frozenset({"complete", "end_turn", "eos", "stop"})
 FIELDS = (
@@ -69,7 +71,7 @@ METRIC_FIELDS = (
 )
 
 
-def _filesystem(path: str, s3_endpoint: str) -> tuple[Any, str]:
+def _filesystem(path: str, s3_endpoint: str) -> tuple[AbstractFileSystem, str]:
     if path.startswith("s3://"):
         return (
             fsspec.filesystem(
@@ -82,7 +84,7 @@ def _filesystem(path: str, s3_endpoint: str) -> tuple[Any, str]:
     return fsspec.filesystem("file"), str(Path(path).resolve())
 
 
-def _read_jsonl(fs: Any, path: str) -> list[dict[str, Any]]:
+def _read_jsonl(fs: AbstractFileSystem, path: str) -> list[dict[str, Any]]:
     with fs.open(path, "rt") as stream:
         return [json.loads(line) for line in stream if line.strip()]
 
@@ -92,12 +94,12 @@ def _membership_hash(rows: list[dict[str, Any]]) -> str:
     return hashlib.sha256(json.dumps(questions, ensure_ascii=False).encode()).hexdigest()
 
 
-def _modified_utc(fs: Any, path: str) -> str:
+def _modified_utc(fs: AbstractFileSystem, path: str) -> str:
     info = fs.info(path)
     modified = info.get("LastModified") or info.get("mtime")
     if isinstance(modified, datetime):
         return modified.astimezone(UTC).isoformat()
-    if type(modified) in (int, float):
+    if isinstance(modified, (int, float)):
         return datetime.fromtimestamp(modified, tz=UTC).isoformat()
     raise ValueError(f"evaluation aggregate has no usable modification time: {path}")
 
@@ -140,20 +142,20 @@ def _summarize(
 
 def summarize_run(label: str, export_path: str, s3_endpoint: str) -> list[dict[str, Any]]:
     fs, root = _filesystem(export_path, s3_endpoint)
-    sessions = fs.glob(f"{root}/dumped_evals/global_step_*_evals")
+    sessions = fs.glob(prefix_join(prefix_join(root, "dumped_evals"), "global_step_*_evals"))
     if not sessions:
         raise ValueError(f"{label}: no in-run evaluation dumps under {export_path}")
     output: list[dict[str, Any]] = []
     for session in sessions:
         step = int(session.rsplit("/global_step_", 1)[1].removesuffix("_evals"))
-        aggregate_path = f"{session}/aggregated_results.jsonl"
+        aggregate_path = prefix_join(session, "aggregated_results.jsonl")
         aggregate_rows = _read_jsonl(fs, aggregate_path)
         if len(aggregate_rows) != 1:
             raise ValueError(f"{label} step {step}: expected one aggregate metrics row")
         aggregate = aggregate_rows[0]
         eval_dump_written_utc = _modified_utc(fs, aggregate_path)
         all_rows: list[dict[str, Any]] = []
-        for path in sorted(fs.glob(f"{session}/*.jsonl")):
+        for path in sorted(fs.glob(prefix_join(session, "*.jsonl"))):
             if path.endswith("/aggregated_results.jsonl"):
                 continue
             dataset = path.rsplit("/", 1)[1].removesuffix(".jsonl")

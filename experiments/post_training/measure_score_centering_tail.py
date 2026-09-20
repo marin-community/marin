@@ -22,14 +22,24 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 import click
 import fsspec
 import torch
+from rigging.filesystem.storage_path import prefix_join
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 POSITIONS = (("prompt", 0), ("answer16", 16), ("answer32", 32), ("answer64", 64), ("answer128", 128), ("answer256", 256))
+
+
+@dataclass(frozen=True)
+class EvalContext:
+    suite: str
+    prompt_sha16: str
+    token_ids: torch.Tensor
+    positions: tuple[int, ...]
 
 
 def _filesystem(uri: str):
@@ -42,11 +52,11 @@ def _filesystem(uri: str):
     return fsspec.filesystem("file")
 
 
-def _contexts(eval_root: str, tokenizer) -> list[tuple[str, str, torch.Tensor, tuple[int, ...]]]:
+def _contexts(eval_root: str, tokenizer) -> list[EvalContext]:
     fs = _filesystem(eval_root)
     contexts = []
     for suite in ("val-gsm8k", "val-math500"):
-        path = f"{eval_root.rstrip('/')}/{suite}.jsonl"
+        path = prefix_join(eval_root, f"{suite}.jsonl")
         with fs.open(path) as stream:
             for index in range(4):
                 row = json.loads(stream.readline())
@@ -58,18 +68,18 @@ def _contexts(eval_root: str, tokenizer) -> list[tuple[str, str, torch.Tensor, t
                 if positions[-1] >= len(ids):
                     raise ValueError(f"{suite} row {index} has fewer than 256 answer tokens")
                 digest = hashlib.sha256(prompt.encode()).hexdigest()[:16]
-                contexts.append((suite, digest, torch.tensor(ids[: positions[-1] + 1]), positions))
+                contexts.append(EvalContext(suite, digest, torch.tensor(ids[: positions[-1] + 1]), positions))
     return contexts
 
 
-def _distributions(model_path: Path, contexts, *, threads: int) -> list[torch.Tensor]:
+def _distributions(model_path: Path, contexts: list[EvalContext], *, threads: int) -> list[torch.Tensor]:
     torch.set_num_threads(threads)
     model = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32, low_cpu_mem_usage=True)
     model.eval()
     vectors = []
     with torch.inference_mode():
-        for _, _, ids, positions in contexts:
-            logits = model(ids.unsqueeze(0)).logits[0, list(positions)].double()
+        for context in contexts:
+            logits = model(context.token_ids.unsqueeze(0)).logits[0, list(context.positions)].double()
             vectors.append(logits.softmax(dim=-1).cpu())
     del model
     return vectors
@@ -150,13 +160,13 @@ def main(
     behavior = _distributions(behavior_model, contexts, threads=threads)
     current = _distributions(current_model, contexts, threads=threads)
     rows = []
-    for (suite, digest, _, _), q_vectors, p_vectors in zip(contexts, behavior, current, strict=True):
+    for context, q_vectors, p_vectors in zip(contexts, behavior, current, strict=True):
         for (position, _), q, p in zip(POSITIONS, q_vectors, p_vectors, strict=True):
             if not torch.isclose(q.sum(), q.new_tensor(1), atol=1e-8) or not torch.isclose(
                 p.sum(), p.new_tensor(1), atol=1e-8
             ):
                 raise ValueError("a model probability vector is not normalized")
-            seed = int(hashlib.sha256(f"{digest}:{position}".encode()).hexdigest()[:8], 16)
+            seed = int(hashlib.sha256(f"{context.prompt_sha16}:{position}".encode()).hexdigest()[:8], 16)
             scenarios = (
                 ("real_base_to_step8", p),
                 ("calibrated_0.016", _calibrated_policy(q, 0.016, seed)),
@@ -167,8 +177,8 @@ def main(
                     for cap in (1.001, 1.05, 2.0):
                         rows.append(
                             {
-                                "suite": suite,
-                                "prompt_sha16": digest,
+                                "suite": context.suite,
+                                "prompt_sha16": context.prompt_sha16,
                                 "position": position,
                                 "scenario": scenario,
                                 "topk": width,

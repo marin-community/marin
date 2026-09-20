@@ -17,6 +17,9 @@ import csv
 import json
 from pathlib import Path
 
+GSM8K_QUESTIONS = 256
+MATH500_QUESTIONS = 500
+
 FIELDS = (
     "run",
     "scheduled_gsm8k",
@@ -37,13 +40,17 @@ def _integer(value: float, label: str) -> int:
 
 
 def _completed_counts(metrics: dict) -> tuple[int, int]:
-    gsm = _integer(metrics["eval/val-gsm8k/completed_stop_score_contribution"] * 256, "GSM8K correct")
-    math_completed = _integer(metrics["eval/val-math500/completed_stop_fraction"] * 500, "Math500 complete")
-    math_signed = _integer(metrics["eval/val-math500/completed_stop_score_contribution"] * 500, "Math500 score")
+    gsm = _integer(metrics["eval/val-gsm8k/completed_stop_score_contribution"] * GSM8K_QUESTIONS, "GSM8K correct")
+    math_completed = _integer(
+        metrics["eval/val-math500/completed_stop_fraction"] * MATH500_QUESTIONS, "Math500 complete"
+    )
+    math_signed = _integer(
+        metrics["eval/val-math500/completed_stop_score_contribution"] * MATH500_QUESTIONS, "Math500 score"
+    )
     if (math_completed + math_signed) % 2:
         raise ValueError("Math500 completed count and signed score have different parity")
     math = (math_completed + math_signed) // 2
-    if not 0 <= gsm <= 256 or not 0 <= math <= math_completed <= 500:
+    if not 0 <= gsm <= GSM8K_QUESTIONS or not 0 <= math <= math_completed <= MATH500_QUESTIONS:
         raise ValueError("derived completed-correct count is out of range")
     return gsm, math
 
@@ -67,7 +74,10 @@ def summarize(run: str, log: Path, evaluations: list[dict[str, str]], step: int)
     rows = {row["dataset"]: row for row in evaluations if row["run"] == run and int(row["step"]) == step}
     if set(rows) != {"all", "val-gsm8k", "val-math500"}:
         raise ValueError(f"{run}: missing final response analysis for step {step}")
-    if [int(rows[dataset]["questions"]) for dataset in ("val-gsm8k", "val-math500")] != [256, 500]:
+    if [int(rows[dataset]["questions"]) for dataset in ("val-gsm8k", "val-math500")] != [
+        GSM8K_QUESTIONS,
+        MATH500_QUESTIONS,
+    ]:
         raise ValueError(f"{run}: frozen evaluation suite sizes changed")
     mirrors = _mirrors(log, step)
     scheduled_gsm, scheduled_math = _completed_counts(mirrors["train"])
