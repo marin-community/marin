@@ -44,7 +44,7 @@ INITIAL_DRAFT_URI = "hf://laion/snowball-64k-eagle3-draft-r2egym"
 INITIAL_DRAFT_REVISION = "4bdb47c08e5b5190bea3c7a93c3e14470230e469"
 CLUSTER = "cw-us-east-02a"
 GPUS_PER_NODE = 8
-MARINSKYRL_COMMIT = "4ecbddf059d85c55ba5c113af58841cf646127bb"
+MARINSKYRL_COMMIT = "16f18405f5c31aadfcd915893f0e4d5fc0c0524e"
 
 DISTILLATION_CONFIG = """
 entrypoint: generate
