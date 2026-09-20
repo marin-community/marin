@@ -198,7 +198,7 @@ SNOWBALL_RECIPE = TrainingRecipe(
         expert_model_parallel_size=8,
         expert_tensor_parallel_size=1,
     ),
-    host_memory="2000GB",
+    host_memory="1980GB",
     # The Triton MoE kernels; the fused defaults do not cover this expert layout.
     engine_init_kwargs={"moe_backend": "triton"},
 )

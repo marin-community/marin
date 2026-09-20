@@ -771,9 +771,12 @@ step-three save then failed: Ray killed a policy worker when its node used
 1,712.42 of the 1,800 GB task memory limit, above Ray's 95% threshold.
 The save failure is host-memory pressure, separate from the resolved GPU
 restore problem. No step-three checkpoint or terminal export is claimed.
-A [same-source, three-step retry](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fscore-centering-snowball-resume-smoke-01a0bb6f-r5)
-uses MarinSkyRL `cd040079` and requests 2,000 GB per GPU task to test the
-checkpoint path before longer Snowball training.
+A 2,000 GB retry, r5, was canceled before any GPU task started: Kueue could
+not fit five tasks because the free H100 nodes had about 1,999.5 GiB each
+after existing memory requests. The [same-source, three-step r6 retry](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fscore-centering-snowball-resume-smoke-01a0bb6f-r6)
+uses MarinSkyRL `cd040079` and requests 1,980 GB per GPU task to test the
+checkpoint path before longer Snowball training. Ray's 95% kill threshold
+would then be about 1,881 GB, above the 1,712 GB observed at the r4 kill.
 
 ## Matched-weight Qwen mismatch probe
 
@@ -1012,12 +1015,12 @@ throughput and quality effects cannot be attributed to SC from this pair.
 The completed two-update Snowball pair used a 1,024-token response cap and
 had 66–72% length stops. The full-optimizer smoke above completed a resumed
 step-three update but failed during checkpoint save at the 1,800 GB host
-memory limit. Its 2,000 GB retry must save and export successfully before
+memory limit. Its 1,980 GB retry must save and export successfully before
 this pilot starts.
 
 If that resume finishes, run one matched Snowball TIS-versus-TIS-plus-SC32
 pair from the same SFT model and frozen pool as the smoke. Use seed 17, the
-same 40-H100 Megatron/vLLM topology with 2,000 GB per task, 128 prompts
+same 40-H100 Megatron/vLLM topology with 1,980 GB per task, 128 prompts
 and four responses per update, 192 generation workers, a 32-group buffer, age limit eight,
 per-update publication with abort and resume, top-k-32 behavior capture,
 TIS cap 1.05, and the original optimizer. Set the response cap to 4,096
