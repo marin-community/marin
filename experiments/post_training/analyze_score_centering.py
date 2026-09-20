@@ -66,6 +66,7 @@ METRIC_FIELDS = (
     "mismatch_log_ratio_abs_mean",
     "tis_capped_fraction",
     "correction_abs_mean",
+    "policy_entropy",
     "response_bytes_mean",
     "length_stop_fraction",
 )
@@ -234,6 +235,7 @@ def summarize_iris_logs(label: str, paths: list[Path]) -> list[dict[str, Any]]:
                 "mismatch_log_ratio_abs_mean": metrics.get("policy/mismatch/pooled/log_ratio_abs_mean"),
                 "tis_capped_fraction": metrics.get("policy/tis/imp_ratio_capped_fraction"),
                 "correction_abs_mean": metrics.get("policy/score_centering/correction_abs_mean"),
+                "policy_entropy": metrics.get("policy/policy_entropy"),
                 "response_bytes_mean": metrics.get("inference_bridge/response_bytes/mean"),
                 "length_stop_fraction": metrics.get("consumed/length_stop_fraction"),
             }

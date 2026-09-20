@@ -543,7 +543,8 @@ seed-17 schedule and capture arms consumed exactly the same 1,280 prompt UIDs. T
 [response analysis](results/score_centering_qwen_cap105_evals.csv), [per-update metrics](results/score_centering_qwen_cap105_metrics.csv),
 [task costs](results/score_centering_qwen_cap105_cost.csv), and
 [terminal repeat ledger](results/score_centering_terminal_repeat_evals.csv) contain the
-individual observations.
+individual observations. The per-update ledger also retains policy entropy from the
+training mirrors for later analysis.
 
 The delayed TIS and SC8 arms consumed tokens at token-weighted mean ages 8.47 and 8.50,
 versus 4.72 in both every-update-publication top-k-eight arms. Their behavior-versus-trainer
@@ -651,6 +652,7 @@ The figure below plots the same primary measure against updates, consumed loss t
 GPU-task time, and reserved H100-hours. The underlying [evaluation](results/score_centering_qwen_cap2_evals.csv),
 [training metric](results/score_centering_qwen_cap2_metrics.csv), and
 [cost](results/score_centering_qwen_cap2_cost.csv) CSVs are checked in beside the analysis code.
+The training CSV also retains policy entropy at every update.
 
 ![Completed-correct Qwen quality against updates, consumed tokens, elapsed time, and reserved GPU-hours](figures/score_centering_cap2_qwen.svg)
 

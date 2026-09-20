@@ -58,6 +58,7 @@ def test_iris_mirror_uses_the_resumed_attempt_for_repeated_steps(tmp_path):
             "async/performance/configured_policy_gpus": 8,
             "async/performance/configured_inference_gpus": 8,
             "timing/step": 10.0,
+            "policy/policy_entropy": 0.4,
         }
         prefix = f"task=/romain/run/0 attempt={attempt} | WANDB_MIRROR kind=train step={step} metrics="
         return prefix + json.dumps(metrics) + "\n"
@@ -69,6 +70,7 @@ def test_iris_mirror_uses_the_resumed_attempt_for_repeated_steps(tmp_path):
         (2, 1, 30),
     ]
     assert rows[-1]["cumulative_consumed_tokens"] == 50
+    assert rows[-1]["policy_entropy"] == pytest.approx(0.4)
     with path.open("a") as stream:
         stream.write(line(1, 2, 30))
     assert summarize_iris_log("arm", path) == rows
