@@ -81,10 +81,12 @@ source ~/.envvars.local
         --version dev --run --arm vanilla
 ```
 
-`--arm` ∈ {`vanilla`, `op1`, `op1-vanilla-recipe`}. Training lands on a v4-8
-(reserve with `--reserve v4-8` when the pool is tight); each arm is ~27
-minutes at ~35% MFU. Evals (`GrugEvalConfig`) run every 500 steps on the
-held-out FineWeb file with the current (non-EMA) weights.
+`--arm` ∈ {`vanilla`, `op1`, `op1-vanilla-recipe`} or `data` (materialize the
+caches without training). Training lands on a preemptible v4-16 (the v4-8
+pools were degraded at launch time; 16 devices divide the batch evenly and
+leave the global batch and data order unchanged); each arm is well under an
+hour. Evals (`GrugEvalConfig`) run every 500 steps on the held-out FineWeb
+file with the current (non-EMA) weights.
 
 ## Verdict
 

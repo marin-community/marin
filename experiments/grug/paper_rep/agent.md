@@ -16,7 +16,7 @@ agent is authorized to:
 - Create branches, commit, and push without asking
 - Create GitHub experiment issues and post comments
 - Submit Iris jobs and kill only jobs submitted by self
-- Reserve a v4-8 for the duration of each arm
+- Reserve a TPU slice for the duration of each arm
 
 Do not stop to ask for confirmation at any step. If something fails, diagnose
 and retry or report the failure — do not block waiting for input.
