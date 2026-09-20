@@ -89,3 +89,16 @@ GPU validation order: (1) fwd vs reference (`attention(...,implementation="refer
 - fwd kernel currently hardcodes `score_mod=None`; bwd has partial score_mod plumbing.
 - head_dim stays 128 (fa4 fast path) — the bias adds no head channels.
 - rel_extent (512/1024) is set independent of the sliding window (2048).
+
+## STATUS UPDATE (GPU)
+- Root cause of all "no-traceback crashes": OOM at 1GB default RAM. Bare iris kernel jobs need
+  `--gpu H100x1 --extra pipeline --cpu 8 --memory 96GB --disk 200GB`.
+- FORWARD fused bias kernel VALIDATED vs reference oracle on H100: all cases PASS
+  (max_abs 1.5-1.8e-2, rel ~6e-3), incl. sliding window & multiple L. Design simplified to a single
+  always-real-bias path (non-Inkling callers pass zero [B,Hq,S,1]); no Constexpr/dummy.
+- NEXT: backward. H100 uses the sm90 native bwd path (qhead_per_kvhead>1, head_dim=128 ->
+  segmented_flash_attention_backward_sm90_native / FlashAttentionBackwardSm90). Add the bias to its
+  S-recompute via the existing score_mod + aux_tensors hook (aux = lower_bounds, valid, + bias);
+  score_mod adds bias[b,h,q, clamp(q-k)] for 0<=q-k<L; score_mod_bwd = identity (dA is computed
+  separately by rel_bias_backward in the custom_vjp, not the kernel). Then wire the custom_vjp
+  (rel_bias as differentiable arg; bwd returns dq,dk,dv,dA) and the wrapper.
