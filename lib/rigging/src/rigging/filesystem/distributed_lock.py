@@ -189,12 +189,12 @@ def lease_refresh(
     *,
     interval: float = HEARTBEAT_INTERVAL,
 ) -> Generator[None, None, None]:
-    """Keep an acquired lease fresh and verify ownership before returning.
+    """Keep an acquired lease fresh for the duration of a block.
 
-    Refresh failures from the background thread are raised in the caller when
-    the block exits. A final synchronous refresh acts as an ownership barrier
-    for work that must only be published while the caller still holds the
-    lease.
+    Refresh failures are logged and stop the background thread. They do not
+    interrupt the caller because the protected operation may already have
+    produced externally visible side effects by the time lease loss is
+    detected.
 
     Args:
         lease: An acquired distributed lease.
@@ -204,16 +204,14 @@ def lease_refresh(
         raise ValueError("lease refresh interval must be positive")
 
     stop = threading.Event()
-    errors: list[Exception] = []
 
     def refresh() -> None:
         while not stop.wait(interval):
             try:
                 lease.refresh()
-            except Exception as error:
+            except Exception:
                 logger.error("Failed to refresh distributed lease %s", lease.lock_path, exc_info=True)
-                errors.append(error)
-                stop.set()
+                return
 
     thread = threading.Thread(target=refresh, name="distributed-lease-refresh", daemon=True)
     thread.start()
@@ -222,10 +220,6 @@ def lease_refresh(
     finally:
         stop.set()
         thread.join()
-
-    if errors:
-        raise errors[0]
-    lease.refresh()
 
 
 # ---------------------------------------------------------------------------

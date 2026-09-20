@@ -75,19 +75,20 @@ def test_gcs_acquire_when_conditional_write_loses_returns_false() -> None:
         assert not lease.try_acquire()
 
 
-def test_lease_refresh_keeps_lease_fresh_and_checks_ownership_on_exit() -> None:
+def test_lease_refresh_keeps_lease_fresh_during_block() -> None:
     lease = RecordingLease()
 
     with lease_refresh(cast(DistributedLease, lease), interval=0.001):
         assert lease.refresh_started.wait(timeout=1)
         lease.finish_refresh.set()
 
-    assert lease.refresh_count >= 2
+    assert lease.refresh_count >= 1
 
 
-def test_lease_refresh_raises_background_refresh_failure() -> None:
+def test_lease_refresh_does_not_interrupt_caller_after_refresh_failure() -> None:
     lease = LostLease()
 
-    with pytest.raises(LeaseLostError, match="changed owners"):
-        with lease_refresh(cast(DistributedLease, lease), interval=0.001):
-            assert lease.refresh_started.wait(timeout=1)
+    # Lease loss may be detected after the caller has produced external side
+    # effects, so the refresher logs the failure without aborting the caller.
+    with lease_refresh(cast(DistributedLease, lease), interval=0.001):
+        assert lease.refresh_started.wait(timeout=1)

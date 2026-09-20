@@ -123,10 +123,11 @@ def cache_to_prefix(
             # filesystems need the prefix to exist before files are written into it.
             fs.makedirs(cache_path, exist_ok=True)
             populate(fs, cache_path)
-        # Marker last: its presence is the cache-hit signal, so a crashed populate
-        # or a writer that lost its lease never reads as complete.
-        with fs.open(marker, "w") as handle:
-            json.dump(asdict(metadata), handle, sort_keys=True)
+            # Marker last: its presence is the cache-hit signal, so a crashed
+            # populate never reads as complete. Keep its write under the heartbeat
+            # because object-store operations can stall past the lease timeout.
+            with fs.open(marker, "w") as handle:
+                json.dump(asdict(metadata), handle, sort_keys=True)
         return cache_path
     finally:
         lock.release()
