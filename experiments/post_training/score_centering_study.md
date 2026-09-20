@@ -472,10 +472,15 @@ out of the same 756 held-out questions.
 The saved final pass favors SC32 in two seeds and TIS in one. Averaging the two same-checkpoint
 passes favors SC32 in all three, but the second pass changes a single arm by as many as 30
 correct answers among the earlier completed runs and 21 in seed 19. These are only three
-training seeds and two evaluator passes per final checkpoint. They show an exploratory quality
-signal, not a stable improvement or a benefit caused specifically by policy age. Held-out-
-question resampling would measure a different uncertainty than training-run or evaluator
-variation.
+training seeds and two evaluator passes per final checkpoint. The paired mean of +29.7
+completed answers has a three-seed 95% Student-t interval of −15.6 to +75.0 answers.
+The baseline-adjusted mean is +32.3 with an interval of −15.6 to +80.3. These use
+the sample mean plus or minus 4.30265 times the sample standard deviation divided
+by √3. They describe training-seed variation in only three pairs; the two evaluator
+passes within each checkpoint do not count as additional training seeds. The result
+is an exploratory signal, not a stable improvement or a benefit caused specifically
+by policy age. Resampling held-out questions would measure a different uncertainty
+than training-run or evaluator variation.
 
 ![Three older-policy Qwen seed pairs at cap 1.05, plotted against updates, consumed tokens, elapsed time, and H100-hours](figures/score_centering_cap105_older_seeds.svg)
 
