@@ -3,18 +3,23 @@
 
 """Distill a reusable EAGLE-3 draft for the Snowball SFT checkpoint.
 
-The target model captures verifier hidden states while generating long-form
-math responses on 64 H100s. The rollout engines are then torn down and one of
-those GPUs performs a bounded four-epoch draft update.
+Evalchemy generates a durable long-form math conversation corpus once. Later draft
+versions replay those cached responses through the target as bulk prefills,
+then train and validate the EAGLE head from the ephemeral verifier features.
 """
 
 from __future__ import annotations
 
 import click
+from marin.evaluation.evalchemy.config import EvalchemyConfig, load_evalchemy_config
+from marin.evaluation.hardware import AcceleratorChoice, Platform
+from marin.evaluation.model_config import ResourceHint, ServeConfig
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep
 from marin.experiment.cli import build_options
+from marin.experiment.evaluation import evaluate_evalchemy
 from marin.experiment.namespacing import user_owned_name
+from marin.rl.eagle import EagleRolloutCorpus, eagle_rollout_corpus_step
 from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
@@ -30,28 +35,29 @@ from marin.rl.skyrl import (
     eagle_draft_distillation_step,
 )
 
+from experiments.evaluation.evals import EVALS, EvalchemyDefinition, evalchemy_run_config
 from experiments.post_training.curriculum_rl.launch import (
     MARIN_TOKENIZER,
     MARIN_TOKENIZER_REVISION,
-    POOL_ARTIFACT_NAME,
     SNOWBALL_MODEL,
 )
-from experiments.post_training.curriculum_rl.pool import VALIDATION_FILENAME, pool_step
 
 ARTIFACT_NAME = "models/snowball-67b-a2b-eagle3-distilled"
-POOL_ARTIFACT_VERSION = "2026.09.18"
+ROLLOUT_VERSION = "2026.09.20"
+CORPUS_ARTIFACT_NAME = "data/snowball-67b-a2b-eagle3-math-corpus"
+CORPUS_VERSION = "2026.09.20"
 INITIAL_DRAFT_URI = "hf://laion/snowball-64k-eagle3-draft-r2egym"
 INITIAL_DRAFT_REVISION = "4bdb47c08e5b5190bea3c7a93c3e14470230e469"
-CLUSTER = "cw-us-east-02a"
+CLUSTER = "cw-rno2a"
 GPUS_PER_NODE = 8
-MARINSKYRL_COMMIT = "16f18405f5c31aadfcd915893f0e4d5fc0c0524e"
+MARINSKYRL_COMMIT = "b304c134c87797168b7bba0cb01c56d263950c9c"
 
 DISTILLATION_CONFIG = """
 entrypoint: generate
 
 context_budget:
-  request_window_tokens: 9856
-  max_new_tokens_per_turn: 8192
+  request_window_tokens: 32768
+  max_new_tokens_per_turn: 1
   max_turns: 1
 
 environment:
@@ -66,9 +72,7 @@ trainer:
     use_kl_loss: false
   train_batch_size: 64
   policy_mini_batch_size: 64
-  # Queue the bounded capture corpus at once so long-output stragglers do not
-  # drain the 64-way rollout pool at every host-side evaluation batch boundary.
-  eval_batch_size: 1200
+  eval_batch_size: 4096
   micro_forward_batch_size_per_gpu: 1
   micro_train_batch_size_per_gpu: 1
   logger: console
@@ -129,20 +133,71 @@ generator:
     top_p: 1.0
 
 data:
+  # The launcher's record-file route stages both Parquet and JSONL inputs.
   kind: parquet
   train_data: []
   val_data: []
   shuffle: false
+  eagle_replay: true
+  eagle_replay_batch_size: 4096
 
 extra_env:
   PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
 """
 
 
-def build_distillation(version: str | None = None) -> ArtifactStep[EagleDraftModel]:
+def build_rollout_corpus() -> ArtifactStep[EagleRolloutCorpus]:
+    """Generate long-form math responses once and normalize them into replay JSONL."""
+    sources = []
+    for name in ("aime24", "math500", "olympiadbench"):
+        definition = EVALS[name]
+        assert isinstance(definition, EvalchemyDefinition)
+        sources.append(load_evalchemy_config(definition.config_path))
+    evalchemy_config = EvalchemyConfig(
+        tasks=tuple(task for source in sources for task in source.tasks),
+        task_options={name: options for source in sources for name, options in source.task_options.items()},
+        apply_chat_template=True,
+        limit=128,
+        runtime_extras=tuple(extra for source in sources for extra in source.runtime_extras),
+    )
+    evaluation = evaluate_evalchemy(
+        model_name="snowball-67b-a2b-sft-s2-thinking",
+        model=SNOWBALL_MODEL,
+        config=evalchemy_run_config("snowball-eagle-math", evalchemy_config),
+        serve=ServeConfig(
+            tensor_parallel_size=1,
+            data_parallel_size=8,
+            max_model_len=32768,
+            max_num_batched_tokens=16384,
+            max_num_seqs=16,
+            vllm_extra_args=("--enable-expert-parallel",),
+        ),
+        resource_hint=ResourceHint(gpu={"H100": 8}, cpu=64, memory="512GB", disk="2TB"),
+        accelerator=AcceleratorChoice(
+            platform=Platform.GPU,
+            gpu_type="H100",
+            gpu_count=8,
+            target_cluster=CLUSTER,
+        ),
+        tokenizer=MARIN_TOKENIZER,
+        discover_latest_checkpoint=False,
+        version=ROLLOUT_VERSION,
+    )
+    return eagle_rollout_corpus_step(
+        name=user_owned_name(CORPUS_ARTIFACT_NAME),
+        version=CORPUS_VERSION,
+        evaluations=(evaluation,),
+    )
+
+
+def build_distillation(
+    version: str | None = None,
+    *,
+    corpus: ArtifactStep[EagleRolloutCorpus] | None = None,
+) -> ArtifactStep[EagleDraftModel]:
     """Build the Snowball EAGLE distillation artifact."""
     resolved_version = version or resolve_version(ARTIFACT_NAME, None)
-    pool = pool_step(POOL_ARTIFACT_NAME, POOL_ARTIFACT_VERSION)
+    corpus = corpus or build_rollout_corpus()
     return eagle_draft_distillation_step(
         EagleDraftDistillationSpec(
             name=user_owned_name(ARTIFACT_NAME),
@@ -155,7 +210,7 @@ def build_distillation(version: str | None = None) -> ArtifactStep[EagleDraftMod
                 tokenizer_revision=MARIN_TOKENIZER_REVISION,
             ),
             initial_draft=EagleDraftSource(uri=INITIAL_DRAFT_URI, identity=INITIAL_DRAFT_REVISION),
-            data=(ArtifactDataSource(pool, relative_path=VALIDATION_FILENAME),),
+            data=(ArtifactDataSource(corpus, relative_path="corpus.jsonl"),),
             topology=SkyRLTopology(
                 num_nodes=8,
                 gpus_per_node=GPUS_PER_NODE,
@@ -195,7 +250,9 @@ def build_distillation(version: str | None = None) -> ArtifactStep[EagleDraftMod
 @click.command(help=__doc__)
 @build_options
 def main() -> dict[str, ArtifactStep]:
-    return {"draft": build_distillation()}
+    corpus = build_rollout_corpus()
+    draft = build_distillation(corpus=corpus)
+    return {"corpus": corpus, "draft": draft}
 
 
 if __name__ == "__main__":

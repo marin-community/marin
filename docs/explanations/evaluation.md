@@ -68,6 +68,21 @@ filters for one Evalchemy response share one rollout. Harbor's normalized `steps
 complete Harbor trajectory remain source objects and blobs, so normalization does not replace the
 raw record.
 
+### Offline EAGLE corpora
+
+[`eagle_rollout_corpus_step`][marin.rl.eagle.eagle_rollout_corpus_step] projects one or more
+normalized evaluation artifacts into a target-independent JSONL corpus. Harbor rows retain their
+exact prompt and completion token IDs when the trajectory recorded them. Evalchemy rows retain the
+prompt messages and response text for rendering with the target tokenizer later. Assistant turns
+from the same evaluation attempt share a `group_id`, so train and holdout selection cannot split one
+conversation across both sets.
+
+The corpus is durable and reusable. Checkpoint-specific verifier hidden states are not: MarinSkyRL
+teacher-forces the cached sequences through the selected target checkpoint, trains the draft from
+the resulting bounded feature capture, and discards those features with the temporary run output.
+Changing the draft optimizer or epoch count therefore reuses the same generated responses; changing
+the target checkpoint recomputes verifier features without regenerating the responses.
+
 ### Rollout run catalog
 
 Completed and failed attempts are discoverable in Finelog's `marin.rollout_runs` table. Each row
