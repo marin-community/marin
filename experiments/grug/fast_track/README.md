@@ -37,13 +37,6 @@ mean. Both loss (Paloma macro cross-entropy) and bpb (macro bits-per-byte) are l
 | d1280 | dense | 20 |  4,988 | 5.23B | 3.4e19 | 83.3% | 2.847 | 1.183 | 0.881 | 1.5 hr |
 | d1280 | moe   | 60 | 16,669 | 17.5B | 4.2e19 | 15.4% | 2.504 | 1.044 | 0.741 | 10.0 hr |
 
-MFU is verified self-consistent: reported MFU equals `3·(analytic fwd FLOPs/token)·(tokens/s) / peak`
-for every row (the ×3 is fwd+bwd). Dense runs at **4–5× the MFU of MoE** at the same width — MoE is
-throttled by expert-parallel all-to-all and small per-expert matmuls, dense is compute-bound in large
-matmuls. Dense and MoE are matched on **active** params (~1.1×: 18.1M vs 20.8M at d512); the MoE's total
-params are 13–17× larger by design (384 experts, top-8 active). The dense variant carries no LatentMoE —
-its `latent_dim` is unused on the dense path and excluded from `_active_params`.
-
 ## Tokenizer impact (16k vs 128k)
 
 Same MoE geometry and token budget, swapping the 16k BPE tokenizer for the 128k Marin (llama3-family)
