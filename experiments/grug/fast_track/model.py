@@ -132,6 +132,7 @@ class GrugModelConfig:
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     # Dense (no-MoE) mode: every block is a single DenseMLP(hidden, intermediate_dim) SwiGLU; the MoE fields are ignored.
     dense_mlp: bool = False
+    logit_softcap: float | None = None  # Gemma-2 final-logit softcap: cap * tanh(logits / cap).
 
     def __post_init__(self) -> None:
         if not self.dense_mlp and self.num_experts_per_token >= self.num_experts:
@@ -852,7 +853,11 @@ class Transformer(eqx.Module):
     ) -> Float[Array, "B S V"]:
         batch_spec = _batch_spec()
         hidden, _ = self(token_ids, mask=mask)
-        return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=batch_spec)
+        logits = jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=batch_spec)
+        if self.config.logit_softcap is not None:
+            cap = self.config.logit_softcap
+            logits = cap * jnp.tanh(logits / cap)
+        return logits
 
     def next_token_loss(
         self,
@@ -876,6 +881,7 @@ class Transformer(eqx.Module):
             weight=loss_weight,
             reduction=reduction,
             logsumexp_weight=logsumexp_weight,
+            logit_soft_cap=self.config.logit_softcap,
             dtype=loss_dtype,
             implementation="xla_fast_bwd",
             block_sizes=_CE_BLOCK_SIZES,
