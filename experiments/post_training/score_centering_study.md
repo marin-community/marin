@@ -255,6 +255,31 @@ The async engine's response sampling and GPU scheduling remain nondeterministic,
 fixed training seed. The step-zero correct counts in the first four runs differ; comparisons
 must include each run's starting point and between-seed uncertainty.
 
+At update 10, the two older-schedule TIS arms each consumed 320 unique prompt UIDs, with exact
+set overlap, and both had mean consumed-token age 5.0. Completed correct was 103/756 for TIS
+alone (87/756 at step zero) and 83/756 for TIS plus SC32 (79/756 at step zero). Their TIS cap
+fractions were near zero through update 10. These are one-seed interim values, with visible
+step-zero evaluator variation; they do not establish a quality effect. The near-fresh TIS and
+plain-PPO arms also consumed the same first 320 prompt UIDs, despite different realized ages.
+At step zero, the older TIS and SC arms used the same 756 held-out prompts and the same starting
+model artifact. Their two greedy response dumps agreed on the first eight response characters
+for 755 prompts, but only 88 full responses matched exactly and 674 scores agreed. The median
+common response prefix was 375 characters. Small generation differences can branch into long,
+different solutions; the exact cause of the divergence has not been isolated. A single greedy
+pass has visible run-to-run outcome variation here.
+
+The near-fresh SC arm's first GPU attempt reached update ten, then its checkpoint hit an S3
+`OSError` (`errno 16`, "Please reduce your request rate") at 00:03 UTC on September 20. Iris
+retried the child, and its second attempt restarted at update zero; the evaluation dump at step
+zero was replaced. Attempt number therefore matters when reading the training curve, and total
+GPU cost includes both attempts. The plain-PPO arm later stalled during its update-30 rank-zero
+multipart checkpoint upload: part 38 of a 7.15 GB object was the last completed part at 00:08:35
+UTC, with no progress for more than ten minutes. A preempt request against the federated Iris
+controller returned success without changing the child. A preempt request to the `cw-rno2a`
+controller at 00:21 UTC stopped rank zero and atomically restarted its sibling. Both child tasks
+entered attempt one. Checkpoint recovery and final outcome remain to be verified. These are
+infrastructure interruptions, and the failed attempts must be included in cost and provenance.
+
 `analyze_score_centering.py` reads every dumped evaluation response and the durable Iris
 `WANDB_MIRROR` lines. It writes separate CSV files for completion-aware quality and per-update
 age, mismatch, consumed tokens, cycle time, and nominal GPU-hours across inclusive step cycles.
