@@ -1156,6 +1156,9 @@ def segmented_flash_attention_backward_launcher(
             None,  # mCuSeqlensQ
             None,  # mSeqUsedQ
             None,  # mdLSE
+            None,  # mRowMax (flash-attn-4 b28)
+            None,  # mScaleP (flash-attn-4 b28)
+            softmax_scale,
             stream,
         )
         if cutlass.const_expr(qhead_per_kvhead == 1):
@@ -1186,7 +1189,7 @@ def segmented_flash_attention_backward_launcher(
                 None,
                 stream,
             )
-            dq_postprocess(dq_accum, dq, softmax_scale, None, None, stream)
+            dq_postprocess(dq_accum, dq, softmax_scale, None, None, None, None, stream)
             return
 
         if cutlass.const_expr(qhead_per_kvhead > 1):
@@ -1219,9 +1222,9 @@ def segmented_flash_attention_backward_launcher(
             None,
             stream,
         )
-        dq_postprocess(dq_accum, dq, softmax_scale, None, None, stream)
-        dk_postprocess(dk_accum, dk, softmax_scale, None, None, stream)
-        dv_postprocess(dv_accum, dv, cutlass.Float32(1.0), None, None, stream)
+        dq_postprocess(dq_accum, dq, softmax_scale, None, None, None, None, stream)
+        dk_postprocess(dk_accum, dk, softmax_scale, None, None, None, None, stream)
+        dv_postprocess(dv_accum, dv, cutlass.Float32(1.0), None, None, None, None, stream)
 
     return _launch_segmented_flash_attention_backward
 
