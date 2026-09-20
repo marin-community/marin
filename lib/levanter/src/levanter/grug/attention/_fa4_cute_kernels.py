@@ -1156,9 +1156,10 @@ def segmented_flash_attention_backward_launcher(
             None,  # mCuSeqlensQ
             None,  # mSeqUsedQ
             None,  # mdLSE
-            None,  # mRowMax (flash-attn-4 b28)
-            None,  # mScaleP (flash-attn-4 b28)
+            None,  # mRowMax
+            None,  # mScaleP
             softmax_scale,
+            None,
             stream,
         )
         if cutlass.const_expr(qhead_per_kvhead == 1):
