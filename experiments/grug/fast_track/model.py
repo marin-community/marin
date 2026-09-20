@@ -130,6 +130,15 @@ class GrugModelConfig:
     sconv_sites: tuple[str, ...] = ("k", "attn", "mlp")
     pooled_transport_capacity_factor: float | None = 1.15
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
+    # Inkling (Thinking Machines) relative-position embedding in place of RoPE: a per-head,
+    # content-dependent bias added to the pre-softmax logits. r_proj maps the residual to a
+    # per-head relative feature of size `rel_dim`; a shared bank `[rel_dim, rel_extent]` turns it
+    # into one bias per query-key distance (0 <= i-j < rel_extent), gathered by distance. When on,
+    # RoPE is disabled. `rel_extent` is a single extent for all layers (Inkling uses 512 local /
+    # 1024 global; the stacked layers here share one bank).
+    inkling_relpos: bool = False
+    rel_dim: int = 16
+    rel_extent: int = 1024
     # Dense (no-MoE) mode: every block is a single DenseMLP(hidden, intermediate_dim) SwiGLU; the MoE fields are ignored.
     dense_mlp: bool = False
 
@@ -202,6 +211,43 @@ class ShortConv(eqx.Module):
         return short_conv(weight, x, segment_ids, batch_axes=_BATCH_AXES)
 
 
+class InklingRelPos(eqx.Module):
+    """Inkling (Thinking Machines) relative-position bias: a per-head, content-dependent term added
+    to the pre-softmax attention logits, in place of RoPE. ``r_proj`` maps the residual to a per-head
+    relative feature R (``rel_dim`` per head); the shared bank ``proj`` [rel_dim, rel_extent] turns it
+    into one bias value per query-key distance. ``__call__`` returns the compact bias A[b,h,i,delta] =
+    R[b,i,h,:]·proj[:,delta]; the kernel/reference gathers it by distance i-j."""
+
+    r_proj: jax.Array  # [D, num_heads * rel_dim]
+    proj: jax.Array  # [rel_dim, rel_extent], shared across heads
+    num_heads: int = eqx.field(static=True)
+    rel_dim: int = eqx.field(static=True)
+
+    @staticmethod
+    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "InklingRelPos":
+        k_r, k_p = random.split(key, 2)
+        d, n, r, L = cfg.hidden_dim, cfg.num_heads, cfg.rel_dim, cfg.rel_extent
+        return InklingRelPos(
+            r_proj=reshard(_init_weight(k_r, (d, n * r), cfg.initializer_std), P(_FSDP_AXES, "model")),
+            # Small bank; init like other projections but scaled to keep the bias O(1) at init.
+            proj=reshard(_init_weight(k_p, (r, L), 1.0 / (r**0.5)), P(None, None)),
+            num_heads=n,
+            rel_dim=r,
+        )
+
+    @named_call
+    def __call__(self, x: Float[Array, "B S D"]) -> Float[Array, "B H S L"]:
+        relative_states = jnp.einsum("bsd,dk->bsk", x, self.r_proj.astype(x.dtype))
+        relative_states = rearrange(relative_states, "b s (h r) -> b s h r", r=self.rel_dim)
+        # A[b,h,i,delta] = sum_r R[b,i,h,r] * proj[r,delta]; heads keep the model-axis sharding.
+        return jnp.einsum(
+            "bshr,rl->bhsl",
+            relative_states,
+            self.proj.astype(x.dtype),
+            out_sharding=P(_BATCH_AXES, "model", None, None),
+        )
+
+
 class CausalSelfAttention(eqx.Module):
     w_q: Float[Array, "D NH"]
     w_k: Float[Array, "D MH"]
@@ -209,11 +255,12 @@ class CausalSelfAttention(eqx.Module):
     w_o: Float[Array, "NH D"]
     attn_gate: Float[Array, "D N"]
     sconv_k: "ShortConv | None"  # SConv after the K projection (cfg.sconv)
+    rel_pos: "InklingRelPos | None"  # Inkling relative-position bias (replaces RoPE when set)
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "CausalSelfAttention":
-        k_q, k_k, k_v, k_o = random.split(key, 4)
+        k_q, k_k, k_v, k_o, k_rel = random.split(key, 5)
         d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.stored_kv_heads, cfg.inferred_head_dim
         return CausalSelfAttention(
             w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), P(_FSDP_AXES, "model")),
@@ -222,6 +269,7 @@ class CausalSelfAttention(eqx.Module):
             w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", _FSDP_AXES)),
             attn_gate=reshard(jnp.zeros((d, n)), P(None, None)),
             sconv_k=(ShortConv.init(m * h, cfg.sconv_kernel) if cfg.sconv and "k" in cfg.sconv_sites else None),
+            rel_pos=InklingRelPos.init(cfg, key=k_rel) if cfg.inkling_relpos else None,
             cfg=cfg,
         )
 
@@ -291,19 +339,25 @@ class CausalSelfAttention(eqx.Module):
                 jnp.concatenate([k_rot, kh[..., half:]], axis=-1),
             )
 
-        if isinstance(disable_rope, bool):
-            if not disable_rope:
-                q, k = _rope(q, k)
+        # Inkling relative-position bias replaces RoPE: skip the rotation and instead add a per-head
+        # content-dependent bias (from x) to the pre-softmax logits inside attention().
+        rel_bias = None
+        if self.rel_pos is not None:
+            rel_bias = self.rel_pos(x)
         else:
-            q_roped, k_roped = _rope(q, k)
-            keep = ~jnp.asarray(disable_rope, dtype=jnp.bool_)
-            q = jnp.where(keep, q_roped, q)
-            k = jnp.where(keep, k_roped, k)
+            if isinstance(disable_rope, bool):
+                if not disable_rope:
+                    q, k = _rope(q, k)
+            else:
+                q_roped, k_roped = _rope(q, k)
+                keep = ~jnp.asarray(disable_rope, dtype=jnp.bool_)
+                q = jnp.where(keep, q_roped, q)
+                k = jnp.where(keep, k_roped, k)
         q = q * self.cfg.qk_mult
         # The fa4-cute kernel is GPU-only; fall back to auto-select off-GPU so the model still lowers
         # on CPU (e.g. the grug variant-contract tests).
         attn_impl = "gpu_fa4_cute" if jax.default_backend() == "gpu" else None
-        attn_out = attention(q, k, v, mask, implementation=attn_impl)
+        attn_out = attention(q, k, v, mask, implementation=attn_impl, rel_bias=rel_bias)
         # Exclusive Self Attention (XSA): subtract the component of yᵢ parallel to vᵢ, per head.
         # zᵢ = yᵢ - (yᵢᵀvᵢ / ‖vᵢ‖²) vᵢ.
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])

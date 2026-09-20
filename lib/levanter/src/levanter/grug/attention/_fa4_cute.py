@@ -340,10 +340,17 @@ def gpu_fa4_cute_attention(
     k: Float[Array, "B K Hkv D"],
     v: Float[Array, "B K Hkv D"],
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+    *,
+    rel_bias: Float[Array, "B Hq Q L"] | None = None,
 ) -> Float[Array, "B Q Hq D"]:
     """Run causal self-attention through the segmented FA4/CuTe kernel."""
     if jax.default_backend() != "gpu":
         raise RuntimeError("gpu_fa4_cute_attention requires the JAX GPU backend.")
+    if rel_bias is not None:
+        # Stage 2/3: fused Inkling relative-position bias (gather-by-distance in the kernel).
+        raise NotImplementedError(
+            "fa4_cute rel_bias (Inkling relative position) not yet wired; see inkling-relpos-fa4.md"
+        )
     return _gpu_fa4_cute_attention(q, k, v, mask, kernel_config=_segmented_kernel_config(q.shape[-1]))
 
 
