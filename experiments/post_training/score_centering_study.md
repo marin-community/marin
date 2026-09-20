@@ -792,3 +792,64 @@ to-eight-update age range, identify the cause of the engine gap, or establish
 whether score centering improves quality. The two eight-H100 training tasks used
 about 2.36 H100-hours. The eight-H100 terminal export added about 0.49 H100-hours.
 These figures include setup and checkpoint/export work for the probe.
+
+## Qwen fixed-sampler age calibration
+
+A longer [17-update GPU run](https://iris-cw-rno2a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-qwen-default-set-59b72b7a-2026.09.20.7-a6c25a09ef63)
+measured the same A/B/C terms from age zero through age sixteen. This is a
+deliberate fixed-sampler stress condition, separate from the normal recipe:
+the initial version-0 inference weights remained published for all 17 learner
+updates (`weight_sync_interval_steps=100`, `max_staleness_steps=16`). It used
+MarinSkyRL `78a2fe8f3baf2e004ade5307535f4de413d2188c`, the same Qwen
+model and pool as the short probe, seed 17, 32 prompts times four responses
+per update, the full 4,096-token response cap, 128 generation workers, a
+32-group buffer, top-k-one sampled-token capture, TIS cap 1.05, and no SC or
+held-out evaluation. The [W&B run](https://wandb.ai/marin-community/marin-async-rl/runs/ojddtcjz)
+records one optimizer update at every step and the raw gradient norms. All
+17 durable records are under
+`s3://marin-us-east-02a/marin/users/romain/checkpoints/async-rl/qwen-default-set-59b72b7a/2026.09.20.7/exports/mismatch_decomposition/`.
+
+The [analysis script](analyze_score_centering_mismatch.py) reads these gzip
+JSON records and writes the [age and position ledger](results/score_centering_qwen_fixed_sampler_age.csv)
+and the figure below. It rejects a wrong policy version, missing reference
+score, unexpected age, or failure of the exact A/B/C reconstruction. Every
+selected token was version 0, so its frozen Megatron B matches the generating
+weights. Across the run, 5,605,282 selected tokens were scored, with no
+mixed-version response. The version mapping and alignment checks are the same
+as in the short probe. The two repeat trainer forwards at step 1 again had
+zero maximum difference in W&B; the observed drift is above that measured
+noise floor. This run cannot validate B for a later published version or a
+response spanning two versions.
+
+| Token age | Tokens | Mean absolute B − A | Mean absolute C − B | Mean absolute C − A | Stale term absolute p99 | Combined absolute p99 | Raw TIS cap active |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0 | 98,326 | 0.01294 | 0 | 0.01294 | 0 | 0.13046 | 4.56% |
+| 1 | 209,009 | 0.01388 | 0.01349 | 0.01393 | 0.12531 | 0.12911 | 5.00% |
+| 4 | 371,253 | 0.01610 | 0.01572 | 0.01618 | 0.12956 | 0.13493 | 5.89% |
+| 8 | 317,153 | 0.01481 | 0.01490 | 0.01529 | 0.13392 | 0.13895 | 5.51% |
+| 12 | 263,431 | 0.01396 | 0.01497 | 0.01521 | 0.14466 | 0.14888 | 5.35% |
+| 16 | 331,954 | 0.01422 | 0.01559 | 0.01581 | 0.14936 | 0.15371 | 5.60% |
+
+Across ages one through sixteen, token-weighted mean absolute engine,
+stale-weight, and combined gaps were 0.01514, 0.01540, and 0.01574. The
+component signs opposed on 60.84% of sampled tokens, canceling 0.01480 mean
+absolute log-probability units. The stale-weight *mean* did not grow steadily
+with age, but its per-step absolute p99 rose from 0.12531 at age one to
+0.14936 at age sixteen. The combined p99 rose from 0.12911 to 0.15371.
+Raw sampled-token TIS cap activity across these ages was 5.66% when weighted
+by selected tokens. First and last 256-token windows had smaller mean gaps
+than the middle; the ledger keeps each window and their token counts. Those
+windows can overlap for responses shorter than 512 tokens and must not be
+summed as a partition. Signed components reconstructed C − A exactly in
+every record. These are descriptive observations along one evolving learner
+and changing prompt batches, not a causal age curve at fixed weights or a
+quality result.
+
+![Qwen fixed-sampler A/B/C mismatch from age zero through sixteen](figures/score_centering_qwen_fixed_sampler_age.svg)
+
+The two eight-H100 tasks succeeded without a retry or preemption. Their
+14:13 and 14:42 runtimes used 3.86 reserved H100-hours in total, including
+setup and the 17 updates. This run did not export a final model or evaluate
+quality. It calibrates the magnitude and tails that the matched quality
+experiments need to interpret; it does not establish that keeping a sampler
+fixed improves throughput or quality.
