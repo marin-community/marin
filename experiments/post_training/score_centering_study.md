@@ -982,7 +982,7 @@ occurred in this probe.
 The [round-two diagnostic cost ledger](results/score_centering_round2_diagnostic_cost.csv)
 records the three Qwen probes, their two failed setup attempts, the Snowball
 model-only recovery, six failed Snowball resume attempts, and the successful
-r8 full-optimizer resume and DP-local save. It uses
+r8 full-optimizer resume, DP-local save, and terminal HF export. It uses
 the durations of every GPU task shown by `iris job describe`, multiplied by
 eight H100s per task; coscheduled siblings still reserve GPUs until a failed
 head task exits. These finished jobs used 9.02 Qwen and 57.86 Snowball reserved
@@ -991,11 +991,10 @@ and r7's setup failure added 3.16, bringing the round-two diagnostic total
 to 99.50. The 17.42-hour Snowball recovery in this
 ledger is the same job described above, so it is counted once. The six completed
 Qwen confirmation runs used another 148.82 reserved H100-hours, including
-training and terminal export. The successful r8 training job used 31.38 more.
-Thus the completed round-two diagnostic and Qwen confirmation tasks total
-279.70 H100-hours before r8's separate terminal export. These are reserved
-task-hours, not a billing estimate; the export enters the total once its task
-durations become final.
+training and terminal export. The successful r8 training and separate HF export
+used 31.38 and 18.23 H100-hours, respectively. Thus the completed round-two
+diagnostic and Qwen confirmation tasks total 297.93 H100-hours. These are
+reserved task-hours, not a billing estimate.
 
 ## Matched Qwen confirmation design
 
@@ -1125,12 +1124,15 @@ retained [qualification record](results/score_centering_snowball_r8_qualificatio
 reads the checkpoint's `policy/common.pt` and records `param_state_sharding_type=dp_reshardable`
 for both optimizer partitions. This is a successful full-optimizer save. Its
 separate [terminal export](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fscore-centering-snowball-resume-smoke-01a0bb6f-r8-export-3)
-is running; the Snowball quality pilot remains gated on export success. A
+also succeeded without retry. It published all 39 HF weight shards with the
+config, tokenizer, and weight index to the durable policy path in the
+qualification record; the exporter verified the model. This clears the
+Snowball quality pilot gate. A
 DP-local checkpoint requires the same tensor, pipeline, context, and expert
 parallel geometry when resumed. The launcher now selects this format for
 Snowball and leaves Qwen's checkpoint config unchanged.
 
-If r8 finishes, run one matched Snowball TIS-versus-TIS-plus-SC32
+Run one matched Snowball TIS-versus-TIS-plus-SC32
 pair from the same SFT model and frozen pool as the smoke. Use seed 17, the
 same 40-H100 Megatron/vLLM topology with 1,980 GB per task, 128 prompts
 and four responses per update, 192 generation workers, a 32-group buffer, age limit eight,
