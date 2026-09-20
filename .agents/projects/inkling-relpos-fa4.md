@@ -201,3 +201,11 @@ Edits:
    attention instead of A. reference_attention: materialize A=einsum(R,proj) for the oracle.
 6. Tests: standalone forward on-the-fly vs reference; grad check (dq/dk/dv/dR/dproj) vs reference; MFU d512+d1280.
 Risk: ~6 files/2 kernels, several GPU iterations. Hybrid keeps dA traffic (gets ~1.3pt); FULL removes it (needs reduction).
+
+## Milestone 1 (on-the-fly A read, hybrid dA) DONE + grad-verified (2026-09-20)
+Grad check (d512 GQA, vs reference): NO-BIAS + WITH-BIAS all PASS incl dR (3.5e-3) and dproj (3.1e-3).
+Interface changed: attention() takes rel_r[B,S,Hq,rel_dim]+rel_proj[rel_dim,L]; custom_vjp returns
+dR,dproj. Kernels compute A=R.proj on the fly (fwd + bwd S-recompute). Model no longer materializes A.
+Reference/TPU/MLA-fallback materialize A internally. dA still scattered in-kernel; VJP maps dA->dR,dproj.
+MFU pending (d512 1024/512, d1280 512) vs materialized (6.03/6.55/11.34, rope d1280 15.44).
+Milestone 2 (optional): emit dR (16-wide) + dproj (reduction) in-kernel to also kill dA[B,Hq,S,L] traffic.
