@@ -200,6 +200,31 @@ def test_scrape_failure_is_reported_separately(monkeypatch: pytest.MonkeyPatch) 
     )
 
 
+def test_health_reporting_failure_does_not_stop_collection(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = _transport(monkeypatch)
+    responses: Iterator[Exception | _PrometheusResponse] = iter(
+        [requests.ConnectionError("unavailable"), _PrometheusResponse(_SCRAPE)]
+    )
+
+    def scrape(*_args: object, **_kwargs: object) -> _PrometheusResponse:
+        response = next(responses)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    def unavailable_health() -> None:
+        raise RuntimeError("telemetry unavailable")
+
+    monkeypatch.setattr("rigging.telemetry.prometheus.requests.get", scrape)
+    monkeypatch.setattr(telemetry, "record_runtime_health", unavailable_health)
+    collector = _collector(lambda families: prefixed_metric_snapshots(families, metric_prefix="vllm:"))
+
+    collector.poll_once()
+    collector.poll_once()
+
+    assert transport.record("generation_tokens_total", {"model_name": "test"})["value"] == 42
+
+
 def test_scraper_rejects_oversized_response_before_reading_body(monkeypatch: pytest.MonkeyPatch) -> None:
     response = _PrometheusResponse(_SCRAPE, content_length=DEFAULT_MAX_SCRAPE_BYTES + 1)
     monkeypatch.setattr("rigging.telemetry.prometheus.requests.get", lambda *_args, **_kwargs: response)
