@@ -132,6 +132,7 @@ class GrugModelConfig:
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     # Dense (no-MoE) mode: every block is a single DenseMLP(hidden, intermediate_dim) SwiGLU; the MoE fields are ignored.
     dense_mlp: bool = False
+    cross_layer_kv: bool = False  # back-half layers source K/V from the midpoint residual (own KV proj each).
 
     def __post_init__(self) -> None:
         if not self.dense_mlp and self.num_experts_per_token >= self.num_experts:
@@ -232,14 +233,17 @@ class CausalSelfAttention(eqx.Module):
         mask: AttentionMask | jax.Array,
         disable_rope: bool | jax.Array = False,
         is_global: bool | jax.Array = False,
+        kv_input: Float[Array, "B S D"] | None = None,
     ) -> Float[Array, "B S D"]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
         batch_spec = _batch_spec()
 
+        # Cross-layer KV: Q from this layer's input, K/V from a separate source (the midpoint residual).
+        kv_x = x if kv_input is None else kv_input
         q_flat = jnp.einsum("bsh,hd->bsd", x, self.w_q)
-        k_flat = jnp.einsum("bsh,hd->bsd", x, self.w_k)
-        v_flat = jnp.einsum("bsh,hd->bsd", x, self.w_v)
+        k_flat = jnp.einsum("bsh,hd->bsd", kv_x, self.w_k)
+        v_flat = jnp.einsum("bsh,hd->bsd", kv_x, self.w_v)
         # SConv: depthwise causal conv after the K projection. segment_ids (packed-document
         # boundaries) come from the mask so the conv never mixes across a document boundary.
         _seg = mask.segment_ids if isinstance(mask, AttentionMask) else None
@@ -678,13 +682,16 @@ class Block(eqx.Module):
         mask: AttentionMask | jax.Array,
         disable_rope: bool | jax.Array = False,
         is_global: bool | jax.Array = False,
+        kv_hidden: Float[Array, "B S D"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         # segment_ids (packed-document boundaries) for the branch-output SConvs; None when unpacked.
         _seg = mask.segment_ids if isinstance(mask, AttentionMask) else None
         sconv_segment_ids = _seg[0] if _seg is not None else None
 
         attn_in = self.attn_gated_norm(self.rms_attn(x))
-        attn_out = self.attn(attn_in, mask, disable_rope=disable_rope, is_global=is_global)
+        # Cross-layer KV: normalize the midpoint residual with this layer's own norm as the K/V source.
+        kv_input = None if kv_hidden is None else self.attn_gated_norm(self.rms_attn(kv_hidden))
+        attn_out = self.attn(attn_in, mask, disable_rope=disable_rope, is_global=is_global, kv_input=kv_input)
         if self.sconv_attn is not None:
             attn_out = self.sconv_attn(attn_out, sconv_segment_ids)
         x = x + attn_out
@@ -801,24 +808,38 @@ class Transformer(eqx.Module):
         short_lower_bounds = _batch_reshard(short_lower_bounds)
         valid = _batch_reshard(valid)
 
-        def _scan_layers(
-            carry_hidden: Float[Array, "B S D"],
-            scan_inputs: tuple[Block, jax.Array],
-        ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-            layer, layer_use_long_mask = scan_inputs
-            use_long = jnp.asarray(layer_use_long_mask, dtype=jnp.bool_)
-            lower_bounds = jnp.where(use_long, long_lower_bounds, short_lower_bounds)
-            layer_mask = long_mask.with_fa4_bounds(lower_bounds, valid)
-            return eqx.filter_checkpoint(layer, policy=None)(
-                carry_hidden,
-                layer_mask,
-                use_long,
-                use_long,
-            )
+        def _make_scan(kv_hidden: Float[Array, "B S D"] | None):
+            def _scan_layers(
+                carry_hidden: Float[Array, "B S D"],
+                scan_inputs: tuple[Block, jax.Array],
+            ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+                layer, layer_use_long_mask = scan_inputs
+                use_long = jnp.asarray(layer_use_long_mask, dtype=jnp.bool_)
+                lower_bounds = jnp.where(use_long, long_lower_bounds, short_lower_bounds)
+                layer_mask = long_mask.with_fa4_bounds(lower_bounds, valid)
+                return eqx.filter_checkpoint(layer, policy=None)(
+                    carry_hidden,
+                    layer_mask,
+                    use_long,
+                    use_long,
+                    kv_hidden,
+                )
 
-        hidden, stacked_router_stats = jax.lax.scan(
-            _scan_layers, hidden, xs=(self.stacked_blocks.stacked, mask_schedule)
-        )
+            return _scan_layers
+
+        if cfg.cross_layer_kv:
+            # Two-phase scan: run the front half, then feed its output (the midpoint residual) as the
+            # K/V source to every back-half layer; each back layer keeps its own K/V projection.
+            mid = cfg.num_layers // 2
+            front = jax.tree.map(lambda a: a[:mid], self.stacked_blocks.stacked)
+            back = jax.tree.map(lambda a: a[mid:], self.stacked_blocks.stacked)
+            hidden, rs_front = jax.lax.scan(_make_scan(None), hidden, xs=(front, mask_schedule[:mid]))
+            hidden, rs_back = jax.lax.scan(_make_scan(hidden), hidden, xs=(back, mask_schedule[mid:]))
+            stacked_router_stats = jax.tree.map(lambda a, b: jnp.concatenate([a, b], axis=0), rs_front, rs_back)
+        else:
+            hidden, stacked_router_stats = jax.lax.scan(
+                _make_scan(None), hidden, xs=(self.stacked_blocks.stacked, mask_schedule)
+            )
         if cfg.dense_mlp:
             router_metrics: dict[str, jax.Array] = {}
         else:
