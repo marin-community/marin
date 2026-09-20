@@ -48,6 +48,7 @@ smokes. All of these runs pin MarinSkyRL `a7b51d31`. The Marin launcher source b
 | r30–r31 | `5c43d7bcfb` | Third cap-1.05 seed |
 | r32–r33 | `6fbf47d3b8` | Cap-1.05 near-fresh pair; same learner settings as r21–r22 except TIS cap |
 | r34–r35 | `16596f4a02` | Cap-1.05 older pair with top-k eight capture and optional SC8 |
+| r36–r37 | `09b623bfb8` | Cap-1.05 top-k-eight pair with delayed weight publication |
 | Snowball smokes | `6f66ee6c22` | Megatron MoE two-update pair |
 
 For one sampled token, let `q` be the behavior policy that sampled it, `o` the stored trainer
@@ -432,6 +433,19 @@ update ten. Across their first seven unique learner updates, both consumed token
 about 3.3 and capped about 5.3% of tokens, with no TIS-skipped batch. Median inclusive cycles
 were 41.9 and 39.7 seconds, and bridge responses averaged 2.59 and 2.62 MB. This is an interim
 throughput signal, not a quality conclusion.
+
+The cap-1.05 top-k-eight delayed-publication pair, [TIS r36](https://iris-cw-rno2a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-qwen-default-set-7a08fd68-2026.09.20.5-ecc74beeec58)
+and [TIS plus SC8 r37](https://iris-cw-rno2a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-qwen-default-set-c776578e-2026.09.20.5-6e92378f4f0b),
+started on September 20 with the same seed, data, 40-update endpoint, 16 H100s per arm, and
+`iris-interactive` GPU pods. The [resolved configurations](configs/score_centering/README.md)
+differ within the pair only in the SC switch. Relative to r34/r35, the maximum admitted
+version age rises from eight to 16 updates, and inference weights are published every ten
+updates instead of every update; evaluations at updates ten, twenty, thirty, and forty also
+require the latest weights. The purpose is to measure whether the observed learner-versus-
+behavior log-probability mismatch rises with deliberate publication delay and whether SC helps
+under that larger drift. Trained outcomes remain pending. Initial remote coordinator attempts
+failed before reaching GPUs because those pods lacked S3 credentials; the authenticated local
+launcher submitted the linked GPU jobs directly.
 
 `analyze_score_centering.py` reads every dumped evaluation response and the durable Iris
 `WANDB_MIRROR` lines. It writes separate CSV files for completion-aware quality and per-update

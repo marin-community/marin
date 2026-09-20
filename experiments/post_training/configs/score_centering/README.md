@@ -21,6 +21,11 @@ The active-cap top-k-eight pair `r34/r35` likewise differs only in
 `score_centering_topk` (`0` versus `8`). Relative to `r24/r25`, the TIS control changes
 only `generator.sampling_params.logprobs` from 32 to 8; the SC arm also changes its
 matching correction width from 32 to 8.
+The delayed-publication pair `r36/r37` differs only in `score_centering_topk` (`0` versus
+`8`) after excluding run-owned paths and names. Relative to `r34/r35`, the only training
+settings changed are `max_staleness_steps` (`8` to `16`) and
+`weight_sync_interval_steps` (`1` to `10`). Step-end evaluation still publishes the latest
+weights at updates 10, 20, 30, and 40.
 
 The cap-2 older pair `r19/r20` also differs only in `score_centering_topk`. Relative to
 `r19`, near-fresh `r21` changes the age limit, generation-worker count, and finished-group
