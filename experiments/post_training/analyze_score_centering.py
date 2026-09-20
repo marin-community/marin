@@ -187,6 +187,7 @@ def summarize_iris_logs(label: str, paths: list[Path]) -> list[dict[str, Any]]:
     for job_index, path in enumerate(paths):
         with path.open() as stream:
             for line in stream:
+                line = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", line)
                 if marker not in line:
                     continue
                 step_text, payload = line.split(marker, 1)[1].split(" metrics=", 1)

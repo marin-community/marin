@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import re
 from pathlib import Path
 
 GSM8K_QUESTIONS = 256
@@ -58,6 +59,7 @@ def _completed_counts(metrics: dict) -> tuple[int, int]:
 def _mirrors(path: Path, step: int) -> dict[str, dict]:
     selected: dict[str, dict] = {}
     for line in path.read_text().splitlines():
+        line = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", line)
         if "WANDB_MIRROR kind=" not in line or f" step={step} metrics=" not in line:
             continue
         marker = line.split("WANDB_MIRROR kind=", 1)[1]
