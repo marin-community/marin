@@ -12,7 +12,6 @@ from hero_runs import (
     INITIALIZING_PHASE,
     LEVANTER_METRICS_TABLE,
     PHASE_METRIC,
-    TASK_STATE_LOOKBACK,
     TELEMETRY_GONE_AGE,
     TRAINING_PHASE,
     HeroRun,
@@ -24,10 +23,7 @@ from hero_runs import (
 
 _TRAINING_STALL_AGE = timedelta(minutes=15)
 _INITIALIZING_STALL_AGE = timedelta(minutes=45)
-# Typed training metrics publish from process zero. Keep that constraint in the
-# query so migrated legacy rows and direct typed rows select the same replica.
 _PROGRESS_LOOKBACK = 2 * _TRAINING_STALL_AGE
-_EXECUTION_LOOKBACK = TASK_STATE_LOOKBACK
 # The phase heartbeat reaches back a day so a run that went silent hours ago is
 # still recognisable as one that stopped publishing, which is TrainingTelemetryGone's
 # case. Without the reach this rule calls a silent training run `initializing_stale`
@@ -53,6 +49,8 @@ def telemetry_query(now: datetime, runs: tuple[HeroRun, ...]) -> str:
         "timestamp_ms, seq, to_timestamp_millis(timestamp_ms) AS ts "
         "FROM telemetry "
         f"WHERE name IN ({metric_names}) "
+        # Typed training metrics publish from process zero. Keep that constraint in the
+        # query so migrated legacy rows and direct typed rows select the same replica.
         f"AND {run_predicate} AND process_index = 0 "
         "AND job_id IS NOT NULL AND execution_uid IS NOT NULL "
         f"AND timestamp_ms >= {phase_since} AND timestamp_ms < {end} "
