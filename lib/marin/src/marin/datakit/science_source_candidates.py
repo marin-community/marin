@@ -10,6 +10,11 @@ in hero-data manifests.
 
 from functools import cache
 
+from marin.datakit.download.arxiv_physics import (
+    ARXIV_PHYSICS_MANIFEST,
+    ARXIV_PHYSICS_NAME,
+    arxiv_physics_normalize_steps,
+)
 from marin.datakit.download.hal_math import (
     HAL_MATH_ABSTRACTS_MANIFEST,
     HAL_MATH_ABSTRACTS_NAME,
@@ -41,6 +46,11 @@ def science_source_candidates() -> dict[str, DatakitSource]:
         name=HAL_MATH_ABSTRACTS_NAME,
         normalize_steps=hal_math_abstracts_normalize_steps(),
         rough_token_count_b=HAL_MATH_ABSTRACTS_MANIFEST.rough_tokens_b,
+    )
+    candidates[ARXIV_PHYSICS_NAME] = DatakitSource(
+        name=ARXIV_PHYSICS_NAME,
+        normalize_steps=arxiv_physics_normalize_steps(),
+        rough_token_count_b=ARXIV_PHYSICS_MANIFEST.rough_tokens_b,
     )
     openstax_chains = openstax_science_normalize_steps()
     candidates.update(
