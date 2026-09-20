@@ -297,7 +297,9 @@ reached 176.9 GB peak cgroup memory during restore, which explains why the 128 G
 It restored 32 buffered groups, trained updates 31–40, saved the step-40 checkpoint, and dumped
 the terminal 756-response evaluation. During shutdown, a trajectory-retention publication
 reported a 120-second storage timeout, while the training driver exited with code zero. The
-separate terminal model export and Iris parent state remain to be checked.
+separate terminal model export completed at `exports/global_step_40/policy/model.safetensors`
+(1.503 GB), and the Iris parent succeeded. The combined r23+r26 ledger has nine accelerator
+attempts, including the export, and 15.366 reserved H100-hours in total.
 
 A second older-schedule pair launched on September 20 with TIS cap 1.05, the same seed and
 schedule, and behavior top-k 32 in both arms. This deliberately activates more capped tokens
@@ -313,7 +315,10 @@ but the loss value alone does not quantify the correction gradient or a quality 
 At update two the cap fractions remained 4.97% and 4.88%, with mean consumed-token age one.
 A second matched seed-18 pair, [r27](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-age8-tis-cap105-seed18-01a0bb6f-r27)
 and [r28](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-age8-sc-cap105-seed18-01a0bb6f-r28),
-uses the same settings and 256 GB host request. Its outcomes are pending.
+uses the same settings and 256 GB host request. Its step-zero completed-correct counts are
+88/756 and 79/756; both have the same held-out membership as seed 17. Its trained outcomes
+are pending. New launches were held when cluster use rose to 504/512 H100s with zero queued
+workloads at 00:59 UTC.
 
 `analyze_score_centering.py` reads every dumped evaluation response and the durable Iris
 `WANDB_MIRROR` lines. It writes separate CSV files for completion-aware quality and per-update
@@ -346,5 +351,5 @@ At the current checkpoint, the comparable update-30 points are:
 The plain-PPO step-30 evaluation was rewritten after its failed restore attempts, so this
 reported point includes their elapsed time and GPU cost. It later reached 301/756 completed
 correct at update 40 after 0.96 hours and 14.52 reserved H100-hours from the first GPU task.
-The TIS arms have not yet reached update 40. These descriptive points mix different objective
-and capture costs; they do not identify a score-centering quality effect.
+The TIS arms had not yet reached update 40 at this checkpoint. These descriptive points mix
+different objective and capture costs; they do not identify a score-centering quality effect.
