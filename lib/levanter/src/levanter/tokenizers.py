@@ -17,6 +17,7 @@ Usage:
 import contextlib
 import dataclasses
 import functools
+import hashlib
 import json
 import logging
 import os
@@ -35,7 +36,7 @@ from huggingface_hub import __version__ as _hf_hub_version
 from huggingface_hub import hf_hub_download, snapshot_download
 from huggingface_hub.utils import EntryNotFoundError, RepositoryNotFoundError
 from rigging.filesystem.atomic import fetch_file_atomic
-from rigging.filesystem.factory import filesystem, open_url
+from rigging.filesystem.factory import filesystem, open_url, url_to_fs
 from tokenizers import Encoding as HfEncoding
 from tokenizers import Tokenizer as HfBaseTokenizer
 
@@ -855,6 +856,22 @@ def _stage_from_mirror(name_or_path: str, local_dir: str) -> bool:
     return copied
 
 
+def _stage_from_url(name_or_path: str, local_dir: str) -> bool:
+    """Copy tokenizer files from an fsspec directory into ``local_dir``."""
+    source_fs, source_path = url_to_fs(name_or_path)
+    copied = False
+    for entry in source_fs.ls(source_path, detail=True):
+        if entry.get("type") == "directory":
+            continue
+        filename = os.path.basename(entry["name"].rstrip("/"))
+        if not filename:
+            continue
+        source_url = f"{name_or_path.rstrip('/')}/{filename}"
+        if fetch_file_atomic(source_url, os.path.join(local_dir, filename)):
+            copied = True
+    return copied
+
+
 def _stage_from_hf(name_or_path: str, local_dir: str) -> None:
     """Download tokenizer files from HF Hub and populate the mirror.
 
@@ -913,12 +930,9 @@ def _stage_tokenizer(name_or_path: str) -> str:
 
     Returns the local directory path. ``lru_cache`` makes subsequent calls free.
     """
-    local_dir = os.path.join(
-        tempfile.gettempdir(),
-        "levanter_tokenizers",
-        name_or_path,
-        f"hf-hub-{_hf_hub_version}",
-    )
+    is_url = "://" in name_or_path
+    cache_key = hashlib.sha256(name_or_path.encode()).hexdigest() if is_url else name_or_path
+    local_dir = os.path.join(tempfile.gettempdir(), "levanter_tokenizers", cache_key, f"hf-hub-{_hf_hub_version}")
     os.makedirs(local_dir, exist_ok=True)
 
     with _STAGE_LOCK:
@@ -926,6 +940,11 @@ def _stage_tokenizer(name_or_path: str) -> str:
         #    waited on the lock while another thread staged this same ref).
         if _try_load_tokenizer_from_dir(local_dir):
             return local_dir
+
+        if is_url:
+            if _stage_from_url(name_or_path, local_dir) and _try_load_tokenizer_from_dir(local_dir):
+                return local_dir
+            raise ValueError(f"Remote tokenizer directory is missing a valid tokenizer.json: {name_or_path}")
 
         # 2. Mirror: copy whatever files are present, then try loading.
         if _stage_from_mirror(name_or_path, local_dir) and _try_load_tokenizer_from_dir(local_dir):

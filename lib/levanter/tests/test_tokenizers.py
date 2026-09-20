@@ -18,6 +18,7 @@ from unittest.mock import patch
 
 import jinja2.exceptions
 import pytest
+from fsspec.implementations.memory import MemoryFileSystem
 from huggingface_hub import __version__ as _hf_hub_version
 from tokenizers import Tokenizer as HfBaseTokenizer
 
@@ -1326,8 +1327,10 @@ def fake_tokenizer_dir(tmp_path):
 @pytest.fixture(autouse=False)
 def clear_stage_cache():
     _stage_tokenizer.cache_clear()
+    load_tokenizer.cache_clear()
     yield
     _stage_tokenizer.cache_clear()
+    load_tokenizer.cache_clear()
 
 
 def test_try_load_tokenizer_from_dir_valid(fake_tokenizer_dir):
@@ -1411,6 +1414,18 @@ def test_stage_from_mirror_absent(tmp_path):
 
     assert result is False
     assert not list(local_dir.iterdir())
+
+
+def test_load_tokenizer_from_url(tmp_path, fake_tokenizer_dir, clear_stage_cache):
+    remote = MemoryFileSystem()
+    remote.store.clear()
+    for source in fake_tokenizer_dir.iterdir():
+        remote.pipe_file(f"tokenizer/{source.name}", source.read_bytes())
+
+    with patch("levanter.tokenizers.tempfile.gettempdir", return_value=str(tmp_path)):
+        tokenizer = load_tokenizer("memory://tokenizer")
+
+    assert tokenizer.vocab_size == 0
 
 
 def test_stage_tokenizer_local_cache_hit(tmp_path, fake_tokenizer_dir, clear_stage_cache):
