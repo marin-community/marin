@@ -702,7 +702,9 @@ def _cutlass_attention_backward_sm90_backward_output_shapes(
     dk_accum = jax.ShapeDtypeStruct((batch, kv_heads, seq_k_rounded * head_dim_rounded), jnp.float32)
     dv_accum = jax.ShapeDtypeStruct((batch, kv_heads, seq_k_rounded * head_dim_v_rounded), jnp.float32)
     # dA (bias gradient) in the A layout [B, Hq, S, L]; the kernel scatters dS by distance into it.
-    d_rel_bias = jax.ShapeDtypeStruct(rel_bias.shape, jnp.float32)
+    # bf16 (matching A) halves the scatter-write + the downstream dA->(dR,dproj) read traffic; dA is a
+    # direct write (no accumulation), so bf16 precision is fine.
+    d_rel_bias = jax.ShapeDtypeStruct(rel_bias.shape, rel_bias.dtype)
     return dq_accum, dk_accum, dv_accum, d_rel_bias
 
 

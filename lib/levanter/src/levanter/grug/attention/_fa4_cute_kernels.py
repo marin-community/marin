@@ -1119,7 +1119,8 @@ def segmented_flash_attention_backward_launcher(
             flat = cute.make_tensor(tensor.iterator, cute.make_layout(cute.size(tensor)))
             idx = bidx * self._num_threads + tidx
             if idx < cute.size(flat):
-                flat[idx] = cutlass.Float32(0.0)
+                # dtype-generic (fp32 dq/dk/dv accumulators or bf16 dA output).
+                flat[idx] = tensor.element_type(0.0)
 
     zero_fill = _Float32ZeroFill(postprocess_threads)
 
@@ -1364,7 +1365,8 @@ def segmented_flash_attention_backward_sm90_launcher(
             flat = cute.make_tensor(tensor.iterator, cute.make_layout(cute.size(tensor)))
             idx = bidx * self._num_threads + tidx
             if idx < cute.size(flat):
-                flat[idx] = cutlass.Float32(0.0)
+                # dtype-generic (fp32 dq/dk/dv accumulators or bf16 dA output).
+                flat[idx] = tensor.element_type(0.0)
 
     zero_fill = _Float32ZeroFill(config.num_threads)
 

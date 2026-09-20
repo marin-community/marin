@@ -1081,7 +1081,7 @@ class FlashAttentionBackwardSm90:
                 in_band = cute.elem_less(delta, rel_extent) and cute.elem_less(Int32(-1), delta)
                 if in_band:
                     delta_safe = cutlass.min(cutlass.max(delta, Int32(0)), rel_extent - 1)
-                    da_t[q_pos, delta_safe, head_idx, batch_idx] = grad_mn[r, c]
+                    da_t[q_pos, delta_safe, head_idx, batch_idx] = grad_mn[r, c].to(da_t.element_type)
 
     @cute.jit
     def mma(
