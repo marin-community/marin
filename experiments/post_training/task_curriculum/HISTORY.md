@@ -43,15 +43,21 @@ Wave nine added the remaining 12 C-series areas. The retired 34-root catalog con
 
 Wave ten replaced the practice-heavy C-series roots with 45 D-series subjects spanning academic, professional, service, sports, safety, transport, and practical domains. All subjects received one generation, blind-task, review, fit, and bounded-repair cycle. The selected catalog contains 2,252 nodes, including 1,853 capabilities, and fits 993/1,072 valid frozen tasks (92.6%); its mean holistic score is 81.3, three subjects pass promotion, and seven retain blocking repeated gaps. The canonical catalog is `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.18-72a763b98f9e/curriculum.yaml` with SHA-256 `72a763b98f9ecf7f8f598b788c4f59e7ace213c01a30b403768a8f8f16f55382`; its evidence archive SHA-256 is `cd127af6afbffc188e94359d2995ad833e8a54ce8d0962dc036592e0d02cfc74`.
 
-## Source survey and bounded audit
+## Source-guided v2
 
 A five-subject survey tested public course sequences, textbook exercise families, and professional standards as
 direct generator inputs. Source-first graphs improved sampled fit from 99/120 to 106/120 but reduced the paired
-holistic mean from 84.4 to 71.6 by copying course groupings and sequence into capabilities and prerequisites. A v3
-follow-up instead applied source evidence as bounded patches to D01, D08, D17, D31, and D41 and added a real-task D02
-command-environment repair. V3 was preferred to both alternatives in all five anonymous comparisons, with a mean
-holistic score of 93.4. The source survey and v3 remain immutable experimental artifacts documented in
-`source_survey/README.md` and `source_audit/README.md`.
+holistic mean from 84.4 to 71.6 by copying course groupings and sequence into capabilities and prerequisites. The
+immutable evidence is
+`s3://marin-us-east-02a/marin/task-curriculum/experiments/2026.09.19-source-survey-v2-148820c9ecae/`.
+
+## Bounded source-audit v3
+
+V3 applied source evidence as bounded patches to D01, D08, D17, D31, and D41. It was preferred to v1 and source-first
+v2 in all five anonymous comparisons, with a mean holistic score of 93.4. A separate D02 repair used 16 discovery and
+16 holdout TaskTrove tasks to add seven command-environment capabilities; the final branch fit 30/32 tasks and all 16
+holdout tasks. The immutable catalog and evidence are
+`s3://marin-us-east-02a/marin/task-curriculum/experiments/2026.09.19-bounded-source-audit-v3-f0edd8ce5141/`.
 
 ## Production bounded repair: cross-domain v2
 

@@ -2,9 +2,9 @@
 
 This runbook describes the one-off agent workflow used to extend the catalog registered in `catalog_artifact.py`; no
 API implements the workflow.
-Keep the durable rubric, prompts, artifact declaration, inventory, and concise findings in the repository. Keep
-catalog payloads, raw task samples, agent transcripts, embeddings, mappings, and intermediate JSON in immutable
-external experiment storage.
+Keep the durable rubric, prompts, artifact declarations, and concise findings in the repository. Keep the subject
+inventory, catalog payloads, raw task samples, agent transcripts, embeddings, mappings, and intermediate JSON in
+immutable external experiment storage.
 
 ## Acceptance rule
 
@@ -40,7 +40,7 @@ self-confidence or epsilon continuity.
 
 Create a run manifest before calling an agent. Record:
 
-- subject ID, name, and guideposts from `subject_inventory.json`;
+- subject ID, name, and guideposts from the `TASK_CURRICULUM_SUBJECT_INVENTORY` artifact;
 - Git commit, `prompts/rubric.md` hash, prompt version, model, reasoning effort, provider, and agent/session ID for every role;
 - sampling settings when the provider exposes them; record `provider controlled` instead of inventing a seed or
   temperature when it does not;
@@ -269,9 +269,9 @@ rewrite archived results to match it.
    date-based immutable identifier such as `YYYY.MM.DD-cross-domain-vN`. Validate the entire file with
    `load_catalog`, which checks routing values and global subject/section uniqueness. Recompute catalog counts from
    the parsed object. Upload the complete YAML to a new immutable S3 directory, verify its SHA-256 by reading it back,
-   and update `CATALOG_ROOT_URI`, `CATALOG_SHA256`, and `TASK_CURRICULUM` in `catalog_artifact.py`. Preserve the prior
-   immutable handle for comparison and rollback. Do not check the catalog payload into git. Task mapping remains a
-   diagnostic and is not a promotion gate.
+   and update the source and version of `TASK_CURRICULUM` in `catalog_artifact.py`. Preserve the prior immutable handle
+   for comparison and rollback. Do not check the catalog payload into git. Task mapping remains a diagnostic and is
+   not a promotion gate.
 
    ```bash
    uv run python -c 'from pathlib import Path; from experiments.post_training.task_curriculum.catalog import load_catalog; c=load_catalog(Path("/tmp/task-curriculum-next.yaml")); print(len(c.curricula), sum(len(x.curriculum.sections) for x in c.curricula), sum(len(x.curriculum.capability_sections()) for x in c.curricula))'

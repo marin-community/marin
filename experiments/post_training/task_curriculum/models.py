@@ -16,6 +16,39 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class SubjectGuidepost(StrictModel):
+    """One broad coverage target in the subject inventory."""
+
+    id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+
+
+class SubjectArea(StrictModel):
+    """One subject root and its coverage guideposts."""
+
+    id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    guideposts: list[SubjectGuidepost] = Field(min_length=1)
+
+
+class SubjectInventory(StrictModel):
+    """Versioned subject roots used to generate a curriculum catalog."""
+
+    version: str = Field(min_length=1)
+    source_url: str = Field(min_length=1)
+    areas: list[SubjectArea] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_identifiers(self) -> SubjectInventory:
+        area_ids = [area.id for area in self.areas]
+        if len(area_ids) != len(set(area_ids)):
+            raise ValueError("subject area IDs must be unique")
+        guidepost_ids = [guidepost.id for area in self.areas for guidepost in area.guideposts]
+        if len(guidepost_ids) != len(set(guidepost_ids)):
+            raise ValueError("subject guidepost IDs must be unique")
+        return self
+
+
 class ProbeKind(StrEnum):
     ENTRY = "entry"
     REPRESENTATIVE = "representative"

@@ -10,5 +10,10 @@ import yaml
 from experiments.post_training.task_curriculum.models import CurriculumCatalog
 
 
+def catalog_from_yaml(contents: bytes) -> CurriculumCatalog:
+    """Validate a serialized curriculum catalog."""
+    return CurriculumCatalog.model_validate(yaml.safe_load(contents))
+
+
 def load_catalog(path: Path) -> CurriculumCatalog:
-    return CurriculumCatalog.model_validate(yaml.safe_load(path.read_text()))
+    return catalog_from_yaml(path.read_bytes())

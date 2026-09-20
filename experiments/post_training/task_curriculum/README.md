@@ -14,7 +14,6 @@ rule. `HISTORY.md` records the experiments and tradeoffs. The 4.0 MB YAML payloa
 
 - Artifact handle: `TASK_CURRICULUM`, version `2026.09.19.1`
 - Catalog: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-2578589fb0de/curriculum.yaml`
-- SHA-256: `2578589fb0de23b179765e6eba999730c7117b9f083140b266ccc391dde9685d`
 - Summary: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-2578589fb0de/catalog_summary.json`
 - Comparison: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-2578589fb0de/comparison.json`
 - Routing audit: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-2578589fb0de/routing_audit.json`
@@ -34,18 +33,16 @@ their task environment.
 
 ## Inputs
 
-- `subject_inventory.json` is the `2026.09.18-cross-domain-v1` inventory: 45 D-series subject roots and 356
-  guideposts. It is a cross-domain redesign rather than a one-to-one rename of the earlier TaskTrove-derived roots.
-  ISCED-F, CIP, Frascati, evaluation inventories, and occupational taxonomies are coverage checks rather than
-  curriculum node definitions.
+- `TASK_CURRICULUM_SUBJECT_INVENTORY` is the `2026.09.18-cross-domain-v1` inventory: 45 D-series subject roots and
+  356 guideposts. Its typed artifact loads `subject_inventory.json` from
+  `s3://marin-us-east-02a/marin/task-curriculum/inventories/2026.09.18-cross-domain-v1-ef10281c71ad/`. ISCED-F, CIP,
+  Frascati, evaluation inventories, and occupational taxonomies are coverage checks rather than curriculum node
+  definitions.
 - `prompts/rubric.md` defines the cross-subject review criteria. The other files in `prompts/` are the exact durable
   role prompts.
 - `workflow.md` is the resumable operating procedure and defines role isolation, artifact contracts, and promotion.
-- `HISTORY.md` summarizes each completed generation, review, and mapping experiment.
-- `source_survey/README.md` compares source-guided regeneration against the frozen cross-domain v1 baseline and
-  records the final practical TaskTrove placement audit.
-- `source_audit/README.md` evaluates the bounded-repair method against v1 and source-first v2, including a held-out
-  TaskTrove repair for command-line environment operations in D02.
+- `HISTORY.md` summarizes each completed generation, review, source-audit, and mapping experiment and links its
+  external evidence artifact.
 - In the general workflow, a small set of model-visible TaskTrove tasks supplies concrete discovery evidence. In-distribution examples listed
   by the evaluation policy are held-out coverage probes. Out-of-distribution evaluations contribute domain and task
   format metadata only. Source names, solutions, and verifier implementations are excluded from generation. The
@@ -55,10 +52,9 @@ their task environment.
   vocabulary for describing task semantics.
 
 The five-subject source survey tested public college course sequences, textbook exercise families, and professional
-standards as generator inputs. `source_survey/README.md` records the result and the bounded-repair recommendation.
-The subsequent v3 experiment applied that recommendation to six roots. Production v2 then used the bounded method
-across the remaining catalog. V1 and experimental v3 remain immutable as `TASK_CURRICULUM_V1` and
-`TASK_CURRICULUM_SOURCE_AUDIT_V3`.
+standards as generator inputs. The subsequent v3 experiment applied its bounded-repair recommendation to six roots.
+Production v2 then used the method across the remaining catalog. `HISTORY.md` records both experiments. V1 and
+experimental v3 remain immutable as `TASK_CURRICULUM_V1` and `TASK_CURRICULUM_SOURCE_AUDIT_V3`.
 
 Production v2 used anonymous same-call comparisons rather than absolute score deltas from different reviewers. A
 repair was selected only when the reviewer preferred it and it scored at least 70. The frozen blind tasks were reused
