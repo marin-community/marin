@@ -870,6 +870,34 @@ quality. It calibrates the magnitude and tails that the matched quality
 experiments need to interpret; it does not establish that keeping a sampler
 fixed improves throughput or quality.
 
+## Normal-publication Qwen version probe
+
+A separate [three-update probe](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-mixed-span-01a0bb6f-r3)
+used per-update weight publication, 128 generation workers, a 32-group buffer,
+4,096-token responses, top-k-one sampled-token capture, and the same model, pool,
+seed, and TIS cap as the fixed-sampler calibration. The [per-step analysis](results/score_centering_qwen_normal_publication_3step.csv)
+comes from the durable `mismatch_decomposition/global_step_{1,2,3}.json.gz` records
+under `s3://marin-us-east-02a/marin/users/romain/checkpoints/async-rl/qwen-mixed-span-01a0bb6f-r3/2026.09.20.1/exports`.
+This diagnostic used MarinSkyRL `cfb407cc` and no held-out evaluation.
+
+| Consuming step / age | Selected tokens | Mean absolute B − A | Mean absolute C − B | Mean absolute C − A | Opposite-sign terms | Raw TIS cap active |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 / 0 | 99,808 | 0.01264 | 0 | 0.01264 | 0% | 4.49% |
+| 2 / 1 | 229,451 | 0.01455 | 0.01411 | 0.01439 | 61.06% | 5.16% |
+| 3 / 2 | 355,780 | 0.01475 | 0.01428 | 0.01481 | 61.20% | 5.31% |
+
+Although the launcher allowed publication after each update, all 685,039
+selected tokens in these three batches still came from version 0. The active
+generation backlog is a likely reason later published weights were not yet
+represented among consumed tokens.
+No response had multiple version spans. Every selected token had a matching
+frozen trainer B score, and the signed A/B/C terms reconstructed C − A with
+zero recorded maximum residual. The two eight-H100 tasks succeeded without
+retry or preemption, using 2.43 reserved H100-hours including setup and
+checkpoint work. This run verifies normal-publication
+provenance through age two; it does not establish mixed-span behavior or the
+version distribution at later updates.
+
 ## Matched Qwen confirmation design
 
 The [current async launcher draft](https://github.com/marin-community/marin/pull/9256)
