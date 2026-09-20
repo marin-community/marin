@@ -101,18 +101,23 @@ shows reset-aware token and outcome totals, an hourly generated-token timeline,
 observed waiting and KV-cache peaks, and native ITL from coherent counter pairs.
 The same sample and memory limits apply. It omits latency
 tails, output-length distribution, per-engine detail, and client or proxy time.
-Zoom to seven hours or less for those server details. The query status panel
-distinguishes an empty selection, a Finelog timeout, a sample-limit rejection,
-and the summary-only view; other panels point to that status when they have no
-data. Missing historical ITL stays unavailable rather than being inferred from
-TPOT.
+Zoom to seven hours or less for those server details. Run triage separates
+query health (detail, summary-only, empty, timeout, or sample limit) from
+selected-range run attention. When first-token observations outnumber recorded
+engine finishes, it shows both counts and points to the evaluator in Iris.
+TTFT is counted when a first token appears; engine finishes are counted later.
+An in-progress or partial window can have a gap without a failed request. A
+missing counter or a query failure gives no run conclusion. The cue does not
+identify client or proxy timeouts. Other panels point to query health when
+they have no data. Missing historical ITL stays unavailable rather than being
+inferred from TPOT.
 
 The identity picker retains request-state discovery. For ranges longer than
 seven hours, it scans the first seven hours to stay within Finelog's deadline.
 Paste an exact job, run, or execution ID into **Manual serve ID** when the
 desired session began later. The diagnostics page links the selected or manual
-serve to Iris; follow its evaluator child to inspect proxy 504s and client
-retries. vLLM counters do not measure that time.
+serve to Iris; follow its evaluator child to inspect client results, retries,
+and proxy logs. vLLM counters do not measure that time.
 
 To replay both pages against the existing four-node data in
 [Marin #8929](https://github.com/marin-community/marin/issues/8929), run from the

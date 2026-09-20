@@ -132,14 +132,14 @@
       "title": "",
       "options": {
         "mode": "markdown",
-        "content": "Compare running and waiting requests, iteration tokens, and time per output token over one phase. Use **Query status** to check whether detail is available. vLLM metrics cover the server; client and proxy time require evaluator evidence. For later sessions absent from the long-range picker, use **Manual serve ID**."
+        "content": "Select a serve and range. **Run triage** shows query health and a selected-range server count cue. A count gap needs range and evaluator checks. Zoom to seven hours or less for engine and latency detail. Use **Manual serve ID** if the picker omits a later session."
       },
       "id": 12,
       "gridPos": {
         "x": 0,
         "y": 0,
         "w": 24,
-        "h": 5
+        "h": 4
       }
     },
     {
@@ -147,9 +147,9 @@
       "id": 19,
       "gridPos": {
         "x": 0,
-        "y": 5,
+        "y": 4,
         "w": 24,
-        "h": 3
+        "h": 4
       }
     },
     {
@@ -157,14 +157,14 @@
       "title": "Check evaluator and proxy time",
       "options": {
         "mode": "markdown",
-        "content": "When **Identity kind** is `job_id`, [open the selected Serve in Iris](https://iris.oa.dev/#/job/${identity:percentencode}?cluster=marin), or [open the Manual serve ID](https://iris.oa.dev/#/job/${identity_override:percentencode}?cluster=marin) if you entered one. Follow the serve parent to the evaluator child. Inspect evaluator logs for HTTP 504, the proxy timeout, and retry attempts. The [64K AIME24 evaluator](https://iris.oa.dev/#/job/%2Fheld%2Feval-20260916-212517-grug-aime-pareto-today-20260916-d7d3%2Feval-aime24-64k-ac462950?cluster=marin) logged repeated 504s after 2100 seconds (35 minutes), retried requests, and ended with 15 terminal request failures. That is client/proxy evidence; it is not measured by vLLM counters. Check each selected run before applying this example."
+        "content": "For a job ID, [open the selected Serve in Iris](https://iris.oa.dev/#/job/${identity:percentencode}?cluster=marin), or [open the Manual serve ID](https://iris.oa.dev/#/job/${identity_override:percentencode}?cluster=marin) if entered. Follow the serve parent to its evaluator child. Check evaluator results, retries and proxy logs against the server counters. vLLM does not measure client or proxy timeouts."
       },
       "id": 20,
       "gridPos": {
         "x": 0,
         "y": 8,
         "w": 24,
-        "h": 6
+        "h": 4
       }
     },
     {
@@ -172,7 +172,7 @@
       "id": 3,
       "gridPos": {
         "x": 0,
-        "y": 14,
+        "y": 12,
         "w": 12,
         "h": 7
       }
@@ -182,7 +182,7 @@
       "id": 2,
       "gridPos": {
         "x": 12,
-        "y": 14,
+        "y": 12,
         "w": 12,
         "h": 7
       }
@@ -289,7 +289,7 @@
       "id": 13,
       "gridPos": {
         "x": 0,
-        "y": 21,
+        "y": 19,
         "w": 8,
         "h": 7
       }
@@ -299,7 +299,7 @@
       "id": 11,
       "gridPos": {
         "x": 8,
-        "y": 21,
+        "y": 19,
         "w": 8,
         "h": 7
       }
@@ -411,7 +411,7 @@
       "id": 14,
       "gridPos": {
         "x": 16,
-        "y": 21,
+        "y": 19,
         "w": 8,
         "h": 7
       }
@@ -603,7 +603,7 @@
       "id": 15,
       "gridPos": {
         "x": 0,
-        "y": 28,
+        "y": 26,
         "w": 24,
         "h": 8
       }
@@ -613,7 +613,7 @@
       "id": 5,
       "gridPos": {
         "x": 0,
-        "y": 36,
+        "y": 34,
         "w": 12,
         "h": 7
       }
@@ -629,7 +629,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 36,
+        "y": 34,
         "w": 8,
         "h": 7
       },
@@ -708,7 +708,7 @@
       "id": 4,
       "gridPos": {
         "x": 20,
-        "y": 36,
+        "y": 34,
         "w": 4,
         "h": 7
       }
@@ -815,7 +815,7 @@
       "id": 7,
       "gridPos": {
         "x": 0,
-        "y": 43,
+        "y": 41,
         "w": 12,
         "h": 8
       }
@@ -903,7 +903,7 @@
       "id": 16,
       "gridPos": {
         "x": 12,
-        "y": 43,
+        "y": 41,
         "w": 6,
         "h": 8
       }
@@ -913,7 +913,7 @@
       "id": 8,
       "gridPos": {
         "x": 18,
-        "y": 43,
+        "y": 41,
         "w": 6,
         "h": 8
       }
@@ -923,7 +923,7 @@
       "id": 1,
       "gridPos": {
         "x": 0,
-        "y": 59,
+        "y": 57,
         "w": 8,
         "h": 6
       }
@@ -933,7 +933,7 @@
       "id": 10,
       "gridPos": {
         "x": 8,
-        "y": 59,
+        "y": 57,
         "w": 8,
         "h": 6
       }
@@ -949,7 +949,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 59,
+        "y": 57,
         "w": 8,
         "h": 6
       },
@@ -1126,7 +1126,7 @@
       "id": 17,
       "gridPos": {
         "x": 0,
-        "y": 51,
+        "y": 49,
         "w": 16,
         "h": 8
       }
@@ -1212,7 +1212,7 @@
       "id": 18,
       "gridPos": {
         "x": 16,
-        "y": 51,
+        "y": 49,
         "w": 8,
         "h": 8
       }

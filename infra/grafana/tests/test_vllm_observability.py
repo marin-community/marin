@@ -179,7 +179,7 @@ def _assert_dashboard_panels(client, dashboards, params):
 
 def _assert_overview_rows(rows, invalid_histogram):
     assert {row["section"] for row in rows} == VLLM_OVERVIEW_SECTIONS - {"run_timeline"}
-    assert [row["status"] for row in rows if row["section"] == "diagnostic_status"] == ["detail"]
+    assert [row["status"] for row in rows if row["section"] == "diagnostic_status"] == ["detail", "no_conclusion"]
     values = {(row["section"], row["metric"], row["stat"], row["series"], row["t"]): row["value"] for row in rows}
     assert values[("request_outcome", "requests", "total", "stop", None)] == 1
     assert (
@@ -328,7 +328,7 @@ def test_standalone_absent_identity(standalone_overview_client):
     assert missing.status_code == 200
     rows = missing.json()
     assert [row["status"] for row in rows if row["section"] == "freshness"] == ["no_data"]
-    assert [row["status"] for row in rows if row["section"] == "diagnostic_status"] == ["empty"]
+    assert [row["status"] for row in rows if row["section"] == "diagnostic_status"] == ["empty", "no_conclusion"]
     assert not any(row["section"] == "token_rate" for row in rows)
 
 
@@ -345,14 +345,74 @@ def test_standalone_long_range_has_summary_and_narrow_drilldown(standalone_overv
     empty = standalone_overview_client.get("/finelog/marin/v1/vllm/overview", params={**params, "identity": "/absent"})
     assert summary.status_code == detail.status_code == empty.status_code == 200
     rows = summary.json()
-    assert [row["status"] for row in rows if row["section"] == "diagnostic_status"] == ["summary_only"]
+    assert [row["status"] for row in rows if row["section"] == "diagnostic_status"] == ["summary_only", "no_conclusion"]
     assert [row["value"] for row in rows if row["section"] == "run_summary" and row["metric"] == "generated_tokens"] == [
         270
     ]
     assert [row["value"] for row in rows if row["section"] == "run_timeline"] == [270]
     assert [row["value"] for row in rows if row["metric"] == "request_success_total"] == [8]
     assert detail.json() == []
-    assert [row["status"] for row in empty.json()] == ["empty"]
+    assert [row["status"] for row in empty.json()] == ["empty", "no_conclusion"]
+
+
+def test_run_triage_count_gap_can_be_a_partial_window_without_a_failed_request():
+    database = duckdb.connect()
+    columns = """cluster VARCHAR, service VARCHAR, job_id VARCHAR, name VARCHAR, kind VARCHAR,
+        value DOUBLE, resource_attributes_json VARCHAR, attributes_json VARCHAR, timestamp_ms BIGINT, seq BIGINT"""
+    for table in ("telemetry_v1.marinskyrl", "telemetry_v1.vllm"):
+        database.execute(f'CREATE TABLE "{table}"({columns})')
+    database.execute("CREATE MACRO json_get(d, f) AS json_extract_string(d, concat('$.', f))")
+    database.execute(
+        """CREATE MACRO named_struct(k1, v1, k2, v2, k3, v3)
+                   AS struct_pack(timestamp_ms := v1, seq := v2, value := v3)"""
+    )
+    rows = [
+        (name, value, timestamp)
+        for name, values in (
+            ("time_to_first_token_seconds_count", (0, 2, 2)),
+            ("request_success_total", (0, 1, 2)),
+        )
+        for timestamp, value in zip((0, 60_000, 9 * 3_600_000), values, strict=True)
+    ]
+    database.executemany(
+        """INSERT INTO "telemetry_v1.vllm" VALUES
+           ('cw-a', 'vllm', '/other-serve', ?, 'gauge', ?, '{}', ?, ?, 0)""",
+        [
+            (
+                name,
+                value,
+                json.dumps(
+                    {
+                        "source_temporality": "cumulative_snapshot",
+                        **({"finished_reason": "stop"} if name == "request_success_total" else {}),
+                    }
+                ),
+                timestamp,
+            )
+            for name, value, timestamp in rows
+        ],
+    )
+    source = Record(
+        target=ClusterTarget("marin", "project", "zone", "fleet", "cluster"),
+        query=lambda sql, *, max_rows: database.execute(sql).fetch_arrow_table(),
+    )
+    app = create_app(bridge_config(), {"marin": source}, {}, None, None, None)
+    params = {
+        "identity_kind": "job_id",
+        "identity": "/other-serve",
+        "from": 0,
+        "bucket_ms": 15_000,
+        "view": "diagnostic_status",
+    }
+    with TestClient(app) as client:
+        partial = client.get("/finelog/marin/v1/vllm/overview", params={**params, "to": 8 * 3_600_000})
+        complete = client.get("/finelog/marin/v1/vllm/overview", params={**params, "to": 10 * 3_600_000})
+    assert partial.status_code == complete.status_code == 200
+    assert [row["status"] for row in partial.json()] == ["summary_only", "check_count_gap"]
+    assert partial.json()[1]["value"] == 1
+    assert "2 first-token observations vs 1 recorded engine finishes" in partial.json()[1]["series"]
+    assert [row["status"] for row in complete.json()] == ["summary_only", "no_conclusion"]
+    assert complete.json()[1]["value"] == 0
 
 
 def test_sample_budget_returns_cached_error_instead_of_partial_panels():
@@ -375,7 +435,7 @@ def test_sample_budget_returns_cached_error_instead_of_partial_panels():
             assert response.status_code == 200
             assert response.json() == []
         status = client.get("/finelog/marin/v1/vllm/overview", params={**params, "view": "diagnostic_status"})
-        assert status.json()[0]["status"] == "sample_limit"
+        assert [row["status"] for row in status.json()] == ["sample_limit", "unavailable"]
     assert len(queries) == 1
 
 
@@ -395,6 +455,6 @@ def test_finelog_timeout_is_visible_and_reuses_cached_failure():
         tokens = client.get("/finelog/marin/v1/vllm/overview", params={**params, "view": "token_rate"})
         status = client.get("/finelog/marin/v1/vllm/overview", params={**params, "view": "diagnostic_status"})
     assert status.status_code == tokens.status_code == 200
-    assert status.json()[0]["status"] == "query_timeout"
+    assert [row["status"] for row in status.json()] == ["query_timeout", "unavailable"]
     assert tokens.json() == []
     assert len(queries) == 1

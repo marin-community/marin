@@ -122,14 +122,14 @@
       "title": "",
       "options": {
         "mode": "markdown",
-        "content": "Select one serve and time range. Ranges over seven hours show hourly generated-token totals and observed server counters and peaks. Drag on the hourly chart or choose at most seven hours for engine and latency detail. **Query status** distinguishes empty data, timeout, and sample-limit rejection. For later sessions absent from the long-range picker, paste the exact ID into **Manual serve ID**."
+        "content": "Select one serve and time range. **Run triage** separates query health from a selected-range server count cue. A count gap needs range and evaluator checks. Above seven hours, zoom for engine and latency detail. Use **Manual serve ID** if the picker omits a later session. Open **Inference diagnostics** for the serve and evaluator Iris links."
       },
       "id": 12,
       "gridPos": {
         "x": 0,
         "y": 0,
         "w": 24,
-        "h": 5
+        "h": 4
       }
     },
     {
@@ -137,9 +137,9 @@
       "id": 19,
       "gridPos": {
         "x": 0,
-        "y": 5,
+        "y": 4,
         "w": 24,
-        "h": 3
+        "h": 4
       }
     },
     {

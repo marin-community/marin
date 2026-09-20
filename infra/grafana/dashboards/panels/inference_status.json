@@ -1,14 +1,14 @@
 {
   "type": "table",
-  "title": "Query status",
-  "description": "The bridge reports detail, summary-only, empty data, timeout, or sample-limit rejection.",
+  "title": "Run triage",
+  "description": "Query health and selected-range server count evidence. A count gap can occur in partial windows and does not identify client or proxy failures.",
   "datasource": {
     "type": "yesoreyeram-infinity-datasource",
     "uid": "finelog-marin"
   },
   "fieldConfig": {
     "defaults": {
-      "noValue": "Query status unavailable"
+      "noValue": "Run triage unavailable"
     },
     "overrides": []
   },
@@ -55,13 +55,18 @@
       },
       "columns": [
         {
+          "selector": "metric",
+          "text": "area",
+          "type": "string"
+        },
+        {
           "selector": "status",
           "text": "state",
           "type": "string"
         },
         {
           "selector": "series",
-          "text": "detail",
+          "text": "observation / next step",
           "type": "string"
         }
       ]

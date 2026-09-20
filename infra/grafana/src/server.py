@@ -343,6 +343,71 @@ def _vllm_status_row(status: str, message: str) -> dict[str, object]:
     }
 
 
+def _vllm_attention_row(rows: list[dict[str, object]], *, summary_only: bool) -> dict[str, object]:
+    """Compare already projected server counters without inferring request outcomes."""
+    if summary_only:
+        observed = [
+            row["value"] for row in rows if row["section"] == "run_summary" and row["metric"] == "ttft_observations"
+        ]
+        observations = float(observed[0]) if observed and isinstance(observed[0], (int, float)) else None
+        finishes = [
+            float(row["value"])
+            for row in rows
+            if row["section"] == "run_summary"
+            and row["metric"] == "request_success_total"
+            and isinstance(row["value"], (int, float))
+        ]
+        finished = sum(finishes) if finishes else None
+    else:
+        observed = next(
+            (
+                row["samples"]
+                for row in rows
+                if row["section"] == "latency" and row["metric"] == "ttft" and row["stat"] == "mean"
+            ),
+            None,
+        )
+        observations = float(observed) if isinstance(observed, (int, float)) else None
+        finish_samples = next((row["samples"] for row in rows if row["section"] == "length_finish_fraction"), None)
+        finished = float(finish_samples) if isinstance(finish_samples, (int, float)) else None
+
+    if observations is None or finished is None:
+        state = "no_conclusion"
+        message = (
+            "Comparable first-token and engine-finish counts unavailable. Check server detail and evaluator in Iris."
+        )
+        gap = None
+    elif observations > finished:
+        state = "check_count_gap"
+        message = (
+            f"{observations:g} first-token observations vs {finished:g} recorded engine finishes. "
+            "Check range coverage and evaluator in Iris."
+        )
+        gap = observations - finished
+    else:
+        state = "no_conclusion"
+        message = "No excess first-token observations in this range. Check evaluator in Iris for client outcomes."
+        gap = observations - finished
+
+    return {
+        **_vllm_status_row(state, message),
+        "metric": "run attention",
+        "stat": "selected-range count comparison",
+        "value": gap,
+        "unit": "observations minus finishes",
+    }
+
+
+def _vllm_unavailable_attention_row(status: str) -> dict[str, object]:
+    state = "no_conclusion" if status == "empty" else "unavailable"
+    message = (
+        "No server telemetry in this range. Check the serve ID and evaluator in Iris."
+        if status == "empty"
+        else "Server comparison unavailable. Retry or narrow the range, then check the evaluator in Iris."
+    )
+    return {**_vllm_status_row(state, message), "metric": "run attention"}
+
+
 def _vllm_query_timed_out(error: BaseException) -> bool:
     while error is not None:
         if isinstance(error, (QueryTimeoutError, TimeoutError)):
@@ -521,7 +586,10 @@ def create_app(
                     table = vllm_run_summary_table(overview, series, vllm_projection_lock, max_rows=config.max_rows)
                     rows = rows_to_json(table)
                     if not rows:
-                        return [_vllm_status_row("empty", "No vLLM telemetry for this serve and time range")]
+                        return [
+                            _vllm_status_row("empty", "No vLLM telemetry for this serve and time range"),
+                            _vllm_unavailable_attention_row("empty"),
+                        ]
                     hours = (overview.end_ms - overview.start_ms) / 3_600_000
                     rows.append(
                         _vllm_status_row(
@@ -530,6 +598,7 @@ def create_app(
                             "Zoom to 7h or less for engine, latency, and outcome detail.",
                         )
                     )
+                    rows.append(_vllm_attention_row(rows, summary_only=True))
                     return rows
 
                 series = finelog_sources[target.name].query(overview.samples_sql, max_rows=VLLM_MAX_SERIES)
@@ -553,6 +622,9 @@ def create_app(
                         ),
                     )
                 )
+                rows.append(
+                    _vllm_unavailable_attention_row("empty") if empty else _vllm_attention_row(rows, summary_only=False)
+                )
                 return rows
 
             def run_with_status():
@@ -561,11 +633,17 @@ def create_app(
                 try:
                     return run()
                 except QueryResultTooLargeError as err:
-                    return [_vllm_status_row("sample_limit", f"{err}; zoom to a shorter range")]
+                    return [
+                        _vllm_status_row("sample_limit", f"{err}; zoom to a shorter range"),
+                        _vllm_unavailable_attention_row("sample_limit"),
+                    ]
                 except StatsError as err:
                     logger.warning("vLLM diagnostic query failed: %s", err)
                     status = "query_timeout" if _vllm_query_timed_out(err) else "query_error"
-                    return [_vllm_status_row(status, f"Finelog {status.replace('_', ' ')}; retry or narrow the range")]
+                    return [
+                        _vllm_status_row(status, f"Finelog {status.replace('_', ' ')}; retry or narrow the range"),
+                        _vllm_unavailable_attention_row(status),
+                    ]
 
             rows = finelog_cache.get_or_compute(key, run_with_status)
             return JSONResponse(rows if not view else [row for row in rows if row.get("section") == view])
