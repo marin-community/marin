@@ -34,3 +34,9 @@ The cap-2 older pair `r19/r20` also differs only in `score_centering_topk`. Rela
 buffer; plain PPO `r23_r26` disables TIS and behavior-logprob capture; and `r29` changes
 the captured behavior-logprob width from 32 to one. The pod host-memory request is an
 Iris execution setting outside these Hydra arguments and is recorded in the study.
+
+The six `confirm_seed{20,21,22}_{tis,sc32}.json` files are the resolved inputs for
+the predeclared 40-update Qwen confirmation. Each within-seed pair has 153 Hydra
+arguments. Excluding run-owned output paths and names, its sole difference is
+`trainer.algorithm.score_centering_topk` (`0` or `32`). Within an arm, the only
+material difference across seeds is `trainer.seed` (`20`, `21`, or `22`).

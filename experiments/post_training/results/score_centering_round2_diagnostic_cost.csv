@@ -1,0 +1,9 @@
+iris_job,cluster,model,purpose,state,gpu_tasks,h100_per_task,task_seconds_total,reserved_h100_hours
+/romain/score-centering-qwen-mixed-span-01a0bb6f,cw-us-east-02a,Qwen,invalid_probe_config,failed,2,8,398.90,0.886444
+/romain/score-centering-qwen-mixed-span-01a0bb6f-r2,cw-us-east-02a,Qwen,missing_wandb_key,failed,2,8,248.34,0.551867
+/romain/score-centering-qwen-mixed-span-01a0bb6f-r3,cw-us-east-02a,Qwen,normal_publication_probe,succeeded,2,8,1093.96,2.431022
+/romain/score-centering-qwen-mixed-span-lowprefetch-01a0bb6f,cw-us-east-02a,Qwen,lower_prefetch_probe,succeeded,2,8,1092.12,2.426933
+/romain/score-centering-snowball-resume-smoke-01a0bb6f,cw-us-east-02a,Snowball,invalid_resume_config,failed,5,8,1647.80,3.661778
+/romain/score-centering-snowball-resume-smoke-01a0bb6f-r2,cw-us-east-02a,Snowball,wrong_wandb_entity,failed,5,8,1502.80,3.339556
+/romain/score-centering-snowball-resume-smoke-01a0bb6f-r3,cw-us-east-02a,Snowball,missing_wandb_key,failed,5,8,1390.05,3.089000
+/romain/score-centering-snowball-sc-export-recovery-01a0bb6f,cw-us-east-02a,Snowball,model_only_export,succeeded,4,8,7838.02,17.417822

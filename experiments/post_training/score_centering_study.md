@@ -929,6 +929,17 @@ synthetic mixed-span test checks the scorer's version routing, but this GPU
 sample does not validate B for later generated versions or an actual mixed
 response.
 
+The [round-two diagnostic cost ledger](results/score_centering_round2_diagnostic_cost.csv)
+records the two Qwen probes, their two failed setup attempts, the Snowball
+model-only recovery, and its three failed full-restore setup attempts. It uses
+the durations of every GPU task shown by `iris job describe`, multiplied by
+eight H100s per task; coscheduled siblings still reserve GPUs until a failed
+head task exits. These finished jobs used 6.30 Qwen and 27.51 Snowball reserved
+H100-hours, or 33.80 together. The 17.42-hour Snowball recovery in this
+ledger is the same job described above, so it is counted once. The active
+full-optimizer restore attempt and confirmation pairs enter the campaign total
+after their task durations become final.
+
 ## Matched Qwen confirmation design
 
 The [current async launcher draft](https://github.com/marin-community/marin/pull/9256)
@@ -959,6 +970,18 @@ exploratory; the new seeds test replication, and a six-pair pooled mean with a
 paired 95% Student-t interval describes the combined evidence. No acceptable
 quality-loss margin has been selected, so the interval is reported against
 zero rather than a non-inferiority threshold.
+
+The [six resolved confirmation configurations](configs/score_centering/README.md)
+were read from their durable `resolved-skyrl.json` exports. Each pair's 153
+Hydra arguments differ only in the SC width after run-owned paths and names
+are removed. Within each arm, only the training seed changes across pairs.
+All six jobs use MarinSkyRL `cd040079`. Their Iris parents and W&B runs are:
+
+| Seed | TIS control | TIS plus SC32 |
+| ---: | --- | --- |
+| 20 | [Iris](https://iris-cw-rno2a.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-confirm-seed20-tis-01a0bb6f), [W&B](https://wandb.ai/marin-community/marin-async-rl/runs/bxtchku2) | [Iris](https://iris-cw-rno2a.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-confirm-seed20-sc32-01a0bb6f), [W&B](https://wandb.ai/marin-community/marin-async-rl/runs/gqn80jr9) |
+| 21 | [Iris](https://iris-cw-rno2a.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-confirm-seed21-tis-01a0bb6f), [W&B](https://wandb.ai/marin-community/marin-async-rl/runs/8bjiq142) | [Iris](https://iris-cw-rno2a.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-confirm-seed21-sc32-01a0bb6f), [W&B](https://wandb.ai/marin-community/marin-async-rl/runs/p31p03qw) |
+| 22 | [Iris](https://iris-cw-rno2a.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-confirm-seed22-tis-01a0bb6f), [W&B](https://wandb.ai/marin-community/marin-async-rl/runs/7y8sbla9) | [Iris](https://iris-cw-rno2a.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-confirm-seed22-sc32-01a0bb6f), [W&B](https://wandb.ai/marin-community/marin-async-rl/runs/rqhq49gu) |
 
 The comparison will also use consumed loss tokens, completion and length-stop
 rates, token ages, skipped or discarded groups, elapsed time from first GPU
