@@ -3,12 +3,12 @@
     "paper_rep"
   ],
   "base_sha": "e7ee488b9fff2f86e14d3441a00a848071440fef",
-  "head_sha": "3f55e5e8caeef9f369700440a69d5ec36f44162e",
+  "head_sha": "ba43eb0b00135c7a02c5411cf6d0fcf70b5d27c9",
   "report_count": 1,
   "reports": [
     {
       "closest_variant": "base",
-      "distance_score": 1683,
+      "distance_score": 1689,
       "report_relpath": "paper_rep/index.html",
       "status_counts": {
         "added": 7,
