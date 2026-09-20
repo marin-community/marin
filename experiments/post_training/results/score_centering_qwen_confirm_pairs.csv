@@ -1,0 +1,7 @@
+cohort,seed,control,centered,control_step0,centered_step0,control_scheduled,centered_scheduled,control_final,centered_final,scheduled_difference,final_difference,mean_terminal_difference,step0_difference,baseline_adjusted_difference
+exploratory,17,r24,r25,73,79,275,313,248,283,38,35,36.5,6,30.5
+exploratory,18,r27,r28,88,79,233,276,245,289,43,44,43.5,-9,52.5
+exploratory,19,r30,r31,80,75,283,312,304,293,29,-11,9.0,-5,14.0
+confirmation,20,s20_tis,s20_sc,67,77,293,321,297,326,28,29,28.5,10,18.5
+confirmation,21,s21_tis,s21_sc,84,87,279,256,262,238,-23,-24,-23.5,3,-26.5
+confirmation,22,s22_tis,s22_sc,74,81,264,259,268,262,-5,-6,-5.5,7,-12.5

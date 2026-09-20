@@ -17,6 +17,15 @@ interval across the three training seeds is -15.6 to +75.0, before uncertainty
 about this small-seed interval's assumptions. This is a promising quality signal,
 not a reliable improvement estimate.
 
+Three new matched confirmation pairs at the same setting gave +28.5, -23.5,
+and -5.5 answers, a mean difference of -0.2 out of 756 (95% paired Student-t
+interval -65.8 to +65.4). Adjusting each pair for its step-zero score changed
+the mean to -6.8 (interval -64.0 to +50.4). The descriptive mean across all
+six seeds is +14.8 (interval -12.6 to +42.1). The original positive signal did
+not replicate consistently, and these small intervals do not establish either
+a gain or an acceptable bound on quality loss. The matched confirmation arms
+consumed almost the same prompts, loss tokens, wall time, and reserved H100 work.
+
 In the near-fresh seed-17 check, centering led by 20 answers across the two final
 evaluations but started 15 ahead at step zero. The deliberately delayed top-k-eight
 pair consumed tokens at mean age about 8.5 rather than 4.7 updates. Centering led
@@ -971,13 +980,18 @@ occurred in this probe.
 
 The [round-two diagnostic cost ledger](results/score_centering_round2_diagnostic_cost.csv)
 records the three Qwen probes, their two failed setup attempts, the Snowball
-model-only recovery, and its four failed full-restore attempts. It uses
+model-only recovery, and six failed Snowball resume attempts. It uses
 the durations of every GPU task shown by `iris job describe`, multiplied by
 eight H100s per task; coscheduled siblings still reserve GPUs until a failed
 head task exits. These finished jobs used 9.02 Qwen and 57.86 Snowball reserved
-H100-hours, or 66.88 together. The 17.42-hour Snowball recovery in this
-ledger is the same job described above, so it is counted once. The active
-confirmation pairs and later restore retry enter the campaign total after their
+H100-hours before r6. The r6 save failure added 29.46 Snowball H100-hours,
+and r7's setup failure added 3.16, bringing the round-two diagnostic total
+to 99.50. The 17.42-hour Snowball recovery in this
+ledger is the same job described above, so it is counted once. The six completed
+Qwen confirmation runs used another 148.82 reserved H100-hours, including
+training and terminal export. Thus the completed round-two diagnostic and Qwen
+confirmation tasks total 248.32 H100-hours before the r8 Snowball retry. These
+are reserved task-hours, not a billing estimate; r8 enters the total once its
 task durations become final.
 
 ## Matched Qwen confirmation design
@@ -1023,23 +1037,85 @@ All six jobs use MarinSkyRL `cd040079`. Their Iris parents and W&B runs are:
 | 21 | [Iris](https://iris-cw-rno2a.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-confirm-seed21-tis-01a0bb6f), [W&B](https://wandb.ai/marin-community/marin-async-rl/runs/8bjiq142) | [Iris](https://iris-cw-rno2a.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-confirm-seed21-sc32-01a0bb6f), [W&B](https://wandb.ai/marin-community/marin-async-rl/runs/p31p03qw) |
 | 22 | [Iris](https://iris-cw-rno2a.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-confirm-seed22-tis-01a0bb6f), [W&B](https://wandb.ai/marin-community/marin-async-rl/runs/7y8sbla9) | [Iris](https://iris-cw-rno2a.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-confirm-seed22-sc32-01a0bb6f), [W&B](https://wandb.ai/marin-community/marin-async-rl/runs/rqhq49gu) |
 
-The comparison will also use consumed loss tokens, completion and length-stop
-rates, token ages, skipped or discarded groups, elapsed time from first GPU
-task, and total reserved H100-hours through evaluation and terminal export.
-Those totals include retries, setup, and failed work. It isolates SC at one
-measured operating condition. Scheduling changes toward the house age-four
-template or more permissive age will be assessed separately, because their
-throughput and quality effects cannot be attributed to SC from this pair.
+All six [training jobs](results/score_centering_qwen_confirm_iris_attempts.csv)
+and terminal exports finished. The [saved response evaluations](results/score_centering_qwen_confirm_evals.csv)
+cover the same 756 held-out prompt IDs in every run and all scheduled steps.
+The [raw W&B evaluation history](results/score_centering_qwen_confirm_wandb_evals.jsonl)
+retains both step-40 passes; the scheduled pass was overwritten by finalization
+in the saved response dump. Its integer correct counts agree with the Iris log
+mirrors where those logs remained and the final pass agrees with the saved dump.
+The [repeat table](results/score_centering_qwen_confirm_repeats.csv) and
+[pair analysis](results/score_centering_qwen_confirm_pairs.csv) give:
+
+| Seed | TIS scheduled / final | SC32 scheduled / final | SC minus TIS, mean of passes | Step-zero-adjusted |
+| ---: | ---: | ---: | ---: | ---: |
+| 20 | 293 / 297 | 321 / 326 | +28.5 | +18.5 |
+| 21 | 279 / 262 | 256 / 238 | -23.5 | -26.5 |
+| 22 | 264 / 268 | 259 / 262 | -5.5 | -12.5 |
+
+The [cohort summary](results/score_centering_qwen_confirm_pairs_summary.csv)
+reports a confirmation mean of -0.2 answers (95% paired Student-t interval
+-65.8 to +65.4), and a six-seed descriptive mean of +14.8 (-12.6 to +42.1).
+Within-pair scheduled and final differences have the same sign in each seed.
+The step-zero-adjusted confirmation mean is -6.8 (-64.0 to +50.4). These
+intervals use training seed as the unit; the two evaluations at one weight are
+averaged, not treated as independent training replicates. The three confirmation
+seeds were fixed before launching them. There is no selected non-inferiority
+margin.
+
+![Seed-20 Qwen quality against optimizer updates, loss tokens, time, and GPU work](figures/score_centering_qwen_confirm_seed20.svg)
+
+![Seed-21 Qwen quality against optimizer updates, loss tokens, time, and GPU work](figures/score_centering_qwen_confirm_seed21.svg)
+
+![Seed-22 Qwen quality against optimizer updates, loss tokens, time, and GPU work](figures/score_centering_qwen_confirm_seed22.svg)
+
+The [W&B training histories](results/score_centering_qwen_confirm_wandb_train.jsonl)
+and [derived step metrics](results/score_centering_qwen_confirm_metrics.csv)
+show mean consumed-token age 4.60–4.62 updates, 89.0–89.7% of consumed tokens
+at age four or older, no stale rejection, mean absolute pooled log ratio
+0.0152–0.0154, and TIS caps on 5.3–5.4% of loss tokens. Each arm consumed
+13.05–13.24 million loss tokens through step 40. The [checkpoint data trackers](results/score_centering_qwen_confirm_exposure.csv)
+show that pairs consumed 1,276–1,280 of the same 1,280 distinct prompt IDs by
+step 40; earlier checkpoints also agree to within four prompt IDs. The
+[Iris-attempt cost analysis](results/score_centering_qwen_confirm_cost.csv)
+includes terminal exports: TIS controls used 74.24 H100-hours total and SC32
+used 74.59. Individual runs cost 24.52–25.35 H100-hours and reached the final
+response dump 1.49–1.53 hours after their first GPU task started. This matched
+setting shows no material compute saving from SC itself. Scheduling changes
+toward the house age-four template or more permissive age need a separate
+comparison, because their throughput and quality effects cannot be attributed
+to SC from these pairs.
 
 ## Snowball full-response pilot design
 
 The completed two-update Snowball pair used a 1,024-token response cap and
-had 66–72% length stops. The full-optimizer smoke above completed a resumed
+had 66–72% length stops. The full-optimizer r4 smoke completed a resumed
 step-three update but failed during checkpoint save at the 1,800 GB host
-memory limit. Its 1,980 GB retry must save and export successfully before
-this pilot starts.
+memory request. An otherwise identical [r6 retry](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fscore-centering-snowball-resume-smoke-01a0bb6f-r6)
+with 1,980 GB per task also restored the original full optimizer and completed
+step three. Ray killed a policy worker during checkpoint save when that node
+reached 1,881.40 of 1,980.00 GB, just over its 95% memory threshold. The
+eight save workers on that node used about 228–243 GB each. Increasing the
+request to 2,000 GB could not fit five nodes in the available leafgroup and
+used no GPU time. These runs establish that the obstacle is the full optimizer
+save, after a successful full optimizer restore and update.
 
-If that resume finishes, run one matched Snowball TIS-versus-TIS-plus-SC32
+Megatron's existing `dp_reshardable` optimizer checkpoint format writes
+DP-local optimizer shards without the CPU gather of the default
+`fully_reshardable` format. Its GPU checkpoint tests cover loading a
+`fully_reshardable` checkpoint and saving as `dp_reshardable`. The
+[r7 qualification attempt](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fscore-centering-snowball-resume-smoke-01a0bb6f-r7)
+did not exercise that format: its launch shell omitted the `marin-env` wrapper,
+so the job stopped before restore because `WANDB_API_KEY` was absent. The
+[r8 retry](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fscore-centering-snowball-resume-smoke-01a0bb6f-r8)
+uses the wrapper and the same original step-two full checkpoint, geometry,
+model, pool, 1,980 GB request, and code pin, changing only the optimizer
+checkpoint sharding type to `dp_reshardable`. The Snowball quality pilot
+remains gated on r8 completing its full save and terminal export. A DP-local checkpoint
+requires the same tensor, pipeline, context, and expert parallel geometry
+when resumed.
+
+If r8 finishes, run one matched Snowball TIS-versus-TIS-plus-SC32
 pair from the same SFT model and frozen pool as the smoke. Use seed 17, the
 same 40-H100 Megatron/vLLM topology with 1,980 GB per task, 128 prompts
 and four responses per update, 192 generation workers, a 32-group buffer, age limit eight,

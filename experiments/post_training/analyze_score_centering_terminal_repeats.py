@@ -8,6 +8,8 @@ same response dump. The first result remains in the step-40 train mirror; the
 second is in the final eval mirror. GSM8K rewards are 0/1 and Math500 rewards
 are -1/1, so the completed counts can be recovered from their signed metrics.
 The final reconstructed counts must match the saved response analysis CSV.
+When an Iris pod log is unavailable, pass retained W&B evaluation history as
+JSONL with the run label, W&B run ID, history step, optimizer step, and metrics.
 """
 
 from __future__ import annotations
@@ -72,7 +74,22 @@ def _mirrors(path: Path, step: int) -> dict[str, dict]:
     return selected
 
 
-def summarize(run: str, log: Path, evaluations: list[dict[str, str]], step: int) -> dict:
+def _wandb_history_mirrors(path: Path, run: str, step: int) -> dict[str, dict]:
+    rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    rows = [row for row in rows if row["run"] == run]
+    run_ids = {row["wandb_run_id"] for row in rows}
+    if len(run_ids) != 1:
+        raise ValueError(f"{run}: expected one W&B run identity in {path}")
+    scheduled = [row for row in rows if row.get("trainer/global_step") == step]
+    if len(scheduled) != 1:
+        raise ValueError(f"{run}: expected one scheduled step-{step} W&B evaluation")
+    final = [row for row in rows if row["_step"] == scheduled[0]["_step"] + 1 and row.get("trainer/global_step") is None]
+    if len(final) != 1:
+        raise ValueError(f"{run}: expected one final W&B evaluation after scheduled step {step}")
+    return {"train": scheduled[0], "eval": final[0]}
+
+
+def summarize(run: str, log: Path, evaluations: list[dict[str, str]], step: int, *, wandb_history: bool = False) -> dict:
     rows = {row["dataset"]: row for row in evaluations if row["run"] == run and int(row["step"]) == step}
     if set(rows) != {"all", "val-gsm8k", "val-math500"}:
         raise ValueError(f"{run}: missing final response analysis for step {step}")
@@ -81,7 +98,7 @@ def summarize(run: str, log: Path, evaluations: list[dict[str, str]], step: int)
         MATH500_QUESTIONS,
     ]:
         raise ValueError(f"{run}: frozen evaluation suite sizes changed")
-    mirrors = _mirrors(log, step)
+    mirrors = _wandb_history_mirrors(log, run, step) if wandb_history else _mirrors(log, step)
     scheduled_gsm, scheduled_math = _completed_counts(mirrors["train"])
     final_gsm, final_math = _completed_counts(mirrors["eval"])
     final_all = final_gsm + final_math
@@ -104,7 +121,8 @@ def summarize(run: str, log: Path, evaluations: list[dict[str, str]], step: int)
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--evaluations", action="append", required=True, type=Path)
-    parser.add_argument("--iris-log", action="append", required=True, metavar="RUN=PATH")
+    parser.add_argument("--iris-log", action="append", default=[], metavar="RUN=PATH")
+    parser.add_argument("--wandb-history", action="append", default=[], metavar="RUN=JSONL")
     parser.add_argument("--step", type=int, default=40)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
@@ -120,12 +138,15 @@ def main() -> None:
                 evaluations.append(row)
     result = []
     labels: set[str] = set()
-    for item in args.iris_log:
-        run, separator, path = item.partition("=")
-        if not separator or not run or not path or run in labels:
-            parser.error(f"invalid --iris-log {item!r}; expected RUN=PATH")
-        labels.add(run)
-        result.append(summarize(run, Path(path), evaluations, args.step))
+    for source, items in (("--iris-log", args.iris_log), ("--wandb-history", args.wandb_history)):
+        for item in items:
+            run, separator, path = item.partition("=")
+            if not separator or not run or not path or run in labels:
+                parser.error(f"invalid {source} {item!r}; expected RUN=PATH")
+            labels.add(run)
+            result.append(summarize(run, Path(path), evaluations, args.step, wandb_history=source == "--wandb-history"))
+    if not result:
+        parser.error("pass at least one --iris-log or --wandb-history")
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("w", newline="") as stream:
         writer = csv.DictWriter(stream, FIELDS)

@@ -8,4 +8,6 @@ iris_job,cluster,model,purpose,state,gpu_tasks,h100_per_task,task_seconds_total,
 /romain/score-centering-snowball-resume-smoke-01a0bb6f-r2,cw-us-east-02a,Snowball,wrong_wandb_entity,failed,5,8,1502.80,3.339556
 /romain/score-centering-snowball-resume-smoke-01a0bb6f-r3,cw-us-east-02a,Snowball,missing_wandb_key,failed,5,8,1390.05,3.089000
 /romain/score-centering-snowball-resume-smoke-01a0bb6f-r4,cw-us-east-02a,Snowball,resume_step3_save_host_oom,failed,5,8,13658.20,30.351556
+/romain/score-centering-snowball-resume-smoke-01a0bb6f-r6,cw-us-east-02a,Snowball,resume_step3_save_host_oom,failed,5,8,13256.90,29.459778
+/romain/score-centering-snowball-resume-smoke-01a0bb6f-r7,cw-us-east-02a,Snowball,missing_wandb_key_before_restore,failed,5,8,1423.02,3.162260
 /romain/score-centering-snowball-sc-export-recovery-01a0bb6f,cw-us-east-02a,Snowball,model_only_export,succeeded,4,8,7838.02,17.417822

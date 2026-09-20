@@ -1,0 +1,7 @@
+run,scheduled_gsm8k,scheduled_math500,scheduled_all,final_gsm8k,final_math500,final_all,final_minus_scheduled
+s20_tis,159,134,293,176,121,297,4
+s20_sc,160,161,321,166,160,326,5
+s21_tis,182,97,279,170,92,262,-17
+s21_sc,153,103,256,159,79,238,-18
+s22_tis,155,109,264,141,127,268,4
+s22_sc,136,123,259,127,135,262,3

@@ -183,7 +183,7 @@ def summarize_iris_logs(label: str, paths: list[Path]) -> list[dict[str, Any]]:
     if not paths:
         raise ValueError(f"{label}: no Iris log paths")
     marker = "WANDB_MIRROR kind=train step="
-    steps: dict[int, tuple[int, int, dict[str, Any]]] = {}
+    steps: dict[int, tuple[int | str, int | str, dict[str, Any]]] = {}
     for job_index, path in enumerate(paths):
         with path.open() as stream:
             for line in stream:
@@ -204,12 +204,18 @@ def summarize_iris_logs(label: str, paths: list[Path]) -> list[dict[str, Any]]:
                     steps[step] = (job_index, attempt, metrics)
     if not steps:
         raise ValueError(f"{label}: no training metrics in {paths}")
+    return _summarize_train_steps(label, steps)
+
+
+def _summarize_train_steps(
+    label: str, steps: dict[int, tuple[int | str, int | str, dict[str, Any]]]
+) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     cumulative_tokens = 0
     cumulative_seconds = 0.0
     for step, (job_index, attempt, metrics) in sorted(steps.items()):
         if metrics["trainer/global_step"] != step:
-            raise ValueError(f"{label}: Iris mirror step {step} disagrees with trainer/global_step")
+            raise ValueError(f"{label}: training record step {step} disagrees with trainer/global_step")
         tokens = metrics["async/performance/consumed_loss_tokens"]
         seconds = metrics["timing/step"]
         gpus = (
@@ -249,11 +255,31 @@ def summarize_iris_log(label: str, path: Path) -> list[dict[str, Any]]:
     return summarize_iris_logs(label, [path])
 
 
+def summarize_wandb_history(label: str, path: Path) -> list[dict[str, Any]]:
+    """Read retained W&B training history when the Iris pod log is unavailable."""
+    rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    rows = [row for row in rows if row["run"] == label]
+    if len({row["wandb_run_id"] for row in rows}) != 1:
+        raise ValueError(f"{label}: expected one W&B run identity in {path}")
+    steps: dict[int, tuple[int | str, int | str, dict[str, Any]]] = {}
+    for row in rows:
+        step = row["trainer/global_step"]
+        if type(step) is not int or row["_step"] != step or step in steps:
+            raise ValueError(f"{label}: duplicate or inconsistent W&B training step {step}")
+        steps[step] = ("", "", row)
+    if not steps:
+        raise ValueError(f"{label}: no W&B training rows in {path}")
+    if sorted(steps) != list(range(1, max(steps) + 1)):
+        raise ValueError(f"{label}: W&B training history has missing optimizer steps")
+    return _summarize_train_steps(label, steps)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run", action="append", required=True, metavar="LABEL=EXPORT_PATH")
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--iris-log", action="append", default=[], metavar="LABEL=LOG_FILE")
+    parser.add_argument("--wandb-history", action="append", default=[], metavar="LABEL=JSONL")
     parser.add_argument("--metrics-output", type=Path)
     parser.add_argument("--s3-endpoint", default="https://cwobject.com")
     args = parser.parse_args()
@@ -273,9 +299,9 @@ def main() -> None:
         writer.writeheader()
         writer.writerows(result)
     print(f"Wrote {len(result)} rows to {args.output}; held-out membership SHA-256: {membership_hash}")
-    if args.iris_log:
+    if args.iris_log or args.wandb_history:
         if args.metrics_output is None:
-            parser.error("--metrics-output is required with --iris-log")
+            parser.error("--metrics-output is required with --iris-log or --wandb-history")
         metrics: list[dict[str, Any]] = []
         log_paths: dict[str, list[Path]] = {}
         for item in args.iris_log:
@@ -285,12 +311,19 @@ def main() -> None:
             log_paths.setdefault(label, []).append(Path(path))
         for label, paths in log_paths.items():
             metrics.extend(summarize_iris_logs(label, paths))
+        history_labels: set[str] = set()
+        for item in args.wandb_history:
+            label, separator, path = item.partition("=")
+            if not separator or label not in labels or not path or label in log_paths or label in history_labels:
+                parser.error(f"invalid --wandb-history {item!r}; its label must match one --run")
+            history_labels.add(label)
+            metrics.extend(summarize_wandb_history(label, Path(path)))
         args.metrics_output.parent.mkdir(parents=True, exist_ok=True)
         with args.metrics_output.open("w", newline="") as stream:
             writer = csv.DictWriter(stream, METRIC_FIELDS)
             writer.writeheader()
             writer.writerows(metrics)
-        print(f"Wrote {len(metrics)} Iris mirror rows to {args.metrics_output}")
+        print(f"Wrote {len(metrics)} training metric rows to {args.metrics_output}")
 
 
 if __name__ == "__main__":
