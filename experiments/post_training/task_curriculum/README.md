@@ -3,7 +3,8 @@
 This experiment turns a broad subject inventory into trainable curricula and maps tasks onto reviewed sections. It
 keeps curriculum design separate from task correctness:
 TaskCompendium owns model-visible task semantics and private verifier contracts; a curriculum describes observable
-capabilities, boundaries, examples, and prerequisites.
+capabilities, boundaries, and examples. A separate catalog-level pass proposes learning prerequisites after those
+capability boundaries are stable.
 
 The canonical cross-domain v2 catalog is the immutable object registered by `catalog_artifact.py`. Canonical means
 versioned and addressable. It contains all 45 D-series subject roots and 2,405 globally unique nodes: 1,999 trainable
@@ -67,6 +68,12 @@ three misses were unrelated operation families, not evidence for another omnibus
 AAII metadata found subject homes across all 45 roots; ten benchmark entries were classified as cross-domain task
 mechanics rather than subjects.
 
+The embedded prerequisite arrays in production v2 are a conservative hard-dependency experiment: only 17 edges in
+four subjects survived it. They are not a reliable easy-to-hard ordering for the other 41 subjects. The next catalog
+iteration uses `prompts/learning_progression.md` to produce a separate catalog-level graph under the original
+learning-enablement rule: mastery of A should materially improve the chance of some success on entry-level B tasks.
+This pass can express cross-subject edges and can be revised without regenerating capability nodes.
+
 ## Curriculum iteration
 
 One-off agent runs produce curricula and reviews. Their reports record the evidence, and reviewed changes are promoted
@@ -74,17 +81,20 @@ into a new immutable catalog version. For each selected macro area:
 
 1. Give a high-reasoning generator the inventory area, rubric, a maximum tree depth, and representative tasks. Before
    emitting the curriculum, it enumerates operation families, tests the most distant permitted pair for every
-   capability, and audits proposed prerequisites with the completed-artifact counterfactual. Every section includes
-   an `entry` probe that isolates the smallest prerequisite delta and a `representative` probe for the full outcome.
+   capability, and leaves embedded prerequisite arrays empty. Every section includes an `entry` probe for the
+   smallest self-contained exercise of its outcome and a `representative` probe for the full outcome.
 2. Validate the JSON with `Curriculum` and `Curriculum.check_generation_contract`.
 3. Give the curriculum and rubric to an independent high-reasoning reviewer. The reviewer returns a score, verdict,
    concrete findings, and proposed rubric changes in one call for the complete subject curriculum.
 4. When an uncertain boundary or difficulty claim could change the review, the reviewer may generate focused tasks
    and send them to a blinded Luna model in batches of 8–16. These diagnostics are optional and do not replace the
    whole-subject judgment.
-5. Compare findings across subjects. Mutual self-confidence and prerequisite continuity are blocking criteria even
-   when the numeric score is high. Revise the rubric or generation instructions only for problems that recur, then
-   generate another version.
+5. Compare findings across subjects. Mutual self-confidence and local entry-to-representative continuity are
+   blocking criteria even when the numeric score is high. Revise the rubric or generation instructions only for
+   problems that recur, then generate another version.
+6. After capability boundaries are stable, run one Sol/high learning-progression proposer and one independent
+   reviewer per complete subject scope. Each accepted edge has two witness pairs. `workflow.md` defines the bounded
+   review and operator-adjudication procedure.
 
 The holistic score controls structural readiness: 85 or higher with no structural blockers is `pilot_ready`.
 Evidence confidence is tracked independently. Low confidence marks branches that need better discovery or held-out
@@ -99,10 +109,10 @@ During initial calibration, a systematic operation-family gap blocks promotion; 
 independence and reporting rules.
 
 The hierarchy has two node kinds. A `capability` is a trainable outcome and the only kind that may receive task
-assignments, declare prerequisites, or carry entry and representative probes. A `group` is an organizational scope;
-it has no outcome, probes, or prerequisite edges. Use a group when a parent would otherwise be a routing menu or an
-artificial bundle of child deliverables. Capabilities may still contain narrower capabilities when their
-representative probe exercises a natural cross-child synthesis.
+assignments or carry entry and representative probes. A `group` is an organizational scope; it has no outcome or
+probes. Catalog-level learning edges connect capabilities and may cross subject roots. Use a group when a parent
+would otherwise be a routing menu or an artificial bundle of child deliverables. Capabilities may still contain
+narrower capabilities when their representative probe exercises a natural cross-child synthesis.
 
 Reusable knowledge dimensions belong in a capability's `sampling_facets`. A facet declares an axis such as language
 direction, jurisdiction, or scientific-model family; its concrete value is recorded with task annotations outside

@@ -77,3 +77,24 @@ SHA-256 `1faada4eeda8368a7834602e88f8f3fb97e35a4baf5dedc2bae10a5dffbfc58b`. This
 republication of the 45-root production graph: the catalog version, subjects, nodes, and reviews are unchanged. The
 prior YAML serialization remains immutable for rollback. The evidence archive SHA-256 is
 `f9d495bcf5afd3b2ae01eb8de60abc9c99e00abfbcd8e90709cce7424d50d74a`.
+
+## Learning-progression pilot
+
+The production catalog's hard-dependency rule left 41 of 45 subjects without prerequisite edges. A separate
+catalog-level pass tested the original learning-enablement rule on D02 Computer and Information Sciences and D08
+Mechanical, Aerospace and Marine Engineering. Iteration one proposed 26 and 45 edges; its reviewer accepted every
+edge, which was too permissive to discriminate course order and domain relabeling. A refined rubric required two
+task-family witnesses, active reuse of the upstream outcome, one shared epsilon step, and the closest useful
+foundation. It proposed 31 and 34 edges. Independent review accepted 30/31 and 31/34, rejected one vocabulary-only
+link and three duplicate or domain-relabeling links, and supplied six omissions.
+
+One bounded repair exposed reviewer variance on six later edge or witness decisions. Operator adjudication stopped
+the loop and retained 31 D02 edges and 38 D08 edges. The combined 69-edge graph is acyclic and validates against the
+production catalog. These edges are structural learning hypotheses, not causal transfer measurements. The adopted
+workflow uses one proposer and one reviewer per complete subject scope, complete witness-backed omissions from the
+reviewer, and operator adjudication instead of repeated reviews.
+
+The immutable evidence is
+`s3://marin-us-east-02a/marin/task-curriculum/experiments/2026.09.20-learning-progression-pilot-v1-0a471faf1da4/`.
+The progression SHA-256 is `0a471faf1da4b8a1fd831d1e4c307ad64c4500a45f6eed68ca815c1b22c8e084`; the evidence
+archive SHA-256 is `1ddca3c28a4ecb6fc5677756d566554a4a7f0b34a133e3e619b30e488d992d1d`.

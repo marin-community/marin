@@ -81,8 +81,8 @@ For trades, public safety, clinical practice, and other fields poorly represente
 authoritative licensing, accreditation, or professional competency standards. Store the source extraction and
 topic mappings externally; check in only a versioned inventory revision and concise findings. Course order and
 chapter structure are evidence for breadth and candidate progression, not capability boundaries, mutual
-self-confidence, or prerequisite edges. The normal generator, completed-artifact counterfactual, holistic review,
-and blind-fit checks remain authoritative.
+self-confidence, or learning-prerequisite edges. The normal generator, holistic review, blind-fit checks, and
+separate learning-progression pass remain authoritative.
 
 Store the manifest and frozen blind-task artifact at a durable URI before ending a wave that may need repair. `/tmp`
 is acceptable only while a single wave is active. A concise checked-in or Loom report records the URI and hashes; it
@@ -202,7 +202,7 @@ The holistic review writes:
   "dimension_scores": {
     "coverage": 0,
     "mutual_self_confidence": 0,
-    "progression_and_epsilon_continuity": 0,
+    "local_progression": 0,
     "observable_boundaries": 0,
     "probe_quality_and_parsimony": 0
   },
@@ -226,7 +226,9 @@ The exact prompts are versioned separately so a run can hash and attach only the
 - [`prompts/generation.md`](prompts/generation.md) for curriculum generation;
 - [`prompts/blind_tasks.md`](prompts/blind_tasks.md) for curriculum-blind task sampling;
 - [`prompts/blind_fit.md`](prompts/blind_fit.md) for fit judgment;
-- [`prompts/review.md`](prompts/review.md) for holistic review; and
+- [`prompts/review.md`](prompts/review.md) for holistic review;
+- [`prompts/learning_progression.md`](prompts/learning_progression.md) for catalog-level learning edges;
+- [`prompts/learning_progression_review.md`](prompts/learning_progression_review.md) for their independent review; and
 - [`prompts/luna_placement.md`](prompts/luna_placement.md) for the optional batched diagnostic.
 
 The shared scoring and boundary definitions are in [`prompts/rubric.md`](prompts/rubric.md). Preserve the allowed-read
@@ -283,6 +285,44 @@ rewrite archived results to match it.
    and catalog version. Archive raw one-off artifacts at the manifest URI, or delete them only after the wave is
    accepted and no repair needs the frozen task set. Do not check them into this directory.
 8. Run focused tests, type checking, and the repository lint workflow before publishing the change.
+
+## Learning-progression pass
+
+Generate learning prerequisites after the capability taxonomy has passed its bounded subject repair. Keep the
+working progression separate from subject curricula so edge-semantics changes do not rewrite capability nodes. A
+future catalog revision may merge the reviewed progression at the catalog root; do not copy it into each capability's
+embedded `prerequisites` field.
+
+For one subject scope:
+
+1. Give one Sol/high proposer the complete catalog, the subject IDs whose dependent capabilities are in scope, and
+   `prompts/learning_progression.md`. Use the Responses API structured-output path with `LearningProgression` as the
+   response schema; do not ask the model to infer field names from the prose. Prerequisites may come from any catalog
+   subject. Record the catalog hash, prompt hash, model, reasoning effort, and output hash.
+2. Parse the output with `LearningProgression` and call `validate_against_catalog`. This checks unique subject and
+   edge IDs, acyclicity, catalog identity, capability-only references, and dependent-subject scope.
+3. Give one fresh Sol/high reviewer the same catalog scope, proposal, and
+   `prompts/learning_progression_review.md`, with `LearningProgressionReview` as the structured response schema. The
+   reviewer judges every edge and returns complete witness-backed objects for clear omissions.
+4. Parse the result with `LearningProgressionReview` and call `validate_against_progression`. Combine accepted edges
+   with reviewed omissions after operator inspection. Repair a rejected edge only when its relationship remains
+   credible and the defect is confined to its witnesses. Stop after one bounded repair; preserve disagreements
+   instead of iterating reviewers to consensus.
+5. Validate the combined graph across all processed subjects for cycles and redundant transitive edges. The latter is
+   a semantic review: a direct edge may remain when it transfers a different foundation from the indirect path.
+
+The edge contract implements learning enablement. Mastery of A must materially improve the chance of success on a
+recurring family of entry-level B tasks. A may cover only a declared stratum of B. Pure artifact handoff, course
+order, general sophistication, and domain relabeling do not qualify. Each edge has two witness pairs that reuse the
+same upstream foundation and add one main dependent operation. These are structural hypotheses; Luna thresholds can
+find obvious ordering failures, but the workflow does not claim causal transfer without training evidence.
+Exact duplicate witness pairs are rejected by the model contract. Semantic task-family diversity is reviewer-enforced
+because paraphrase equivalence is not a reliable string-level invariant.
+
+Run one proposer and one reviewer per complete subject scope. Do not spawn one model call per capability or edge.
+Related small subjects may share a call when the combined graph fits comfortably in context. Use a bounded repair
+call only when the reviewer identifies concrete rejected edges whose witness defects cannot be resolved from its
+structured output.
 
 ## Catalog-wide bounded repair
 
