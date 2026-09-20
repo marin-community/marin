@@ -48,7 +48,7 @@
         "name": "identity",
         "label": "Serve",
         "type": "query",
-        "description": "Standalone vLLM serves and MarinSkyRL processes that reported request-state telemetry under the selected identity kind. One identity at a time: every panel is entity-scoped.",
+        "description": "Standalone vLLM and MarinSkyRL serves with request-state telemetry. For ranges over seven hours, the list scans only the first seven hours; paste an exact ID into Manual serve ID for later sessions.",
         "datasource": {
           "type": "yesoreyeram-infinity-datasource",
           "uid": "finelog-marin"
@@ -69,7 +69,7 @@
               "params": [
                 {
                   "key": "sql",
-                  "value": "WITH sessions AS (SELECT job_id, run_id, execution_uid, timestamp_ms FROM \"telemetry_v1.vllm\" WHERE service = 'vllm' AND name = 'num_requests_running' UNION ALL SELECT job_id, run_id, execution_uid, timestamp_ms FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'num_requests_running' AND json_get(attributes_json, 'metric_source') = 'vllm') SELECT DISTINCT CASE '${identity_kind}' WHEN 'job_id' THEN job_id WHEN 'run_id' THEN run_id WHEN 'execution_uid' THEN execution_uid END AS value FROM sessions WHERE timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND CASE '${identity_kind}' WHEN 'job_id' THEN job_id WHEN 'run_id' THEN run_id WHEN 'execution_uid' THEN execution_uid END IS NOT NULL ORDER BY 1"
+                  "value": "WITH sessions AS (SELECT job_id, run_id, execution_uid, timestamp_ms FROM \"telemetry_v1.vllm\" WHERE service = 'vllm' AND name = 'num_requests_running' UNION ALL SELECT job_id, run_id, execution_uid, timestamp_ms FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'num_requests_running' AND json_get(attributes_json, 'metric_source') = 'vllm') SELECT DISTINCT CASE '${identity_kind}' WHEN 'job_id' THEN job_id WHEN 'run_id' THEN run_id WHEN 'execution_uid' THEN execution_uid END AS value FROM sessions WHERE timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) + 25200000 AND CASE '${identity_kind}' WHEN 'job_id' THEN job_id WHEN 'run_id' THEN run_id WHEN 'execution_uid' THEN execution_uid END IS NOT NULL ORDER BY 1"
                 },
                 {
                   "key": "from",
@@ -104,6 +104,17 @@
         "hide": 0
       },
       {
+        "name": "identity_override",
+        "label": "Manual serve ID (optional)",
+        "type": "textbox",
+        "description": "Paste an exact job, run, or execution ID when a long-range picker slice omits it. This takes precedence over Serve.",
+        "query": "",
+        "current": {
+          "text": "",
+          "value": ""
+        }
+      },
+      {
         "name": "output_cap",
         "label": "Output token cap (annotation)",
         "type": "textbox",
@@ -121,14 +132,39 @@
       "title": "",
       "options": {
         "mode": "markdown",
-        "content": "Requests are not GPU batch size. Compare **running/waiting**, **iteration tokens**, and **time per output token** over the same rollout phase. These metrics do not split in-flight requests into prefill vs decode, expose ready upstream work, or measure CUDA-graph/kernel efficiency. Use **RL Post-training** for phase timing and **Fleet accelerators** for GPU context."
+        "content": "Select a serve and range. **Run triage** shows query health and a selected-range server count cue. A count gap needs range and evaluator checks. Zoom to seven hours or less for engine and latency detail. Use **Manual serve ID** if the picker omits a later session."
       },
       "id": 12,
       "gridPos": {
         "x": 0,
         "y": 0,
         "w": 24,
-        "h": 3
+        "h": 4
+      }
+    },
+    {
+      "panelRef": "inference_status",
+      "id": 19,
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 24,
+        "h": 4
+      }
+    },
+    {
+      "type": "text",
+      "title": "Check evaluator and proxy time",
+      "options": {
+        "mode": "markdown",
+        "content": "For a job ID, [open the selected Serve in Iris](https://iris.oa.dev/#/job/${identity:percentencode}?cluster=marin), or [open the Manual serve ID](https://iris.oa.dev/#/job/${identity_override:percentencode}?cluster=marin) if entered. Follow the serve parent to its evaluator child. Check evaluator results, retries and proxy logs against the server counters. vLLM does not measure client or proxy timeouts."
+      },
+      "id": 20,
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 24,
+        "h": 4
       }
     },
     {
@@ -136,7 +172,7 @@
       "id": 3,
       "gridPos": {
         "x": 0,
-        "y": 3,
+        "y": 12,
         "w": 12,
         "h": 7
       }
@@ -146,7 +182,7 @@
       "id": 2,
       "gridPos": {
         "x": 12,
-        "y": 3,
+        "y": 12,
         "w": 12,
         "h": 7
       }
@@ -163,7 +199,7 @@
         "defaults": {
           "unit": "short",
           "min": 0,
-          "noValue": "No samples",
+          "noValue": "See query status above",
           "displayName": "${__field.labels.series}",
           "custom": {
             "drawStyle": "line",
@@ -204,6 +240,10 @@
                 "value": "${identity}"
               },
               {
+                "key": "identity_override",
+                "value": "${identity_override}"
+              },
+              {
                 "key": "from",
                 "value": "${__from}"
               },
@@ -213,7 +253,7 @@
               },
               {
                 "key": "bucket_ms",
-                "value": "${__interval_ms}"
+                "value": "15000"
               },
               {
                 "key": "view",
@@ -249,7 +289,7 @@
       "id": 13,
       "gridPos": {
         "x": 0,
-        "y": 10,
+        "y": 19,
         "w": 8,
         "h": 7
       }
@@ -259,7 +299,7 @@
       "id": 11,
       "gridPos": {
         "x": 8,
-        "y": 10,
+        "y": 19,
         "w": 8,
         "h": 7
       }
@@ -276,7 +316,7 @@
         "defaults": {
           "unit": "s",
           "min": 0,
-          "noValue": "No samples",
+          "noValue": "See query status above",
           "displayName": "${__field.labels.series}",
           "custom": {
             "drawStyle": "line",
@@ -317,6 +357,10 @@
                 "value": "${identity}"
               },
               {
+                "key": "identity_override",
+                "value": "${identity_override}"
+              },
+              {
                 "key": "from",
                 "value": "${__from}"
               },
@@ -326,7 +370,7 @@
               },
               {
                 "key": "bucket_ms",
-                "value": "${__interval_ms}"
+                "value": "15000"
               },
               {
                 "key": "view",
@@ -367,7 +411,7 @@
       "id": 14,
       "gridPos": {
         "x": 16,
-        "y": 10,
+        "y": 19,
         "w": 8,
         "h": 7
       }
@@ -382,7 +426,7 @@
       },
       "fieldConfig": {
         "defaults": {
-          "noValue": "No samples",
+          "noValue": "See query status above",
           "custom": {
             "filterable": true
           }
@@ -505,6 +549,10 @@
                 "value": "${identity}"
               },
               {
+                "key": "identity_override",
+                "value": "${identity_override}"
+              },
+              {
                 "key": "from",
                 "value": "${__from}"
               },
@@ -514,7 +562,7 @@
               },
               {
                 "key": "bucket_ms",
-                "value": "${__interval_ms}"
+                "value": "15000"
               },
               {
                 "key": "view",
@@ -555,7 +603,7 @@
       "id": 15,
       "gridPos": {
         "x": 0,
-        "y": 17,
+        "y": 26,
         "w": 24,
         "h": 8
       }
@@ -565,7 +613,7 @@
       "id": 5,
       "gridPos": {
         "x": 0,
-        "y": 25,
+        "y": 34,
         "w": 12,
         "h": 7
       }
@@ -581,7 +629,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 25,
+        "y": 34,
         "w": 8,
         "h": 7
       },
@@ -609,6 +657,10 @@
                 "value": "${identity}"
               },
               {
+                "key": "identity_override",
+                "value": "${identity_override}"
+              },
+              {
                 "key": "from",
                 "value": "${__from}"
               },
@@ -618,7 +670,7 @@
               },
               {
                 "key": "bucket_ms",
-                "value": "${__interval_ms}"
+                "value": "15000"
               },
               {
                 "key": "view",
@@ -656,7 +708,7 @@
       "id": 4,
       "gridPos": {
         "x": 20,
-        "y": 25,
+        "y": 34,
         "w": 4,
         "h": 7
       }
@@ -671,7 +723,7 @@
       },
       "fieldConfig": {
         "defaults": {
-          "noValue": "No samples",
+          "noValue": "See query status above",
           "custom": {
             "filterable": true
           }
@@ -714,6 +766,10 @@
                 "value": "${identity}"
               },
               {
+                "key": "identity_override",
+                "value": "${identity_override}"
+              },
+              {
                 "key": "from",
                 "value": "${__from}"
               },
@@ -723,7 +779,7 @@
               },
               {
                 "key": "bucket_ms",
-                "value": "${__interval_ms}"
+                "value": "15000"
               },
               {
                 "key": "view",
@@ -759,7 +815,7 @@
       "id": 7,
       "gridPos": {
         "x": 0,
-        "y": 32,
+        "y": 41,
         "w": 12,
         "h": 8
       }
@@ -774,7 +830,7 @@
       },
       "fieldConfig": {
         "defaults": {
-          "noValue": "No samples",
+          "noValue": "See query status above",
           "custom": {
             "filterable": true
           }
@@ -804,6 +860,10 @@
                 "value": "${identity}"
               },
               {
+                "key": "identity_override",
+                "value": "${identity_override}"
+              },
+              {
                 "key": "from",
                 "value": "${__from}"
               },
@@ -813,7 +873,7 @@
               },
               {
                 "key": "bucket_ms",
-                "value": "${__interval_ms}"
+                "value": "15000"
               },
               {
                 "key": "view",
@@ -843,7 +903,7 @@
       "id": 16,
       "gridPos": {
         "x": 12,
-        "y": 32,
+        "y": 41,
         "w": 6,
         "h": 8
       }
@@ -853,7 +913,7 @@
       "id": 8,
       "gridPos": {
         "x": 18,
-        "y": 32,
+        "y": 41,
         "w": 6,
         "h": 8
       }
@@ -863,7 +923,7 @@
       "id": 1,
       "gridPos": {
         "x": 0,
-        "y": 48,
+        "y": 57,
         "w": 8,
         "h": 6
       }
@@ -873,7 +933,7 @@
       "id": 10,
       "gridPos": {
         "x": 8,
-        "y": 48,
+        "y": 57,
         "w": 8,
         "h": 6
       }
@@ -889,7 +949,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 48,
+        "y": 57,
         "w": 8,
         "h": 6
       },
@@ -917,6 +977,10 @@
                 "value": "${identity}"
               },
               {
+                "key": "identity_override",
+                "value": "${identity_override}"
+              },
+              {
                 "key": "from",
                 "value": "${__from}"
               },
@@ -926,7 +990,7 @@
               },
               {
                 "key": "bucket_ms",
-                "value": "${__interval_ms}"
+                "value": "15000"
               },
               {
                 "key": "view",
@@ -1008,6 +1072,10 @@
                 "value": "${identity}"
               },
               {
+                "key": "identity_override",
+                "value": "${identity_override}"
+              },
+              {
                 "key": "from",
                 "value": "${__from}"
               },
@@ -1017,7 +1085,7 @@
               },
               {
                 "key": "bucket_ms",
-                "value": "${__interval_ms}"
+                "value": "15000"
               },
               {
                 "key": "view",
@@ -1058,7 +1126,7 @@
       "id": 17,
       "gridPos": {
         "x": 0,
-        "y": 40,
+        "y": 49,
         "w": 16,
         "h": 8
       }
@@ -1076,7 +1144,7 @@
           "unit": "percentunit",
           "min": 0,
           "max": 1,
-          "noValue": "No completed samples"
+          "noValue": "See query status above"
         },
         "overrides": []
       },
@@ -1100,6 +1168,10 @@
                 "value": "${identity}"
               },
               {
+                "key": "identity_override",
+                "value": "${identity_override}"
+              },
+              {
                 "key": "from",
                 "value": "${__from}"
               },
@@ -1109,7 +1181,7 @@
               },
               {
                 "key": "bucket_ms",
-                "value": "${__interval_ms}"
+                "value": "15000"
               },
               {
                 "key": "view",
@@ -1140,7 +1212,7 @@
       "id": 18,
       "gridPos": {
         "x": 16,
-        "y": 40,
+        "y": 49,
         "w": 8,
         "h": 8
       }
