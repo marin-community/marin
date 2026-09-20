@@ -70,7 +70,7 @@ raw record.
 
 ### Offline EAGLE corpora
 
-[`eagle_rollout_corpus_step`][marin.rl.eagle.eagle_rollout_corpus_step] projects one or more
+[`eagle_rollout_corpus_step`](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/rl/eagle.py) projects one or more
 normalized evaluation artifacts into a target-independent JSONL corpus. Harbor rows retain their
 exact prompt and completion token IDs when the trajectory recorded them. Evalchemy rows retain the
 prompt messages and response text for rendering with the target tokenizer later. Assistant turns
