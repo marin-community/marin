@@ -60,8 +60,9 @@ Interpretation choices (documented deviations):
 - **Muon internals** (momentum, nesterov, Newton-Schulz steps) are not
   specified in the paper and use the modded-nanogpt defaults.
 - **FineWeb** is the 10BT uniformly-sampled slice, not the full corpus (the
-  runs consume 1B of its ~10B tokens); validation is one held-out full-corpus
-  file (first ~400k docs), which the 10BT sample overlaps by ~0.007% of docs.
+  runs consume 1B of its ~10B tokens); validation is the first ~400k docs of
+  one held-out full-corpus crawl file, which the 10BT sample (uniformly drawn
+  from the full corpus) overlaps by a fraction of a percent of docs.
 - **Sequence packing**: the tokenize pipeline concatenates documents to fill
   2048-token sequences (standard Levanter packing); the paper's attention
   masking across document boundaries is not documented.

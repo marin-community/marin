@@ -19,10 +19,14 @@ from marin.processing.tokenize.tokenize import TokenizedCache
 _FINEWEB_REVISION = "9bb295ddab0e05d785b879661af7260fed5140fc"
 _FINEWEB_VERSION = "2026.09.19"
 
-# Validation: one full-corpus parquet (~6.9B tokens, ~5.7M docs), capped at
+# Validation: one full-corpus crawl file (~6.9B tokens, ~5.7M docs), capped at
 # 400k docs (~500M tokens); evals consume at most ~100M tokens per pass.
 # (tokenize's sample_count is per shard.)
 _VAL_SAMPLE_COUNT = 400_000
+# A single crawl file — the full corpus is sharded per crawl as
+# data/CC-MAIN-<crawl>/*.parquet (unlike the fineweb-edu flat layout); one
+# file (~2.2GB, ~5.7M docs) is plenty for validation.
+_VAL_FILE = "data/CC-MAIN-2024-10/000_00000.parquet"
 
 
 def fineweb_10bt_train() -> ArtifactStep[TokenizedCache]:
@@ -42,25 +46,25 @@ def fineweb_10bt_train() -> ArtifactStep[TokenizedCache]:
         "fineweb-10bt-gpt2",
         tokenizer="gpt2",
         raw=raw,
-        glob="**",
+        glob="sample/10BT/*.parquet",
         version=_FINEWEB_VERSION,
     )
 
 
 def fineweb_validation() -> ArtifactStep[TokenizedCache]:
-    """Held-out FineWeb documents (first full-corpus file), GPT-2 tokenized."""
+    """Held-out FineWeb documents (one full-corpus crawl file), GPT-2 tokenized."""
     raw = hf_download(
         "raw/fineweb-val",
         hf_id="HuggingFaceFW/fineweb",
         revision=_FINEWEB_REVISION,
-        urls_glob=["data/000_00000.parquet"],
+        urls_glob=[_VAL_FILE],
         version=_FINEWEB_VERSION,
     )
     return tokenized(
         "fineweb-val-gpt2",
         tokenizer="gpt2",
         raw=raw,
-        glob="**",
+        glob=_VAL_FILE,
         validation=True,
         sample_count=_VAL_SAMPLE_COUNT,
         version=_FINEWEB_VERSION,
