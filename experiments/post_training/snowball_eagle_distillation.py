@@ -173,6 +173,7 @@ trainer:
   gradient_checkpointing: true
   algorithm:
     advantage_estimator: rloo_n
+    group_advantage_min_size: 4
     use_kl_loss: false
   epochs: 1
   max_steps: 1
