@@ -156,7 +156,7 @@ def _h100_ladder_model(rung: H100LadderRung, dense: bool = False) -> GrugModelCo
         qk_mult=1.3,
         sconv=True,
         pooled_transport_capacity_factor=_EP_CAPACITY_FACTOR,
-        latent_dim=hidden // 2,
+        latent_dim=None if dense else hidden // 2,  # dense carries no LatentMoE
     )
 
 

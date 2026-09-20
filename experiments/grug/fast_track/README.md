@@ -22,24 +22,63 @@ detokenized — see [`../../datakit/paloma_detok.py`](../../datakit/paloma_detok
 
 ## Results
 
-Dense at 20 tokens/active-param, MoE at 60; recorded at batch 128 on 1 node (8×H100); base LR. bpb is
-macro bits-per-byte (lower = better).
+Dense at 20 tokens/active-param, MoE at 60; d512/d768 at batch 128, d1024/d1280 at batch 256, on 1 node
+(8×H100); base LR. FLOPs are total training FLOPs (6·N·D, fwd+bwd); MFU is the steady-state per-step
+mean. Both loss (Paloma macro cross-entropy) and bpb (macro bits-per-byte) are lower-is-better.
 
-| size | variant | TPP | steps | tokens | FLOPs | MFU | Paloma bpb | uncheat bpb | runtime |
-|------|---------|----:|------:|-------:|------:|----:|-----------:|------------:|--------:|
-| d512  | dense | 20 |    690 | 0.36B | 3.2e17 | 33.1% | 1.516 | 1.239 | 3.7m |
-| d512  | moe   | 60 |  2,385 | 1.25B | 7.6e17 |  7.6% | 1.309 | 1.008 | 14.6m |
-| d768  | dense | 20 |  2,040 | 1.07B | 2.1e18 | 52.2% | 1.359 | 1.062 | 9.4m |
-| d768  | moe   | 60 |  6,930 | 3.63B | 4.2e18 |  9.4% | 1.193 | 0.889 | 1.0 hr |
-| d1024 | dense | 20 |  5,400 | 2.83B | 1.2e19 | 70.0% | 1.242 | 0.941 | 36.1m |
-| d1024 | moe   | 60 | 18,180 | 9.53B | 2.0e19 | 11.0% | 1.100 | 0.795 | 4.5 hr |
-| d1280 | dense | 20 |  9,800 | 5.14B | 3.8e19 | 82.4% | _est_ | _est_ | ~1.5 hr |
-| d1280 | moe   | 60 | 32,813 | 17.2B | 5.6e19 | 11.9% | _est_ | _est_ | ~12.3 hr |
+| size | variant | TPP | steps | tokens | FLOPs | MFU | Paloma loss | Paloma bpb | uncheat bpb | runtime |
+|------|---------|----:|------:|-------:|------:|----:|------------:|-----------:|------------:|--------:|
+| d512  | dense | 20 |    690 | 0.36B | 2.0e17 | 34.9% | 3.676 | 1.520 | 1.243 | 3.7m |
+| d512  | moe   | 60 |  2,385 | 1.25B | 3.3e17 |  7.8% | 3.156 | 1.308 | 1.008 | 14.0m |
+| d768  | dense | 20 |  2,040 | 1.07B | 1.6e18 | 51.1% | 3.283 | 1.361 | 1.063 | 9.2m |
+| d768  | moe   | 60 |  6,930 | 3.63B | 2.3e18 | 10.3% | 2.872 | 1.193 | 0.888 | 54.4m |
+| d1024 | dense | 20 |  2,760 | 2.89B | 1.1e19 | 73.6% | 3.006 | 1.248 | 0.945 | 34.8m |
+| d1024 | moe   | 60 |  9,270 | 9.72B | 1.4e19 | 13.9% | 2.633 | 1.096 | 0.793 | 3.8 hr |
+| d1280 | dense | 20 |  4,988 | 5.23B | 3.4e19 | 83.3% | 2.847 | 1.183 | 0.881 | 1.5 hr |
+| d1280 | moe   | 60 | 16,669 | 17.5B | 4.2e19 | 15.4% | 2.504 | 1.044 | 0.741 | 10.0 hr |
 
-d1280 rows are estimated from 20-step MFU probes (bpb pending a full run). The d1024/d1280 rows
-predate two config changes now in the launcher — `local_kv_heads=2` and a baseline batch of 256 — so
-their steps/tokens/FLOPs no longer match the current defaults and the bpb needs a re-run; d512/d768
-(batch 128, unchanged) are current.
+MFU is verified self-consistent: reported MFU equals `3·(analytic fwd FLOPs/token)·(tokens/s) / peak`
+for every row (the ×3 is fwd+bwd). Dense runs at **4–5× the MFU of MoE** at the same width — MoE is
+throttled by expert-parallel all-to-all and small per-expert matmuls, dense is compute-bound in large
+matmuls. Dense and MoE are matched on **active** params (~1.1×: 18.1M vs 20.8M at d512); the MoE's total
+params are 13–17× larger by design (384 experts, top-8 active). The dense variant carries no LatentMoE —
+its `latent_dim` is unused on the dense path and excluded from `_active_params`.
+
+## Tokenizer impact (16k vs 128k)
+
+Same MoE geometry and token budget, swapping the 16k BPE tokenizer for the 128k Marin (llama3-family)
+tokenizer. bpb is byte-normalized so it compares fairly across tokenizers; per-token loss does not
+(the 128k tokenizer packs more bytes per token, so higher loss at similar bpb).
+
+| size | tokenizer | Paloma loss | Paloma bpb | uncheat bpb |
+|------|-----------|------------:|-----------:|------------:|
+| d512 | 16k  | 3.156 | 1.308 | 1.008 |
+| d512 | 128k | 3.656 | 1.309 | 0.996 |
+| d768 | 16k  | 2.872 | 1.193 | 0.888 |
+| d768 | 128k | 3.306 | 1.187 | 0.870 |
+
+At these scales the 128k tokenizer is ~neutral on Paloma bpb (+0.001 at d512, −0.006 at d768) and a
+small win on uncheatable bpb (−0.012 / −0.018): a larger vocab barely moves Paloma byte-efficiency
+here, with a slight edge on code/technical text.
+
+## Scaling law
+
+Fitting `L(C) = L∞ + A·C^(−α)` to Paloma macro loss over the four rungs (C = total training FLOPs), with
+the irreducible floor pinned at **L∞ = 1.2** (a prior — the ladder never nears saturation):
+
+| variant | fit | R² | α |
+|---------|-----|---:|--:|
+| MoE   | `L = 1.2 + 56.76·C^(−0.0835)` | 0.99979 | 0.0835 |
+| dense | `L = 1.2 + 57.43·C^(−0.0790)` | 0.99938 | 0.0790 |
+
+![Paloma scaling law](scaling_law.png)
+
+With a shared floor the amplitudes nearly coincide (A ≈ 57), so the dense-vs-MoE gap is entirely the
+exponent: MoE improves faster and stays below dense at every compute. **Compute efficiency:** MoE
+reaches the same Paloma loss with **~10× less compute at the top of the ladder, ~13× at the d1280 loss
+(2.85)**, rising toward ~15–17× as loss falls — the gap widens with scale because MoE's exponent is
+steeper. Caveat: with the floor fixed, two free parameters (A, α) fit four points; trust α and the
+ordering, not the L∞ value or extrapolations far past ~5e19 FLOPs.
 
 ## Launch commands
 
