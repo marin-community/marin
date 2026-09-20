@@ -30,7 +30,6 @@ from levanter.grug.attention._fa4_cute_kernels import (
     segmented_flash_attention_forward_launcher,
 )
 from levanter.grug.attention._fa4_cute_config import Flash4CuteKernelConfig
-from levanter.grug.attention._inkling_relpos import rel_bias_backward
 
 
 @dataclass(frozen=True)
@@ -757,6 +756,49 @@ def _segmented_flash_attention_custom_vjp_fwd(
     return out, (q, k, v, out, lse, lower_bounds, valid, rel_bias)
 
 
+def _reference_bias_vjp(
+    q: jax.Array,
+    k: jax.Array,
+    v: jax.Array,
+    lower_bounds: jax.Array,
+    valid: jax.Array,
+    rel_bias: jax.Array,
+    cot: jax.Array,
+    softmax_scale: float,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
+    """Correctness-first backward for the Inkling-biased attention via a materialized reference VJP.
+
+    Used only when a real relative bias is present (rel_extent > 1). The forward stays on the fused
+    kernel; this recomputes dq/dk/dv/dA exactly (matching the reference oracle) at the cost of an [S,S]
+    score matrix in the backward. The fully fused backward is a follow-up optimization.
+    """
+    b, s, hq, _ = q.shape
+    hkv = k.shape[2]
+    rel_extent = rel_bias.shape[-1]
+    rep = hq // hkv
+    i_idx = jnp.arange(s)[:, None]
+    j_idx = jnp.arange(s)[None, :]
+    delta = i_idx - j_idx
+    in_band = (delta >= 0) & (delta < rel_extent)
+    gather_idx = jnp.clip(delta, 0, rel_extent - 1)
+    allowed = (j_idx <= i_idx) & (j_idx >= lower_bounds[:, :, None]) & (valid[:, :, None] != 0)  # [B,S,S]
+
+    def fwd(q_, k_, v_, rel_bias_):
+        kk = jnp.repeat(k_, rep, axis=2).astype(jnp.float32)
+        vv = jnp.repeat(v_, rep, axis=2).astype(jnp.float32)
+        scores = jnp.einsum("bqhd,bkhd->bhqk", q_.astype(jnp.float32) * softmax_scale, kk)  # [B,Hq,S,S]
+        gi = jnp.broadcast_to(gather_idx, (b, hq, s, s))
+        a = jnp.take_along_axis(rel_bias_.astype(jnp.float32), gi, axis=-1)
+        scores = scores + jnp.where(in_band, a, 0.0)
+        scores = jnp.where(allowed[:, None, :, :], scores, -jnp.inf)
+        p = jax.nn.softmax(scores, axis=-1)
+        out = jnp.einsum("bhqk,bkhd->bqhd", p, vv)
+        return out.astype(q_.dtype)
+
+    _, vjp_fn = jax.vjp(fwd, q, k, v, rel_bias)
+    return vjp_fn(cot)
+
+
 def _segmented_flash_attention_custom_vjp_bwd(
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
@@ -767,33 +809,15 @@ def _segmented_flash_attention_custom_vjp_bwd(
     if isinstance(cotangent, jax.custom_derivatives.SymbolicZero):
         return jnp.zeros_like(q), jnp.zeros_like(k), jnp.zeros_like(v), None, None, jnp.zeros_like(rel_bias)
     cot = cotangent.astype(q.dtype)
-    dq, dk, dv = segmented_flash_attention_backward(
-        q,
-        k,
-        v,
-        out,
-        cot,
-        lse,
-        lower_bounds,
-        valid,
-        rel_bias,
-        softmax_scale=softmax_scale,
-        kernel_config=kernel_config,
-    )
-    # dA = banded gather of dScore (verified in _inkling_relpos); heads on axis 1 ([B,Hq,S,L]).
-    d_rel_bias = rel_bias_backward(
-        jnp.swapaxes(q, 1, 2),
-        jnp.swapaxes(k, 1, 2),
-        jnp.swapaxes(v, 1, 2),
-        jnp.swapaxes(out, 1, 2),
-        jnp.swapaxes(cot, 1, 2),
-        lse,
-        rel_bias,
-        lower_bounds.astype(jnp.int32),
-        valid.astype(jnp.bool_),
-        softmax_scale=softmax_scale,
-    ).astype(rel_bias.dtype)
-    return dq, dk, dv, None, None, d_rel_bias
+    # rel_extent == 1 is the zero placeholder for non-Inkling callers: use the fast fused sm90 backward.
+    if rel_bias.shape[-1] == 1:
+        dq, dk, dv = segmented_flash_attention_backward(
+            q, k, v, out, cot, lse, lower_bounds, valid, softmax_scale=softmax_scale, kernel_config=kernel_config
+        )
+        return dq, dk, dv, None, None, jnp.zeros_like(rel_bias)
+    # Inkling bias present: correctness-first materialized reference VJP (fused bwd is a follow-up).
+    dq, dk, dv, d_rel_bias = _reference_bias_vjp(q, k, v, lower_bounds, valid, rel_bias, cot, softmax_scale)
+    return dq.astype(q.dtype), dk.astype(k.dtype), dv.astype(v.dtype), None, None, d_rel_bias.astype(rel_bias.dtype)
 
 
 _segmented_flash_attention_custom_vjp.defvjp(

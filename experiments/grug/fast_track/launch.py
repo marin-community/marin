@@ -229,6 +229,8 @@ def build_h100_ladder_run(
     no_eval: bool = False,
     dense: bool = False,
     save_checkpoints: bool = False,
+    inkling_relpos: bool = False,
+    rel_extent: int = 1024,
 ) -> ArtifactStep[ThroughputResult]:
     """Build one H100 scaling-ladder rung.
 
@@ -244,6 +246,9 @@ def build_h100_ladder_run(
 
     rung = _h100_ladder_rung(size)
     model = dataclasses.replace(_h100_ladder_model(rung, dense=dense), vocab_size=vocab_size)
+    if inkling_relpos:
+        # Inkling relative-position bias in place of RoPE (fused forward + reference backward).
+        model = dataclasses.replace(model, inkling_relpos=True, rel_extent=rel_extent)
     mp_policy = "params=float32,compute=bfloat16,output=bfloat16"
     expert_axis_size = 1 if dense else rung.gpus_per_task
     replica_axis_size = 1
@@ -411,6 +416,10 @@ def build_h100_ladder_run(
 )
 @click.option("--no-eval", is_flag=True, help="Disable in-run eval (clean MFU probes).")
 @click.option("--dense", is_flag=True, help="Dense baseline: 3x hidden SwiGLU per block, no MoE.")
+@click.option("--inkling-relpos", is_flag=True, help="Use the Inkling relative-position bias instead of RoPE.")
+@click.option(
+    "--rel-extent", type=click.IntRange(min=1), default=1024, show_default=True, help="Inkling rel-pos extent."
+)
 @click.option(
     "--save-checkpoints",
     is_flag=True,
@@ -427,6 +436,8 @@ def main(
     no_eval: bool,
     dense: bool,
     save_checkpoints: bool,
+    inkling_relpos: bool,
+    rel_extent: int,
 ) -> ArtifactStep[ThroughputResult]:
     return build_h100_ladder_run(
         run_id=run_id,
@@ -437,6 +448,8 @@ def main(
         no_eval=no_eval,
         dense=dense,
         save_checkpoints=save_checkpoints,
+        inkling_relpos=inkling_relpos,
+        rel_extent=rel_extent,
     )
 
 
