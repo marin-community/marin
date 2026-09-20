@@ -34,6 +34,20 @@ GPU work.
   The main comparison width is 32; width-8 and width-128 cost controls and capture-only controls
   have completed. All work uses Iris `interactive` priority.
 
+The [resolved run configurations](configs/score_centering/README.md) preserve the exact
+materialized Hydra arguments and artifact references for the main Qwen arms and Snowball
+smokes. All of these runs pin MarinSkyRL `a7b51d31`. The Marin launcher source bundles were:
+
+| Jobs | Marin commit | Relevant source change |
+| --- | --- | --- |
+| r19–r23 | `3abefce4f8` | Frozen first 40-update screen |
+| r26 | `00d3ce0442` | Same PPO artifact and settings; 256 GB host-memory request for restore |
+| r24–r25 | `0674c9300d` | First cap-1.05 pair, 128 GB host-memory request |
+| r27–r28 | `d3a120425c` | Second seed, 256 GB host-memory request |
+| r29 | `437f37d6d9` | Top-k-one cost control, 256 GB request |
+| r30–r31 | `5c43d7bcfb` | Third cap-1.05 seed |
+| Snowball smokes | `6f66ee6c22` | Megatron MoE two-update pair |
+
 For one sampled token, let `q` be the behavior policy that sampled it, `o` the stored trainer
 policy at the start of the optimizer update, and `p` the trainer policy being differentiated.
 The sampled regular-PPO/TIS score coefficient is `A * min(o/q, cap) * (p/o)` while PPO's
@@ -334,6 +348,13 @@ uses the same settings and 256 GB host request. Its step-zero completed-correct 
 counts were 95 and 117, with each arm consuming 320 prompt UIDs and 318 in common. Their
 later trained outcomes are pending. New launches were held when cluster use rose to 504/512 H100s with zero queued
 workloads at 00:59 UTC.
+A third matched seed-19 pair started after capacity returned to 284/512 H100s with no queued
+workloads: [TIS r30](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-age8-tis-cap105-seed19-01a0bb6f-r30)
+and [TIS plus SC32 r31](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-age8-sc-cap105-seed19-01a0bb6f-r31).
+Both use the same cap-1.05 configuration, 40-update endpoint, frozen model and pool, and
+`iris-interactive` accelerator pods. Their outcomes are pending. Three seeds provide a
+small between-training-run check; held-out-question resampling would measure a different
+uncertainty.
 
 `analyze_score_centering.py` reads every dumped evaluation response and the durable Iris
 `WANDB_MIRROR` lines. It writes separate CSV files for completion-aware quality and per-update
