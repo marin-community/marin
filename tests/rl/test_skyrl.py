@@ -251,7 +251,7 @@ def test_eagle_distillation_step_injects_draft_and_uses_validation_data() -> Non
     ]
 
 
-def test_skyrl_step_resolves_distilled_draft_dependency() -> None:
+def test_skyrl_step_declares_distilled_draft_dependency() -> None:
     draft_step = ArtifactStep.adopt(
         "tests/iceball-eagle",
         "2026.09.19",

@@ -15,7 +15,7 @@ from collections import deque
 from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 from pathlib import PurePosixPath
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 import fsspec
 import yaml
@@ -39,6 +39,13 @@ _MARINSKYRL_STAGING_ROOT = PurePosixPath("/tmp/marinskyrl")
 _TEMPORARY_OUTPUT_PREFIX = "skyrl"
 _TRACE_JOBS_SUBDIR = "trace_jobs"
 _TRAJECTORIES_SUBDIR = "trajectories"
+_CHECKPOINTS_SUBDIR = "checkpoints"
+_EXPORTS_SUBDIR = "exports"
+_ATTEMPTS_SUBDIR = "attempts"
+_RESOLVED_CONFIG_FILENAME = "resolved-skyrl.json"
+_TERMINAL_MANIFEST_FILENAME = "terminal.json"
+_FINGERPRINT_ATTEMPT_ID = "<attempt_id>"
+_FINGERPRINT_TEMPORARY_OUTPUT_PATH = "<temporary_output_path>"
 _LAUNCHER_DIAGNOSTIC_LINES = 20
 SKYRL_POLICY_LOCATION = "<skyrl-policy>"
 SKYRL_TEMPORARY_STORAGE_TTL_DAYS = 14
@@ -523,11 +530,10 @@ def _launcher_command(requirement: str, request_path: str) -> list[str]:
 
 
 def _launcher_requirement(runtime: SkyRLRuntime) -> str:
-    return f"{MARIN_SKYRL.distribution} @ git+{MARIN_SKYRL.repository}@{runtime.commit}"
+    return replace(MARIN_SKYRL, commit=runtime.commit).requirement()
 
 
-def _config_with_eagle_draft(config_yaml: str, draft: EagleDraftSource) -> str:
-    config = yaml.safe_load(config_yaml)
+def _eagle_config_with_draft(config: object, draft: EagleDraftSource) -> dict[str, Any]:
     if not isinstance(config, dict):
         raise ValueError("EAGLE configuration must be a YAML mapping")
     generator = config.get("generator")
@@ -540,6 +546,11 @@ def _config_with_eagle_draft(config_yaml: str, draft: EagleDraftSource) -> str:
         "source_uri": draft.uri,
         "source_identity": draft.identity,
     }
+    return config
+
+
+def _config_with_eagle_draft(config_yaml: str, draft: EagleDraftSource) -> str:
+    config = _eagle_config_with_draft(yaml.safe_load(config_yaml), draft)
     return yaml.safe_dump(config, sort_keys=False)
 
 
@@ -564,8 +575,7 @@ def _run_launcher(command: list[str]) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(command, returncode, response.read(), "".join(tail))
 
 
-def run_skyrl(config: SkyRLRunConfig) -> SkyRLModel:
-    """Run the pinned external launcher and return its validated model value."""
+def _launcher_response(config: SkyRLRunConfig) -> tuple[subprocess.CompletedProcess[str], _SkyRLLaunchResponse]:
     envelope = {
         "request": asdict(config.request),
         "execution": {
@@ -573,23 +583,35 @@ def run_skyrl(config: SkyRLRunConfig) -> SkyRLModel:
             "job_name": sanitize_job_name(f"{config.request.run_id}-{config.request.attempt_id}"),
         },
     }
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", encoding="utf-8") as request_file:
+        json.dump(envelope, request_file, sort_keys=True)
+        request_file.flush()
+        completed = _run_launcher(_launcher_command(config.launcher_requirement, request_file.name))
+    if not completed.stdout.strip():
+        raise RuntimeError(
+            f"MarinSkyRL launcher exited {completed.returncode} without a terminal response:\n"
+            f"{completed.stderr.strip() or '(the launcher wrote nothing to stderr)'}"
+        )
+    return completed, _SkyRLLaunchResponse.model_validate_json(completed.stdout)
+
+
+def _raise_for_failed_response(
+    config: SkyRLRunConfig,
+    completed: subprocess.CompletedProcess[str],
+    response: _SkyRLLaunchResponse,
+) -> None:
+    if completed.returncode == 0 and response.state == "succeeded":
+        return
+    failure = response.failure or f"launcher exited {completed.returncode}"
+    raise RuntimeError(f"MarinSkyRL attempt {config.request.attempt_id} failed: {failure}\n{completed.stderr.strip()}")
+
+
+def run_skyrl(config: SkyRLRunConfig) -> SkyRLModel:
+    """Run the pinned external launcher and return its validated model value."""
     response: _SkyRLLaunchResponse | None = None
     try:
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", encoding="utf-8") as request_file:
-            json.dump(envelope, request_file, sort_keys=True)
-            request_file.flush()
-            completed = _run_launcher(_launcher_command(config.launcher_requirement, request_file.name))
-        if not completed.stdout.strip():
-            raise RuntimeError(
-                f"MarinSkyRL launcher exited {completed.returncode} without a terminal response:\n"
-                f"{completed.stderr.strip() or '(the launcher wrote nothing to stderr)'}"
-            )
-        response = _SkyRLLaunchResponse.model_validate_json(completed.stdout)
-        if completed.returncode != 0 or response.state != "succeeded":
-            failure = response.failure or f"launcher exited {completed.returncode}"
-            raise RuntimeError(
-                f"MarinSkyRL attempt {config.request.attempt_id} failed: {failure}\n{completed.stderr.strip()}"
-            )
+        completed, response = _launcher_response(config)
+        _raise_for_failed_response(config, completed, response)
         model = response.model
         if model is None or response.iris_job_id is None:
             raise ValueError("successful MarinSkyRL response requires model and iris_job_id")
@@ -612,28 +634,8 @@ def run_skyrl(config: SkyRLRunConfig) -> SkyRLModel:
 
 def run_eagle_draft_distillation(config: SkyRLRunConfig) -> EagleDraftModel:
     """Run offline EAGLE distillation and return its published draft checkpoint."""
-    envelope = {
-        "request": asdict(config.request),
-        "execution": {
-            **asdict(config.execution),
-            "job_name": sanitize_job_name(f"{config.request.run_id}-{config.request.attempt_id}"),
-        },
-    }
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", encoding="utf-8") as request_file:
-        json.dump(envelope, request_file, sort_keys=True)
-        request_file.flush()
-        completed = _run_launcher(_launcher_command(config.launcher_requirement, request_file.name))
-    if not completed.stdout.strip():
-        raise RuntimeError(
-            f"MarinSkyRL launcher exited {completed.returncode} without a terminal response:\n"
-            f"{completed.stderr.strip() or '(the launcher wrote nothing to stderr)'}"
-        )
-    response = _SkyRLLaunchResponse.model_validate_json(completed.stdout)
-    if completed.returncode != 0 or response.state != "succeeded":
-        failure = response.failure or f"launcher exited {completed.returncode}"
-        raise RuntimeError(
-            f"MarinSkyRL attempt {config.request.attempt_id} failed: {failure}\n{completed.stderr.strip()}"
-        )
+    completed, response = _launcher_response(config)
+    _raise_for_failed_response(config, completed, response)
     draft = response.draft_model
     if draft is None or response.iris_job_id is None:
         raise ValueError("successful EAGLE distillation response requires draft_model and iris_job_id")
@@ -690,6 +692,33 @@ def _record_skyrl_run(config: SkyRLRunConfig, status: str, response: _SkyRLLaunc
     )
 
 
+def _skyrl_output_paths(
+    ctx: StepContext,
+    retention: SkyRLRetentionPolicy,
+) -> tuple[str, str, SkyRLOutputPaths]:
+    attempt_id = _FINGERPRINT_ATTEMPT_ID if ctx.is_fingerprint else uuid.uuid4().hex[:12]
+    temporary_root = (
+        _FINGERPRINT_TEMPORARY_OUTPUT_PATH
+        if ctx.is_fingerprint
+        else skyrl_temporary_run_path(
+            ctx.output_path,
+            ttl_days=retention.temporary_storage_ttl_days,
+        )
+    )
+    attempts_root = prefix_join(temporary_root, _ATTEMPTS_SUBDIR)
+    return (
+        attempt_id,
+        attempts_root,
+        SkyRLOutputPaths(
+            checkpoint_root=prefix_join(temporary_root, _CHECKPOINTS_SUBDIR),
+            export_root=prefix_join(ctx.output_path, _EXPORTS_SUBDIR),
+            attempts_root=attempts_root,
+            resolved_config_uri=prefix_join(ctx.output_path, _RESOLVED_CONFIG_FILENAME),
+            terminal_manifest_uri=prefix_join(ctx.output_path, _TERMINAL_MANIFEST_FILENAME),
+        ),
+    )
+
+
 def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[SkyRLModel]:
     """Build a versioned MarinSkyRL training artifact."""
     step_name = spec.name
@@ -705,22 +734,7 @@ def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[S
     )
 
     def build_config(ctx: StepContext) -> SkyRLRunConfig:
-        attempt_id = "<attempt_id>" if ctx.is_fingerprint else uuid.uuid4().hex[:12]
-        if ctx.is_fingerprint:
-            temporary_root = "<temporary_output_path>"
-        else:
-            temporary_root = skyrl_temporary_run_path(
-                ctx.output_path,
-                ttl_days=spec.retention.temporary_storage_ttl_days,
-            )
-        attempts_root = prefix_join(temporary_root, "attempts")
-        output = SkyRLOutputPaths(
-            checkpoint_root=prefix_join(temporary_root, "checkpoints"),
-            export_root=prefix_join(ctx.output_path, "exports"),
-            attempts_root=attempts_root,
-            resolved_config_uri=prefix_join(ctx.output_path, "resolved-skyrl.json"),
-            terminal_manifest_uri=prefix_join(ctx.output_path, "terminal.json"),
-        )
+        attempt_id, attempts_root, output = _skyrl_output_paths(ctx, spec.retention)
         retention_overrides = (
             f"++trainer.max_ckpts_to_keep={spec.retention.resume_checkpoint_count}",
             f"++terminal_bench_config.trials_dir='{prefix_join(attempts_root, _TRACE_JOBS_SUBDIR)}'",
@@ -767,7 +781,7 @@ def _eagle_distillation_config(spec: EagleDraftDistillationSpec) -> str:
     speculative = generator.get("speculative_decoding") if isinstance(generator, dict) else None
     if not isinstance(speculative, dict) or not isinstance(speculative.get("training"), dict):
         raise ValueError("EAGLE draft distillation config_yaml requires speculative_decoding.training")
-    return _config_with_eagle_draft(spec.config_yaml, spec.initial_draft)
+    return yaml.safe_dump(_eagle_config_with_draft(config, spec.initial_draft), sort_keys=False)
 
 
 def eagle_draft_distillation_step(
@@ -785,23 +799,7 @@ def eagle_draft_distillation_step(
     )
 
     def build_config(ctx: StepContext) -> SkyRLRunConfig:
-        attempt_id = "<attempt_id>" if ctx.is_fingerprint else uuid.uuid4().hex[:12]
-        temporary_root = (
-            "<temporary_output_path>"
-            if ctx.is_fingerprint
-            else skyrl_temporary_run_path(
-                ctx.output_path,
-                ttl_days=spec.retention.temporary_storage_ttl_days,
-            )
-        )
-        attempts_root = prefix_join(temporary_root, "attempts")
-        output = SkyRLOutputPaths(
-            checkpoint_root=prefix_join(temporary_root, "checkpoints"),
-            export_root=prefix_join(ctx.output_path, "exports"),
-            attempts_root=attempts_root,
-            resolved_config_uri=prefix_join(ctx.output_path, "resolved-skyrl.json"),
-            terminal_manifest_uri=prefix_join(ctx.output_path, "terminal.json"),
-        )
+        attempt_id, attempts_root, output = _skyrl_output_paths(ctx, spec.retention)
         request = SkyRLLaunchRequest(
             run_id=f"{spec.name}-{spec.version}",
             attempt_id=attempt_id,
