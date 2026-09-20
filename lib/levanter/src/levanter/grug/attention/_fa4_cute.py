@@ -224,6 +224,7 @@ def _fa4_cute_attention_forward_sharded(
     v: jax.Array,
     lower_bounds: jax.Array,
     valid: jax.Array,
+    rel_bias: jax.Array,
     *,
     sm_scale: float,
     kernel_config: Flash4CuteKernelConfig,
@@ -236,6 +237,7 @@ def _fa4_cute_attention_forward_sharded(
             v,
             lower_bounds,
             valid,
+            rel_bias,
             sm_scale=sm_scale,
             kernel_config=kernel_config,
         )
@@ -248,12 +250,15 @@ def _fa4_cute_attention_forward_sharded(
             v,
             lower_bounds,
             valid,
+            rel_bias,
             sm_scale=sm_scale,
             kernel_config=kernel_config,
         )
 
     qkv_spec = P(batch_axes, None, _head_axis(mesh), None)
     metadata_spec = P(batch_axes, None)
+    # rel_bias is [B, Hq, S, L]: batch on batch_axes, head on the model/head axis, seq & L unsharded.
+    rel_bias_spec = P(batch_axes, _head_axis(mesh), None, None)
     _assert_sequence_axis_unsharded("q", q)
     _assert_sequence_axis_unsharded("k", k)
     _assert_sequence_axis_unsharded("v", v)
@@ -261,24 +266,26 @@ def _fa4_cute_attention_forward_sharded(
     _assert_sequence_axis_unsharded("valid", valid)
     lower_bounds = reshard(lower_bounds, metadata_spec)
     valid = reshard(valid, metadata_spec)
+    rel_bias = reshard(rel_bias, rel_bias_spec)
 
     @shard_map(
         mesh=mesh,
         out_specs=qkv_spec,
         check_vma=False,
     )
-    def _local_fa4_attention(q_local, k_local, v_local, lower_bounds_local, valid_local):
+    def _local_fa4_attention(q_local, k_local, v_local, lower_bounds_local, valid_local, rel_bias_local):
         return fa4_cute_attention_forward(
             q_local,
             k_local,
             v_local,
             lower_bounds_local,
             valid_local,
+            rel_bias_local,
             sm_scale=sm_scale,
             kernel_config=kernel_config,
         )
 
-    return _local_fa4_attention(q, k, v, lower_bounds, valid)
+    return _local_fa4_attention(q, k, v, lower_bounds, valid, rel_bias)
 
 
 def _segmented_kernel_config(head_dim: int) -> Flash4CuteKernelConfig:
@@ -310,6 +317,7 @@ def _gpu_fa4_cute_attention(
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
     *,
     kernel_config: Flash4CuteKernelConfig,
+    rel_bias: Float[Array, "B Hq Q L"] | None = None,
 ) -> Float[Array, "B Q Hq D"]:
     _validate_head_layout(q, k, backend_name="gpu_fa4_cute_attention")
     if isinstance(mask, AttentionMask) and mask.fa4_bounds is not None:
@@ -324,12 +332,16 @@ def _gpu_fa4_cute_attention(
             backend_name="gpu_fa4_cute_attention",
         )
 
+    if rel_bias is None:
+        rel_bias = jnp.zeros((q.shape[0], q.shape[2], q.shape[1], 1), dtype=q.dtype)
+
     return _fa4_cute_attention_forward_sharded(
         q,
         k,
         v,
         lower_bounds,
         valid,
+        rel_bias,
         sm_scale=1.0 / math.sqrt(q.shape[-1]),
         kernel_config=kernel_config,
     )
@@ -343,15 +355,13 @@ def gpu_fa4_cute_attention(
     *,
     rel_bias: Float[Array, "B Hq Q L"] | None = None,
 ) -> Float[Array, "B Q Hq D"]:
-    """Run causal self-attention through the segmented FA4/CuTe kernel."""
+    """Run causal self-attention through the segmented FA4/CuTe kernel, with the optional Inkling
+    relative-position bias ``rel_bias`` (compact A, [B, Hq, Q, L])."""
     if jax.default_backend() != "gpu":
         raise RuntimeError("gpu_fa4_cute_attention requires the JAX GPU backend.")
-    if rel_bias is not None:
-        # Stage 2/3: fused Inkling relative-position bias (gather-by-distance in the kernel).
-        raise NotImplementedError(
-            "fa4_cute rel_bias (Inkling relative position) not yet wired; see inkling-relpos-fa4.md"
-        )
-    return _gpu_fa4_cute_attention(q, k, v, mask, kernel_config=_segmented_kernel_config(q.shape[-1]))
+    return _gpu_fa4_cute_attention(
+        q, k, v, mask, kernel_config=_segmented_kernel_config(q.shape[-1]), rel_bias=rel_bias
+    )
 
 
 def gpu_fa4_cute_wide_attention(

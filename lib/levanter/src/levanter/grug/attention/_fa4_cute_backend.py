@@ -30,6 +30,7 @@ from levanter.grug.attention._fa4_cute_kernels import (
     segmented_flash_attention_forward_launcher,
 )
 from levanter.grug.attention._fa4_cute_config import Flash4CuteKernelConfig
+from levanter.grug.attention._inkling_relpos import rel_bias_backward
 
 
 @dataclass(frozen=True)
@@ -153,6 +154,7 @@ def segmented_flash_attention_backward(
     lse: jax.Array,
     lower_bounds: jax.Array,
     valid: jax.Array,
+    rel_bias: jax.Array | None = None,
     *,
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
@@ -166,7 +168,9 @@ def segmented_flash_attention_backward(
         raise _optional_dependency_error() from exc
 
     qhead_per_kvhead = q.shape[2] // k.shape[2]
-    if kernel_config.sm90_backward is not None and qhead_per_kvhead > 1 and q.shape[-1] == 128:
+    # The sm90-native backward path (external flash_attn.cute) has no Inkling bias support, so when a
+    # rel_bias is present route to the segmented backward, which adds it in its S-recompute.
+    if rel_bias is None and kernel_config.sm90_backward is not None and qhead_per_kvhead > 1 and q.shape[-1] == 128:
         sm90_config = kernel_config.sm90_backward
         sparse_metadata = _packed_segment_backward_block_sparse_indices_with_full(
             lower_bounds,
@@ -219,7 +223,11 @@ def segmented_flash_attention_backward(
         use_static_tensors=True,
         softmax_scale=softmax_scale,
     )
-    dq, dk, dv, *_scratch = call(q, k, v, out, dout, lse, lower_bounds, valid.astype(jnp.int32))
+    if rel_bias is None:
+        rel_bias = jnp.zeros((q.shape[0], q.shape[2], q.shape[1], 1), dtype=q.dtype)
+    dq, dk, dv, *_scratch = call(
+        q, k, v, out, dout, lse, lower_bounds, valid.astype(jnp.int32), rel_bias.astype(q.dtype)
+    )
     return dq, dk, dv
 
 
@@ -427,6 +435,8 @@ def _cutlass_attention_backward_specs(
     lse_spec = tensor_spec(mode=(0, 1, 2), divisibility=(1, 1, 1), static=True)
     metadata_spec = tensor_spec(mode=(0, 1), static=True)
     scratch_spec = tensor_spec(mode=(0, 1, 2), static=True)
+    # rel_bias A [B,Hq,S,L] -> kernel [S,L,Hq,B] (mode=(2,3,1,0)); always present (zero [.,1] if unused).
+    rel_bias_spec = tensor_spec(mode=(2, 3, 1, 0), static=True)
     input_spec = (
         qkv_spec,
         qkv_spec,
@@ -436,6 +446,7 @@ def _cutlass_attention_backward_specs(
         lse_spec,
         metadata_spec,
         metadata_spec,
+        rel_bias_spec,
     )
     dkv_accum_spec = scratch_spec if qhead_per_kvhead > 1 else qkv_spec
     return input_spec, (
@@ -671,35 +682,42 @@ def fa4_cute_attention_forward(
     v: jax.Array,
     lower_bounds: jax.Array,
     valid: jax.Array,
+    rel_bias: jax.Array | None = None,
     *,
     sm_scale: float | None = None,
     kernel_config: Flash4CuteKernelConfig,
 ) -> jax.Array:
-    """FA4/CuTe attention boundary with packed causal metadata.
+    """FA4/CuTe attention boundary with packed causal metadata and optional Inkling relative-position
+    bias ``rel_bias`` (compact A, [B, Hq, S, L]).
 
     Forward uses the CUTLASS/CuTe JAX FFI path. Backward is routed through a custom VJP so JAX does not
-    attempt to autodiff through ``cutlass_call``.
+    attempt to autodiff through ``cutlass_call``. ``rel_bias`` is a differentiable input; its gradient
+    (dA) is computed by the banded ``rel_bias_backward`` helper.
     """
     if sm_scale is None:
         sm_scale = float(q.shape[-1] ** -0.5)
+    if rel_bias is None:
+        rel_bias = jnp.zeros((q.shape[0], q.shape[2], q.shape[1], 1), dtype=q.dtype)
     return _segmented_flash_attention_custom_vjp(
         q,
         k,
         v,
         lower_bounds,
         valid,
+        rel_bias,
         sm_scale,
         kernel_config,
     )
 
 
-@partial(jax.custom_vjp, nondiff_argnums=(5, 6))
+@partial(jax.custom_vjp, nondiff_argnums=(6, 7))
 def _segmented_flash_attention_custom_vjp(
     q: jax.Array,
     k: jax.Array,
     v: jax.Array,
     lower_bounds: jax.Array,
     valid: jax.Array,
+    rel_bias: jax.Array,
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
 ) -> jax.Array:
@@ -709,6 +727,7 @@ def _segmented_flash_attention_custom_vjp(
         v,
         lower_bounds,
         valid,
+        rel_bias,
         softmax_scale=softmax_scale,
         kernel_config=kernel_config,
     )
@@ -721,43 +740,60 @@ def _segmented_flash_attention_custom_vjp_fwd(
     v: jax.Array,
     lower_bounds: jax.Array,
     valid: jax.Array,
+    rel_bias: jax.Array,
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
-) -> tuple[jax.Array, tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]]:
+) -> tuple[jax.Array, tuple[jax.Array, ...]]:
     out, lse = segmented_flash_attention_forward(
         q,
         k,
         v,
         lower_bounds,
         valid,
+        rel_bias,
         softmax_scale=softmax_scale,
         kernel_config=kernel_config,
     )
-    return out, (q, k, v, out, lse, lower_bounds, valid)
+    return out, (q, k, v, out, lse, lower_bounds, valid, rel_bias)
 
 
 def _segmented_flash_attention_custom_vjp_bwd(
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
-    residuals: tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array],
+    residuals: tuple[jax.Array, ...],
     cotangent: jax.Array | jax.custom_derivatives.SymbolicZero,
-) -> tuple[jax.Array | None, jax.Array | None, jax.Array | None, None, None]:
-    q, k, v, out, lse, lower_bounds, valid = residuals
+) -> tuple[jax.Array | None, jax.Array | None, jax.Array | None, None, None, jax.Array | None]:
+    q, k, v, out, lse, lower_bounds, valid, rel_bias = residuals
     if isinstance(cotangent, jax.custom_derivatives.SymbolicZero):
-        return jnp.zeros_like(q), jnp.zeros_like(k), jnp.zeros_like(v), None, None
+        return jnp.zeros_like(q), jnp.zeros_like(k), jnp.zeros_like(v), None, None, jnp.zeros_like(rel_bias)
+    cot = cotangent.astype(q.dtype)
     dq, dk, dv = segmented_flash_attention_backward(
         q,
         k,
         v,
         out,
-        cotangent.astype(q.dtype),
+        cot,
         lse,
         lower_bounds,
         valid,
+        rel_bias,
         softmax_scale=softmax_scale,
         kernel_config=kernel_config,
     )
-    return dq, dk, dv, None, None
+    # dA = banded gather of dScore (verified in _inkling_relpos); heads on axis 1 ([B,Hq,S,L]).
+    d_rel_bias = rel_bias_backward(
+        jnp.swapaxes(q, 1, 2),
+        jnp.swapaxes(k, 1, 2),
+        jnp.swapaxes(v, 1, 2),
+        jnp.swapaxes(out, 1, 2),
+        jnp.swapaxes(cot, 1, 2),
+        lse,
+        rel_bias,
+        lower_bounds.astype(jnp.int32),
+        valid.astype(jnp.bool_),
+        softmax_scale=softmax_scale,
+    ).astype(rel_bias.dtype)
+    return dq, dk, dv, None, None, d_rel_bias
 
 
 _segmented_flash_attention_custom_vjp.defvjp(
