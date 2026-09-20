@@ -177,7 +177,6 @@ def build_rollout_corpus() -> ArtifactStep[EagleRolloutCorpus]:
             platform=Platform.GPU,
             gpu_type="H100",
             gpu_count=8,
-            target_cluster=CLUSTER,
         ),
         tokenizer=MARIN_TOKENIZER,
         discover_latest_checkpoint=False,
