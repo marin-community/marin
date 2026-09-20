@@ -6,6 +6,7 @@
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep
 
+CATALOG_ARTIFACT_NAME = "post-training/task-curriculum/catalog"
 CATALOG_FILENAME = "curriculum.yaml"
 CATALOG_SHA256 = "2578589fb0de23b179765e6eba999730c7117b9f083140b266ccc391dde9685d"
 CATALOG_ROOT_URI = "s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-2578589fb0de"
@@ -32,7 +33,7 @@ SOURCE_AUDIT_V3_COMPARISON_SHA256 = "f0edd8ce5141a4dc01dbeb26dbd55fdd0b438db9fd1
 SOURCE_AUDIT_V3_EVIDENCE_SHA256 = "25ff4b75fb7b08e6e69fa4b8fd29f6f371b84a435b35af8253ed3cb49e0482c2"
 
 TASK_CURRICULUM = ArtifactStep.adopt(
-    "post-training/task-curriculum/catalog",
+    CATALOG_ARTIFACT_NAME,
     "2026.09.19.1",
     source=CATALOG_ROOT_URI,
     kind=Artifact,
@@ -52,7 +53,7 @@ TASK_CURRICULUM = ArtifactStep.adopt(
 )
 
 TASK_CURRICULUM_V1 = ArtifactStep.adopt(
-    "post-training/task-curriculum/catalog",
+    CATALOG_ARTIFACT_NAME,
     "2026.09.18.2",
     source=V1_CATALOG_ROOT_URI,
     kind=Artifact,

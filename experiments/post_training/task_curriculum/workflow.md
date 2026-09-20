@@ -265,8 +265,8 @@ rewrite archived results to match it.
    and preserve its exact last review and fit result in the wave report. Add the selected curriculum to
    a locally materialized catalog and declare `routing_facet` from the intended
    membership semantics and record whether a labeled member/near-neighbor fixture calibrated that choice. A missing
-   fixture leaves routing provisional but does not block a structurally sound curriculum. Increment `catalog_version`
-   as `waveN-R`, where `N` is the wave and `R` is the catalog revision within it. Validate the entire file with
+   fixture leaves routing provisional but does not block a structurally sound curriculum. Give `catalog_version` a
+   date-based immutable identifier such as `YYYY.MM.DD-cross-domain-vN`. Validate the entire file with
    `load_catalog`, which checks routing values and global subject/section uniqueness. Recompute catalog counts from
    the parsed object. Upload the complete YAML to a new immutable S3 directory, verify its SHA-256 by reading it back,
    and update `CATALOG_ROOT_URI`, `CATALOG_SHA256`, and `TASK_CURRICULUM` in `catalog_artifact.py`. Preserve the prior

@@ -24,6 +24,7 @@ class ProbeKind(StrEnum):
 EXPECTED_PROBE_KINDS = (ProbeKind.ENTRY, ProbeKind.REPRESENTATIVE)
 PILOT_READY_SCORE = 85
 REGENERATE_SCORE = 70
+CURRICULUM_IDENTIFIER_PATTERN = r"^[a-z0-9][a-z0-9._-]*$"
 
 
 class SampleTask(StrictModel):
@@ -37,12 +38,12 @@ class CurriculumNodeKind(StrEnum):
 
 
 class SamplingFacet(StrictModel):
-    id: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]*$")
+    id: str = Field(pattern=CURRICULUM_IDENTIFIER_PATTERN)
     description: str = Field(min_length=1)
 
 
 class CurriculumNodeBase(StrictModel):
-    id: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]*$")
+    id: str = Field(pattern=CURRICULUM_IDENTIFIER_PATTERN)
     parent_id: str | None
     name: str = Field(min_length=1)
     includes: list[str] = Field(min_length=1)
