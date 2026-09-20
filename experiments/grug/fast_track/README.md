@@ -33,11 +33,6 @@ detokenized — see [`../../datakit/paloma_detok.py`](../../datakit/paloma_detok
 | d1280 | dense | 20 | 256 |  4,988 | 5.23B | 1.2e19 | 28.4% | 2.847 | 1.183 | 0.881 | 1.5 hr |
 | d1280 | moe   | 60 | 256 | 16,669 | 17.5B | 4.2e19 | 15.4% | 2.504 | 1.044 | 0.741 | 10.0 hr |
 
-Dense FLOPs/MFU were previously overstated ~2× because the analytic FLOP counter priced the dense MLP
-as an 8-expert-plus-shared MoE; fixed in `train.py::_compute_flops`. Corrected here, dense runs at
-roughly 2× MoE's MFU (not 4–5×), and dense/MoE are matched on active params (~1.1×; the MoE's total is
-13–17× larger by design — 384 experts, top-8 active).
-
 ## Tokenizer impact (16k vs 128k)
 
 Same MoE geometry and token budget, swapping the 16k BPE tokenizer for the 128k Marin (llama3-family)
