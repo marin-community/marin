@@ -13,3 +13,13 @@ After excluding only run-owned output paths and names, the cap-1.05 Qwen pairs
 `generator.sampling_params.logprobs=32`. Across pairs, the only training setting that
 changes is `trainer.seed` (`17`, `18`, or `19`). The Snowball smoke pair likewise differs
 only in `score_centering_topk` after excluding run-owned paths and names.
+
+The active-cap near-fresh pair `r32/r33` differs only in `score_centering_topk` after
+excluding its run-owned paths and names. Relative to the cap-2 near-fresh pair `r21/r22`,
+its only training-setting change is `tis_imp_ratio_cap=1.05` instead of `2.0`.
+
+The cap-2 older pair `r19/r20` also differs only in `score_centering_topk`. Relative to
+`r19`, near-fresh `r21` changes the age limit, generation-worker count, and finished-group
+buffer; plain PPO `r23_r26` disables TIS and behavior-logprob capture; and `r29` changes
+the captured behavior-logprob width from 32 to one. The pod host-memory request is an
+Iris execution setting outside these Hydra arguments and is recorded in the study.

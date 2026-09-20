@@ -46,6 +46,7 @@ smokes. All of these runs pin MarinSkyRL `a7b51d31`. The Marin launcher source b
 | r27–r28 | `d3a120425c` | Second seed, 256 GB host-memory request |
 | r29 | `437f37d6d9` | Top-k-one cost control, 256 GB request |
 | r30–r31 | `5c43d7bcfb` | Third cap-1.05 seed |
+| r32–r33 | `6fbf47d3b8` | Cap-1.05 near-fresh pair; same learner settings as r21–r22 except TIS cap |
 | Snowball smokes | `6f66ee6c22` | Megatron MoE two-update pair |
 
 For one sampled token, let `q` be the behavior policy that sampled it, `o` the stored trainer
@@ -324,7 +325,7 @@ schedule, and behavior top-k 32 in both arms. This deliberately activates more c
 than the cap-2 screen; it is a distinct objective comparison. The Iris parents are
 [r24](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-age8-tis-cap105-seed17-01a0bb6f-r24)
 and [r25](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-age8-sc-cap105-seed17-01a0bb6f-r25).
-Their children use `iris-interactive` GPU pods. Their terminal outcomes are pending.
+Their children use `iris-interactive` GPU pods.
 Their step-zero completed-correct counts were 73/756 for TIS and 79/756 for TIS plus SC32.
 At the first learner update, 4.57% and 4.61% of sampled tokens respectively hit the TIS cap,
 compared with near-zero cap fractions in the cap-2 screen. The SC arm logged 0.00315 mean
@@ -341,20 +342,38 @@ their own step-zero counts, those arms gained 55 and 79 correct answers. The app
 SC difference thus changed sign between updates 10 and 20. Their update-20 checkpoints each
 recorded 640 consumed prompt UIDs and shared 639 (Jaccard 0.997). Through their first 24–25
 updates, both arms consumed tokens at mean age about 4.4 and capped about 5.3% of tokens.
+At update 30, their completed-correct counts were 177 and 190. At the prespecified update-40
+endpoint, TIS had 248/756 completed correct and TIS plus SC32 had 283/756. Relative to each
+arm's own step-zero count, the gains were 175 and 204, a baseline-adjusted difference of 29
+answers in this seed. The pair used 24.20 and 23.58 reserved H100-hours, respectively, through
+the terminal evaluation, with 1.51 and 1.47 hours since their first GPU tasks; full job costs,
+including export, were 25.26 and 24.54 H100-hours. Across all 40 updates their
+token-weighted mean consumed ages were both 4.72, and 5.33% and 5.39% of tokens hit the TIS
+cap. The difference can still reflect asynchronous sampling and evaluator variation; two
+further seeds are running.
 A second matched seed-18 pair, [r27](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-age8-tis-cap105-seed18-01a0bb6f-r27)
 and [r28](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-age8-sc-cap105-seed18-01a0bb6f-r28),
 uses the same settings and 256 GB host request. Its step-zero completed-correct counts are
 88/756 and 79/756; both have the same held-out membership as seed 17. At update 10, the
 counts were 95 and 117, with each arm consuming 320 prompt UIDs and 318 in common. Their
-later trained outcomes are pending. New launches were held when cluster use rose to 504/512 H100s with zero queued
-workloads at 00:59 UTC.
+update-20 counts were 130 and 148, and update-30 counts were 173 and 196. Later trained outcomes are pending. New launches were held
+when cluster use rose to 504/512 H100s with zero queued workloads at 00:59 UTC.
 A third matched seed-19 pair started after capacity returned to 284/512 H100s with no queued
 workloads: [TIS r30](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-age8-tis-cap105-seed19-01a0bb6f-r30)
 and [TIS plus SC32 r31](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-age8-sc-cap105-seed19-01a0bb6f-r31).
 Both use the same cap-1.05 configuration, 40-update endpoint, frozen model and pool, and
-`iris-interactive` accelerator pods. Their outcomes are pending. Three seeds provide a
+`iris-interactive` accelerator pods. Their step-zero completed-correct counts were 80 and
+75; trained outcomes are pending. Three seeds provide a
 small between-training-run check; held-out-question resampling would measure a different
 uncertainty.
+A near-fresh cap-1.05 pair, [TIS r32](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-fresh-tis-cap105-seed17-01a0bb6f-r32)
+and [TIS plus SC32 r33](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-fresh-sc-cap105-seed17-01a0bb6f-r33),
+uses the same seed, model, pool, active TIS cap, top-k capture, 40-update horizon, and
+evaluation contract as the older seed-17 pair. It sets maximum consumed age zero, 32
+generation workers, and a 16-group buffer, matching the cap-2 near-fresh screen. Their GPU
+children were admitted at `iris-interactive` priority; trained results are pending. This
+schedule comparison will show whether any SC advantage is specific to older rollouts, while
+keeping the objective fixed within each pair.
 
 `analyze_score_centering.py` reads every dumped evaluation response and the durable Iris
 `WANDB_MIRROR` lines. It writes separate CSV files for completion-aware quality and per-update
@@ -430,9 +449,16 @@ raised the pod's host-memory request from 128 to 256 GB after a separate checkpo
 failure. Its first nine updates had median inclusive cycles of 20.66 seconds, compared with
 84.26 seconds in r19, and mean inference-bridge response sizes of 0.720 MB versus 9.378 MB.
 Mean consumed-token age was 3.32 versus 3.29 in those same early updates. Both arms had zero
-TIS skipped fraction and zero batches without sampled-token logprobs. Later training,
-checkpoint, and quality results are pending. These early data point to wide behavior-logprob
-capture as a major source of collection cost.
+TIS skipped fraction and zero batches without sampled-token logprobs. Their step-zero
+completed-correct counts were both 87/756. At updates 10, 20, 30, and 40, r29 scored 99,
+135, 209, and 279/756, versus r19's 103, 137, 181, and 250/756. The top-k-one run reached
+its terminal evaluation in 0.63 elapsed GPU-task hours and 10.07 reserved H100-hours, versus
+1.49 hours and 23.87 H100-hours for top-k 32. It consumed 13.12 million loss tokens at mean
+age 4.78, versus 13.15 million at mean age 4.62 for r19. The changed capture width also changes
+asynchronous generation speed and therefore policy-age exposure; these quality counts do not
+isolate the effect of width on learning. The near-2.4-fold cost reduction through evaluation,
+plus the 13-fold smaller bridge responses, identify wide behavior-logprob capture as a major
+cost in this implementation. Full costs including terminal export are pending.
 `plot_score_centering.py` draws the completed-correct curve
 against updates, consumed loss tokens, elapsed task time, and reserved H100-hours from the
 three analysis CSVs. These descriptive comparisons do not identify a score-centering quality
@@ -445,6 +471,19 @@ priority, the adopted Snowball SFT export `2026.08.30`, pool `2026.08.29.1`, see
 TIS cap 1.05, top-k 32 behavior capture, and age limit eight. Their Iris parents are
 [TIS](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-smoke-set-399c37f1-2026.09.20.1-918d8daf4d8c)
 and [TIS plus SC32](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-smoke-set-81e8344e-2026.09.20.1-29e2743294fb).
-The 1,024-token smoke response cap is for wiring, not answer-quality comparison. Results are
-pending. The older curriculum Snowball launcher uses FSDP2; this fully async experiment
-launcher uses Megatron and does not require an FSDP2 port.
+Both arms completed two Megatron updates. The TIS cap was active for 8.98% and 8.92% of sampled
+tokens in the control's two updates, and 8.87% and 9.03% in the SC arm; mean absolute
+trainer-versus-behavior log ratios stayed near 0.034–0.035. Neither arm skipped TIS or lacked
+sampled-token logprobs. The SC arm's mean absolute correction loss values were 0.00253 and
+0.00248, and its behavior top-k-32 tail masses averaged 0.00293 and 0.00284. All four raw
+gradient norms were finite. The first inclusive update took 426 seconds for TIS and 443 seconds
+for TIS plus SC32; the second took 673 and 653 seconds, respectively. The second policy-training
+substage took 19.75 and 20.12 seconds. Different sampled lengths and concurrent storage work
+prevent a clean incremental-cost estimate from two batches. The 1,024-token smoke response cap
+caused 66–72% length stops, so these runs are for wiring, not answer-quality comparison. The
+control job succeeded with five eight-H100 tasks lasting about 29.5 minutes each. The SC job
+was system-preempted after its second update and automatically restarted; Iris diagnosed rank
+zero as `PodDeleted`, with its four siblings coscheduled for restart. The second update's W&B
+history had already committed, but a terminal job result remains pending. The older curriculum
+Snowball launcher uses FSDP2; this fully async experiment launcher uses Megatron and does not
+require an FSDP2 port.
