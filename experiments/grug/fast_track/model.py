@@ -132,6 +132,9 @@ class GrugModelConfig:
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     # Dense (no-MoE) mode: every block is a single DenseMLP(hidden, intermediate_dim) SwiGLU; the MoE fields are ignored.
     dense_mlp: bool = False
+    # Attention Residuals (Kimi, arXiv 2603.15031): each layer forms its input by per-token softmax
+    # attention (learned per-layer query) over the outputs of all preceding layers, not a fixed sum.
+    attn_residuals: bool = False
 
     def __post_init__(self) -> None:
         if not self.dense_mlp and self.num_experts_per_token >= self.num_experts:
@@ -623,10 +626,13 @@ class Block(eqx.Module):
     shared: tuple[DenseMLP, ...] | None
     sconv_attn: "ShortConv | None"
     sconv_mlp: "ShortConv | None"
+    attn_res_query: "jax.Array | None"  # learned per-layer query over preceding layer outputs
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
         attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key = random.split(key, 5)
+        # Zero-init query -> uniform attention over preceding layer outputs at step 0.
+        attn_res_query = jnp.zeros(cfg.hidden_dim) if cfg.attn_residuals else None
         if cfg.dense_mlp:
             # Dense block: one SwiGLU DenseMLP(hidden, intermediate_dim), no MoE and no shared experts.
             return Block(
@@ -643,6 +649,7 @@ class Block(eqx.Module):
                 sconv_mlp=(
                     ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel) if cfg.sconv and "mlp" in cfg.sconv_sites else None
                 ),
+                attn_res_query=attn_res_query,
             )
         shared = None
         if cfg.shared_expert_intermediate_dim > 0:
@@ -669,6 +676,7 @@ class Block(eqx.Module):
             sconv_mlp=(
                 ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel) if cfg.sconv and "mlp" in cfg.sconv_sites else None
             ),
+            attn_res_query=attn_res_query,
         )
 
     @named_call
@@ -816,9 +824,31 @@ class Transformer(eqx.Module):
                 use_long,
             )
 
-        hidden, stacked_router_stats = jax.lax.scan(
-            _scan_layers, hidden, xs=(self.stacked_blocks.stacked, mask_schedule)
-        )
+        if cfg.attn_residuals:
+            # Unrolled: each layer reads a per-token softmax-weighted combine of all preceding outputs.
+            layer_outputs = [hidden]
+            per_layer_stats = []
+            scale = hidden.shape[-1] ** 0.5
+            for layer_index in range(cfg.num_layers):
+                layer = jax.tree.map(lambda a, i=layer_index: a[i], self.stacked_blocks.stacked)
+                use_long = jnp.asarray(mask_schedule[layer_index], dtype=jnp.bool_)
+                lower_bounds = jnp.where(use_long, long_lower_bounds, short_lower_bounds)
+                layer_mask = long_mask.with_fa4_bounds(lower_bounds, valid)
+                stacked_outputs = jnp.stack(layer_outputs, axis=0)  # [J, B, S, D]
+                scores = jnp.einsum("jbsd,d->jbs", stacked_outputs, layer.attn_res_query) / scale
+                weights = jax.nn.softmax(scores, axis=0)
+                layer_input = jnp.einsum("jbs,jbsd->bsd", weights, stacked_outputs)
+                layer_out, router_stats = eqx.filter_checkpoint(layer, policy=None)(
+                    layer_input, layer_mask, use_long, use_long
+                )
+                layer_outputs.append(layer_out)
+                per_layer_stats.append(router_stats)
+            hidden = layer_outputs[-1]
+            stacked_router_stats = {} if cfg.dense_mlp else jax.tree.map(lambda *xs: jnp.stack(xs), *per_layer_stats)
+        else:
+            hidden, stacked_router_stats = jax.lax.scan(
+                _scan_layers, hidden, xs=(self.stacked_blocks.stacked, mask_schedule)
+            )
         if cfg.dense_mlp:
             router_metrics: dict[str, jax.Array] = {}
         else:

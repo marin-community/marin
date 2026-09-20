@@ -250,6 +250,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 return "adam"
             if "output_proj" in path_lower or "lm_head" in path_lower:
                 return "adamh"
+            # Attention-residual per-layer query vectors train with Adam.
+            if path_lower.endswith(".attn_res_query"):
+                return "adam"
             # GatedNorms route to muonh (NS + Frobenius hyperball), same as matrices.
             if "gated_norm" in path_lower:
                 return "muonh"
