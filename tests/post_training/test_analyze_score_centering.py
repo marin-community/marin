@@ -3,7 +3,12 @@ from datetime import datetime
 
 import pytest
 
-from experiments.post_training.analyze_score_centering import summarize_iris_log, summarize_run, verify_membership
+from experiments.post_training.analyze_score_centering import (
+    summarize_iris_log,
+    summarize_iris_logs,
+    summarize_run,
+    verify_membership,
+)
 
 
 def test_saved_eval_uses_completed_correct_answers_and_checks_membership(tmp_path):
@@ -63,5 +68,32 @@ def test_iris_mirror_uses_the_resumed_attempt_for_repeated_steps(tmp_path):
     assert rows[-1]["cumulative_consumed_tokens"] == 50
     with path.open("a") as stream:
         stream.write(line(1, 2, 30))
-    with pytest.raises(ValueError, match="within attempt"):
+    assert summarize_iris_log("arm", path) == rows
+    with path.open("a") as stream:
+        stream.write(line(1, 2, 99))
+    with pytest.raises(ValueError, match="conflicting Iris mirror"):
         summarize_iris_log("arm", path)
+
+
+def test_later_iris_job_supersedes_repeated_steps_after_continuation(tmp_path):
+    first, second = tmp_path / "first.log", tmp_path / "second.log"
+
+    def line(step, tokens):
+        metrics = {
+            "trainer/global_step": step,
+            "async/performance/consumed_loss_tokens": tokens,
+            "async/performance/configured_policy_gpus": 8,
+            "async/performance/configured_inference_gpus": 8,
+            "timing/step": 10.0,
+        }
+        return f"task=/romain/run/0 attempt=0 | WANDB_MIRROR kind=train step={step} metrics={json.dumps(metrics)}\n"
+
+    first.write_text(line(1, 10) + line(2, 20))
+    second.write_text(line(2, 25) + line(3, 30))
+    rows = summarize_iris_logs("arm", [first, second])
+    assert [(row["step"], row["iris_job_index"], row["consumed_tokens"]) for row in rows] == [
+        (1, 0, 10),
+        (2, 1, 25),
+        (3, 1, 30),
+    ]
+    assert rows[-1]["cumulative_consumed_tokens"] == 65

@@ -8,6 +8,9 @@ Example:
 
 The script reads every held-out response. SkyRL's completed-stop score metric is
 a signed reward contribution, so it cannot stand in for completed correctness.
+Repeat --iris-log for a run continued under another Iris parent, in chronological
+job order. Identical log lines are deduplicated; later attempts and jobs replace
+their repeated optimizer steps.
 """
 
 from __future__ import annotations
@@ -43,6 +46,7 @@ FIELDS = (
 METRIC_FIELDS = (
     "run",
     "step",
+    "iris_job_index",
     "iris_attempt",
     "consumed_tokens",
     "cumulative_consumed_tokens",
@@ -168,29 +172,35 @@ def verify_membership(rows: list[dict[str, Any]]) -> str:
     return hashes.pop()
 
 
-def summarize_iris_log(label: str, path: Path) -> list[dict[str, Any]]:
-    """Read per-step stdout mirrors, preferring a resumed attempt for repeated steps."""
+def summarize_iris_logs(label: str, paths: list[Path]) -> list[dict[str, Any]]:
+    """Read mirrors, preferring later Iris jobs and then later attempts for repeated steps."""
+    if not paths:
+        raise ValueError(f"{label}: no Iris log paths")
     marker = "WANDB_MIRROR kind=train step="
-    steps: dict[int, tuple[int, dict[str, Any]]] = {}
-    with path.open() as stream:
-        for line in stream:
-            if marker not in line:
-                continue
-            step_text, payload = line.split(marker, 1)[1].split(" metrics=", 1)
-            step = int(step_text)
-            attempt_match = re.search(r"\battempt=(\d+)\b", line.split(marker, 1)[0])
-            attempt = int(attempt_match.group(1)) if attempt_match else 0
-            previous = steps.get(step)
-            if previous is not None and previous[0] == attempt:
-                raise ValueError(f"{label}: duplicate Iris mirror step {step} within attempt {attempt}")
-            if previous is None or attempt > previous[0]:
-                steps[step] = (attempt, json.loads(payload))
+    steps: dict[int, tuple[int, int, dict[str, Any]]] = {}
+    for job_index, path in enumerate(paths):
+        with path.open() as stream:
+            for line in stream:
+                if marker not in line:
+                    continue
+                step_text, payload = line.split(marker, 1)[1].split(" metrics=", 1)
+                step = int(step_text)
+                attempt_match = re.search(r"\battempt=(\d+)\b", line.split(marker, 1)[0])
+                attempt = int(attempt_match.group(1)) if attempt_match else 0
+                metrics = json.loads(payload)
+                previous = steps.get(step)
+                if previous is not None and previous[:2] == (job_index, attempt):
+                    if previous[2] != metrics:
+                        raise ValueError(f"{label}: conflicting Iris mirror step {step} within attempt {attempt}")
+                    continue
+                if previous is None or (job_index, attempt) > previous[:2]:
+                    steps[step] = (job_index, attempt, metrics)
     if not steps:
-        raise ValueError(f"{label}: no training metrics in {path}")
+        raise ValueError(f"{label}: no training metrics in {paths}")
     result: list[dict[str, Any]] = []
     cumulative_tokens = 0
     cumulative_seconds = 0.0
-    for step, (attempt, metrics) in sorted(steps.items()):
+    for step, (job_index, attempt, metrics) in sorted(steps.items()):
         if metrics["trainer/global_step"] != step:
             raise ValueError(f"{label}: Iris mirror step {step} disagrees with trainer/global_step")
         tokens = metrics["async/performance/consumed_loss_tokens"]
@@ -204,6 +214,7 @@ def summarize_iris_log(label: str, path: Path) -> list[dict[str, Any]]:
             {
                 "run": label,
                 "step": step,
+                "iris_job_index": job_index,
                 "iris_attempt": attempt,
                 "consumed_tokens": tokens,
                 "cumulative_consumed_tokens": cumulative_tokens,
@@ -223,6 +234,11 @@ def summarize_iris_log(label: str, path: Path) -> list[dict[str, Any]]:
             }
         )
     return result
+
+
+def summarize_iris_log(label: str, path: Path) -> list[dict[str, Any]]:
+    """Read one Iris job's mirrors, preferring its later retry for repeated steps."""
+    return summarize_iris_logs(label, [path])
 
 
 def main() -> None:
@@ -253,11 +269,14 @@ def main() -> None:
         if args.metrics_output is None:
             parser.error("--metrics-output is required with --iris-log")
         metrics: list[dict[str, Any]] = []
+        log_paths: dict[str, list[Path]] = {}
         for item in args.iris_log:
             label, separator, path = item.partition("=")
             if not separator or label not in labels or not path:
                 parser.error(f"invalid --iris-log {item!r}; its label must match a --run")
-            metrics.extend(summarize_iris_log(label, Path(path)))
+            log_paths.setdefault(label, []).append(Path(path))
+        for label, paths in log_paths.items():
+            metrics.extend(summarize_iris_logs(label, paths))
         args.metrics_output.parent.mkdir(parents=True, exist_ok=True)
         with args.metrics_output.open("w", newline="") as stream:
             writer = csv.DictWriter(stream, METRIC_FIELDS)

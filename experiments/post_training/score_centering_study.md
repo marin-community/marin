@@ -280,16 +280,20 @@ retried the child, and its second attempt restarted at update zero; the evaluati
 zero was replaced. Attempt number therefore matters when reading the training curve, and total
 GPU cost includes both attempts. The plain-PPO arm appeared stalled during its update-30
 rank-zero multipart checkpoint upload: part 38 of a 7.15 GB object was the last logged
-completion at 00:08:35 UTC, with no logged progress for more than ten minutes. A later S3 object
-inspection found the full rank-zero shard with a 00:18:45 UTC modification time, before the
-working preempt. A preempt request against the federated Iris controller returned success
-without changing the child. A preempt request to the `cw-rno2a` controller at 00:21 UTC stopped
-rank zero and atomically restarted its sibling. Both child tasks entered attempt one. The
-restart selected the complete step-30 checkpoint, then rank zero was OOM-killed while loading
-it. A second restore attempt was OOM-killed at the same point. The peer job was canceled to
-avoid further repeated GPU use. The Qwen child memory request was raised from 128 to 256 GB for
-a continuation using the same artifact address and settings; recovery still needs verification.
-These infrastructure interruptions and their GPU attempts belong in cost and provenance.
+completion at 00:08:35 UTC, with no logged multipart progress for more than ten minutes.
+The full rank-zero shard was actually committed to S3 at 00:18:45 UTC. Iris mirrors show
+update 30 completed at 00:19:34 and updates 31–36 by 00:21:04; later log lines report updates
+37–38. A preempt request against the federated Iris controller returned success without
+changing the child. A direct request to the `cw-rno2a` controller at 00:21 UTC stopped rank
+zero and atomically restarted its sibling. This direct preempt interrupted a worker that had
+already resumed training. The decision was based on incomplete log visibility and added
+avoidable cost; only the step-30 checkpoint was durable, so the later updates were repeated.
+Both child tasks entered attempt one. The restart selected that complete checkpoint, then
+rank zero was OOM-killed while loading it. A second restore attempt was OOM-killed at the same
+point. The peer job was canceled to avoid further repeated GPU use. The Qwen child memory
+request was raised from 128 to 256 GB for a continuation with the same artifact address and
+settings. The full ledger includes the slow upload, manual interruption, OOM retries, and
+continuation.
 
 The continuation [r26](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-age8-ppo-resume-seed17-01a0bb6f-r26)
 selected that same step-30 checkpoint and loaded model and optimizer state. Its learner pod
@@ -328,8 +332,10 @@ workloads at 00:59 UTC.
 `analyze_score_centering.py` reads every dumped evaluation response and the durable Iris
 `WANDB_MIRROR` lines. It writes separate CSV files for completion-aware quality and per-update
 age, mismatch, consumed tokens, cycle time, and nominal GPU-hours across inclusive step cycles.
-When Iris retries a GPU child, a repeated optimizer step uses the later attempt's mirror, and
-the metrics CSV records the selected attempt number.
+When Iris retries a GPU child, a repeated optimizer step uses the later attempt's mirror.
+Repeated `--iris-log` inputs in job order also let the PPO analysis select r26's updates
+31–40 over r23's interrupted post-checkpoint updates. Identical mirrored lines are
+deduplicated. The metrics CSV records both the selected job index and attempt number.
 The step-cycle cost includes in-run evaluation and checkpointing but excludes setup, terminal
 export, and failed attempts; those require Iris task durations in the total-cost table. The
 script checks that prompt and ground-truth membership
@@ -356,5 +362,33 @@ At the current checkpoint, the comparable update-30 points are:
 The plain-PPO step-30 evaluation was rewritten after its failed restore attempts, so this
 reported point includes their elapsed time and GPU cost. It later reached 301/756 completed
 correct at update 40 after 0.96 hours and 14.52 reserved H100-hours from the first GPU task.
-The TIS arms had not yet reached update 40 at this checkpoint. These descriptive points mix
-different objective and capture costs; they do not identify a score-centering quality effect.
+The four arms with complete update-40 exports now have:
+
+| Arm | Completed correct / 756 | Consumed loss tokens (M) | Hours to evaluation | H100-hours to evaluation | Full H100-hours |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Older TIS, cap 2 (r19) | 250 | 13.150 | 1.49 | 23.87 | 24.22 |
+| Older TIS plus SC32, cap 2 (r20) | 265 | 13.342 | 1.53 | 24.45 | 25.32 |
+| Near-fresh TIS, cap 2 (r21) | 262 | 13.301 | 1.45 | 23.21 | 24.03 |
+| Plain PPO (r23 + r26) | 301 | 12.700 | 0.96 | 14.52 | 15.37 |
+
+The two older TIS arms had mean consumed-token age 4.62 across updates, versus zero for the
+near-fresh arm. Their TIS cap fractions averaged about 0.001% and never exceeded 0.011%; the
+SC arm's absolute correction loss value averaged about 3e-5. At update 30, older TIS,
+near-fresh TIS, and plain PPO had consumed exactly the same 960 prompt UIDs. Older SC shared
+959 of its 960 prompts with them (Jaccard 0.998). Thus prompt membership barely differs, but
+the generation and optimizer paths still vary across asynchronous runs. The cap-2 TIS control
+and SC arm changed order repeatedly along the quality curve; the final 15-answer spread is
+not evidence of a meaningful correction gradient under this nearly uncapped objective.
+
+The older-schedule captured TIS arms returned roughly 8.9–9.0 MB per inference-bridge response
+and had median inclusive update cycles of 84–91 seconds. Plain PPO returned about 0.21 MB and had a
+15.5-second median cycle in its original and resumed training segments. This contrasts the
+current TIS-plus-top-k collection path with plain PPO. A narrower top-k-one TIS control,
+[r29](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-age8-tis-topk1-seed17-01a0bb6f-r29),
+was launched with the same seed, age schedule, TIS cap 2, and 40-update budget as r19. It
+changes only the requested behavior-logprob width from 32 to one. Its training and quality
+results are pending; it will help separate top-k collection cost from the plain-PPO path.
+`plot_score_centering.py` draws the completed-correct curve
+against updates, consumed loss tokens, elapsed task time, and reserved H100-hours from the
+three analysis CSVs. These descriptive comparisons do not identify a score-centering quality
+effect or prove a plain-PPO advantage across training seeds.

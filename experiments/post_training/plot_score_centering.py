@@ -1,6 +1,7 @@
-"""Plot completed-correct quality against updates, elapsed time, and reserved GPU-hours.
+"""Plot completed-correct quality against work, elapsed time, and reserved GPU-hours.
 
 Use the CSV outputs of analyze_score_centering.py and analyze_score_centering_cost.py.
+Pass --metrics to add consumed-loss-token curves alongside update, time, and cost curves.
 Repeat --run to select the arms in one figure. Example::
 
     python -m experiments.post_training.plot_score_centering \
@@ -22,11 +23,25 @@ mpl.use("Agg")
 import matplotlib.pyplot as plt
 
 
-def plot_curves(evaluations: Path, cost: Path, arms: dict[str, str], output: Path, title: str) -> None:
+def plot_curves(
+    evaluations: Path,
+    cost: Path,
+    arms: dict[str, str],
+    output: Path,
+    title: str,
+    metrics: Path | None = None,
+) -> None:
     with evaluations.open(newline="") as stream:
         quality_rows = [row for row in csv.DictReader(stream) if row["dataset"] == "all"]
     with cost.open(newline="") as stream:
         cost_rows = {(row["run"], int(row["step"])): row for row in csv.DictReader(stream)}
+    token_rows = {}
+    if metrics is not None:
+        with metrics.open(newline="") as stream:
+            token_rows = {
+                (row["run"], int(row["step"])): float(row["cumulative_consumed_tokens"]) / 1e6
+                for row in csv.DictReader(stream)
+            }
 
     by_run = defaultdict(list)
     for row in quality_rows:
@@ -36,9 +51,13 @@ def plot_curves(evaluations: Path, cost: Path, arms: dict[str, str], output: Pat
         cost_row = cost_rows.get((run, step))
         if cost_row is None:
             raise ValueError(f"{run} step {step}: missing task cost")
+        tokens_millions = 0.0 if step == 0 else token_rows.get((run, step))
+        if metrics is not None and tokens_millions is None:
+            raise ValueError(f"{run} step {step}: missing consumed-token metrics")
         by_run[run].append(
             (
                 step,
+                tokens_millions,
                 float(cost_row["elapsed_from_first_gpu_task_hours"]),
                 float(cost_row["reserved_gpu_hours_to_eval"]),
                 100 * float(row["completed_correct_rate"]),
@@ -47,21 +66,24 @@ def plot_curves(evaluations: Path, cost: Path, arms: dict[str, str], output: Pat
     if set(by_run) != set(arms):
         raise ValueError(f"missing evaluated arms: {sorted(set(arms) - set(by_run))}")
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4.5), sharey=True, constrained_layout=True)
-    x_labels = ("Optimizer updates", "Elapsed GPU-task hours", "Reserved H100-hours")
+    x_columns = [(0, "Optimizer updates")]
+    if metrics is not None:
+        x_columns.append((1, "Consumed loss tokens (millions)"))
+    x_columns.extend(((2, "Elapsed GPU-task hours"), (3, "Reserved H100-hours")))
+    fig, axes = plt.subplots(1, len(x_columns), figsize=(5 * len(x_columns), 4.5), sharey=True, constrained_layout=True)
     markers = ("o", "s", "^", "D", "v", "P", "X", "*")
     for arm_index, (run, label) in enumerate(arms.items()):
         points = sorted(by_run[run])
-        for axis_index, ax in enumerate(axes):
+        for ax, (column, _) in zip(axes, x_columns, strict=True):
             ax.plot(
-                [point[axis_index] for point in points],
-                [point[3] for point in points],
+                [point[column] for point in points],
+                [point[4] for point in points],
                 marker=markers[arm_index % len(markers)],
                 markersize=5,
                 linewidth=1.8,
                 label=label,
             )
-    for ax, label in zip(axes, x_labels, strict=True):
+    for ax, (_, label) in zip(axes, x_columns, strict=True):
         ax.set_xlabel(label)
         ax.grid(alpha=0.25)
         ax.set_xlim(left=0)
@@ -78,6 +100,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--evaluations", required=True, type=Path)
     parser.add_argument("--cost", required=True, type=Path)
+    parser.add_argument("--metrics", type=Path, help="Per-step CSV from analyze_score_centering.py --metrics-output")
     parser.add_argument("--run", action="append", required=True, metavar="RUN=LABEL")
     parser.add_argument("--title", default="Score centering: held-out quality")
     parser.add_argument("--output", required=True, type=Path)
@@ -89,7 +112,7 @@ def main() -> None:
         if not separator or not run or not label or run in arms:
             parser.error(f"invalid or duplicate --run {item!r}; use RUN=LABEL")
         arms[run] = label
-    plot_curves(args.evaluations, args.cost, arms, args.output, args.title)
+    plot_curves(args.evaluations, args.cost, arms, args.output, args.title, args.metrics)
     print(f"Wrote quality curves to {args.output}")
 
 
