@@ -13,6 +13,7 @@ This avoids both THD compaction and materialized [B, S, S] masks.
 """
 
 import functools
+import os
 import importlib
 from dataclasses import dataclass
 from functools import partial
@@ -30,6 +31,7 @@ from levanter.grug.attention._fa4_cute_kernels import (
     segmented_flash_attention_forward_launcher,
 )
 from levanter.grug.attention._fa4_cute_config import Flash4CuteKernelConfig
+from levanter.grug.attention._inkling_relpos import rel_bias_backward
 
 
 @dataclass(frozen=True)
@@ -815,9 +817,35 @@ def _segmented_flash_attention_custom_vjp_bwd(
             q, k, v, out, cot, lse, lower_bounds, valid, softmax_scale=softmax_scale, kernel_config=kernel_config
         )
         return dq, dk, dv, None, None, jnp.zeros_like(rel_bias)
-    # Inkling bias present: correctness-first materialized reference VJP (fused bwd is a follow-up).
-    dq, dk, dv, d_rel_bias = _reference_bias_vjp(q, k, v, lower_bounds, valid, rel_bias, cot, softmax_scale)
-    return dq.astype(q.dtype), dk.astype(k.dtype), dv.astype(v.dtype), None, None, d_rel_bias.astype(rel_bias.dtype)
+    # Inkling bias present. Fused path: the segmented backward computes dq/dk/dv with the bias in its
+    # S-recompute (efficient, no S^2); dA is the verified banded gather of dScore. Set
+    # FAST_TRACK_INKLING_REF_BWD=1 to fall back to the materialized reference VJP (slow but simplest).
+    if os.environ.get("FAST_TRACK_INKLING_REF_BWD") == "1":
+        dq, dk, dv, d_rel_bias = _reference_bias_vjp(q, k, v, lower_bounds, valid, rel_bias, cot, softmax_scale)
+        return (
+            dq.astype(q.dtype),
+            dk.astype(k.dtype),
+            dv.astype(v.dtype),
+            None,
+            None,
+            d_rel_bias.astype(rel_bias.dtype),
+        )
+    dq, dk, dv = segmented_flash_attention_backward(
+        q, k, v, out, cot, lse, lower_bounds, valid, rel_bias, softmax_scale=softmax_scale, kernel_config=kernel_config
+    )
+    d_rel_bias = rel_bias_backward(
+        jnp.swapaxes(q, 1, 2),
+        jnp.swapaxes(k, 1, 2),
+        jnp.swapaxes(v, 1, 2),
+        jnp.swapaxes(out, 1, 2),
+        jnp.swapaxes(cot, 1, 2),
+        lse,
+        rel_bias,
+        lower_bounds.astype(jnp.int32),
+        valid.astype(jnp.bool_),
+        softmax_scale=softmax_scale,
+    ).astype(rel_bias.dtype)
+    return dq, dk, dv, None, None, d_rel_bias
 
 
 _segmented_flash_attention_custom_vjp.defvjp(
