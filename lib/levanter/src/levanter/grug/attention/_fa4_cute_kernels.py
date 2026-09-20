@@ -1337,6 +1337,29 @@ def segmented_flash_attention_backward_sm90_launcher(
             return result.load()
 
         inkling_score_mod = _grug_const_score_mod
+    elif use_rel_bias and _sm_debug == "head0":
+
+        @cute.jit
+        def _grug_head0_score_mod(score, batch_idx, head_idx, q_idx, kv_idx, seqlen_info, aux_tensors):
+            # Debug: real gmem read but head hardcoded to 0 (guaranteed-valid index). Finite => the
+            # read mechanism is fine and head_idx[j] was OOB; NaN => the read itself is broken.
+            del head_idx, seqlen_info
+            rel_bias_t = aux_tensors[2]
+            rel_extent = rel_bias_t.shape[1]
+            vec = cutlass.const_expr(cute.size(score.shape))
+            b0 = batch_idx[0]
+            result = cute.make_rmem_tensor(vec, cutlass.Float32)
+            for j in cutlass.range_constexpr(vec):
+                result[j] = score[j]
+                delta = q_idx[j] - kv_idx[j]
+                delta_safe = cutlass.min(cutlass.max(delta, cutlass.Int32(0)), rel_extent - 1)
+                bias = rel_bias_t[q_idx[j], delta_safe, cutlass.Int32(0), b0].to(cutlass.Float32)
+                in_band = cute.elem_less(delta, rel_extent) and cute.elem_less(cutlass.Int32(-1), delta)
+                if in_band:
+                    result[j] = result[j] + bias
+            return result.load()
+
+        inkling_score_mod = _grug_head0_score_mod
     elif use_rel_bias:
 
         @cute.jit
