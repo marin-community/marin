@@ -310,7 +310,7 @@ schedule, and behavior top-k 32 in both arms. This deliberately activates more c
 than the cap-2 screen; it is a distinct objective comparison. The Iris parents are
 [r24](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-age8-tis-cap105-seed17-01a0bb6f-r24)
 and [r25](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-age8-sc-cap105-seed17-01a0bb6f-r25).
-Their children use `iris-interactive` GPU pods. The cap fraction and outcomes are pending.
+Their children use `iris-interactive` GPU pods. Their terminal outcomes are pending.
 Their step-zero completed-correct counts were 73/756 for TIS and 79/756 for TIS plus SC32.
 At the first learner update, 4.57% and 4.61% of sampled tokens respectively hit the TIS cap,
 compared with near-zero cap fractions in the cap-2 screen. The SC arm logged 0.00315 mean
@@ -322,11 +322,17 @@ tokens hit the cap. Their step-10 checkpoint UID sets each contained 320 consume
 with 318 in common (Jaccard 0.988). The first post-training evaluation was 112/756 completed
 correct for TIS and 98/756 for TIS plus SC32, versus step-zero counts 73 and 79. A single
 early difference does not establish a quality effect or stability.
+At update 20, TIS had 128/756 completed correct and TIS plus SC32 had 158/756. Relative to
+their own step-zero counts, those arms gained 55 and 79 correct answers. The apparent
+SC difference thus changed sign between updates 10 and 20. Their update-20 checkpoints each
+recorded 640 consumed prompt UIDs and shared 639 (Jaccard 0.997). Through their first 24–25
+updates, both arms consumed tokens at mean age about 4.4 and capped about 5.3% of tokens.
 A second matched seed-18 pair, [r27](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-age8-tis-cap105-seed18-01a0bb6f-r27)
 and [r28](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-age8-sc-cap105-seed18-01a0bb6f-r28),
 uses the same settings and 256 GB host request. Its step-zero completed-correct counts are
-88/756 and 79/756; both have the same held-out membership as seed 17. Its trained outcomes
-are pending. New launches were held when cluster use rose to 504/512 H100s with zero queued
+88/756 and 79/756; both have the same held-out membership as seed 17. At update 10, the
+counts were 95 and 117, with each arm consuming 320 prompt UIDs and 318 in common. Their
+later trained outcomes are pending. New launches were held when cluster use rose to 504/512 H100s with zero queued
 workloads at 00:59 UTC.
 
 `analyze_score_centering.py` reads every dumped evaluation response and the durable Iris
@@ -362,23 +368,35 @@ At the current checkpoint, the comparable update-30 points are:
 The plain-PPO step-30 evaluation was rewritten after its failed restore attempts, so this
 reported point includes their elapsed time and GPU cost. It later reached 301/756 completed
 correct at update 40 after 0.96 hours and 14.52 reserved H100-hours from the first GPU task.
-The four arms with complete update-40 exports now have:
+All five cap-2 arms have update-40 evaluation dumps. Their results are:
 
 | Arm | Completed correct / 756 | Consumed loss tokens (M) | Hours to evaluation | H100-hours to evaluation | Full H100-hours |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Older TIS, cap 2 (r19) | 250 | 13.150 | 1.49 | 23.87 | 24.22 |
-| Older TIS plus SC32, cap 2 (r20) | 265 | 13.342 | 1.53 | 24.45 | 25.32 |
+| Older TIS plus SC32, cap 2 (r20) | 267 | 13.342 | 1.53 | 24.45 | 25.32 |
 | Near-fresh TIS, cap 2 (r21) | 262 | 13.301 | 1.45 | 23.21 | 24.03 |
+| Near-fresh TIS plus SC32, cap 2 (r22) | 293 | 13.125 | 1.92 | 30.65 | 31.82 |
 | Plain PPO (r23 + r26) | 301 | 12.700 | 0.96 | 14.52 | 15.37 |
 
+The r22 ledger includes its failed first attempt and successful retry. The quality counts
+come from the saved response dumps, with the same 756-prompt membership hash in every arm.
+The figure below plots the same primary measure against updates, consumed loss tokens, elapsed
+GPU-task time, and reserved H100-hours. The underlying [evaluation](results/score_centering_qwen_cap2_evals.csv),
+[training metric](results/score_centering_qwen_cap2_metrics.csv), and
+[cost](results/score_centering_qwen_cap2_cost.csv) CSVs are checked in beside the analysis code.
+
+![Completed-correct Qwen quality against updates, consumed tokens, elapsed time, and reserved GPU-hours](figures/score_centering_cap2_qwen.svg)
+
 The two older TIS arms had mean consumed-token age 4.62 across updates, versus zero for the
-near-fresh arm. Their TIS cap fractions averaged about 0.001% and never exceeded 0.011%; the
+near-fresh arms. Their TIS cap fractions averaged about 0.001% and never exceeded 0.011%; the
 SC arm's absolute correction loss value averaged about 3e-5. At update 30, older TIS,
 near-fresh TIS, and plain PPO had consumed exactly the same 960 prompt UIDs. Older SC shared
 959 of its 960 prompts with them (Jaccard 0.998). Thus prompt membership barely differs, but
 the generation and optimizer paths still vary across asynchronous runs. The cap-2 TIS control
 and SC arm changed order repeatedly along the quality curve; the final 15-answer spread is
-not evidence of a meaningful correction gradient under this nearly uncapped objective.
+not evidence of a meaningful correction gradient under this nearly uncapped objective. The
+near-fresh SC arm's terminal 31-answer lead over its near-fresh TIS control is subject to the
+same limitation and to its extra retry.
 
 The older-schedule captured TIS arms returned roughly 8.9–9.0 MB per inference-bridge response
 and had median inclusive update cycles of 84–91 seconds. Plain PPO returned about 0.21 MB and had a
@@ -386,9 +404,26 @@ and had median inclusive update cycles of 84–91 seconds. Plain PPO returned ab
 current TIS-plus-top-k collection path with plain PPO. A narrower top-k-one TIS control,
 [r29](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-age8-tis-topk1-seed17-01a0bb6f-r29),
 was launched with the same seed, age schedule, TIS cap 2, and 40-update budget as r19. It
-changes only the requested behavior-logprob width from 32 to one. Its training and quality
-results are pending; it will help separate top-k collection cost from the plain-PPO path.
+changes the requested behavior-logprob width from 32 to one; a later launcher commit also
+raised the pod's host-memory request from 128 to 256 GB after a separate checkpoint-restore
+failure. Its first nine updates had median inclusive cycles of 20.66 seconds, compared with
+84.26 seconds in r19, and mean inference-bridge response sizes of 0.720 MB versus 9.378 MB.
+Mean consumed-token age was 3.32 versus 3.29 in those same early updates. Both arms had zero
+TIS skipped fraction and zero batches without sampled-token logprobs. Later training,
+checkpoint, and quality results are pending. These early data point to wide behavior-logprob
+capture as a major source of collection cost.
 `plot_score_centering.py` draws the completed-correct curve
 against updates, consumed loss tokens, elapsed task time, and reserved H100-hours from the
 three analysis CSVs. These descriptive comparisons do not identify a score-centering quality
 effect or prove a plain-PPO advantage across training seeds.
+
+The supported Snowball Megatron recipe permits a separate MoE integration check with the same
+SC implementation. A matched two-update TIS and TIS-plus-SC32 smoke pair started in
+`cw-us-east-02a` on September 20, each using five eight-H100 nodes at `iris-interactive`
+priority, the adopted Snowball SFT export `2026.08.30`, pool `2026.08.29.1`, seed 17,
+TIS cap 1.05, top-k 32 behavior capture, and age limit eight. Their Iris parents are
+[TIS](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-smoke-set-399c37f1-2026.09.20.1-918d8daf4d8c)
+and [TIS plus SC32](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-smoke-set-81e8344e-2026.09.20.1-29e2743294fb).
+The 1,024-token smoke response cap is for wiring, not answer-quality comparison. Results are
+pending. The older curriculum Snowball launcher uses FSDP2; this fully async experiment
+launcher uses Megatron and does not require an FSDP2 port.
