@@ -113,6 +113,7 @@ generator:
   batched: false
   engine_init_kwargs:
     async_scheduling: false
+    enable_mfu_metrics: true
   speculative_decoding:
     method: eagle3
     model: {}
@@ -227,6 +228,7 @@ generator:
   batched: false
   engine_init_kwargs:
     async_scheduling: false
+    enable_mfu_metrics: true
   speculative_decoding:
     method: eagle3
     model: {}
