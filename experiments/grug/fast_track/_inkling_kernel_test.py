@@ -1,8 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""GPU isolation check for the Inkling relative-position fused forward. Run on one H100 via iris."""
-
+"""GPU check for the Inkling relative-position fused forward vs the reference oracle. iris, 1xH100."""
 
 import jax
 import jax.numpy as jnp
@@ -17,10 +16,11 @@ def _base_case():
     k = jax.random.normal(kk, (1, 256, 1, 128), dtype=jnp.bfloat16)
     v = jax.random.normal(kv, (1, 256, 1, 128), dtype=jnp.bfloat16)
     mask = AttentionMask.causal()
-    out = np.asarray(jax.block_until_ready(gpu_fa4_cute_attention(q, k, v, mask))).astype(np.float32)
+    fn = jax.jit(lambda q, k, v: gpu_fa4_cute_attention(q, k, v, mask))
+    out = np.asarray(jax.block_until_ready(fn(q, k, v))).astype(np.float32)
     exp = np.asarray(reference_attention(q, k, v, mask, logits_dtype=jnp.float32)).astype(np.float32)
     err = float(np.max(np.abs(out - exp)))
-    print(f"[base no-bias via wrapper] max_abs={err:.4e} -> {'PASS' if err < 7e-2 else 'FAIL'}", flush=True)
+    print(f"[base no-bias via wrapper+jit] max_abs={err:.4e} -> {'PASS' if err < 7e-2 else 'FAIL'}", flush=True)
 
 
 def main():
