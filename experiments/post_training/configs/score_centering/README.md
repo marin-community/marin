@@ -40,3 +40,8 @@ the predeclared 40-update Qwen confirmation. Each within-seed pair has 153 Hydra
 arguments. Excluding run-owned output paths and names, its sole difference is
 `trainer.algorithm.score_centering_topk` (`0` or `32`). Within an arm, the only
 material difference across seeds is `trainer.seed` (`20`, `21`, or `22`).
+
+`qwen_fresh_version.json` is the resolved four-update age-zero diagnostic
+input. It publishes weights after each update and admits only responses from
+the current version, so versions one through three can use the consuming
+trainer as their exactly matched B scorer before its next optimizer update.

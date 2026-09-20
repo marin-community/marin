@@ -948,13 +948,34 @@ synthetic mixed-span test checks the scorer's version routing, but this GPU
 sample does not validate B for later generated versions or an actual mixed
 response.
 
+To check B against later published weights, a separate [four-update Qwen
+probe](https://iris-cw-rno2a.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-fresh-version-01a0bb6f)
+set the admission age limit to zero. Its [resolved config](configs/score_centering/qwen_fresh_version.json)
+kept the same Qwen model, pool, 4,096-token response cap, top-k-one capture,
+TIS cap 1.05, 32 generation workers, eight-group buffer, and per-update
+publication. It used MarinSkyRL `cd040079`, seed 17, no SC or held-out
+evaluation. The [per-version audit](results/score_centering_qwen_fresh_version_coverage.csv)
+checks all four durable raw records. At consuming steps one through four,
+selected tokens came entirely from published versions zero through three,
+respectively: 294,312, 324,759, 321,323, and 363,215 tokens. Every one of
+the 1,303,609 selected tokens had matching generating weights for B. For
+versions one through three, the freshly published trainer B is the consuming
+trainer C before its next update, so the stale-weight term was exactly zero.
+Mean absolute B − A by version was 0.01493, 0.01559, 0.01577, and 0.01511;
+the token-weighted mean was 0.01535. Raw TIS capping applied to 5.58% of
+selected tokens. The two eight-H100 tasks succeeded without retry and used
+2.72 reserved H100-hours. This directly validates the engine-gap measurement
+for later published weights at age zero. It does not measure stale-weight
+drift for those later versions or an actual mixed-version response; none
+occurred in this probe.
+
 The [round-two diagnostic cost ledger](results/score_centering_round2_diagnostic_cost.csv)
-records the two Qwen probes, their two failed setup attempts, the Snowball
+records the three Qwen probes, their two failed setup attempts, the Snowball
 model-only recovery, and its four failed full-restore attempts. It uses
 the durations of every GPU task shown by `iris job describe`, multiplied by
 eight H100s per task; coscheduled siblings still reserve GPUs until a failed
-head task exits. These finished jobs used 6.30 Qwen and 57.86 Snowball reserved
-H100-hours, or 64.16 together. The 17.42-hour Snowball recovery in this
+head task exits. These finished jobs used 9.02 Qwen and 57.86 Snowball reserved
+H100-hours, or 66.88 together. The 17.42-hour Snowball recovery in this
 ledger is the same job described above, so it is counted once. The active
 confirmation pairs and later restore retry enter the campaign total after their
 task durations become final.
