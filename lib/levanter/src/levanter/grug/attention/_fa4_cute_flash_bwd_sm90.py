@@ -41,7 +41,6 @@ from flash_attn.cute.tile_scheduler import (
 )
 from flash_attn.cute import barrier
 from flash_attn.cute.named_barrier import NamedBarrierBwd
-from flash_attn.cute.softmax import apply_score_mod_bwd_inner
 from flash_attn.cute.block_sparsity import BlockSparseTensors
 from flash_attn.cute.utils import AuxData
 from flash_attn.cute.block_sparse_utils import (
@@ -1055,6 +1054,13 @@ class FlashAttentionBackwardSm90:
         aux_data: AuxData = AuxData(),
         fastdiv_mods=(None, None),
     ):
+        # GRUG: the Inkling bias is additive (S = qk*scale + A), so its backward is the identity for
+        # dQ/dK/dV (grad_tensor is left unchanged) and the bias gradient is dA[q, q-k] = dS[q, k], where
+        # dS = grad_tensor here (P*(dP - dPsum)). Scatter dS into the dA output aux tensor (aux[3],
+        # kernel layout [S, L, Hq, B]); each (q, k) maps to a unique (q, delta), so writes never race.
+        del score_tensor, softmax_scale, seqlen_info, fastdiv_mods
+        da_t = aux_data.tensors[3]
+        rel_extent = da_t.shape[1]
         cS = cute.make_identity_tensor((self.tile_n, self.tile_m) if self.SdP_swapAB else (self.tile_m, self.tile_n))
         cS = cute.domain_offset(
             (
@@ -1064,25 +1070,18 @@ class FlashAttentionBackwardSm90:
             ),
             cS,
         )
-        tScS = thr_mma_SdP.partition_C(cS)
-
-        apply_score_mod_bwd_inner(
-            grad_tensor,
-            score_tensor,
-            tScS,
-            self.score_mod_bwd,
-            batch_idx,
-            head_idx,
-            softmax_scale,
-            self.vec_size,
-            self.qk_acc_dtype,
-            aux_data,
-            fastdiv_mods,
-            seqlen_info,
-            constant_q_idx=None,
-            qhead_per_kvhead=self.qhead_per_kvhead,
-            transpose_indices=self.SdP_swapAB,
-        )
+        tScS_mn = layout_utils.reshape_acc_to_mn(thr_mma_SdP.partition_C(cS), transpose=self.SdP_swapAB)
+        grad_mn = layout_utils.reshape_acc_to_mn(grad_tensor, transpose=self.SdP_swapAB)
+        ROW = const_expr(0 if not self.SdP_swapAB else 1)
+        COL = const_expr(1 if not self.SdP_swapAB else 0)
+        for r in cutlass.range_constexpr(cute.size(tScS_mn.shape[0])):
+            q_pos = tScS_mn[r, 0][ROW]
+            for c in cutlass.range_constexpr(cute.size(tScS_mn.shape[1])):
+                delta = q_pos - tScS_mn[r, c][COL]
+                in_band = cute.elem_less(delta, rel_extent) and cute.elem_less(Int32(-1), delta)
+                if in_band:
+                    delta_safe = cutlass.min(cutlass.max(delta, Int32(0)), rel_extent - 1)
+                    da_t[q_pos, delta_safe, head_idx, batch_idx] = grad_mn[r, c]
 
     @cute.jit
     def mma(

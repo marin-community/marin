@@ -1336,7 +1336,9 @@ def segmented_flash_attention_backward_sm90_launcher(
         num_threads=config.num_threads,
         V_in_regs=False,
         score_mod=inkling_score_mod,
-        score_mod_bwd=None,
+        # Non-None sentinel triggers the vendored apply_score_mod_bwd, which scatters dS into the dA
+        # output (aux[3]); it leaves dQ/dK/dV grads unchanged (additive bias => identity).
+        score_mod_bwd=("inkling_inline" if use_rel_bias else None),
         mask_mod=None if use_builtin_sliding_window else _grug_segment_mask_mod,
         has_aux_tensors=use_rel_bias or not use_builtin_sliding_window,
         q_subtile_factor=1,
@@ -1395,6 +1397,7 @@ def segmented_flash_attention_backward_sm90_launcher(
         dq_accum: cute.Tensor,
         dk_accum: cute.Tensor,
         dv_accum: cute.Tensor,
+        rel_bias_grad: cute.Tensor,
         *,
         softmax_scale: cutlass.Float32,
     ):
@@ -1403,6 +1406,11 @@ def segmented_flash_attention_backward_sm90_launcher(
             zero_fill(dq_accum, stream)
             zero_fill(dk_accum, stream)
             zero_fill(dv_accum, stream)
+        # dA output: zeroed so out-of-band / skipped-block entries stay 0 (the kernel only writes the
+        # in-band dS via apply_score_mod_bwd). For the RoPE path it is returned as zeros and ignored.
+        if cutlass.const_expr(use_rel_bias):
+            zero_fill(rel_bias_grad, stream)
+        rel_bias_grad_gmem = _as_gmem_tensor(rel_bias_grad)
         lse_log2_gmem = _as_gmem_tensor(lse_log2)
         dpsum_gmem = _as_gmem_tensor(dpsum)
         dq_accum_gmem = _as_gmem_tensor(dq_accum)
@@ -1437,7 +1445,11 @@ def segmented_flash_attention_backward_sm90_launcher(
                 dk_accum_gmem,
                 dv_accum_gmem,
                 softmax_scale,
-                aux_data=AuxData(tensors=(lower_bounds, valid, rel_bias) if use_rel_bias else (lower_bounds, valid)),
+                aux_data=AuxData(
+                    tensors=(
+                        (lower_bounds, valid, rel_bias, rel_bias_grad_gmem) if use_rel_bias else (lower_bounds, valid)
+                    )
+                ),
                 blocksparse_tensors=blocksparse_tensors,
                 stream=stream,
             )

@@ -159,8 +159,12 @@ def segmented_flash_attention_backward(
     *,
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
-) -> tuple[jax.Array, jax.Array, jax.Array]:
-    """Return gradients for FA4/CuTe packed-segment attention."""
+) -> tuple[jax.Array, ...]:
+    """Return gradients for FA4/CuTe packed-segment attention.
+
+    Returns ``(dq, dk, dv)``, or ``(dq, dk, dv, dA)`` when the sm90 vendored path also produces the
+    Inkling bias gradient in-kernel.
+    """
     _validate_forward_inputs(q, k, v, lower_bounds, valid, softmax_scale=softmax_scale)
     _validate_backward_inputs(q, k, v, out, dout, lse)
     try:
@@ -253,7 +257,7 @@ def segmented_flash_attention_backward_sm90_native(
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
     window_size_left: int | None = None,
-) -> tuple[jax.Array, jax.Array, jax.Array]:
+) -> tuple[jax.Array, ...]:
     """Run the native SM90 segmented backward path for D128 GQA kernels.
 
     ``rel_bias`` (Inkling A [B, Hq, S, L]) is added to the recomputed scores via the kernel's
@@ -338,7 +342,9 @@ def segmented_flash_attention_backward_sm90_native(
     backward_input_spec, backward_output_spec = _cutlass_attention_backward_sm90_accum_specs(modules, vector_elems=8)
     if not use_rel_bias:
         rel_bias = jnp.zeros((q.shape[0], q.shape[2], q.shape[1], 1), dtype=q.dtype)
-    backward_output_shape_dtype = _cutlass_attention_backward_sm90_backward_output_shapes(q, k, v, sm90_config.tile)
+    backward_output_shape_dtype = _cutlass_attention_backward_sm90_backward_output_shapes(
+        q, k, v, sm90_config.tile, rel_bias
+    )
     backward_call = cutlass_call(
         backward_launcher,
         output_shape_dtype=backward_output_shape_dtype,
@@ -347,7 +353,7 @@ def segmented_flash_attention_backward_sm90_native(
         use_static_tensors=True,
         softmax_scale=softmax_scale,
     )
-    dq_accum, dk_accum, dv_accum = backward_call(
+    dq_accum, dk_accum, dv_accum, d_rel_bias = backward_call(
         q,
         k,
         v,
@@ -424,6 +430,9 @@ def segmented_flash_attention_backward_sm90_native(
     (dq,) = dq_postprocess(dq_accum)
     (dk,) = dk_postprocess(dk_accum)
     (dv,) = dv_postprocess(dv_accum)
+    # d_rel_bias (dA) is the kernel's scattered dS in the A layout; no postprocess/scale needed.
+    if use_rel_bias:
+        return dq, dk, dv, d_rel_bias
     return dq, dk, dv
 
 
@@ -501,7 +510,8 @@ def _cutlass_attention_backward_sm90_accum_specs(
         sparse_idx_spec,
         rel_bias_spec,
     )
-    return input_spec, (scratch_spec, scratch_spec, scratch_spec)
+    # Outputs: dq/dk/dv accumulators (flat scratch) + dA (bias gradient, A-layout [B,Hq,S,L]).
+    return input_spec, (scratch_spec, scratch_spec, scratch_spec, rel_bias_spec)
 
 
 def _cutlass_attention_backward_sm90_preprocess_specs(
@@ -679,6 +689,7 @@ def _cutlass_attention_backward_sm90_backward_output_shapes(
     k: jax.Array,
     v: jax.Array,
     backward_tile: tuple[int, int],
+    rel_bias: jax.Array,
 ) -> tuple[jax.ShapeDtypeStruct, ...]:
     batch, seq_len, q_heads, head_dim = q.shape
     kv_heads = k.shape[2]
@@ -690,7 +701,9 @@ def _cutlass_attention_backward_sm90_backward_output_shapes(
     dq_accum = jax.ShapeDtypeStruct((batch, q_heads, seq_q_rounded * head_dim_rounded), jnp.float32)
     dk_accum = jax.ShapeDtypeStruct((batch, kv_heads, seq_k_rounded * head_dim_rounded), jnp.float32)
     dv_accum = jax.ShapeDtypeStruct((batch, kv_heads, seq_k_rounded * head_dim_v_rounded), jnp.float32)
-    return dq_accum, dk_accum, dv_accum
+    # dA (bias gradient) in the A layout [B, Hq, S, L]; the kernel scatters dS by distance into it.
+    d_rel_bias = jax.ShapeDtypeStruct(rel_bias.shape, jnp.float32)
+    return dq_accum, dk_accum, dv_accum, d_rel_bias
 
 
 def fa4_cute_attention_forward(
@@ -848,9 +861,17 @@ def _segmented_flash_attention_custom_vjp_bwd(
             None,
             d_rel_bias.astype(rel_bias.dtype),
         )
-    dq, dk, dv = segmented_flash_attention_backward(
+    result = segmented_flash_attention_backward(
         q, k, v, out, cot, lse, lower_bounds, valid, rel_bias, softmax_scale=softmax_scale, kernel_config=kernel_config
     )
+    if len(result) == 4:
+        # sm90 vendored path: dA is scattered from the kernel's own dS (free); no standalone pass.
+        dq, dk, dv, d_rel_bias = result
+        if os.environ.get("FAST_TRACK_INKLING_ZERO_DA") == "1":
+            return dq, dk, dv, None, None, jnp.zeros_like(rel_bias)
+        return dq, dk, dv, None, None, d_rel_bias.astype(rel_bias.dtype)
+    # Fallback (non-sm90) segmented path: dA via the standalone banded gather of dScore.
+    dq, dk, dv = result
     if os.environ.get("FAST_TRACK_INKLING_ZERO_DA") == "1":
         # Throughput-isolation only (WRONG grads): measures fwd + fused dq/dk/dv without the dA pass.
         return dq, dk, dv, None, None, jnp.zeros_like(rel_bias)
