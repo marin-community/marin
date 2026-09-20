@@ -19,12 +19,14 @@ by other holders.
 """
 
 import abc
+import contextlib
 import fcntl
 import json
 import logging
 import os
 import threading
 import time
+from collections.abc import Generator
 from dataclasses import asdict, dataclass
 
 from rigging.filesystem.conditional_object import ConditionalWriteError, conditional_object
@@ -179,6 +181,50 @@ class DistributedLease(abc.ABC):
         if lock_data is None or lock_data.is_stale():
             return None
         return lock_data.worker_id
+
+
+@contextlib.contextmanager
+def lease_refresh(
+    lease: DistributedLease,
+    *,
+    interval: float = HEARTBEAT_INTERVAL,
+) -> Generator[None, None, None]:
+    """Keep an acquired lease fresh and verify ownership before returning.
+
+    Refresh failures from the background thread are raised in the caller when
+    the block exits. A final synchronous refresh acts as an ownership barrier
+    for work that must only be published while the caller still holds the
+    lease.
+
+    Args:
+        lease: An acquired distributed lease.
+        interval: Seconds between refresh attempts.
+    """
+    if interval <= 0:
+        raise ValueError("lease refresh interval must be positive")
+
+    stop = threading.Event()
+    errors: list[Exception] = []
+
+    def refresh() -> None:
+        while not stop.wait(interval):
+            try:
+                lease.refresh()
+            except Exception as error:
+                errors.append(error)
+                stop.set()
+
+    thread = threading.Thread(target=refresh, name="distributed-lease-refresh", daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        thread.join()
+
+    if errors:
+        raise errors[0]
+    lease.refresh()
 
 
 # ---------------------------------------------------------------------------
