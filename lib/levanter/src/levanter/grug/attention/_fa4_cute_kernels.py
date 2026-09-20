@@ -835,12 +835,22 @@ def segmented_flash_attention_forward_launcher(
                     if cutlass.const_expr(self._has_rel_bias):
                         rel_extent = basic_params.mRelBias.shape[1]
                         delta = query_idx - key_idx
-                        if keep and cute.elem_less(delta, rel_extent):
-                            bias_val = basic_params.mRelBias[
-                                query_meta_idx, delta, basic_params.q_head, basic_params.batch_idx
-                            ]
-                            acc_S_mn[r, c] = acc_S_mn[r, c] + bias_val.to(cutlass.Float32) * (
-                                1.4426950408889634 / softmax_params.softmax_scale_log2
+                        # cute evaluates the GMEM load unconditionally, so clamp the gather index into
+                        # [0, rel_extent) (masked positions can have delta < 0); gate the actual add on
+                        # keep and 0 <= delta < rel_extent.
+                        delta_safe = cutlass.min(cutlass.max(delta, cutlass.Int32(0)), rel_extent - 1)
+                        bias_val = basic_params.mRelBias[
+                            query_meta_idx, delta_safe, basic_params.q_head, basic_params.batch_idx
+                        ]
+                        in_band = (
+                            keep and cute.elem_less(delta, rel_extent) and cute.elem_less(cutlass.Int32(-1), delta)
+                        )
+                        if in_band:
+                            acc_S_mn[r, c] = (
+                                acc_S_mn[r, c]
+                                + bias_val.to(cutlass.Float32)
+                                * cutlass.Float32(1.4426950408889634)
+                                / softmax_params.softmax_scale_log2
                             )
 
                 acc_S_row = acc_S_mn[r, None].load()

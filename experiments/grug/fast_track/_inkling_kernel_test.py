@@ -14,13 +14,13 @@ from levanter.grug.attention._fa4_cute import _segmented_kernel_config, _simple_
 from levanter.grug.attention._fa4_cute_backend import segmented_flash_attention_forward
 
 
-def _run(B, S, Hq, Hkv, D, L, sliding_window, seed=0):
+def _run(B, S, Hq, Hkv, D, L, sliding_window, seed=0, use_bias=True):
     key = jax.random.PRNGKey(seed)
     kq, kk, kv, ka = jax.random.split(key, 4)
     q = jax.random.normal(kq, (B, S, Hq, D), dtype=jnp.bfloat16)
     k = jax.random.normal(kk, (B, S, Hkv, D), dtype=jnp.bfloat16)
     v = jax.random.normal(kv, (B, S, Hkv, D), dtype=jnp.bfloat16)
-    A = (jax.random.normal(ka, (B, Hq, S, L), dtype=jnp.float32) * 0.5).astype(jnp.bfloat16)
+    A = (jax.random.normal(ka, (B, Hq, S, L), dtype=jnp.float32) * 0.5).astype(jnp.bfloat16) if use_bias else None
     scale = 1.0 / math.sqrt(D)
     lower_bounds, valid = _simple_causal_lower_bounds(batch_size=B, seq_len=S, sliding_window=sliding_window)
     cfg = _segmented_kernel_config(D)
@@ -35,7 +35,8 @@ def _run(B, S, Hq, Hkv, D, L, sliding_window, seed=0):
     rel = err / (float(np.max(np.abs(expected))) + 1e-6)
     print(
         f"[{B}x{S}x{Hq}/{Hkv}x{D} L={L} win={sliding_window}] max_abs={err:.4e} rel={rel:.4e} "
-        f"-> {'PASS' if err < 7e-2 else 'FAIL'}"
+        f"-> {'PASS' if err < 7e-2 else 'FAIL'}",
+        flush=True,
     )
     return err
 
@@ -44,7 +45,8 @@ def main():
     if jax.default_backend() != "gpu":
         print("SKIP: needs GPU backend")
         return
-    print("backend:", jax.default_backend(), "device:", jax.devices()[0])
+    print("backend:", jax.default_backend(), "device:", jax.devices()[0], flush=True)
+    _run(B=1, S=256, Hq=4, Hkv=1, D=128, L=64, sliding_window=None, use_bias=False)  # base kernel sanity
     _run(B=1, S=256, Hq=4, Hkv=1, D=128, L=64, sliding_window=None)
     _run(B=1, S=256, Hq=4, Hkv=1, D=128, L=128, sliding_window=128)
     _run(B=2, S=512, Hq=4, Hkv=1, D=128, L=256, sliding_window=None)
