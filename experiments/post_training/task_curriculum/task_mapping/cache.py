@@ -5,17 +5,17 @@
 
 from __future__ import annotations
 
-import hashlib
 import sqlite3
 from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager
 from pathlib import Path
 
 import numpy as np
+from rigging.cache import combined_content_hash
 
 
 def embedding_cache_key(text: str, model: str) -> str:
-    return hashlib.sha256("\0".join((text, model)).encode()).hexdigest()
+    return combined_content_hash((text, model))
 
 
 class EmbeddingCache(AbstractContextManager["EmbeddingCache"]):

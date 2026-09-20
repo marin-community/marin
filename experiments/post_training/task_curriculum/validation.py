@@ -51,23 +51,19 @@ def _accounting_ids(rows: list[EvidenceAccounting], label: str) -> set[str]:
     return set(item_ids)
 
 
-def _validate_identities(
-    curriculum: Curriculum,
-    blind_tasks: BlindTaskSet,
-    fit_review: BlindFitReview,
-    holistic_review: HolisticReview,
-) -> None:
+def _validate_identities(artifacts: SubjectRunArtifacts) -> None:
+    curriculum = artifacts.curriculum
     subject_ids = {
         curriculum.subject_id,
-        blind_tasks.subject_id,
-        fit_review.subject_id,
-        holistic_review.subject_id,
+        artifacts.blind_tasks.subject_id,
+        artifacts.fit_review.subject_id,
+        artifacts.holistic_review.subject_id,
     }
     if len(subject_ids) != 1:
         raise ValueError(f"subject IDs do not match: {sorted(subject_ids)}")
-    if holistic_review.curriculum_version != curriculum.version:
+    if artifacts.holistic_review.curriculum_version != curriculum.version:
         raise ValueError("holistic review curriculum version does not match")
-    if fit_review.curriculum_version != curriculum.version:
+    if artifacts.fit_review.curriculum_version != curriculum.version:
         raise ValueError("fit review curriculum version does not match")
     prefix = f"{curriculum.subject_id.lower()}."
     invalid_section_ids = [section.id for section in curriculum.sections if not section.id.startswith(prefix)]
@@ -90,26 +86,21 @@ def _validate_blind_sample(blind_tasks: BlindTaskSet, guidepost_ids: set[str]) -
         raise ValueError(f"guideposts need at least two blind tasks: {underrepresented}")
 
 
-def _validate_fit_references(
-    curriculum: Curriculum,
-    blind_tasks: BlindTaskSet,
-    fit_review: BlindFitReview,
-    gap_dispositions: list[SystematicGapDisposition],
-) -> None:
-    disposition_gaps = [disposition.gap for disposition in gap_dispositions]
+def _validate_fit_references(artifacts: SubjectRunArtifacts) -> None:
+    disposition_gaps = [disposition.gap for disposition in artifacts.gap_dispositions]
     if len(disposition_gaps) != len(set(disposition_gaps)):
         raise ValueError("systematic gap dispositions must be unique")
-    if set(disposition_gaps) != set(fit_review.systematic_gaps):
+    if set(disposition_gaps) != set(artifacts.fit_review.systematic_gaps):
         raise ValueError("systematic gap dispositions do not match the fit review")
 
-    task_ids = {task.id for task in blind_tasks.tasks}
-    fit_task_ids = {judgment.task_id for judgment in fit_review.judgments}
+    task_ids = {task.id for task in artifacts.blind_tasks.tasks}
+    fit_task_ids = {judgment.task_id for judgment in artifacts.fit_review.judgments}
     if fit_task_ids != task_ids:
         raise ValueError("fit judgment task IDs do not match the frozen blind task set")
 
-    capability_ids = {section.id for section in curriculum.capability_sections()}
+    capability_ids = {section.id for section in artifacts.curriculum.capability_sections()}
     fit_capability_ids = {
-        section_id for judgment in fit_review.judgments for section_id in judgment.acceptable_capability_ids
+        section_id for judgment in artifacts.fit_review.judgments for section_id in judgment.acceptable_capability_ids
     }
     unknown_fit_capabilities = fit_capability_ids - capability_ids
     if unknown_fit_capabilities:
@@ -188,19 +179,9 @@ def validate_subject_run(
     evidence_ids: SubjectEvidenceIds,
 ) -> None:
     """Validate references and accounting across one subject's artifacts."""
-    _validate_identities(
-        artifacts.curriculum,
-        artifacts.blind_tasks,
-        artifacts.fit_review,
-        artifacts.holistic_review,
-    )
+    _validate_identities(artifacts)
     _validate_blind_sample(artifacts.blind_tasks, set(evidence_ids.guideposts))
-    _validate_fit_references(
-        artifacts.curriculum,
-        artifacts.blind_tasks,
-        artifacts.fit_review,
-        list(artifacts.gap_dispositions),
-    )
+    _validate_fit_references(artifacts)
     _validate_review_accounting(
         artifacts.curriculum,
         artifacts.holistic_review,

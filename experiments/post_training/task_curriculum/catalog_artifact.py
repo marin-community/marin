@@ -8,14 +8,11 @@ import json
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.post_training.task_curriculum.models import CurriculumCatalog, SubjectInventory
 
 CATALOG_ARTIFACT_NAME = "post-training/task-curriculum/catalog"
-
-
-def _artifact_file_uri(root: str, filename: str) -> str:
-    return f"{root.rstrip('/')}/{filename}"
 
 
 def _artifact_bytes(uri: str) -> bytes:
@@ -28,8 +25,7 @@ class TaskCurriculumCatalogArtifact(Artifact):
 
     @property
     def catalog_uri(self) -> str:
-        """Return the catalog JSON location."""
-        return _artifact_file_uri(self.path, "curriculum.json")
+        return prefix_join(self.path, "curriculum.json")
 
     def read_catalog(self) -> CurriculumCatalog:
         """Load and validate the catalog from the artifact."""
@@ -41,8 +37,7 @@ class TaskCurriculumSubjectInventoryArtifact(Artifact):
 
     @property
     def inventory_uri(self) -> str:
-        """Return the subject inventory JSON location."""
-        return _artifact_file_uri(self.path, "subject_inventory.json")
+        return prefix_join(self.path, "subject_inventory.json")
 
     def read_inventory(self) -> SubjectInventory:
         """Load and validate the subject inventory from the artifact."""
