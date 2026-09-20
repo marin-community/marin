@@ -23,17 +23,17 @@ Test split is preferred; tasks without a test split fall back to
 validation, then training. Tasks that fail to load (e.g. removed from
 lm-eval since our pinned commit, gated HF datasets) are logged and skipped.
 
-Submit on a CPU Iris cluster with lm-eval-harness installed in the worker
-environment. Marin does not package lm-eval-harness because its dependency
-graph includes NLTK, which has an unpatched security advisory:
+Submit on a CPU Iris cluster. The ``lm_eval`` extra supplies the optional
+lm-eval-harness package:
 
     uv run iris --cluster=cw-rno2a job run --no-wait \\
-        --extra=cpu --priority interactive \\
+        --extra=cpu --extra=lm_eval --priority interactive \\
         --memory 16GB --cpu 2 --enable-extra-resources \\
         -e MARIN_PREFIX s3://marin-us-east-02a/marin \\
         -- python experiments/datakit/decontam/prepare_eval_corpus.py
 
-The script monkey-patches ``datasets.load_dataset`` to force
+The Iris worker installs lm-eval through the Levanter ``lm_eval`` extra. The
+script monkey-patches ``datasets.load_dataset`` to force
 ``trust_remote_code=True`` and sets ``HF_ALLOW_CODE_EVAL=1`` before
 loading any task, so tasks shipping custom HF loading scripts (logiqa,
 piqa, ethics_*, crows_pairs_*, ...) and humaneval load without per-task
