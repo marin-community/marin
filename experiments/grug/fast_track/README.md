@@ -29,6 +29,16 @@ below from 9e16 to 4.2e19 FLOPs.
 | d1024 | moe   | 60 | 256 | 162.0M |  3.75B |  9,270 | 9.72B | 1.4e19 | 13.9% | 2.633 | 1.096 | 0.793 | 3.8 hr |
 | d1280 | moe   | 60 | 256 | 291.3M |  6.81B | 16,669 | 17.5B | 4.2e19 | 15.4% | 2.504 | 1.044 | 0.741 | 10.0 hr |
 
+W&B runs (project `marin-community/marin_moe`) —
+dense: [d512](https://wandb.ai/marin-community/marin_moe/runs/fasttrack-dense-d512) ·
+[d768](https://wandb.ai/marin-community/marin_moe/runs/fasttrack-dense-d768) ·
+[d1024](https://wandb.ai/marin-community/marin_moe/runs/fasttrack-dense-d1024) ·
+[d1280](https://wandb.ai/marin-community/marin_moe/runs/fasttrack-dense-d1280) —
+moe: [d512](https://wandb.ai/marin-community/marin_moe/runs/fasttrack-moe-d512) ·
+[d768](https://wandb.ai/marin-community/marin_moe/runs/fasttrack-moe-d768) ·
+[d1024](https://wandb.ai/marin-community/marin_moe/runs/fasttrack-moe-d1024) ·
+[d1280](https://wandb.ai/marin-community/marin_moe/runs/fasttrack-moe-d1280)
+
 ## Tokenizer impact (16k vs 128k)
 
 Same MoE geometry and token budget, swapping the 16k BPE tokenizer for the 128k Marin (llama3-family)
