@@ -1,0 +1,79 @@
+{
+  "type": "table",
+  "title": "Run triage",
+  "description": "Query health and selected-range server count evidence. The finish count uses request_success_total, excluding separate failure and timeout counters. A gap can occur in partial windows and does not identify client or proxy failures.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "noValue": "Run triage unavailable"
+    },
+    "overrides": []
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "type": "json",
+      "source": "url",
+      "format": "table",
+      "parser": "backend",
+      "url": "/v1/vllm/overview",
+      "url_options": {
+        "method": "GET",
+        "params": [
+          {
+            "key": "identity_kind",
+            "value": "${identity_kind}"
+          },
+          {
+            "key": "identity",
+            "value": "${identity}"
+          },
+          {
+            "key": "identity_override",
+            "value": "${identity_override}"
+          },
+          {
+            "key": "from",
+            "value": "${__from}"
+          },
+          {
+            "key": "to",
+            "value": "${__to}"
+          },
+          {
+            "key": "bucket_ms",
+            "value": "15000"
+          },
+          {
+            "key": "view",
+            "value": "diagnostic_status"
+          }
+        ]
+      },
+      "columns": [
+        {
+          "selector": "metric",
+          "text": "area",
+          "type": "string"
+        },
+        {
+          "selector": "status",
+          "text": "state",
+          "type": "string"
+        },
+        {
+          "selector": "series",
+          "text": "observation / next step",
+          "type": "string"
+        }
+      ]
+    }
+  ],
+  "options": {
+    "showHeader": true,
+    "cellHeight": "sm"
+  }
+}

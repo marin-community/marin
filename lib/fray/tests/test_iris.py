@@ -37,6 +37,7 @@ from iris.cluster.constraints import ConstraintOp
 from iris.cluster.types import Entrypoint as IrisEntrypoint
 from iris.cluster.types import JobName, ResourceSpec, gpu_device
 from iris.resources.state import JobState as IrisJobState
+from rigging.timing import Duration
 
 
 class TestConvertConstraints:
@@ -303,8 +304,8 @@ class TestImagePlumbing:
         kwargs = fake_iris.submit.call_args.kwargs
         assert kwargs["task_image"] is None
 
-    def test_submit_job_passes_task_image_to_iris(self):
-        """resources.image on a top-level job request reaches iris.submit()."""
+    def test_submit_job_passes_request_options_to_iris(self):
+        """Top-level job options reach iris.submit()."""
         fake_iris = MagicMock()
         fake_iris.submit.return_value = MagicMock(job_id="job-456")
         client = FrayIrisClient.from_iris_client(fake_iris)
@@ -316,11 +317,13 @@ class TestImagePlumbing:
             name="test-job",
             entrypoint=Entrypoint.from_callable(_noop),
             resources=ResourceConfig(cpu=1, ram="2g", image="custom/swetrace:dev"),
+            timeout=Duration.from_minutes(30),
         )
         client.submit(request)
 
         kwargs = fake_iris.submit.call_args.kwargs
         assert kwargs["task_image"] == "custom/swetrace:dev"
+        assert kwargs["timeout"] == Duration.from_minutes(30)
 
 
 class TestActorGroupEnvironment:

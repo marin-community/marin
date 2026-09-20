@@ -87,6 +87,7 @@ jobs:
         run: |
           uv run python scripts/ops/storage/generate_report.py \
             --cluster marin \
+            --job-timeout 21600 \
             --gist secret \
             --discord internal-discuss \
             ${{ inputs.workers && format('--workers {0}', inputs.workers) || '' }} \

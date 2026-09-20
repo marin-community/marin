@@ -4,9 +4,11 @@
 """Bounded compatibility query for legacy and bundled vLLM histograms."""
 
 from vllm_observability import (
+    _HISTOGRAM_BOUND_ORDER_SQL,
     _HISTOGRAM_FAMILIES,
     _HISTOGRAM_NAMES,
     VLLM_HISTOGRAM_COHERENCE_MS,
+    VLLM_MAX_FRESHNESS_DETAILS,
     VLLM_MAX_RESULT_ROWS,
     VLLM_SNAPSHOT_LOOKBACK_MS,
     VllmOverviewQuery,
@@ -14,8 +16,8 @@ from vllm_observability import (
     _histogram_component_mapping,
     _histogram_name_mapping,
     _histogram_source_mapping,
-    _sql_values,
     sql_string,
+    sql_values,
 )
 
 VLLM_HISTOGRAM_BUNDLE_NAME = "vllm_histogram_bundle"
@@ -54,7 +56,7 @@ def _time_output_sql(start_ms: int, bucket_ms: int) -> str:
 
 
 def _summary_output_sql() -> str:
-    return """histogram_components AS (
+    return f"""histogram_components AS (
     SELECT family, component, upper_bound, SUM(delta) AS component_total
     FROM coherent_histogram_increments
     GROUP BY 1, 2, 3
@@ -93,6 +95,28 @@ def _summary_output_sql() -> str:
                THEN CAST(upper_bound AS DOUBLE)
            END) OVER (PARTITION BY family) AS p99
     FROM histogram_rollup
+), output_length_distribution AS (
+    SELECT upper_bound,
+           component_total - COALESCE(
+               LAG(component_total) OVER (ORDER BY {_HISTOGRAM_BOUND_ORDER_SQL}),
+               0
+           ) AS value,
+           total_bucket_count
+    FROM histogram_stats
+    WHERE family = 'output_tokens'
+      AND component = 'bucket'
+), engine_itl AS (
+    SELECT producer_identity || ' @ ' || origin_cluster || ':' || service || ':' || resource_attributes_json AS series,
+           SUM(CASE WHEN component = 'sum' THEN delta ELSE 0 END)
+               / NULLIF(SUM(CASE WHEN component = 'count' THEN delta ELSE 0 END), 0) AS value,
+           SUM(CASE WHEN component = 'count' THEN delta ELSE 0 END) AS samples
+    FROM coherent_histogram_increments
+    WHERE family = 'inter_token_latency'
+    GROUP BY 1
+    HAVING SUM(CASE WHEN component = 'count' THEN delta ELSE 0 END) > 0
+), ranked_engine_itl AS (
+    SELECT *, ROW_NUMBER() OVER (ORDER BY series) AS producer_rank
+    FROM engine_itl
 ), output AS (
     SELECT CAST(NULL AS BIGINT) AS t,
            CASE WHEN family = 'output_tokens' THEN 'workload' ELSE 'latency' END AS section,
@@ -114,6 +138,35 @@ def _summary_output_sql() -> str:
     WHERE family_rank = 1
       AND family <> 'iteration_tokens'
       AND samples > 0
+
+    UNION ALL
+
+    SELECT CAST(NULL AS BIGINT) AS t,
+           'output_length_distribution' AS section,
+           'output_tokens' AS metric,
+           'interval_count' AS stat,
+           upper_bound AS series,
+           value AS value,
+           'requests' AS unit,
+           CAST(NULL AS VARCHAR) AS status,
+           CAST(total_bucket_count AS BIGINT) AS samples,
+           CAST(NULL AS DOUBLE) AS gap_seconds
+    FROM output_length_distribution
+
+    UNION ALL
+
+    SELECT CAST(NULL AS BIGINT) AS t,
+           'engine_summary' AS section,
+           'inter_token_latency_mean' AS metric,
+           'observed' AS stat,
+           series AS series,
+           value AS value,
+           's' AS unit,
+           CAST(NULL AS VARCHAR) AS status,
+           CAST(samples AS BIGINT) AS samples,
+           CAST(NULL AS DOUBLE) AS gap_seconds
+    FROM ranked_engine_itl
+    WHERE producer_rank <= {VLLM_MAX_FRESHNESS_DETAILS}
 )"""
 
 
@@ -129,7 +182,7 @@ def _vllm_histogram_overview_query(
     bucket_ms = overview.bucket_ms
     scan_start_ms = max(0, start_ms - VLLM_SNAPSHOT_LOOKBACK_MS)
     identity_literal = sql_string(identity)
-    histogram_names = _sql_values(_HISTOGRAM_NAMES)
+    histogram_names = sql_values(_HISTOGRAM_NAMES)
     histogram_family = _case_for(_histogram_name_mapping(), "name")
     histogram_component = _case_for(_histogram_component_mapping(), "name")
     histogram_source_family = _case_for(_histogram_source_mapping(), "name")
@@ -172,6 +225,7 @@ WITH legacy_base AS (
     SELECT COALESCE(NULLIF(cluster, ''), 'local') AS origin_cluster,
            service,
            resource_attributes_json,
+           COALESCE(json_get(attributes_json, 'engine'), resource_attributes_json) AS producer_identity,
            timestamp_ms,
            json_get(attributes_json, 'histogram_publication_id') AS publication_id,
            json_get(body_json, 'delta_family_names_pipe') AS delta_family_names_pipe,
@@ -202,6 +256,10 @@ WITH legacy_base AS (
     WHERE delta_component_values_pipe IS NOT NULL
 ), structured_components AS (
     SELECT timestamp_ms,
+           origin_cluster,
+           service,
+           resource_attributes_json,
+           producer_identity,
            delta_family_names_pipe,
            UNNEST(string_to_array(delta_family_indexes_pipe, {sql_string(VLLM_HISTOGRAM_QUERY_DELIMITER)}))
                AS family_index,
@@ -222,6 +280,10 @@ WITH legacy_base AS (
     FROM structured_components
 ), structured_coherent AS (
     SELECT timestamp_ms - timestamp_ms % {VLLM_HISTOGRAM_COHERENCE_MS} AS sample_t,
+           origin_cluster,
+           service,
+           resource_attributes_json,
+           producer_identity,
            {structured_family} AS family,
            component,
            CASE WHEN component = 'bucket' THEN component_bound END AS upper_bound,
@@ -342,6 +404,10 @@ WITH legacy_base AS (
     GROUP BY 1, 2, 3, 4, 5, 6, 7, 8
 ), legacy_coherent AS (
     SELECT samples.sample_t,
+           samples.origin_cluster,
+           samples.service,
+           samples.resource_attributes_json,
+           samples.producer_identity,
            samples.family,
            samples.component,
            samples.upper_bound,
@@ -366,11 +432,19 @@ WITH legacy_base AS (
 ), {output_sql}
 SELECT t, section, metric, stat, series, value, unit, status, samples, gap_seconds
 FROM output
-ORDER BY section, t, metric, stat, series
+ORDER BY section,
+         t,
+         metric,
+         stat,
+         CASE WHEN section = 'output_length_distribution'
+              THEN {_HISTOGRAM_BOUND_ORDER_SQL.replace('upper_bound', 'series')}
+              ELSE 0 END,
+         series
 LIMIT {VLLM_MAX_RESULT_ROWS + 1}
 """.strip()
     return VllmOverviewQuery(
         sql=sql,
+        samples_sql="",
         identity_field=identity_field,
         identity=identity,
         start_ms=start_ms,

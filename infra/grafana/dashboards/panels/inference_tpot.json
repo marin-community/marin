@@ -10,7 +10,7 @@
     "defaults": {
       "unit": "s",
       "min": 0,
-      "noValue": "No samples",
+      "noValue": "See query status above",
       "displayName": "${__field.labels.series}",
       "custom": {
         "drawStyle": "line",
@@ -51,6 +51,10 @@
             "value": "${identity}"
           },
           {
+            "key": "identity_override",
+            "value": "${identity_override}"
+          },
+          {
             "key": "from",
             "value": "${__from}"
           },
@@ -60,7 +64,7 @@
           },
           {
             "key": "bucket_ms",
-            "value": "${__interval_ms}"
+            "value": "15000"
           },
           {
             "key": "view",

@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -10,6 +9,7 @@ import duckdb
 import pytest
 from conftest import queried_namespace
 from dashboard_stitch import stitch_all
+from rl_observability import recent_rl_runs_dataset, rl_overview_dataset
 from rl_producers import RL_PRODUCER_NAMESPACES, collect_producers, producers_query
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -55,6 +55,7 @@ def _row(
     run_id: str | None = None,
     job_id: str | None = None,
     node_name: str | None = None,
+    execution_uid: str = "iris:/atqamar/snowball-e6-muonh-0-attempt-0/0:attempt:0",
     role: str = "",
     attributes: dict[str, str] | None = None,
 ) -> tuple:
@@ -64,7 +65,7 @@ def _row(
         service,
         run_id,
         job_id,
-        "iris:/atqamar/snowball-e6-muonh-0-attempt-0/0:attempt:0",
+        execution_uid,
         node_name,
         # Production stamps no process_index: it is NULL on every row of a real capture, so the
         # counter windows have to separate replicas without it.
@@ -366,19 +367,12 @@ def _in_window(sql: str) -> str:
 
 
 def _panel_sql(title: str) -> str:
-    """One panel's shipped SQL, with Grafana's macros resolved to this window."""
-    dashboard = stitch_all(DASHBOARDS, DASHBOARDS / "panels")["rl_runs.json"]
-    panels = {panel["title"]: panel for panel in dashboard["panels"]}
-    (parameter,) = [param for param in panels[title]["targets"][0]["url_options"]["params"] if param["key"] == "sql"]
-    sql = parameter["value"]
-    sql = _in_window(sql)
-    sql = sql.replace("${__interval_ms} milliseconds", "5 minutes")
-    # A rate panel divides by the bucket width, so the macro also appears on its own.
-    sql = sql.replace("${__interval_ms}", str(5 * 60 * 1000))
-    sql = sql.replace("${cluster:sqlstring}", f"'{CLUSTER}'")
-    sql = sql.replace("${run:sqlstring}", f"'{RUN_ID}'")
-    assert not re.search(r"\$\{|\{\{", sql), sql
-    return sql
+    dataset = rl_overview_dataset((CLUSTER,), RUN_ID, _WINDOW_START_MS, _NOW_MS, 5 * 60 * 1000)
+    sources = ",\n".join(f"{source.name} AS ({source.sql})" for source in dataset.sources)
+    (panel,) = [panel for panel in _dashboard()["panels"] if panel.get("title") == title]
+    (target,) = [target for target in panel["targets"] if target.get("url") == "/v1/rl/overview"]
+    (view,) = [param["value"] for param in target["url_options"]["params"] if param["key"] == "view"]
+    return f"WITH {sources}\n{dataset.views[view]}"
 
 
 def test_the_run_variable_offers_a_run_the_trainer_reported(store) -> None:
@@ -413,6 +407,63 @@ def test_the_trainer_panels_render_for_that_run(store) -> None:
     # than doubling. 6e9 used over 8e9 total.
     occupancy = store.execute(_panel_sql("Ray object store occupancy · needs the Ray collector")).fetchall()
     assert [row[1] for row in occupancy] == [pytest.approx(0.75)] * 6
+
+
+def test_percentile_panels_compute_over_all_executions_in_each_bucket(store) -> None:
+    moment = WINDOW_START
+    timestamp_ms = _millis(moment)
+    store.execute(
+        'DELETE FROM "telemetry_v1.marinskyrl" '
+        "WHERE timestamp_ms = ? AND name IN ('phase_duration_seconds', 'rollout_staleness_steps')",
+        [timestamp_ms],
+    )
+    rows = []
+    grouped_values = (("attempt-a", (0.0, 100.0)), ("attempt-b", (10.0, 10.0, 10.0, 10.0, 10.0)))
+    for execution_uid, values in grouped_values:
+        for seq, value in enumerate(values):
+            rows.append(
+                _row(
+                    service="marinskyrl",
+                    name="rollout_staleness_steps",
+                    value=value,
+                    moment=moment,
+                    seq=seq,
+                    run_id=RUN_ID,
+                    execution_uid=execution_uid,
+                )
+            )
+            rows.append(
+                _row(
+                    service="marinskyrl",
+                    name="phase_duration_seconds",
+                    value=value,
+                    moment=moment,
+                    seq=seq,
+                    run_id=RUN_ID,
+                    execution_uid=execution_uid,
+                    attributes={
+                        "phase": "rollout_or_inference_wait",
+                        "clock_domain": "critical_path",
+                        "outcome": "success",
+                    },
+                )
+            )
+    store.executemany(f'INSERT INTO "telemetry_v1.marinskyrl" VALUES ({", ".join("?" for _ in _COLUMNS)})', rows)
+    expected_p50, expected_p99 = store.execute(
+        "SELECT quantile_cont(value, 0.5), quantile_cont(value, 0.99) "
+        'FROM "telemetry_v1.marinskyrl" '
+        "WHERE timestamp_ms = ? AND name = 'rollout_staleness_steps'",
+        [timestamp_ms],
+    ).fetchone()
+
+    staleness = store.execute(_panel_sql("Off-policy staleness (optimizer steps behind) · async runs only")).fetchall()
+    first_bucket = min(row[0] for row in staleness)
+    first_staleness = {row[1]: row[2] for row in staleness if row[0] == first_bucket}
+    straggler = store.execute(_panel_sql("Straggler proxy: rollout wait p99 ÷ p50")).fetchall()
+    first_straggler = next(row[2] for row in straggler if row[0] == first_bucket)
+
+    assert first_staleness == {"p50": pytest.approx(expected_p50), "p99": pytest.approx(expected_p99)}
+    assert first_straggler == pytest.approx(expected_p99 / expected_p50)
 
 
 def test_the_node_agent_joins_through_node_name_without_a_run_id(store) -> None:
@@ -502,27 +553,7 @@ def test_the_census_quotes_a_run_id_carrying_an_apostrophe() -> None:
     assert len(database.execute(sql).fetchall()) == 1
 
 
-def _projected_columns(sql: str) -> set[str]:
-    # Grafana reads the columns the outermost SELECT returns. The last SELECT in the text can sit
-    # inside a subquery, and a derived table's alias is not a column, so scan at parenthesis depth
-    # zero and keep only the projection list. CAST target types are spelled in caps.
-    depth = 0
-    start = end = None
-    for match in re.finditer(r"[()]|\bSELECT\b|\bFROM\b", sql):
-        token = match.group().upper()
-        if token == "(":
-            depth += 1
-        elif token == ")":
-            depth -= 1
-        elif depth == 0 and token == "SELECT":
-            start, end = match.end(), None
-        elif depth == 0 and token == "FROM" and start is not None and end is None:
-            end = match.start()
-    projection = sql[start:end]
-    return {alias for alias in re.findall(r"\bAS (\w+)", projection) if not alias.isupper()}
-
-
-def test_every_timeseries_panel_declares_the_columns_its_sql_returns() -> None:
+def test_every_timeseries_panel_declares_the_columns_its_projection_returns(store) -> None:
     """A panel is read through its declared columns, so executing its SQL cannot see a mistake there."""
     dashboard = stitch_all(DASHBOARDS, DASHBOARDS / "panels")["rl_runs.json"]
 
@@ -530,9 +561,9 @@ def test_every_timeseries_panel_declares_the_columns_its_sql_returns() -> None:
         if panel.get("type") != "timeseries":
             continue
         for target in panel["targets"]:
-            (parameter,) = [param for param in target["url_options"]["params"] if param["key"] == "sql"]
-            selected = _projected_columns(parameter["value"])
             declared = {column["selector"]: column["type"] for column in target["columns"]}
+            store.execute(_panel_sql(panel["title"]))
+            selected = {column[0] for column in store.description}
 
             assert (
                 set(declared) == selected
@@ -630,22 +661,14 @@ def test_every_labelled_series_panel_names_the_series_without_its_column() -> No
     for panel in _dashboard()["panels"]:
         if panel.get("type") != "timeseries":
             continue
-        sql = "".join(
-            param["value"]
-            for target in panel.get("targets", [])
-            for param in target.get("url_options", {}).get("params", [])
-            if param["key"] == "sql"
-        )
-        if "AS series" not in sql:
+        if "series" not in {column["selector"] for target in panel.get("targets", []) for column in target["columns"]}:
             continue
         assert panel["fieldConfig"]["defaults"].get("displayName") == "${__field.labels.series}", panel["title"]
 
 
 def _recent_runs_sql() -> str:
-    (sql,) = [
-        param["value"] for param in _recent_runs_panel()["targets"][0]["url_options"]["params"] if param["key"] == "sql"
-    ]
-    return _in_window(sql)
+    dataset = recent_rl_runs_dataset(_WINDOW_START_MS, _NOW_MS)
+    return f"WITH recent AS ({dataset.sources[0].sql})\n{dataset.views['recent']}"
 
 
 def _recent_runs_panel() -> dict:
