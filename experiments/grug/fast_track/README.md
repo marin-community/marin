@@ -63,15 +63,8 @@ the irreducible floor pinned at **L∞ = 1.2**:
 
 ![Paloma scaling law](scaling_law.png)
 
-With a shared floor the two exponents are essentially identical (α ≈ 0.084 for both), so dense and MoE
-scale **in parallel** and the gap is a constant amplitude offset (A: 64.5 dense vs 56.8 MoE).
 **Compute efficiency:** the MoE recipe (60 TPP) reaches the same Paloma loss as the compute-optimal
-dense recipe (20 TPP) with **~4.3× less compute, roughly constant across the ladder** (parallel lines,
-so the multiple does not widen with scale). This is a recipe-vs-recipe comparison — dense at its
-compute-optimal 20 TPP, MoE at 60 TPP — so it bundles the architecture gain with the 3× longer MoE
-token schedule and is not an iso-TPP architecture measurement. Caveat: with the floor fixed, two free
-parameters (A, α) fit four points; trust α and the ordering, not the L∞ value or extrapolations far
-past ~5e19 FLOPs.
+dense recipe (20 TPP) with **~4.3× less compute**.
 
 ## Launch commands
 
