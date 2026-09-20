@@ -39,6 +39,14 @@ class QueryRecord:
     error: str | None = None
 
 
+@dataclass(frozen=True)
+class PanelRequest:
+    title: str
+    path: str
+    view: str
+    bucket_ms: str
+
+
 class RecordingSource:
     """Record actual Finelog calls made by the bridge, including shared failures."""
 
@@ -118,22 +126,27 @@ def selector_params(dashboard: dict, params: dict[str, str | int]) -> dict[str, 
     return result
 
 
-def panel_requests(dashboard: dict) -> list[tuple[str, str, str]]:
+def panel_requests(dashboard: dict) -> list[PanelRequest]:
     requests = []
     for panel in dashboard["panels"]:
         for target in panel.get("targets", []):
-            view = next(param["value"] for param in target["url_options"]["params"] if param["key"] == "view")
-            requests.append((panel["title"], target["url"], view))
+            target_params = {param["key"]: param["value"] for param in target["url_options"]["params"]}
+            requests.append(
+                PanelRequest(panel["title"], target["url"], target_params["view"], target_params["bucket_ms"])
+            )
     return requests
 
 
-def fetch_panel(client: TestClient, params: dict[str, str | int], request: tuple[str, str, str]) -> dict:
-    title, path, view = request
+def fetch_panel(client: TestClient, params: dict[str, str | int], request: PanelRequest) -> dict:
+    bucket_ms = int(params["bucket_ms"]) if request.bucket_ms == "${__interval_ms}" else int(request.bucket_ms)
     started = time.monotonic()
-    response = client.get(f"/finelog/{FINELOG_CLUSTER}{path}", params={**params, "view": view})
+    response = client.get(
+        f"/finelog/{FINELOG_CLUSTER}{request.path}", params={**params, "view": request.view, "bucket_ms": bucket_ms}
+    )
     return {
-        "title": title,
-        "view": view,
+        "title": request.title,
+        "view": request.view,
+        "bucket_ms": bucket_ms,
         "status": response.status_code,
         "seconds": time.monotonic() - started,
         "rows": response.json() if response.status_code == 200 else response.text,

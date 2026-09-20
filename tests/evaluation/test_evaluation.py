@@ -51,6 +51,7 @@ from marin.evaluation.runner import (
 )
 from marin.evaluation.serving_config import inference_config_for_model
 from marin.external_dependencies import EVALCHEMY
+from marin.inference.config import EffectiveServing
 from marin.inference.iris import RemoteInferenceSession
 from marin.inference.types import OpenAIEndpoint, RunningModel
 from rigging.filesystem.storage_path import StoragePath
@@ -283,6 +284,7 @@ def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp
     records = tmp_path / "records"
     endpoint = "https://iris.example/proxy/t/token/inference/v1"
     session = _remote_session(endpoint)
+    session = replace(session, effective_serving=EffectiveServing(2, 1, 1, 1, 4096))
     batch = EvaluationBatch(
         group_id="group",
         user="tester",
@@ -319,6 +321,11 @@ def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp
     assert failed.log_tails == {"eval": ("failure detail",)}
     assert succeeded.status is RunStatus.SUCCEEDED
     assert succeeded.metrics == {"task": {"accuracy": 0.75}}
+    assert succeeded.serving is not None
+    assert succeeded.serving.effective
+    assert succeeded.serving.tensor_parallel_size == 2
+    assert succeeded.serving.max_model_len == 4096
+    assert failed.serving == succeeded.serving
     assert succeeded.provenance.eval_runtime == "test-runtime"
     assert succeeded.model.config is not None
     assert succeeded.model.config.model_dump(mode="json") == json.loads(json.dumps(asdict(batch.model)))

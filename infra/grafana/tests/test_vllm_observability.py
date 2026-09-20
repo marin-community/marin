@@ -10,10 +10,13 @@ import pyarrow as pa
 import pytest
 from config import ClusterTarget
 from conftest import bridge_config
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from dashboard_stitch import stitch_all
+from finelog.errors import StatsError
 from server import create_app
 from starlette.testclient import TestClient
-from vllm_observability import VLLM_OVERVIEW_SECTIONS
+from vllm_observability import VLLM_DETAIL_MAX_WINDOW_MS, VLLM_OVERVIEW_SECTIONS
 
 
 @pytest.mark.parametrize("filename", ["inference.json", "inference_overview.json"])
@@ -27,7 +30,8 @@ def test_inference_identity_selector_reads_request_state_rows(filename: str) -> 
     database.execute(
         """INSERT INTO "telemetry_v1.vllm" VALUES
            ('vllm', '/serve', 'serve-run', 'serve-execution', 1000, 'num_requests_running', '{}'),
-           ('vllm', '/metric-only', 'metric-run', 'metric-execution', 2000, 'generation_tokens_total', '{}')"""
+           ('vllm', '/metric-only', 'metric-run', 'metric-execution', 2000, 'generation_tokens_total', '{}'),
+           ('vllm', '/later', 'later-run', 'later-execution', 28800000, 'num_requests_running', '{}')"""
     )
     database.execute(
         """INSERT INTO "telemetry_v1.marinskyrl" VALUES
@@ -40,28 +44,35 @@ def test_inference_identity_selector_reads_request_state_rows(filename: str) -> 
     sql = next(
         item["value"] for item in variable["query"]["infinityQuery"]["url_options"]["params"] if item["key"] == "sql"
     )
-    sql = (
-        sql.replace("${identity_kind}", "job_id")
-        .replace("{{from}}", "TIMESTAMP '1970-01-01 00:00:00'")
-        .replace("{{to}}", "TIMESTAMP '1970-01-01 00:04:00'")
+    sql = sql.replace("${identity_kind}", "job_id")
+    short_sql = sql.replace("{{from}}", "TIMESTAMP '1970-01-01 00:00:00'").replace(
+        "{{to}}", "TIMESTAMP '1970-01-01 00:04:00'"
+    )
+    long_sql = sql.replace("{{from}}", "TIMESTAMP '1970-01-01 00:00:00'").replace(
+        "{{to}}", "TIMESTAMP '1970-01-01 09:00:00'"
     )
 
-    assert database.execute(sql).fetchall() == [("/serve",), ("/train",)]
+    assert database.execute(short_sql).fetchall() == [("/serve",), ("/train",)]
+    assert database.execute(long_sql).fetchall() == [("/serve",), ("/train",)]
 
 
-def _embedded_overview_app(invalid_histogram):
+def _vllm_projection_database():
     database = duckdb.connect()
     columns = """cluster VARCHAR, service VARCHAR, job_id VARCHAR, name VARCHAR, kind VARCHAR,
         value DOUBLE, resource_attributes_json VARCHAR, attributes_json VARCHAR, timestamp_ms BIGINT, seq BIGINT"""
-    database.execute(f'CREATE TABLE "telemetry_v1.marinskyrl"({columns})')
-    database.execute(f'CREATE TABLE "telemetry_v1.vllm"({columns})')
+    for table in ("telemetry_v1.marinskyrl", "telemetry_v1.vllm"):
+        database.execute(f'CREATE TABLE "{table}"({columns})')
     database.execute("CREATE MACRO json_get(d, f) AS json_extract_string(d, concat('$.', f))")
-
     # Finelog and DuckDB name the same struct constructor differently.
     database.execute(
         """CREATE MACRO named_struct(k1, v1, k2, v2, k3, v3)
                      AS struct_pack(timestamp_ms := v1, seq := v2, value := v3)"""
     )
+    return database
+
+
+def _embedded_overview_app(invalid_histogram):
+    database = _vllm_projection_database()
 
     def sample(name, value, timestamp, **labels):
         attributes = {"metric_source": "vllm", "engine": "physical-a", "engine_index": "0", **labels}
@@ -158,8 +169,12 @@ def _assert_dashboard_panels(client, dashboards, params):
     for filename in ("inference.json", "inference_overview.json"):
         for panel in dashboards[filename]["panels"]:
             for target in panel.get("targets", []):
-                view = next(param["value"] for param in target["url_options"]["params"] if param["key"] == "view")
-                result = client.get(f"/finelog/marin{target['url']}", params={**params, "view": view})
+                target_params = {param["key"]: param["value"] for param in target["url_options"]["params"]}
+                view = target_params["view"]
+                result = client.get(
+                    f"/finelog/marin{target['url']}",
+                    params={**params, "view": view, "bucket_ms": target_params["bucket_ms"]},
+                )
                 assert result.status_code == 200, panel["title"]
                 for row in result.json():
                     assert row["section"] == view
@@ -167,7 +182,8 @@ def _assert_dashboard_panels(client, dashboards, params):
 
 
 def _assert_overview_rows(rows, invalid_histogram):
-    assert {row["section"] for row in rows} == VLLM_OVERVIEW_SECTIONS
+    assert {row["section"] for row in rows} == VLLM_OVERVIEW_SECTIONS - {"run_timeline"}
+    assert [row["status"] for row in rows if row["section"] == "diagnostic_status"] == ["detail", "no_conclusion"]
     values = {(row["section"], row["metric"], row["stat"], row["series"], row["t"]): row["value"] for row in rows}
     assert values[("request_outcome", "requests", "total", "stop", None)] == 1
     assert (
@@ -223,8 +239,11 @@ def test_dashboard_vllm_overview_end_to_end(invalid_histogram):
         saturation = client.get(f"/finelog/marin{path}", params={**params, "view": "saturation"})
         all_rows = client.get(f"/finelog/marin{path}", params=params)
         _assert_dashboard_panels(client, dashboards, params)
+        long_params = {**params, "to": VLLM_DETAIL_MAX_WINDOW_MS + 15_000}
+        long_summary = client.get(f"/finelog/marin{path}", params={**long_params, "view": "run_summary"})
+        _assert_dashboard_panels(client, dashboards, long_params)
 
-    assert len(queries) == 1  # One external scan serves both pages and all their panels.
+    assert len(queries) == 2  # One external query per range serves both pages and all panels.
     assert response.status_code == 200
     assert saturation.status_code == 200
     assert all_rows.status_code == 200
@@ -239,19 +258,16 @@ def test_dashboard_vllm_overview_end_to_end(invalid_histogram):
         ("prompt_tokens", 30_000): 2,
     }
     _assert_overview_rows(all_rows.json(), invalid_histogram)
+    summary_rows = long_summary.json()
+    assert [row["value"] for row in summary_rows if row["metric"] == "generated_tokens"] == [300]
+    if invalid_histogram == "missing_component":
+        assert not any(row["metric"] == "inter_token_latency" for row in summary_rows)
+    else:
+        assert [row["value"] for row in summary_rows if row["metric"] == "inter_token_latency"] == [0.02]
 
 
 def _standalone_overview_app():
-    database = duckdb.connect()
-    columns = """cluster VARCHAR, service VARCHAR, job_id VARCHAR, name VARCHAR, kind VARCHAR,
-        value DOUBLE, resource_attributes_json VARCHAR, attributes_json VARCHAR, timestamp_ms BIGINT, seq BIGINT"""
-    for table in ("telemetry_v1.marinskyrl", "telemetry_v1.vllm"):
-        database.execute(f'CREATE TABLE "{table}"({columns})')
-    database.execute("CREATE MACRO json_get(d, f) AS json_extract_string(d, concat('$.', f))")
-    database.execute(
-        """CREATE MACRO named_struct(k1, v1, k2, v2, k3, v3)
-                     AS struct_pack(timestamp_ms := v1, seq := v2, value := v3)"""
-    )
+    database = _vllm_projection_database()
     for cluster, values in (("cw-a", (100, 250, 10)), ("cw-b", (100, 160, 220))):
         for timestamp, value in zip((0, 60_000, 120_000), values, strict=True):
             database.execute(
@@ -288,10 +304,15 @@ def standalone_overview_client():
 def test_standalone_reset_window_change(standalone_overview_client):
     params = {"identity_kind": "job_id", "identity": "/serve", "from": 60_000, "to": 120_000, "bucket_ms": 15_000}
     first = standalone_overview_client.get("/finelog/marin/v1/vllm/overview", params=params)
+    manual = standalone_overview_client.get(
+        "/finelog/marin/v1/vllm/overview",
+        params={**params, "identity": "/absent", "identity_override": "/serve", "view": "token_rate"},
+    )
     reset = standalone_overview_client.get(
         "/finelog/marin/v1/vllm/overview", params={**params, "from": 120_000, "to": 180_000}
     )
-    assert first.status_code == reset.status_code == 200
+    assert first.status_code == manual.status_code == reset.status_code == 200
+    assert manual.json() == [row for row in first.json() if row["section"] == "token_rate"]
     _assert_standalone_rows(first.json(), 3.5)
     _assert_standalone_rows(reset.json(), 1.0)
 
@@ -302,7 +323,98 @@ def test_standalone_absent_identity(standalone_overview_client):
     assert missing.status_code == 200
     rows = missing.json()
     assert [row["status"] for row in rows if row["section"] == "freshness"] == ["no_data"]
+    assert [row["status"] for row in rows if row["section"] == "diagnostic_status"] == ["empty", "no_conclusion"]
     assert not any(row["section"] == "token_rate" for row in rows)
+
+
+def test_standalone_long_range_has_summary_and_no_detail(standalone_overview_client):
+    params = {
+        "identity_kind": "job_id",
+        "identity": "/serve",
+        "from": 60_000,
+        "to": VLLM_DETAIL_MAX_WINDOW_MS + 120_000,
+        "bucket_ms": 15_000,
+    }
+    summary = standalone_overview_client.get("/finelog/marin/v1/vllm/overview", params=params)
+    detail = standalone_overview_client.get("/finelog/marin/v1/vllm/overview", params={**params, "view": "token_rate"})
+    empty = standalone_overview_client.get("/finelog/marin/v1/vllm/overview", params={**params, "identity": "/absent"})
+    assert summary.status_code == detail.status_code == empty.status_code == 200
+    rows = summary.json()
+    assert [row["status"] for row in rows if row["section"] == "diagnostic_status"] == ["summary_only", "no_conclusion"]
+    assert [row["value"] for row in rows if row["section"] == "run_summary" and row["metric"] == "generated_tokens"] == [
+        270
+    ]
+    assert [row["value"] for row in rows if row["section"] == "run_timeline"] == [270]
+    assert [row["value"] for row in rows if row["metric"] == "request_success_total"] == [8]
+    assert detail.json() == []
+    assert [row["status"] for row in empty.json()] == ["empty", "no_conclusion"]
+
+
+def test_run_triage_count_gap_can_be_a_partial_window_without_a_failed_request():
+    database = _vllm_projection_database()
+    rows = [
+        (name, value, timestamp, labels)
+        for name, values, labels in (
+            ("time_to_first_token_seconds_count", (0, 2, 2, 2), {}),
+            ("time_to_first_token_seconds_sum", (0, 0.2, 0.2, 0.2), {}),
+            ("time_to_first_token_seconds_bucket", (0, 2, 2, 2), {"le": "+Inf"}),
+            ("request_success_total", (0, 0, 1, 2), {"finished_reason": "stop"}),
+        )
+        for timestamp, value in zip((0, 60_000, 5 * 3_600_000, 9 * 3_600_000), values, strict=True)
+    ]
+    database.executemany(
+        """INSERT INTO "telemetry_v1.vllm" VALUES
+           ('cw-a', 'vllm', '/other-serve', ?, 'gauge', ?, '{}', ?, ?, 0)""",
+        [
+            (
+                name,
+                value,
+                json.dumps(
+                    {
+                        "source_temporality": "cumulative_snapshot",
+                        **labels,
+                    }
+                ),
+                timestamp,
+            )
+            for name, value, timestamp, labels in rows
+        ],
+    )
+    source = Record(
+        target=ClusterTarget("marin", "project", "zone", "fleet", "cluster"),
+        query=lambda sql, *, max_rows: database.execute(sql).fetch_arrow_table(),
+    )
+    app = create_app(bridge_config(), {"marin": source}, {}, None, None, None)
+    params = {
+        "identity_kind": "job_id",
+        "identity": "/other-serve",
+        "from": 0,
+        "bucket_ms": 15_000,
+        "view": "diagnostic_status",
+    }
+    with TestClient(app) as client:
+        short = client.get("/finelog/marin/v1/vllm/overview", params={**params, "to": 2 * 3_600_000})
+        partial = client.get("/finelog/marin/v1/vllm/overview", params={**params, "to": 8 * 3_600_000})
+        complete = client.get("/finelog/marin/v1/vllm/overview", params={**params, "to": 10 * 3_600_000})
+    assert short.status_code == partial.status_code == complete.status_code == 200
+    assert [row["status"] for row in short.json()] == ["detail", "check_count_gap"]
+    assert (
+        short.json()[1]["ttft_observations"],
+        short.json()[1]["request_success_finishes"],
+        short.json()[1]["value"],
+    ) == (2, 0, 2)
+    assert [row["status"] for row in partial.json()] == ["summary_only", "check_count_gap"]
+    assert (
+        partial.json()[1]["ttft_observations"],
+        partial.json()[1]["request_success_finishes"],
+        partial.json()[1]["value"],
+    ) == (2, 1, 1)
+    assert [row["status"] for row in complete.json()] == ["summary_only", "no_conclusion"]
+    assert (
+        complete.json()[1]["ttft_observations"],
+        complete.json()[1]["request_success_finishes"],
+        complete.json()[1]["value"],
+    ) == (2, 2, 0)
 
 
 def test_sample_budget_returns_cached_error_instead_of_partial_panels():
@@ -322,6 +434,29 @@ def test_sample_budget_returns_cached_error_instead_of_partial_panels():
     with TestClient(app) as client:
         for view in ("token_rate", "engine_summary"):
             response = client.get("/finelog/marin/v1/vllm/overview", params={**params, "view": view})
-            assert response.status_code == 400
-            assert set(response.json()) == {"error"}
+            assert response.status_code == 200
+            assert response.json() == []
+        status = client.get("/finelog/marin/v1/vllm/overview", params={**params, "view": "diagnostic_status"})
+        assert [row["status"] for row in status.json()] == ["sample_limit", "unavailable"]
+    assert len(queries) == 1
+
+
+def test_finelog_timeout_is_visible_and_reuses_cached_failure():
+    queries = []
+
+    def query(sql, *, max_rows):
+        queries.append(sql)
+        error = StatsError("query failed")
+        error.__cause__ = ConnectError(Code.DEADLINE_EXCEEDED, "deadline exceeded")
+        raise error
+
+    source = Record(target=ClusterTarget("marin", "project", "zone", "fleet", "cluster"), query=query)
+    app = create_app(bridge_config(), {"marin": source}, {}, None, None, None)
+    params = {"identity_kind": "job_id", "identity": "/slow", "from": 0, "to": 300_000, "bucket_ms": 15_000}
+    with TestClient(app) as client:
+        tokens = client.get("/finelog/marin/v1/vllm/overview", params={**params, "view": "token_rate"})
+        status = client.get("/finelog/marin/v1/vllm/overview", params={**params, "view": "diagnostic_status"})
+    assert status.status_code == tokens.status_code == 200
+    assert [row["status"] for row in status.json()] == ["query_timeout", "unavailable"]
+    assert tokens.json() == []
     assert len(queries) == 1
