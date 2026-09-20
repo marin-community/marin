@@ -236,15 +236,16 @@ class InklingRelPos(eqx.Module):
         )
 
     @named_call
-    def __call__(self, x: Float[Array, "B S D"]) -> tuple[Float[Array, "B S H R"], Float[Array, "R L"]]:
-        # Return the low-rank factors R[b,s,h,r] and the shared bank proj[r,l]. The bias
-        # A[b,h,i,delta] = sum_r R[b,i,h,r]*proj[r,delta] is computed on the fly inside the attention
-        # kernel, so the full [B,H,S,L] tensor is never materialized (the dominant cost at scale).
-        relative_states = jnp.einsum(
-            "bsd,dk->bsk", x, self.r_proj.astype(x.dtype), out_sharding=P(_BATCH_AXES, None, "model")
-        )
+    def __call__(self, x: Float[Array, "B S D"]) -> Float[Array, "B H S L"]:
+        relative_states = jnp.einsum("bsd,dk->bsk", x, self.r_proj.astype(x.dtype))
         relative_states = rearrange(relative_states, "b s (h r) -> b s h r", r=self.rel_dim)
-        return relative_states, self.proj.astype(x.dtype)
+        # A[b,h,i,delta] = sum_r R[b,i,h,r] * proj[r,delta]; heads keep the model-axis sharding.
+        return jnp.einsum(
+            "bshr,rl->bhsl",
+            relative_states,
+            self.proj.astype(x.dtype),
+            out_sharding=P(_BATCH_AXES, "model", None, None),
+        )
 
 
 class CausalSelfAttention(eqx.Module):
@@ -340,10 +341,9 @@ class CausalSelfAttention(eqx.Module):
 
         # Inkling relative-position bias replaces RoPE: skip the rotation and instead add a per-head
         # content-dependent bias (from x) to the pre-softmax logits inside attention().
-        rel_r = None
-        rel_proj = None
+        rel_bias = None
         if self.rel_pos is not None:
-            rel_r, rel_proj = self.rel_pos(x)
+            rel_bias = self.rel_pos(x)
         else:
             if isinstance(disable_rope, bool):
                 if not disable_rope:
@@ -357,7 +357,7 @@ class CausalSelfAttention(eqx.Module):
         # The fa4-cute kernel is GPU-only; fall back to auto-select off-GPU so the model still lowers
         # on CPU (e.g. the grug variant-contract tests).
         attn_impl = "gpu_fa4_cute" if jax.default_backend() == "gpu" else None
-        attn_out = attention(q, k, v, mask, implementation=attn_impl, rel_r=rel_r, rel_proj=rel_proj)
+        attn_out = attention(q, k, v, mask, implementation=attn_impl, rel_bias=rel_bias)
         # Exclusive Self Attention (XSA): subtract the component of yᵢ parallel to vᵢ, per head.
         # zᵢ = yᵢ - (yᵢᵀvᵢ / ‖vᵢ‖²) vᵢ.
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
