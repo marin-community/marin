@@ -963,6 +963,13 @@ class Transformer(eqx.Module):
         embed_all = _embedding_gather(self.token_embed, token_ids)
         segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
         long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
+        # The MTP block is full-causal; give its mask fa4 segment bounds so the gpu_fa4_cute kernel
+        # (used on GPU) has them, exactly like the main-trunk masks.
+        batch_size, seq_len = token_ids.shape
+        mtp_lower_bounds, mtp_valid = fa4_cute_segment_bounds(
+            long_mask, batch_size=batch_size, seq_len=seq_len, sliding_window=None
+        )
+        long_mask = long_mask.with_fa4_bounds(_batch_reshard(mtp_lower_bounds), _batch_reshard(mtp_valid))
         h_prev = h0
         mtp_ce = jnp.zeros((), dtype=loss_dtype)
         for k, module in enumerate(self.mtp_modules, start=1):
