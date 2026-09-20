@@ -313,6 +313,11 @@ compared with near-zero cap fractions in the cap-2 screen. The SC arm logged 0.0
 absolute correction loss value. This confirms that the new cap changes the active objective,
 but the loss value alone does not quantify the correction gradient or a quality effect.
 At update two the cap fractions remained 4.97% and 4.88%, with mean consumed-token age one.
+By update eight, both arms consumed tokens at mean age near five, and about 5.6% of sampled
+tokens hit the cap. Their step-10 checkpoint UID sets each contained 320 consumed prompts,
+with 318 in common (Jaccard 0.988). The first post-training evaluation was 112/756 completed
+correct for TIS and 98/756 for TIS plus SC32, versus step-zero counts 73 and 79. A single
+early difference does not establish a quality effect or stability.
 A second matched seed-18 pair, [r27](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-age8-tis-cap105-seed18-01a0bb6f-r27)
 and [r28](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-age8-sc-cap105-seed18-01a0bb6f-r28),
 uses the same settings and 256 GB host request. Its step-zero completed-correct counts are
