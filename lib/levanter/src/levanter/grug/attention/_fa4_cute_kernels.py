@@ -1362,6 +1362,8 @@ def segmented_flash_attention_backward_sm90_launcher(
         inkling_score_mod = _grug_head0_score_mod
     elif use_rel_bias:
 
+        rep = cutlass.const_expr(qhead_per_kvhead)
+
         @cute.jit
         def _grug_inkling_score_mod(score, batch_idx, head_idx, q_idx, kv_idx, seqlen_info, aux_tensors):
             del seqlen_info
@@ -1371,14 +1373,24 @@ def segmented_flash_attention_backward_sm90_launcher(
             b0 = batch_idx[0]
             result = cute.make_rmem_tensor(vec, cutlass.Float32)
             for j in cutlass.range_constexpr(vec):
+                # apply_score_mod_inner assumes Pack-GQA when qhead_per_kvhead>1 (it always divides the
+                # real q position by rep and packs the head offset into head_idx). This backward is NOT
+                # packed -- its work tile head_idx is the true q-head and the index holds the real q pos.
+                # Invert that packing: true q-head = head_idx//rep, real q = q_idx*rep + head_idx%rep.
+                if cutlass.const_expr(rep > 1):
+                    q_head = head_idx[j] // rep
+                    q_pos = q_idx[j] * rep + (head_idx[j] - q_head * rep)
+                else:
+                    q_head = head_idx[j]
+                    q_pos = q_idx[j]
                 # Write result[j] unconditionally, then add the bias in-place inside the dynamic `if`.
                 # (A value assigned only in the then-branch is undefined on the else path in the DSL.)
                 result[j] = score[j]
-                delta = q_idx[j] - kv_idx[j]
+                delta = q_pos - kv_idx[j]
                 # cute evaluates the GMEM load unconditionally, so clamp the gather index into range
                 # (masked positions can have delta < 0) and gate the actual add on 0 <= delta < rel_extent.
                 delta_safe = cutlass.min(cutlass.max(delta, cutlass.Int32(0)), rel_extent - 1)
-                bias = rel_bias_t[q_idx[j], delta_safe, head_idx[j], b0].to(cutlass.Float32)
+                bias = rel_bias_t[q_pos, delta_safe, q_head, b0].to(cutlass.Float32)
                 in_band = cute.elem_less(delta, rel_extent) and cute.elem_less(cutlass.Int32(-1), delta)
                 if in_band:
                     # score arrives already multiplied by softmax_scale (softmax_scale_log2 == LOG2E for
