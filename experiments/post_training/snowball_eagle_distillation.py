@@ -58,7 +58,7 @@ INITIAL_DRAFT_URI = "hf://laion/snowball-64k-eagle3-draft-r2egym"
 INITIAL_DRAFT_REVISION = "4bdb47c08e5b5190bea3c7a93c3e14470230e469"
 CLUSTER = "cw-rno2a"
 GPUS_PER_NODE = 8
-MARINSKYRL_COMMIT = "bb01fa3d4751448debd3740328c01911ff24cd5e"
+MARINSKYRL_COMMIT = "35222f8bc1b06d99f425c037cd7b3a17dd9ba58a"
 RL_DATA_VERSION = "2026.09.18"
 
 DISTILLATION_CONFIG = """
@@ -97,8 +97,8 @@ generator:
   vllm_attention_backend: FLASH_ATTN
   inference_engine_tensor_parallel_size: 1
   inference_engine_pipeline_parallel_size: 1
-  # Keep expert collectives within one eight-GPU node while retaining 64
-  # independent DP schedulers across the eight engines.
+  # Keep expert collectives within one eight-GPU node while retaining eight
+  # node-local request schedulers across the eight pools.
   inference_engine_data_parallel_size: 8
   inference_engine_expert_parallel_size: 8
   num_inference_engines: 8
