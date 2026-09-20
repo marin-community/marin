@@ -754,14 +754,13 @@ class MTPModule(eqx.Module):
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "MTPModule":
-        k_proj, k_attn, k_mlp, k_shared, k_gn_attn, k_gn_mlp = random.split(key, 6)
+        k_proj, k_attn, k_mlp, k_gn_attn, k_gn_mlp = random.split(key, 5)
         d = cfg.hidden_dim
-        shared = None
-        if cfg.shared_expert_intermediate_dim > 0:
-            shared_keys = random.split(k_shared, cfg.num_shared_experts)
-            shared = tuple(
-                DenseMLP.init(d, cfg.shared_expert_intermediate_dim, cfg.initializer_std, key=sk) for sk in shared_keys
-            )
+        # The MTP block uses a dense SwiGLU MLP (3*hidden), not a second EP-MoE stack. A standalone MoE
+        # here has 3D expert weights [num_experts, d, inter] whose leading axis is sharded on `expert`;
+        # MuonH's padded-stack Newton-Schulz treats that leading axis as the (must-be-replicated) layer
+        # axis and errors. The trunk MoE avoids this only because it is 4D inside the scan (replicated
+        # layer axis). Dense MTP (2D matrices -> local NS) is the DeepSeek-V3 mtp_dense variant.
         return MTPModule(
             h_norm=RMSNorm.init(d, cfg.layer_norm_eps),
             e_norm=RMSNorm.init(d, cfg.layer_norm_eps),
@@ -771,8 +770,8 @@ class MTPModule(eqx.Module):
             attn=CausalSelfAttention.init(cfg, key=k_attn),
             rms_mlp=RMSNorm.init(d, cfg.layer_norm_eps),
             mlp_gated_norm=GatedNorm.init(d, cfg.initializer_std, key=k_gn_mlp),
-            mlp=MoEMLP.init(cfg, key=k_mlp),
-            shared=shared,
+            mlp=DenseMLP.init(d, 3 * d, cfg.initializer_std, key=k_mlp),
+            shared=None,
             out_norm=RMSNorm.init(d, cfg.layer_norm_eps),
         )
 
