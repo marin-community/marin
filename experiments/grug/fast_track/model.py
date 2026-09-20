@@ -54,6 +54,8 @@ _CE_BLOCK_SIZES = BlockSizes(b_block_size=_CE_TOKENS_PER_RANK, v_block_size=4096
 # Axes the non-expert params FSDP-shard over.
 _FSDP_AXES: tuple[str, ...] = ("data", "expert")
 _LM_HEAD_PARTITION_SPEC = P(_FSDP_AXES, "model")
+_OVER_ENCODING_TABLE_ROW_ALIGNMENT = 128
+_NORMALIZED_INPUT_STREAM_SCALE = 2**0.5  # normsum rescale for two unit-variance input streams
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
@@ -132,6 +134,11 @@ class GrugModelConfig:
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     # Dense (no-MoE) mode: every block is a single DenseMLP(hidden, intermediate_dim) SwiGLU; the MoE fields are ignored.
     dense_mlp: bool = False
+    # Over-Encoding (arXiv 2501.16975): input-only hierarchical n-gram embedding tables added to the
+    # token embedding. 0 (default) = off. num tables = over_encoding_splits * (over_encoding_num_grams - 1).
+    over_encoding_vocab_size: int = 0
+    over_encoding_splits: int = 4
+    over_encoding_num_grams: int = 3
 
     def __post_init__(self) -> None:
         if not self.dense_mlp and self.num_experts_per_token >= self.num_experts:
@@ -710,8 +717,116 @@ def _long_layer_schedule(num_layers: int, global_every: int) -> jax.Array:
     return (((layer_indices + 1) % global_every) == 0) | (layer_indices == num_layers - 1)
 
 
+def _over_encoding_table_rows(logical_rows: int) -> int:
+    """Round the logical n-gram vocab up to a multiple of the row alignment."""
+    align = _OVER_ENCODING_TABLE_ROW_ALIGNMENT
+    return ((logical_rows + align - 1) // align) * align
+
+
+def _causal_ngram_ids(
+    token_ids: Int[Array, "B S"],
+    *,
+    order: int,
+    modulus: int,
+    base_vocab_size: int,
+    segment_ids: jax.Array | None,
+) -> Int[Array, "B S"]:
+    """Hash a causal n-gram id per position without crossing packed-document boundaries."""
+    if order < 2:
+        raise ValueError(f"n-gram order must be at least 2, got {order}")
+    seq_len = token_ids.shape[-1]
+    token_ids_u32 = token_ids.astype(jnp.uint32)
+    ngram_hash = token_ids_u32
+    multiplier = jnp.uint32(base_vocab_size)
+    valid_prefix = jnp.ones(token_ids.shape, dtype=jnp.bool_)
+    current_segments = segment_ids
+    if current_segments is not None and current_segments.ndim == 1:
+        current_segments = jnp.broadcast_to(current_segments[None, :], token_ids.shape)
+    for lag in range(1, order):
+        shifted_tokens = jnp.pad(token_ids_u32, ((0, 0), (lag, 0)))[:, :seq_len]
+        valid_lag = jnp.arange(seq_len) >= lag
+        if current_segments is not None:
+            shifted_segments = jnp.pad(current_segments, ((0, 0), (lag, 0)), constant_values=-1)[:, :seq_len]
+            valid_lag = valid_lag[None, :] & (current_segments >= 0) & (current_segments == shifted_segments)
+        valid_prefix = valid_prefix & valid_lag
+        ngram_hash = ngram_hash + jnp.where(valid_prefix, shifted_tokens, jnp.uint32(0)) * multiplier
+        multiplier = multiplier * jnp.uint32(base_vocab_size)
+    return (ngram_hash % jnp.uint32(modulus)).astype(jnp.int32)
+
+
+class OverEncoding(eqx.Module):
+    """Hierarchical input-only n-gram embedding tables (orders 2..num_grams, ``splits`` hashes each),
+    replicated per device. Each table slice is projected up to hidden and the streams are summed."""
+
+    tables: jax.Array  # [num_tables, physical_rows, slice_dim], replicated
+    projections: tuple[jax.Array, ...]  # each [slice_dim, hidden], replicated
+    logical_vocab_sizes: tuple[int, ...] = eqx.field(static=True)
+    splits: int = eqx.field(static=True)
+    num_grams: int = eqx.field(static=True)
+    num_tables: int = eqx.field(static=True)
+    base_vocab_size: int = eqx.field(static=True)
+
+    @staticmethod
+    def init(cfg: "GrugModelConfig", *, key: PRNGKeyArray) -> "OverEncoding":
+        if cfg.over_encoding_vocab_size <= 0:
+            raise ValueError("OverEncoding requires a positive over_encoding_vocab_size")
+        num_tables = cfg.over_encoding_splits * (cfg.over_encoding_num_grams - 1)
+        if cfg.hidden_dim % num_tables != 0:
+            raise ValueError(f"hidden_dim={cfg.hidden_dim} must be divisible by num OE tables={num_tables}")
+        slice_dim = cfg.hidden_dim // num_tables
+        table_keys = random.split(key, num_tables * 2)
+        logical_vocab_sizes = tuple(cfg.over_encoding_vocab_size + 2 * index for index in range(num_tables))
+        physical_rows = max(_over_encoding_table_rows(rows) for rows in logical_vocab_sizes)
+        table_values = jnp.stack(
+            tuple(
+                _init_weight(table_keys[index], (physical_rows, slice_dim), cfg.initializer_std)
+                for index in range(num_tables)
+            )
+        )
+        projection_std = 1.0 / (slice_dim**0.5)
+        projections = tuple(
+            reshard(
+                _init_weight(table_keys[num_tables + index], (slice_dim, cfg.hidden_dim), projection_std), P(None, None)
+            )
+            for index in range(num_tables)
+        )
+        return OverEncoding(
+            tables=reshard(table_values, P(None, None, None)),
+            projections=projections,
+            logical_vocab_sizes=logical_vocab_sizes,
+            splits=cfg.over_encoding_splits,
+            num_grams=cfg.over_encoding_num_grams,
+            num_tables=num_tables,
+            base_vocab_size=cfg.vocab_size,
+        )
+
+    @named_call
+    def __call__(self, token_ids: Int[Array, "B S"], segment_ids: jax.Array | None) -> Float[Array, "B S D"]:
+        ngram_ids = [
+            _causal_ngram_ids(
+                token_ids,
+                order=order,
+                modulus=self.logical_vocab_sizes[(order - 2) * self.splits + split_index],
+                base_vocab_size=self.base_vocab_size,
+                segment_ids=segment_ids,
+            )
+            for order in range(2, self.num_grams + 1)
+            for split_index in range(self.splits)
+        ]
+        added: jax.Array | None = None
+        for table_index, ids in enumerate(ngram_ids):
+            embedding_slice = _embedding_gather(self.tables[table_index], ids)
+            projected = jnp.einsum(
+                "bsd,dh->bsh", embedding_slice, self.projections[table_index], out_sharding=_batch_spec()
+            )
+            added = projected if added is None else added + projected
+        assert added is not None, "OverEncoding must contain at least one table"
+        return added
+
+
 class Transformer(eqx.Module):
     token_embed: jax.Array
+    over_encoding: OverEncoding | None
     embed_norm: RMSNorm
     embed_gated_norm: GatedNorm
     output_proj: jax.Array
@@ -740,7 +855,7 @@ class Transformer(eqx.Module):
                 raise ValueError("config must not be provided when initializing directly from GrugModelConfig")
             cfg = cfg_or_vocab
 
-        embed_key, out_key, embed_gn_key, final_gn_key, *block_keys = random.split(key, cfg.num_layers + 4)
+        embed_key, out_key, embed_gn_key, final_gn_key, oe_key, *block_keys = random.split(key, cfg.num_layers + 5)
         # The embedding is fully replicated for a local lookup.
         token_embed = reshard(
             _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), P(None, None)
@@ -749,8 +864,10 @@ class Transformer(eqx.Module):
             _init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), _LM_HEAD_PARTITION_SPEC
         )
         stacked_blocks = ArrayStacked.init(cfg.num_layers, Block)(cfg, key=jnp.stack(block_keys))
+        over_encoding = OverEncoding.init(cfg, key=oe_key) if cfg.over_encoding_vocab_size > 0 else None
         return Transformer(
             token_embed=token_embed,
+            over_encoding=over_encoding,
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             embed_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=embed_gn_key),
             output_proj=output_proj,
@@ -774,8 +891,17 @@ class Transformer(eqx.Module):
             mask = AttentionMask.causal()
 
         cfg = self.config
-        hidden = _embedding_gather(self.token_embed, token_ids)
-        hidden = self.embed_gated_norm(self.embed_norm(hidden))
+        token_embedding = _embedding_gather(self.token_embed, token_ids)
+        if self.over_encoding is None:
+            hidden = self.embed_gated_norm(self.embed_norm(token_embedding))
+        else:
+            oe_seg = mask.segment_ids[0] if isinstance(mask, AttentionMask) and mask.segment_ids is not None else None
+            over_encoding_embedding = self.over_encoding(token_ids, oe_seg)
+            # normsum: RMSNorm each input stream, sum, rescale to unit variance, then gate.
+            hidden = (
+                self.embed_norm(token_embedding) + self.embed_norm(over_encoding_embedding)
+            ) / _NORMALIZED_INPUT_STREAM_SCALE
+            hidden = self.embed_gated_norm(hidden)
 
         # Local layers use a sliding window; every global_every-th layer is full causal.
         segment_ids = None

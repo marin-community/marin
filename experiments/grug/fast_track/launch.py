@@ -157,6 +157,9 @@ def _h100_ladder_model(rung: H100LadderRung, dense: bool = False) -> GrugModelCo
         sconv=True,
         pooled_transport_capacity_factor=_EP_CAPACITY_FACTOR,
         latent_dim=hidden // 2,
+        over_encoding_vocab_size=65536,  # feature branch: fast_track_abl_over_encoding
+        over_encoding_splits=4,
+        over_encoding_num_grams=3,
     )
 
 

@@ -248,6 +248,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             path_lower = path_str.lower()
             if "token_embed" in path_lower or "router_bias" in path_lower or _is_gate_or_router_weight(path_lower):
                 return "adam"
+            # Over-Encoding n-gram tables + projections train with Adam (sparse input-embedding enrichment).
+            if "over_encoding" in path_lower:
+                return "adam"
             if "output_proj" in path_lower or "lm_head" in path_lower:
                 return "adamh"
             # GatedNorms route to muonh (NS + Frobenius hyperball), same as matrices.
