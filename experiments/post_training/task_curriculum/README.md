@@ -6,27 +6,27 @@ TaskCompendium owns model-visible task semantics and private verifier contracts;
 capabilities, boundaries, and examples. A separate catalog-level pass proposes learning prerequisites after those
 capability boundaries are stable.
 
-The canonical cross-domain v2 catalog is the immutable object registered by `catalog_artifact.py`. Canonical means
+The canonical cross-domain v3 catalog is the immutable object registered by `catalog_artifact.py`. Canonical means
 versioned and addressable. It contains all 45 D-series subject roots and 2,405 globally unique nodes: 1,999 trainable
-capabilities and 406 organizational groups. One bounded repair pass raised the same-call holistic mean from 78.36 to
-92.81 across 42 reviewed subjects; 41 repairs were selected, one baseline was retained, and three previously accepted
-graphs were unchanged. Twenty-four subjects are `pilot_ready`; 21 remain explicitly provisional after the stopping
-rule. `HISTORY.md` records the experiments and tradeoffs. The 3.6 MB canonical JSON payload lives in CoreWeave S3.
+capabilities and 406 organizational groups. Its catalog-level learning graph adds 1,812 reviewed same-subject edges;
+the capability definitions otherwise retain production v2. Twenty-four subjects are `pilot_ready`; 21 remain
+explicitly provisional after the stopping rule. `HISTORY.md` records the experiments and tradeoffs. The 7.6 MB
+canonical JSON payload lives in CoreWeave S3.
 
-- Artifact handle: `TASK_CURRICULUM`, version `2026.09.19.2`
-- Catalog: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-json-1faada4eeda8/publish/curriculum.json`
-- Summary: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-json-1faada4eeda8/publish/catalog_summary.json`
-- Comparison: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-json-1faada4eeda8/publish/comparison.json`
-- Routing audit: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-json-1faada4eeda8/publish/routing_audit.json`
-- Evidence: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-json-1faada4eeda8/publish/evidence.tar.gz`
+- Artifact handle: `TASK_CURRICULUM`, version `2026.09.20.1`
+- Catalog: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.20-subject-local-v3-0ce32038771d/curriculum.json`
+- Progression summary: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.20-subject-local-v3-0ce32038771d/summary.json`
+- Capability scores: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.20-subject-local-v3-0ce32038771d/comparison.json`
+- Routing audit: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.20-subject-local-v3-0ce32038771d/routing_audit.json`
+- Evidence: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.20-subject-local-v3-0ce32038771d/evidence.tar.gz`
 - Human viewer: [Task curriculum](https://applets.marina.oa.dev/a/67f69132-2ef4-4c9e-b8b5-77cabd126442/)
 
 Materialize the JSON before local validation or mapping:
 
 ```bash
 uv run fsutil cp \
-  s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-json-1faada4eeda8/publish/curriculum.json \
-  /tmp/task-curriculum-cross-domain-v2.json
+  s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.20-subject-local-v3-0ce32038771d/curriculum.json \
+  /tmp/task-curriculum-cross-domain-v3.json
 ```
 
 `fsutil` reads `CW_KEY_ID` and `CW_KEY_SECRET` for this bucket. CoreWeave Iris tasks receive the same credentials from
@@ -68,11 +68,13 @@ three misses were unrelated operation families, not evidence for another omnibus
 AAII metadata found subject homes across all 45 roots; ten benchmark entries were classified as cross-domain task
 mechanics rather than subjects.
 
-The embedded prerequisite arrays in production v2 are a conservative hard-dependency experiment: only 17 edges in
-four subjects survived it. They are not a reliable easy-to-hard ordering for the other 41 subjects. The next catalog
-iteration uses `prompts/learning_progression.md` to produce a separate catalog-level graph under the original
-learning-enablement rule: mastery of A should materially improve the chance of some success on entry-level B tasks.
-This pass can express cross-subject edges and can be revised without regenerating capability nodes.
+The embedded prerequisite arrays in production v2 were a conservative hard-dependency experiment: only 17 edges in
+four subjects survived it, so they were not a useful easy-to-hard ordering. Production v3 replaces them with one
+catalog-level `learning_progression` graph under the original learning-enablement rule: mastery of A should materially
+improve the chance of some success on a recurring family of entry-level B tasks. It was generated subject by subject
+from compact capability packets, with one Sol/high proposer and one independent reviewer per subject. Capability
+definitions are unchanged from v2 except that the 17 obsolete embedded prerequisites are cleared. Cross-subject
+progression is deliberately deferred rather than inferred from incomplete context.
 
 ## Curriculum iteration
 
@@ -93,8 +95,8 @@ into a new immutable catalog version. For each selected macro area:
    blocking criteria even when the numeric score is high. Revise the rubric or generation instructions only for
    problems that recur, then generate another version.
 6. After capability boundaries are stable, run one Sol/high learning-progression proposer and one independent
-   reviewer per complete subject scope. Each accepted edge has two witness pairs. `workflow.md` defines the bounded
-   review and operator-adjudication procedure.
+   reviewer per compact subject packet. Each accepted edge has two witness-family sketches. `workflow.md` defines the
+   subject-local procedure.
 
 The holistic score controls structural readiness: 85 or higher with no structural blockers is `pilot_ready`.
 Evidence confidence is tracked independently. Low confidence marks branches that need better discovery or held-out

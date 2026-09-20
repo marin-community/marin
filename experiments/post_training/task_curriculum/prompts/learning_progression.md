@@ -1,46 +1,38 @@
-# Learning-progression prompt
+# Subject-local learning progression
 
-Use `gpt-5.6-sol` with high reasoning effort after the capability catalog is stable. Attach the complete catalog or a
-declared subject subset. Bind structured output to the `LearningProgression` Pydantic schema in `models.py`; the
-schema, rather than field names inferred from this prose, is the output contract. The output is a separate working
-artifact; do not rewrite capability sections during this pass.
+Run this pass after the capability catalog is stable. Give one `gpt-5.6-sol` high-reasoning proposer a compact packet
+for exactly one subject: its groups and each capability's name, parent, outcome, boundaries, and two sample-task
+probes. Do not attach other subjects, facets, reviews, scores, mappings, or generation transcripts. Bind structured
+output to `LearningProgression`; the schema is the output contract. The pass does not rewrite capabilities.
 
 ```text
-You are proposing learning-prerequisite edges between existing curriculum capabilities. Return strict
-LearningProgression JSON.
+Propose directed edges between capabilities in the supplied subject. An edge A -> B means mastery of A materially
+raises the probability of solving at least one recurring family of entry-level B tasks. A need not be required for
+every task in B. The graph models learning enablement, not workflow order or production dependency.
 
-An edge A -> B means that mastery of A materially raises the probability of solving at least one recurring family of
-entry-level B tasks. This is the epsilon condition: a learner who has mastered A should have a non-trivial chance of
-some success in B. A does not need to be necessary for every B task.
+Apply every rule:
 
-Apply every rule below:
+1. Name the operation, representation, invariant, or concept from A that remains active in B. It must be exercised by
+   A's outcome and representative probe, not an isolated fragment of A.
+2. Name the single main operation or concept added by entry-level B tasks. Supplied domain facts, notation, and data
+   do not count as added capabilities.
+3. Give exactly two semantically distinct task-family sketches. Each sketch names an A family and an entry-level B
+   family that reuse the same foundation and add the same main operation. Use compact phrases, not complete task
+   instructions, solutions, or verifier designs.
+4. State the enabled scope inside B. It must be a recurring sampling stratum that could be trained and evaluated, not
+   one formula, tool, or contrived example.
+5. Apply artifact substitution. Imagine every artifact A could produce is supplied to the B learner. Keep the edge
+   only when A mastery still helps choose a method, construct or adapt a model, maintain an invariant, or detect an
+   invalid result. Reject pure handoff order.
+6. Reject course order, shared vocabulary, common parentage, domain relabeling, general sophistication, and mere
+   difficulty correlation.
+7. Prefer the closest useful foundation. Omit a transitive edge when an existing shorter path transfers the same
+   foundation. Keep a direct edge when it transfers a distinct foundation or enables a different natural stratum.
+8. Multiple prerequisites for B are allowed when each independently enables a distinct recurring stratum or supplies
+   a distinct active foundation.
+9. Use only capability IDs from the supplied subject. Ignore embedded prerequisites and do not modify the taxonomy.
+10. An empty graph is valid. Do not target density or force a course sequence.
 
-1. Name the exact reusable foundation from A. It must be an operation, representation, invariant, or concept exercised
-   in A's representative tasks and actively reused in B.
-2. Each B witness reuses that foundation and adds one main operation or concept. It may add supplied domain facts,
-   notation, or data, but it cannot require another unmodeled capability.
-3. Give exactly two witness pairs from semantically distinct task families, not paraphrases or parameter variants.
-   Each pair contains a representative A task and a self-contained entry B task. Both B tasks exhibit the same
-   epsilon step. Exact duplicate pairs are rejected mechanically; the independent reviewer enforces semantic family
-   diversity.
-4. State the enabled scope within B. The scope must be a natural sampling stratum broad enough to train and evaluate
-   independently. Reject a dependency that applies only to one formula, tool, or contrived example.
-5. Distinguish conceptual transfer from artifact handoff. Supply every artifact that A could have produced. Keep the
-   edge only when A mastery still helps choose a method, construct a model, maintain an invariant, detect an invalid
-   result, or adapt the supplied artifact. Reject pure workflow order.
-6. Reject course order, general sophistication, shared terminology, common parentage, and difficulty correlation.
-   Reject A -> B when B uses an isolated fragment of A and would not benefit from mastery of A's stated outcome.
-7. Prefer the closest useful foundation. Omit a transitive edge when the same transfer is already represented by a
-   shorter accepted path. Multiple prerequisites are allowed only when each contributes a distinct foundation used
-   in both B witnesses.
-8. Do not infer an edge from the existing entry and representative labels. Rewrite witness tasks when catalog probes
-   hide a genuine progression by supplying formulas or intermediate state.
-9. Cross-subject edges are allowed. The dependent capability's subject must be in scope; its prerequisite may be in
-   another catalog subject.
-10. Keep the capability taxonomy unchanged. Ignore embedded prerequisites from earlier catalog versions. An honest
-    empty graph is better than a dense syllabus sequence.
-
-For every edge return prerequisite and dependent capability IDs, enabled scope, transfer basis,
-artifact-substitution analysis, and exactly two witnesses. Do not target an edge count. The result is a structural
-learning hypothesis, not evidence that training on A caused improvement on B.
+For every edge return the two IDs, enabled scope, transfer basis, artifact-substitution result, and two compact
+witness-family sketches. These are structural learning hypotheses, not evidence that training on A caused B gains.
 ```

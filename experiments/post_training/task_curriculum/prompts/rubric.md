@@ -160,7 +160,8 @@ tasks are a weak diagnostic because their wording tends to mirror the section de
 permitted in-distribution evaluation examples provide stronger evidence.
 
 Model-training experiments are outside this curriculum workflow. During development or a periodic audit, use Luna
-failures as a rough proxy on the two witness pairs attached to each sampled learning-prerequisite edge:
+failures as a rough proxy on concrete tasks instantiated from the two witness-family sketches attached to each
+sampled learning-prerequisite edge:
 
 - failing a prerequisite probe is a floor condition and leaves the edge empirically inconclusive;
 - passing both prerequisites and failing both entries rejects epsilon continuity;

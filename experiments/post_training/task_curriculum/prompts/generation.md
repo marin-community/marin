@@ -32,8 +32,8 @@ CONSTRAINTS
 - Use a sampling facet only when the central operation and evaluation contract remain stable across its values.
   Apply the same distant-pair test to the facet's most distant values. Split instead when values change the solver
   loop, state transition, or evaluation contract.
-- Set every capability's `prerequisites` field to an empty array. A separate catalog-level pass proposes learning
-  prerequisites after capability boundaries are stable, including cross-subject edges.
+- Set every capability's `prerequisites` field to an empty array. A separate subject-local catalog pass proposes
+  learning prerequisites after capability boundaries are stable. Cross-subject progression is a separate follow-up.
 - The entry probe must be the smallest self-contained exercise of the capability's outcome. The representative probe
   must exercise the full outcome. Do not encode an assumed cross-capability sequence in either probe.
 - Execute every probe on paper. Reject missing state or geometry, undefined factors, inconsistent premises, trivial

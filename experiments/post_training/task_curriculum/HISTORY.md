@@ -98,3 +98,19 @@ The immutable evidence is
 `s3://marin-us-east-02a/marin/task-curriculum/experiments/2026.09.20-learning-progression-pilot-v1-0a471faf1da4/`.
 The progression SHA-256 is `0a471faf1da4b8a1fd831d1e4c307ad64c4500a45f6eed68ca815c1b22c8e084`; the evidence
 archive SHA-256 is `1ddca3c28a4ecb6fc5677756d566554a4a7f0b34a133e3e619b30e488d992d1d`.
+
+## Production subject-local progression: cross-domain v3
+
+The production pass replaced whole-catalog prompting with one compact subject packet, one Sol/high proposer, and one
+independent Sol/high reviewer per subject. The 45 proposers emitted 1,631 edges; reviewers accepted 1,596, rejected
+35, and supplied 216 omissions, producing an acyclic 1,812-edge graph. Subject graphs contain 19–78 edges and reach a
+maximum learning stage of eight. D15 required one mechanical retry because its first accepted-plus-omission result
+contained a cycle; no semantic repair calls or per-edge agents were used. Total measured usage was 4,849,321 tokens,
+compared with 16.28 million for the original build and 8.92 million for the production repair wave.
+
+V3 preserves the v2 capability taxonomy and score/routing evidence while clearing its 17 embedded hard-dependency
+entries. The reviewed graph appears once at the catalog root. Cross-subject progression remains a follow-up rather
+than being inferred from partial context. The immutable catalog is
+`s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.20-subject-local-v3-0ce32038771d/curriculum.json`,
+with SHA-256 `0ce32038771d4fb0c66498f29604474d6766040e8917f894b31940a6a828149a`. The deterministic evidence
+archive SHA-256 is `84a1ba4284360ba3e722be7f06206588296dc3c25027300415002c9f187d779a`.

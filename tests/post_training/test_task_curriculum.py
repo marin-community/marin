@@ -297,14 +297,14 @@ def _learning_edge(prerequisite_id: str, dependent_id: str) -> dict[str, object]
         "artifact_substitution_test": "A supplied artifact does not remove the reasoning operation.",
         "witnesses": [
             {
-                "prerequisite_task": "Construct the upstream representation for case one.",
-                "dependent_entry_task": "Reuse it and add one operation for case one.",
+                "prerequisite_family": "Construct the upstream representation for case one.",
+                "dependent_entry_family": "Reuse it and add one operation for case one.",
                 "shared_foundation": "The same representation and invariant.",
                 "new_operation": "One dependent operation.",
             },
             {
-                "prerequisite_task": "Construct the upstream representation for case two.",
-                "dependent_entry_task": "Reuse it and add one operation for case two.",
+                "prerequisite_family": "Construct the upstream representation for case two.",
+                "dependent_entry_family": "Reuse it and add one operation for case two.",
                 "shared_foundation": "The same representation and invariant.",
                 "new_operation": "One dependent operation.",
             },
@@ -335,6 +335,25 @@ def test_learning_progression_validates_cross_subject_edges_against_catalog() ->
     )
     with pytest.raises(ValueError, match="out-of-scope dependents"):
         reversed_progression.validate_against_catalog(catalog)
+
+
+def test_catalog_validates_embedded_learning_progression() -> None:
+    catalog_data = _catalog().model_dump(mode="json")
+    catalog_data["learning_progression"] = {
+        "catalog_version": catalog_data["catalog_version"],
+        "prompt_version": "learning-v1",
+        "scope_subject_ids": ["C00"],
+        "edges": [_learning_edge("files.search", "processes.logs")],
+    }
+
+    catalog = CurriculumCatalog.model_validate(catalog_data)
+
+    assert catalog.learning_progression is not None
+    assert len(catalog.learning_progression.edges) == 1
+
+    catalog_data["curricula"][0]["curriculum"]["sections"][1]["prerequisites"] = ["processes.logs"]
+    with pytest.raises(ValueError, match="cannot embed capability prerequisites"):
+        CurriculumCatalog.model_validate(catalog_data)
 
 
 def test_learning_progression_rejects_cycles() -> None:

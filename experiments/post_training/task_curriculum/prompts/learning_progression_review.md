@@ -1,30 +1,17 @@
-# Learning-progression review prompt
+# Independent subject-local progression review
 
-Use a fresh `gpt-5.6-sol` high-reasoning context. Attach the same catalog scope, the proposal, and
-`prompts/learning_progression.md`. Bind structured output to the `LearningProgressionReview` Pydantic schema in
-`models.py`; the schema is the output contract. Do not attach the proposal's generation transcript or an earlier
-review.
+Use one fresh `gpt-5.6-sol` high-reasoning reviewer for the subject. Attach the same compact subject packet, the
+proposal, and `prompts/learning_progression.md`; do not attach another subject, the proposal transcript, or an earlier
+review. Bind structured output to `LearningProgressionReview`.
 
 ```text
-Perform an independent complete-scope review of the proposed learning progression. Return strict
-LearningProgressionReview JSON.
+Judge every proposed edge against the learning-enablement rule. Accept an edge only when both witness families use the
+prerequisite capability's stated outcome, reuse the same foundation, and add one shared main operation in the
+dependent capability. Reject course order, domain relabeling, shared vocabulary, general sophistication, artifact
+handoff, narrow scopes, cycles, and redundant transfers already represented by a closer path.
 
-For every proposed edge:
-
-- verify that both witnesses exercise the prerequisite capability's stated outcome;
-- verify that both dependent tasks reuse the same foundation and add the same single main operation;
-- reject course order, domain relabeling, shared vocabulary, general sophistication, pure artifact handoff, and
-  narrow or contrived enabled scopes;
-- execute each witness on paper and reject missing inputs, contradictory premises, trivial requests, and
-  uncheckable outputs; and
-- check that a closer prerequisite or an existing path does not make the edge redundant.
-
-Then scan the complete scope for a small number of clear missing immediate edges. Do not construct an exhaustive
-course DAG. Each missing edge must include the full enabled scope, transfer basis, artifact-substitution analysis,
-and two self-contained witness pairs. This lets the operator combine accepted edges and omissions without another
-generation call.
-
-Return one edge review for every proposed edge exactly once. Recommend `revise` when any proposed edge is rejected
-or any missing edge is supplied; otherwise recommend `accept`. Structural review supports the learning hypothesis.
-It does not establish causal training transfer.
+Then scan the complete subject packet for clear missing immediate edges. Supply each omission as a complete compact
+edge with two witness-family sketches. Do not construct an exhaustive course DAG and do not rewrite a rejected pair.
+Return one verdict for every proposed edge exactly once. Recommend `revise` when any edge is rejected or an omission
+is supplied; otherwise recommend `accept`.
 ```

@@ -229,6 +229,7 @@ class CatalogCurriculum(StrictModel):
 class CurriculumCatalog(StrictModel):
     catalog_version: str
     curricula: list[CatalogCurriculum] = Field(min_length=1)
+    learning_progression: LearningProgression | None = None
 
     @model_validator(mode="after")
     def validate_catalog(self) -> CurriculumCatalog:
@@ -238,16 +239,29 @@ class CurriculumCatalog(StrictModel):
         section_ids = [section.id for entry in self.curricula for section in entry.curriculum.sections]
         if len(section_ids) != len(set(section_ids)):
             raise ValueError("section IDs must be unique across curricula")
+        if self.learning_progression is not None:
+            embedded_prerequisites = [
+                section.id
+                for entry in self.curricula
+                for section in entry.curriculum.capability_sections()
+                if section.prerequisites
+            ]
+            if embedded_prerequisites:
+                raise ValueError(
+                    "catalogs with a learning progression cannot embed capability prerequisites: "
+                    f"{embedded_prerequisites}"
+                )
+            self.learning_progression.validate_against_catalog(self)
         return self
 
 
 class LearningProgressionWitness(StrictModel):
-    """One concrete prerequisite-to-entry transfer example."""
+    """One concise prerequisite-to-entry task-family transfer example."""
 
-    prerequisite_task: str = Field(min_length=1)
-    dependent_entry_task: str = Field(min_length=1)
-    shared_foundation: str = Field(min_length=1)
-    new_operation: str = Field(min_length=1)
+    prerequisite_family: str = Field(min_length=3, max_length=160)
+    dependent_entry_family: str = Field(min_length=3, max_length=160)
+    shared_foundation: str = Field(min_length=3, max_length=200)
+    new_operation: str = Field(min_length=3, max_length=160)
 
 
 class LearningPrerequisiteEdge(StrictModel):
@@ -255,16 +269,16 @@ class LearningPrerequisiteEdge(StrictModel):
 
     prerequisite_id: str = Field(pattern=CURRICULUM_IDENTIFIER_PATTERN)
     dependent_id: str = Field(pattern=CURRICULUM_IDENTIFIER_PATTERN)
-    enabled_scope: str = Field(min_length=1)
-    transfer_basis: str = Field(min_length=1)
-    artifact_substitution_test: str = Field(min_length=1)
+    enabled_scope: str = Field(min_length=3, max_length=240)
+    transfer_basis: str = Field(min_length=3, max_length=320)
+    artifact_substitution_test: str = Field(min_length=3, max_length=320)
     witnesses: list[LearningProgressionWitness] = Field(min_length=2, max_length=2)
 
     @model_validator(mode="after")
     def validate_witnesses(self) -> LearningPrerequisiteEdge:
-        task_pairs = {(witness.prerequisite_task, witness.dependent_entry_task) for witness in self.witnesses}
+        task_pairs = {(witness.prerequisite_family, witness.dependent_entry_family) for witness in self.witnesses}
         if len(task_pairs) != len(self.witnesses):
-            raise ValueError("learning-prerequisite witnesses must use distinct task pairs")
+            raise ValueError("learning-prerequisite witnesses must use distinct task-family pairs")
         return self
 
 
@@ -322,6 +336,9 @@ class LearningProgression(StrictModel):
         )
         if out_of_scope_dependents:
             raise ValueError(f"learning progression has out-of-scope dependents: {out_of_scope_dependents}")
+
+
+CurriculumCatalog.model_rebuild()
 
 
 class LearningEdgeVerdict(StrEnum):

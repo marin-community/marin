@@ -288,41 +288,35 @@ rewrite archived results to match it.
 
 ## Learning-progression pass
 
-Generate learning prerequisites after the capability taxonomy has passed its bounded subject repair. Keep the
-working progression separate from subject curricula so edge-semantics changes do not rewrite capability nodes. A
-future catalog revision may merge the reviewed progression at the catalog root; do not copy it into each capability's
-embedded `prerequisites` field.
+Generate learning prerequisites after capability boundaries are stable. The production pass is subject-local: it
+does not send the whole catalog to an agent and it does not regenerate capabilities. The reviewed graph lives once at
+the catalog root in `learning_progression`; keep every capability's embedded `prerequisites` array empty.
 
-For one subject scope:
+For each subject:
 
-1. Give one Sol/high proposer the complete catalog, the subject IDs whose dependent capabilities are in scope, and
-   `prompts/learning_progression.md`. Use the Responses API structured-output path with `LearningProgression` as the
-   response schema; do not ask the model to infer field names from the prose. Prerequisites may come from any catalog
-   subject. Record the catalog hash, prompt hash, model, reasoning effort, and output hash.
-2. Parse the output with `LearningProgression` and call `validate_against_catalog`. This checks unique subject and
-   edge IDs, acyclicity, catalog identity, capability-only references, and dependent-subject scope.
-3. Give one fresh Sol/high reviewer the same catalog scope, proposal, and
-   `prompts/learning_progression_review.md`, with `LearningProgressionReview` as the structured response schema. The
-   reviewer judges every edge and returns complete witness-backed objects for clear omissions.
-4. Parse the result with `LearningProgressionReview` and call `validate_against_progression`. Combine accepted edges
-   with reviewed omissions after operator inspection. Repair a rejected edge only when its relationship remains
-   credible and the defect is confined to its witnesses. Stop after one bounded repair; preserve disagreements
-   instead of iterating reviewers to consensus.
-5. Validate the combined graph across all processed subjects for cycles and redundant transitive edges. The latter is
-   a semantic review: a direct edge may remain when it transfers a different foundation from the indirect path.
+1. Materialize a compact packet containing its groups and each capability's ID, parent, name, outcome, includes,
+   excludes, and entry/representative probes. Omit facets, evidence, scores, task mappings, previous prerequisites,
+   other subjects, and generation transcripts.
+2. Give the packet and `prompts/learning_progression.md` to one Sol/high proposer. Bind structured output to
+   `LearningProgression`, record catalog/prompt/model hashes, and require every endpoint to be a capability in that
+   subject.
+3. Parse and validate capability references, unique edge pairs, distinct witness-family pairs, and acyclicity.
+4. Give a fresh Sol/high reviewer the same packet, proposal, and `prompts/learning_progression_review.md`. The reviewer
+   judges every proposal and returns complete witness-backed objects for clear omissions.
+5. Validate exact review accounting, then combine accepted proposals with reviewer omissions. Do not run a routine
+   repair call: rejected edges stay rejected, and supplied omissions are already complete edge objects.
+
+After all subjects finish, combine their edges, validate the global graph, and merge it into a new immutable catalog
+version. Cross-subject prerequisites are a separate follow-up because discovering them would require a different
+routing or retrieval procedure; the subject-local pass must not infer them from a partial catalog view.
 
 The edge contract implements learning enablement. Mastery of A must materially improve the chance of success on a
 recurring family of entry-level B tasks. A may cover only a declared stratum of B. Pure artifact handoff, course
-order, general sophistication, and domain relabeling do not qualify. Each edge has two witness pairs that reuse the
-same upstream foundation and add one main dependent operation. These are structural hypotheses; Luna thresholds can
-find obvious ordering failures, but the workflow does not claim causal transfer without training evidence.
-Exact duplicate witness pairs are rejected by the model contract. Semantic task-family diversity is reviewer-enforced
-because paraphrase equivalence is not a reliable string-level invariant.
-
-Run one proposer and one reviewer per complete subject scope. Do not spawn one model call per capability or edge.
-Related small subjects may share a call when the combined graph fits comfortably in context. Use a bounded repair
-call only when the reviewer identifies concrete rejected edges whose witness defects cannot be resolved from its
-structured output.
+order, general sophistication, and domain relabeling do not qualify. Each edge has two concise task-family sketches
+that reuse the same upstream foundation and add one main dependent operation. These are structural hypotheses; the
+workflow does not claim causal transfer without training evidence. Exact duplicate family pairs are rejected by the
+model contract. Semantic family diversity is reviewer-enforced because paraphrase equivalence is not a reliable
+string-level invariant. Run exactly one proposer and one reviewer per subject, never one call per capability or edge.
 
 ## Catalog-wide bounded repair
 

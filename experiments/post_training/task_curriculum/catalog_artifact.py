@@ -40,6 +40,13 @@ class TaskCurriculumSubjectInventoryArtifact(Artifact):
 
 TASK_CURRICULUM = ArtifactStep.adopt(
     CATALOG_ARTIFACT_NAME,
+    "2026.09.20.1",
+    source="s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.20-subject-local-v3-0ce32038771d",
+    kind=TaskCurriculumCatalogArtifact,
+)
+
+TASK_CURRICULUM_V2 = ArtifactStep.adopt(
+    CATALOG_ARTIFACT_NAME,
     "2026.09.19.2",
     source="s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-json-1faada4eeda8/publish",
     kind=TaskCurriculumCatalogArtifact,
