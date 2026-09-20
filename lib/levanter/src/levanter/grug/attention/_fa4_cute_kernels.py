@@ -1291,7 +1291,9 @@ def segmented_flash_attention_backward_sm90_launcher(
         batch_idx = utils_module.ssa_to_scalar(batch_idx)
         q_idx = utils_module.ssa_to_scalar(q_idx)
         kv_idx = utils_module.ssa_to_scalar(kv_idx)
-        lower_bounds, valid = aux_tensors
+        # aux_tensors is (lower_bounds, valid) or (lower_bounds, valid, rel_bias) when a bias score_mod
+        # is also active; the mask only needs the first two.
+        lower_bounds, valid = aux_tensors[0], aux_tensors[1]
         query_in_bounds = cute.elem_less(q_idx, lower_bounds.shape[1])
         metadata_q_idx = q_idx if query_in_bounds else lower_bounds.shape[1] - 1
         query_valid = valid[batch_idx, metadata_q_idx] != 0
