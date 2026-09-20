@@ -147,11 +147,11 @@ class PrometheusCollector:
     def poll_once(self) -> None:
         """Run one scrape, process, and publication cycle, isolating the failed stage.
 
-        This runs on the daemon poll loop, so a stage failure is logged with its
-        traceback and recorded against that stage rather than propagated: letting
-        it escape would kill the collector thread and silently end forwarding.
-        The stage cursor attributes the failure so the loss surfaces as a health
-        metric instead of vanishing.
+        This runs on the daemon poll loop, so a stage failure is logged and
+        recorded against that stage rather than propagated: letting it escape
+        would kill the collector thread and silently end forwarding. The stage
+        cursor attributes the failure so the loss surfaces as a health metric
+        instead of vanishing.
         """
         stage = _PrometheusStage.SCRAPE
         try:
@@ -160,20 +160,43 @@ class PrometheusCollector:
             snapshots = self._processor(families)
             stage = _PrometheusStage.PUBLISH
             result = self._publisher.publish(snapshots)
-        except Exception:
-            self._stage_failed(stage)
-            self._record_health(source_available=stage is not _PrometheusStage.SCRAPE)
+        except Exception as error:
+            self._stage_failed(stage, error)
+            self._record_health_safely(source_available=stage is not _PrometheusStage.SCRAPE)
             return
-        self._record_health(source_available=True, result=result)
+        self._record_health_safely(source_available=True, result=result)
 
-    def _stage_failed(self, stage: _PrometheusStage) -> None:
+    def _stage_failed(self, stage: _PrometheusStage, error: Exception) -> None:
         self._stage_failures[stage] += 1
+        if stage is _PrometheusStage.SCRAPE and isinstance(error, requests.RequestException):
+            logger.warning(
+                "Prometheus %s stage failed for %s; forwarding continues: %s",
+                stage,
+                self._metric_source,
+                error,
+            )
+            return
         logger.warning(
             "Prometheus %s stage failed for %s; forwarding continues",
             stage,
             self._metric_source,
             exc_info=True,
         )
+
+    def _record_health_safely(
+        self,
+        *,
+        source_available: bool,
+        result: metrics.MetricPublishResult | None = None,
+    ) -> None:
+        try:
+            self._record_health(source_available=source_available, result=result)
+        except Exception:
+            logger.warning(
+                "Prometheus collector health reporting failed for %s; forwarding continues",
+                self._metric_source,
+                exc_info=True,
+            )
 
     def _record_health(
         self,
