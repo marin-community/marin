@@ -1,7 +1,7 @@
 # fast_track — dense vs MoE scaling ladder (H100, 16k BPE)
 
 Self-contained grug variant with 16k vocab size for fast iteration. Dense and MoE baselines shown
-below from 9e16 to 4.2e19 FLOPs.
+below from 9.4e16 to 4.3e19 FLOPs.
 
 ## Files
 
@@ -20,14 +20,14 @@ below from 9e16 to 4.2e19 FLOPs.
 
 | size | variant | TPP | batch | active | total | steps | tokens | FLOPs | MFU | Paloma loss | Paloma bpb | uncheat bpb | runtime |
 |------|---------|----:|------:|-------:|------:|------:|-------:|------:|----:|------------:|-----------:|------------:|--------:|
-| d512  | dense | 20 | 128 |  18.1M |  36.8M |    690 | 0.36B | 9.0e16 | 15.8% | 3.676 | 1.520 | 1.243 | 3.7m |
+| d512  | dense | 20 | 128 |  18.1M |  36.8M |    690 | 0.36B | 9.4e16 | 16.6% | 3.676 | 1.520 | 1.243 | 3.7m |
 | d768  | dense | 20 | 128 |  53.5M |  82.3M |  2,040 | 1.07B | 6.3e17 | 20.2% | 3.283 | 1.361 | 1.063 | 9.2m |
 | d1024 | dense | 20 | 256 | 144.7M | 185.3M |  2,760 | 2.89B | 3.9e18 | 26.7% | 3.006 | 1.248 | 0.945 | 34.8m |
-| d1280 | dense | 20 | 256 | 261.5M | 313.6M |  4,988 | 5.23B | 1.2e19 | 28.4% | 2.847 | 1.183 | 0.881 | 1.5 hr |
-| d512  | moe   | 60 | 128 |  20.8M |   483M |  2,385 | 1.25B | 3.3e17 |  7.8% | 3.156 | 1.308 | 1.008 | 14.0m |
+| d1280 | dense | 20 | 256 | 261.5M | 313.6M |  4,988 | 5.23B | 1.2e19 | 28.8% | 2.847 | 1.183 | 0.881 | 1.5 hr |
+| d512  | moe   | 60 | 128 |  20.8M |   483M |  2,385 | 1.25B | 3.5e17 |  8.2% | 3.156 | 1.308 | 1.008 | 14.0m |
 | d768  | moe   | 60 | 128 |  60.6M |  1.42B |  6,930 | 3.63B | 2.3e18 | 10.3% | 2.872 | 1.193 | 0.888 | 54.4m |
 | d1024 | moe   | 60 | 256 | 162.0M |  3.75B |  9,270 | 9.72B | 1.4e19 | 13.9% | 2.633 | 1.096 | 0.793 | 3.8 hr |
-| d1280 | moe   | 60 | 256 | 291.3M |  6.81B | 16,669 | 17.5B | 4.2e19 | 15.4% | 2.504 | 1.044 | 0.741 | 10.0 hr |
+| d1280 | moe   | 60 | 256 | 291.3M |  6.81B | 16,669 | 17.5B | 4.3e19 | 15.6% | 2.504 | 1.044 | 0.741 | 10.0 hr |
 
 W&B runs (project `marin-community/marin_moe`) —
 dense: [d512](https://wandb.ai/marin-community/marin_moe/runs/fasttrack-dense-d512) ·
@@ -64,13 +64,13 @@ the irreducible floor pinned at **L∞ = 1.2**:
 
 | variant | fit | R² | α |
 |---------|-----|---:|--:|
-| MoE   | `L = 1.2 + 56.76·C^(−0.0835)` | 0.99979 | 0.0835 |
-| dense | `L = 1.2 + 64.53·C^(−0.0836)` | 0.99917 | 0.0836 |
+| MoE   | `L = 1.2 + 58.67·C^(−0.0842)` | 0.99995 | 0.0842 |
+| dense | `L = 1.2 + 66.70·C^(−0.0844)` | 0.99870 | 0.0844 |
 
 ![Paloma scaling law](scaling_law.png)
 
 **Compute efficiency:** the MoE recipe (60 TPP) reaches the same Paloma loss as the compute-optimal
-dense recipe (20 TPP) with **~4.3× less compute**.
+dense recipe (20 TPP) with **~4.2× less compute**.
 
 ## Launch commands
 

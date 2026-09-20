@@ -333,6 +333,31 @@ def build_tagged_evaluator(
     )
 
 
+def _forced_final_global_flops(cfg: GrugModelConfig) -> float:
+    """FLOPs/token for the forced-final-global layer that `lm_flops_per_token` misses.
+
+    The model makes the last layer full-attention even when `num_layers` is not a multiple of
+    `global_every` (see `_long_layer_schedule`), but the shared util counts only
+    `num_layers // global_every` global layers. Return the local->global delta for that one layer
+    (full-`seq_len` attention + global-KV projection, minus the sliding-window local layer it was
+    counted as), or 0 when the depth is already a multiple of `global_every`.
+    """
+    sw, ge, seq = cfg.sliding_window, cfg.global_every, cfg.max_seq_len
+    if not (sw is not None and ge and 0 < sw < seq and cfg.num_layers % ge != 0):
+        return 0.0
+    n, hd = cfg.num_heads, cfg.inferred_head_dim
+    local_kv = cfg.local_kv_heads if cfg.local_kv_heads is not None else cfg.num_kv_heads
+    global_kv = cfg.global_kv_heads if cfg.global_kv_heads is not None else cfg.num_kv_heads
+
+    def qkv(kv: int) -> float:  # matches `_qkv_proj` in lm_flops_per_token
+        return 2 * cfg.hidden_dim * (n * hd + 2 * kv * hd)
+
+    def attn(span: int) -> float:  # matches `_attn_per_token` in lm_flops_per_token
+        return ((2 * seq * span * n * hd) + (3 * seq * span * n) + (2 * seq * span * hd * n)) / seq
+
+    return (qkv(global_kv) + attn(seq)) - (qkv(local_kv) + attn(sw))
+
+
 def _compute_flops(
     *,
     model_config: GrugModelConfig,
@@ -341,7 +366,7 @@ def _compute_flops(
     # shared experts and no latent. Pricing it with the MoE terms (top-k + shared experts) overcounts
     # its FLOPs ~2x, which would inflate both its reported MFU and its scaling-law compute.
     if model_config.dense_mlp:
-        dense_flops_per_token = lm_flops_per_token(
+        flops_per_token = lm_flops_per_token(
             hidden_dim=model_config.hidden_dim,
             intermediate_dim=model_config.intermediate_dim,
             shared_intermediate_dim=0,
@@ -359,40 +384,41 @@ def _compute_flops(
             local_kv_heads=model_config.local_kv_heads,
             global_kv_heads=model_config.global_kv_heads,
         )
-        dense_flops_per_example = 3 * dense_flops_per_token * model_config.max_seq_len
-        return dense_flops_per_example, {
-            "throughput/flops_per_token_analytic": dense_flops_per_token,
-            "throughput/flops_per_example_analytic": dense_flops_per_example,
-        }
+    else:
+        flops_per_token = lm_flops_per_token(
+            hidden_dim=model_config.hidden_dim,
+            intermediate_dim=model_config.intermediate_dim,
+            shared_intermediate_dim=model_config.shared_expert_intermediate_dim,
+            num_layers=model_config.num_layers,
+            num_kv_heads=model_config.num_kv_heads,
+            num_heads=model_config.num_heads,
+            seq_len=model_config.max_seq_len,
+            vocab_size=model_config.vocab_size,
+            glu=True,
+            num_experts=model_config.num_experts,
+            num_shared_experts=(
+                model_config.num_shared_experts if model_config.shared_expert_intermediate_dim > 0 else 0
+            ),
+            num_experts_per_tok=model_config.num_experts_per_token,
+            sliding_window=model_config.sliding_window,
+            global_every=model_config.global_every,
+            local_kv_heads=model_config.local_kv_heads,
+            global_kv_heads=model_config.global_kv_heads,
+        )
+        # `lm_flops_per_token` prices every matmul at `hidden_dim`. Under LatentMoE the routed experts
+        # live at `latent_dim` instead, and two projections are added per layer, so correct both terms
+        # or MFU is overstated by roughly the compression ratio.
+        if model_config.latent_dim is not None:
+            latent, hidden = model_config.latent_dim, model_config.hidden_dim
+            # Matches the routed term in `lm_flops_per_token`: 2 * 3 * width * intermediate * top_k.
+            routed_delta = 2 * 3 * model_config.intermediate_dim * model_config.num_experts_per_token * (latent - hidden)
+            # W_down (hidden -> latent) and W_up (latent -> hidden), once per token each.
+            projection = 2 * 2 * hidden * latent
+            flops_per_token += model_config.num_layers * (routed_delta + projection)
 
-    flops_per_token = lm_flops_per_token(
-        hidden_dim=model_config.hidden_dim,
-        intermediate_dim=model_config.intermediate_dim,
-        shared_intermediate_dim=model_config.shared_expert_intermediate_dim,
-        num_layers=model_config.num_layers,
-        num_kv_heads=model_config.num_kv_heads,
-        num_heads=model_config.num_heads,
-        seq_len=model_config.max_seq_len,
-        vocab_size=model_config.vocab_size,
-        glu=True,
-        num_experts=model_config.num_experts,
-        num_shared_experts=model_config.num_shared_experts if model_config.shared_expert_intermediate_dim > 0 else 0,
-        num_experts_per_tok=model_config.num_experts_per_token,
-        sliding_window=model_config.sliding_window,
-        global_every=model_config.global_every,
-        local_kv_heads=model_config.local_kv_heads,
-        global_kv_heads=model_config.global_kv_heads,
-    )
-    # `lm_flops_per_token` prices every matmul at `hidden_dim`. Under LatentMoE the routed experts
-    # live at `latent_dim` instead, and two projections are added per layer, so correct both terms
-    # or MFU is overstated by roughly the compression ratio.
-    if model_config.latent_dim is not None:
-        latent, hidden = model_config.latent_dim, model_config.hidden_dim
-        # Matches the routed term in `lm_flops_per_token`: 2 * 3 * width * intermediate * top_k.
-        routed_delta = 2 * 3 * model_config.intermediate_dim * model_config.num_experts_per_token * (latent - hidden)
-        # W_down (hidden -> latent) and W_up (latent -> hidden), once per token each.
-        projection = 2 * 2 * hidden * latent
-        flops_per_token += model_config.num_layers * (routed_delta + projection)
+    # The last layer is forced global even when depth is not a multiple of `global_every`; add the one
+    # global layer the shared util misses (applies to both dense and MoE).
+    flops_per_token += _forced_final_global_flops(model_config)
 
     flops_per_example = 3 * flops_per_token * model_config.max_seq_len
 

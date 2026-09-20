@@ -271,8 +271,9 @@ def build_h100_ladder_run(
     elif num_steps <= 0:
         raise ValueError(f"--num-steps must be positive, got {num_steps}")
 
-    # no_eval pushes eval past the run end (clean MFU probes); otherwise eval at the midpoint and end.
-    steps_per_eval = num_steps + 1 if no_eval else max(1, num_steps // 2)
+    # Eval at the midpoint and end; no_eval disables it entirely below (the forced final callback would
+    # otherwise still run a full eval, so pushing the interval past the end is not enough).
+    steps_per_eval = max(1, num_steps // 2)
     optimizer = MoeHeuristic().build_optimizer_config(
         num_train_steps=num_steps,
         batch_size=batch_size,
@@ -358,12 +359,16 @@ def build_h100_ladder_run(
             tensorstore_cache_bytes=TENSORSTORE_CACHE_BYTES,
             optimizer=optimizer,
             trainer=dataclasses.replace(grug_trainer, trainer=trainer),
-            eval=GrugEvalConfig(
-                steps_per_eval=steps_per_eval,
-                eval_batch_size=rung.global_device_count,
-                compute_bpb=True,
-                dropless_eval=True,
-                dropless_eval_moe_implementation="sonic",
+            eval=(
+                None
+                if no_eval
+                else GrugEvalConfig(
+                    steps_per_eval=steps_per_eval,
+                    eval_batch_size=rung.global_device_count,
+                    compute_bpb=True,
+                    dropless_eval=True,
+                    dropless_eval_moe_implementation="sonic",
+                )
             ),
             stop_after_steps=num_steps,
             processes_per_task=rung.gpus_per_task,
