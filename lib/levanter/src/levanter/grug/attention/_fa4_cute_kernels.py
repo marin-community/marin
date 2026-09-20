@@ -1153,9 +1153,11 @@ def segmented_flash_attention_backward_launcher(
             lse,  # mLSE
             lse_log2,  # mLSElog2
             dq_accum,  # mdQaccum
+            None,  # mScaleP
             None,  # mCuSeqlensQ
             None,  # mSeqUsedQ
             None,  # mdLSE
+            softmax_scale,
             stream,
         )
         if cutlass.const_expr(qhead_per_kvhead == 1):
