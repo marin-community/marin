@@ -29,7 +29,7 @@ def test_science_mix_identities_are_distinct_and_versioned():
 def test_science_text_catalog_has_each_approved_family():
     datasets = science_curriculum_datasets()
 
-    assert len(datasets) == 14
+    assert len(datasets) == 15
     assert "biocollection/free_text_stream" in datasets
     assert "swallow-math-v2/qa" in datasets
     assert "ultradata-math/l2" in datasets

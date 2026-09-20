@@ -86,6 +86,7 @@ SWALLOW_SOURCES = (
 )
 ULTRADATA_SOURCES = ("ultradata-math/l2",)
 CURRICULUM_TEXT_SOURCES = (
+    "hal/mathematics-licensed-abstracts",
     "openstax/physics",
     "openstax/chemistry",
     "openstax/biology",

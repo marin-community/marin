@@ -4,7 +4,6 @@
 """Tokenized text handles for the licensed science-curriculum experiment."""
 
 from fray.types import ResourceConfig
-
 from marin.datakit.science_source_candidates import science_source_candidates
 from marin.datakit.sources import all_sources
 from marin.execution.lazy import ArtifactStep

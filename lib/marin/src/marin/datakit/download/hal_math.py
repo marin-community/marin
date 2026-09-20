@@ -36,12 +36,22 @@ logger = logging.getLogger(__name__)
 HAL_SEARCH_URL = "https://api.hal.science/search/"
 HAL_REUSE_TERMS_URL = "https://doc.hal.science/aspects-juridiques/conditions-de-reutilisation/"
 HAL_DATASET_REVISION = "2dab727888c4f29eb61d1a3abb9764f5b03ea0c2"
-HAL_DATASET_URL = (
-    "https://huggingface.co/datasets/aritol/hal-open-archive-mathematics-resources/tree/"
-    f"{HAL_DATASET_REVISION}"
-)
+HAL_DATASET_REPO_URL = "https://huggingface.co/datasets/aritol/hal-open-archive-mathematics-resources"
+HAL_DATASET_URL = f"{HAL_DATASET_REPO_URL}/tree/{HAL_DATASET_REVISION}"
 HAL_MATH_ABSTRACTS_NAME = "hal/mathematics-licensed-abstracts"
 HAL_API_PAGE_SIZE = 10_000
+HAL_API_FIELDS = (
+    "docid",
+    "halId_s",
+    "uri_s",
+    "title_s",
+    "abstract_s",
+    "fileLicenses_s",
+    "arxivId_s",
+    "doiId_s",
+    "domain_s",
+    "submittedDate_s",
+)
 
 HAL_COMPATIBLE_LICENSES: Mapping[str, str] = MappingProxyType(
     {
@@ -146,10 +156,8 @@ def hal_record_to_document(record: Mapping[str, Any]) -> dict[str, Any] | None:
 
 
 def _hal_license_query(license_uri: str) -> str:
-    return (
-        "(domain_s:0.math) AND (submitType_s:file) AND "
-        f'(fileLicenses_s:"{license_uri}")'
-    )
+    license_clause = f'fileLicenses_s:"{license_uri}"'
+    return f"(domain_s:0.math) AND (submitType_s:file) AND ({license_clause})"
 
 
 def _iter_license_records(
@@ -165,10 +173,7 @@ def _iter_license_records(
             HAL_SEARCH_URL,
             params={
                 "q": _hal_license_query(license_uri),
-                "fl": (
-                    "docid,halId_s,uri_s,title_s,abstract_s,fileLicenses_s,arxivId_s,doiId_s,"
-                    "domain_s,submittedDate_s"
-                ),
+                "fl": ",".join(HAL_API_FIELDS),
                 "rows": page_size,
                 "sort": "docid asc",
                 "cursorMark": cursor,
