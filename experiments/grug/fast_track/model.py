@@ -132,6 +132,7 @@ class GrugModelConfig:
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     # Dense (no-MoE) mode: every block is a single DenseMLP(hidden, intermediate_dim) SwiGLU; the MoE fields are ignored.
     dense_mlp: bool = False
+    parallel_layers: bool = False  # PaLM-style: attn and MLP both read the block input, summed once.
 
     def __post_init__(self) -> None:
         if not self.dense_mlp and self.num_experts_per_token >= self.num_experts:
@@ -683,11 +684,14 @@ class Block(eqx.Module):
         _seg = mask.segment_ids if isinstance(mask, AttentionMask) else None
         sconv_segment_ids = _seg[0] if _seg is not None else None
 
+        # Parallel (PaLM/GPT-J): attn and MLP both read the same block input; sequential otherwise.
+        parallel = self.mlp.cfg.parallel_layers if hasattr(self.mlp, "cfg") else False
         attn_in = self.attn_gated_norm(self.rms_attn(x))
         attn_out = self.attn(attn_in, mask, disable_rope=disable_rope, is_global=is_global)
         if self.sconv_attn is not None:
             attn_out = self.sconv_attn(attn_out, sconv_segment_ids)
-        x = x + attn_out
+        if not parallel:
+            x = x + attn_out
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         if isinstance(self.mlp, DenseMLP):
             mlp_out = self.mlp(mlp_in, moe_output_reshard=False)
@@ -699,7 +703,7 @@ class Block(eqx.Module):
                 mlp_out = mlp_out + shared_expert(mlp_in, activation=ActivationFunctionEnum.silu)
         if self.sconv_mlp is not None:
             mlp_out = self.sconv_mlp(mlp_out, sconv_segment_ids)
-        x = x + mlp_out
+        x = x + mlp_out if not parallel else x + attn_out + mlp_out
         return x, router_stats
 
 
