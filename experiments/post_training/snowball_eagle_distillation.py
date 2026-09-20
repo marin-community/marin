@@ -58,7 +58,7 @@ INITIAL_DRAFT_URI = "hf://laion/snowball-64k-eagle3-draft-r2egym"
 INITIAL_DRAFT_REVISION = "4bdb47c08e5b5190bea3c7a93c3e14470230e469"
 CLUSTER = "cw-rno2a"
 GPUS_PER_NODE = 8
-MARINSKYRL_COMMIT = "c43c70369c247be576e28385f929b9e1f7e22cfb"
+MARINSKYRL_COMMIT = "b33b72c6340e1cd0f4cd0b8093af3fccfdde7c43"
 RL_DATA_VERSION = "2026.09.18"
 
 DISTILLATION_CONFIG = """
@@ -101,6 +101,7 @@ generator:
   # node-local request schedulers across the eight pools.
   inference_engine_data_parallel_size: 8
   inference_engine_expert_parallel_size: 8
+  inference_engine_node_local: true
   num_inference_engines: 8
   n_samples_per_prompt: 16
   eval_n_samples_per_prompt: 4
@@ -205,6 +206,7 @@ trainer:
         grad_reduce_in_fp32: false
   placement:
     colocate_all: false
+    policy_strict_spread_pg: true
     policy_num_nodes: 4
     policy_num_gpus_per_node: 8
 
@@ -216,6 +218,7 @@ generator:
   inference_engine_pipeline_parallel_size: 1
   inference_engine_data_parallel_size: 8
   inference_engine_expert_parallel_size: 8
+  inference_engine_node_local: true
   # Eight engines are eight node-local pools, not eight GPU workers.
   num_inference_engines: 8
   n_samples_per_prompt: 16
