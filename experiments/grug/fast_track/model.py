@@ -132,6 +132,7 @@ class GrugModelConfig:
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     # Dense (no-MoE) mode: every block is a single DenseMLP(hidden, intermediate_dim) SwiGLU; the MoE fields are ignored.
     dense_mlp: bool = False
+    sandwich_norm: bool = False  # Gemma-2: extra RMSNorm on each sublayer output before the residual add.
 
     def __post_init__(self) -> None:
         if not self.dense_mlp and self.num_experts_per_token >= self.num_experts:
@@ -623,10 +624,17 @@ class Block(eqx.Module):
     shared: tuple[DenseMLP, ...] | None
     sconv_attn: "ShortConv | None"
     sconv_mlp: "ShortConv | None"
+    attn_post_norm: "RMSNorm | None"
+    mlp_post_norm: "RMSNorm | None"
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
         attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key = random.split(key, 5)
+        attn_post_norm, mlp_post_norm = (
+            (RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps), RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps))
+            if cfg.sandwich_norm
+            else (None, None)
+        )
         if cfg.dense_mlp:
             # Dense block: one SwiGLU DenseMLP(hidden, intermediate_dim), no MoE and no shared experts.
             return Block(
@@ -643,6 +651,8 @@ class Block(eqx.Module):
                 sconv_mlp=(
                     ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel) if cfg.sconv and "mlp" in cfg.sconv_sites else None
                 ),
+                attn_post_norm=attn_post_norm,
+                mlp_post_norm=mlp_post_norm,
             )
         shared = None
         if cfg.shared_expert_intermediate_dim > 0:
@@ -669,6 +679,8 @@ class Block(eqx.Module):
             sconv_mlp=(
                 ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel) if cfg.sconv and "mlp" in cfg.sconv_sites else None
             ),
+            attn_post_norm=attn_post_norm,
+            mlp_post_norm=mlp_post_norm,
         )
 
     @named_call
@@ -687,6 +699,8 @@ class Block(eqx.Module):
         attn_out = self.attn(attn_in, mask, disable_rope=disable_rope, is_global=is_global)
         if self.sconv_attn is not None:
             attn_out = self.sconv_attn(attn_out, sconv_segment_ids)
+        if self.attn_post_norm is not None:
+            attn_out = self.attn_post_norm(attn_out)
         x = x + attn_out
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         if isinstance(self.mlp, DenseMLP):
@@ -699,6 +713,8 @@ class Block(eqx.Module):
                 mlp_out = mlp_out + shared_expert(mlp_in, activation=ActivationFunctionEnum.silu)
         if self.sconv_mlp is not None:
             mlp_out = self.sconv_mlp(mlp_out, sconv_segment_ids)
+        if self.mlp_post_norm is not None:
+            mlp_out = self.mlp_post_norm(mlp_out)
         x = x + mlp_out
         return x, router_stats
 
