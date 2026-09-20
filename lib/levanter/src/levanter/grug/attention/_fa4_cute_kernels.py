@@ -60,6 +60,7 @@ Nontrivial differences from upstream FA4/CuTe:
 
 import importlib
 import math
+import os
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Callable
@@ -1308,7 +1309,17 @@ def segmented_flash_attention_backward_sm90_launcher(
     # add A directly (no scale conversion). Additive bias -> identity backward for dQ/dK/dV, so no
     # score_mod_bwd. head_idx/q_idx/kv_idx arrive as per-lane SSA vectors (logical q head for GQA).
     inkling_score_mod = None
-    if use_rel_bias:
+    _sm_identity = os.environ.get("FAST_TRACK_INKLING_SM_IDENTITY") == "1"
+    if use_rel_bias and _sm_identity:
+
+        @cute.jit
+        def _grug_identity_score_mod(score, batch_idx, head_idx, q_idx, kv_idx, seqlen_info, aux_tensors):
+            # Debug isolation: exercises the score_mod path (LOG2E scale switch) with no bias add.
+            del batch_idx, head_idx, q_idx, kv_idx, seqlen_info, aux_tensors
+            return score
+
+        inkling_score_mod = _grug_identity_score_mod
+    elif use_rel_bias:
 
         @cute.jit
         def _grug_inkling_score_mod(score, batch_idx, head_idx, q_idx, kv_idx, seqlen_info, aux_tensors):
