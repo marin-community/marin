@@ -22,20 +22,16 @@ detokenized — see [`../../datakit/paloma_detok.py`](../../datakit/paloma_detok
 
 ## Results
 
-Dense at 20 tokens/active-param, MoE at 60; d512/d768 at batch 128, d1024/d1280 at batch 256, on 1 node
-(8×H100); base LR. FLOPs are total training FLOPs (6·N·D, fwd+bwd); MFU is the steady-state per-step
-mean. Both loss (Paloma macro cross-entropy) and bpb (macro bits-per-byte) are lower-is-better.
-
-| size | variant | TPP | steps | tokens | FLOPs | MFU | Paloma loss | Paloma bpb | uncheat bpb | runtime |
-|------|---------|----:|------:|-------:|------:|----:|------------:|-----------:|------------:|--------:|
-| d512  | dense | 20 |    690 | 0.36B | 9.0e16 | 15.8% | 3.676 | 1.520 | 1.243 | 3.7m |
-| d512  | moe   | 60 |  2,385 | 1.25B | 3.3e17 |  7.8% | 3.156 | 1.308 | 1.008 | 14.0m |
-| d768  | dense | 20 |  2,040 | 1.07B | 6.3e17 | 20.2% | 3.283 | 1.361 | 1.063 | 9.2m |
-| d768  | moe   | 60 |  6,930 | 3.63B | 2.3e18 | 10.3% | 2.872 | 1.193 | 0.888 | 54.4m |
-| d1024 | dense | 20 |  2,760 | 2.89B | 3.9e18 | 26.7% | 3.006 | 1.248 | 0.945 | 34.8m |
-| d1024 | moe   | 60 |  9,270 | 9.72B | 1.4e19 | 13.9% | 2.633 | 1.096 | 0.793 | 3.8 hr |
-| d1280 | dense | 20 |  4,988 | 5.23B | 1.2e19 | 28.4% | 2.847 | 1.183 | 0.881 | 1.5 hr |
-| d1280 | moe   | 60 | 16,669 | 17.5B | 4.2e19 | 15.4% | 2.504 | 1.044 | 0.741 | 10.0 hr |
+| size | variant | TPP | batch | steps | tokens | FLOPs | MFU | Paloma loss | Paloma bpb | uncheat bpb | runtime |
+|------|---------|----:|------:|------:|-------:|------:|----:|------------:|-----------:|------------:|--------:|
+| d512  | dense | 20 | 128 |    690 | 0.36B | 9.0e16 | 15.8% | 3.676 | 1.520 | 1.243 | 3.7m |
+| d512  | moe   | 60 | 128 |  2,385 | 1.25B | 3.3e17 |  7.8% | 3.156 | 1.308 | 1.008 | 14.0m |
+| d768  | dense | 20 | 128 |  2,040 | 1.07B | 6.3e17 | 20.2% | 3.283 | 1.361 | 1.063 | 9.2m |
+| d768  | moe   | 60 | 128 |  6,930 | 3.63B | 2.3e18 | 10.3% | 2.872 | 1.193 | 0.888 | 54.4m |
+| d1024 | dense | 20 | 256 |  2,760 | 2.89B | 3.9e18 | 26.7% | 3.006 | 1.248 | 0.945 | 34.8m |
+| d1024 | moe   | 60 | 256 |  9,270 | 9.72B | 1.4e19 | 13.9% | 2.633 | 1.096 | 0.793 | 3.8 hr |
+| d1280 | dense | 20 | 256 |  4,988 | 5.23B | 1.2e19 | 28.4% | 2.847 | 1.183 | 0.881 | 1.5 hr |
+| d1280 | moe   | 60 | 256 | 16,669 | 17.5B | 4.2e19 | 15.4% | 2.504 | 1.044 | 0.741 | 10.0 hr |
 
 Dense FLOPs/MFU were previously overstated ~2× because the analytic FLOP counter priced the dense MLP
 as an 8-expert-plus-shared MoE; fixed in `train.py::_compute_flops`. Corrected here, dense runs at
