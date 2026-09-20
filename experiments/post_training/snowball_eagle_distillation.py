@@ -29,27 +29,22 @@ from marin.rl.skyrl import (
     SkyRLTopology,
     eagle_draft_distillation_step,
 )
-from marin.training.training import LevanterCheckpoint
 
-from experiments.evaluation.models import SNOWBALL_SFT_EXPORT_URI
+from experiments.post_training.curriculum_rl.launch import (
+    MARIN_TOKENIZER,
+    MARIN_TOKENIZER_REVISION,
+    POOL_ARTIFACT_NAME,
+    SNOWBALL_MODEL,
+)
 from experiments.post_training.curriculum_rl.pool import VALIDATION_FILENAME, pool_step
 
 ARTIFACT_NAME = "models/snowball-67b-a2b-eagle3-distilled"
-POOL_ARTIFACT_NAME = "documents/curriculum-rl-pool"
 POOL_ARTIFACT_VERSION = "2026.09.18"
 INITIAL_DRAFT_URI = "hf://laion/snowball-64k-eagle3-draft-r2egym"
 INITIAL_DRAFT_REVISION = "4bdb47c08e5b5190bea3c7a93c3e14470230e469"
-MARIN_TOKENIZER = "marin-community/marin-tokenizer"
-MARIN_TOKENIZER_REVISION = "a5ca45f"
+CLUSTER = "cw-us-east-02a"
 GPUS_PER_NODE = 8
 MARINSKYRL_COMMIT = "bce12eb5c03b5797f2163b745148c13f78f1d01a"
-
-SNOWBALL_MODEL = ArtifactStep.adopt(
-    "models/snowball-67b-a2b-sft-s2-thinking",
-    "2026.08.30",
-    SNOWBALL_SFT_EXPORT_URI,
-    kind=LevanterCheckpoint,
-)
 
 DISTILLATION_CONFIG = """
 entrypoint: generate
@@ -183,8 +178,8 @@ def build_distillation(version: str | None = None) -> ArtifactStep[EagleDraftMod
             seed=17,
         ),
         IrisSkyRLExecution(
-            cluster="cw-us-east-02a",
-            cluster_config="lib/iris/config/cw-us-east-02a.yaml",
+            cluster=CLUSTER,
+            cluster_config=f"lib/iris/config/{CLUSTER}.yaml",
             cpu=16,
             memory="512GB",
             disk="2TB",

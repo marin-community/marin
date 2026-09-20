@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import json
-import posixpath
 import subprocess
 import sys
 import tempfile
@@ -21,8 +20,8 @@ import fsspec
 import yaml
 from pydantic import BaseModel
 from rigging.filesystem.cluster_config import marin_temp_bucket
-from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rigging.fsutil.transfer import copy_plan, execute_copy_plan
 
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.utils import discover_hf_checkpoints
@@ -533,7 +532,7 @@ def _launcher_requirement(runtime: SkyRLRuntime) -> str:
     return replace(MARIN_SKYRL, commit=runtime.commit).requirement()
 
 
-def _eagle_config_with_draft(config: object, draft: EagleDraftSource) -> dict[str, Any]:
+def _eagle_speculative_config(config: object) -> dict[str, Any]:
     if not isinstance(config, dict):
         raise ValueError("EAGLE configuration must be a YAML mapping")
     generator = config.get("generator")
@@ -542,15 +541,16 @@ def _eagle_config_with_draft(config: object, draft: EagleDraftSource) -> dict[st
     speculative = generator.get("speculative_decoding")
     if not isinstance(speculative, dict):
         raise ValueError("EAGLE configuration requires generator.speculative_decoding")
+    return speculative
+
+
+def _eagle_config_yaml_with_draft(config_yaml: str, draft: EagleDraftSource) -> str:
+    config = yaml.safe_load(config_yaml)
+    speculative = _eagle_speculative_config(config)
     speculative["model"] = {
         "source_uri": draft.uri,
         "source_identity": draft.identity,
     }
-    return config
-
-
-def _config_with_eagle_draft(config_yaml: str, draft: EagleDraftSource) -> str:
-    config = _eagle_config_with_draft(yaml.safe_load(config_yaml), draft)
     return yaml.safe_dump(config, sort_keys=False)
 
 
@@ -656,18 +656,8 @@ def run_eagle_draft_distillation(config: SkyRLRunConfig) -> EagleDraftModel:
 
 def _copy_eagle_draft_checkpoint(source_uri: str, destination_uri: str) -> None:
     """Copy one completed draft from temporary checkpoint storage to the durable artifact path."""
-    source_fs, source_root = url_to_fs(source_uri, use_listings_cache=False)
-    destination_fs, destination_root = url_to_fs(destination_uri, use_listings_cache=False)
-    if type(source_fs) is not type(destination_fs) or source_fs.storage_options != destination_fs.storage_options:
-        raise ValueError("EAGLE draft publication requires temporary and durable paths on the same filesystem")
-    source_files = source_fs.find(source_root, withdirs=False)
-    if not source_files:
-        raise FileNotFoundError(f"EAGLE draft checkpoint is empty: {source_uri}")
-    for source_path in source_files:
-        relative_path = posixpath.relpath(source_path, source_root)
-        destination_path = posixpath.join(destination_root, relative_path)
-        destination_fs.makedirs(posixpath.dirname(destination_path), exist_ok=True)
-        source_fs.copy(source_path, destination_path)
+    plan = copy_plan((source_uri,), destination_uri, recursive=True, no_clobber=False)
+    execute_copy_plan(plan)
 
 
 def _record_skyrl_run(config: SkyRLRunConfig, status: str, response: _SkyRLLaunchResponse | None) -> None:
@@ -692,10 +682,16 @@ def _record_skyrl_run(config: SkyRLRunConfig, status: str, response: _SkyRLLaunc
     )
 
 
-def _skyrl_output_paths(
+@dataclass(frozen=True)
+class _SkyRLAttemptOutput:
+    attempt_id: str
+    output: SkyRLOutputPaths
+
+
+def _skyrl_attempt_output(
     ctx: StepContext,
     retention: SkyRLRetentionPolicy,
-) -> tuple[str, str, SkyRLOutputPaths]:
+) -> _SkyRLAttemptOutput:
     attempt_id = _FINGERPRINT_ATTEMPT_ID if ctx.is_fingerprint else uuid.uuid4().hex[:12]
     temporary_root = (
         _FINGERPRINT_TEMPORARY_OUTPUT_PATH
@@ -706,10 +702,9 @@ def _skyrl_output_paths(
         )
     )
     attempts_root = prefix_join(temporary_root, _ATTEMPTS_SUBDIR)
-    return (
-        attempt_id,
-        attempts_root,
-        SkyRLOutputPaths(
+    return _SkyRLAttemptOutput(
+        attempt_id=attempt_id,
+        output=SkyRLOutputPaths(
             checkpoint_root=prefix_join(temporary_root, _CHECKPOINTS_SUBDIR),
             export_root=prefix_join(ctx.output_path, _EXPORTS_SUBDIR),
             attempts_root=attempts_root,
@@ -734,25 +729,26 @@ def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[S
     )
 
     def build_config(ctx: StepContext) -> SkyRLRunConfig:
-        attempt_id, attempts_root, output = _skyrl_output_paths(ctx, spec.retention)
+        attempt = _skyrl_attempt_output(ctx, spec.retention)
+        trajectory_output_path = prefix_join(attempt.output.attempts_root, _TRAJECTORIES_SUBDIR)
         retention_overrides = (
             f"++trainer.max_ckpts_to_keep={spec.retention.resume_checkpoint_count}",
-            f"++terminal_bench_config.trials_dir='{prefix_join(attempts_root, _TRACE_JOBS_SUBDIR)}'",
-            f"++generator.trajectory_retention.output_path='{prefix_join(attempts_root, _TRAJECTORIES_SUBDIR)}'",
+            f"++terminal_bench_config.trials_dir='{prefix_join(attempt.output.attempts_root, _TRACE_JOBS_SUBDIR)}'",
+            f"++generator.trajectory_retention.output_path='{trajectory_output_path}'",
         )
         config_yaml = spec.config_yaml
         if spec.draft_model is not None:
-            config_yaml = _config_with_eagle_draft(config_yaml, spec.draft_model.resolve(ctx))
+            config_yaml = _eagle_config_yaml_with_draft(config_yaml, spec.draft_model.resolve(ctx))
         request = SkyRLLaunchRequest(
             run_id=f"{step_name}-{spec.version}",
-            attempt_id=attempt_id,
+            attempt_id=attempt.attempt_id,
             config_yaml=config_yaml,
             runtime=spec.runtime,
             model=spec.model.resolve(ctx),
             train_data=tuple(source.resolve(ctx) for source in spec.train_data),
             validation_data=tuple(source.resolve(ctx) for source in spec.validation_data),
             topology=spec.topology,
-            output=output,
+            output=attempt.output,
             seed=spec.seed,
             overrides=(*spec.overrides, *retention_overrides),
         )
@@ -777,11 +773,14 @@ def _eagle_distillation_config(spec: EagleDraftDistillationSpec) -> str:
     config = yaml.safe_load(spec.config_yaml)
     if not isinstance(config, dict) or config.get("entrypoint") != "generate":
         raise ValueError("EAGLE draft distillation config_yaml must declare entrypoint: generate")
-    generator = config.get("generator")
-    speculative = generator.get("speculative_decoding") if isinstance(generator, dict) else None
-    if not isinstance(speculative, dict) or not isinstance(speculative.get("training"), dict):
+    speculative = _eagle_speculative_config(config)
+    if not isinstance(speculative.get("training"), dict):
         raise ValueError("EAGLE draft distillation config_yaml requires speculative_decoding.training")
-    return yaml.safe_dump(_eagle_config_with_draft(config, spec.initial_draft), sort_keys=False)
+    speculative["model"] = {
+        "source_uri": spec.initial_draft.uri,
+        "source_identity": spec.initial_draft.identity,
+    }
+    return yaml.safe_dump(config, sort_keys=False)
 
 
 def eagle_draft_distillation_step(
@@ -799,21 +798,22 @@ def eagle_draft_distillation_step(
     )
 
     def build_config(ctx: StepContext) -> SkyRLRunConfig:
-        attempt_id, attempts_root, output = _skyrl_output_paths(ctx, spec.retention)
+        attempt = _skyrl_attempt_output(ctx, spec.retention)
+        trajectory_output_path = prefix_join(attempt.output.attempts_root, _TRAJECTORIES_SUBDIR)
         request = SkyRLLaunchRequest(
             run_id=f"{spec.name}-{spec.version}",
-            attempt_id=attempt_id,
+            attempt_id=attempt.attempt_id,
             config_yaml=_eagle_distillation_config(spec),
             runtime=spec.runtime,
             model=spec.target_model.resolve(ctx),
             train_data=(),
             validation_data=tuple(source.resolve(ctx) for source in spec.data),
             topology=spec.topology,
-            output=output,
+            output=attempt.output,
             seed=spec.seed,
             overrides=(
                 *spec.overrides,
-                f"++generator.trajectory_retention.output_path='{prefix_join(attempts_root, _TRAJECTORIES_SUBDIR)}'",
+                f"++generator.trajectory_retention.output_path='{trajectory_output_path}'",
             ),
         )
         return SkyRLRunConfig(
