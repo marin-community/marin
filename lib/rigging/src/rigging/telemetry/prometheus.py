@@ -147,11 +147,11 @@ class PrometheusCollector:
     def poll_once(self) -> None:
         """Run one scrape, process, and publication cycle, isolating the failed stage.
 
-        This runs on the daemon poll loop, so a stage failure is logged with its
-        traceback and recorded against that stage rather than propagated: letting
-        it escape would kill the collector thread and silently end forwarding.
-        The stage cursor attributes the failure so the loss surfaces as a health
-        metric instead of vanishing.
+        This runs on the daemon poll loop, so a stage failure is logged and
+        recorded against that stage rather than propagated: letting it escape
+        would kill the collector thread and silently end forwarding. The stage
+        cursor attributes the failure so the loss surfaces as a health metric
+        instead of vanishing.
         """
         stage = _PrometheusStage.SCRAPE
         try:
