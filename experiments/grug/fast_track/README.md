@@ -69,11 +69,13 @@ the irreducible floor pinned at **L∞ = 1.2** (a prior — the ladder never nea
 ![Paloma scaling law](scaling_law.png)
 
 With a shared floor the amplitudes nearly coincide (A ≈ 57), so the dense-vs-MoE gap is entirely the
-exponent: MoE improves faster and stays below dense at every compute. **Compute efficiency:** MoE
-reaches the same Paloma loss with **~10× less compute at the top of the ladder, ~13× at the d1280 loss
-(2.85)**, rising toward ~15–17× as loss falls — the gap widens with scale because MoE's exponent is
-steeper. Caveat: with the floor fixed, two free parameters (A, α) fit four points; trust α and the
-ordering, not the L∞ value or extrapolations far past ~5e19 FLOPs.
+exponent: MoE improves faster and stays below dense at every compute. **Compute efficiency:** the MoE
+recipe (60 TPP) reaches the same Paloma loss as the compute-optimal dense recipe (20 TPP) with **~10×
+less compute at the top of the ladder, ~13× at the d1280 loss (2.85)**, rising toward ~15–17× as loss
+falls. This is a recipe-vs-recipe comparison — dense is at its compute-optimal 20 TPP, MoE at 60 TPP —
+so it bundles the architecture gain with the 3× longer MoE token schedule and is not an iso-TPP
+architecture measurement. Caveat: with the floor fixed, two free parameters (A, α) fit four points;
+trust α and the ordering, not the L∞ value or extrapolations far past ~5e19 FLOPs.
 
 ## Launch commands
 
