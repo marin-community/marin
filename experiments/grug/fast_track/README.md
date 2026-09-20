@@ -50,9 +50,11 @@ tokenizer. bpb is byte-normalized so it compares fairly across tokenizers; per-t
 | d768 | 16k  | 2.872 | 1.193 | 0.888 |
 | d768 | 128k | 3.306 | 1.187 | 0.870 |
 
-At these scales the 128k tokenizer is ~neutral on Paloma bpb (+0.001 at d512, −0.006 at d768) and a
-small win on uncheatable bpb (−0.012 / −0.018): a larger vocab barely moves Paloma byte-efficiency
-here, with a slight edge on code/technical text.
+Both runs train on the same number of tokens, but the 16k tokenizer compresses ~12% worse than the
+128k, so at equal token budget the 16k run covers ~12% fewer bytes of text. Even with that data
+disadvantage it lands ~neutral on Paloma bpb (+0.001 at d512, −0.006 at d768) and only slightly behind
+on uncheatable bpb (−0.012 / −0.018). So the larger vocab's byte-efficiency edge is small at these
+scales, and part of what shows up is the extra text the 128k run sees, not the vocabulary alone.
 
 ## Scaling law
 
