@@ -380,7 +380,7 @@ def _vllm_attention_row(rows: list[dict[str, object]], *, summary_only: bool) ->
     elif observations > finished:
         state = "check_count_gap"
         message = (
-            f"{observations:g} first-token observations vs {finished:g} recorded engine finishes. "
+            f"{observations:g} first-token observations vs {finished:g} request_success_total finishes. "
             "Partial ranges can differ; check the evaluator in Iris."
         )
         gap = observations - finished
@@ -396,7 +396,7 @@ def _vllm_attention_row(rows: list[dict[str, object]], *, summary_only: bool) ->
         "value": gap,
         "unit": "observations minus finishes",
         "ttft_observations": observations,
-        "engine_finishes": finished,
+        "request_success_finishes": finished,
     }
 
 
@@ -411,7 +411,7 @@ def _vllm_unavailable_attention_row(status: str) -> dict[str, object]:
         **_vllm_status_row(state, message),
         "metric": "run attention",
         "ttft_observations": None,
-        "engine_finishes": None,
+        "request_success_finishes": None,
     }
 
 

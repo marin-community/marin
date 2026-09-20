@@ -353,12 +353,14 @@ def test_standalone_long_range_has_summary_and_no_detail(standalone_overview_cli
 def test_run_triage_count_gap_can_be_a_partial_window_without_a_failed_request():
     database = _vllm_projection_database()
     rows = [
-        (name, value, timestamp)
-        for name, values in (
-            ("time_to_first_token_seconds_count", (0, 2, 2)),
-            ("request_success_total", (0, 1, 2)),
+        (name, value, timestamp, labels)
+        for name, values, labels in (
+            ("time_to_first_token_seconds_count", (0, 2, 2, 2), {}),
+            ("time_to_first_token_seconds_sum", (0, 0.2, 0.2, 0.2), {}),
+            ("time_to_first_token_seconds_bucket", (0, 2, 2, 2), {"le": "+Inf"}),
+            ("request_success_total", (0, 0, 1, 2), {"finished_reason": "stop"}),
         )
-        for timestamp, value in zip((0, 60_000, 9 * 3_600_000), values, strict=True)
+        for timestamp, value in zip((0, 60_000, 5 * 3_600_000, 9 * 3_600_000), values, strict=True)
     ]
     database.executemany(
         """INSERT INTO "telemetry_v1.vllm" VALUES
@@ -370,12 +372,12 @@ def test_run_triage_count_gap_can_be_a_partial_window_without_a_failed_request()
                 json.dumps(
                     {
                         "source_temporality": "cumulative_snapshot",
-                        **({"finished_reason": "stop"} if name == "request_success_total" else {}),
+                        **labels,
                     }
                 ),
                 timestamp,
             )
-            for name, value, timestamp in rows
+            for name, value, timestamp, labels in rows
         ],
     )
     source = Record(
@@ -391,19 +393,26 @@ def test_run_triage_count_gap_can_be_a_partial_window_without_a_failed_request()
         "view": "diagnostic_status",
     }
     with TestClient(app) as client:
+        short = client.get("/finelog/marin/v1/vllm/overview", params={**params, "to": 2 * 3_600_000})
         partial = client.get("/finelog/marin/v1/vllm/overview", params={**params, "to": 8 * 3_600_000})
         complete = client.get("/finelog/marin/v1/vllm/overview", params={**params, "to": 10 * 3_600_000})
-    assert partial.status_code == complete.status_code == 200
+    assert short.status_code == partial.status_code == complete.status_code == 200
+    assert [row["status"] for row in short.json()] == ["detail", "check_count_gap"]
+    assert (
+        short.json()[1]["ttft_observations"],
+        short.json()[1]["request_success_finishes"],
+        short.json()[1]["value"],
+    ) == (2, 0, 2)
     assert [row["status"] for row in partial.json()] == ["summary_only", "check_count_gap"]
     assert (
         partial.json()[1]["ttft_observations"],
-        partial.json()[1]["engine_finishes"],
+        partial.json()[1]["request_success_finishes"],
         partial.json()[1]["value"],
     ) == (2, 1, 1)
     assert [row["status"] for row in complete.json()] == ["summary_only", "no_conclusion"]
     assert (
         complete.json()[1]["ttft_observations"],
-        complete.json()[1]["engine_finishes"],
+        complete.json()[1]["request_success_finishes"],
         complete.json()[1]["value"],
     ) == (2, 2, 0)
 

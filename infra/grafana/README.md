@@ -103,9 +103,11 @@ The same sample and memory limits apply. It omits latency
 tails, output-length distribution, per-engine detail, and client or proxy time.
 Zoom to seven hours or less for those server details. Run triage separates
 query health (detail, summary-only, empty, timeout, or sample limit) from
-selected-range run attention. When first-token observations outnumber recorded
-engine finishes, it shows both counts and points to the evaluator in Iris.
-TTFT is counted when a first token appears; engine finishes are counted later.
+selected-range run attention. When first-token observations outnumber
+`request_success_total` finishes, it shows both counts and points to the
+evaluator in Iris. TTFT is counted when a first token appears; the finish
+counter changes later. Separate vLLM failure and timeout counters are not in
+this comparison; inspect the outcome panel for them.
 An in-progress or partial window can have a gap without a failed request. A
 missing counter or a query failure gives no run conclusion. The cue does not
 identify client or proxy timeouts. Other panels point to query health when

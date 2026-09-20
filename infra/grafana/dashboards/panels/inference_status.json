@@ -1,7 +1,7 @@
 {
   "type": "table",
   "title": "Run triage",
-  "description": "Query health and selected-range server count evidence. A count gap can occur in partial windows and does not identify client or proxy failures.",
+  "description": "Query health and selected-range server count evidence. The finish count uses request_success_total, excluding separate failure and timeout counters. A gap can occur in partial windows and does not identify client or proxy failures.",
   "datasource": {
     "type": "yesoreyeram-infinity-datasource",
     "uid": "finelog-marin"

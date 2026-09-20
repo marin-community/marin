@@ -609,7 +609,7 @@ WITH base AS MATERIALIZED (
            SUM(delta) AS samples
     FROM outcome_increments
     WHERE name = 'request_success_total'
-    HAVING SUM(delta) > 0
+    HAVING COUNT(delta) > 0
 ), outcome_source_rates AS (
     SELECT {start_ms} + (timestamp_ms - {start_ms})
                - (timestamp_ms - {start_ms}) % CASE
