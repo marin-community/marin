@@ -132,6 +132,14 @@ class GrugModelConfig:
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     # Dense (no-MoE) mode: every block is a single DenseMLP(hidden, intermediate_dim) SwiGLU; the MoE fields are ignored.
     dense_mlp: bool = False
+    # MLA (DeepSeek-V2, arXiv 2405.04434) with decoupled RoPE: Q/KV project through learnable-normed
+    # low-rank latents; per head the key/query is [nope content dims | rope dims], where the rope key
+    # is projected from x directly and shared across heads. v head dim = mla_nope_head_dim.
+    mla: bool = False
+    mla_q_latent_dim: int = 512
+    mla_kv_latent_dim: int = 512
+    mla_nope_head_dim: int = 64
+    mla_rope_head_dim: int = 64
 
     def __post_init__(self) -> None:
         if not self.dense_mlp and self.num_experts_per_token >= self.num_experts:
@@ -203,27 +211,118 @@ class ShortConv(eqx.Module):
 
 
 class CausalSelfAttention(eqx.Module):
-    w_q: Float[Array, "D NH"]
-    w_k: Float[Array, "D MH"]
-    w_v: Float[Array, "D MH"]
+    w_q: "jax.Array | None"
+    w_k: "jax.Array | None"
+    w_v: "jax.Array | None"
     w_o: Float[Array, "NH D"]
     attn_gate: Float[Array, "D N"]
     sconv_k: "ShortConv | None"  # SConv after the K projection (cfg.sconv)
+    # MLA decoupled-RoPE projections + learnable latent norms (None unless cfg.mla).
+    w_dq: "jax.Array | None"
+    w_uq: "jax.Array | None"
+    q_latent_norm: "RMSNorm | None"
+    w_dkv: "jax.Array | None"
+    w_uk: "jax.Array | None"
+    w_uv: "jax.Array | None"
+    w_kr: "jax.Array | None"
+    kv_latent_norm: "RMSNorm | None"
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "CausalSelfAttention":
-        k_q, k_k, k_v, k_o = random.split(key, 4)
+        keys = random.split(key, 8)
         d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.stored_kv_heads, cfg.inferred_head_dim
+        std = cfg.initializer_std
+        attn_gate = reshard(jnp.zeros((d, n)), P(None, None))
+        if cfg.mla:
+            ql, kvl = cfg.mla_q_latent_dim, cfg.mla_kv_latent_dim
+            nd, rd = cfg.mla_nope_head_dim, cfg.mla_rope_head_dim
+            k_dq, k_uq, k_dkv, k_uk, k_uv, k_kr, k_o, _ = keys
+            return CausalSelfAttention(
+                w_q=None,
+                w_k=None,
+                w_v=None,
+                w_o=reshard(_init_weight(k_o, (n * nd, d), std), P("model", _FSDP_AXES)),
+                attn_gate=attn_gate,
+                sconv_k=(ShortConv.init(n * nd, cfg.sconv_kernel) if cfg.sconv and "k" in cfg.sconv_sites else None),
+                w_dq=reshard(_init_weight(k_dq, (d, ql), std), P(_FSDP_AXES, None)),
+                w_uq=reshard(_init_weight(k_uq, (ql, n * (nd + rd)), std), P(None, "model")),
+                q_latent_norm=RMSNorm.init(ql, cfg.layer_norm_eps),
+                w_dkv=reshard(_init_weight(k_dkv, (d, kvl), std), P(_FSDP_AXES, None)),
+                w_uk=reshard(_init_weight(k_uk, (kvl, n * nd), std), P(None, "model")),
+                w_uv=reshard(_init_weight(k_uv, (kvl, n * nd), std), P(None, "model")),
+                w_kr=reshard(_init_weight(k_kr, (d, rd), std), P(_FSDP_AXES, None)),
+                kv_latent_norm=RMSNorm.init(kvl, cfg.layer_norm_eps),
+                cfg=cfg,
+            )
+        k_q, k_k, k_v, k_o = keys[:4]
         return CausalSelfAttention(
-            w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), P(_FSDP_AXES, "model")),
-            w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), P(_FSDP_AXES, "model")),
-            w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), P(_FSDP_AXES, "model")),
-            w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", _FSDP_AXES)),
-            attn_gate=reshard(jnp.zeros((d, n)), P(None, None)),
+            w_q=reshard(_init_weight(k_q, (d, n * h), std), P(_FSDP_AXES, "model")),
+            w_k=reshard(_init_weight(k_k, (d, m * h), std), P(_FSDP_AXES, "model")),
+            w_v=reshard(_init_weight(k_v, (d, m * h), std), P(_FSDP_AXES, "model")),
+            w_o=reshard(_init_weight(k_o, (n * h, d), std), P("model", _FSDP_AXES)),
+            attn_gate=attn_gate,
             sconv_k=(ShortConv.init(m * h, cfg.sconv_kernel) if cfg.sconv and "k" in cfg.sconv_sites else None),
+            w_dq=None,
+            w_uq=None,
+            q_latent_norm=None,
+            w_dkv=None,
+            w_uk=None,
+            w_uv=None,
+            w_kr=None,
+            kv_latent_norm=None,
             cfg=cfg,
         )
+
+    def _mla_qkv(
+        self,
+        x: Float[Array, "B S D"],
+        mask: AttentionMask | jax.Array,
+        disable_rope: bool | jax.Array,
+    ) -> tuple[jax.Array, jax.Array, jax.Array]:
+        """DeepSeek-V2 MLA with decoupled RoPE: per head, q/k = [nope content | rope]. The rope key is
+        projected from x directly and shared across heads; QK-norm applies to the nope parts."""
+        cfg = self.cfg
+        nd, rd = cfg.mla_nope_head_dim, cfg.mla_rope_head_dim
+        seq_len = x.shape[1]
+        _seg = mask.segment_ids if isinstance(mask, AttentionMask) else None
+        sconv_segment_ids = _seg[0] if _seg is not None else None
+
+        q_latent = self.q_latent_norm(jnp.einsum("bsh,hl->bsl", x, self.w_dq))
+        q = rearrange(jnp.einsum("bsl,ld->bsd", q_latent, self.w_uq), "... (n d) -> ... n d", d=nd + rd)
+        q_nope, q_rope = q[..., :nd], q[..., nd:]
+
+        kv_latent = self.kv_latent_norm(jnp.einsum("bsh,hl->bsl", x, self.w_dkv))
+        k_nope_flat = jnp.einsum("bsl,ld->bsd", kv_latent, self.w_uk)
+        if self.sconv_k is not None:
+            k_nope_flat = self.sconv_k(k_nope_flat, sconv_segment_ids)
+        k_nope = rearrange(k_nope_flat, "... (n d) -> ... n d", d=nd)
+        v = rearrange(jnp.einsum("bsl,ld->bsd", kv_latent, self.w_uv), "... (n d) -> ... n d", d=nd)
+
+        # Decoupled rope key: projected from x, shared across heads (materialized per head for the kernel).
+        # Match k_nope's head sharding so the later concat has a single consistent spec.
+        k_rope = jnp.einsum("bsh,hr->bsr", x, self.w_kr)[..., None, :]
+        k_rope = jnp.broadcast_to(k_rope, (*q_rope.shape[:-1], rd))
+        k_rope = reshard(k_rope, _partition_spec_of(k_nope) or P(_BATCH_AXES, None, "model", None))
+
+        q_nope = rms_norm(q_nope)
+        k_nope = rms_norm(k_nope)
+
+        def _rope(qr: jax.Array, kr: jax.Array) -> tuple[jax.Array, jax.Array]:
+            return apply_rotary_embedding(qr, kr, seq_len=seq_len, head_dim=rd, rope=cfg.rope)
+
+        if isinstance(disable_rope, bool):
+            if not disable_rope:
+                q_rope, k_rope = _rope(q_rope, k_rope)
+        else:
+            q_r, k_r = _rope(q_rope, k_rope)
+            keep = ~jnp.asarray(disable_rope, dtype=jnp.bool_)
+            q_rope = jnp.where(keep, q_r, q_rope)
+            k_rope = jnp.where(keep, k_r, k_rope)
+
+        q = jnp.concatenate([q_nope, q_rope], axis=-1)
+        k = jnp.concatenate([k_nope, k_rope], axis=-1)
+        return q, k, v
 
     @named_call
     def __call__(
@@ -233,10 +332,15 @@ class CausalSelfAttention(eqx.Module):
         disable_rope: bool | jax.Array = False,
         is_global: bool | jax.Array = False,
     ) -> Float[Array, "B S D"]:
-        head_dim = self.cfg.inferred_head_dim
-        seq_len = x.shape[1]
         batch_spec = _batch_spec()
 
+        if self.cfg.mla:
+            q, k, v = self._mla_qkv(x, mask, disable_rope)
+            q = q * self.cfg.qk_mult
+            return self._attend(x, q, k, v, mask, batch_spec)
+
+        head_dim = self.cfg.inferred_head_dim
+        seq_len = x.shape[1]
         q_flat = jnp.einsum("bsh,hd->bsd", x, self.w_q)
         k_flat = jnp.einsum("bsh,hd->bsd", x, self.w_k)
         v_flat = jnp.einsum("bsh,hd->bsd", x, self.w_v)
@@ -300,6 +404,17 @@ class CausalSelfAttention(eqx.Module):
             q = jnp.where(keep, q_roped, q)
             k = jnp.where(keep, k_roped, k)
         q = q * self.cfg.qk_mult
+        return self._attend(x, q, k, v, mask, batch_spec)
+
+    def _attend(
+        self,
+        x: Float[Array, "B S D"],
+        q: jax.Array,
+        k: jax.Array,
+        v: jax.Array,
+        mask: AttentionMask | jax.Array,
+        batch_spec: P,
+    ) -> Float[Array, "B S D"]:
         # The fa4-cute kernel is GPU-only; fall back to auto-select off-GPU so the model still lowers
         # on CPU (e.g. the grug variant-contract tests).
         attn_impl = "gpu_fa4_cute" if jax.default_backend() == "gpu" else None
