@@ -46,6 +46,9 @@ from experiments.post_training.task_curriculum.validation import (
     validate_subject_run,
 )
 
+LEARNING_PROMPT_VERSION = "learning-v1"
+LEARNING_REVIEW_PROMPT_VERSION = "learning-review-v1"
+
 
 def _section(section_id: str, parent_id: str | None, task_texts: tuple[str, str]) -> CapabilitySection:
     return CapabilitySection(
@@ -317,7 +320,7 @@ def test_learning_progression_validates_cross_subject_edges_against_catalog() ->
     progression = LearningProgression.model_validate(
         {
             "catalog_version": catalog.catalog_version,
-            "prompt_version": "learning-v1",
+            "prompt_version": LEARNING_PROMPT_VERSION,
             "scope_subject_ids": ["C01"],
             "edges": [_learning_edge("files.search", "practice.processes.logs")],
         }
@@ -328,7 +331,7 @@ def test_learning_progression_validates_cross_subject_edges_against_catalog() ->
     reversed_progression = LearningProgression.model_validate(
         {
             "catalog_version": catalog.catalog_version,
-            "prompt_version": "learning-v1",
+            "prompt_version": LEARNING_PROMPT_VERSION,
             "scope_subject_ids": ["C01"],
             "edges": [_learning_edge("practice.processes.logs", "files.search")],
         }
@@ -341,7 +344,7 @@ def test_catalog_validates_embedded_learning_progression() -> None:
     catalog_data = _catalog().model_dump(mode="json")
     catalog_data["learning_progression"] = {
         "catalog_version": catalog_data["catalog_version"],
-        "prompt_version": "learning-v1",
+        "prompt_version": LEARNING_PROMPT_VERSION,
         "scope_subject_ids": ["C00"],
         "edges": [_learning_edge("files.search", "processes.logs")],
     }
@@ -361,7 +364,7 @@ def test_learning_progression_rejects_cycles() -> None:
         LearningProgression.model_validate(
             {
                 "catalog_version": "catalog-1",
-                "prompt_version": "learning-v1",
+                "prompt_version": LEARNING_PROMPT_VERSION,
                 "scope_subject_ids": ["C00"],
                 "edges": [
                     _learning_edge("files.search", "processes.logs"),
@@ -385,7 +388,7 @@ def test_learning_progression_review_requires_exact_edge_accounting() -> None:
     progression = LearningProgression.model_validate(
         {
             "catalog_version": catalog.catalog_version,
-            "prompt_version": "learning-v1",
+            "prompt_version": LEARNING_PROMPT_VERSION,
             "scope_subject_ids": ["C00"],
             "edges": [_learning_edge("files.search", "processes.logs")],
         }
@@ -393,8 +396,8 @@ def test_learning_progression_review_requires_exact_edge_accounting() -> None:
     review = LearningProgressionReview.model_validate(
         {
             "catalog_version": catalog.catalog_version,
-            "progression_prompt_version": "learning-v1",
-            "review_prompt_version": "learning-review-v1",
+            "progression_prompt_version": LEARNING_PROMPT_VERSION,
+            "review_prompt_version": LEARNING_REVIEW_PROMPT_VERSION,
             "scope_subject_ids": ["C00"],
             "edge_reviews": [],
             "missing_edges": [],
@@ -412,15 +415,15 @@ def test_learning_progression_review_treats_scope_as_unique_set() -> None:
     progression = LearningProgression.model_validate(
         {
             "catalog_version": catalog.catalog_version,
-            "prompt_version": "learning-v1",
+            "prompt_version": LEARNING_PROMPT_VERSION,
             "scope_subject_ids": ["C00", "C01"],
             "edges": [_learning_edge("files.search", "practice.processes.logs")],
         }
     )
     review_data = {
         "catalog_version": catalog.catalog_version,
-        "progression_prompt_version": "learning-v1",
-        "review_prompt_version": "learning-review-v1",
+        "progression_prompt_version": LEARNING_PROMPT_VERSION,
+        "review_prompt_version": LEARNING_REVIEW_PROMPT_VERSION,
         "scope_subject_ids": ["C01", "C00"],
         "edge_reviews": [
             {
@@ -447,7 +450,7 @@ def test_learning_progression_review_rejects_combined_cycle() -> None:
     progression = LearningProgression.model_validate(
         {
             "catalog_version": catalog.catalog_version,
-            "prompt_version": "learning-v1",
+            "prompt_version": LEARNING_PROMPT_VERSION,
             "scope_subject_ids": ["C00"],
             "edges": [_learning_edge("files.search", "processes.logs")],
         }
@@ -455,8 +458,8 @@ def test_learning_progression_review_rejects_combined_cycle() -> None:
     review = LearningProgressionReview.model_validate(
         {
             "catalog_version": catalog.catalog_version,
-            "progression_prompt_version": "learning-v1",
-            "review_prompt_version": "learning-review-v1",
+            "progression_prompt_version": LEARNING_PROMPT_VERSION,
+            "review_prompt_version": LEARNING_REVIEW_PROMPT_VERSION,
             "scope_subject_ids": ["C00"],
             "edge_reviews": [
                 {
