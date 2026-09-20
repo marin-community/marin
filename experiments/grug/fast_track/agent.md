@@ -20,26 +20,26 @@ the dense and MoE runs recorded in `experiments/grug/fast_track/README.md` —
 compare against the table there (the `fasttrack-baseline`-tagged W&B runs).
 
 **Metrics (from wandb, project `marin-community/marin_moe`):**
-- `eval/paloma/macro_bpb` (final value) — primary quality metric (lower is better)
-- `eval/uncheatable_eval/macro_bpb` (final value) — secondary quality metric
+- `eval/paloma/macro_loss` (final value) — **the** quality metric (lower is better). Report and compare
+  in Paloma macro loss, not bpb or uncheatable.
 - `throughput/tokens_per_second` (averaged over the last 100 steps)
 - `run.state` must be `finished` before pulling final metrics
 
 The ladder is data-matched by default (`--match data`): a variant trains on the
-same tokens as its baseline at each size, so bpb is an equal-data comparison. Use
+same tokens as its baseline at each size, so macro loss is an equal-data comparison. Use
 `--match compute` for an equal-FLOPs comparison instead.
 
 ### Gate 1: two small scales
 
 Run the variant at `d512` and `d768` (both dense and MoE, as the change
-requires). The variant passes gate 1 if its Paloma bpb beats the baseline at
+requires). The variant passes gate 1 if its Paloma macro loss beats the baseline at
 **both** scales.
 
 ### Gate 2: full ladder
 
 Run the variant at `d1024` and `d1280`, combining with gate 1 for four points.
-The variant passes gate 2 if it beats the baseline Paloma bpb at **all four**
-scales. Once four points exist, fit `bpb(C) = L_inf + A · C^(-alpha)` on the
+The variant passes gate 2 if it beats the baseline Paloma macro loss at **all four**
+scales. Once four points exist, fit `L(C) = L_inf + A · C^(-alpha)` on the
 variant's optima and on the baseline's, and compare the projections — but fit
 `L_inf`/`alpha` from these runs; do not reuse constants from other variants
 (different vocab and metric).
@@ -47,14 +47,14 @@ variant's optima and on the baseline's, and compare the projections — but fit
 ### Effective speedup (throughput-aware refinement)
 
 When a variant trades quality for throughput (or vice versa), compare wall-clock
-time to reach a fixed bpb rather than bpb alone. Given a fitted exponent `alpha`
+time to reach a fixed macro loss rather than loss alone. Given a fitted exponent `alpha`
 and asymptote `L_inf`:
 
 ```python
-def effective_speedup(baseline_bpb, baseline_tps, variant_bpb, variant_tps, budget, *, L_inf, alpha):
-    """Wall-clock speedup of the variant over the baseline (>1 = variant reaches its bpb faster)."""
-    A_bl = (baseline_bpb - L_inf) * budget ** alpha          # fit A through the baseline point
-    C_needed = (A_bl / (variant_bpb - L_inf)) ** (1 / alpha)  # compute baseline needs to match variant bpb
+def effective_speedup(baseline_loss, baseline_tps, variant_loss, variant_tps, budget, *, L_inf, alpha):
+    """Wall-clock speedup of the variant over the baseline (>1 = variant reaches its loss faster)."""
+    A_bl = (baseline_loss - L_inf) * budget ** alpha          # fit A through the baseline point
+    C_needed = (A_bl / (variant_loss - L_inf)) ** (1 / alpha)  # compute baseline needs to match variant loss
     return (C_needed / baseline_tps) / (budget / variant_tps)
 ```
 
@@ -128,7 +128,7 @@ import wandb
 api = wandb.Api()
 runs = api.runs('marin-community/marin_moe', filters={'displayName': {'$regex': '^<PREFIX>'}}, order='-created_at')
 for r in runs:
-    print(f'{r.name:<50} state={r.state:<10} bpb={r.summary.get("eval/paloma/macro_bpb", "n/a")}')
+    print(f'{r.name:<50} state={r.state:<10} loss={r.summary.get("eval/paloma/macro_loss", "n/a")}')
 ```
 
 ## Final metrics to log
@@ -152,8 +152,7 @@ issue; for baselines, also the README table). Capture:
   a large share at small hidden_dim / 16k vocab)
 
 **Results** (from wandb — final value, or last-100-step average for throughput)
-- Paloma macro loss and macro bpb (`eval/paloma/macro_bpb`)
-- uncheatable macro bpb (`eval/uncheatable_eval/macro_bpb`)
+- Paloma macro loss (`eval/paloma/macro_loss`) — the quality metric (not bpb or uncheatable)
 - MFU, throughput (`throughput/tokens_per_second`), wall-clock runtime
 
 **Provenance**
