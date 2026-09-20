@@ -322,6 +322,9 @@ class CausalSelfAttention(eqx.Module):
 
         q = jnp.concatenate([q_nope, q_rope], axis=-1)
         k = jnp.concatenate([k_nope, k_rope], axis=-1)
+        # The fa4/CuTe kernel requires head_dim_v == head_dim, so pad v (nope) up to nope+rope with
+        # zeros; the padded output dims stay zero through attention/XSA and are sliced off before w_o.
+        v = jnp.pad(v, [(0, 0)] * (v.ndim - 1) + [(0, rd)])
         return q, k, v
 
     @named_call
@@ -431,6 +434,9 @@ class CausalSelfAttention(eqx.Module):
         # Headwise gating: sigmoid(x @ attn_gate) produces one scalar per head.
         gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
         attn_out = gate * attn_out
+        # MLA: drop the zero-padded rope dims (v was padded to head_dim); w_o consumes n * nope.
+        if self.cfg.mla:
+            attn_out = attn_out[..., : self.cfg.mla_nope_head_dim]
         # Merge heads into hidden dim while keeping model-axis sharding for w_o.
         attn_out = jnp.reshape(
             attn_out,
