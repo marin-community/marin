@@ -209,3 +209,17 @@ dR,dproj. Kernels compute A=R.proj on the fly (fwd + bwd S-recompute). Model no 
 Reference/TPU/MLA-fallback materialize A internally. dA still scattered in-kernel; VJP maps dA->dR,dproj.
 MFU pending (d512 1024/512, d1280 512) vs materialized (6.03/6.55/11.34, rope d1280 15.44).
 Milestone 2 (optional): emit dR (16-wide) + dproj (reduction) in-kernel to also kill dA[B,Hq,S,L] traffic.
+
+## On-the-fly low-rank: FAILED, REVERTED (2026-09-20)
+Milestone 1 was grad-correct (dq/dk/dv/dR/dproj all PASS) but MFU CRATERED:
+- d512 rel_extent=1024: 2.48% (vs materialized 6.03)   -- 2.4x SLOWER
+- d512 rel_extent=512:  2.48% (vs 6.55)
+- d1280 rel_extent=512: 4.22% (vs 11.34)
+Root cause: computing A=sum_r R[q,r]*proj[r,delta] per score element (16 FMAs + 16 R-reads +
+16 proj-reads, in BOTH fwd and bwd scalar loops) is ~2.5x costlier than ONE coalesced load of the
+materialized A. The materialized A read was already cheap (cached/coalesced); the model-side A einsum
+is a well-optimized matmul. The bandwidth premise was wrong -- these kernels are not A-bandwidth-bound
+in the way assumed; the per-element scalar 16-dim dot dominates. Reverted to the materialized kernel
+(HEAD after 19cce3c0fc). BEST STATE = materialized fully-fused free-dA: d512 6.03(1024)/6.55(512),
+d1280 11.34 vs rope 15.44. <10% MFU impact is NOT reachable with these approaches.
+Remaining micro-lever: bf16 dA output (~0.3pt). Otherwise ship materialized + run the science.
