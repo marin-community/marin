@@ -632,7 +632,7 @@ reported point includes their elapsed time and GPU cost. It later reached 301/75
 correct at update 40 after 0.96 hours and 14.52 reserved H100-hours from the first GPU task.
 All five cap-2 arms have update-40 evaluation dumps. Their results are:
 
-| Arm | Completed correct / 756 | Consumed loss tokens (M) | Hours to evaluation | H100-hours to evaluation | Full H100-hours |
+| Arm | Completed correct / 756 | Consumed loss tokens (M) | Hours to evaluation | H100-hours to evaluation | Total observed H100-hours |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Older TIS, cap 2 (r19) | 250 | 13.150 | 1.49 | 23.87 | 24.22 |
 | Older TIS plus SC32, cap 2 (r20) | 267 | 13.342 | 1.53 | 24.45 | 25.32 |
@@ -640,7 +640,12 @@ All five cap-2 arms have update-40 evaluation dumps. Their results are:
 | Near-fresh TIS plus SC32, cap 2 (r22) | 293 | 13.125 | 1.92 | 30.65 | 31.82 |
 | Plain PPO (r23 + r26) | 301 | 12.700 | 0.96 | 14.52 | 15.37 |
 
-The r22 ledger includes its failed first attempt and successful retry. The quality counts
+The r19 training pod saved its final response dump, but a peer pod was deleted during
+teardown. Iris left that task pending until the idle parent was canceled during the final
+campaign audit. Its 24.22 H100-hours include the GPU tasks through that teardown and no
+terminal model export. The other four totals include export, so compare the columns through
+evaluation for equal deliverables. The r22 ledger includes its failed first attempt and
+successful retry. The quality counts
 come from the saved response dumps, with the same 756-prompt membership hash in every arm.
 The figure below plots the same primary measure against updates, consumed loss tokens, elapsed
 GPU-task time, and reserved H100-hours. The underlying [evaluation](results/score_centering_qwen_cap2_evals.csv),
@@ -680,9 +685,9 @@ age 4.78, versus 13.15 million at mean age 4.62 for r19. The changed capture wid
 asynchronous generation speed and therefore policy-age exposure; these quality counts do not
 isolate the effect of width on learning. The near-2.4-fold cost reduction through evaluation,
 plus the 13-fold smaller bridge responses, identify wide behavior-logprob capture as a major
-cost in this implementation. Both jobs succeeded; including terminal export, r29 used 12.23
-reserved H100-hours versus r19's 24.22. The much longer r29 export time narrows the full-job
-cost ratio compared with the ratio through evaluation.
+cost in this implementation. The r29 job succeeded with terminal export and used 12.23
+reserved H100-hours in total. The r19 parent was canceled after its saved final evaluation;
+its 24.22 H100-hours exclude export and are not a like-for-like full-job comparison.
 `plot_score_centering.py` draws the completed-correct curve
 against updates, consumed loss tokens, elapsed task time, and reserved H100-hours from the
 three analysis CSVs. These descriptive comparisons do not identify a score-centering quality
