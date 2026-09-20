@@ -112,7 +112,7 @@ class ChatTemplate:
 CHAT_TEMPLATE = ChatTemplate(source="name", name_or_path="marin_tokenizer")
 QWEN_CHAT_TEMPLATE = ChatTemplate(source="name", name_or_path="qwen3_without_thinking")
 # This revision includes the score-centering learner and exact behavior top-k capture.
-SCORE_CENTERING_SKYRL_COMMIT = "78a2fe8f3baf2e004ade5307535f4de413d2188c"
+SCORE_CENTERING_SKYRL_COMMIT = "154bac2a2e4040547437a767f94e5bac98439c26"
 
 
 @dataclass(frozen=True)

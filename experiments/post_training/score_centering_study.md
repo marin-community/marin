@@ -744,6 +744,16 @@ its three attempts consumed 50.77 reserved H100-hours. The older curriculum Snow
 uses FSDP2; this fully async experiment launcher uses Megatron and does not require an FSDP2
 port.
 
+A separate [model-only recovery job](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fscore-centering-snowball-sc-export-recovery-01a0bb6f)
+loaded the saved SC step-two policy without constructing the optimizer and
+successfully exported it with MarinSkyRL `78a2fe8f`. The verified HF export at
+`s3://marin-us-east-02a/marin/users/romain/checkpoints/async-rl/snowball-smoke-set-81e8344e/2026.09.20.1/exports/global_step_2/policy`
+contains 39 weight shards, the index, model configuration, and tokenizer.
+All four eight-H100 tasks succeeded with no retry or preemption. Their task
+durations total 17.42 reserved H100-hours, including initialization, checkpoint
+read, conversion, and upload. This salvages a final model for evaluation, but
+does not show that the full optimizer checkpoint can resume training.
+
 ## Matched-weight Qwen mismatch probe
 
 This two-update probe separates the inference-engine gap from one optimizer update of
@@ -837,7 +847,8 @@ absolute log-probability units. The stale-weight *mean* did not grow steadily
 with age, but its per-step absolute p99 rose from 0.12531 at age one to
 0.14936 at age sixteen. The combined p99 rose from 0.12911 to 0.15371.
 Raw sampled-token TIS cap activity across these ages was 5.66% when weighted
-by selected tokens. First and last 256-token windows had smaller mean gaps
+by selected tokens; the actual loss's W&B cap fraction, weighted by its
+selected-token count, was 5.56%. First and last 256-token windows had smaller mean gaps
 than the middle; the ledger keeps each window and their token counts. Those
 windows can overlap for responses shorter than 512 tokens and must not be
 summed as a partition. Signed components reconstructed C − A exactly in
@@ -853,3 +864,42 @@ setup and the 17 updates. This run did not export a final model or evaluate
 quality. It calibrates the magnitude and tails that the matched quality
 experiments need to interpret; it does not establish that keeping a sampler
 fixed improves throughput or quality.
+
+## Matched Qwen confirmation design
+
+The [current async launcher draft](https://github.com/marin-community/marin/pull/9256)
+defines a Qwen default with the same 16-H100 split used here, 64 generation
+workers, a 16-group buffer, maximum age four, per-update weight publication,
+60 updates, 4,096-token responses, and evaluation every five updates. Its
+default has TIS off, so it is a house template rather than a directly matched
+TIS-versus-SC result. The completed age-eight, 128-worker, 32-buffer,
+per-update-publication TIS cap-1.05 top-k-32 runs above are this study's
+**measured incumbent** for the SC comparison. Their actual consumed-token
+mean age was about 4.7 updates and their TIS cap was active on about 5.3% of
+tokens. The fixed-sampler A/B/C calibration shows why a nearly unchanged
+combined gap across that range cannot be read as negligible drift.
+
+Before adding training seeds, the confirmation is fixed as three further
+matched pairs, seeds 20, 21, and 22, at the incumbent settings and a 40-update
+endpoint. Within each seed, TIS and TIS plus SC32 use the same Qwen model,
+frozen training and held-out pools, 32 prompts and four responses per update,
+4,096-token cap, optimizer, admission and publication schedule, TIS cap 1.05,
+top-k-32 behavior capture, and 16-H100 topology. Only the SC switch changes.
+Evaluations remain at updates zero, ten, twenty, thirty, and forty, with the
+existing finalization pass providing a second evaluation at the same step-40
+weights. The primary pair score is SC minus TIS in the mean completed-correct
+count of those two step-40 passes, out of the same 756 held-out prompts.
+Step-zero-adjusted differences, each separate terminal pass, and the full
+quality curves are sensitivity analyses. The three existing seeds 17–19 remain
+exploratory; the new seeds test replication, and a six-pair pooled mean with a
+paired 95% Student-t interval describes the combined evidence. No acceptable
+quality-loss margin has been selected, so the interval is reported against
+zero rather than a non-inferiority threshold.
+
+The comparison will also use consumed loss tokens, completion and length-stop
+rates, token ages, skipped or discarded groups, elapsed time from first GPU
+task, and total reserved H100-hours through evaluation and terminal export.
+Those totals include retries, setup, and failed work. It isolates SC at one
+measured operating condition. Scheduling changes toward the house age-four
+template or more permissive age will be assessed separately, because their
+throughput and quality effects cannot be attributed to SC from this pair.
