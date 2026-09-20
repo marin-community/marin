@@ -9,6 +9,7 @@ import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import cast
 
 import equinox as eqx
@@ -51,6 +52,13 @@ from experiments.june_tpu_67b_a2b.moe.model import Block, GrugModelConfig, Trans
 logger = logging.getLogger(__name__)
 
 
+class RouterFreeze(StrEnum):
+    """Routing parameters held fixed during an SFT update."""
+
+    BIAS = "bias"
+    ALL = "all"
+
+
 @dataclass(frozen=True)
 class GrugTrainerConfig:
     """Runtime knobs for grug training."""
@@ -87,6 +95,9 @@ class GrugTrainerConfig:
     special_token_lr_ids: tuple[int, ...] = ()
     special_token_lr_multiplier: float = 1.0
     """Scale final optimizer updates for these input-embedding and LM-head token rows."""
+
+    router_freeze: RouterFreeze = RouterFreeze.ALL
+    """Freeze router biases only, or both router matrices and biases."""
 
     sft_weights_only_init: bool = False
     """SFT/RL init semantics (marin #650). When True and the run has no checkpoint of
@@ -433,6 +444,14 @@ def init_weights_only_from_checkpoint(
     return dataclasses.replace(state, **updates)
 
 
+def _router_bias(model: Transformer):
+    return model.stacked_blocks.stacked.mlp.router_bias
+
+
+def _router_and_bias(model: Transformer):
+    return model.stacked_blocks.stacked.mlp.router, model.stacked_blocks.stacked.mlp.router_bias
+
+
 def _make_train_step(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
@@ -442,6 +461,7 @@ def _make_train_step(
     watch_config: WatchConfig | None = None,
     special_token_lr_ids: tuple[int, ...] = (),
     special_token_lr_multiplier: float = 1.0,
+    router_freeze: RouterFreeze = RouterFreeze.ALL,
 ):
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
@@ -452,6 +472,13 @@ def _make_train_step(
             watch_targets = tuple(watch_config.watch_targets)
     else:
         watch_targets = ()
+
+    if router_freeze == RouterFreeze.BIAS:
+        router_selector = _router_bias
+    elif router_freeze == RouterFreeze.ALL:
+        router_selector = _router_and_bias
+    else:
+        raise ValueError(f"Unknown router freeze mode: {router_freeze}")
 
     @functools.partial(jax.jit, donate_argnums=(0,), static_argnames=("compute_watch",))
     def train_step(state: GrugTrainState, batch, *, compute_watch: bool = False):
@@ -465,7 +492,7 @@ def _make_train_step(
 
         def loss_fn(params):
             params = eqx.tree_at(
-                lambda m: (m.stacked_blocks.stacked.mlp.router, m.stacked_blocks.stacked.mlp.router_bias),
+                router_selector,
                 params,
                 replace_fn=jax.lax.stop_gradient,
             )
@@ -494,9 +521,9 @@ def _make_train_step(
         params = optax.apply_updates(qb_params, updates)
         # Inherited optimizer momentum must not move the frozen routing parameters.
         params = eqx.tree_at(
-            lambda m: (m.stacked_blocks.stacked.mlp.router, m.stacked_blocks.stacked.mlp.router_bias),
+            router_selector,
             params,
-            (qb_params.stacked_blocks.stacked.mlp.router, qb_params.stacked_blocks.stacked.mlp.router_bias),
+            router_selector(qb_params),
         )
 
         if ema_beta is None:
@@ -649,6 +676,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             watch_config=watch_config if watch_config.is_enabled else None,
             special_token_lr_ids=config.trainer.special_token_lr_ids,
             special_token_lr_multiplier=config.trainer.special_token_lr_multiplier,
+            router_freeze=config.trainer.router_freeze,
         )
 
         @jax.jit
@@ -869,6 +897,7 @@ __all__ = [
     "GrugRunConfig",
     "GrugTrainState",
     "GrugTrainerConfig",
+    "RouterFreeze",
     "initial_state",
     "run_grug",
 ]

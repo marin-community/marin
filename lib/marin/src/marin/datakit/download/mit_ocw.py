@@ -241,10 +241,14 @@ def mit_ocw_course_normalize_steps(course: MitOcwCourse) -> tuple[StepSpec, ...]
         fn=lambda output_path: stage_course_html(course, download.output_path, output_path),
         hash_attrs={"manifest_content_fingerprint": course.manifest.fingerprint()},
     )
-    return download, staged, normalize_step(
-        name=f"normalized/{course.name}",
-        download=staged,
-        file_extensions=(".jsonl.gz",),
+    return (
+        download,
+        staged,
+        normalize_step(
+            name=f"normalized/{course.name}",
+            download=staged,
+            file_extensions=(".jsonl.gz",),
+        ),
     )
 
 

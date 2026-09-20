@@ -19,6 +19,7 @@ from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.schedule import BatchSchedule
 
 from experiments.grug_sft.head_only_train import (
+    RouterFreeze,
     _apply_qb_betas,
     _make_train_step,
     build_train_dataset,
@@ -116,11 +117,22 @@ def test_frozen_router_and_exact_token_initialization():
             special_token_lr_ids=(60, 61),
             special_token_lr_multiplier=4.0,
         )
+        bias_only_step = _make_train_step(
+            opt,
+            mp,
+            z_loss_weight=1e-4,
+            ema_beta=None,
+            router_freeze=RouterFreeze.BIAS,
+        )
         original = jax.tree.map(lambda x: x.copy() if eqx.is_array(x) else x, s)
         scaled_input = jax.tree.map(lambda x: x.copy() if eqx.is_array(x) else x, s)
         baseline_input = jax.tree.map(lambda x: x.copy() if eqx.is_array(x) else x, s)
         scaled, _, _ = scaled_step(scaled_input, batch)
         normal, _, _ = step(baseline_input, batch)
+        bias_only_input = jax.tree.map(lambda x: x.copy() if eqx.is_array(x) else x, s)
+        bias_only, _, _ = bias_only_step(bias_only_input, batch)
+        np.testing.assert_array_equal(np.array(bias_only.params.stacked_blocks.stacked.mlp.router_bias), bias)
+        assert not np.array_equal(np.array(bias_only.params.stacked_blocks.stacked.mlp.router), r)
         for before, after, boosted in zip(
             jax.tree.leaves(original.params),
             jax.tree.leaves(normal.params),
