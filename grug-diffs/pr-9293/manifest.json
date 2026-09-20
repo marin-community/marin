@@ -1,0 +1,22 @@
+{
+  "added_variants": [
+    "paper_rep"
+  ],
+  "base_sha": "e7ee488b9fff2f86e14d3441a00a848071440fef",
+  "head_sha": "8f224d3255e2d9c692e264a5c81d3f76e42749e3",
+  "report_count": 1,
+  "reports": [
+    {
+      "closest_variant": "base",
+      "distance_score": 1659,
+      "report_relpath": "paper_rep/index.html",
+      "status_counts": {
+        "added": 7,
+        "changed": 3,
+        "removed": 0,
+        "unchanged": 1
+      },
+      "variant": "paper_rep"
+    }
+  ]
+}
