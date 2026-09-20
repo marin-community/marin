@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Measure the two step-40 evaluations of the frozen Qwen math pool.
 
 SkyRL evaluates at the last step and again during finalization, overwriting the

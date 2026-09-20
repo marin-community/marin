@@ -1,7 +1,9 @@
 # Resolved score-centering run configurations
 
-Each JSON file is a byte-for-byte copy of `resolved-skyrl.json` from the corresponding
-`s3://marin-us-east-02a/marin/users/romain/checkpoints/async-rl/<run>/<version>/` artifact.
+Each JSON file copies `resolved-skyrl.json` from the corresponding
+`s3://marin-us-east-02a/marin/users/romain/checkpoints/async-rl/<run>/<version>/` artifact,
+with one terminal newline added for repository lint. Its JSON values and Hydra arguments
+are unchanged.
 The file contains the 151 materialized Hydra arguments and the model/data references used
 by the Iris child. `r23_r26.json` describes the shared PPO artifact continued by both jobs.
 Run labels, artifact names, versions, and launcher source commits are in

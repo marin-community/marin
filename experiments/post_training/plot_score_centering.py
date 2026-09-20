@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Plot completed-correct quality against work, elapsed time, and reserved GPU-hours.
 
 Use the CSV outputs of analyze_score_centering.py and analyze_score_centering_cost.py.
@@ -94,6 +97,9 @@ def plot_curves(
     output.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output, format=output.suffix.removeprefix(".") or "svg")
     plt.close(fig)
+    if output.suffix.lower() == ".svg":
+        svg = output.read_text()
+        output.write_text("\n".join(line.rstrip() for line in svg.splitlines()) + "\n")
 
 
 def main() -> None:

@@ -129,9 +129,9 @@ def approximation_metrics(policy: torch.Tensor, behavior: torch.Tensor, width: i
         "exact_gradient_l2": exact_gradient.norm().item(),
         "error_l1": error.abs().sum().item(),
         "error_l2": error.norm().item(),
-        "relative_error_l1": error.abs().sum().item() / exact_gradient.abs().sum().item()
-        if exact_gradient.abs().sum() > 1e-12
-        else None,
+        "relative_error_l1": (
+            error.abs().sum().item() / exact_gradient.abs().sum().item() if exact_gradient.abs().sum() > 1e-12 else None
+        ),
     }
 
 

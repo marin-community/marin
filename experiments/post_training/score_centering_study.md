@@ -188,7 +188,8 @@ k8 merits an end-to-end cost and quality check. Its error is still an offline av
 guarantee about every training token. The
 [width-1/4/8/32/128 results](results/score_centering_qwen_tail_error_k1_4_8_32_128.csv)
 use `qwen-default-set-a8761bbb/2026.09.19.6/exports/dumped_evals/global_step_0_evals`
-as the evaluation root.
+as the evaluation root. Numeric CSV values are rounded to 12 significant digits for the
+repository size gate; the summary above was computed before rounding.
 
 The full-cap [age-limit-four calibration](https://wandb.ai/marin-community/marin-async-rl/runs/g0iq70y0)
 used 64 generation workers. Its token-weighted mean consumed age rose from 0 to 2.72 by update
@@ -445,7 +446,7 @@ top-k-32 pair. Through the final evaluation, the top-k-eight arms took 0.687 and
 hours and 10.99 and 11.16 reserved H100-hours. The top-k-32 arms took 1.512 and 1.474 hours
 and 24.20 and 23.58 H100-hours. Thus narrower behavior capture more than halved measured
 time and GPU work in this schedule; its quality comparison remains sensitive to evaluation
-variation. Full-run cost remains pending until export finishes.
+variation. Both exports succeeded; full-run costs were 11.77 and 12.03 H100-hours.
 
 The cap-1.05 top-k-eight delayed-publication pair, [TIS r36](https://iris-cw-rno2a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-qwen-default-set-7a08fd68-2026.09.20.5-ecc74beeec58)
 and [TIS plus SC8 r37](https://iris-cw-rno2a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-qwen-default-set-c776578e-2026.09.20.5-6e92378f4f0b),

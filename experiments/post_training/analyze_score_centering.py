@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Summarize completion-aware quality from SkyRL's saved in-run evaluations.
 
 Example:
