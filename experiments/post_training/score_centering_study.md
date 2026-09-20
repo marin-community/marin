@@ -25,6 +25,10 @@ delayed arms scored below their every-update-publication counterparts. Delaying
 publication shortened median training cycles, yet total time and H100 work through
 evaluation remained close to the regular top-k-eight pair. Different generation
 timing and repeated-evaluator variation limit these one-seed schedule comparisons.
+The age change did not produce a meaningful trainer-versus-behavior mismatch change:
+the mean absolute log ratio stayed near 0.015 at age zero, around 4, and around
+8.5 updates. These runs therefore test centering mainly under a persistent
+age-zero gap, and do not establish its effect when staleness causes larger drift.
 
 Keep `score_centering_topk=0` as the default. The implementation can support a
 controlled follow-up where active TIS and older rollouts are expected, but these
@@ -34,6 +38,9 @@ top-k 32 at the same schedule; its quality effect was inconclusive. The Snowball
 pair validated two Megatron optimizer updates with active TIS and finite
 correction, but its SC job did not finish terminal export after preemption and
 restore failures, so this report makes no Snowball quality claim.
+Snowball's mismatch was about 0.034–0.035 with about 9% capped tokens, making a
+completed Snowball quality comparison the natural next check. The Qwen result
+does not establish the effect in that more active regime.
 
 ## Implementation and frozen inputs
 
@@ -220,6 +227,15 @@ guarantee about every training token. The
 use `qwen-default-set-a8761bbb/2026.09.19.6/exports/dumped_evals/global_step_0_evals`
 as the evaluation root. Numeric CSV values are rounded to 12 significant digits for the
 repository size gate; the summary above was computed before rounding.
+These offline errors use float64 and exact omitted-tail sums. The learner instead
+uses float32 for ordinary inputs and floors each current, old, and behavior tail
+at `1e-6`. In the cap-1.05, calibrated-0.016 rows above, at least one tail is
+below that floor in 4, 8, 16, 20, and 23 of 48 contexts at k1, k4, k8, k32,
+and k128. Filtering those rows from the checked-in CSV leaves aggregate relative
+L1 errors of 13.17%, 2.73%, 1.46%, 0.94%, and 0.77%, respectively. This filter
+does not model the floored rows; the CPU small-tail test checks finite float32
+behavior against a full-vocabulary gradient there. The reported offline averages
+are therefore proxies, not production coefficient errors on near-exhaustive heads.
 
 The full-cap [age-limit-four calibration](https://wandb.ai/marin-community/marin-async-rl/runs/g0iq70y0)
 used 64 generation workers. Its token-weighted mean consumed age rose from 0 to 2.72 by update

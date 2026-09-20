@@ -199,15 +199,14 @@ def test_settings_change_existing_keys_and_reject_unknown_ones():
     assert added["trainer"]["fully_async"]["weight_sync_interval"] == 1
 
 
-def test_settings_cannot_escape_the_loop_invariants():
-    with pytest.raises(click.BadParameter, match="cannot fill an update"):
-        rendered(settings=("trainer.fully_async.num_parallel_generation_workers=8",))
+def test_settings_allow_core_managed_worker_shapes_but_check_the_prompt_window():
+    small_pool = rendered(settings=("trainer.fully_async.num_parallel_generation_workers=8",))
+    assert small_pool["trainer"]["fully_async"]["num_parallel_generation_workers"] == 8
     with pytest.raises(click.BadParameter, match="do not fit the request window"):
         rendered(settings=("context_budget.request_window_tokens=1024",))
-    # 480 workers plus the 32-group buffer is exactly four updates of 128: the bound is strict.
-    with pytest.raises(click.BadParameter, match="would age out"):
-        rendered(settings=("trainer.fully_async.num_parallel_generation_workers=480",))
-    # At staleness 0 nothing is ever admitted stale, so only the worker floor applies.
+    # Submission capacity and stale-group admission are managed by MarinSkyRL at runtime.
+    wide_pool = rendered(settings=("trainer.fully_async.num_parallel_generation_workers=480",))
+    assert wide_pool["trainer"]["fully_async"]["num_parallel_generation_workers"] == 480
     on_policy = rendered(async_rl.ON_POLICY, settings=("trainer.fully_async.num_parallel_generation_workers=480",))
     assert on_policy["trainer"]["fully_async"]["num_parallel_generation_workers"] == 480
 

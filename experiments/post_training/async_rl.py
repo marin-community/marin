@@ -411,29 +411,13 @@ def apply_setting(config: dict, setting: Setting) -> None:
     node[parts[-1]] = value
 
 
-def check_loop_shape(config: dict) -> None:
-    """Refuse a rendered config the trainer would reject or whose groups would age out."""
+def check_prompt_window(config: dict) -> None:
+    """Refuse a request window too small for the frozen training prompts."""
     budget = config["context_budget"]
-    trainer = config["trainer"]
-    loop = trainer["fully_async"]
-    prompts = trainer["train_batch_size"]
-    workers = loop["num_parallel_generation_workers"]
-    staleness = loop["max_staleness_steps"]
     # Every retained prompt must fit the request window beside the response budget, or rows skip
     # generation and their groups fail admission.
     if MAX_PROMPT_TOKENS > budget["request_window_tokens"] - budget["max_new_tokens_per_turn"]:
         raise click.BadParameter("pool prompts do not fit the request window beside the response cap")
-    if workers < prompts:
-        raise click.BadParameter(f"{workers} generation workers cannot fill an update of {prompts} prompts")
-    # At staleness 0 nothing stale is ever admitted, so the allowance bounds no queue.
-    if staleness == 0:
-        return
-    in_flight = workers + loop["max_buffered_groups"]
-    if in_flight / prompts >= staleness:
-        raise click.BadParameter(
-            f"{in_flight} groups in flight or buffered exceed {staleness} updates of {prompts}, "
-            "so the last of them would age out"
-        )
 
 
 def training_config(
@@ -618,7 +602,7 @@ def training_config(
     # Score the starting weights once when evaluation is on, so the curves have a step-0 point.
     trainer["eval_before_train"] = trainer["eval_interval"] > 0
     trainer["ckpt_interval"] = checkpoint_interval(trainer["max_steps"], trainer["eval_interval"])
-    check_loop_shape(config)
+    check_prompt_window(config)
     return config
 
 
