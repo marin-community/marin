@@ -5,6 +5,36 @@ they become available. The question is whether score centering lets the learner 
 tokens without giving up completed-answer quality, and whether that extra tolerance saves time or
 GPU work.
 
+## Result and recommendation
+
+The correction runs end to end, but this study does not establish that it makes older
+rollouts cheaper at comparable answer quality. At TIS cap 1.05 and top-k 32, three
+matched 40-update older-policy seed pairs favored centering by +36.5, +43.5, and
++9.0 completed answers out of 756 when averaging the two evaluations at the same
+final weights. The saved final evaluation alone favored it in two of three seeds.
+Their average two-pass difference was +29.7 answers; an illustrative 95% Student-t
+interval across the three training seeds is -15.6 to +75.0, before uncertainty
+about this small-seed interval's assumptions. This is a promising quality signal,
+not a reliable improvement estimate.
+
+In the near-fresh seed-17 check, centering led by 20 answers across the two final
+evaluations but started 15 ahead at step zero. The deliberately delayed top-k-eight
+pair consumed tokens at mean age about 8.5 rather than 4.7 updates. Centering led
+its matched control by 22 answers across the two final evaluations, but both
+delayed arms scored below their every-update-publication counterparts. Delaying
+publication shortened median training cycles, yet total time and H100 work through
+evaluation remained close to the regular top-k-eight pair. Different generation
+timing and repeated-evaluator variation limit these one-seed schedule comparisons.
+
+Keep `score_centering_topk=0` as the default. The implementation can support a
+controlled follow-up where active TIS and older rollouts are expected, but these
+runs do not justify routine adoption or a claim of recovered useful staleness.
+Top-k-eight behavior capture cut measured Qwen cost by more than half versus
+top-k 32 at the same schedule; its quality effect was inconclusive. The Snowball
+pair validated two Megatron optimizer updates with active TIS and finite
+correction, but its SC job did not finish terminal export after preemption and
+restore failures, so this report makes no Snowball quality claim.
+
 ## Implementation and frozen inputs
 
 - MarinSkyRL branch `goal/score-centering-01a0bb6f`, pinned at
@@ -85,7 +115,7 @@ failures count toward the campaign's total task cost.
 | r13 | Yes | TIS with sampled-token logprobs but no top-k capture; succeeded. |
 | r14 | Yes | Full-cap default schedule, TIS plus top-k 32 capture, eight-update age calibration; succeeded with terminal export. |
 | r15 | Yes | Full-cap 128-worker, age-limit-eight schedule, TIS plus top-k 32 capture, eight-update age calibration; succeeded with terminal export. |
-| r16 | Yes | Top-k 8 score-centering cost control; two updates trained, export pending. |
+| r16 | Yes | Top-k 8 score-centering cost control; two updates trained, terminal export not confirmed. |
 | r17 | Yes | Explicit W&B finish worked: the primary run reports `finished` and retains step 2. Tail-mass mean telemetry became NaN on padded rows; correction stayed finite. |
 | r18 | Yes | Four updates tested finite masked tail-mass telemetry and every-two-step weight publication. |
 
@@ -113,7 +143,7 @@ The r8 retained trajectory archive confirms sampled-token logprobs and exact eng
 reached generation without alignment alerts. It does not contain top-k evidence; the learner
 rejected its first batch before an optimizer update. The r8 run is
 [tva86i2y](https://wandb.ai/marin-community/marin-async-rl/runs/tva86i2y). Earlier W&B runs
-and exact Iris job IDs will be listed with cost accounting.
+and exact Iris job IDs are retained in the linked Iris parents and artifact records below.
 
 The r10 [Qwen smoke run](https://wandb.ai/marin-community/marin-async-rl/runs/ms580xuq)
 trained at token-weighted consumed ages 0 and 1. Its two batches had 116,181 and 122,486
@@ -238,24 +268,25 @@ head/tail arithmetic; it is not evidence of a material correction gradient.
 
 ## Comparison contract
 
-The first causal comparison will hold the model, pool, evaluator, optimizer, topology, seed,
+Each TIS-versus-centering pair held the model, pool, evaluator, optimizer, topology, seed,
 generation workers, buffer, weight publication cadence, TIS cap, and top-k capture width fixed.
-It will compare TIS with TIS plus score centering at near-fresh and demonstrably older consumed
-token ages. A matched plain PPO arm checks the current launcher incumbent. We will measure
-token-weighted age from policy-version spans at optimizer consumption, policy mismatch, rejected
-groups and tokens, and correction size. An age limit is an exposure setting, not a measured age.
+Separate near-fresh, older, and delayed-publication schedules tested exposure. The cap-2
+screen included plain PPO as a current launcher incumbent, though its different behavior
+capture means its time and cost comparison is descriptive. The metrics record token-weighted
+age from policy-version spans at optimizer consumption, behavior-versus-trainer mismatch,
+rejected groups, and correction size. An age limit is an exposure setting, not a measured age.
 
 The primary quality endpoint is a correct answer with an accepted stop reason (`complete`,
 `end_turn`, `eos`, or `stop`). Raw reward, completion and length-stop fractions, answer lengths,
-and response dumps remain separate. Quality curves will use optimizer updates, consumed tokens,
+and response dumps remain separate. Quality curves use optimizer updates, consumed tokens,
 elapsed training time, and full task GPU-hours as distinct axes. Question resampling within one
 training seed does not measure between-seed uncertainty.
 
 The logged `completed_stop_score_contribution` is a signed reward contribution, not the binary
-completed-correct fraction: AIME assigns -1 to an incorrect answer. We will compute the primary
-fraction from each dumped response's score and stop reason, after checking that the frozen run
-does not reshape correctness rewards. We will also hash the held-out prompts and ground truths to
-confirm the evaluated questions match across arms.
+completed-correct fraction: Math500 assigns -1 to an incorrect answer. The primary fraction comes
+from each dumped response's score and stop reason, after checking that the frozen run does not
+reshape correctness rewards. The held-out prompt and ground-truth hash confirms matching
+question membership across arms.
 
 The two full-cap calibration runs' step-0 dumps contain 256 GSM8K and 500 Math500 rows each.
 Their sorted prompt plus ground-truth SHA-256 is the same,
@@ -265,10 +296,10 @@ run had 78/756 completed correct (66 GSM8K, 12 Math500); the age-limit-eight run
 were 228 and 236. This step-0 variation occurred before any optimizer update despite the same
 model artifact and held-out membership, and should not be mistaken for a training effect.
 
-The Qwen screen decides which comparison merits a matched Snowball follow-up. A scheduling
-change, such as allowing more age or changing the worker pool, will be reported as a separate
-configuration comparison. No quality-loss margin or target score has been selected, so this study
-will not claim non-inferiority or time-to-target until one is fixed before confirmation.
+The Qwen screen led to a two-update Snowball smoke rather than a longer quality comparison.
+The schedule and capture changes are reported separately from the correction comparison.
+No quality-loss margin or target score was selected, so this study makes no non-inferiority
+or time-to-target claim.
 
 The first 40-update screen uses seed 17, an evaluation every ten updates plus step zero and
 terminal evaluation, the frozen `.08.29.1` pool and `.08.29` model, and MarinSkyRL
@@ -370,7 +401,7 @@ the terminal evaluation, with 1.51 and 1.47 hours since their first GPU tasks; f
 including export, were 25.26 and 24.54 H100-hours. Across all 40 updates their
 token-weighted mean consumed ages were both 4.72, and 5.33% and 5.39% of tokens hit the TIS
 cap. The difference can still reflect asynchronous sampling and evaluator variation; two
-further seeds are running.
+further seed comparisons follow.
 The terminal consumed-prompt trackers contain exactly the same 1,280 unique prompt UIDs in
 both seed-17 arms (Jaccard 1.0). The top-k-one control r29 consumed that same UID set despite
 its faster collection path. Prompt membership therefore does not explain their endpoint
@@ -386,8 +417,8 @@ step-zero-adjusted gains were 157 and 210, a paired difference of 53 answers. Me
 ages across all 40 updates were 4.70 and 4.71, with 5.38% and 5.50% of tokens hitting the
 TIS cap. Both arms consumed about 13.2–13.4 million loss tokens. Through terminal evaluation,
 the TIS and SC arms used 24.80 and 24.41 H100-hours, respectively; full jobs, including export,
-used 25.64 and 25.50 H100-hours. Both completed active-cap older pairs so far favor SC, but
-two seeds cannot establish robustness or isolate benefit specific to age. Their terminal
+used 25.64 and 25.50 H100-hours. These two final saved comparisons favor SC; the third pair
+below reverses that result. Their terminal
 consumed-prompt trackers also match exactly within the seed-18 pair: 1,280 unique UIDs in each.
 The two seed-18 arms share only 161 of those UIDs with the seed-17 set, as expected from a
 different shuffled training seed. The [terminal exposure comparisons](results/score_centering_terminal_exposure_seed17_18.csv)
@@ -399,29 +430,69 @@ and [TIS plus SC32 r31](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qw
 Both use the same cap-1.05 configuration, 40-update endpoint, frozen model and pool, and
 `iris-interactive` accelerator pods. Their step-zero completed-correct counts were 80 and
 75. At updates ten and twenty, TIS had 88 and 124 completed correct, while SC32 had 96 and
-147. The latter difference remains interim; update 40 and its finalization evaluation are the
-endpoint. Three seeds provide a
-small between-training-run check; held-out-question resampling would measure a different
-uncertainty.
+147. At update thirty, counts were 191 and 196. The final saved update-40 dumps scored TIS
+304/756 and SC32 293/756, a raw SC difference of -11 and step-zero-adjusted difference of -6.
+Their token-weighted consumed ages were 4.68 and 4.69; 5.44% and 5.49% of sampled tokens hit
+the TIS cap. Both arms consumed about 13.2–13.3 million loss tokens. Median inclusive cycles
+were 89.71 and 83.71 seconds. Through the final evaluation they used 25.20 and 24.49 reserved
+H100-hours, with 1.58 and 1.53 elapsed hours. Their
+[terminal prompt UID sets](results/score_centering_terminal_exposure_seed19.csv) also match
+exactly: 1,280 unique UIDs in each arm. Both exports succeeded; full-run costs were
+26.10 and 25.40 H100-hours.
+
+SkyRL evaluates update 40 twice at the same weights. The first scheduled score remains in
+the train mirror; the finalization score is saved with the response dump. The
+[repeat-evaluation ledger](results/score_centering_terminal_repeat_evals.csv) checks each
+reconstructed final count against the saved responses. All counts below are completed correct
+out of the same 756 held-out questions.
+
+| Training seed | Step zero TIS / SC32 | Scheduled update 40 TIS / SC32 | Saved final update 40 TIS / SC32 | Two-pass mean SC32 minus TIS |
+| --- | ---: | ---: | ---: | ---: |
+| 17 | 73 / 79 | 275 / 313 | 248 / 283 | +36.5 |
+| 18 | 88 / 79 | 233 / 276 | 245 / 289 | +43.5 |
+| 19 | 80 / 75 | 283 / 312 | 304 / 293 | +9.0 |
+
+The saved final pass favors SC32 in two seeds and TIS in one. Averaging the two same-checkpoint
+passes favors SC32 in all three, but the second pass changes a single arm by as many as 30
+correct answers among the earlier completed runs and 21 in seed 19. These are only three
+training seeds and two evaluator passes per final checkpoint. They show an exploratory quality
+signal, not a stable improvement or a benefit caused specifically by policy age. Held-out-
+question resampling would measure a different uncertainty than training-run or evaluator
+variation.
+
+![Three older-policy Qwen seed pairs at cap 1.05, plotted against updates, consumed tokens, elapsed time, and H100-hours](figures/score_centering_cap105_older_seeds.svg)
+
 A near-fresh cap-1.05 pair, [TIS r32](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-fresh-tis-cap105-seed17-01a0bb6f-r32)
 and [TIS plus SC32 r33](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-fresh-sc-cap105-seed17-01a0bb6f-r33),
 uses the same seed, model, pool, active TIS cap, top-k capture, 40-update horizon, and
 evaluation contract as the older seed-17 pair. It sets maximum consumed age zero, 32
 generation workers, and a 16-group buffer, matching the cap-2 near-fresh screen. Their GPU
-children were admitted at `iris-interactive` priority; trained results are pending. This
-schedule comparison will show whether any SC advantage is specific to older rollouts, while
-keeping the objective fixed within each pair.
+children were admitted at `iris-interactive` priority. This pair tests whether an
+apparent SC advantage persists without aged rollouts while keeping the objective fixed
+within the pair.
 Their step-zero completed-correct counts were 73/756 for TIS and 88/756 for SC32. At update
-ten, the counts were 99 and 101. The SC arm's raw two-answer lead at that point is smaller than
-its 15-answer starting lead; longer trained outcomes are needed. Across the first nine updates,
+ten, the counts were 99 and 101; at update 20 they were 130 and 131; and at update 30 they
+were 186 and 207. The scheduled update-40 evaluations scored 275 and 299, and the saved
+final evaluations scored 284 and 300. The two-pass mean SC lead was 20 answers, or five
+after subtracting the 15-answer step-zero lead. Through final evaluation the TIS and SC
+arms used 22.70 and 23.35 reserved H100-hours and 1.419 and 1.460 elapsed hours.
+Their terminal exports succeeded; full-run costs were 23.49 and 24.10 H100-hours.
+The arms consumed exactly the same 1,280 prompt UIDs as each other and as the older seed-17 arms;
+the [terminal exposure ledger](results/score_centering_terminal_exposure_seed17_schedules.csv)
+contains every cross-schedule comparison. Across all 40 updates, their token-weighted
+consumed ages were zero, their TIS cap fractions were 5.21% and 5.23%, and their
+behavior-versus-trainer mean absolute log ratios were 0.01497 and 0.01510. Across the
+first nine updates,
 both arms consumed tokens at measured age zero, while 5.28% and 5.29% of sampled tokens still
 hit the active TIS cap. Their behavior-versus-trainer mean absolute log ratios were 0.01532
 and 0.01536, essentially the same as 0.01539 and 0.01545 in the older seed-17 arms' first
 nine updates despite mean token age 3.66–3.68 there. Across all 40 older updates the mismatch
 stayed near 0.0153. Thus the cap also acts on vLLM-versus-learner mismatch at age zero, and
 the existing age separation does not establish a comparably large distribution-mismatch
-separation. The near-fresh quality comparison tests whether SC's effect depends on the schedule;
-a delayed weight-publication pair may be needed to test larger off-policy drift.
+separation. The near-fresh comparison therefore cannot isolate an age-specific SC benefit.
+
+![Near-fresh and older Qwen cap-1.05 seed-17 comparisons against work and cost](figures/score_centering_cap105_fresh_vs_older.svg)
+
 A narrower behavior-capture pair, [TIS r34](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-age8-tis-cap105-topk8-seed17-01a0bb6f-r34)
 and [TIS plus SC8 r35](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-age8-sc-cap105-topk8-seed17-01a0bb6f-r35),
 keeps the older seed-17 cap-1.05 schedule and changes behavior-logprob capture from top-k 32
@@ -448,6 +519,8 @@ and 24.20 and 23.58 H100-hours. Thus narrower behavior capture more than halved 
 time and GPU work in this schedule; its quality comparison remains sensitive to evaluation
 variation. Both exports succeeded; full-run costs were 11.77 and 12.03 H100-hours.
 
+![Top-k-eight and top-k-32 Qwen cap-1.05 seed-17 comparisons against work and cost](figures/score_centering_cap105_topk_width.svg)
+
 The cap-1.05 top-k-eight delayed-publication pair, [TIS r36](https://iris-cw-rno2a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-qwen-default-set-7a08fd68-2026.09.20.5-ecc74beeec58)
 and [TIS plus SC8 r37](https://iris-cw-rno2a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-qwen-default-set-c776578e-2026.09.20.5-6e92378f4f0b),
 started on September 20 with the same seed, data, 40-update endpoint, 16 H100s per arm, and
@@ -457,9 +530,43 @@ version age rises from eight to 16 updates, and inference weights are published 
 updates instead of every update; evaluations at updates ten, twenty, thirty, and forty also
 require the latest weights. The purpose is to measure whether the observed learner-versus-
 behavior log-probability mismatch rises with deliberate publication delay and whether SC helps
-under that larger drift. Trained outcomes remain pending. Initial remote coordinator attempts
-failed before reaching GPUs because those pods lacked S3 credentials; the authenticated local
-launcher submitted the linked GPU jobs directly.
+under that larger drift. Initial remote coordinator attempts failed before reaching GPUs
+because those pods lacked S3 credentials; the authenticated local launcher submitted the
+linked GPU jobs directly.
+
+Both arms reached 40 optimizer updates and saved two terminal evaluations. Their step-zero
+completed-correct counts were 72 for TIS and 74 for SC8. At updates ten, twenty, and thirty,
+the counts were 106/98, 117/133, and 159/185. The scheduled update-40 pass scored 233/244;
+the saved final pass scored 231/264. Thus the raw SC lead was 11 and 33 answers across the
+two passes, or 22 on average; subtracting the two-answer step-zero lead gives 20. All eight
+seed-17 schedule and capture arms consumed exactly the same 1,280 prompt UIDs. The
+[response analysis](results/score_centering_qwen_cap105_evals.csv), [per-update metrics](results/score_centering_qwen_cap105_metrics.csv),
+[task costs](results/score_centering_qwen_cap105_cost.csv), and
+[terminal repeat ledger](results/score_centering_terminal_repeat_evals.csv) contain the
+individual observations.
+
+The delayed TIS and SC8 arms consumed tokens at token-weighted mean ages 8.47 and 8.50,
+versus 4.72 in both every-update-publication top-k-eight arms. Their behavior-versus-trainer
+mean absolute log ratios were 0.01561 and 0.01575, while the every-update controls were
+0.01636 and 0.01546. These small and inconsistent differences do not establish a
+substantially larger distribution mismatch despite the larger version age. Active TIS caps
+covered 5.55% and 5.62% of delayed tokens, versus 5.43% and 5.39% in the controls; neither
+schedule rejected stale groups. Median inclusive training cycles fell from 37.56/39.52
+seconds in the every-update top-k-eight pair to 22.50/26.30 seconds with delayed
+publication. Through final evaluation, however, elapsed time was 0.671/0.690 hours and
+reserved work 10.73/11.04 H100-hours, close to 0.687/0.698 hours and 10.99/11.16 H100-hours
+with every-update publication. Setup, evaluations, and checkpoints consume part of the job
+independent of median training-cycle speed. Both delayed arms finished below their
+every-update-publication counterparts at the saved endpoint (231 versus 292 for TIS,
+264 versus 279 for SC8), so this one-seed schedule change did not establish a useful
+quality-per-cost gain. The delayed SC job's second GPU pod was deleted during teardown
+after the terminal response dump was saved. Iris left that task pending; the idle parent
+was canceled after confirming the final response and step-40 checkpoint were durable.
+The delayed TIS arm completed terminal export and cost 11.45 H100-hours in total. The
+delayed SC arm used 11.34 H100-hours through cancellation, without a terminal export;
+those full-job totals are not equal deliverables.
+
+![Every-update and delayed weight-publication Qwen top-k-eight comparisons](figures/score_centering_cap105_delayed_publication.svg)
 
 `analyze_score_centering.py` reads every dumped evaluation response and the durable Iris
 `WANDB_MIRROR` lines. It writes separate CSV files for completion-aware quality and per-update
@@ -492,22 +599,26 @@ direct reason to avoid interpreting small single-run score differences as traini
 For this frozen pool, GSM8K rewards are zero or one and Math500 rewards are minus one or one.
 `analyze_score_centering_terminal_repeats.py` recovers each suite's completed-correct count
 from its completed-stop fraction and signed reward contribution, then checks the final mirror
-against the saved responses. Across ten completed arms, the two evaluations at fixed weights
-differed by 16.3 correct answers on average in absolute value, with a maximum difference of 30.
+against the saved responses. Across 18 completed arms, the two evaluations at fixed weights
+differed by 14.6 correct answers on average in absolute value, with a maximum difference of 30.
 The [paired-evaluation CSV](results/score_centering_terminal_repeat_evals.csv) preserves each
-count. The active-cap older comparisons favor SC in both copies of the terminal evaluation:
+count. The cap-1.05 comparisons show how the choice of terminal pass can change an inference:
 
-| Seed and cap | Scheduled TIS / SC | Final TIS / SC | SC minus TIS, scheduled / final |
+| Schedule and seed | Scheduled TIS / SC | Final TIS / SC | SC minus TIS, scheduled / final |
 | --- | ---: | ---: | ---: |
-| 17, 1.05 | 275 / 313 | 248 / 283 | +38 / +35 |
-| 18, 1.05 | 233 / 276 | 245 / 289 | +43 / +44 |
+| Older, top-k 32, seed 17 | 275 / 313 | 248 / 283 | +38 / +35 |
+| Older, top-k 32, seed 18 | 233 / 276 | 245 / 289 | +43 / +44 |
+| Older, top-k 32, seed 19 | 283 / 312 | 304 / 293 | +29 / -11 |
+| Near-fresh, top-k 32, seed 17 | 275 / 299 | 284 / 300 | +24 / +16 |
+| Older, top-k eight, seed 17 | 278 / 292 | 292 / 279 | +14 / -13 |
+| Delayed publication, top-k eight, seed 17 | 233 / 244 | 231 / 264 | +11 / +33 |
 
 By contrast, the near-fresh cap-2 pair changed from 289 / 278 in the scheduled pass to
 262 / 293 in finalization, reversing the apparent sign. These are repeated evaluator passes,
 not independent training seeds. They narrow one source of ambiguity but do not establish a
 staleness-specific benefit.
 
-At the current checkpoint, the comparable update-30 points are:
+At the cap-2 screen's update-30 checkpoint, the comparable points were:
 
 | Arm | Completed correct / 756 | Hours since first GPU task | Reserved H100-hours through evaluation |
 | --- | ---: | ---: | ---: |
