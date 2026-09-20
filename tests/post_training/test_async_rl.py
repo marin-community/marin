@@ -199,9 +199,9 @@ def test_settings_change_existing_keys_and_reject_unknown_ones():
     assert added["trainer"]["fully_async"]["weight_sync_interval"] == 1
 
 
-def test_settings_allow_core_managed_worker_shapes_but_check_the_prompt_window():
-    small_pool = rendered(settings=("trainer.fully_async.num_parallel_generation_workers=8",))
-    assert small_pool["trainer"]["fully_async"]["num_parallel_generation_workers"] == 8
+def test_settings_preserve_core_worker_floor_and_check_prompt_window():
+    with pytest.raises(click.BadParameter, match="cannot fill a policy mini-batch"):
+        rendered(settings=("trainer.fully_async.num_parallel_generation_workers=8",))
     with pytest.raises(click.BadParameter, match="do not fit the request window"):
         rendered(settings=("context_budget.request_window_tokens=1024",))
     # Submission capacity and stale-group admission are managed by MarinSkyRL at runtime.

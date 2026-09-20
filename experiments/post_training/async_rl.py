@@ -411,13 +411,18 @@ def apply_setting(config: dict, setting: Setting) -> None:
     node[parts[-1]] = value
 
 
-def check_prompt_window(config: dict) -> None:
-    """Refuse a request window too small for the frozen training prompts."""
+def check_loop_preflight(config: dict) -> None:
+    """Reject request budgets or worker counts the downstream trainer would reject."""
     budget = config["context_budget"]
+    trainer = config["trainer"]
+    workers = trainer["fully_async"]["num_parallel_generation_workers"]
+    mini_batch = trainer["policy_mini_batch_size"]
     # Every retained prompt must fit the request window beside the response budget, or rows skip
     # generation and their groups fail admission.
     if MAX_PROMPT_TOKENS > budget["request_window_tokens"] - budget["max_new_tokens_per_turn"]:
         raise click.BadParameter("pool prompts do not fit the request window beside the response cap")
+    if workers < mini_batch:
+        raise click.BadParameter(f"{workers} generation workers cannot fill a policy mini-batch of {mini_batch}")
 
 
 def training_config(
@@ -602,7 +607,7 @@ def training_config(
     # Score the starting weights once when evaluation is on, so the curves have a step-0 point.
     trainer["eval_before_train"] = trainer["eval_interval"] > 0
     trainer["ckpt_interval"] = checkpoint_interval(trainer["max_steps"], trainer["eval_interval"])
-    check_prompt_window(config)
+    check_loop_preflight(config)
     return config
 
 
