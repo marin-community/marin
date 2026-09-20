@@ -157,6 +157,8 @@ def _h100_ladder_model(rung: H100LadderRung, dense: bool = False) -> GrugModelCo
         sconv=True,
         pooled_transport_capacity_factor=_EP_CAPACITY_FACTOR,
         latent_dim=hidden // 2,
+        mtp_depth=1,  # feature branch: fast_track_abl_mtp (DeepSeek-V3 MTP)
+        mtp_loss_weight=0.3,
     )
 
 
