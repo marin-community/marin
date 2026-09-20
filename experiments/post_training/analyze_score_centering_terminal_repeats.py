@@ -1,0 +1,123 @@
+"""Measure the two step-40 evaluations of the frozen Qwen math pool.
+
+SkyRL evaluates at the last step and again during finalization, overwriting the
+same response dump. The first result remains in the step-40 train mirror; the
+second is in the final eval mirror. GSM8K rewards are 0/1 and Math500 rewards
+are -1/1, so the completed counts can be recovered from their signed metrics.
+The final reconstructed counts must match the saved response analysis CSV.
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+from pathlib import Path
+
+FIELDS = (
+    "run",
+    "scheduled_gsm8k",
+    "scheduled_math500",
+    "scheduled_all",
+    "final_gsm8k",
+    "final_math500",
+    "final_all",
+    "final_minus_scheduled",
+)
+
+
+def _integer(value: float, label: str) -> int:
+    rounded = round(value)
+    if abs(value - rounded) > 1e-4:
+        raise ValueError(f"{label} is not an integer count: {value}")
+    return rounded
+
+
+def _completed_counts(metrics: dict) -> tuple[int, int]:
+    gsm = _integer(metrics["eval/val-gsm8k/completed_stop_score_contribution"] * 256, "GSM8K correct")
+    math_completed = _integer(metrics["eval/val-math500/completed_stop_fraction"] * 500, "Math500 complete")
+    math_signed = _integer(metrics["eval/val-math500/completed_stop_score_contribution"] * 500, "Math500 score")
+    if (math_completed + math_signed) % 2:
+        raise ValueError("Math500 completed count and signed score have different parity")
+    math = (math_completed + math_signed) // 2
+    if not 0 <= gsm <= 256 or not 0 <= math <= math_completed <= 500:
+        raise ValueError("derived completed-correct count is out of range")
+    return gsm, math
+
+
+def _mirrors(path: Path, step: int) -> dict[str, dict]:
+    selected: dict[str, dict] = {}
+    for line in path.read_text().splitlines():
+        if "WANDB_MIRROR kind=" not in line or f" step={step} metrics=" not in line:
+            continue
+        marker = line.split("WANDB_MIRROR kind=", 1)[1]
+        kind, remainder = marker.split(" step=", 1)
+        logged_step, payload = remainder.split(" metrics=", 1)
+        if int(logged_step) == step and kind in {"train", "eval"}:
+            selected[kind] = json.loads(payload)
+    if set(selected) != {"train", "eval"}:
+        raise ValueError(f"{path}: expected scheduled train and final eval mirrors for step {step}")
+    return selected
+
+
+def summarize(run: str, log: Path, evaluations: list[dict[str, str]], step: int) -> dict:
+    rows = {row["dataset"]: row for row in evaluations if row["run"] == run and int(row["step"]) == step}
+    if set(rows) != {"all", "val-gsm8k", "val-math500"}:
+        raise ValueError(f"{run}: missing final response analysis for step {step}")
+    if [int(rows[dataset]["questions"]) for dataset in ("val-gsm8k", "val-math500")] != [256, 500]:
+        raise ValueError(f"{run}: frozen evaluation suite sizes changed")
+    mirrors = _mirrors(log, step)
+    scheduled_gsm, scheduled_math = _completed_counts(mirrors["train"])
+    final_gsm, final_math = _completed_counts(mirrors["eval"])
+    final_all = final_gsm + final_math
+    if [final_gsm, final_math, final_all] != [
+        int(rows[dataset]["completed_correct"]) for dataset in ("val-gsm8k", "val-math500", "all")
+    ]:
+        raise ValueError(f"{run}: final mirror disagrees with saved responses")
+    return {
+        "run": run,
+        "scheduled_gsm8k": scheduled_gsm,
+        "scheduled_math500": scheduled_math,
+        "scheduled_all": scheduled_gsm + scheduled_math,
+        "final_gsm8k": final_gsm,
+        "final_math500": final_math,
+        "final_all": final_all,
+        "final_minus_scheduled": final_all - scheduled_gsm - scheduled_math,
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--evaluations", action="append", required=True, type=Path)
+    parser.add_argument("--iris-log", action="append", required=True, metavar="RUN=PATH")
+    parser.add_argument("--step", type=int, default=40)
+    parser.add_argument("--output", required=True, type=Path)
+    args = parser.parse_args()
+    evaluations = []
+    seen_evaluations: dict[tuple[str, str, str], dict[str, str]] = {}
+    for path in args.evaluations:
+        with path.open() as stream:
+            for row in csv.DictReader(stream):
+                key = (row["run"], row["step"], row["dataset"])
+                if key in seen_evaluations and seen_evaluations[key] != row:
+                    raise ValueError(f"conflicting evaluation row for {key}")
+                seen_evaluations[key] = row
+                evaluations.append(row)
+    result = []
+    labels: set[str] = set()
+    for item in args.iris_log:
+        run, separator, path = item.partition("=")
+        if not separator or not run or not path or run in labels:
+            parser.error(f"invalid --iris-log {item!r}; expected RUN=PATH")
+        labels.add(run)
+        result.append(summarize(run, Path(path), evaluations, args.step))
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    with args.output.open("w", newline="") as stream:
+        writer = csv.DictWriter(stream, FIELDS)
+        writer.writeheader()
+        writer.writerows(result)
+    print(f"Wrote {len(result)} paired evaluation records to {args.output}")
+
+
+if __name__ == "__main__":
+    main()

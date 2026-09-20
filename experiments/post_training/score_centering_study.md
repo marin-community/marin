@@ -375,12 +375,13 @@ uses the same settings and 256 GB host request. Its step-zero completed-correct 
 88/756 and 79/756; both have the same held-out membership as seed 17. At update 10, the
 counts were 95 and 117, with each arm consuming 320 prompt UIDs and 318 in common. Their
 update-20 counts were 130 and 148, and update-30 counts were 173 and 196. At the prespecified
-update-40 endpoint, TIS had 245/756 completed correct and TIS plus SC32 had 276/756. Their
-step-zero-adjusted gains were 157 and 197, a paired difference of 40 answers. Mean consumed
+update-40 endpoint, TIS had 245/756 completed correct and TIS plus SC32 had 289/756. Their
+step-zero-adjusted gains were 157 and 210, a paired difference of 53 answers. Mean consumed
 ages across all 40 updates were 4.70 and 4.71, with 5.38% and 5.50% of tokens hitting the
 TIS cap. Both arms consumed about 13.2–13.4 million loss tokens. Through terminal evaluation,
-the TIS and SC arms used 24.80 and 24.41 H100-hours, respectively; full export costs are
-pending. Both completed active-cap older pairs so far favor SC, but two seeds cannot establish
+the TIS and SC arms used 24.80 and 24.41 H100-hours, respectively; full jobs, including export,
+used 25.64 and 25.50 H100-hours. Both completed active-cap older pairs so far favor SC, but
+two seeds cannot establish
 robustness or isolate benefit specific to age. New launches were held
 when cluster use rose to 504/512 H100s with zero queued workloads at 00:59 UTC.
 A third matched seed-19 pair started after capacity returned to 284/512 H100s with no queued
@@ -427,6 +428,31 @@ evaluation. It includes retries and failed attempts, while excluding a later exp
 earlier evaluation's cost. Full-run H100-hours appear only after all matched attempts finish.
 The raw Iris query and the eight-GPU-per-child assumption are stated above. This GPU task clock
 does not include time spent queued before the first accelerator task started.
+
+At `max_steps`, SkyRL runs both the scheduled step-end evaluation and a finalization evaluation
+at the same weights. The latter overwrites the same step-40 response paths. Terminal quality
+and cost in this report use the **final saved** response dump after finalization; an interim
+read during the first write is not a terminal endpoint. For example, r28's scheduled evaluation
+dump at 02:16:21 UTC had 276/756 completed correct, while its finalization dump at 02:17:05
+UTC had 289/756, with no intervening optimizer update. This same-checkpoint variation is a
+direct reason to avoid interpreting small single-run score differences as training effects.
+For this frozen pool, GSM8K rewards are zero or one and Math500 rewards are minus one or one.
+`analyze_score_centering_terminal_repeats.py` recovers each suite's completed-correct count
+from its completed-stop fraction and signed reward contribution, then checks the final mirror
+against the saved responses. Across ten completed arms, the two evaluations at fixed weights
+differed by 16.3 correct answers on average in absolute value, with a maximum difference of 30.
+The [paired-evaluation CSV](results/score_centering_terminal_repeat_evals.csv) preserves each
+count. The active-cap older comparisons favor SC in both copies of the terminal evaluation:
+
+| Seed and cap | Scheduled TIS / SC | Final TIS / SC | SC minus TIS, scheduled / final |
+| --- | ---: | ---: | ---: |
+| 17, 1.05 | 275 / 313 | 248 / 283 | +38 / +35 |
+| 18, 1.05 | 233 / 276 | 245 / 289 | +43 / +44 |
+
+By contrast, the near-fresh cap-2 pair changed from 289 / 278 in the scheduled pass to
+262 / 293 in finalization, reversing the apparent sign. These are repeated evaluator passes,
+not independent training seeds. They narrow one source of ambiguity but do not establish a
+staleness-specific benefit.
 
 At the current checkpoint, the comparable update-30 points are:
 
