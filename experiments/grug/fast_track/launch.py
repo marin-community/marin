@@ -234,6 +234,8 @@ def build_h100_ladder_run(
     dense: bool = False,
     save_checkpoints: bool = False,
     residual_dim: int | None = None,
+    experts_per_token: int | None = None,
+    drop_shared_experts: bool = False,
 ) -> ArtifactStep[ThroughputResult]:
     """Build one H100 scaling-ladder rung.
 
@@ -249,6 +251,12 @@ def build_h100_ladder_run(
 
     rung = _h100_ladder_rung(size)
     base_model = dataclasses.replace(_h100_ladder_model(rung, dense=dense), vocab_size=vocab_size)
+    # Expert-mix overrides (applied to the baseline so the token budget matches this mix): drop the
+    # full-width shared experts and/or change the number of active routed experts.
+    if drop_shared_experts:
+        base_model = dataclasses.replace(base_model, num_shared_experts=0, shared_expert_intermediate_dim=0)
+    if experts_per_token is not None:
+        base_model = dataclasses.replace(base_model, num_experts_per_token=experts_per_token)
     # Residual-stream width sweep: only hidden_dim changes; latent_dim, intermediate_dim, the shared /
     # attention latent widths, and initializer_std stay pinned to the rung baseline (as do the LR recipe
     # and token budget below), so the attention/MoE param+FLOP budget is held fixed as the residual grows.
@@ -434,6 +442,13 @@ def build_h100_ladder_run(
     "stay pinned to the rung baseline.",
 )
 @click.option(
+    "--experts-per-token",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Override the number of active routed experts (default: the rung's top-8).",
+)
+@click.option("--drop-shared-experts", is_flag=True, help="Remove the full-width shared experts.")
+@click.option(
     "--save-checkpoints",
     is_flag=True,
     default=False,
@@ -450,6 +465,8 @@ def main(
     dense: bool,
     save_checkpoints: bool,
     residual_dim: int | None,
+    experts_per_token: int | None,
+    drop_shared_experts: bool,
 ) -> ArtifactStep[ThroughputResult]:
     return build_h100_ladder_run(
         run_id=run_id,
@@ -461,6 +478,8 @@ def main(
         dense=dense,
         save_checkpoints=save_checkpoints,
         residual_dim=residual_dim,
+        experts_per_token=experts_per_token,
+        drop_shared_experts=drop_shared_experts,
     )
 
 
