@@ -17,6 +17,10 @@ only in `score_centering_topk` after excluding run-owned paths and names.
 The active-cap near-fresh pair `r32/r33` differs only in `score_centering_topk` after
 excluding its run-owned paths and names. Relative to the cap-2 near-fresh pair `r21/r22`,
 its only training-setting change is `tis_imp_ratio_cap=1.05` instead of `2.0`.
+The active-cap top-k-eight pair `r34/r35` likewise differs only in
+`score_centering_topk` (`0` versus `8`). Relative to `r24/r25`, the TIS control changes
+only `generator.sampling_params.logprobs` from 32 to 8; the SC arm also changes its
+matching correction width from 32 to 8.
 
 The cap-2 older pair `r19/r20` also differs only in `score_centering_topk`. Relative to
 `r19`, near-fresh `r21` changes the age limit, generation-worker count, and finished-group

@@ -47,6 +47,7 @@ smokes. All of these runs pin MarinSkyRL `a7b51d31`. The Marin launcher source b
 | r29 | `437f37d6d9` | Top-k-one cost control, 256 GB request |
 | r30–r31 | `5c43d7bcfb` | Third cap-1.05 seed |
 | r32–r33 | `6fbf47d3b8` | Cap-1.05 near-fresh pair; same learner settings as r21–r22 except TIS cap |
+| r34–r35 | `16596f4a02` | Cap-1.05 older pair with top-k eight capture and optional SC8 |
 | Snowball smokes | `6f66ee6c22` | Megatron MoE two-update pair |
 
 For one sampled token, let `q` be the behavior policy that sampled it, `o` the stored trainer
@@ -167,9 +168,26 @@ fixed seed per context. At magnitude 0.016 and cap 2.0, k32's mean L1 error was 
 0.94% of the mean exact correction norm; k8 was 1.46% and k128 0.68%. At cap 1.05, k32's
 corresponding error was 0.46%. These are ratios of aggregate means, not per-context maxima.
 The synthetic perturbations match only one mismatch statistic and cannot stand in for actual
-vLLM/Megatron distribution differences or later generation positions. The output CSV is
-`/tmp/score-centering-qwen-tail-error-01a0bb6f.csv`; rerun the script with the exact S3
-model and evaluation paths to reproduce it.
+vLLM/Megatron distribution differences or later generation positions. The
+[width-8/32/128 results](results/score_centering_qwen_tail_error_k8_32_128.csv) use r14's
+step-zero saved responses; rerun the script against its S3 evaluation root with
+`--topk 8 --topk 32 --topk 128` to reproduce them. A rerun against
+`qwen-default-set-b2fc0319/2026.09.19.3/exports/dumped_evals/global_step_0_evals`
+matched the checked-in CSV byte for byte.
+
+A second run of the same full-vocabulary script added widths one and four and used the first
+four response continuations per suite from r19's step-zero evaluation. The eight prompts and
+sampled positions match the earlier check, but the generated continuations differ, so their
+answer-position distributions differ. At synthetic behavior-weighted mean absolute log ratio
+0.016 and TIS cap 1.05, mean L1 gradient error divided by mean exact correction L1 norm was
+11.29% at k1, 1.96% at k4, 0.75% at k8, 0.41% at k32, and 0.29% at k128. Mean behavior
+tail mass was 0.120, 0.0192, 0.00497, 0.000424, and 0.000116 respectively. On this proxy,
+k1 is too coarse for score centering despite being an inexpensive TIS-only collection path;
+k8 merits an end-to-end cost and quality check. Its error is still an offline average, not a
+guarantee about every training token. The
+[width-1/4/8/32/128 results](results/score_centering_qwen_tail_error_k1_4_8_32_128.csv)
+use `qwen-default-set-a8761bbb/2026.09.19.6/exports/dumped_evals/global_step_0_evals`
+as the evaluation root.
 
 The full-cap [age-limit-four calibration](https://wandb.ai/marin-community/marin-async-rl/runs/g0iq70y0)
 used 64 generation workers. Its token-weighted mean consumed age rose from 0 to 2.72 by update
@@ -356,7 +374,14 @@ and [r28](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-age8-sc-cap
 uses the same settings and 256 GB host request. Its step-zero completed-correct counts are
 88/756 and 79/756; both have the same held-out membership as seed 17. At update 10, the
 counts were 95 and 117, with each arm consuming 320 prompt UIDs and 318 in common. Their
-update-20 counts were 130 and 148, and update-30 counts were 173 and 196. Later trained outcomes are pending. New launches were held
+update-20 counts were 130 and 148, and update-30 counts were 173 and 196. At the prespecified
+update-40 endpoint, TIS had 245/756 completed correct and TIS plus SC32 had 276/756. Their
+step-zero-adjusted gains were 157 and 197, a paired difference of 40 answers. Mean consumed
+ages across all 40 updates were 4.70 and 4.71, with 5.38% and 5.50% of tokens hitting the
+TIS cap. Both arms consumed about 13.2–13.4 million loss tokens. Through terminal evaluation,
+the TIS and SC arms used 24.80 and 24.41 H100-hours, respectively; full export costs are
+pending. Both completed active-cap older pairs so far favor SC, but two seeds cannot establish
+robustness or isolate benefit specific to age. New launches were held
 when cluster use rose to 504/512 H100s with zero queued workloads at 00:59 UTC.
 A third matched seed-19 pair started after capacity returned to 284/512 H100s with no queued
 workloads: [TIS r30](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-age8-tis-cap105-seed19-01a0bb6f-r30)
@@ -374,6 +399,13 @@ generation workers, and a 16-group buffer, matching the cap-2 near-fresh screen.
 children were admitted at `iris-interactive` priority; trained results are pending. This
 schedule comparison will show whether any SC advantage is specific to older rollouts, while
 keeping the objective fixed within each pair.
+A narrower behavior-capture pair, [TIS r34](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-age8-tis-cap105-topk8-seed17-01a0bb6f-r34)
+and [TIS plus SC8 r35](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-age8-sc-cap105-topk8-seed17-01a0bb6f-r35),
+keeps the older seed-17 cap-1.05 schedule and changes behavior-logprob capture from top-k 32
+to top-k eight in both arms. The SC arm uses the matching correction width eight. It isolates
+SC within the narrow-capture pair and measures whether the cheaper capture path preserves the
+older pair's quality signal. All four accelerator tasks were admitted at `iris-interactive`
+priority; trained results are pending.
 
 `analyze_score_centering.py` reads every dumped evaluation response and the durable Iris
 `WANDB_MIRROR` lines. It writes separate CSV files for completion-aware quality and per-update
@@ -458,7 +490,9 @@ age 4.78, versus 13.15 million at mean age 4.62 for r19. The changed capture wid
 asynchronous generation speed and therefore policy-age exposure; these quality counts do not
 isolate the effect of width on learning. The near-2.4-fold cost reduction through evaluation,
 plus the 13-fold smaller bridge responses, identify wide behavior-logprob capture as a major
-cost in this implementation. Full costs including terminal export are pending.
+cost in this implementation. Both jobs succeeded; including terminal export, r29 used 12.23
+reserved H100-hours versus r19's 24.22. The much longer r29 export time narrows the full-job
+cost ratio compared with the ratio through evaluation.
 `plot_score_centering.py` draws the completed-correct curve
 against updates, consumed loss tokens, elapsed task time, and reserved H100-hours from the
 three analysis CSVs. These descriptive comparisons do not identify a score-centering quality

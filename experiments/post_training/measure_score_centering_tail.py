@@ -141,7 +141,10 @@ def approximation_metrics(policy: torch.Tensor, behavior: torch.Tensor, width: i
 @click.option("--eval-root", required=True)
 @click.option("--output", type=click.Path(path_type=Path), required=True)
 @click.option("--threads", type=int, default=4, show_default=True)
-def main(behavior_model: Path, current_model: Path, eval_root: str, output: Path, threads: int) -> None:
+@click.option("--topk", "widths", type=int, multiple=True, default=(1, 4, 8, 32, 128), show_default=True)
+def main(
+    behavior_model: Path, current_model: Path, eval_root: str, output: Path, threads: int, widths: tuple[int, ...]
+) -> None:
     tokenizer = AutoTokenizer.from_pretrained(behavior_model)
     contexts = _contexts(eval_root, tokenizer)
     behavior = _distributions(behavior_model, contexts, threads=threads)
@@ -160,7 +163,7 @@ def main(behavior_model: Path, current_model: Path, eval_root: str, output: Path
                 ("calibrated_0.05", _calibrated_policy(q, 0.05, seed)),
             )
             for scenario, current_policy in scenarios:
-                for width in (8, 32, 128):
+                for width in widths:
                     for cap in (1.001, 1.05, 2.0):
                         rows.append(
                             {
