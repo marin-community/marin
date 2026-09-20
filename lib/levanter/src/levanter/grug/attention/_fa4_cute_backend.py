@@ -127,9 +127,7 @@ def segmented_flash_attention_forward(
         tile_n=forward_tile[1],
         num_threads=num_threads,
     )
-    input_spec, output_spec = _cutlass_attention_forward_specs(
-        modules, vector_elems=8, has_rel_bias=rel_bias is not None
-    )
+    input_spec, output_spec = _cutlass_attention_forward_specs(modules, vector_elems=8)
     out_shape_dtype = jax.ShapeDtypeStruct((*q.shape[:3], v.shape[-1]), q.dtype)
     lse_shape_dtype = jax.ShapeDtypeStruct((q.shape[0], q.shape[2], q.shape[1]), jnp.float32)
     call = cutlass_call(
@@ -140,10 +138,10 @@ def segmented_flash_attention_forward(
         use_static_tensors=True,
         softmax_scale=softmax_scale,
     )
-    metadata = (lower_bounds, valid.astype(jnp.int32))
     if rel_bias is None:
-        return call(q, k, v, *metadata)
-    return call(q, k, v, *metadata, rel_bias.astype(q.dtype))
+        # Zero bias A [B, Hq, S, 1] -> the kernel only ever adds A[i, 0] on the diagonal (delta=0), = 0.
+        rel_bias = jnp.zeros((q.shape[0], q.shape[2], q.shape[1], 1), dtype=q.dtype)
+    return call(q, k, v, lower_bounds, valid.astype(jnp.int32), rel_bias.astype(q.dtype))
 
 
 def segmented_flash_attention_backward(
@@ -408,18 +406,17 @@ def segmented_flash_attention_backward_sm90_native(
 
 
 def _cutlass_attention_forward_specs(
-    modules: _CutlassCuteModules, *, vector_elems: int, has_rel_bias: bool = False
+    modules: _CutlassCuteModules, *, vector_elems: int
 ) -> tuple[tuple[Any, ...], Any]:
     tensor_spec = modules.cjax.TensorSpec
     qkv_spec = tensor_spec(mode=(1, 3, 2, 0), divisibility=(1, 1, 1, vector_elems), static=True)
     lse_spec = tensor_spec(divisibility=(1, 1, 1), static=True)
     metadata_spec = tensor_spec(static=True)
-    inputs = (qkv_spec, qkv_spec, qkv_spec, metadata_spec, metadata_spec)
-    if has_rel_bias:
-        # Inkling relative-position bias A [B, Hq, S, L] -> kernel [S, L, Hq, B] (mode=(2,3,1,0)), so the
-        # kernel scalar-indexes mRelBias[query_idx, delta, q_head, batch_idx].
-        inputs = (*inputs, tensor_spec(mode=(2, 3, 1, 0), static=True))
-    return inputs, (qkv_spec, lse_spec)
+    # Inkling relative-position bias A [B, Hq, S, L] -> kernel [S, L, Hq, B] (mode=(2,3,1,0)), so the
+    # kernel scalar-indexes mRelBias[query_idx, delta, q_head, batch_idx]. Always present; callers that
+    # do not use it pass a zero [B, Hq, S, 1] bias.
+    rel_bias_spec = tensor_spec(mode=(2, 3, 1, 0), static=True)
+    return (qkv_spec, qkv_spec, qkv_spec, metadata_spec, metadata_spec, rel_bias_spec), (qkv_spec, lse_spec)
 
 
 def _cutlass_attention_backward_specs(
