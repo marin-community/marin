@@ -88,10 +88,26 @@ leave the global batch and data order unchanged); each arm is well under an
 hour. Evals (`GrugEvalConfig`) run every 500 steps on the held-out FineWeb
 file with the current (non-EMA) weights.
 
-## Verdict
+## Verdict (2026-09-20)
 
-Compare each arm's final eval loss against the paper targets in the table
-above. The replication succeeds if the ordering and approximate gaps match:
-Operator-1 (own recipe) < Operator-1 (vanilla recipe) < Vanilla, with gaps of
-roughly the paper's magnitudes (−0.022 and −0.014). Report in the experiment
-issue with W&B links.
+All three arms ran to completion (1907 steps, seed 0, preemptible v4-16,
+shared caches). Final `eval/loss` on the held-out FineWeb file:
+
+| Arm | Ours | Paper (Table 6) |
+| --- | --- | --- |
+| Vanilla | **3.2661** | 3.3279 |
+| Operator-1 (own recipe) | **3.4738** | 3.3057 |
+| Operator-1 (vanilla recipe) | **3.2561** | 3.3135 |
+
+The transfer probe replicates (Operator-1 under the vanilla recipe is
+−0.010 better than vanilla; the paper has −0.014): the boundary-operator
+architecture itself is neutral-to-slightly-positive at this scale. The
+central claim does not replicate: the Operator-1 own recipe is +0.208
+WORSE than vanilla instead of −0.022 better, behind from the first eval
+and never recovering — a hyperparameter-configuration effect, not a
+collapse. This is consistent with the Phase-0 MoE ablation's negative
+result.
+
+Full analysis: https://github.com/marin-community/marin/issues/9292
+W&B runs: `paper_rep_d8_vanilla`, `paper_rep_d8_op1`,
+`paper_rep_d8_op1_vanilla_recipe` (project `marin`).
