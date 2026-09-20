@@ -364,7 +364,9 @@ class LearningProgressionReview(StrictModel):
             raise ValueError("learning-progression review and proposal catalog versions differ")
         if self.progression_prompt_version != progression.prompt_version:
             raise ValueError("learning-progression review names the wrong proposal prompt")
-        if self.scope_subject_ids != progression.scope_subject_ids:
+        if len(self.scope_subject_ids) != len(set(self.scope_subject_ids)):
+            raise ValueError("learning-progression review subject IDs must be unique")
+        if set(self.scope_subject_ids) != set(progression.scope_subject_ids):
             raise ValueError("learning-progression review and proposal scopes differ")
         expected = {(edge.prerequisite_id, edge.dependent_id) for edge in progression.edges}
         actual = [(edge.prerequisite_id, edge.dependent_id) for edge in self.edge_reviews]

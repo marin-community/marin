@@ -388,6 +388,41 @@ def test_learning_progression_review_requires_exact_edge_accounting() -> None:
         review.validate_against_progression(progression, catalog)
 
 
+def test_learning_progression_review_treats_scope_as_unique_set() -> None:
+    catalog = _catalog()
+    progression = LearningProgression.model_validate(
+        {
+            "catalog_version": catalog.catalog_version,
+            "prompt_version": "learning-v1",
+            "scope_subject_ids": ["C00", "C01"],
+            "edges": [_learning_edge("files.search", "practice.processes.logs")],
+        }
+    )
+    review_data = {
+        "catalog_version": catalog.catalog_version,
+        "progression_prompt_version": "learning-v1",
+        "review_prompt_version": "learning-review-v1",
+        "scope_subject_ids": ["C01", "C00"],
+        "edge_reviews": [
+            {
+                "prerequisite_id": "files.search",
+                "dependent_id": "practice.processes.logs",
+                "verdict": "accept",
+                "rationale": "Both witness families reuse the upstream operation.",
+            }
+        ],
+        "missing_edges": [],
+        "findings": [],
+        "recommendation": "accept",
+    }
+    LearningProgressionReview.model_validate(review_data).validate_against_progression(progression, catalog)
+
+    review_data["scope_subject_ids"] = ["C00", "C00"]
+    duplicate_scope_review = LearningProgressionReview.model_validate(review_data)
+    with pytest.raises(ValueError, match="subject IDs must be unique"):
+        duplicate_scope_review.validate_against_progression(progression, catalog)
+
+
 def test_learning_progression_review_rejects_combined_cycle() -> None:
     catalog = _catalog()
     progression = LearningProgression.model_validate(
