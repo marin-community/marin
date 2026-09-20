@@ -175,3 +175,29 @@ A = R.proj on the fly in fwd score-add and bwd S-recompute (16-mul/elem, proj in
 Hybrid (simpler, gets the ~1.3pt read gap): keep dA[B,H,S,L] scatter output, compute dR=einsum(dA,proj)
 & dproj=einsum(dA,R) in the custom_vjp (cheap). Full (also kills dA traffic): kernel emits dR (16-wide
 scatter, tiny) + dproj (smem partial + atomic reduce) -- harder. Do hybrid first, measure, then full.
+
+## On-the-fly low-rank implementation plan (ready to execute)
+Goal: stop materializing/streaming A[B,Hq,S,L]; compute A = sum_r R[q,h,r]*proj[r,delta] in-kernel.
+Wins the ~1.3pt fwd+bwd read gap + the model-side A write; grows with scale (d1280 impact 27%).
+
+Layouts: mR kernel [S, rel_dim, Hq, B] (spec mode (2,3,1,0) on R[B,S,H,rel_dim] -> actually R is [B,S,H,r];
+pick spec so kernel indexes mR[q, r, head, batch]); mProj [rel_dim, L] shared (no batch/head).
+
+Edits:
+1. Forward kernel (_fa4_cute_kernels segmented_flash_attention_forward_launcher): replace mRelBias operand
+   with mR + mProj through __call__(256)/kernel(385)/mma(544)/_launch(952); at the bias-add site (~832):
+   rel_extent=mProj.shape[1]; rel_dim=mProj.shape[0]; acc=0; for r in range(rel_dim): acc += mR[q_meta,r,q_head,b].to(f32)*mProj[r,delta_safe].to(f32); add acc*LOG2E/softmax_scale_log2 when in_band.
+2. Backward vendored apply_score_mod (_fa4_cute_flash_bwd_sm90): read R (aux) + proj (aux) instead of
+   aux[2] A; compute A on the fly (same loop); keep dA scatter unchanged (aux[3]).
+3. Backend: forward specs + segmented_flash_attention_forward take (R, proj). sm90 native backward passes
+   R, proj as aux[2],aux[4]... (reindex: aux=(lb,valid,R,dA,proj)) OR aux=(lb,valid,proj,dA) with R as a
+   separate operand. Simplest: aux tensors (lb, valid, R, proj, dA); apply_score_mod reads aux[2]=R,aux[3]=proj;
+   apply_score_mod_bwd writes aux[4]=dA.
+4. custom_vjp: differentiable inputs become (q,k,v,R,proj) [drop A]. fwd saves R,proj. bwd: kernel returns
+   dA (scatter); compute dR=einsum("bhql,rl->bqhr" ... dA,proj) and dproj=einsum(dA,R) OUTSIDE (cheap);
+   return dq,dk,dv,dR,dproj. (Hybrid: dA still materialized as kernel output + read once by these einsums.)
+   FULL variant (later): kernel emits dR (16-wide scatter) + dproj (smem partial + atomic) -> no dA traffic.
+5. Model InklingRelPos/CausalSelfAttention: compute R=einsum(x,r_proj)->[B,S,H,rel_dim]; pass (R, proj) to
+   attention instead of A. reference_attention: materialize A=einsum(R,proj) for the oracle.
+6. Tests: standalone forward on-the-fly vs reference; grad check (dq/dk/dv/dR/dproj) vs reference; MFU d512+d1280.
+Risk: ~6 files/2 kernels, several GPU iterations. Hybrid keeps dA traffic (gets ~1.3pt); FULL removes it (needs reduction).
