@@ -132,6 +132,10 @@ class GrugModelConfig:
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     # Dense (no-MoE) mode: every block is a single DenseMLP(hidden, intermediate_dim) SwiGLU; the MoE fields are ignored.
     dense_mlp: bool = False
+    # Manifold-constrained hyper-connections (DeepSeek-V4 2606.19348; base 2409.19606): n parallel
+    # residual streams with learnable in-mix A, doubly-stochastic depth-mix B, out-mix C. n=2 only.
+    hyper_connections: bool = False
+    hyper_connection_rate: int = 2
 
     def __post_init__(self) -> None:
         if not self.dense_mlp and self.num_experts_per_token >= self.num_experts:
@@ -623,10 +627,20 @@ class Block(eqx.Module):
     shared: tuple[DenseMLP, ...] | None
     sconv_attn: "ShortConv | None"
     sconv_mlp: "ShortConv | None"
+    hc_a: "jax.Array | None"  # in-mix weights (sigmoid), [n]
+    hc_b: "jax.Array | None"  # depth-mix logit (scalar) -> 2x2 doubly-stochastic B
+    hc_c: "jax.Array | None"  # out-mix weights (2*sigmoid), [n]
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
         attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key = random.split(key, 5)
+        # Zero-init the hyper-connection params so A=[.5,.5], B=[[.5,.5],[.5,.5]], C=[1,1] make mHC exactly
+        # the standard single residual at step 0 (both streams stay equal to the running hidden).
+        hc_a, hc_b, hc_c = (
+            (jnp.zeros(cfg.hyper_connection_rate), jnp.zeros(()), jnp.zeros(cfg.hyper_connection_rate))
+            if cfg.hyper_connections
+            else (None, None, None)
+        )
         if cfg.dense_mlp:
             # Dense block: one SwiGLU DenseMLP(hidden, intermediate_dim), no MoE and no shared experts.
             return Block(
@@ -643,6 +657,9 @@ class Block(eqx.Module):
                 sconv_mlp=(
                     ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel) if cfg.sconv and "mlp" in cfg.sconv_sites else None
                 ),
+                hc_a=hc_a,
+                hc_b=hc_b,
+                hc_c=hc_c,
             )
         shared = None
         if cfg.shared_expert_intermediate_dim > 0:
@@ -669,6 +686,9 @@ class Block(eqx.Module):
             sconv_mlp=(
                 ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel) if cfg.sconv and "mlp" in cfg.sconv_sites else None
             ),
+            hc_a=hc_a,
+            hc_b=hc_b,
+            hc_c=hc_c,
         )
 
     @named_call
@@ -816,9 +836,36 @@ class Transformer(eqx.Module):
                 use_long,
             )
 
-        hidden, stacked_router_stats = jax.lax.scan(
-            _scan_layers, hidden, xs=(self.stacked_blocks.stacked, mask_schedule)
-        )
+        def _scan_hc(
+            carry_streams: Float[Array, "B S N D"],
+            scan_inputs: tuple[Block, jax.Array],
+        ) -> tuple[Float[Array, "B S N D"], dict[str, jax.Array]]:
+            layer, layer_use_long_mask = scan_inputs
+            use_long = jnp.asarray(layer_use_long_mask, dtype=jnp.bool_)
+            lower_bounds = jnp.where(use_long, long_lower_bounds, short_lower_bounds)
+            layer_mask = long_mask.with_fa4_bounds(lower_bounds, valid)
+            a_mix = jax.nn.sigmoid(layer.hc_a)  # [n]
+            beta = jax.nn.sigmoid(layer.hc_b)  # scalar; B = [[beta, 1-beta], [1-beta, beta]] (doubly stochastic)
+            b_mat = jnp.stack([jnp.stack([beta, 1 - beta]), jnp.stack([1 - beta, beta])])
+            c_mix = 2 * jax.nn.sigmoid(layer.hc_c)  # [n]
+            mixed_in = jnp.einsum("bsnd,n->bsd", carry_streams, a_mix)
+            block_out, router_stats = eqx.filter_checkpoint(layer, policy=None)(mixed_in, layer_mask, use_long, use_long)
+            delta = block_out - mixed_in
+            new_streams = jnp.einsum("ij,bsjd->bsid", b_mat, carry_streams) + jnp.einsum("i,bsd->bsid", c_mix, delta)
+            return new_streams, router_stats
+
+        if cfg.hyper_connections:
+            streams = jnp.broadcast_to(
+                hidden[:, :, None, :], (batch_size, seq_len, cfg.hyper_connection_rate, hidden.shape[-1])
+            )
+            streams, stacked_router_stats = jax.lax.scan(
+                _scan_hc, streams, xs=(self.stacked_blocks.stacked, mask_schedule)
+            )
+            hidden = jnp.mean(streams, axis=2)
+        else:
+            hidden, stacked_router_stats = jax.lax.scan(
+                _scan_layers, hidden, xs=(self.stacked_blocks.stacked, mask_schedule)
+            )
         if cfg.dense_mlp:
             router_metrics: dict[str, jax.Array] = {}
         else:

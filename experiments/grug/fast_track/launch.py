@@ -157,6 +157,8 @@ def _h100_ladder_model(rung: H100LadderRung, dense: bool = False) -> GrugModelCo
         sconv=True,
         pooled_transport_capacity_factor=_EP_CAPACITY_FACTOR,
         latent_dim=hidden // 2,
+        hyper_connections=True,  # feature branch: fast_track_abl_mhc (2 residual streams)
+        hyper_connection_rate=2,
     )
 
 
