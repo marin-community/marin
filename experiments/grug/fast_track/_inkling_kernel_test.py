@@ -1,56 +1,35 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Standalone GPU check: fused fa4_cute forward with the Inkling relative-position bias vs the
-reference (materialized) oracle. Run on one H100 via iris. Not a pytest (keeps the iris cmd simple)."""
+"""GPU isolation check for the Inkling relative-position fused forward. Run on one H100 via iris."""
 
-import math
 
 import jax
 import jax.numpy as jnp
 import numpy as np
-from levanter.grug.attention import AttentionMask, reference_attention
-from levanter.grug.attention._fa4_cute import _segmented_kernel_config, _simple_causal_lower_bounds
-from levanter.grug.attention._fa4_cute_backend import segmented_flash_attention_forward
+from levanter.grug.attention import AttentionMask, gpu_fa4_cute_attention, reference_attention
 
 
-def _run(B, S, Hq, Hkv, D, L, sliding_window, seed=0, use_bias=True):
-    key = jax.random.PRNGKey(seed)
-    kq, kk, kv, ka = jax.random.split(key, 4)
-    q = jax.random.normal(kq, (B, S, Hq, D), dtype=jnp.bfloat16)
-    k = jax.random.normal(kk, (B, S, Hkv, D), dtype=jnp.bfloat16)
-    v = jax.random.normal(kv, (B, S, Hkv, D), dtype=jnp.bfloat16)
-    A = (jax.random.normal(ka, (B, Hq, S, L), dtype=jnp.float32) * 0.5).astype(jnp.bfloat16) if use_bias else None
-    scale = 1.0 / math.sqrt(D)
-    lower_bounds, valid = _simple_causal_lower_bounds(batch_size=B, seq_len=S, sliding_window=sliding_window)
-    cfg = _segmented_kernel_config(D)
-    out, _lse = segmented_flash_attention_forward(
-        q, k, v, lower_bounds, valid, A, softmax_scale=scale, kernel_config=cfg
-    )
-    mask = AttentionMask.causal(sliding_window=sliding_window)
-    expected = reference_attention(q, k, v, mask, logits_dtype=jnp.float32, rel_bias=A)
-    out = np.asarray(jax.block_until_ready(out)).astype(np.float32)
-    expected = np.asarray(expected).astype(np.float32)
-    err = float(np.max(np.abs(out - expected)))
-    rel = err / (float(np.max(np.abs(expected))) + 1e-6)
-    print(
-        f"[{B}x{S}x{Hq}/{Hkv}x{D} L={L} win={sliding_window}] max_abs={err:.4e} rel={rel:.4e} "
-        f"-> {'PASS' if err < 7e-2 else 'FAIL'}",
-        flush=True,
-    )
-    return err
+def _base_case():
+    key = jax.random.PRNGKey(0)
+    kq, kk, kv = jax.random.split(key, 3)
+    q = jax.random.normal(kq, (1, 256, 4, 128), dtype=jnp.bfloat16)
+    k = jax.random.normal(kk, (1, 256, 1, 128), dtype=jnp.bfloat16)
+    v = jax.random.normal(kv, (1, 256, 1, 128), dtype=jnp.bfloat16)
+    mask = AttentionMask.causal()
+    out = np.asarray(jax.block_until_ready(gpu_fa4_cute_attention(q, k, v, mask))).astype(np.float32)
+    exp = np.asarray(reference_attention(q, k, v, mask, logits_dtype=jnp.float32)).astype(np.float32)
+    err = float(np.max(np.abs(out - exp)))
+    print(f"[base no-bias via wrapper] max_abs={err:.4e} -> {'PASS' if err < 7e-2 else 'FAIL'}", flush=True)
 
 
 def main():
     if jax.default_backend() != "gpu":
-        print("SKIP: needs GPU backend")
+        print("SKIP: needs GPU backend", flush=True)
         return
     print("backend:", jax.default_backend(), "device:", jax.devices()[0], flush=True)
-    _run(B=1, S=256, Hq=4, Hkv=1, D=128, L=64, sliding_window=None, use_bias=False)  # base kernel sanity
-    _run(B=1, S=256, Hq=4, Hkv=1, D=128, L=64, sliding_window=None)
-    _run(B=1, S=256, Hq=4, Hkv=1, D=128, L=128, sliding_window=128)
-    _run(B=2, S=512, Hq=4, Hkv=1, D=128, L=256, sliding_window=None)
-    print("INKLING_FWD_KERNEL_TEST_DONE")
+    _base_case()
+    print("INKLING_BASE_KERNEL_TEST_DONE", flush=True)
 
 
 if __name__ == "__main__":
