@@ -1309,16 +1309,34 @@ def segmented_flash_attention_backward_sm90_launcher(
     # add A directly (no scale conversion). Additive bias -> identity backward for dQ/dK/dV, so no
     # score_mod_bwd. head_idx/q_idx/kv_idx arrive as per-lane SSA vectors (logical q head for GQA).
     inkling_score_mod = None
-    _sm_identity = os.environ.get("FAST_TRACK_INKLING_SM_IDENTITY") == "1"
-    if use_rel_bias and _sm_identity:
+    _sm_debug = os.environ.get("FAST_TRACK_INKLING_SM_DEBUG", "")
+    if use_rel_bias and _sm_debug == "identity":
 
         @cute.jit
         def _grug_identity_score_mod(score, batch_idx, head_idx, q_idx, kv_idx, seqlen_info, aux_tensors):
-            # Debug isolation: exercises the score_mod path (LOG2E scale switch) with no bias add.
+            # Debug: exercises the score_mod path (LOG2E scale switch) with no bias add.
             del batch_idx, head_idx, q_idx, kv_idx, seqlen_info, aux_tensors
             return score
 
         inkling_score_mod = _grug_identity_score_mod
+    elif use_rel_bias and _sm_debug == "const":
+
+        @cute.jit
+        def _grug_const_score_mod(score, batch_idx, head_idx, q_idx, kv_idx, seqlen_info, aux_tensors):
+            # Debug: per-lane rmem-loop mechanics with NO gmem read (adds a constant to in-band lanes).
+            del batch_idx, head_idx, seqlen_info, aux_tensors
+            rel_extent = cutlass.Int32(1024)
+            vec = cutlass.const_expr(cute.size(score.shape))
+            result = cute.make_rmem_tensor(vec, cutlass.Float32)
+            for j in cutlass.range_constexpr(vec):
+                result[j] = score[j]
+                delta = q_idx[j] - kv_idx[j]
+                in_band = cute.elem_less(delta, rel_extent) and cute.elem_less(cutlass.Int32(-1), delta)
+                if in_band:
+                    result[j] = result[j] + cutlass.Float32(0.1)
+            return result.load()
+
+        inkling_score_mod = _grug_const_score_mod
     elif use_rel_bias:
 
         @cute.jit
