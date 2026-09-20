@@ -54,7 +54,7 @@ on uncheatable bpb (−0.012 / −0.018).
 ## Scaling law
 
 Fitting `L(C) = L∞ + A·C^(−α)` to Paloma macro loss over the four rungs (C = total training FLOPs), with
-the irreducible floor pinned at **L∞ = 1.2** (a prior — the ladder never nears saturation):
+the irreducible floor pinned at **L∞ = 1.2**:
 
 | variant | fit | R² | α |
 |---------|-----|---:|--:|
