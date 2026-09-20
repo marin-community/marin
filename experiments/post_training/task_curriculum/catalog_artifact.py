@@ -9,7 +9,6 @@ from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep
 from rigging.filesystem.buckets import filesystem_for
 
-from experiments.post_training.task_curriculum.catalog import catalog_from_yaml
 from experiments.post_training.task_curriculum.models import CurriculumCatalog, SubjectInventory
 
 CATALOG_ARTIFACT_NAME = "post-training/task-curriculum/catalog"
@@ -29,12 +28,12 @@ class TaskCurriculumCatalogArtifact(Artifact):
 
     @property
     def catalog_uri(self) -> str:
-        """Return the catalog YAML location."""
-        return _artifact_file_uri(self.path, "curriculum.yaml")
+        """Return the catalog JSON location."""
+        return _artifact_file_uri(self.path, "curriculum.json")
 
     def read_catalog(self) -> CurriculumCatalog:
         """Load and validate the catalog from the artifact."""
-        return catalog_from_yaml(_artifact_bytes(self.catalog_uri))
+        return CurriculumCatalog.model_validate_json(_artifact_bytes(self.catalog_uri))
 
 
 class TaskCurriculumSubjectInventoryArtifact(Artifact):
@@ -52,8 +51,8 @@ class TaskCurriculumSubjectInventoryArtifact(Artifact):
 
 TASK_CURRICULUM = ArtifactStep.adopt(
     CATALOG_ARTIFACT_NAME,
-    "2026.09.19.1",
-    source="s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-2578589fb0de",
+    "2026.09.19.2",
+    source="s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-json-1faada4eeda8/publish",
     kind=TaskCurriculumCatalogArtifact,
 )
 
@@ -61,7 +60,14 @@ TASK_CURRICULUM_V1 = ArtifactStep.adopt(
     CATALOG_ARTIFACT_NAME,
     "2026.09.18.2",
     source="s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.18-72a763b98f9e",
-    kind=TaskCurriculumCatalogArtifact,
+    kind=Artifact,
+)
+
+TASK_CURRICULUM_YAML_V2 = ArtifactStep.adopt(
+    CATALOG_ARTIFACT_NAME,
+    "2026.09.19.1",
+    source="s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-2578589fb0de",
+    kind=Artifact,
 )
 
 TASK_CURRICULUM_SUBJECT_INVENTORY = ArtifactStep.adopt(
@@ -82,5 +88,5 @@ TASK_CURRICULUM_SOURCE_AUDIT_V3 = ArtifactStep.adopt(
     "post-training/task-curriculum/source-audit-v3",
     "2026.09.19.1",
     source="s3://marin-us-east-02a/marin/task-curriculum/experiments/2026.09.19-bounded-source-audit-v3-f0edd8ce5141",
-    kind=TaskCurriculumCatalogArtifact,
+    kind=Artifact,
 )

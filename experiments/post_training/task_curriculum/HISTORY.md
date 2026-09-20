@@ -72,6 +72,8 @@ A separate routing audit placed all 24 practical TaskTrove shell, repository-wor
 Twenty-one mapped to one complete capability; three distinct gaps did not justify another catch-all. Evaluation-policy
 and AAII metadata found subject homes across all 45 roots, while ten entries were correctly treated as reusable task
 mechanics rather than subjects. The canonical catalog is
-`s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-2578589fb0de/curriculum.yaml`, with SHA-256
-`2578589fb0de23b179765e6eba999730c7117b9f083140b266ccc391dde9685d`. Its evidence archive SHA-256 is
+`s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-json-1faada4eeda8/publish/curriculum.json`, with
+SHA-256 `1faada4eeda8368a7834602e88f8f3fb97e35a4baf5dedc2bae10a5dffbfc58b`. This is a representation-only
+republication of the 45-root production graph: the catalog version, subjects, nodes, and reviews are unchanged. The
+prior YAML serialization remains immutable for rollback. The evidence archive SHA-256 is
 `f9d495bcf5afd3b2ae01eb8de60abc9c99e00abfbcd8e90709cce7424d50d74a`.

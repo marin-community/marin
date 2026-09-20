@@ -267,14 +267,16 @@ rewrite archived results to match it.
    membership semantics and record whether a labeled member/near-neighbor fixture calibrated that choice. A missing
    fixture leaves routing provisional but does not block a structurally sound curriculum. Give `catalog_version` a
    date-based immutable identifier such as `YYYY.MM.DD-cross-domain-vN`. Validate the entire file with
-   `load_catalog`, which checks routing values and global subject/section uniqueness. Recompute catalog counts from
-   the parsed object. Upload the complete YAML to a new immutable S3 directory, verify its SHA-256 by reading it back,
+   `CurriculumCatalog.model_validate_json`, which checks routing values and global subject/section uniqueness.
+   Recompute catalog counts from the parsed object. Serialize the complete catalog as canonical JSON (UTF-8, sorted
+   keys, compact separators, and one trailing newline), upload it to a new immutable S3 directory, verify its SHA-256
+   by reading it back,
    and update the source and version of `TASK_CURRICULUM` in `catalog_artifact.py`. Preserve the prior immutable handle
    for comparison and rollback. Do not check the catalog payload into git. Task mapping remains a diagnostic and is
    not a promotion gate.
 
    ```bash
-   uv run python -c 'from pathlib import Path; from experiments.post_training.task_curriculum.catalog import load_catalog; c=load_catalog(Path("/tmp/task-curriculum-next.yaml")); print(len(c.curricula), sum(len(x.curriculum.sections) for x in c.curricula), sum(len(x.curriculum.capability_sections()) for x in c.curricula))'
+   uv run python -c 'from pathlib import Path; from experiments.post_training.task_curriculum.models import CurriculumCatalog; c=CurriculumCatalog.model_validate_json(Path("/tmp/task-curriculum-next.json").read_bytes()); print(len(c.curricula), sum(len(x.curriculum.sections) for x in c.curricula), sum(len(x.curriculum.capability_sections()) for x in c.curricula))'
    ```
 7. Record a concise result: models and prompt versions, subject/version, node counts, holistic score/status/confidence,
    blind-fit X/Y and counts, systematic gaps and dispositions, repairs, optional Luna results, evidence limitations,

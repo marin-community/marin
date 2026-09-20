@@ -14,8 +14,7 @@ from openai import OpenAI
 from zephyr.readers import load_jsonl
 from zephyr.writers import write_jsonl_file
 
-from experiments.post_training.task_curriculum.catalog import load_catalog
-from experiments.post_training.task_curriculum.models import RoutingFacet
+from experiments.post_training.task_curriculum.models import CurriculumCatalog, RoutingFacet
 from experiments.post_training.task_curriculum.task_mapping.cache import EmbeddingCache, cached_embeddings
 from experiments.post_training.task_curriculum.task_mapping.embedding import (
     MappingInputs,
@@ -62,7 +61,7 @@ def main(
     """Rank annotated tasks within each graph in the canonical curriculum catalog."""
     task_rows = [TaskAnnotation.model_validate(row) for path in annotations for row in load_jsonl(str(path))]
     anchor_rows = [AssignmentAnchor.model_validate(row) for path in assignment_anchors for row in load_jsonl(str(path))]
-    catalog_row = load_catalog(catalog)
+    catalog_row = CurriculumCatalog.model_validate_json(catalog.read_bytes())
     graph_anchor_rows = graph_anchors(catalog_row, anchor_rows)
     section_anchor_rows = section_anchors(catalog_row, anchor_rows)
     embed = _openai_embedding_function(embedding_model, embedding_batch_size)

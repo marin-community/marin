@@ -10,22 +10,22 @@ versioned and addressable. It contains all 45 D-series subject roots and 2,405 g
 capabilities and 406 organizational groups. One bounded repair pass raised the same-call holistic mean from 78.36 to
 92.81 across 42 reviewed subjects; 41 repairs were selected, one baseline was retained, and three previously accepted
 graphs were unchanged. Twenty-four subjects are `pilot_ready`; 21 remain explicitly provisional after the stopping
-rule. `HISTORY.md` records the experiments and tradeoffs. The 4.0 MB YAML payload lives in CoreWeave S3.
+rule. `HISTORY.md` records the experiments and tradeoffs. The 3.6 MB canonical JSON payload lives in CoreWeave S3.
 
-- Artifact handle: `TASK_CURRICULUM`, version `2026.09.19.1`
-- Catalog: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-2578589fb0de/curriculum.yaml`
-- Summary: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-2578589fb0de/catalog_summary.json`
-- Comparison: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-2578589fb0de/comparison.json`
-- Routing audit: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-2578589fb0de/routing_audit.json`
-- Evidence: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-2578589fb0de/evidence.tar.gz`
+- Artifact handle: `TASK_CURRICULUM`, version `2026.09.19.2`
+- Catalog: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-json-1faada4eeda8/publish/curriculum.json`
+- Summary: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-json-1faada4eeda8/publish/catalog_summary.json`
+- Comparison: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-json-1faada4eeda8/publish/comparison.json`
+- Routing audit: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-json-1faada4eeda8/publish/routing_audit.json`
+- Evidence: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-json-1faada4eeda8/publish/evidence.tar.gz`
 - Human viewer: [Task curriculum](https://applets.marina.oa.dev/a/67f69132-2ef4-4c9e-b8b5-77cabd126442/)
 
-Materialize the YAML before local validation or mapping:
+Materialize the JSON before local validation or mapping:
 
 ```bash
 uv run fsutil cp \
-  s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-2578589fb0de/curriculum.yaml \
-  /tmp/task-curriculum-cross-domain-v2.yaml
+  s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-json-1faada4eeda8/publish/curriculum.json \
+  /tmp/task-curriculum-cross-domain-v2.json
 ```
 
 `fsutil` reads `CW_KEY_ID` and `CW_KEY_SECRET` for this bucket. CoreWeave Iris tasks receive the same credentials from
@@ -54,7 +54,9 @@ their task environment.
 The five-subject source survey tested public college course sequences, textbook exercise families, and professional
 standards as generator inputs. The subsequent v3 experiment applied its bounded-repair recommendation to six roots.
 Production v2 then used the method across the remaining catalog. `HISTORY.md` records both experiments. V1 and
-experimental v3 remain immutable as `TASK_CURRICULUM_V1` and `TASK_CURRICULUM_SOURCE_AUDIT_V3`.
+experimental v3 remain immutable as `TASK_CURRICULUM_V1` and `TASK_CURRICULUM_SOURCE_AUDIT_V3`. The semantically
+identical YAML serialization of production v2 remains available as `TASK_CURRICULUM_YAML_V2` for rollback and
+provenance, but active consumers use JSON.
 
 Production v2 used anonymous same-call comparisons rather than absolute score deltas from different reviewers. A
 repair was selected only when the reviewer preferred it and it scored at least 70. The frozen blind tasks were reused
@@ -142,7 +144,7 @@ Run a pilot mapping with:
 ```bash
 uv run python -m experiments.post_training.task_curriculum.task_mapping.cli \
   --annotations /tmp/task-annotations-000.jsonl \
-  --catalog /tmp/task-curriculum-cross-domain-v2.yaml \
+  --catalog /tmp/task-curriculum-cross-domain-v2.json \
   --assignment-anchors /tmp/assignment-anchors.jsonl \
   --cache /tmp/curriculum-embeddings.sqlite \
   --embedding-model text-embedding-3-small \
@@ -156,7 +158,7 @@ projection. The mapper has no source-specific rules or per-task exceptions. Mapp
 excluded from the curriculum promotion gate. Roughly 70% reasonable placement is adequate for initial scale-out.
 
 For the full TaskTrove run, materialize the approximately 4 GB clean release and shard annotation and embedding work.
-Keep these artifacts outside the curriculum YAML:
+Keep these artifacts outside the curriculum JSON:
 
 - semantic keys by task-content hash, annotation schema, prompt, and model;
 - task vectors by semantic-key hash and embedding model;
