@@ -18,6 +18,7 @@ import hashlib
 import json
 import math
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,7 @@ ACCEPTED_STOPS = frozenset({"complete", "end_turn", "eos", "stop"})
 FIELDS = (
     "run",
     "step",
+    "eval_dump_written_utc",
     "dataset",
     "questions",
     "completed_correct",
@@ -83,6 +85,16 @@ def _membership_hash(rows: list[dict[str, Any]]) -> str:
     return hashlib.sha256(json.dumps(questions, ensure_ascii=False).encode()).hexdigest()
 
 
+def _modified_utc(fs: Any, path: str) -> str:
+    info = fs.info(path)
+    modified = info.get("LastModified") or info.get("mtime")
+    if isinstance(modified, datetime):
+        return modified.astimezone(UTC).isoformat()
+    if type(modified) in (int, float):
+        return datetime.fromtimestamp(modified, tz=UTC).isoformat()
+    raise ValueError(f"evaluation aggregate has no usable modification time: {path}")
+
+
 def _summarize(
     run: str,
     step: int,
@@ -90,6 +102,7 @@ def _summarize(
     rows: list[dict[str, Any]],
     aggregate: dict[str, Any],
     membership_hash: str,
+    eval_dump_written_utc: str,
 ) -> dict[str, Any]:
     if not rows:
         raise ValueError(f"{run} step {step} dataset {dataset} has no responses")
@@ -104,6 +117,7 @@ def _summarize(
     return {
         "run": run,
         "step": step,
+        "eval_dump_written_utc": eval_dump_written_utc,
         "dataset": dataset,
         "questions": count,
         "completed_correct": completed_correct,
@@ -125,10 +139,12 @@ def summarize_run(label: str, export_path: str, s3_endpoint: str) -> list[dict[s
     output: list[dict[str, Any]] = []
     for session in sessions:
         step = int(session.rsplit("/global_step_", 1)[1].removesuffix("_evals"))
-        aggregate_rows = _read_jsonl(fs, f"{session}/aggregated_results.jsonl")
+        aggregate_path = f"{session}/aggregated_results.jsonl"
+        aggregate_rows = _read_jsonl(fs, aggregate_path)
         if len(aggregate_rows) != 1:
             raise ValueError(f"{label} step {step}: expected one aggregate metrics row")
         aggregate = aggregate_rows[0]
+        eval_dump_written_utc = _modified_utc(fs, aggregate_path)
         all_rows: list[dict[str, Any]] = []
         for path in sorted(fs.glob(f"{session}/*.jsonl")):
             if path.endswith("/aggregated_results.jsonl"):
@@ -136,8 +152,12 @@ def summarize_run(label: str, export_path: str, s3_endpoint: str) -> list[dict[s
             dataset = path.rsplit("/", 1)[1].removesuffix(".jsonl")
             rows = _read_jsonl(fs, path)
             all_rows.extend(rows)
-            output.append(_summarize(label, step, dataset, rows, aggregate, _membership_hash(rows)))
-        output.append(_summarize(label, step, "all", all_rows, aggregate, _membership_hash(all_rows)))
+            output.append(
+                _summarize(label, step, dataset, rows, aggregate, _membership_hash(rows), eval_dump_written_utc)
+            )
+        output.append(
+            _summarize(label, step, "all", all_rows, aggregate, _membership_hash(all_rows), eval_dump_written_utc)
+        )
     return sorted(output, key=lambda row: (row["step"], row["dataset"]))
 
 

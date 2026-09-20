@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 
 import pytest
 
@@ -30,6 +31,7 @@ def test_saved_eval_uses_completed_correct_answers_and_checks_membership(tmp_pat
     assert overall["correct_any_stop"] == 2
     assert overall["raw_reward_mean"] == pytest.approx(1 / 3)
     assert overall["length_stop_fraction"] == pytest.approx(1 / 3)
+    assert datetime.fromisoformat(overall["eval_dump_written_utc"]).tzinfo is not None
     assert verify_membership(result) == overall["membership_sha256"]
 
     changed = [dict(row) for row in result]

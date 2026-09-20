@@ -294,7 +294,10 @@ These infrastructure interruptions and their GPU attempts belong in cost and pro
 The continuation [r26](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-age8-ppo-resume-seed17-01a0bb6f-r26)
 selected that same step-30 checkpoint and loaded model and optimizer state. Its learner pod
 reached 176.9 GB peak cgroup memory during restore, which explains why the 128 GB request failed.
-Training beyond the restored step and the terminal export remain to be checked.
+It restored 32 buffered groups, trained updates 31–40, saved the step-40 checkpoint, and dumped
+the terminal 756-response evaluation. During shutdown, a trajectory-retention publication
+reported a 120-second storage timeout, while the training driver exited with code zero. The
+separate terminal model export and Iris parent state remain to be checked.
 
 A second older-schedule pair launched on September 20 with TIS cap 1.05, the same seed and
 schedule, and behavior top-k 32 in both arms. This deliberately activates more capped tokens
@@ -307,6 +310,10 @@ At the first learner update, 4.57% and 4.61% of sampled tokens respectively hit 
 compared with near-zero cap fractions in the cap-2 screen. The SC arm logged 0.00315 mean
 absolute correction loss value. This confirms that the new cap changes the active objective,
 but the loss value alone does not quantify the correction gradient or a quality effect.
+At update two the cap fractions remained 4.97% and 4.88%, with mean consumed-token age one.
+A second matched seed-18 pair, [r27](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-age8-tis-cap105-seed18-01a0bb6f-r27)
+and [r28](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-age8-sc-cap105-seed18-01a0bb6f-r28),
+uses the same settings and 256 GB host request. Its outcomes are pending.
 
 `analyze_score_centering.py` reads every dumped evaluation response and the durable Iris
 `WANDB_MIRROR` lines. It writes separate CSV files for completion-aware quality and per-update
@@ -317,3 +324,27 @@ The step-cycle cost includes in-run evaluation and checkpointing but excludes se
 export, and failed attempts; those require Iris task durations in the total-cost table. The
 script checks that prompt and ground-truth membership
 match at every evaluation step and across the compared runs.
+
+The evaluation CSV also records the UTC write time of each aggregate dump. The separate
+`analyze_score_centering_cost.py` joins those times to a read-only Iris `task_attempts` CSV,
+using the exact parent job prefix for each run. For the PPO arm it joins both r23 and r26.
+It computes elapsed time from the first GPU task start and reserved H100-hours through each
+evaluation. It includes retries and failed attempts, while excluding a later export from an
+earlier evaluation's cost. Full-run H100-hours appear only after all matched attempts finish.
+The raw Iris query and the eight-GPU-per-child assumption are stated above. This GPU task clock
+does not include time spent queued before the first accelerator task started.
+
+At the current checkpoint, the comparable update-30 points are:
+
+| Arm | Completed correct / 756 | Hours since first GPU task | Reserved H100-hours through evaluation |
+| --- | ---: | ---: | ---: |
+| Older TIS, cap 2 (r19) | 181 | 1.16 | 18.60 |
+| Older TIS plus SC32, cap 2 (r20) | 160 | 1.19 | 19.09 |
+| Near-fresh TIS, cap 2 (r21) | 184 | 1.09 | 17.43 |
+| Plain PPO (r23 + r26) | 182 | 0.88 | 13.19 |
+
+The plain-PPO step-30 evaluation was rewritten after its failed restore attempts, so this
+reported point includes their elapsed time and GPU cost. It later reached 301/756 completed
+correct at update 40 after 0.96 hours and 14.52 reserved H100-hours from the first GPU task.
+The TIS arms have not yet reached update 40. These descriptive points mix different objective
+and capture costs; they do not identify a score-centering quality effect.
