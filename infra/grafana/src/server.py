@@ -381,7 +381,7 @@ def _vllm_attention_row(rows: list[dict[str, object]], *, summary_only: bool) ->
         state = "check_count_gap"
         message = (
             f"{observations:g} first-token observations vs {finished:g} recorded engine finishes. "
-            "Check range coverage and evaluator in Iris."
+            "Partial ranges can differ; check the evaluator in Iris."
         )
         gap = observations - finished
     else:
@@ -395,6 +395,8 @@ def _vllm_attention_row(rows: list[dict[str, object]], *, summary_only: bool) ->
         "stat": "selected-range count comparison",
         "value": gap,
         "unit": "observations minus finishes",
+        "ttft_observations": observations,
+        "engine_finishes": finished,
     }
 
 
@@ -405,7 +407,12 @@ def _vllm_unavailable_attention_row(status: str) -> dict[str, object]:
         if status == "empty"
         else "Server comparison unavailable. Retry or narrow the range, then check the evaluator in Iris."
     )
-    return {**_vllm_status_row(state, message), "metric": "run attention"}
+    return {
+        **_vllm_status_row(state, message),
+        "metric": "run attention",
+        "ttft_observations": None,
+        "engine_finishes": None,
+    }
 
 
 def _vllm_query_timed_out(error: BaseException) -> bool:

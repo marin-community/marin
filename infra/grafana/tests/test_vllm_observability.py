@@ -56,19 +56,23 @@ def test_inference_identity_selector_reads_request_state_rows(filename: str) -> 
     assert database.execute(long_sql).fetchall() == [("/serve",), ("/train",)]
 
 
-def _embedded_overview_app(invalid_histogram):
+def _vllm_projection_database():
     database = duckdb.connect()
     columns = """cluster VARCHAR, service VARCHAR, job_id VARCHAR, name VARCHAR, kind VARCHAR,
         value DOUBLE, resource_attributes_json VARCHAR, attributes_json VARCHAR, timestamp_ms BIGINT, seq BIGINT"""
-    database.execute(f'CREATE TABLE "telemetry_v1.marinskyrl"({columns})')
-    database.execute(f'CREATE TABLE "telemetry_v1.vllm"({columns})')
+    for table in ("telemetry_v1.marinskyrl", "telemetry_v1.vllm"):
+        database.execute(f'CREATE TABLE "{table}"({columns})')
     database.execute("CREATE MACRO json_get(d, f) AS json_extract_string(d, concat('$.', f))")
-
     # Finelog and DuckDB name the same struct constructor differently.
     database.execute(
         """CREATE MACRO named_struct(k1, v1, k2, v2, k3, v3)
                      AS struct_pack(timestamp_ms := v1, seq := v2, value := v3)"""
     )
+    return database
+
+
+def _embedded_overview_app(invalid_histogram):
+    database = _vllm_projection_database()
 
     def sample(name, value, timestamp, **labels):
         attributes = {"metric_source": "vllm", "engine": "physical-a", "engine_index": "0", **labels}
@@ -263,16 +267,7 @@ def test_dashboard_vllm_overview_end_to_end(invalid_histogram):
 
 
 def _standalone_overview_app():
-    database = duckdb.connect()
-    columns = """cluster VARCHAR, service VARCHAR, job_id VARCHAR, name VARCHAR, kind VARCHAR,
-        value DOUBLE, resource_attributes_json VARCHAR, attributes_json VARCHAR, timestamp_ms BIGINT, seq BIGINT"""
-    for table in ("telemetry_v1.marinskyrl", "telemetry_v1.vllm"):
-        database.execute(f'CREATE TABLE "{table}"({columns})')
-    database.execute("CREATE MACRO json_get(d, f) AS json_extract_string(d, concat('$.', f))")
-    database.execute(
-        """CREATE MACRO named_struct(k1, v1, k2, v2, k3, v3)
-                     AS struct_pack(timestamp_ms := v1, seq := v2, value := v3)"""
-    )
+    database = _vllm_projection_database()
     for cluster, values in (("cw-a", (100, 250, 10)), ("cw-b", (100, 160, 220))):
         for timestamp, value in zip((0, 60_000, 120_000), values, strict=True):
             database.execute(
@@ -332,7 +327,7 @@ def test_standalone_absent_identity(standalone_overview_client):
     assert not any(row["section"] == "token_rate" for row in rows)
 
 
-def test_standalone_long_range_has_summary_and_narrow_drilldown(standalone_overview_client):
+def test_standalone_long_range_has_summary_and_no_detail(standalone_overview_client):
     params = {
         "identity_kind": "job_id",
         "identity": "/serve",
@@ -356,16 +351,7 @@ def test_standalone_long_range_has_summary_and_narrow_drilldown(standalone_overv
 
 
 def test_run_triage_count_gap_can_be_a_partial_window_without_a_failed_request():
-    database = duckdb.connect()
-    columns = """cluster VARCHAR, service VARCHAR, job_id VARCHAR, name VARCHAR, kind VARCHAR,
-        value DOUBLE, resource_attributes_json VARCHAR, attributes_json VARCHAR, timestamp_ms BIGINT, seq BIGINT"""
-    for table in ("telemetry_v1.marinskyrl", "telemetry_v1.vllm"):
-        database.execute(f'CREATE TABLE "{table}"({columns})')
-    database.execute("CREATE MACRO json_get(d, f) AS json_extract_string(d, concat('$.', f))")
-    database.execute(
-        """CREATE MACRO named_struct(k1, v1, k2, v2, k3, v3)
-                   AS struct_pack(timestamp_ms := v1, seq := v2, value := v3)"""
-    )
+    database = _vllm_projection_database()
     rows = [
         (name, value, timestamp)
         for name, values in (
@@ -409,10 +395,17 @@ def test_run_triage_count_gap_can_be_a_partial_window_without_a_failed_request()
         complete = client.get("/finelog/marin/v1/vllm/overview", params={**params, "to": 10 * 3_600_000})
     assert partial.status_code == complete.status_code == 200
     assert [row["status"] for row in partial.json()] == ["summary_only", "check_count_gap"]
-    assert partial.json()[1]["value"] == 1
-    assert "2 first-token observations vs 1 recorded engine finishes" in partial.json()[1]["series"]
+    assert (
+        partial.json()[1]["ttft_observations"],
+        partial.json()[1]["engine_finishes"],
+        partial.json()[1]["value"],
+    ) == (2, 1, 1)
     assert [row["status"] for row in complete.json()] == ["summary_only", "no_conclusion"]
-    assert complete.json()[1]["value"] == 0
+    assert (
+        complete.json()[1]["ttft_observations"],
+        complete.json()[1]["engine_finishes"],
+        complete.json()[1]["value"],
+    ) == (2, 2, 0)
 
 
 def test_sample_budget_returns_cached_error_instead_of_partial_panels():
