@@ -369,6 +369,10 @@ including export, were 25.26 and 24.54 H100-hours. Across all 40 updates their
 token-weighted mean consumed ages were both 4.72, and 5.33% and 5.39% of tokens hit the TIS
 cap. The difference can still reflect asynchronous sampling and evaluator variation; two
 further seeds are running.
+The terminal consumed-prompt trackers contain exactly the same 1,280 unique prompt UIDs in
+both seed-17 arms (Jaccard 1.0). The top-k-one control r29 consumed that same UID set despite
+its faster collection path. Prompt membership therefore does not explain their endpoint
+differences, though sampled completions, truncation, and optimizer timing still can.
 A second matched seed-18 pair, [r27](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-age8-tis-cap105-seed18-01a0bb6f-r27)
 and [r28](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-age8-sc-cap105-seed18-01a0bb6f-r28),
 uses the same settings and 256 GB host request. Its step-zero completed-correct counts are
@@ -381,15 +385,20 @@ ages across all 40 updates were 4.70 and 4.71, with 5.38% and 5.50% of tokens hi
 TIS cap. Both arms consumed about 13.2–13.4 million loss tokens. Through terminal evaluation,
 the TIS and SC arms used 24.80 and 24.41 H100-hours, respectively; full jobs, including export,
 used 25.64 and 25.50 H100-hours. Both completed active-cap older pairs so far favor SC, but
-two seeds cannot establish
-robustness or isolate benefit specific to age. New launches were held
+two seeds cannot establish robustness or isolate benefit specific to age. Their terminal
+consumed-prompt trackers also match exactly within the seed-18 pair: 1,280 unique UIDs in each.
+The two seed-18 arms share only 161 of those UIDs with the seed-17 set, as expected from a
+different shuffled training seed. The [terminal exposure comparisons](results/score_centering_terminal_exposure_seed17_18.csv)
+include both matched pairs and the top-k-one control. New launches were held
 when cluster use rose to 504/512 H100s with zero queued workloads at 00:59 UTC.
 A third matched seed-19 pair started after capacity returned to 284/512 H100s with no queued
 workloads: [TIS r30](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-age8-tis-cap105-seed19-01a0bb6f-r30)
 and [TIS plus SC32 r31](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-age8-sc-cap105-seed19-01a0bb6f-r31).
 Both use the same cap-1.05 configuration, 40-update endpoint, frozen model and pool, and
 `iris-interactive` accelerator pods. Their step-zero completed-correct counts were 80 and
-75; trained outcomes are pending. Three seeds provide a
+75. At updates ten and twenty, TIS had 88 and 124 completed correct, while SC32 had 96 and
+147. The latter difference remains interim; update 40 and its finalization evaluation are the
+endpoint. Three seeds provide a
 small between-training-run check; held-out-question resampling would measure a different
 uncertainty.
 A near-fresh cap-1.05 pair, [TIS r32](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-fresh-tis-cap105-seed17-01a0bb6f-r32)
@@ -400,6 +409,17 @@ generation workers, and a 16-group buffer, matching the cap-2 near-fresh screen.
 children were admitted at `iris-interactive` priority; trained results are pending. This
 schedule comparison will show whether any SC advantage is specific to older rollouts, while
 keeping the objective fixed within each pair.
+Their step-zero completed-correct counts were 73/756 for TIS and 88/756 for SC32. At update
+ten, the counts were 99 and 101. The SC arm's raw two-answer lead at that point is smaller than
+its 15-answer starting lead; longer trained outcomes are needed. Across the first nine updates,
+both arms consumed tokens at measured age zero, while 5.28% and 5.29% of sampled tokens still
+hit the active TIS cap. Their behavior-versus-trainer mean absolute log ratios were 0.01532
+and 0.01536, essentially the same as 0.01539 and 0.01545 in the older seed-17 arms' first
+nine updates despite mean token age 3.66–3.68 there. Across all 40 older updates the mismatch
+stayed near 0.0153. Thus the cap also acts on vLLM-versus-learner mismatch at age zero, and
+the existing age separation does not establish a comparably large distribution-mismatch
+separation. The near-fresh quality comparison tests whether SC's effect depends on the schedule;
+a delayed weight-publication pair may be needed to test larger off-policy drift.
 A narrower behavior-capture pair, [TIS r34](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-age8-tis-cap105-topk8-seed17-01a0bb6f-r34)
 and [TIS plus SC8 r35](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-age8-sc-cap105-topk8-seed17-01a0bb6f-r35),
 keeps the older seed-17 cap-1.05 schedule and changes behavior-logprob capture from top-k 32
@@ -407,6 +427,11 @@ to top-k eight in both arms. The SC arm uses the matching correction width eight
 SC within the narrow-capture pair and measures whether the cheaper capture path preserves the
 older pair's quality signal. All four accelerator tasks were admitted at `iris-interactive`
 priority; trained results are pending.
+The top-k-eight arms started at 70/756 and 81/756 completed correct and reached 96 and 98 at
+update ten. Across their first seven unique learner updates, both consumed tokens at mean age
+about 3.3 and capped about 5.3% of tokens, with no TIS-skipped batch. Median inclusive cycles
+were 41.9 and 39.7 seconds, and bridge responses averaged 2.59 and 2.62 MB. This is an interim
+throughput signal, not a quality conclusion.
 
 `analyze_score_centering.py` reads every dumped evaluation response and the durable Iris
 `WANDB_MIRROR` lines. It writes separate CSV files for completion-aware quality and per-update
