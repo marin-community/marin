@@ -337,6 +337,34 @@ def _compute_flops(
     *,
     model_config: GrugModelConfig,
 ) -> tuple[float, dict[str, float]]:
+    # The dense variant runs a single GLU MLP of width `intermediate_dim` per layer -- no routed or
+    # shared experts and no latent. Pricing it with the MoE terms (top-k + shared experts) overcounts
+    # its FLOPs ~2x, which would inflate both its reported MFU and its scaling-law compute.
+    if model_config.dense_mlp:
+        dense_flops_per_token = lm_flops_per_token(
+            hidden_dim=model_config.hidden_dim,
+            intermediate_dim=model_config.intermediate_dim,
+            shared_intermediate_dim=0,
+            num_layers=model_config.num_layers,
+            num_kv_heads=model_config.num_kv_heads,
+            num_heads=model_config.num_heads,
+            seq_len=model_config.max_seq_len,
+            vocab_size=model_config.vocab_size,
+            glu=True,
+            num_experts=1,
+            num_shared_experts=0,
+            num_experts_per_tok=1,
+            sliding_window=model_config.sliding_window,
+            global_every=model_config.global_every,
+            local_kv_heads=model_config.local_kv_heads,
+            global_kv_heads=model_config.global_kv_heads,
+        )
+        dense_flops_per_example = 3 * dense_flops_per_token * model_config.max_seq_len
+        return dense_flops_per_example, {
+            "throughput/flops_per_token_analytic": dense_flops_per_token,
+            "throughput/flops_per_example_analytic": dense_flops_per_example,
+        }
+
     flops_per_token = lm_flops_per_token(
         hidden_dim=model_config.hidden_dim,
         intermediate_dim=model_config.intermediate_dim,

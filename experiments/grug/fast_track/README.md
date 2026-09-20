@@ -28,14 +28,19 @@ mean. Both loss (Paloma macro cross-entropy) and bpb (macro bits-per-byte) are l
 
 | size | variant | TPP | steps | tokens | FLOPs | MFU | Paloma loss | Paloma bpb | uncheat bpb | runtime |
 |------|---------|----:|------:|-------:|------:|----:|------------:|-----------:|------------:|--------:|
-| d512  | dense | 20 |    690 | 0.36B | 2.0e17 | 34.9% | 3.676 | 1.520 | 1.243 | 3.7m |
+| d512  | dense | 20 |    690 | 0.36B | 9.0e16 | 15.8% | 3.676 | 1.520 | 1.243 | 3.7m |
 | d512  | moe   | 60 |  2,385 | 1.25B | 3.3e17 |  7.8% | 3.156 | 1.308 | 1.008 | 14.0m |
-| d768  | dense | 20 |  2,040 | 1.07B | 1.6e18 | 51.1% | 3.283 | 1.361 | 1.063 | 9.2m |
+| d768  | dense | 20 |  2,040 | 1.07B | 6.3e17 | 20.2% | 3.283 | 1.361 | 1.063 | 9.2m |
 | d768  | moe   | 60 |  6,930 | 3.63B | 2.3e18 | 10.3% | 2.872 | 1.193 | 0.888 | 54.4m |
-| d1024 | dense | 20 |  2,760 | 2.89B | 1.1e19 | 73.6% | 3.006 | 1.248 | 0.945 | 34.8m |
+| d1024 | dense | 20 |  2,760 | 2.89B | 3.9e18 | 26.7% | 3.006 | 1.248 | 0.945 | 34.8m |
 | d1024 | moe   | 60 |  9,270 | 9.72B | 1.4e19 | 13.9% | 2.633 | 1.096 | 0.793 | 3.8 hr |
-| d1280 | dense | 20 |  4,988 | 5.23B | 3.4e19 | 83.3% | 2.847 | 1.183 | 0.881 | 1.5 hr |
+| d1280 | dense | 20 |  4,988 | 5.23B | 1.2e19 | 28.4% | 2.847 | 1.183 | 0.881 | 1.5 hr |
 | d1280 | moe   | 60 | 16,669 | 17.5B | 4.2e19 | 15.4% | 2.504 | 1.044 | 0.741 | 10.0 hr |
+
+Dense FLOPs/MFU were previously overstated ~2× because the analytic FLOP counter priced the dense MLP
+as an 8-expert-plus-shared MoE; fixed in `train.py::_compute_flops`. Corrected here, dense runs at
+roughly 2× MoE's MFU (not 4–5×), and dense/MoE are matched on active params (~1.1×; the MoE's total is
+13–17× larger by design — 384 experts, top-8 active).
 
 ## Tokenizer impact (16k vs 128k)
 
@@ -64,18 +69,19 @@ the irreducible floor pinned at **L∞ = 1.2** (a prior — the ladder never nea
 | variant | fit | R² | α |
 |---------|-----|---:|--:|
 | MoE   | `L = 1.2 + 56.76·C^(−0.0835)` | 0.99979 | 0.0835 |
-| dense | `L = 1.2 + 57.43·C^(−0.0790)` | 0.99938 | 0.0790 |
+| dense | `L = 1.2 + 64.53·C^(−0.0836)` | 0.99917 | 0.0836 |
 
 ![Paloma scaling law](scaling_law.png)
 
-With a shared floor the amplitudes nearly coincide (A ≈ 57), so the dense-vs-MoE gap is entirely the
-exponent: MoE improves faster and stays below dense at every compute. **Compute efficiency:** the MoE
-recipe (60 TPP) reaches the same Paloma loss as the compute-optimal dense recipe (20 TPP) with **~10×
-less compute at the top of the ladder, ~13× at the d1280 loss (2.85)**, rising toward ~15–17× as loss
-falls. This is a recipe-vs-recipe comparison — dense is at its compute-optimal 20 TPP, MoE at 60 TPP —
-so it bundles the architecture gain with the 3× longer MoE token schedule and is not an iso-TPP
-architecture measurement. Caveat: with the floor fixed, two free parameters (A, α) fit four points;
-trust α and the ordering, not the L∞ value or extrapolations far past ~5e19 FLOPs.
+With a shared floor the two exponents are essentially identical (α ≈ 0.084 for both), so dense and MoE
+scale **in parallel** and the gap is a constant amplitude offset (A: 64.5 dense vs 56.8 MoE).
+**Compute efficiency:** the MoE recipe (60 TPP) reaches the same Paloma loss as the compute-optimal
+dense recipe (20 TPP) with **~4.3× less compute, roughly constant across the ladder** (parallel lines,
+so the multiple does not widen with scale). This is a recipe-vs-recipe comparison — dense at its
+compute-optimal 20 TPP, MoE at 60 TPP — so it bundles the architecture gain with the 3× longer MoE
+token schedule and is not an iso-TPP architecture measurement. Caveat: with the floor fixed, two free
+parameters (A, α) fit four points; trust α and the ordering, not the L∞ value or extrapolations far
+past ~5e19 FLOPs.
 
 ## Launch commands
 
