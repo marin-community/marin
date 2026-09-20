@@ -50,8 +50,11 @@ def test_cnxml_to_markdown_preserves_scientific_content_and_structure():
 
 
 def test_stage_openstax_rejects_non_training_policy_before_download(tmp_path: Path):
+    blocked_policy = OPENSTAX_PHYSICS_MANIFEST.policy.model_copy(update={"usage_policy": UsagePolicy.BLOCKED})
     blocked_manifest = OPENSTAX_PHYSICS_MANIFEST.model_copy(
-        update={"policy": OPENSTAX_PHYSICS_MANIFEST.policy.model_copy(update={"usage_policy": UsagePolicy.BLOCKED})}
+        update={
+            "policy": blocked_policy,
+        }
     )
     config = OpenStaxStageConfig(
         manifest=blocked_manifest,
