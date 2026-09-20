@@ -163,8 +163,13 @@ def segmented_flash_attention_forward_launcher(
     tile_m: int = 128,
     tile_n: int = 64,
     num_threads: int = 128,
+    has_rel_bias: bool = False,
 ) -> Any:
     """Build a JAX/CUTLASS-callable segmented FlashAttention forward launcher.
+
+    When ``has_rel_bias`` is set, the launcher takes an extra input ``rel_bias`` (the compact Inkling
+    relative-position bias A, kernel layout ``[S, L, Hq, B]``) which is added to the pre-softmax logits
+    by distance ``q_idx - k_idx``. When unset, the signature and behavior are identical to upstream.
 
     Args:
         modules: Optional dependency bundle from ``_fa4_cute_backend``. It may
@@ -206,12 +211,14 @@ def segmented_flash_attention_forward_launcher(
             m_block_size: int,
             n_block_size: int,
             num_threads: int,
+            has_rel_bias: bool = False,
         ):
             self._head_dim = head_dim
             self._head_dim_v = head_dim_v
             self._qhead_per_kvhead = qhead_per_kvhead
             self._m_block_size = m_block_size
             self._n_block_size = n_block_size
+            self._has_rel_bias = has_rel_bias
             self._head_dim_padded = (head_dim + 31) // 32 * 32
             self._head_dim_v_padded = (head_dim_v + 31) // 32 * 32
             self._head_dim_qo_padded = max(self._head_dim_padded, self._head_dim_v_padded)
@@ -249,6 +256,7 @@ def segmented_flash_attention_forward_launcher(
             mV: cute.Tensor,
             mLowerBounds: cute.Tensor,
             mValid: cute.Tensor,
+            mRelBias: cute.Tensor,
             mO: cute.Tensor,
             mLSE: cute.Tensor,
             softmax_scale: cutlass.Float32,
@@ -355,6 +363,7 @@ def segmented_flash_attention_forward_launcher(
                 mV,
                 mLowerBounds,
                 mValid,
+                mRelBias,
                 mO,
                 mLSE,
                 softmax_scale_log2,
@@ -376,6 +385,7 @@ def segmented_flash_attention_forward_launcher(
             mV: cute.Tensor,
             mLowerBounds: cute.Tensor,
             mValid: cute.Tensor,
+            mRelBias: cute.Tensor,
             mO: cute.Tensor,
             mLSE: cute.Tensor,
             softmax_scale_log2: cutlass.Float32,
@@ -534,6 +544,7 @@ def segmented_flash_attention_forward_launcher(
                 mK=mK,
                 mLowerBounds=mLowerBounds,
                 mValid=mValid,
+                mRelBias=mRelBias,
             )
             mma_params = SimpleNamespace(
                 thr_mma=thr_mma, tiled_mma=tiled_mma, tSrQ=tSrQ, tSrK=tSrK, tOrVt=tOrVt, acc_O=acc_O
@@ -809,14 +820,28 @@ def segmented_flash_attention_forward_launcher(
                     key_in_bounds = cute.elem_less(key_idx, basic_params.mK.shape[0])
                     key_after_lower_bound = cute.elem_less(query_lower_bound, key_idx + 1)
                     key_before_query = cute.elem_less(key_idx, query_idx + 1)
-                    if not (
+                    keep = (
                         query_in_bounds
                         and query_valid
                         and key_in_bounds
                         and key_after_lower_bound
                         and key_before_query
-                    ):
+                    )
+                    if not keep:
                         acc_S_mn[r, c] = -cutlass.Float32.inf
+                    # Inkling relative-position bias: add A[query, delta=query-key] (natural units) to the
+                    # logit for kept positions. acc_S is in raw-qk units and the softmax multiplies it by
+                    # softmax_scale_log2 inside exp2, so scale the bias by LOG2E/softmax_scale_log2 = 1/scale.
+                    if cutlass.const_expr(self._has_rel_bias):
+                        rel_extent = basic_params.mRelBias.shape[1]
+                        delta = query_idx - key_idx
+                        if keep and cute.elem_less(delta, rel_extent):
+                            bias_val = basic_params.mRelBias[
+                                query_meta_idx, delta, basic_params.q_head, basic_params.batch_idx
+                            ]
+                            acc_S_mn[r, c] = acc_S_mn[r, c] + bias_val.to(cutlass.Float32) * (
+                                1.4426950408889634 / softmax_params.softmax_scale_log2
+                            )
 
                 acc_S_row = acc_S_mn[r, None].load()
                 row_max_cur_row = acc_S_row.reduce(cute.ReductionOp.MAX, -cutlass.Float32.inf, 0)
@@ -917,22 +942,44 @@ def segmented_flash_attention_forward_launcher(
         m_block_size=tile_m,
         n_block_size=tile_n,
         num_threads=num_threads,
+        has_rel_bias=has_rel_bias,
     )
 
-    @cute.jit
-    def _launch_segmented_flash_attention_forward(
-        stream: cuda.CUstream,
-        q: cute.Tensor,
-        k: cute.Tensor,
-        v: cute.Tensor,
-        lower_bounds: cute.Tensor,
-        valid: cute.Tensor,
-        out: cute.Tensor,
-        lse: cute.Tensor,
-        *,
-        softmax_scale: cutlass.Float32,
-    ):
-        kernel(q, k, v, lower_bounds, valid, out, lse, softmax_scale, stream)
+    if has_rel_bias:
+
+        @cute.jit
+        def _launch_segmented_flash_attention_forward(
+            stream: cuda.CUstream,
+            q: cute.Tensor,
+            k: cute.Tensor,
+            v: cute.Tensor,
+            lower_bounds: cute.Tensor,
+            valid: cute.Tensor,
+            rel_bias: cute.Tensor,
+            out: cute.Tensor,
+            lse: cute.Tensor,
+            *,
+            softmax_scale: cutlass.Float32,
+        ):
+            kernel(q, k, v, lower_bounds, valid, rel_bias, out, lse, softmax_scale, stream)
+
+    else:
+
+        @cute.jit
+        def _launch_segmented_flash_attention_forward(
+            stream: cuda.CUstream,
+            q: cute.Tensor,
+            k: cute.Tensor,
+            v: cute.Tensor,
+            lower_bounds: cute.Tensor,
+            valid: cute.Tensor,
+            out: cute.Tensor,
+            lse: cute.Tensor,
+            *,
+            softmax_scale: cutlass.Float32,
+        ):
+            # rel-bias disabled: pass `valid` as an unread placeholder for mRelBias (Constexpr-gated off).
+            kernel(q, k, v, lower_bounds, valid, valid, out, lse, softmax_scale, stream)
 
     return _launch_segmented_flash_attention_forward
 
