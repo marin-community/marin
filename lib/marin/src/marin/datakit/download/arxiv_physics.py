@@ -38,7 +38,10 @@ ARXIV_PHYSICS_NAME = "arxiv/physics-compatible-novel-abstracts"
 ARXIV_METADATA_PAGE = "https://www.kaggle.com/datasets/Cornell-University/arxiv"
 ARXIV_METADATA_API = "https://www.kaggle.com/api/v1/datasets/download"
 ARXIV_METADATA_FILE = "Cornell-University/arxiv/arxiv-metadata-oai-snapshot.json"
-ARXIV_METADATA_URL = f"{ARXIV_METADATA_API}/{ARXIV_METADATA_FILE}"
+ARXIV_METADATA_VERSION = 304
+ARXIV_METADATA_PATH = f"{ARXIV_METADATA_API}/{ARXIV_METADATA_FILE}"
+ARXIV_METADATA_QUERY = f"datasetVersionNumber={ARXIV_METADATA_VERSION}"
+ARXIV_METADATA_URL = "?".join((ARXIV_METADATA_PATH, ARXIV_METADATA_QUERY))
 ARXIV_LICENSE_HELP_URL = "https://info.arxiv.org/help/license/index.html"
 ARXIV_SNAPSHOT_DATE = "2026-09-19"
 ARXIV_SNAPSHOT_BYTES = 5_545_506_967
@@ -105,6 +108,7 @@ ARXIV_PHYSICS_MANIFEST = IngestionSourceManifest(
         serializer_name="arxiv_metadata_record_to_jsonl",
         metadata={
             "snapshot_date": ARXIV_SNAPSHOT_DATE,
+            "snapshot_version": ARXIV_METADATA_VERSION,
             "snapshot_bytes": ARXIV_SNAPSHOT_BYTES,
             "snapshot_etag": ARXIV_SNAPSHOT_ETAG,
             "common_pile_snapshot_cutoff": COMMON_PILE_SNAPSHOT_CUTOFF.isoformat(),
@@ -112,7 +116,11 @@ ARXIV_PHYSICS_MANIFEST = IngestionSourceManifest(
         },
     ),
     rough_tokens_b=0.1,
-    source_metadata={"snapshot_date": ARXIV_SNAPSHOT_DATE, "snapshot_etag": ARXIV_SNAPSHOT_ETAG},
+    source_metadata={
+        "snapshot_date": ARXIV_SNAPSHOT_DATE,
+        "snapshot_version": ARXIV_METADATA_VERSION,
+        "snapshot_etag": ARXIV_SNAPSHOT_ETAG,
+    },
 )
 
 
@@ -235,6 +243,7 @@ def stage_arxiv_physics_abstracts(config: ArxivPhysicsStageConfig) -> dict[str, 
             metadata={
                 "input_records": input_records,
                 "snapshot_date": ARXIV_SNAPSHOT_DATE,
+                "snapshot_version": ARXIV_METADATA_VERSION,
                 "snapshot_bytes": ARXIV_SNAPSHOT_BYTES,
                 "snapshot_etag": ARXIV_SNAPSHOT_ETAG,
             },
