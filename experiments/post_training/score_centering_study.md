@@ -291,12 +291,22 @@ avoid further repeated GPU use. The Qwen child memory request was raised from 12
 a continuation using the same artifact address and settings; recovery still needs verification.
 These infrastructure interruptions and their GPU attempts belong in cost and provenance.
 
+The continuation [r26](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-age8-ppo-resume-seed17-01a0bb6f-r26)
+selected that same step-30 checkpoint and loaded model and optimizer state. Its learner pod
+reached 176.9 GB peak cgroup memory during restore, which explains why the 128 GB request failed.
+Training beyond the restored step and the terminal export remain to be checked.
+
 A second older-schedule pair launched on September 20 with TIS cap 1.05, the same seed and
 schedule, and behavior top-k 32 in both arms. This deliberately activates more capped tokens
 than the cap-2 screen; it is a distinct objective comparison. The Iris parents are
 [r24](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-age8-tis-cap105-seed17-01a0bb6f-r24)
 and [r25](https://iris.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-age8-sc-cap105-seed17-01a0bb6f-r25).
 Their children use `iris-interactive` GPU pods. The cap fraction and outcomes are pending.
+Their step-zero completed-correct counts were 73/756 for TIS and 79/756 for TIS plus SC32.
+At the first learner update, 4.57% and 4.61% of sampled tokens respectively hit the TIS cap,
+compared with near-zero cap fractions in the cap-2 screen. The SC arm logged 0.00315 mean
+absolute correction loss value. This confirms that the new cap changes the active objective,
+but the loss value alone does not quantify the correction gradient or a quality effect.
 
 `analyze_score_centering.py` reads every dumped evaluation response and the durable Iris
 `WANDB_MIRROR` lines. It writes separate CSV files for completion-aware quality and per-update
