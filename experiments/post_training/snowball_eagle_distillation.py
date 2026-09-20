@@ -3,21 +3,18 @@
 
 """Distill a reusable EAGLE-3 draft for the Snowball SFT checkpoint.
 
-Evalchemy generates a durable long-form math conversation corpus once. Later draft
-versions replay those cached responses through the target as bulk prefills,
-then train and validate the EAGLE head from the ephemeral verifier features.
+The source evaluation is a durable FineStore artifact. Draft versions replay its
+cached responses through the target as bulk prefills, then train and validate the
+EAGLE head from the ephemeral verifier features.
 """
 
 from __future__ import annotations
 
 import click
-from marin.evaluation.evalchemy.config import EvalchemyConfig, load_evalchemy_config
-from marin.evaluation.hardware import AcceleratorChoice, Platform
-from marin.evaluation.model_config import ResourceHint, ServeConfig
+from marin.evaluation.evalchemy.result import FineStoreEvalchemyResult
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep
 from marin.experiment.cli import build_options
-from marin.experiment.evaluation import evaluate_evalchemy
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.eagle import EagleRolloutCorpus, eagle_rollout_corpus_step
 from marin.rl.skyrl import (
@@ -39,7 +36,6 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 
-from experiments.evaluation.evals import EVALS, EvalchemyDefinition, evalchemy_run_config
 from experiments.post_training.curriculum_rl.launch import (
     MARIN_TOKENIZER,
     MARIN_TOKENIZER_REVISION,
@@ -51,13 +47,18 @@ from experiments.post_training.curriculum_rl.pool import VALIDATION_FILENAME, po
 ARTIFACT_NAME = "models/snowball-67b-a2b-eagle3-distilled"
 RL_ARTIFACT_NAME = "checkpoints/snowball-67b-a2b-eagle3-frozen-draft-smoke"
 ROLLOUT_VERSION = "2026.09.20"
+ROLLOUT_ARCHIVE_URI = (
+    "s3://marin-us-east-02a/marin/evaluation/evalchemy/"
+    "snowball-67b-a2b-sft-s2-thinking/snowball-eagle-math/2026.09.20"
+)
+ROLLOUT_SOURCE_ARTIFACT_NAME = "data/snowball-67b-a2b-eagle3-math-rollouts"
 CORPUS_ARTIFACT_NAME = "data/snowball-67b-a2b-eagle3-math-corpus"
 CORPUS_VERSION = "2026.09.20"
 INITIAL_DRAFT_URI = "hf://laion/snowball-64k-eagle3-draft-r2egym"
 INITIAL_DRAFT_REVISION = "4bdb47c08e5b5190bea3c7a93c3e14470230e469"
 CLUSTER = "cw-rno2a"
 GPUS_PER_NODE = 8
-MARINSKYRL_COMMIT = "b304c134c87797168b7bba0cb01c56d263950c9c"
+MARINSKYRL_COMMIT = "88731dd4c5993c07035b0c75b9b92528dce5e97b"
 RL_DATA_VERSION = "2026.09.18"
 
 DISTILLATION_CONFIG = """
@@ -248,40 +249,12 @@ extra_env:
 
 
 def build_rollout_corpus() -> ArtifactStep[EagleRolloutCorpus]:
-    """Generate long-form math responses once and normalize them into replay JSONL."""
-    sources = []
-    for name in ("aime24", "math500", "olympiadbench"):
-        definition = EVALS[name]
-        assert isinstance(definition, EvalchemyDefinition)
-        sources.append(load_evalchemy_config(definition.config_path))
-    evalchemy_config = EvalchemyConfig(
-        tasks=tuple(task for source in sources for task in source.tasks),
-        task_options={name: options for source in sources for name, options in source.task_options.items()},
-        apply_chat_template=True,
-        limit=128,
-        runtime_extras=tuple(extra for source in sources for extra in source.runtime_extras),
-    )
-    evaluation = evaluate_evalchemy(
-        model_name="snowball-67b-a2b-sft-s2-thinking",
-        model=SNOWBALL_MODEL,
-        config=evalchemy_run_config("snowball-eagle-math", evalchemy_config),
-        serve=ServeConfig(
-            tensor_parallel_size=1,
-            data_parallel_size=8,
-            max_model_len=32768,
-            max_num_batched_tokens=16384,
-            max_num_seqs=16,
-            vllm_extra_args=("--enable-expert-parallel",),
-        ),
-        resource_hint=ResourceHint(gpu={"H100": 8}, cpu=64, memory="512GB", disk="2TB"),
-        accelerator=AcceleratorChoice(
-            platform=Platform.GPU,
-            gpu_type="H100",
-            gpu_count=8,
-        ),
-        tokenizer=MARIN_TOKENIZER,
-        discover_latest_checkpoint=False,
+    """Extract replay JSONL from the normalized, immutable evaluation archive."""
+    evaluation = ArtifactStep.adopt(
+        name=user_owned_name(ROLLOUT_SOURCE_ARTIFACT_NAME),
         version=ROLLOUT_VERSION,
+        source=ROLLOUT_ARCHIVE_URI,
+        kind=FineStoreEvalchemyResult,
     )
     return eagle_rollout_corpus_step(
         name=user_owned_name(CORPUS_ARTIFACT_NAME),
