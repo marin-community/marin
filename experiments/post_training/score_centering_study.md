@@ -25,10 +25,11 @@ delayed arms scored below their every-update-publication counterparts. Delaying
 publication shortened median training cycles, yet total time and H100 work through
 evaluation remained close to the regular top-k-eight pair. Different generation
 timing and repeated-evaluator variation limit these one-seed schedule comparisons.
-The age change did not produce a meaningful trainer-versus-behavior mismatch change:
-the mean absolute log ratio stayed near 0.015 at age zero, around 4, and around
-8.5 updates. These runs therefore test centering mainly under a persistent
-age-zero gap, and do not establish its effect when staleness causes larger drift.
+The aggregate trainer-versus-behavior mean absolute log ratio stayed near 0.015 at
+age zero, around 4, and around 8.5 updates. A later matched-weight probe found
+that engine and stale-weight differences partly cancel after one update. The
+aggregate measurements therefore cannot isolate the source of the gap at older
+ages or establish an age-specific centering benefit.
 
 Keep `score_centering_topk=0` as the default. The implementation can support a
 controlled follow-up where active TIS and older rollouts are expected, but these
@@ -742,3 +743,52 @@ two-update integration check with a failed terminal restore/export, not a comple
 its three attempts consumed 50.77 reserved H100-hours. The older curriculum Snowball launcher
 uses FSDP2; this fully async experiment launcher uses Megatron and does not require an FSDP2
 port.
+
+## Matched-weight Qwen mismatch probe
+
+This two-update probe separates the inference-engine gap from one optimizer update of
+policy movement. It is a calibration, not a score-centering quality comparison.
+The [GPU job](https://iris-cw-rno2a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-qwen-smoke-set-02747901-2026.09.20.6-e9656d108b01)
+and its terminal model export succeeded. The [W&B run](https://wandb.ai/marin-community/marin-async-rl/runs/1392zq9e)
+holds the per-step training metrics. The durable raw records are
+`s3://marin-us-east-02a/marin/users/romain/checkpoints/async-rl/qwen-smoke-set-02747901/2026.09.20.6/exports/mismatch_decomposition/global_step_{1,2}.json.gz`.
+The job used MarinSkyRL `e291ade790a7046f77ab18d8c96ecbc7c5185895`,
+Qwen3-0.6B artifact `2026.08.29`, pool `2026.08.29.1`, seed 17, 32 prompts and
+four responses per update, a 1,024-token response cap, TIS cap 1.05, and top-k-one
+sampled-token probability capture. Both KL flags and score centering were off.
+
+For each sampled token, A is its actual vLLM log probability, B is a frozen
+Megatron reference actor initialized from the same model as the initial policy,
+and C is the consuming Megatron policy actor. The inference sampler used
+temperature 1, top-p 1, no top-k or min-p restriction, and repetition penalty 1;
+these settings leave the sampled-token probability untransformed. The probe
+checks the token IDs against the trainer sequence, response mask, and loss mask,
+then applies each token's recorded policy-version span. The initial weight sync
+publishes version 0; each later published version equals the number of completed
+optimizer updates. Thus a token from version 0 consumed at step 2 has age one.
+Only version-0 tokens are compared with this frozen B. Other versions are counted
+and excluded from the decomposition. All selected tokens in this short run were
+version 0; no response crossed a version boundary.
+
+| Consuming step / age | Tokens | Mean absolute B − A | Mean absolute C − B | Mean absolute C − A | Opposite-sign terms | TIS cap active |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 / 0 | 116,076 | 0.01376 | 0 | 0.01376 | 0% | 4.95% |
+| 2 / 1 | 119,936 | 0.01609 | 0.01574 | 0.01596 | 61.69% | 5.78% |
+
+The signed means at step 2 are −0.000618 for B − A, +0.000167 for C − B,
+and −0.000451 for C − A. On the same tokens, mean canceled absolute magnitude
+is 0.01587, about half the sum of the two component mean absolute magnitudes.
+The step-2 99th-percentile absolute values are 0.13717 for the engine term,
+0.13279 for the stale-weight term, and 0.13641 combined. Signed components
+reconstruct the combined gap exactly for every selected token; the recorded
+maximum reconstruction residual is zero. Repeating both trainer forwards at
+step 1 produced zero maximum log-probability difference, so this measured
+one-update drift exceeds the observed repeat-scoring noise floor.
+
+The one-update result corrects the earlier interpretation of the flat aggregate
+gap: stale-weight movement can be as large as the engine gap while their sum
+barely changes. It does not measure the distribution through the normal four-
+to-eight-update age range, identify the cause of the engine gap, or establish
+whether score centering improves quality. The two eight-H100 training tasks used
+about 2.36 H100-hours. The eight-H100 terminal export added about 0.49 H100-hours.
+These figures include setup and checkpoint/export work for the probe.
