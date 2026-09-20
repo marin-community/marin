@@ -759,6 +759,22 @@ durations total 17.42 reserved H100-hours, including initialization, checkpoint
 read, conversion, and upload. This salvages a final model for evaluation, but
 does not show that the full optimizer checkpoint can resume training.
 
+A full-optimizer [resume smoke r4](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fscore-centering-snowball-resume-smoke-01a0bb6f-r4)
+with MarinSkyRL `cfb407cc` loaded the original step-two policy and optimizer
+checkpoint. The restore-only optimizer offload added in that revision took
+6.53 seconds, the full checkpoint load took 1,697.19 seconds including S3
+download, and optimizer backload took 5.64 seconds. It restored 32 buffered
+groups, generated a new 512-response batch, and completed optimizer step
+three at 21:20:00 UTC, September 20. This demonstrates an actual resumed
+training update after the earlier GPU-memory restore failure. The terminal
+step-three save then failed: Ray killed a policy worker when its node used
+1,712.42 of the 1,800 GB task memory limit, above Ray's 95% threshold.
+The save failure is host-memory pressure, separate from the resolved GPU
+restore problem. No step-three checkpoint or terminal export is claimed.
+A [same-source, three-step retry](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fscore-centering-snowball-resume-smoke-01a0bb6f-r5)
+uses MarinSkyRL `cd040079` and requests 2,000 GB per GPU task to test the
+checkpoint path before longer Snowball training.
+
 ## Matched-weight Qwen mismatch probe
 
 This two-update probe separates the inference-engine gap from one optimizer update of
@@ -931,14 +947,14 @@ response.
 
 The [round-two diagnostic cost ledger](results/score_centering_round2_diagnostic_cost.csv)
 records the two Qwen probes, their two failed setup attempts, the Snowball
-model-only recovery, and its three failed full-restore setup attempts. It uses
+model-only recovery, and its four failed full-restore attempts. It uses
 the durations of every GPU task shown by `iris job describe`, multiplied by
 eight H100s per task; coscheduled siblings still reserve GPUs until a failed
-head task exits. These finished jobs used 6.30 Qwen and 27.51 Snowball reserved
-H100-hours, or 33.80 together. The 17.42-hour Snowball recovery in this
+head task exits. These finished jobs used 6.30 Qwen and 57.86 Snowball reserved
+H100-hours, or 64.16 together. The 17.42-hour Snowball recovery in this
 ledger is the same job described above, so it is counted once. The active
-full-optimizer restore attempt and confirmation pairs enter the campaign total
-after their task durations become final.
+confirmation pairs and later restore retry enter the campaign total after their
+task durations become final.
 
 ## Matched Qwen confirmation design
 
@@ -990,3 +1006,26 @@ Those totals include retries, setup, and failed work. It isolates SC at one
 measured operating condition. Scheduling changes toward the house age-four
 template or more permissive age will be assessed separately, because their
 throughput and quality effects cannot be attributed to SC from this pair.
+
+## Snowball full-response pilot design
+
+The completed two-update Snowball pair used a 1,024-token response cap and
+had 66–72% length stops. The full-optimizer smoke above completed a resumed
+step-three update but failed during checkpoint save at the 1,800 GB host
+memory limit. Its 2,000 GB retry must save and export successfully before
+this pilot starts.
+
+If that resume finishes, run one matched Snowball TIS-versus-TIS-plus-SC32
+pair from the same SFT model and frozen pool as the smoke. Use seed 17, the
+same 40-H100 Megatron/vLLM topology with 2,000 GB per task, 128 prompts
+and four responses per update, 192 generation workers, a 32-group buffer, age limit eight,
+per-update publication with abort and resume, top-k-32 behavior capture,
+TIS cap 1.05, and the original optimizer. Set the response cap to 4,096
+tokens and train for 20 updates. Evaluate the same held-out prompts at
+updates zero, ten, and twenty, then repeat the final evaluation at the same
+step-twenty weights. The only within-pair training change is SC width zero
+versus 32. Compare both terminal passes, the starting score, the curve,
+completed-answer quality, response lengths and stops, consumed-token age,
+rejected work, elapsed time, and all reserved H100-hours. One training seed
+is a pilot, so its pair difference will be descriptive; further Snowball
+training depends on its measured signal and cost.

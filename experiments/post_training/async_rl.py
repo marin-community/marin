@@ -144,8 +144,8 @@ class TrainingRecipe:
     max_grad_norm: float
     # Megatron parallelism for the policy and the reference model.
     megatron: MegatronGeometry
-    # Host memory per training task; Megatron checkpoint staging needs 1800GB where the policy
-    # spec's 512GB covers only the FSDP load.
+    # Host memory per training task; the resumed Megatron step-3 save reached Ray's
+    # 95% kill threshold at 1800GB, so checkpoint staging needs more headroom.
     host_memory: str
     # vLLM engine settings the model needs beyond the ones the launcher writes itself.
     engine_init_kwargs: dict[str, object]
@@ -198,7 +198,7 @@ SNOWBALL_RECIPE = TrainingRecipe(
         expert_model_parallel_size=8,
         expert_tensor_parallel_size=1,
     ),
-    host_memory="1800GB",
+    host_memory="2000GB",
     # The Triton MoE kernels; the fused defaults do not cover this expert layout.
     engine_init_kwargs={"moe_backend": "triton"},
 )
