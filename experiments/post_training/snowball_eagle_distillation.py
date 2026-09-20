@@ -181,8 +181,8 @@ def build_distillation(version: str | None = None) -> ArtifactStep[EagleDraftMod
             seed=17,
         ),
         IrisSkyRLExecution(
-            cluster="cw-rno2a",
-            cluster_config="lib/iris/config/cw-rno2a.yaml",
+            cluster="cw-us-east-02a",
+            cluster_config="lib/iris/config/cw-us-east-02a.yaml",
             cpu=16,
             memory="512GB",
             disk="2TB",

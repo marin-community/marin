@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import posixpath
 import subprocess
 import sys
 import tempfile
@@ -20,6 +21,7 @@ import fsspec
 import yaml
 from pydantic import BaseModel
 from rigging.filesystem.cluster_config import marin_temp_bucket
+from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from marin.evaluation.model_config import ModelConfig
@@ -635,16 +637,35 @@ def run_eagle_draft_distillation(config: SkyRLRunConfig) -> EagleDraftModel:
     draft = response.draft_model
     if draft is None or response.iris_job_id is None:
         raise ValueError("successful EAGLE distillation response requires draft_model and iris_job_id")
+    durable_checkpoint_root = prefix_join(config.request.output.export_root, "drafts")
+    durable_uri = prefix_join(durable_checkpoint_root, draft.revision)
+    _copy_eagle_draft_checkpoint(draft.uri, durable_uri)
     return EagleDraftModel(
         path=config.request.output.terminal_manifest_uri,
-        uri=draft.uri,
+        uri=durable_uri,
         revision=draft.revision,
         source_identity=draft.source_identity,
         target_identity=draft.target_identity,
-        checkpoint_root=draft.checkpoint_root,
+        checkpoint_root=durable_checkpoint_root,
         terminal_manifest_uri=draft.terminal_manifest_uri,
         iris_job_id=response.iris_job_id,
     )
+
+
+def _copy_eagle_draft_checkpoint(source_uri: str, destination_uri: str) -> None:
+    """Copy one completed draft from temporary checkpoint storage to the durable artifact path."""
+    source_fs, source_root = url_to_fs(source_uri, use_listings_cache=False)
+    destination_fs, destination_root = url_to_fs(destination_uri, use_listings_cache=False)
+    if type(source_fs) is not type(destination_fs) or source_fs.storage_options != destination_fs.storage_options:
+        raise ValueError("EAGLE draft publication requires temporary and durable paths on the same filesystem")
+    source_files = source_fs.find(source_root, withdirs=False)
+    if not source_files:
+        raise FileNotFoundError(f"EAGLE draft checkpoint is empty: {source_uri}")
+    for source_path in source_files:
+        relative_path = posixpath.relpath(source_path, source_root)
+        destination_path = posixpath.join(destination_root, relative_path)
+        destination_fs.makedirs(posixpath.dirname(destination_path), exist_ok=True)
+        source_fs.copy(source_path, destination_path)
 
 
 def _record_skyrl_run(config: SkyRLRunConfig, status: str, response: _SkyRLLaunchResponse | None) -> None:

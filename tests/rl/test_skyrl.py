@@ -50,6 +50,7 @@ from marin.rl.skyrl import (
     skyrl_step,
     skyrl_temporary_run_path,
 )
+from marin.rl.skyrl import _copy_eagle_draft_checkpoint as copy_eagle_draft_checkpoint_for_test
 from marin.rl.skyrl import _run_launcher as run_launcher_for_test
 from marin.training.training import LevanterCheckpoint
 
@@ -458,6 +459,11 @@ def test_run_eagle_distillation_returns_published_draft(monkeypatch: pytest.Monk
             response=json.dumps(response), returncode=0, stdout=kwargs["stdout"]
         ),
     )
+    publications = []
+    monkeypatch.setattr(
+        "marin.rl.skyrl._copy_eagle_draft_checkpoint",
+        lambda source, destination: publications.append((source, destination)),
+    )
 
     draft = run_eagle_draft_distillation(
         SkyRLRunConfig(
@@ -467,10 +473,30 @@ def test_run_eagle_distillation_returns_published_draft(monkeypatch: pytest.Monk
         )
     )
 
-    assert draft.uri.endswith("draft-step-1")
+    assert draft.uri == f"{request.output.export_root}/drafts/draft-step-1"
+    assert draft.checkpoint_root == f"{request.output.export_root}/drafts"
     assert draft.revision == "draft-step-1"
     assert draft.target_identity == request.model.identity
     assert draft.iris_job_id == "01KDRAFT"
+    assert publications == [
+        (
+            "s3://test/run/checkpoints/drafts/draft-step-1",
+            f"{request.output.export_root}/drafts/draft-step-1",
+        )
+    ]
+
+
+def test_copy_eagle_draft_checkpoint_preserves_tree(tmp_path: Path) -> None:
+    source = tmp_path / "temporary" / "draft-step-1"
+    (source / "nested").mkdir(parents=True)
+    (source / "config.json").write_text("{}")
+    (source / "nested" / "model.safetensors").write_bytes(b"weights")
+    destination = tmp_path / "durable" / "draft-step-1"
+
+    copy_eagle_draft_checkpoint_for_test(source.as_uri(), destination.as_uri())
+
+    assert (destination / "config.json").read_text() == "{}"
+    assert (destination / "nested" / "model.safetensors").read_bytes() == b"weights"
 
 
 def test_tasktrove_data_source_resolves_exact_file_and_verifier(tmp_path: Path) -> None:
