@@ -56,9 +56,7 @@ def _check_samples(record: dict, path: str) -> None:
             expected_source = (
                 "frozen_reference"
                 if segment["policy_version"] == record["reference_version"]
-                else "fresh_consuming_policy"
-                if segment["policy_version"] == record["fresh_scored_version"]
-                else None
+                else "fresh_consuming_policy" if segment["policy_version"] == record["fresh_scored_version"] else None
             )
             if sample["B_source"][index] != expected_source:
                 raise ValueError(f"{path}: sampled B is assigned to the wrong generating version")
