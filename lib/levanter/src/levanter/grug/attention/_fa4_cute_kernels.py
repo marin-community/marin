@@ -60,7 +60,6 @@ Nontrivial differences from upstream FA4/CuTe:
 
 import importlib
 import math
-import os
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Callable
@@ -1270,7 +1269,12 @@ def segmented_flash_attention_backward_sm90_launcher(
     else:
         raise TypeError(f"native SM90 segmented FA4/CuTe backward expects bf16/fp16, got {dtype}")
 
-    flash_bwd_sm90_module = importlib.import_module("flash_attn.cute.flash_bwd_sm90")
+    # When adding the Inkling bias, use the grug-vendored sm90 backward (efficient inlined bias read
+    # in the S-recompute); otherwise use the stock external kernel unchanged.
+    if use_rel_bias:
+        flash_bwd_sm90_module = importlib.import_module("levanter.grug.attention._fa4_cute_flash_bwd_sm90")
+    else:
+        flash_bwd_sm90_module = importlib.import_module("flash_attn.cute.flash_bwd_sm90")
     block_sparsity_module = importlib.import_module("flash_attn.cute.block_sparsity")
     utils_module = importlib.import_module("flash_attn.cute.utils")
 
@@ -1304,101 +1308,10 @@ def segmented_flash_attention_backward_sm90_launcher(
         mask_value = query_in_bounds and query_valid and key_after_lower_bound and key_before_query
         return utils_module.scalar_to_ssa(mask_value, cutlass.Boolean)
 
-    # Inkling relative-position bias score_mod: add A[query, delta=query-key] (natural logit units)
-    # to the recomputed score tile. score_mod sees scores already multiplied by softmax_scale, so we
-    # add A directly (no scale conversion). Additive bias -> identity backward for dQ/dK/dV, so no
-    # score_mod_bwd. head_idx/q_idx/kv_idx arrive as per-lane SSA vectors (logical q head for GQA).
-    inkling_score_mod = None
-    _sm_debug = os.environ.get("FAST_TRACK_INKLING_SM_DEBUG", "")
-    if use_rel_bias and _sm_debug == "identity":
-
-        @cute.jit
-        def _grug_identity_score_mod(score, batch_idx, head_idx, q_idx, kv_idx, seqlen_info, aux_tensors):
-            # Debug: exercises the score_mod path (LOG2E scale switch) with no bias add.
-            del batch_idx, head_idx, q_idx, kv_idx, seqlen_info, aux_tensors
-            return score
-
-        inkling_score_mod = _grug_identity_score_mod
-    elif use_rel_bias and _sm_debug == "const":
-
-        @cute.jit
-        def _grug_const_score_mod(score, batch_idx, head_idx, q_idx, kv_idx, seqlen_info, aux_tensors):
-            # Debug: per-lane rmem-loop mechanics with NO gmem read (adds a constant to in-band lanes).
-            del batch_idx, head_idx, seqlen_info, aux_tensors
-            rel_extent = cutlass.Int32(1024)
-            vec = cutlass.const_expr(cute.size(score.shape))
-            result = cute.make_rmem_tensor(vec, cutlass.Float32)
-            for j in cutlass.range_constexpr(vec):
-                result[j] = score[j]
-                delta = q_idx[j] - kv_idx[j]
-                in_band = cute.elem_less(delta, rel_extent) and cute.elem_less(cutlass.Int32(-1), delta)
-                if in_band:
-                    result[j] = result[j] + cutlass.Float32(0.1)
-            return result.load()
-
-        inkling_score_mod = _grug_const_score_mod
-    elif use_rel_bias and _sm_debug == "head0":
-
-        @cute.jit
-        def _grug_head0_score_mod(score, batch_idx, head_idx, q_idx, kv_idx, seqlen_info, aux_tensors):
-            # Debug: real gmem read but head hardcoded to 0 (guaranteed-valid index). Finite => the
-            # read mechanism is fine and head_idx[j] was OOB; NaN => the read itself is broken.
-            del head_idx, seqlen_info
-            rel_bias_t = aux_tensors[2]
-            rel_extent = rel_bias_t.shape[1]
-            vec = cutlass.const_expr(cute.size(score.shape))
-            b0 = batch_idx[0]
-            result = cute.make_rmem_tensor(vec, cutlass.Float32)
-            for j in cutlass.range_constexpr(vec):
-                result[j] = score[j]
-                delta = q_idx[j] - kv_idx[j]
-                delta_safe = cutlass.min(cutlass.max(delta, cutlass.Int32(0)), rel_extent - 1)
-                bias = rel_bias_t[q_idx[j], delta_safe, cutlass.Int32(0), b0].to(cutlass.Float32)
-                in_band = cute.elem_less(delta, rel_extent) and cute.elem_less(cutlass.Int32(-1), delta)
-                if in_band:
-                    result[j] = result[j] + bias
-            return result.load()
-
-        inkling_score_mod = _grug_head0_score_mod
-    elif use_rel_bias:
-
-        rep = cutlass.const_expr(qhead_per_kvhead)
-
-        @cute.jit
-        def _grug_inkling_score_mod(score, batch_idx, head_idx, q_idx, kv_idx, seqlen_info, aux_tensors):
-            del seqlen_info
-            rel_bias_t = aux_tensors[2]  # kernel layout [S, L, Hq, B]
-            rel_extent = rel_bias_t.shape[1]
-            vec = cutlass.const_expr(cute.size(score.shape))
-            b0 = batch_idx[0]
-            result = cute.make_rmem_tensor(vec, cutlass.Float32)
-            for j in cutlass.range_constexpr(vec):
-                # apply_score_mod_inner assumes Pack-GQA when qhead_per_kvhead>1 (it always divides the
-                # real q position by rep and packs the head offset into head_idx). This backward is NOT
-                # packed -- its work tile head_idx is the true q-head and the index holds the real q pos.
-                # Invert that packing: true q-head = head_idx//rep, real q = q_idx*rep + head_idx%rep.
-                if cutlass.const_expr(rep > 1):
-                    q_head = head_idx[j] // rep
-                    q_pos = q_idx[j] * rep + (head_idx[j] - q_head * rep)
-                else:
-                    q_head = head_idx[j]
-                    q_pos = q_idx[j]
-                # Write result[j] unconditionally, then add the bias in-place inside the dynamic `if`.
-                # (A value assigned only in the then-branch is undefined on the else path in the DSL.)
-                result[j] = score[j]
-                delta = q_pos - kv_idx[j]
-                # cute evaluates the GMEM load unconditionally, so clamp the gather index into range
-                # (masked positions can have delta < 0) and gate the actual add on 0 <= delta < rel_extent.
-                delta_safe = cutlass.min(cutlass.max(delta, cutlass.Int32(0)), rel_extent - 1)
-                bias = rel_bias_t[q_pos, delta_safe, q_head, b0].to(cutlass.Float32)
-                in_band = cute.elem_less(delta, rel_extent) and cute.elem_less(cutlass.Int32(-1), delta)
-                if in_band:
-                    # score arrives already multiplied by softmax_scale (softmax_scale_log2 == LOG2E for
-                    # score_mod), so add the natural-unit bias A directly (no 1/scale factor).
-                    result[j] = result[j] + bias
-            return result.load()
-
-        inkling_score_mod = _grug_inkling_score_mod
+    # GRUG: the Inkling relative-position bias is applied by an efficient inlined read in the vendored
+    # sm90 backward's apply_score_mod method (see _fa4_cute_flash_bwd_sm90.py). We only need a non-None
+    # sentinel here so the kernel takes the score_mod branch; the value itself is ignored by the method.
+    inkling_score_mod = "inkling_inline" if use_rel_bias else None
 
     tile_m, tile_n = config.tile
     backward = FlashAttentionBackwardSm90(
