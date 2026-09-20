@@ -12,14 +12,18 @@ cot = jax.random.normal(ks[4], (B, S, Hq, D), jnp.float32)
 mask = AttentionMask.causal()
 
 def mk(impl, rel_arg):
+    if rel_arg is None:
+        def loss(q, k, v):
+            o = attention(q.astype(jnp.bfloat16), k.astype(jnp.bfloat16), v.astype(jnp.bfloat16),
+                          mask, implementation=impl, rel_bias=None)
+            return jnp.sum(o.astype(jnp.float32) * cot)
+        return jax.jit(jax.grad(loss, argnums=(0, 1, 2))), (q, k, v)
+
     def loss(q, k, v, rel):
-        rb = None if rel_arg is None else rel.astype(jnp.bfloat16)
         o = attention(q.astype(jnp.bfloat16), k.astype(jnp.bfloat16), v.astype(jnp.bfloat16),
-                      mask, implementation=impl, rel_bias=rb)
+                      mask, implementation=impl, rel_bias=rel.astype(jnp.bfloat16))
         return jnp.sum(o.astype(jnp.float32) * cot)
-    args = (q, k, v) if rel_arg is None else (q, k, v, rel)
-    an = (0, 1, 2) if rel_arg is None else (0, 1, 2, 3)
-    return jax.jit(jax.grad(loss, argnums=an)), args
+    return jax.jit(jax.grad(loss, argnums=(0, 1, 2, 3))), (q, k, v, rel)
 
 def compare(tag, rel_arg):
     gfn, gargs = mk("gpu_fa4_cute", rel_arg)
