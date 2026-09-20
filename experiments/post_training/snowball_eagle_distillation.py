@@ -84,9 +84,11 @@ generator:
   vllm_attention_backend: FLASH_ATTN
   inference_engine_tensor_parallel_size: 1
   inference_engine_pipeline_parallel_size: 1
-  inference_engine_data_parallel_size: 64
-  inference_engine_expert_parallel_size: 64
-  num_inference_engines: 1
+  # Keep expert collectives within one eight-GPU node while retaining 64
+  # independent DP schedulers across the eight engines.
+  inference_engine_data_parallel_size: 8
+  inference_engine_expert_parallel_size: 8
+  num_inference_engines: 8
   n_samples_per_prompt: 16
   eval_n_samples_per_prompt: 4
   gpu_memory_utilization: 0.75
@@ -162,11 +164,11 @@ def build_distillation(version: str | None = None) -> ArtifactStep[EagleDraftMod
                     colocate_all=False,
                     policy_num_nodes=1,
                     policy_num_gpus_per_node=GPUS_PER_NODE,
-                    num_inference_engines=1,
+                    num_inference_engines=8,
                     inference_engine_tensor_parallel_size=1,
                     inference_engine_pipeline_parallel_size=1,
-                    inference_engine_data_parallel_size=64,
-                    inference_engine_expert_parallel_size=64,
+                    inference_engine_data_parallel_size=8,
+                    inference_engine_expert_parallel_size=8,
                     train_batch_size=64,
                     policy_mini_batch_size=64,
                     micro_train_batch_size_per_gpu=1,
