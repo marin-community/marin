@@ -496,7 +496,7 @@ def _drop_metrics(
     }
 
 
-def _loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | None):
+def _loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | None, mtp_progress: jax.Array | float = 0.0):
     def loss_fn(model):
         compute_params = mp.cast_to_compute(model)
         return compute_params.next_token_loss(
@@ -506,6 +506,7 @@ def _loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | None):
             reduction="mean",
             logsumexp_weight=z_loss,
             return_router_metrics=True,
+            mtp_progress=mtp_progress,
         )
 
     return jax.value_and_grad(loss_fn, has_aux=True)(params)
@@ -552,6 +553,7 @@ def _make_train_step(
     z_loss_weight: float,
     ema_beta: float | None = None,
     watch_config: WatchConfig | None = None,
+    num_train_steps: int | None = None,
 ):
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
@@ -569,7 +571,8 @@ def _make_train_step(
         # host-side kernel launches that can cause SPMD sync issues).
         qb_params = _apply_qb_betas(state.params, state.pending_qb_betas)
 
-        (loss, summarized_metrics), grads = _loss_and_grads(qb_params, batch, mp, z_loss)
+        mtp_progress = 0.0 if num_train_steps is None else state.step.astype(jnp.float32) / num_train_steps
+        (loss, summarized_metrics), grads = _loss_and_grads(qb_params, batch, mp, z_loss, mtp_progress)
         metrics = {"train/loss": loss, **summarized_metrics}
         opt_state_in = state.opt_state
         if os.environ.get("GRUG_SKIP_OPTIMIZER"):
@@ -655,6 +658,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         trainer.mp,
         z_loss_weight=config.trainer.z_loss_weight,
         watch_config=inline_watch_config,
+        num_train_steps=trainer.num_train_steps,
     )
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)

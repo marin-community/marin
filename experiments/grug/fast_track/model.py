@@ -136,6 +136,9 @@ class GrugModelConfig:
     # each predicting one token further ahead; their averaged CE is added with weight mtp_loss_weight.
     mtp_depth: int = 0
     mtp_loss_weight: float = 0.3
+    # DeepSeek-V3 step schedule: mtp_loss_weight until mtp_step_decay_fraction of training, then final.
+    mtp_loss_weight_final: float = 0.1
+    mtp_step_decay_fraction: float = 0.8
 
     def __post_init__(self) -> None:
         if not self.dense_mlp and self.num_experts_per_token >= self.num_experts:
@@ -150,6 +153,13 @@ class GrugModelConfig:
     @property
     def model_type(self) -> type["Transformer"]:
         return Transformer
+
+    def mtp_weight_at(self, progress: jax.Array | float) -> jax.Array:
+        """Step-scheduled MTP loss weight: mtp_loss_weight for progress < decay fraction, else final."""
+        p = jnp.asarray(progress, dtype=jnp.float32)
+        return jnp.where(
+            p < self.mtp_step_decay_fraction, jnp.float32(self.mtp_loss_weight), jnp.float32(self.mtp_loss_weight_final)
+        )
 
     @property
     def inferred_head_dim(self) -> int:
@@ -983,6 +993,7 @@ class Transformer(eqx.Module):
         logsumexp_weight: float | None = None,
         loss_dtype: jnp.dtype = jnp.float32,
         return_router_metrics: bool = False,
+        mtp_progress: jax.Array | float = 0.0,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
         hidden, router_metrics = self(token_ids, mask=mask)
         labels = jnp.pad(token_ids[:, 1:], ((0, 0), (0, 1))).astype(jnp.int32)
@@ -1004,7 +1015,7 @@ class Transformer(eqx.Module):
         mtp_loss = None
         if self.config.mtp_depth > 0 and reduction != "none":
             mtp_loss = self._mtp_loss(token_ids, hidden, loss_weight, mask, loss_dtype)
-            loss = loss + self.config.mtp_loss_weight * mtp_loss
+            loss = loss + self.config.mtp_weight_at(mtp_progress) * mtp_loss
         if return_router_metrics:
             if not router_metrics:
                 # Dense model: no router to summarize.

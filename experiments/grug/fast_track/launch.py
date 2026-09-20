@@ -159,6 +159,8 @@ def _h100_ladder_model(rung: H100LadderRung, dense: bool = False) -> GrugModelCo
         latent_dim=hidden // 2,
         mtp_depth=1,  # feature branch: fast_track_abl_mtp (DeepSeek-V3 MTP)
         mtp_loss_weight=0.3,
+        mtp_loss_weight_final=0.1,  # step schedule: 0.1 for the last 20% of training
+        mtp_step_decay_fraction=0.8,
     )
 
 
