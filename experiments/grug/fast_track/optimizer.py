@@ -250,6 +250,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 return "adam"
             if "output_proj" in path_lower or "lm_head" in path_lower:
                 return "adamh"
+            # Engram memory tables + projections train with Adam (sparse n-gram memory).
+            if "engram" in path_lower:
+                return "adam"
             # GatedNorms route to muonh (NS + Frobenius hyperball), same as matrices.
             if "gated_norm" in path_lower:
                 return "muonh"

@@ -157,6 +157,11 @@ def _h100_ladder_model(rung: H100LadderRung, dense: bool = False) -> GrugModelCo
         sconv=True,
         pooled_transport_capacity_factor=_EP_CAPACITY_FACTOR,
         latent_dim=hidden // 2,
+        engram=True,  # feature branch: fast_track_abl_engram
+        engram_num_grams=3,
+        engram_heads=8,
+        engram_table_vocab=32768,
+        engram_mem_dim=hidden,
     )
 
 

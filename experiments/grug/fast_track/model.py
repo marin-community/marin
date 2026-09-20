@@ -54,6 +54,7 @@ _CE_BLOCK_SIZES = BlockSizes(b_block_size=_CE_TOKENS_PER_RANK, v_block_size=4096
 # Axes the non-expert params FSDP-shard over.
 _FSDP_AXES: tuple[str, ...] = ("data", "expert")
 _LM_HEAD_PARTITION_SPEC = P(_FSDP_AXES, "model")
+_ENGRAM_TABLE_ROW_ALIGNMENT = 128
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
@@ -132,6 +133,12 @@ class GrugModelConfig:
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     # Dense (no-MoE) mode: every block is a single DenseMLP(hidden, intermediate_dim) SwiGLU; the MoE fields are ignored.
     dense_mlp: bool = False
+    # Engram (arXiv 2601.07372): context-gated n-gram memory injected mid-network via a residual add.
+    engram: bool = False
+    engram_num_grams: int = 3
+    engram_heads: int = 8
+    engram_table_vocab: int = 32768
+    engram_mem_dim: int = 512
 
     def __post_init__(self) -> None:
         if not self.dense_mlp and self.num_experts_per_token >= self.num_experts:
@@ -710,8 +717,109 @@ def _long_layer_schedule(num_layers: int, global_every: int) -> jax.Array:
     return (((layer_indices + 1) % global_every) == 0) | (layer_indices == num_layers - 1)
 
 
+def _engram_table_rows(logical_rows: int) -> int:
+    align = _ENGRAM_TABLE_ROW_ALIGNMENT
+    return ((logical_rows + align - 1) // align) * align
+
+
+def _causal_ngram_ids(
+    token_ids: Int[Array, "B S"],
+    *,
+    order: int,
+    modulus: int,
+    base_vocab_size: int,
+    segment_ids: jax.Array | None,
+) -> Int[Array, "B S"]:
+    """Hash a causal suffix n-gram id per position without crossing packed-document boundaries."""
+    seq_len = token_ids.shape[-1]
+    token_ids_u32 = token_ids.astype(jnp.uint32)
+    ngram_hash = token_ids_u32
+    multiplier = jnp.uint32(base_vocab_size)
+    valid_prefix = jnp.ones(token_ids.shape, dtype=jnp.bool_)
+    current_segments = segment_ids
+    if current_segments is not None and current_segments.ndim == 1:
+        current_segments = jnp.broadcast_to(current_segments[None, :], token_ids.shape)
+    for lag in range(1, order):
+        shifted_tokens = jnp.pad(token_ids_u32, ((0, 0), (lag, 0)))[:, :seq_len]
+        valid_lag = jnp.arange(seq_len) >= lag
+        if current_segments is not None:
+            shifted_segments = jnp.pad(current_segments, ((0, 0), (lag, 0)), constant_values=-1)[:, :seq_len]
+            valid_lag = valid_lag[None, :] & (current_segments >= 0) & (current_segments == shifted_segments)
+        valid_prefix = valid_prefix & valid_lag
+        ngram_hash = ngram_hash + jnp.where(valid_prefix, shifted_tokens, jnp.uint32(0)) * multiplier
+        multiplier = multiplier * jnp.uint32(base_vocab_size)
+    return (ngram_hash % jnp.uint32(modulus)).astype(jnp.int32)
+
+
+class Engram(eqx.Module):
+    """Context-gated n-gram memory (arXiv 2601.07372). Retrieve suffix n-gram embeddings (orders 2..N,
+    ``heads`` hashes each), gate them by the residual stream, refine with a zero-init causal conv, and
+    return a residual to add mid-network. Conv zero-init preserves identity at step 0."""
+
+    tables: jax.Array  # [num_tables, rows, slice], replicated
+    w_k: jax.Array  # [mem_dim, hidden]
+    w_v: jax.Array  # [mem_dim, hidden]
+    conv: "ShortConv"  # depthwise causal conv over hidden, zero-init
+    logical_vocab_sizes: tuple[int, ...] = eqx.field(static=True)
+    heads: int = eqx.field(static=True)
+    num_grams: int = eqx.field(static=True)
+    num_tables: int = eqx.field(static=True)
+    base_vocab_size: int = eqx.field(static=True)
+
+    @staticmethod
+    def init(cfg: "GrugModelConfig", *, key: PRNGKeyArray) -> "Engram":
+        num_tables = (cfg.engram_num_grams - 1) * cfg.engram_heads
+        if cfg.engram_mem_dim % num_tables != 0:
+            raise ValueError(f"engram_mem_dim={cfg.engram_mem_dim} must be divisible by num tables={num_tables}")
+        slice_dim = cfg.engram_mem_dim // num_tables
+        k_tables, k_wk, k_wv = random.split(key, 3)
+        table_keys = random.split(k_tables, num_tables)
+        logical_vocab_sizes = tuple(cfg.engram_table_vocab + 2 * index for index in range(num_tables))
+        rows = max(_engram_table_rows(v) for v in logical_vocab_sizes)
+        tables = jnp.stack(
+            tuple(_init_weight(table_keys[i], (rows, slice_dim), cfg.initializer_std) for i in range(num_tables))
+        )
+        conv_weight = jnp.zeros((cfg.sconv_kernel, cfg.hidden_dim))
+        return Engram(
+            tables=reshard(tables, P(None, None, None)),
+            w_k=reshard(_init_weight(k_wk, (cfg.engram_mem_dim, cfg.hidden_dim), cfg.initializer_std), P(None, None)),
+            w_v=reshard(_init_weight(k_wv, (cfg.engram_mem_dim, cfg.hidden_dim), cfg.initializer_std), P(None, None)),
+            conv=ShortConv(weight=reshard(conv_weight, P(None, _FSDP_AXES)), kernel_size=cfg.sconv_kernel),
+            logical_vocab_sizes=logical_vocab_sizes,
+            heads=cfg.engram_heads,
+            num_grams=cfg.engram_num_grams,
+            num_tables=num_tables,
+            base_vocab_size=cfg.vocab_size,
+        )
+
+    @named_call
+    def __call__(
+        self, hidden: Float[Array, "B S D"], token_ids: Int[Array, "B S"], segment_ids: jax.Array | None
+    ) -> Float[Array, "B S D"]:
+        ngram_ids = [
+            _causal_ngram_ids(
+                token_ids,
+                order=order,
+                modulus=self.logical_vocab_sizes[(order - 2) * self.heads + head],
+                base_vocab_size=self.base_vocab_size + head,
+                segment_ids=segment_ids,
+            )
+            for order in range(2, self.num_grams + 1)
+            for head in range(self.heads)
+        ]
+        slices = [_embedding_gather(self.tables[i], ids) for i, ids in enumerate(ngram_ids)]
+        memory = jnp.concatenate(slices, axis=-1)  # [B, S, mem_dim]
+        key_stream = rms_norm(jnp.einsum("bsm,md->bsd", memory, self.w_k, out_sharding=_batch_spec()))
+        alpha = jax.nn.sigmoid(
+            jnp.sum(rms_norm(hidden) * key_stream, axis=-1, keepdims=True) / (hidden.shape[-1] ** 0.5)
+        )
+        value = alpha * jnp.einsum("bsm,md->bsd", memory, self.w_v, out_sharding=_batch_spec())
+        return jax.nn.silu(self.conv(rms_norm(value), segment_ids)) + value
+
+
 class Transformer(eqx.Module):
     token_embed: jax.Array
+    engram: Engram | None
     embed_norm: RMSNorm
     embed_gated_norm: GatedNorm
     output_proj: jax.Array
@@ -740,7 +848,7 @@ class Transformer(eqx.Module):
                 raise ValueError("config must not be provided when initializing directly from GrugModelConfig")
             cfg = cfg_or_vocab
 
-        embed_key, out_key, embed_gn_key, final_gn_key, *block_keys = random.split(key, cfg.num_layers + 4)
+        embed_key, out_key, embed_gn_key, final_gn_key, engram_key, *block_keys = random.split(key, cfg.num_layers + 5)
         # The embedding is fully replicated for a local lookup.
         token_embed = reshard(
             _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), P(None, None)
@@ -749,8 +857,10 @@ class Transformer(eqx.Module):
             _init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), _LM_HEAD_PARTITION_SPEC
         )
         stacked_blocks = ArrayStacked.init(cfg.num_layers, Block)(cfg, key=jnp.stack(block_keys))
+        engram = Engram.init(cfg, key=engram_key) if cfg.engram else None
         return Transformer(
             token_embed=token_embed,
+            engram=engram,
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             embed_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=embed_gn_key),
             output_proj=output_proj,
@@ -816,9 +926,22 @@ class Transformer(eqx.Module):
                 use_long,
             )
 
-        hidden, stacked_router_stats = jax.lax.scan(
-            _scan_layers, hidden, xs=(self.stacked_blocks.stacked, mask_schedule)
-        )
+        if self.engram is not None:
+            # Inject the engram residual once at the midpoint (arXiv 2601.07372 injects at interior layers).
+            mid = cfg.num_layers // 2
+            front = jax.tree.map(lambda a: a[:mid], self.stacked_blocks.stacked)
+            back = jax.tree.map(lambda a: a[mid:], self.stacked_blocks.stacked)
+            hidden, rs_front = jax.lax.scan(_scan_layers, hidden, xs=(front, mask_schedule[:mid]))
+            engram_seg = (
+                mask.segment_ids[0] if isinstance(mask, AttentionMask) and mask.segment_ids is not None else None
+            )
+            hidden = hidden + self.engram(hidden, token_ids, engram_seg)
+            hidden, rs_back = jax.lax.scan(_scan_layers, hidden, xs=(back, mask_schedule[mid:]))
+            stacked_router_stats = jax.tree.map(lambda a, b: jnp.concatenate([a, b], axis=0), rs_front, rs_back)
+        else:
+            hidden, stacked_router_stats = jax.lax.scan(
+                _scan_layers, hidden, xs=(self.stacked_blocks.stacked, mask_schedule)
+            )
         if cfg.dense_mlp:
             router_metrics: dict[str, jax.Array] = {}
         else:
