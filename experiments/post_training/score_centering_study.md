@@ -898,6 +898,37 @@ checkpoint work. This run verifies normal-publication
 provenance through age two; it does not establish mixed-span behavior or the
 version distribution at later updates.
 
+A [four-update lower-prefetch probe](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fscore-centering-qwen-mixed-span-lowprefetch-01a0bb6f)
+kept the model, pool, 4,096-token response cap, top-k-one capture, TIS cap,
+and per-update publication, but reduced generation workers from 128 to 32 and
+the completed-group buffer from 32 to eight. Its purpose was to observe later
+published versions sooner; it is not a matched quality arm. It used SkyRL
+`cd040079`, whose raw record also counts selected tokens by generating version
+and prioritizes mixed responses in the bounded sample. The
+[version-coverage audit](results/score_centering_qwen_lowprefetch_version_coverage.csv)
+checks the four durable records under
+`s3://marin-us-east-02a/marin/users/romain/checkpoints/async-rl/qwen-mixed-span-lowprefetch-01a0bb6f/2026.09.20.1/exports/mismatch_decomposition/`.
+
+| Consuming step | Selected tokens by version | Tokens with matching B | Mixed-version responses |
+| ---: | --- | ---: | ---: |
+| 1 | v0: 200,370 | 200,370 | 0 |
+| 2 | v0: 389,998 | 389,998 | 0 |
+| 3 | v0: 107,604; v1: 232,663 | 107,604 | 0 |
+| 4 | v1: 111,903; v2: 210,777 | 0 | 0 |
+
+The diagnostic scored only v0 tokens against the frozen v0 trainer. It
+counted the other 555,343 selected tokens but excluded them from A/B/C rather
+than using the wrong B weights. On the matched v0 tokens at steps two and
+three, mean absolute B − A was 0.01611 and 0.01669; C − B was 0.01565 and
+0.01615. Every recorded matched-token decomposition reconstructed C − A
+exactly. No completed response crossed a version boundary in this four-step
+sample, even though versions mixed across batches. The two eight-H100 tasks
+succeeded without retry or preemption and used 2.43 reserved H100-hours.
+This bounds what the observed abort-and-resume path demonstrated; the
+synthetic mixed-span test checks the scorer's version routing, but this GPU
+sample does not validate B for later generated versions or an actual mixed
+response.
+
 ## Matched Qwen confirmation design
 
 The [current async launcher draft](https://github.com/marin-community/marin/pull/9256)
