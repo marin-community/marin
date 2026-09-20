@@ -71,7 +71,9 @@ trainer:
     use_kl_loss: false
   train_batch_size: 64
   policy_mini_batch_size: 64
-  eval_batch_size: 64
+  # Queue the bounded capture corpus at once so long-output stragglers do not
+  # drain the 64-way rollout pool at every host-side evaluation batch boundary.
+  eval_batch_size: 1200
   micro_forward_batch_size_per_gpu: 1
   micro_train_batch_size_per_gpu: 1
   logger: console
