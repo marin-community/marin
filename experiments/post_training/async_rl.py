@@ -230,7 +230,8 @@ QWEN_RECIPE = TrainingRecipe(
         expert_model_parallel_size=1,
         expert_tensor_parallel_size=1,
     ),
-    host_memory="128GB",
+    # Restoring a full Megatron optimizer checkpoint exceeded 128 GB on the learner pod.
+    host_memory="256GB",
     engine_init_kwargs={},
 )
 
