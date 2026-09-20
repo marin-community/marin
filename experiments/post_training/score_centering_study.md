@@ -556,6 +556,9 @@ priority, the adopted Snowball SFT export `2026.08.30`, pool `2026.08.29.1`, see
 TIS cap 1.05, top-k 32 behavior capture, and age limit eight. Their Iris parents are
 [TIS](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-smoke-set-399c37f1-2026.09.20.1-918d8daf4d8c)
 and [TIS plus SC32](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-smoke-set-81e8344e-2026.09.20.1-29e2743294fb).
+The [per-update metrics](results/score_centering_snowball_smoke_metrics.csv) preserve the four
+W&B history rows, and the [task-attempt cost ledger](results/score_centering_snowball_smoke_cost.csv)
+preserves Iris start and finish times for all five nodes and every attempt.
 Both arms completed two Megatron updates. The TIS cap was active for 8.98% and 8.92% of sampled
 tokens in the control's two updates, and 8.87% and 9.03% in the SC arm; mean absolute
 trainer-versus-behavior log ratios stayed near 0.034–0.035. Neither arm skipped TIS or lacked
@@ -566,9 +569,14 @@ for TIS plus SC32; the second took 673 and 653 seconds, respectively. The second
 substage took 19.75 and 20.12 seconds. Different sampled lengths and concurrent storage work
 prevent a clean incremental-cost estimate from two batches. The 1,024-token smoke response cap
 caused 66–72% length stops, so these runs are for wiring, not answer-quality comparison. The
-control job succeeded with five eight-H100 tasks lasting about 29.5 minutes each. The SC job
-was system-preempted after its second update and automatically restarted; Iris diagnosed rank
-zero as `PodDeleted`, with its four siblings coscheduled for restart. The second update's W&B
-history had already committed, but a terminal job result remains pending. The older curriculum
-Snowball launcher uses FSDP2; this fully async experiment launcher uses Megatron and does not
-require an FSDP2 port.
+control job succeeded and used 24.02 reserved H100-hours. The SC job completed both optimizer
+updates and a durable global-step-two checkpoint before Iris system-preempted its rank-zero pod
+(`PodDeleted`); its four siblings were coscheduled for restart. The first restore attempt failed
+while downloading policy weights from S3 with `[Errno 16] Please reduce your request rate`.
+The next attempt loaded trainer and dataloader state and reached the Megatron optimizer restore,
+then ran out of GPU memory while allocating 26 MiB with about 7 MiB free on an H100. We stopped
+further retries after that repeatable restore failure. The SC job is therefore a successful
+two-update integration check with a failed terminal restore/export, not a completed training job;
+its three attempts consumed 50.77 reserved H100-hours. The older curriculum Snowball launcher
+uses FSDP2; this fully async experiment launcher uses Megatron and does not require an FSDP2
+port.
