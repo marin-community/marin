@@ -51,6 +51,13 @@ def rel_bias_backward(
     noff = rel_extent // block + 1
 
     qf, kf, vf, dof, af = (t.astype(jnp.float32) for t in (q, k, v, d_out, rel_bias))
+    # GQA: k/v carry Hkv <= Hq heads; expand to Hq so each query head uses its shared kv head.
+    hkv = kf.shape[1]
+    if hkv != h:
+        if h % hkv != 0:
+            raise ValueError(f"num q heads {h} must be a multiple of kv heads {hkv}")
+        kf = jnp.repeat(kf, h // hkv, axis=1)
+        vf = jnp.repeat(vf, h // hkv, axis=1)
     delta_i = jnp.sum(out.astype(jnp.float32) * dof, axis=-1)  # [B,H,S]
 
     qb = qf.reshape(b, h, nqb, block, d)
