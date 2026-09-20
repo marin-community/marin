@@ -112,6 +112,10 @@ class GrugModelConfig:
     num_experts_per_token: int = 8
     # LatentMoE (arXiv 2601.18089); latent RMSNorm per issue #6822.
     latent_dim: int | None = 256
+    # Attention latent projection (mirrors LatentMoE): project the residual down to `attn_latent_dim`
+    # with a learnable RMSNorm before Q/K/V, run attention there, and project back up (no norm). This
+    # decouples attention's param/FLOP budget from the residual-stream width. None = full-width attention.
+    attn_latent_dim: int | None = None
     num_layers: int = 6
     num_heads: int = 4
     num_kv_heads: int = 1
@@ -203,24 +207,44 @@ class ShortConv(eqx.Module):
 
 
 class CausalSelfAttention(eqx.Module):
-    w_q: Float[Array, "D NH"]
-    w_k: Float[Array, "D MH"]
-    w_v: Float[Array, "D MH"]
-    w_o: Float[Array, "NH D"]
-    attn_gate: Float[Array, "D N"]
+    # When cfg.attn_latent_dim is set, Q/K/V/O and the gate live in the latent space (leading dim
+    # `attn_latent_dim`); w_attn_down/w_attn_up bridge the residual stream. Otherwise they are None and
+    # the projections read/write the full residual width directly.
+    w_q: Float[Array, "L NH"]
+    w_k: Float[Array, "L MH"]
+    w_v: Float[Array, "L MH"]
+    w_o: Float[Array, "NH L"]
+    attn_gate: Float[Array, "L N"]
+    w_attn_down: jax.Array | None
+    attn_latent_norm: "RMSNorm | None"
+    w_attn_up: jax.Array | None
     sconv_k: "ShortConv | None"  # SConv after the K projection (cfg.sconv)
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "CausalSelfAttention":
-        k_q, k_k, k_v, k_o = random.split(key, 4)
+        k_q, k_k, k_v, k_o, k_down, k_up = random.split(key, 6)
         d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.stored_kv_heads, cfg.inferred_head_dim
+        latent = cfg.attn_latent_dim
+        # Q/K/V read from the latent when enabled, else from the full residual width.
+        proj_in = latent if latent is not None else d
         return CausalSelfAttention(
-            w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), P(_FSDP_AXES, "model")),
-            w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), P(_FSDP_AXES, "model")),
-            w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), P(_FSDP_AXES, "model")),
-            w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", _FSDP_AXES)),
-            attn_gate=reshard(jnp.zeros((d, n)), P(None, None)),
+            w_q=reshard(_init_weight(k_q, (proj_in, n * h), cfg.initializer_std), P(_FSDP_AXES, "model")),
+            w_k=reshard(_init_weight(k_k, (proj_in, m * h), cfg.initializer_std), P(_FSDP_AXES, "model")),
+            w_v=reshard(_init_weight(k_v, (proj_in, m * h), cfg.initializer_std), P(_FSDP_AXES, "model")),
+            w_o=reshard(_init_weight(k_o, (n * h, proj_in), cfg.initializer_std), P("model", _FSDP_AXES)),
+            attn_gate=reshard(jnp.zeros((proj_in, n)), P(None, None)),
+            w_attn_down=(
+                None
+                if latent is None
+                else reshard(_init_weight(k_down, (d, latent), cfg.initializer_std), P(_FSDP_AXES, "model"))
+            ),
+            attn_latent_norm=None if latent is None else RMSNorm.init(latent, cfg.layer_norm_eps),
+            w_attn_up=(
+                None
+                if latent is None
+                else reshard(_init_weight(k_up, (latent, d), cfg.initializer_std), P("model", _FSDP_AXES))
+            ),
             sconv_k=(ShortConv.init(m * h, cfg.sconv_kernel) if cfg.sconv and "k" in cfg.sconv_sites else None),
             cfg=cfg,
         )
@@ -237,9 +261,18 @@ class CausalSelfAttention(eqx.Module):
         seq_len = x.shape[1]
         batch_spec = _batch_spec()
 
-        q_flat = jnp.einsum("bsh,hd->bsd", x, self.w_q)
-        k_flat = jnp.einsum("bsh,hd->bsd", x, self.w_k)
-        v_flat = jnp.einsum("bsh,hd->bsd", x, self.w_v)
+        # Project the residual down to the attention latent (learnable RMSNorm), mirroring LatentMoE.
+        # The gate and Q/K/V then read this latent; `x` (full width) is only used for the down-projection.
+        if self.w_attn_down is not None and self.attn_latent_norm is not None:
+            x_attn = self.attn_latent_norm(
+                jnp.einsum("bsd,dl->bsl", x, self.w_attn_down.astype(x.dtype), out_sharding=batch_spec)
+            )
+        else:
+            x_attn = x
+
+        q_flat = jnp.einsum("bsh,hd->bsd", x_attn, self.w_q)
+        k_flat = jnp.einsum("bsh,hd->bsd", x_attn, self.w_k)
+        v_flat = jnp.einsum("bsh,hd->bsd", x_attn, self.w_v)
         # SConv: depthwise causal conv after the K projection. segment_ids (packed-document
         # boundaries) come from the mask so the conv never mixes across a document boundary.
         _seg = mask.segment_ids if isinstance(mask, AttentionMask) else None
@@ -313,16 +346,20 @@ class CausalSelfAttention(eqx.Module):
         dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
         v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
         attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
-        # Headwise gating: sigmoid(x @ attn_gate) produces one scalar per head.
-        gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
+        # Headwise gating: sigmoid(x_attn @ attn_gate) produces one scalar per head.
+        gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x_attn, self.attn_gate))[..., None]
         attn_out = gate * attn_out
-        # Merge heads into hidden dim while keeping model-axis sharding for w_o.
+        # Merge heads into the projection width while keeping model-axis sharding for w_o.
         attn_out = jnp.reshape(
             attn_out,
             (*attn_out.shape[:-2], attn_out.shape[-2] * attn_out.shape[-1]),
             out_sharding=P(_BATCH_AXES, None, "model"),
         )
-        return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
+        out = jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
+        # Project the attention latent back up to the residual width (no norm, mirroring LatentMoE up).
+        if self.w_attn_up is not None:
+            out = jnp.einsum("bsl,ld->bsd", out, self.w_attn_up.astype(out.dtype), out_sharding=batch_spec)
+        return out
 
 
 class RMSNorm(eqx.Module):

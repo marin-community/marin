@@ -157,6 +157,7 @@ def _h100_ladder_model(rung: H100LadderRung, dense: bool = False) -> GrugModelCo
         sconv=True,
         pooled_transport_capacity_factor=_EP_CAPACITY_FACTOR,
         latent_dim=None if dense else hidden // 2,  # dense carries no LatentMoE
+        attn_latent_dim=None if dense else hidden // 2,  # attention latent projection (LatentMoE mirror)
     )
 
 
@@ -164,15 +165,18 @@ def _active_params(cfg: GrugModelConfig) -> int:
     """Active (non-embedding) params per token, summed over layers: attention plus either the dense
     MLP or the router + top-k routed experts + LatentMoE projections + shared experts."""
     d = cfg.hidden_dim
-    attn = 2 * d * cfg.num_heads * cfg.head_dim + 2 * d * cfg.num_kv_heads * cfg.head_dim
+    # Q/K/V/O read from the attention latent when it is enabled, else from the full residual width.
+    attn_width = cfg.attn_latent_dim if cfg.attn_latent_dim is not None else d
+    attn = 2 * attn_width * cfg.num_heads * cfg.head_dim + 2 * attn_width * cfg.num_kv_heads * cfg.head_dim
+    attn_latent_proj = 0 if cfg.attn_latent_dim is None else 2 * d * cfg.attn_latent_dim
     if cfg.dense_mlp:
-        return cfg.num_layers * (attn + 3 * d * cfg.intermediate_dim)
+        return cfg.num_layers * (attn + attn_latent_proj + 3 * d * cfg.intermediate_dim)
     expert_width = cfg.latent_dim if cfg.latent_dim is not None else d
     routed = cfg.num_experts_per_token * 3 * expert_width * cfg.intermediate_dim
     latent_proj = 0 if cfg.latent_dim is None else 2 * d * cfg.latent_dim
     shared = cfg.num_shared_experts * 3 * d * cfg.shared_expert_intermediate_dim
     router = d * cfg.num_experts
-    return cfg.num_layers * (attn + router + routed + latent_proj + shared)
+    return cfg.num_layers * (attn + attn_latent_proj + router + routed + latent_proj + shared)
 
 
 def _flat_cache_data_config(
@@ -229,6 +233,7 @@ def build_h100_ladder_run(
     no_eval: bool = False,
     dense: bool = False,
     save_checkpoints: bool = False,
+    residual_dim: int | None = None,
 ) -> ArtifactStep[ThroughputResult]:
     """Build one H100 scaling-ladder rung.
 
@@ -243,7 +248,16 @@ def build_h100_ladder_run(
         raise ValueError("wandb_project must not be empty")
 
     rung = _h100_ladder_rung(size)
-    model = dataclasses.replace(_h100_ladder_model(rung, dense=dense), vocab_size=vocab_size)
+    base_model = dataclasses.replace(_h100_ladder_model(rung, dense=dense), vocab_size=vocab_size)
+    # Residual-stream width sweep: only hidden_dim changes; latent_dim, intermediate_dim, the shared /
+    # attention latent widths, and initializer_std stay pinned to the rung baseline (as do the LR recipe
+    # and token budget below), so the attention/MoE param+FLOP budget is held fixed as the residual grows.
+    if residual_dim is not None:
+        if residual_dim <= 0:
+            raise ValueError(f"--residual-dim must be positive, got {residual_dim}")
+        model = dataclasses.replace(base_model, hidden_dim=residual_dim)
+    else:
+        model = base_model
     mp_policy = "params=float32,compute=bfloat16,output=bfloat16"
     expert_axis_size = 1 if dense else rung.gpus_per_task
     replica_axis_size = 1
@@ -255,7 +269,8 @@ def build_h100_ladder_run(
 
     # Baseline: this variant's standard recipe (DENSE_TPP/MOE_TPP at the rung's baseline batch).
     active = _active_params(model)
-    baseline_active = active  # option 1: the baseline is this variant's own standard config
+    # Pin the token budget to the baseline residual width so every point in a residual sweep is data-matched.
+    baseline_active = _active_params(base_model)
     baseline_tpp = DENSE_TPP if dense else MOE_TPP
     baseline_steps = max(1, round(baseline_tpp * baseline_active / (rung.baseline_batch * SEQ_LEN)))
     baseline_tokens = rung.baseline_batch * baseline_steps * SEQ_LEN
@@ -277,7 +292,7 @@ def build_h100_ladder_run(
     optimizer = MoeHeuristic().build_optimizer_config(
         num_train_steps=num_steps,
         batch_size=batch_size,
-        hidden_dim=model.hidden_dim,
+        hidden_dim=base_model.hidden_dim,  # pin the LR recipe to the baseline width across a residual sweep
         seq_len=SEQ_LEN,
     )
     grug_trainer = GrugTrainerConfig(
@@ -412,6 +427,13 @@ def build_h100_ladder_run(
 @click.option("--no-eval", is_flag=True, help="Disable in-run eval (clean MFU probes).")
 @click.option("--dense", is_flag=True, help="Dense baseline: 3x hidden SwiGLU per block, no MoE.")
 @click.option(
+    "--residual-dim",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Override the residual-stream width (hidden_dim); latent/attn/MoE sizes, LR, and token budget "
+    "stay pinned to the rung baseline.",
+)
+@click.option(
     "--save-checkpoints",
     is_flag=True,
     default=False,
@@ -427,6 +449,7 @@ def main(
     no_eval: bool,
     dense: bool,
     save_checkpoints: bool,
+    residual_dim: int | None,
 ) -> ArtifactStep[ThroughputResult]:
     return build_h100_ladder_run(
         run_id=run_id,
@@ -437,6 +460,7 @@ def main(
         no_eval=no_eval,
         dense=dense,
         save_checkpoints=save_checkpoints,
+        residual_dim=residual_dim,
     )
 
 
