@@ -17,6 +17,7 @@ import csv
 import hashlib
 import json
 import math
+import re
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +41,7 @@ FIELDS = (
 METRIC_FIELDS = (
     "run",
     "step",
+    "iris_attempt",
     "consumed_tokens",
     "cumulative_consumed_tokens",
     "step_seconds",
@@ -147,24 +149,28 @@ def verify_membership(rows: list[dict[str, Any]]) -> str:
 
 
 def summarize_iris_log(label: str, path: Path) -> list[dict[str, Any]]:
-    """Read the durable per-step stdout mirror when a W&B run ends without its final flush."""
+    """Read per-step stdout mirrors, preferring a resumed attempt for repeated steps."""
     marker = "WANDB_MIRROR kind=train step="
-    steps: dict[int, dict[str, Any]] = {}
+    steps: dict[int, tuple[int, dict[str, Any]]] = {}
     with path.open() as stream:
         for line in stream:
             if marker not in line:
                 continue
             step_text, payload = line.split(marker, 1)[1].split(" metrics=", 1)
             step = int(step_text)
-            if step in steps:
-                raise ValueError(f"{label}: duplicate Iris mirror step {step}; inspect retries before analysis")
-            steps[step] = json.loads(payload)
+            attempt_match = re.search(r"\battempt=(\d+)\b", line.split(marker, 1)[0])
+            attempt = int(attempt_match.group(1)) if attempt_match else 0
+            previous = steps.get(step)
+            if previous is not None and previous[0] == attempt:
+                raise ValueError(f"{label}: duplicate Iris mirror step {step} within attempt {attempt}")
+            if previous is None or attempt > previous[0]:
+                steps[step] = (attempt, json.loads(payload))
     if not steps:
         raise ValueError(f"{label}: no training metrics in {path}")
     result: list[dict[str, Any]] = []
     cumulative_tokens = 0
     cumulative_seconds = 0.0
-    for step, metrics in sorted(steps.items()):
+    for step, (attempt, metrics) in sorted(steps.items()):
         if metrics["trainer/global_step"] != step:
             raise ValueError(f"{label}: Iris mirror step {step} disagrees with trainer/global_step")
         tokens = metrics["async/performance/consumed_loss_tokens"]
@@ -178,6 +184,7 @@ def summarize_iris_log(label: str, path: Path) -> list[dict[str, Any]]:
             {
                 "run": label,
                 "step": step,
+                "iris_attempt": attempt,
                 "consumed_tokens": tokens,
                 "cumulative_consumed_tokens": cumulative_tokens,
                 "step_seconds": seconds,

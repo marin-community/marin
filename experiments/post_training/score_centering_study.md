@@ -258,6 +258,8 @@ must include each run's starting point and between-seed uncertainty.
 `analyze_score_centering.py` reads every dumped evaluation response and the durable Iris
 `WANDB_MIRROR` lines. It writes separate CSV files for completion-aware quality and per-update
 age, mismatch, consumed tokens, cycle time, and nominal GPU-hours across inclusive step cycles.
+When Iris retries a GPU child, a repeated optimizer step uses the later attempt's mirror, and
+the metrics CSV records the selected attempt number.
 The step-cycle cost includes in-run evaluation and checkpointing but excludes setup, terminal
 export, and failed attempts; those require Iris task durations in the total-cost table. The
 script checks that prompt and ground-truth membership
