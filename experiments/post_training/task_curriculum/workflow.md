@@ -68,7 +68,7 @@ Use separate agent contexts for all four roles. A repair is a new curriculum ver
 holistic review and blind-fit judgment against the same frozen blind tasks. Regenerate blind tasks only when they are
 invalid, leaked the curriculum, or the subject definition changed.
 
-### Post-v1 source survey
+### Curriculum source survey
 
 After the first D-series catalog pass, audit each root against at least two public undergraduate course sequences
 from independent institutions and one established introductory or survey textbook table of contents. Record the
@@ -81,8 +81,8 @@ For trades, public safety, clinical practice, and other fields poorly represente
 authoritative licensing, accreditation, or professional competency standards. Store the source extraction and
 topic mappings externally; check in only a versioned inventory revision and concise findings. Course order and
 chapter structure are evidence for breadth and candidate progression, not capability boundaries, mutual
-self-confidence, or prerequisite edges. The normal generator, completed-artifact counterfactual, holistic review,
-and blind-fit checks remain authoritative.
+self-confidence, or learning-prerequisite edges. The normal generator, holistic review, blind-fit checks, and
+separate learning-progression pass remain authoritative.
 
 Store the manifest and frozen blind-task artifact at a durable URI before ending a wave that may need repair. `/tmp`
 is acceptable only while a single wave is active. A concise checked-in or Loom report records the URI and hashes; it
@@ -202,7 +202,7 @@ The holistic review writes:
   "dimension_scores": {
     "coverage": 0,
     "mutual_self_confidence": 0,
-    "progression_and_epsilon_continuity": 0,
+    "local_progression": 0,
     "observable_boundaries": 0,
     "probe_quality_and_parsimony": 0
   },
@@ -226,7 +226,9 @@ The exact prompts are versioned separately so a run can hash and attach only the
 - [`prompts/generation.md`](prompts/generation.md) for curriculum generation;
 - [`prompts/blind_tasks.md`](prompts/blind_tasks.md) for curriculum-blind task sampling;
 - [`prompts/blind_fit.md`](prompts/blind_fit.md) for fit judgment;
-- [`prompts/review.md`](prompts/review.md) for holistic review; and
+- [`prompts/review.md`](prompts/review.md) for holistic review;
+- [`prompts/learning_progression.md`](prompts/learning_progression.md) for catalog-level learning edges;
+- [`prompts/learning_progression_review.md`](prompts/learning_progression_review.md) for their independent review; and
 - [`prompts/luna_placement.md`](prompts/luna_placement.md) for the optional batched diagnostic.
 
 The shared scoring and boundary definitions are in [`prompts/rubric.md`](prompts/rubric.md). Preserve the allowed-read
@@ -283,6 +285,38 @@ rewrite archived results to match it.
    and catalog version. Archive raw one-off artifacts at the manifest URI, or delete them only after the wave is
    accepted and no repair needs the frozen task set. Do not check them into this directory.
 8. Run focused tests, type checking, and the repository lint workflow before publishing the change.
+
+## Learning-progression pass
+
+Generate learning prerequisites after capability boundaries are stable. The production pass is subject-local: it
+does not send the whole catalog to an agent and it does not regenerate capabilities. The reviewed graph lives once at
+the catalog root in `learning_progression`; keep every capability's embedded `prerequisites` array empty.
+
+For each subject:
+
+1. Materialize a compact packet containing its groups and each capability's ID, parent, name, outcome, includes,
+   excludes, and entry/representative probes. Omit facets, evidence, scores, task mappings, previous prerequisites,
+   other subjects, and generation transcripts.
+2. Give the packet and `prompts/learning_progression.md` to one Sol/high proposer. Bind structured output to
+   `LearningProgression`, record catalog/prompt/model hashes, and require every endpoint to be a capability in that
+   subject.
+3. Parse and validate capability references, unique edge pairs, distinct witness-family pairs, and acyclicity.
+4. Give a fresh Sol/high reviewer the same packet, proposal, and `prompts/learning_progression_review.md`. The reviewer
+   judges every proposal and returns complete witness-backed objects for clear omissions.
+5. Validate exact review accounting, then combine accepted proposals with reviewer omissions. Do not run a routine
+   repair call: rejected edges stay rejected, and supplied omissions are already complete edge objects.
+
+After all subjects finish, combine their edges, validate the global graph, and merge it into a new immutable catalog
+version. Cross-subject prerequisites are a separate follow-up because discovering them would require a different
+routing or retrieval procedure; the subject-local pass must not infer them from a partial catalog view.
+
+The edge contract implements learning enablement. Mastery of A must materially improve the chance of success on a
+recurring family of entry-level B tasks. A may cover only a declared stratum of B. Pure artifact handoff, course
+order, general sophistication, and domain relabeling do not qualify. Each edge has two concise task-family sketches
+that reuse the same upstream foundation and add one main dependent operation. These are structural hypotheses; the
+workflow does not claim causal transfer without training evidence. Exact duplicate family pairs are rejected by the
+model contract. Semantic family diversity is reviewer-enforced because paraphrase equivalence is not a reliable
+string-level invariant. Run exactly one proposer and one reviewer per subject, never one call per capability or edge.
 
 ## Catalog-wide bounded repair
 

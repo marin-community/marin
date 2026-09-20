@@ -6,7 +6,8 @@ for each judgment and name changes that would apply beyond the current subject.
 ## Review modes
 
 Use this detailed rubric while developing the generator and review procedure on sampled subjects. It diagnoses
-section boundaries, prerequisite edges, probes, and evidence failures.
+section boundaries, hierarchy, probes, and evidence failures. Learning-prerequisite edges use a separate pass after
+the capability taxonomy is stable.
 
 Routine scale-out uses one high-reasoning review call for one complete subject curriculum version. Sol/high is the
 current reference. The call reads the subject guideposts, curriculum, and a small evidence summary, then returns a
@@ -29,22 +30,16 @@ request targeted blinded Luna probes when their result could change a finding.
    the decisive operation or knowledge that determines its primary home. A task's output format, delivery wrapper,
    or narrative subject does not establish membership when its decisive operation belongs to another subject.
 4. **Learnable progression:** A capability parent's outcome contains its child outcomes; a group parent's scope
-   contains its descendants. Children narrow that parent outcome or scope. Prerequisites connect capabilities only,
-   are necessary, and every representative task in the dependent capability requires their full outcomes. The entry
-   task adds the smallest new operation or concept to the prerequisites. A learner that has mastered the
-   prerequisites must have a non-trivial chance of solving it. Flag an
-   edge when the easiest dependent task still requires several unmodeled capabilities. For every edge, record why the
-   full prerequisite outcome is necessary, where the dependent representative uses it, and the single new operation
-   in the entry task. If the dependent task remains solvable when a completed prerequisite artifact is supplied to a
-   learner who cannot produce it, that is pipeline ordering rather than capability dependence. Internal-capability
-   representative tasks require coherent cross-child synthesis around one natural artifact, question, or decision;
-   concatenating unrelated child deliverables does not qualify. For sampled edges, write a second prerequisite
-   representative, dependent entry, and dependent representative. An independent reviewer checks both variants
-   against prerequisite-to-entry transfer, material added capability, and the completed-artifact counterfactual. One
-   failing variant blocks the edge. Passing this structural audit does not establish training transfer.
-   Test containment by substituting every child's entry and representative probe into the parent's outcome. When a
-   cross-child workflow is trainable but does not contain each child outcome, make the shared parent a group and add
-   the workflow as a sibling synthesis capability.
+   contains its descendants. Children narrow that parent outcome or scope. The entry probe is the smallest
+   self-contained exercise of its capability, and the representative probe exercises the full outcome. Flag an entry
+   that already requires several unmodeled capabilities or an entry-to-representative jump that introduces a distinct
+   operation family. Cross-capability learning prerequisites are generated after capability boundaries are stable by
+   `learning_progression.md`. That pass implements the original epsilon condition: mastery of A materially raises the
+   chance of solving some recurring family of entry-level B tasks. It does not require A to be necessary for every B
+   task. Subject generation leaves embedded `prerequisites` arrays empty. Test containment by substituting every
+   child's entry and representative probe into the parent's outcome. When a cross-child workflow is trainable but
+   does not contain each child outcome, make the shared parent a group and add the workflow as a sibling synthesis
+   capability.
 5. **Mutual self-confidence:** Mastery of one representative task in a capability should predict success on most
    other representative tasks in that capability after changing surface form, data, and tools that are not part of
    the claimed outcome. Test composite capabilities with a counterexample pair drawn from different included operation
@@ -69,8 +64,8 @@ request targeted blinded Luna probes when their result could change a finding.
    construction versus interpretation, paired versus unpaired inference, and deterministic mismatch analysis versus
    intermittent-mechanism diagnosis.
 6. **Generation probes:** Every capability has one `entry` instruction and one `representative` instruction. Groups
-   have neither. The entry probe isolates the prerequisite-to-capability delta. The representative probe exercises
-   the full outcome and differs in substance from the entry probe. Internal-capability representative probes exercise
+   have neither. The entry probe is the smallest self-contained exercise of the capability. The representative probe
+   exercises the full outcome and differs in substance from the entry probe. Internal-capability representative probes exercise
    cross-child synthesis. Both must be instantiable as tasks. When the outcome is transformation, explanation,
    revision, or documentation rather than domain expertise, the probe supplies the facts, interface, measurements,
    or completed solution it operates on.
@@ -106,9 +101,13 @@ The single-call reviewer scores five dimensions:
 | --- | ---: |
 | Coverage | 25 |
 | Mutual self-confidence | 25 |
-| Progression and epsilon continuity | 25 |
+| Local progression | 25 |
 | Observable boundaries | 15 |
 | Probe quality and parsimony | 10 |
+
+`Local progression` scores parent containment, self-contained entry probes, and coherent entry-to-representative
+difficulty within each capability. Catalog-level learning prerequisites receive their own proposal and review and do
+not contribute to this 100-point subject score.
 
 The total is a comparison aid. `pilot_ready` requires at least 85 points and no structural blockers. Any failed gate
 at 70 points or above yields `revise`; a score below 70 yields `regenerate`. Pervasive structural defects must reduce
@@ -126,11 +125,11 @@ structurally coherent graph can enter the versioned catalog with low evidence co
 findings and recommended changes. Reserve blockers for structural defects. This keeps curriculum quality distinct
 from the maturity of the current task inventory and lets later evidence drive targeted revisions.
 
-The routine reviewer must inspect every capability section's most distant permitted task pair, every prerequisite edge
-under the completed-artifact counterfactual, every internal-capability representative for coherent synthesis, and
-every guidepost for coverage. It must not infer one capability per guidepost. High confidence requires direct or
-held-out evidence reaching every capability and sampled prerequisite edges. A complete structural scan with sparse
-task evidence is medium confidence; missing evidence for major branches is low confidence.
+The routine reviewer must inspect every capability section's most distant permitted task pair, every embedded
+prerequisite array for emptiness, every internal-capability representative for coherent synthesis, and every
+guidepost for coverage. It must not infer one capability per guidepost. High confidence requires direct or held-out
+evidence reaching every capability. A complete structural scan with sparse task evidence is medium confidence;
+missing evidence for major branches is low confidence.
 
 After any repair, repeat the complete-subject review. A local check that the named blocker disappeared cannot detect
 coverage loss, new catch-all sections, or shifted sibling boundaries.
@@ -161,8 +160,8 @@ tasks are a weak diagnostic because their wording tends to mirror the section de
 permitted in-distribution evaluation examples provide stronger evidence.
 
 Model-training experiments are outside this curriculum workflow. During development or a periodic audit, use Luna
-failures as a rough proxy on two prerequisite representatives, two dependent entries, and two dependent
-representatives per sampled edge:
+failures as a rough proxy on concrete tasks instantiated from the two witness-family sketches attached to each
+sampled learning-prerequisite edge:
 
 - failing a prerequisite probe is a floor condition and leaves the edge empirically inconclusive;
 - passing both prerequisites and failing both entries rejects epsilon continuity;

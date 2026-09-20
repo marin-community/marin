@@ -200,6 +200,13 @@ class Curriculum(StrictModel):
         ]
         if wrong_probes:
             raise ValueError(f"sections must have one entry and one representative probe in order: {wrong_probes}")
+        embedded_prerequisites = [
+            section.id for section in self.sections if isinstance(section, CapabilitySection) and section.prerequisites
+        ]
+        if embedded_prerequisites:
+            raise ValueError(
+                f"generated curricula leave learning prerequisites to the catalog-level pass: {embedded_prerequisites}"
+            )
 
     def capability_sections(self) -> list[CapabilitySection]:
         return [section for section in self.sections if isinstance(section, CapabilitySection)]
@@ -222,6 +229,7 @@ class CatalogCurriculum(StrictModel):
 class CurriculumCatalog(StrictModel):
     catalog_version: str
     curricula: list[CatalogCurriculum] = Field(min_length=1)
+    learning_progression: LearningProgression | None = None
 
     @model_validator(mode="after")
     def validate_catalog(self) -> CurriculumCatalog:
@@ -231,7 +239,187 @@ class CurriculumCatalog(StrictModel):
         section_ids = [section.id for entry in self.curricula for section in entry.curriculum.sections]
         if len(section_ids) != len(set(section_ids)):
             raise ValueError("section IDs must be unique across curricula")
+        if self.learning_progression is not None:
+            embedded_prerequisites = [
+                section.id
+                for entry in self.curricula
+                for section in entry.curriculum.capability_sections()
+                if section.prerequisites
+            ]
+            if embedded_prerequisites:
+                raise ValueError(
+                    "catalogs with a learning progression cannot embed capability prerequisites: "
+                    f"{embedded_prerequisites}"
+                )
+            self.learning_progression.validate_against_catalog(self)
         return self
+
+
+class LearningProgressionWitness(StrictModel):
+    """One concise prerequisite-to-entry task-family transfer example."""
+
+    prerequisite_family: str = Field(min_length=3, max_length=160)
+    dependent_entry_family: str = Field(min_length=3, max_length=160)
+    shared_foundation: str = Field(min_length=3, max_length=200)
+    new_operation: str = Field(min_length=3, max_length=160)
+
+
+class LearningPrerequisiteEdge(StrictModel):
+    """A structural hypothesis that one capability enables learning another."""
+
+    prerequisite_id: str = Field(pattern=CURRICULUM_IDENTIFIER_PATTERN)
+    dependent_id: str = Field(pattern=CURRICULUM_IDENTIFIER_PATTERN)
+    enabled_scope: str = Field(min_length=3, max_length=240)
+    transfer_basis: str = Field(min_length=3, max_length=320)
+    artifact_substitution_test: str = Field(min_length=3, max_length=320)
+    witnesses: list[LearningProgressionWitness] = Field(min_length=2, max_length=2)
+
+    @model_validator(mode="after")
+    def validate_witnesses(self) -> LearningPrerequisiteEdge:
+        task_pairs = {(witness.prerequisite_family, witness.dependent_entry_family) for witness in self.witnesses}
+        if len(task_pairs) != len(self.witnesses):
+            raise ValueError("learning-prerequisite witnesses must use distinct task-family pairs")
+        return self
+
+
+class LearningProgression(StrictModel):
+    """Catalog-level learning edges produced after capability generation."""
+
+    catalog_version: str = Field(min_length=1)
+    prompt_version: str = Field(min_length=1)
+    scope_subject_ids: list[str] = Field(min_length=1)
+    edges: list[LearningPrerequisiteEdge]
+
+    @model_validator(mode="after")
+    def validate_graph(self) -> LearningProgression:
+        if len(self.scope_subject_ids) != len(set(self.scope_subject_ids)):
+            raise ValueError("learning-progression subject IDs must be unique")
+        pairs = [(edge.prerequisite_id, edge.dependent_id) for edge in self.edges]
+        if len(pairs) != len(set(pairs)):
+            raise ValueError("learning-prerequisite edges must be unique")
+        if any(prerequisite == dependent for prerequisite, dependent in pairs):
+            raise ValueError("learning-prerequisite edges cannot refer to themselves")
+        nodes = {item for pair in pairs for item in pair}
+        dependencies = {node: [] for node in nodes}
+        for prerequisite, dependent in pairs:
+            dependencies[dependent].append(prerequisite)
+        _reject_cycles(dependencies, "learning-prerequisite")
+        return self
+
+    def validate_against_catalog(self, catalog: CurriculumCatalog) -> None:
+        """Validate subject and capability references against one catalog."""
+
+        if self.catalog_version != catalog.catalog_version:
+            raise ValueError("learning progression and catalog versions differ")
+        subject_capabilities = {
+            entry.curriculum.subject_id: {section.id for section in entry.curriculum.capability_sections()}
+            for entry in catalog.curricula
+        }
+        unknown_subjects = sorted(set(self.scope_subject_ids) - set(subject_capabilities))
+        if unknown_subjects:
+            raise ValueError(f"learning progression has unknown subjects: {unknown_subjects}")
+        capability_subject = {
+            capability_id: subject_id
+            for subject_id, capability_ids in subject_capabilities.items()
+            for capability_id in capability_ids
+        }
+        references = {
+            capability_id for edge in self.edges for capability_id in (edge.prerequisite_id, edge.dependent_id)
+        }
+        unknown_capabilities = sorted(references - set(capability_subject))
+        if unknown_capabilities:
+            raise ValueError(f"learning progression has unknown capabilities: {unknown_capabilities}")
+        out_of_scope_dependents = sorted(
+            edge.dependent_id
+            for edge in self.edges
+            if capability_subject[edge.dependent_id] not in self.scope_subject_ids
+        )
+        if out_of_scope_dependents:
+            raise ValueError(f"learning progression has out-of-scope dependents: {out_of_scope_dependents}")
+
+
+CurriculumCatalog.model_rebuild()
+
+
+class LearningEdgeVerdict(StrEnum):
+    ACCEPT = "accept"
+    REJECT = "reject"
+
+
+class LearningEdgeReview(StrictModel):
+    prerequisite_id: str = Field(pattern=CURRICULUM_IDENTIFIER_PATTERN)
+    dependent_id: str = Field(pattern=CURRICULUM_IDENTIFIER_PATTERN)
+    verdict: LearningEdgeVerdict
+    rationale: str = Field(min_length=1)
+
+
+class LearningProgressionRecommendation(StrEnum):
+    ACCEPT = "accept"
+    REVISE = "revise"
+
+
+class LearningProgressionReview(StrictModel):
+    """Independent edge review and complete witness-backed omissions."""
+
+    catalog_version: str = Field(min_length=1)
+    progression_prompt_version: str = Field(min_length=1)
+    review_prompt_version: str = Field(min_length=1)
+    scope_subject_ids: list[str] = Field(min_length=1)
+    edge_reviews: list[LearningEdgeReview]
+    missing_edges: list[LearningPrerequisiteEdge]
+    findings: list[str]
+    recommendation: LearningProgressionRecommendation
+
+    def validate_against_progression(
+        self,
+        progression: LearningProgression,
+        catalog: CurriculumCatalog,
+    ) -> None:
+        """Validate identity, exact edge accounting, and proposed omissions."""
+
+        if self.catalog_version != progression.catalog_version:
+            raise ValueError("learning-progression review and proposal catalog versions differ")
+        if self.progression_prompt_version != progression.prompt_version:
+            raise ValueError("learning-progression review names the wrong proposal prompt")
+        if len(self.scope_subject_ids) != len(set(self.scope_subject_ids)):
+            raise ValueError("learning-progression review subject IDs must be unique")
+        if set(self.scope_subject_ids) != set(progression.scope_subject_ids):
+            raise ValueError("learning-progression review and proposal scopes differ")
+        expected = {(edge.prerequisite_id, edge.dependent_id) for edge in progression.edges}
+        actual = [(edge.prerequisite_id, edge.dependent_id) for edge in self.edge_reviews]
+        if len(actual) != len(set(actual)) or set(actual) != expected:
+            raise ValueError("learning-progression review must judge every proposed edge exactly once")
+        missing_pairs = [(edge.prerequisite_id, edge.dependent_id) for edge in self.missing_edges]
+        if len(missing_pairs) != len(set(missing_pairs)) or set(missing_pairs) & expected:
+            raise ValueError("missing learning-prerequisite edges must be unique and absent from the proposal")
+        missing_progression = LearningProgression(
+            catalog_version=self.catalog_version,
+            prompt_version=self.review_prompt_version,
+            scope_subject_ids=self.scope_subject_ids,
+            edges=self.missing_edges,
+        )
+        missing_progression.validate_against_catalog(catalog)
+        accepted_pairs = {
+            (review.prerequisite_id, review.dependent_id)
+            for review in self.edge_reviews
+            if review.verdict == LearningEdgeVerdict.ACCEPT
+        }
+        proposed_by_pair = {(edge.prerequisite_id, edge.dependent_id): edge for edge in progression.edges}
+        combined_progression = LearningProgression(
+            catalog_version=self.catalog_version,
+            prompt_version=self.review_prompt_version,
+            scope_subject_ids=self.scope_subject_ids,
+            edges=[proposed_by_pair[pair] for pair in accepted_pairs] + self.missing_edges,
+        )
+        combined_progression.validate_against_catalog(catalog)
+        has_revision = any(edge.verdict == LearningEdgeVerdict.REJECT for edge in self.edge_reviews) or bool(
+            self.missing_edges
+        )
+        expected_recommendation = (
+            LearningProgressionRecommendation.REVISE if has_revision else LearningProgressionRecommendation.ACCEPT
+        )
+        if self.recommendation != expected_recommendation:
+            raise ValueError("learning-progression recommendation does not match its edge findings")
 
 
 class DifficultyIntent(StrEnum):
@@ -376,7 +564,7 @@ class EvidenceConfidence(StrEnum):
 class HolisticDimensionScores(StrictModel):
     coverage: int = Field(ge=0, le=25)
     mutual_self_confidence: int = Field(ge=0, le=25)
-    progression_and_epsilon_continuity: int = Field(ge=0, le=25)
+    local_progression: int = Field(ge=0, le=25)
     observable_boundaries: int = Field(ge=0, le=15)
     probe_quality_and_parsimony: int = Field(ge=0, le=10)
 
@@ -384,7 +572,7 @@ class HolisticDimensionScores(StrictModel):
         return (
             self.coverage
             + self.mutual_self_confidence
-            + self.progression_and_epsilon_continuity
+            + self.local_progression
             + self.observable_boundaries
             + self.probe_quality_and_parsimony
         )
