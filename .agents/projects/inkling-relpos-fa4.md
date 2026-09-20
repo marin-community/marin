@@ -159,3 +159,19 @@ FIX (in _grug_inkling_score_mod): invert the packing with rep=qhead_per_kvhead (
   bias = rel_bias_t[q_pos, delta_safe, q_head, b0]   # kernel layout [S,L,Hq,B]
 Debug modes retained behind FAST_TRACK_INKLING_SM_DEBUG=identity|const|head0 (remove before final).
 dA (standalone rel_bias_backward) PASSES throughout (rel ~5e-3).
+
+## STATUS 2026-09-20 (fully-fused free-dA + scale finding)
+MFU (d512, fully-fused sm90 vendored bwd, in-kernel free dA):
+- rel_extent=1024: 6.03% (25% impact vs RoPE 8.04)
+- rel_extent=512: 6.55% (18.5%)
+- no-dA ceiling 1024: 6.75%
+STEP 2 (in-kernel dA scatter) done + grad-verified: 5.39 -> 6.03 (scatter costs ~0.72pt vs standalone 1.36pt).
+d1280 (rel_extent 512): ink ~11.5% vs ROPE ~15.7% => ~27% impact -- IMPACT GROWS WITH SCALE
+(A/dA [B,Hq,S,L] bandwidth scales with heads). => on-the-fly low-rank is essential, more so at scale.
+
+## NEXT: on-the-fly low-rank bias (eliminate [B,Hq,S,L] materialization)
+Model passes R[B,S,H,rel_dim=16] + proj[16,L] instead of materialized A. Kernel computes
+A = R.proj on the fly in fwd score-add and bwd S-recompute (16-mul/elem, proj in smem; R reused per row).
+Hybrid (simpler, gets the ~1.3pt read gap): keep dA[B,H,S,L] scatter output, compute dR=einsum(dA,proj)
+& dproj=einsum(dA,R) in the custom_vjp (cheap). Full (also kills dA traffic): kernel emits dR (16-wide
+scatter, tiny) + dproj (smem partial + atomic reduce) -- harder. Do hybrid first, measure, then full.
