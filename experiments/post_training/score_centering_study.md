@@ -427,12 +427,25 @@ keeps the older seed-17 cap-1.05 schedule and changes behavior-logprob capture f
 to top-k eight in both arms. The SC arm uses the matching correction width eight. It isolates
 SC within the narrow-capture pair and measures whether the cheaper capture path preserves the
 older pair's quality signal. All four accelerator tasks were admitted at `iris-interactive`
-priority; trained results are pending.
-The top-k-eight arms started at 70/756 and 81/756 completed correct and reached 96 and 98 at
-update ten. Across their first seven unique learner updates, both consumed tokens at mean age
-about 3.3 and capped about 5.3% of tokens, with no TIS-skipped batch. Median inclusive cycles
-were 41.9 and 39.7 seconds, and bridge responses averaged 2.59 and 2.62 MB. This is an interim
-throughput signal, not a quality conclusion.
+priority. At updates zero, ten, twenty, thirty, and forty, TIS completed-correct counts were
+70, 96, 132, 192, and **292**; SC8 counts were 81, 98, 136, 189, and **279**. Both arms consumed
+the [same 1,280 prompt UIDs](results/score_centering_terminal_exposure_topk8.csv), also
+identical to the seed-17 top-k-32 pair. Yet evaluation variation changes this comparison's
+sign at the same final weights: the scheduled step-40 evaluations scored TIS/SC8 **278/292**,
+while the finalization evaluations saved to the response dumps scored **292/279**. The final
+SC8 difference is -13 raw and -24 after subtracting its 11-answer step-zero lead; the
+scheduled difference was +14 raw. This one pair therefore does not identify a quality effect
+from a narrower correction. Across its first seven unique learner updates, both arms consumed
+tokens at mean age about 3.3 and capped about 5.3% of tokens, with no TIS-skipped batch. Median
+inclusive cycles were 41.9 and 39.7 seconds, and bridge responses averaged 2.59 and 2.62 MB.
+Across all 40 updates, token-weighted ages were 4.72 in both arms, active-cap fractions were
+5.43% and 5.39%, and consumed loss tokens were 13.11 and 13.15 million. Median inclusive
+cycles were 37.56 and 39.52 seconds, compared with 86.13 and 81.02 seconds for the seed-17
+top-k-32 pair. Through the final evaluation, the top-k-eight arms took 0.687 and 0.698 elapsed
+hours and 10.99 and 11.16 reserved H100-hours. The top-k-32 arms took 1.512 and 1.474 hours
+and 24.20 and 23.58 H100-hours. Thus narrower behavior capture more than halved measured
+time and GPU work in this schedule; its quality comparison remains sensitive to evaluation
+variation. Full-run cost remains pending until export finishes.
 
 The cap-1.05 top-k-eight delayed-publication pair, [TIS r36](https://iris-cw-rno2a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-qwen-default-set-7a08fd68-2026.09.20.5-ecc74beeec58)
 and [TIS plus SC8 r37](https://iris-cw-rno2a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-qwen-default-set-c776578e-2026.09.20.5-6e92378f4f0b),
