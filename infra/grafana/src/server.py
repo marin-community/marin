@@ -771,7 +771,7 @@ def create_app(
                     series = finelog_sources[target.name].query(
                         vllm_run_summary_samples_query(overview), max_rows=VLLM_MAX_SERIES
                     )
-                table = vllm_run_summary_table(overview, series, dashboard_projection_lock, max_rows=config.max_rows)
+                    table = vllm_run_summary_table(overview, series, dashboard_projection_lock, max_rows=config.max_rows)
                     rows = rows_to_json(table)
                     if not rows:
                         return [
