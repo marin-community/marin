@@ -250,7 +250,12 @@ def _run_evalchemy_child(
                 **{CONFIG_ENV_KEY: _run_config_json(model, config, output_dir)},
             )
         ),
-        max_retries_failure=0,
+        # A failed task attempt must not kill the whole eval: one request error can close the
+        # client's shared HTTP session, after which every remaining request fails and the task
+        # exits nonzero ("results are empty"). Two retries let the resumed task (lm-eval
+        # fingerprint resume) survive transient serve errors instead of losing the run.
+        max_retries_failure=2,
+        max_task_failures=2,
     )
     eval_path = str(eval_job.job_id)
     logger.info(
