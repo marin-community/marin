@@ -264,7 +264,7 @@ def _parse_messages(value: object) -> list[dict]:
 
 
 def _tool_definitions(value: object) -> list[dict]:
-    if value is None:
+    if value is None or value == "":
         return []
     if isinstance(value, str):
         value = json.loads(value)
