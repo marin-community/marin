@@ -149,6 +149,9 @@ class TrainingRecipe:
     host_memory: str
     # vLLM engine settings the model needs beyond the ones the launcher writes itself.
     engine_init_kwargs: dict[str, object]
+    # Optional policy optimizer checkpoint format; DP-local shards avoid a host-memory-heavy
+    # gather on Snowball and require the same non-DP Megatron geometry on resume.
+    policy_optimizer_checkpoint_sharding_type: str | None = None
 
     def __post_init__(self) -> None:
         plan = self.role_plan
@@ -201,6 +204,7 @@ SNOWBALL_RECIPE = TrainingRecipe(
     host_memory="1980GB",
     # The Triton MoE kernels; the fused defaults do not cover this expert layout.
     engine_init_kwargs={"moe_backend": "triton"},
+    policy_optimizer_checkpoint_sharding_type="dp_reshardable",
 )
 
 
@@ -438,6 +442,9 @@ def training_config(
     # The curriculum template supplies the data and environment sections; every other section is
     # written below in full.
     config = yaml.safe_load(rl_config_yaml(CURRICULUM_TEMPLATE))
+    policy_megatron_config = asdict(recipe.megatron)
+    if recipe.policy_optimizer_checkpoint_sharding_type is not None:
+        policy_megatron_config["optimizer_checkpoint_sharding_type"] = recipe.policy_optimizer_checkpoint_sharding_type
     config["entrypoint"] = "fully_async"
     # The one public context declaration; MarinSkyRL derives the prompt, generation and engine
     # lengths from it.
@@ -520,7 +527,7 @@ def training_config(
                 "weight_decay": recipe.weight_decay,
                 "max_grad_norm": recipe.max_grad_norm,
             },
-            "megatron_config": asdict(recipe.megatron),
+            "megatron_config": policy_megatron_config,
         },
         # The reference model shares the policy's geometry so it can share the policy's GPUs.
         "ref": {"megatron_config": asdict(recipe.megatron)},

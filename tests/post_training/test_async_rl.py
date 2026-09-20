@@ -62,6 +62,7 @@ EXPLICIT_KEYS = (
     "trainer.policy.optimizer_config.lr",
     "trainer.policy.optimizer_config.weight_decay",
     "trainer.policy.optimizer_config.max_grad_norm",
+    "trainer.policy.megatron_config.optimizer_checkpoint_sharding_type",
     "trainer.fully_async.max_staleness_steps",
     "trainer.fully_async.weight_sync_interval_steps",
     "trainer.fully_async.num_parallel_generation_workers",
@@ -123,6 +124,7 @@ CONTRACT_VALUES = {
     "trainer.fully_async.pause_mode": "abort",
     "trainer.fully_async.clear_kv_cache_on_weight_sync": True,
     "trainer.fully_async.first_token_admission": True,
+    "trainer.policy.megatron_config.optimizer_checkpoint_sharding_type": "dp_reshardable",
 }
 
 PRESET_LOOPS = {
@@ -338,6 +340,7 @@ def test_qwen_smoke_selects_megatron_policy_and_pinned_skyrl_runtime(owner):
     assert built.request.runtime.commit == async_rl.SCORE_CENTERING_SKYRL_COMMIT
     assert built.launcher_requirement.endswith(f"@{async_rl.SCORE_CENTERING_SKYRL_COMMIT}")
     assert config["trainer"]["strategy"] == "megatron"
+    assert "optimizer_checkpoint_sharding_type" not in config["trainer"]["policy"]["megatron_config"]
     assert config["generator"]["chat_template"]["name_or_path"] == "qwen3_without_thinking"
     assert config["generator"]["num_inference_engines"] == 8
     assert config["generator"]["rollout_num_nodes"] == 1
