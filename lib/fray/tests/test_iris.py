@@ -40,18 +40,14 @@ from iris.resources.state import JobState as IrisJobState
 
 
 class TestConvertConstraints:
-    def test_preemptible_true_produces_no_constraints(self):
-        resources = ResourceConfig(preemptible=True)
-        constraints = convert_constraints(resources)
-        assert constraints == []
-
-    def test_preemptible_false_adds_constraint(self):
-        resources = ResourceConfig(preemptible=False)
+    @pytest.mark.parametrize("preemptible", [True, False])
+    def test_preemptible_adds_explicit_constraint(self, preemptible: bool):
+        resources = ResourceConfig(preemptible=preemptible)
         constraints = convert_constraints(resources)
         assert len(constraints) == 1
         c = constraints[0]
         assert c.key == "preemptible"
-        assert c.values[0].value == "false"
+        assert c.values[0].value == str(preemptible).lower()
 
     def test_single_region_produces_eq_constraint(self):
         resources = ResourceConfig(regions=["us-central1"])
