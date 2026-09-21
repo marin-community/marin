@@ -135,3 +135,31 @@ to the full-length arms):
 GLR) in both directions. Submit with the same command as the main arms,
 e.g. `--arm screen-wu0`. Results land in W&B as
 `paper_rep_d8_screen_<name>`.
+
+### First-stage results (2026-09-21)
+
+All arms ran on one preemptible v4-32 (the v4-16 pool was in boot backoff
+that day; same zone and global batch, so arms stay comparable to each
+other). Eval loss per step:
+
+| Arm | @250 | @500 | @750 | @1000 | Δ@1000 vs base |
+| --- | --- | --- | --- | --- | --- |
+| `screen-base` | 4.103 | 3.721 | 3.512 | 3.406 | — |
+| `screen-own` | 4.514 | 4.147 | 3.892 | 3.774 | +0.368 |
+| `screen-wu0` | 4.042 | 3.697 | 3.497 | 3.393 | −0.013 |
+| `screen-init-own` | 4.607 | 4.174 | 3.850 | 3.715 | **+0.309** |
+| `screen-opt-own` | 4.100 | 3.688 | 3.511 | 3.423 | +0.017 |
+| `screen-own-wu40` | 4.542 | 4.148 | 3.874 | 3.757 | +0.351 |
+
+Attribution: the penalty is driven by the model-side init cluster
+(WTE 0.113, UIS 0.354, RM 0.5, OM 1 vs vanilla's 0.007, 0.063, 0.25, 0.5):
+it alone reproduces 84% of the own-recipe gap and is worse than the full
+own recipe at the first eval. Warmup is neutral in both directions (wu0
+is not worse than base; restoring warmup does not repair the own recipe),
+and the optimizer cluster (ELRM/HLRM/WD/WDR/β2) is neutral on its own.
+The remaining +0.06 is an interaction: the optimizer knobs add a little
+damage when combined with the init cluster.
+
+A second-stage split (`screen-init-embed`: WTE/UIS only;
+`screen-init-depth`: RM/OM only) refines the attribution to individual
+knobs.
