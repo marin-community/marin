@@ -158,11 +158,9 @@ def main(argv: list[str] | None = None) -> None:
     )
     logger.info("Map stage wrote %d count files in %.0fs", len(outcome.results), time.monotonic() - started)
 
-    fs, root = url_to_fs(counts_dir)
-    names = sorted(str(path).rsplit("/", 1)[-1] for path in fs.ls(root, detail=False) if str(path).endswith(".parquet"))
     tables = []
-    for name in names:
-        with StoragePath(prefix_join(counts_dir, name)).open("rb") as handle:
+    for result in outcome.results:
+        with StoragePath(result["path"]).open("rb") as handle:
             tables.append(pq.ParquetFile(handle).read(columns=["dup_cluster_id", "n"]))
     merged = pa.concat_tables(tables)
     logger.info("Aggregating %d sampled count rows", merged.num_rows)
@@ -176,7 +174,7 @@ def main(argv: list[str] | None = None) -> None:
     with StoragePath(prefix_join(args.out, "large_clusters.parquet")).open("wb") as handle:
         pq.write_table(large, handle)
     payload = {
-        "candidates": args.candidates,
+        "candidates": resolve_data_path(args.prefix, args.candidates),
         "stride": args.stride,
         "minimum_size": args.minimum_size,
         "sampled_rows": merged.num_rows,

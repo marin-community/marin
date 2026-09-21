@@ -222,11 +222,9 @@ def group_key_of(cluster_key: str, groups: int) -> int:
     holds 831 million members: routing all of its splits to one file would
     hand one reduce task the whole component and undo the split.
 
-    Keep ``groups`` well above the reduce-task count. Zephyr hashes this key
-    again to pick a reduce task, so one group per task is balls-into-bins:
-    ``e**-1`` of the tasks get nothing and the unlucky ones get five or more
-    groups. The v5 run measured 37% idle reducers and a 31 GB partition
-    against a 5.6 GB mean. Eight groups per task flattens that tail.
+    Keep ``groups`` above the reduce-task count. Zephyr hashes this key again
+    to select a reduce task. More groups per task decrease the variation in
+    partition size.
     """
     return dupekit.hash_xxh3_64(cluster_key.encode("utf-8")) % groups
 
@@ -289,12 +287,14 @@ def build_shards(prefix: str, candidates: str, output_path: str) -> list[TextSha
     ]
 
 
-def load_oversized(large_clusters_path: str, max_cluster_size: int) -> tuple[dict[str, int], int]:
+def load_oversized(large_clusters_path: str, max_cluster_size: int, candidate_path: str) -> tuple[dict[str, int], int]:
     """Return split counts and the estimated member count for oversized clusters."""
     summary_path = StoragePath(prefix_join(str(StoragePath(large_clusters_path).parent), "summary.json"))
     if not summary_path.exists():
         raise FileNotFoundError(f"Large-cluster planner summary is absent: {summary_path}")
     summary = json.loads(summary_path.read_bytes())
+    if summary["candidates"] != candidate_path:
+        raise ValueError(f"Large-cluster plan candidates {summary['candidates']!r} do not match {candidate_path!r}")
     minimum_size = int(summary["minimum_size"])
     if minimum_size > max_cluster_size:
         raise ValueError(
@@ -340,7 +340,8 @@ def main(argv: list[str] | None = None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     shards = build_shards(args.prefix, args.candidates, args.out)
-    oversized, oversized_cluster_members = load_oversized(args.large_clusters, args.max_cluster_size)
+    candidate_path = resolve_data_path(args.prefix, args.candidates)
+    oversized, oversized_cluster_members = load_oversized(args.large_clusters, args.max_cluster_size, candidate_path)
     logger.info(
         "Grouping %d shards; %d clusters exceed %d members and will be split",
         len(shards),
@@ -349,7 +350,7 @@ def main(argv: list[str] | None = None) -> None:
     )
 
     manifest = ClusterTextManifest(
-        candidates=resolve_data_path(args.prefix, args.candidates),
+        candidates=candidate_path,
         max_cluster_size=args.max_cluster_size,
         output_shards=args.output_shards,
         groups_per_shard=args.groups_per_shard,

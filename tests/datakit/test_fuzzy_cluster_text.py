@@ -166,7 +166,7 @@ def test_oversized_cluster_keeps_equal_text_in_one_split(tmp_path: Path) -> None
 
 def test_load_oversized_uses_the_required_split_count(tmp_path: Path) -> None:
     sizes = tmp_path / "large-clusters.parquet"
-    (tmp_path / "summary.json").write_text(json.dumps({"minimum_size": 100}))
+    (tmp_path / "summary.json").write_text(json.dumps({"minimum_size": 100, "candidates": "/candidates"}))
     _write_parquet(
         sizes,
         [
@@ -176,16 +176,28 @@ def test_load_oversized_uses_the_required_split_count(tmp_path: Path) -> None:
         ],
     )
 
-    assert load_oversized(str(sizes), max_cluster_size=100) == ({"one-over": 2, "large": 3}, 351)
+    assert load_oversized(str(sizes), max_cluster_size=100, candidate_path="/candidates") == (
+        {"one-over": 2, "large": 3},
+        351,
+    )
 
 
 def test_load_oversized_rejects_a_planner_threshold_above_the_cap(tmp_path: Path) -> None:
     sizes = tmp_path / "large-clusters.parquet"
-    (tmp_path / "summary.json").write_text(json.dumps({"minimum_size": 200}))
+    (tmp_path / "summary.json").write_text(json.dumps({"minimum_size": 200, "candidates": "/candidates"}))
     _write_parquet(sizes, [{"dup_cluster_id": "large", "size": 250}])
 
     with pytest.raises(ValueError, match="above the materializer cap"):
-        load_oversized(str(sizes), max_cluster_size=100)
+        load_oversized(str(sizes), max_cluster_size=100, candidate_path="/candidates")
+
+
+def test_load_oversized_rejects_a_different_candidate_artifact(tmp_path: Path) -> None:
+    sizes = tmp_path / "large-clusters.parquet"
+    (tmp_path / "summary.json").write_text(json.dumps({"minimum_size": 100, "candidates": "/other"}))
+    _write_parquet(sizes, [{"dup_cluster_id": "large", "size": 250}])
+
+    with pytest.raises(ValueError, match=r"candidates.*do not match"):
+        load_oversized(str(sizes), max_cluster_size=100, candidate_path="/candidates")
 
 
 def test_cluster_sort_puts_longest_documents_first() -> None:
