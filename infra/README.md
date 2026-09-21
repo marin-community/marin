@@ -93,7 +93,7 @@ Jobs should still follow these principles for preemptible compute:
 To keep our Docker artifact registries tidy, we provide a script and Makefile target to automatically configure a cleanup policy for all our standard GCP regions. This policy deletes images older than 30 days from the registry,
 except we keep the most recent 16 tags.
 
-The canonical region list is sourced from `lib/iris/config/marin.yaml`, the
+The canonical region list is sourced from `config/marin.yaml`, the
 same source used by the regional data-bucket Pulumi component. Scripts read
 that map so they stay aligned with the runtime fleet.
 
@@ -108,7 +108,7 @@ that map so they stay aligned with the runtime fleet.
   ```
   - `repository-name`: Name of the Artifact Registry repository (usually `marin`).
   - `--region`: GCP region (e.g., `us-central2`). Mutually exclusive with `--all-regions`; exactly one is required.
-  - `--all-regions`: Apply to every region in `lib/iris/config/marin.yaml`.
+  - `--all-regions`: Apply to every region in `config/marin.yaml`.
   - `--dry-run`: Print the gcloud command(s) that would run, per region, without executing.
   - `--project`: (Optional) GCP project ID. If omitted, uses the current gcloud project.
 
@@ -117,7 +117,7 @@ that map so they stay aligned with the runtime fleet.
   ```bash
   make configure_gcp_registry_all
   ```
-- This runs `uv run infra/configure_gcp_registry.py marin --all-regions`, iterating over the regions in `lib/iris/config/marin.yaml`.
+- This runs `uv run infra/configure_gcp_registry.py marin --all-regions`, iterating over the regions in `config/marin.yaml`.
 - To target a single region, a different repository, or a specific project, call the script directly with `--region` / `--project`.
 
 **When to use:**
