@@ -125,6 +125,8 @@ class GrugModelConfig:
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
     qk_mult: float = 1.3
+    # QK-norm: non-parametric RMS norm on per-head q/k. Canonical MLA omits it (latent norms only).
+    qk_norm: bool = True
     sconv: bool = True
     sconv_kernel: int = 4
     sconv_sites: tuple[str, ...] = ("k", "attn", "mlp")
@@ -375,8 +377,9 @@ class CausalSelfAttention(eqx.Module):
         k_nope = rearrange(k_nope_flat, "... (n d) -> ... n d", d=nd)
         v = rearrange(jnp.einsum("bsl,ld->bsd", kv_latent, self.w_uv), "... (n d) -> ... n d", d=nd)
 
-        q_nope = rms_norm(q_nope)
-        k_nope = rms_norm(k_nope)
+        if cfg.qk_norm:
+            q_nope = rms_norm(q_nope)
+            k_nope = rms_norm(k_nope)
 
         # Inkling variant (mla_rope_head_dim == 0): the relative-position bias replaces decoupled RoPE,
         # so heads carry only the nope content dims and head_dim_v == head_dim (no rope, no v padding).
@@ -466,8 +469,9 @@ class CausalSelfAttention(eqx.Module):
                 (k, v),
             )
 
-        q = rms_norm(q)
-        k = rms_norm(k)
+        if self.cfg.qk_norm:
+            q = rms_norm(q)
+            k = rms_norm(k)
 
         # Half-RoPE: rotate only the first half of Q/K head_dim; disable_rope skips RoPE on long/global layers.
         def _rope(qh: jax.Array, kh: jax.Array) -> tuple[jax.Array, jax.Array]:

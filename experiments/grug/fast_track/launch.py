@@ -252,6 +252,10 @@ def build_h100_ladder_run(
     expert_intermediate_mult: int = 1,
     num_shared_experts: int | None = None,
     num_experts_per_token: int | None = None,
+    residual_mult: int = 1,
+    lr_match_base_hidden: bool = False,
+    qk_norm: bool = True,
+    qk_mult: float | None = None,
     rel_r_proj_group: RelBiasGroup = RelBiasGroup.MUONH,
     rel_proj_group: RelBiasGroup = RelBiasGroup.MUONH,
 ) -> ArtifactStep[ThroughputResult]:
@@ -269,6 +273,10 @@ def build_h100_ladder_run(
 
     rung = _h100_ladder_rung(size)
     model = dataclasses.replace(_h100_ladder_model(rung, dense=dense), vocab_size=vocab_size)
+    if not qk_norm:
+        model = dataclasses.replace(model, qk_norm=False)
+    if qk_mult is not None:
+        model = dataclasses.replace(model, qk_mult=qk_mult)
     if not dense and (latent_div != 2 or expert_intermediate_mult != 1):
         # LatentMoE compression / expert-width trade: shrink the routed-expert latent (hidden//latent_div)
         # and widen the routed-expert intermediate (x expert_intermediate_mult). Flop-neutral when the
@@ -299,6 +307,12 @@ def build_h100_ladder_run(
             model = dataclasses.replace(model, mla_q_latent_dim=model.hidden_dim // mla_q_latent_div)
         if mla_o_latent_div is not None:
             model = dataclasses.replace(model, mla_o_latent_dim=model.hidden_dim // mla_o_latent_div)
+    # Residual-stream scaling: widen hidden_dim by residual_mult while every internal module dim
+    # (heads, MLA/MoE latents, intermediate) stays at its baseline value -- only the residual<->module
+    # boundary projections (q/kv/o, MoE latent, lm_head) grow. base_hidden feeds the LR when pinned.
+    base_hidden = model.hidden_dim
+    if residual_mult != 1:
+        model = dataclasses.replace(model, hidden_dim=base_hidden * residual_mult)
     mp_policy = "params=float32,compute=bfloat16,output=bfloat16"
     expert_axis_size = 1 if dense else rung.gpus_per_task
     replica_axis_size = 1
@@ -332,7 +346,7 @@ def build_h100_ladder_run(
     optimizer = MoeHeuristic().build_optimizer_config(
         num_train_steps=num_steps,
         batch_size=batch_size,
-        hidden_dim=model.hidden_dim,
+        hidden_dim=base_hidden if lr_match_base_hidden else model.hidden_dim,
         seq_len=SEQ_LEN,
         rel_r_proj_group=rel_r_proj_group,
         rel_proj_group=rel_proj_group,
@@ -534,6 +548,20 @@ def build_h100_ladder_run(
     help="Override routed top-k (active experts per token).",
 )
 @click.option(
+    "--residual-mult",
+    type=click.IntRange(min=1),
+    default=1,
+    show_default=True,
+    help="Scale hidden_dim (residual stream) by this; internal module dims stay at baseline.",
+)
+@click.option(
+    "--lr-match-base-hidden",
+    is_flag=True,
+    help="With --residual-mult, keep the LR heuristic on the pre-scale hidden_dim (LR unchanged).",
+)
+@click.option("--qk-norm/--no-qk-norm", default=True, show_default=True, help="Non-parametric RMS norm on per-head q/k.")
+@click.option("--qk-mult", type=float, default=None, help="Override qk_mult (query scale); default: config 1.3.")
+@click.option(
     "--save-checkpoints",
     is_flag=True,
     default=False,
@@ -561,6 +589,10 @@ def main(
     expert_intermediate_mult: int,
     num_shared_experts: int | None,
     num_experts_per_token: int | None,
+    residual_mult: int,
+    lr_match_base_hidden: bool,
+    qk_norm: bool,
+    qk_mult: float | None,
 ) -> ArtifactStep[ThroughputResult]:
     return build_h100_ladder_run(
         run_id=run_id,
@@ -581,6 +613,10 @@ def main(
         expert_intermediate_mult=expert_intermediate_mult,
         num_shared_experts=num_shared_experts,
         num_experts_per_token=num_experts_per_token,
+        residual_mult=residual_mult,
+        lr_match_base_hidden=lr_match_base_hidden,
+        qk_norm=qk_norm,
+        qk_mult=qk_mult,
         rel_r_proj_group=RelBiasGroup(rel_r_proj_opt),
         rel_proj_group=RelBiasGroup(rel_proj_opt),
     )
