@@ -1198,3 +1198,16 @@ passes and the baseline-adjusted difference. The
 [SC32 GSM8K format audit](results/score_centering_snowball_formatfixed_sc32_gsm8k_step0_probe.json)
 found 59 completed outputs with an exact boxed ground-truth number but no
 reward. The pair comparison remains within one pool.
+
+The first SC32 Iris attempt completed two optimizer updates and then failed
+during update three. A TransformerEngine fused-attention backward call on
+policy actor 26 returned `CUDNN_STATUS_EXECUTION_FAILED_CUDA_DRIVER`. The
+[attempt record](results/score_centering_snowball_sc32_attempt0_failure.json)
+retains the exact task durations, worker-log hash, and original debug paths;
+the five tasks used 26.69 reserved H100-hours. Its
+[step-zero responses](results/score_centering_snowball_sc32_attempt0_evals.csv)
+and [training history](results/score_centering_snowball_sc32_attempt0_wandb.jsonl)
+are retained because Iris is retrying from the source model before the first
+step-ten optimizer checkpoint. The failed attempt is not an outcome comparison.
+The retry has a distinct W&B run ID, `zxrf462l`, and must establish its own
+step-zero baseline before comparison with TIS.

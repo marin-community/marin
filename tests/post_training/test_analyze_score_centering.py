@@ -135,6 +135,9 @@ def test_iris_mirror_uses_the_resumed_attempt_for_repeated_steps(tmp_path):
             "async/performance/consumed_loss_tokens": tokens,
             "async/performance/configured_policy_gpus": 8,
             "async/performance/configured_inference_gpus": 8,
+            "consumed/sequences": 512,
+            "reward/informative_group_fraction": 0.65,
+            "async/rejected_count": 3,
             "timing/step": 10.0,
             "policy/policy_entropy": 0.4,
         }
@@ -148,6 +151,9 @@ def test_iris_mirror_uses_the_resumed_attempt_for_repeated_steps(tmp_path):
         (2, 1, 30),
     ]
     assert rows[-1]["cumulative_consumed_tokens"] == 50
+    assert rows[-1]["consumed_sequences"] == 512
+    assert rows[-1]["informative_group_fraction"] == pytest.approx(0.65)
+    assert rows[-1]["rejected_count"] == 3
     assert rows[-1]["policy_entropy"] == pytest.approx(0.4)
     with path.open("a") as stream:
         stream.write(line(1, 2, 30))
