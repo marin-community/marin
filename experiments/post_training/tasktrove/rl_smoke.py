@@ -32,16 +32,16 @@ from marin.experiment.namespacing import user_owned_name
 from marin.rl.skyrl import (
     ArtifactHfModel,
     IrisSkyRLExecution,
-    SkyRLModel,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
+    SkyRLRun,
     SkyRLRuntime,
     SkyRLRuntimeProfile,
     SkyRLSpec,
     SkyRLTopology,
     TaskTroveDataSource,
     TaskTroveSelection,
-    skyrl_step,
+    skyrl_smoke,
 )
 
 from experiments.post_training.curriculum_rl.launch import HF_EXPORT_SUBDIR, model_step
@@ -212,9 +212,9 @@ trajectory_runner:
 """
 
 
-def smoke_step(release: ArtifactStep) -> ArtifactStep[SkyRLModel]:
+def smoke_step(release: ArtifactStep) -> ArtifactStep[SkyRLRun]:
     name = user_owned_name(RL_ARTIFACT_NAME)
-    return skyrl_step(
+    return skyrl_smoke(
         SkyRLSpec(
             name=name,
             version=resolve_version(name, None),

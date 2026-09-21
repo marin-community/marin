@@ -92,11 +92,7 @@ class SkyRLTopology:
 
 @dataclass(frozen=True)
 class SkyRLRetentionPolicy:
-    """Temporary storage lifetime and rolling resume depth for one SkyRL run.
-
-    Every successful run produces one durable canonical export from its terminal
-    checkpoint.
-    """
+    """Temporary storage lifetime and rolling resume depth for one SkyRL run."""
 
     resume_checkpoint_count: int = 2
     temporary_storage_ttl_days: int = SKYRL_TEMPORARY_STORAGE_TTL_DAYS
@@ -379,6 +375,7 @@ class SkyRLLaunchRequest:
     validation_data: tuple[ResolvedDataSource, ...]
     topology: SkyRLTopology
     output: SkyRLOutputPaths
+    export_hf: bool
     seed: int
     overrides: tuple[str, ...]
 
@@ -400,14 +397,15 @@ class SkyRLRunConfig:
     launcher_requirement: str
 
 
-class SkyRLModel(Artifact):
-    """Validated terminal HF policy export from a MarinSkyRL run."""
+class SkyRLRun(Artifact):
+    """Completed MarinSkyRL run with an optional terminal HF policy export."""
 
-    policy_export_uri: str
-    global_step: int
+    hf_model_uri: str | None
+    global_step: int | None
     tokenizer_uri: str
     tokenizer_revision: str
     checkpoint_root: str
+    resolved_config_uri: str
     terminal_manifest_uri: str
     iris_job_id: str
 
@@ -432,7 +430,7 @@ class _SkyRLLaunchResponse(BaseModel):
 class SkyRLEvaluationModel:
     """A terminal SkyRL policy adapted to the shared evaluation model contract."""
 
-    step: ArtifactStep[SkyRLModel]
+    step: ArtifactStep[SkyRLRun]
     model: ModelConfig
 
     def __post_init__(self) -> None:
@@ -450,7 +448,9 @@ class SkyRLEvaluationModel:
             tokenizer = self.model.tokenizer
         else:
             terminal = ctx.resolved(self.step)
-            location = terminal.policy_export_uri
+            if terminal.hf_model_uri is None:
+                raise ValueError("SkyRL evaluation requires a run created with export_hf=True")
+            location = terminal.hf_model_uri
             tokenizer = terminal.tokenizer_uri
         return replace(self.model, location=location, tokenizer=tokenizer)
 
@@ -495,8 +495,8 @@ def _run_launcher(command: list[str]) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(command, returncode, response.read(), "".join(tail))
 
 
-def run_skyrl(config: SkyRLRunConfig) -> SkyRLModel:
-    """Run the pinned external launcher and return its validated model value."""
+def run_skyrl(config: SkyRLRunConfig) -> SkyRLRun:
+    """Run the pinned external launcher and return its terminal run record."""
     envelope = {
         "request": asdict(config.request),
         "execution": {
@@ -522,16 +522,19 @@ def run_skyrl(config: SkyRLRunConfig) -> SkyRLModel:
                 f"MarinSkyRL attempt {config.request.attempt_id} failed: {failure}\n{completed.stderr.strip()}"
             )
         model = response.model
-        if model is None or response.iris_job_id is None:
-            raise ValueError("successful MarinSkyRL response requires model and iris_job_id")
-        result = SkyRLModel(
+        if response.iris_job_id is None:
+            raise ValueError("successful MarinSkyRL response requires iris_job_id")
+        if config.request.export_hf != (model is not None):
+            raise ValueError("successful MarinSkyRL response does not match export_hf")
+        result = SkyRLRun(
             path=config.request.output.terminal_manifest_uri,
-            policy_export_uri=model.policy_export_uri,
-            global_step=model.global_step,
-            tokenizer_uri=model.tokenizer_uri,
-            tokenizer_revision=model.tokenizer_revision,
-            checkpoint_root=model.checkpoint_root,
-            terminal_manifest_uri=model.terminal_manifest_uri,
+            hf_model_uri=model.policy_export_uri if model is not None else None,
+            global_step=model.global_step if model is not None else None,
+            tokenizer_uri=config.request.model.tokenizer_uri,
+            tokenizer_revision=config.request.model.tokenizer_revision,
+            checkpoint_root=config.request.output.checkpoint_root,
+            resolved_config_uri=config.request.output.resolved_config_uri,
+            terminal_manifest_uri=config.request.output.terminal_manifest_uri,
             iris_job_id=response.iris_job_id,
         )
     except Exception:
@@ -563,8 +566,13 @@ def _record_skyrl_run(config: SkyRLRunConfig, status: str, response: _SkyRLLaunc
     )
 
 
-def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[SkyRLModel]:
-    """Build a versioned MarinSkyRL training artifact."""
+def skyrl_step(
+    spec: SkyRLSpec,
+    execution: IrisSkyRLExecution,
+    *,
+    export_hf: bool = False,
+) -> ArtifactStep[SkyRLRun]:
+    """Build a versioned MarinSkyRL run, optionally exporting its terminal policy."""
     step_name = spec.name
     deps = tuple(
         dict.fromkeys(
@@ -621,6 +629,7 @@ def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[S
             validation_data=tuple(source.resolve(ctx) for source in spec.validation_data),
             topology=spec.topology,
             output=output,
+            export_hf=export_hf,
             seed=spec.seed,
             overrides=(*spec.overrides, *retention_overrides),
         )
@@ -633,9 +642,22 @@ def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[S
     return ArtifactStep(
         name=step_name,
         version=spec.version,
-        artifact_type=SkyRLModel,
+        artifact_type=SkyRLRun,
         run=run_skyrl,
         build_config=build_config,
         deps=deps,
         runtime_args={_EXECUTION: execution},
     )
+
+
+def skyrl_smoke(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[SkyRLRun]:
+    """Build a run that emits metrics without checkpointing or exporting a model."""
+    config = yaml.safe_load(spec.config_yaml)
+    if not isinstance(config, dict):
+        raise ValueError("SkyRL smoke configuration must be a YAML mapping")
+    trainer = config.get("trainer")
+    if not isinstance(trainer, dict):
+        raise ValueError("SkyRL smoke configuration requires trainer")
+    trainer["callbacks"] = [{"type": "inference_stats"}, {"type": "logging"}]
+    smoke_spec = replace(spec, config_yaml=yaml.safe_dump(config, sort_keys=False))
+    return skyrl_step(smoke_spec, execution)

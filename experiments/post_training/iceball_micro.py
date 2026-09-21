@@ -59,9 +59,9 @@ from marin.rl.skyrl import (
     ArtifactHfModel,
     IrisSkyRLExecution,
     SkyRLEvaluationModel,
-    SkyRLModel,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
+    SkyRLRun,
     SkyRLRuntime,
     SkyRLRuntimeProfile,
     SkyRLSpec,
@@ -244,7 +244,7 @@ class IceballMicroWorkflow:
     pretrain: ArtifactStep[LevanterCheckpoint]
     sft: ArtifactStep[LevanterCheckpoint]
     gsm8k: ArtifactStep[Artifact]
-    rl: ArtifactStep[SkyRLModel]
+    rl: ArtifactStep[SkyRLRun]
     evaluation: ArtifactStep[EvaluationResult]
 
 
@@ -463,6 +463,7 @@ def build_workflow(*, version: str | None = None) -> IceballMicroWorkflow:
             max_retries=3,
             wandb_entity="marin-community",
         ),
+        export_hf=True,
     )
 
     evaluation_name = f"evals/{ICEBALL_MODEL_NAME}/{ICEBALL_EVALS}"

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import IO, cast
 
 import pytest
+import yaml
 from marin.evaluation.model_config import ModelConfig, ResourceHint
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -27,10 +28,10 @@ from marin.rl.skyrl import (
     ResolvedModelLocator,
     SkyRLEvaluationModel,
     SkyRLLaunchRequest,
-    SkyRLModel,
     SkyRLOutputPaths,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
+    SkyRLRun,
     SkyRLRunConfig,
     SkyRLRuntime,
     SkyRLRuntimeProfile,
@@ -40,6 +41,7 @@ from marin.rl.skyrl import (
     TaskTroveSelection,
     TaskTroveTagMatch,
     run_skyrl,
+    skyrl_smoke,
     skyrl_step,
     skyrl_temporary_run_path,
 )
@@ -211,6 +213,7 @@ def test_skyrl_step_routes_disposable_state_to_ttl_storage(
     )
 
     assert step.name == "users/alice/tests/iceball-rl"
+    assert config.request.export_hf is False
     assert config.request.output == SkyRLOutputPaths(
         checkpoint_root="s3://temp/ttl=14d/skyrl/users/alice/run/checkpoints",
         export_root=f"{output_path}/exports",
@@ -240,8 +243,17 @@ def test_skyrl_temporary_run_path_does_not_repeat_bucket_name(monkeypatch: pytes
     )
 
 
+def test_skyrl_smoke_disables_checkpoint_and_export_callbacks() -> None:
+    step = skyrl_smoke(_spec(), _execution())
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    parsed = yaml.safe_load(config.request.config_yaml)
+    assert parsed["trainer"]["callbacks"] == [{"type": "inference_stats"}, {"type": "logging"}]
+    assert config.request.export_hf is False
+
+
 def test_terminal_policy_composes_into_shared_evaluation_step() -> None:
-    rl = skyrl_step(_spec(), _execution())
+    rl = skyrl_step(_spec(), _execution(), export_hf=True)
     model = SkyRLEvaluationModel(
         step=rl,
         model=ModelConfig(
@@ -260,13 +272,15 @@ def test_terminal_policy_composes_into_shared_evaluation_step() -> None:
 
 
 def test_evaluation_uses_the_validated_training_tokenizer() -> None:
-    rl = skyrl_step(_spec(), _execution())
-    terminal = SkyRLModel(
-        policy_export_uri="s3://test/iceball-rl/exports/global_step_8/policy",
+    rl = skyrl_step(_spec(), _execution(), export_hf=True)
+    terminal = SkyRLRun(
+        path="s3://test/iceball-rl/terminal.json",
+        hf_model_uri="s3://test/iceball-rl/exports/global_step_8/policy",
         global_step=8,
         tokenizer_uri="Qwen/Qwen3-0.6B-Base",
         tokenizer_revision="da87bfb",
         checkpoint_root="s3://test/iceball-rl/checkpoints",
+        resolved_config_uri="s3://test/iceball-rl/resolved.json",
         terminal_manifest_uri="s3://test/iceball-rl/terminal.json",
         iris_job_id="/tester/iceball-rl",
     )
@@ -290,12 +304,12 @@ def test_evaluation_uses_the_validated_training_tokenizer() -> None:
 
     model = source.resolve(cast(StepContext, ResolvedContext()))
 
-    assert model.location == terminal.policy_export_uri
+    assert model.location == terminal.hf_model_uri
     assert model.tokenizer == terminal.tokenizer_uri
 
 
 def test_run_skyrl_returns_external_terminal_model(monkeypatch: pytest.MonkeyPatch) -> None:
-    request = _launch_request()
+    request = dataclasses.replace(_launch_request(), export_hf=True)
     output = request.output
     response = {
         "run_id": request.run_id,
@@ -326,7 +340,7 @@ def test_run_skyrl_returns_external_terminal_model(monkeypatch: pytest.MonkeyPat
     catalog_rows = []
     monkeypatch.setattr("marin.rl.skyrl.record_rollout_run", catalog_rows.append)
 
-    model = run_skyrl(
+    run = run_skyrl(
         SkyRLRunConfig(
             request=request,
             execution=_execution(),
@@ -334,9 +348,10 @@ def test_run_skyrl_returns_external_terminal_model(monkeypatch: pytest.MonkeyPat
         )
     )
 
-    assert model.policy_export_uri.endswith("global_step_8/policy")
-    assert model.global_step == 8
-    assert model.iris_job_id == "01KTEST"
+    assert run.hf_model_uri is not None
+    assert run.hf_model_uri.endswith("global_step_8/policy")
+    assert run.global_step == 8
+    assert run.iris_job_id == "01KTEST"
     assert launch_envelopes[0]["request"]["runtime"] == {
         "commit": MARIN_SKYRL.commit,
         "profile": SkyRLRuntimeProfile.FSDP.value,
@@ -349,6 +364,41 @@ def test_run_skyrl_returns_external_terminal_model(monkeypatch: pytest.MonkeyPat
     assert catalog_rows[0].status == "succeeded"
     assert catalog_rows[0].rollout_uri == f"{output.attempts_root}/trajectories"
     assert catalog_rows[0].job_id == "01KTEST"
+
+
+def test_run_skyrl_returns_run_without_hf_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    request = _launch_request()
+    response = {
+        "run_id": request.run_id,
+        "attempt_id": request.attempt_id,
+        "state": "succeeded",
+        "iris_job_id": "01KTEST",
+        "iris_job_state": "succeeded",
+        "runtime": asdict(request.runtime),
+        "failure": None,
+        "model": None,
+    }
+
+    monkeypatch.setattr(
+        subprocess,
+        "Popen",
+        lambda _command, **kwargs: _FakeLauncherProcess(
+            response=json.dumps(response), returncode=0, stdout=kwargs["stdout"]
+        ),
+    )
+    monkeypatch.setattr("marin.rl.skyrl.record_rollout_run", lambda _row: None)
+
+    run = run_skyrl(
+        SkyRLRunConfig(
+            request=request,
+            execution=_execution(),
+            launcher_requirement=MARIN_SKYRL.requirement(),
+        )
+    )
+
+    assert run.hf_model_uri is None
+    assert run.global_step is None
+    assert run.iris_job_id == "01KTEST"
 
 
 def test_tasktrove_data_source_resolves_exact_file_and_verifier(tmp_path: Path) -> None:
@@ -495,6 +545,7 @@ def _launch_request() -> SkyRLLaunchRequest:
             resolved_config_uri="s3://test/run/resolved.json",
             terminal_manifest_uri="s3://test/run/terminal.json",
         ),
+        export_hf=False,
         seed=17,
         overrides=(),
     )

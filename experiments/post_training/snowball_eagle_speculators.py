@@ -44,16 +44,16 @@ from marin.rl.skyrl import (
     EagleDraftArtifact,
     IrisSkyRLExecution,
     SkyRLDataSource,
-    SkyRLModel,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
+    SkyRLRun,
     SkyRLRuntime,
     SkyRLRuntimeProfile,
     SkyRLSpec,
     SkyRLTopology,
     TaskTroveDataSource,
     TaskTroveSelection,
-    skyrl_step,
+    skyrl_smoke,
 )
 from marin.training.speculators import (
     SPECULATORS_DATA_FILENAME,
@@ -710,7 +710,7 @@ class SnowballDraftPipeline:
     verifier: ArtifactStep[Artifact]
     captured_data: ArtifactStep[Artifact]
     draft: ArtifactStep[EagleDraftArtifact]
-    benchmarks: dict[str, ArtifactStep[SkyRLModel]]
+    benchmarks: dict[str, ArtifactStep[SkyRLRun]]
 
 
 def build_rl_benchmark(
@@ -719,7 +719,7 @@ def build_rl_benchmark(
     label: str,
     data_file: str,
     draft: ArtifactStep[EagleDraftArtifact] | None,
-) -> ArtifactStep[SkyRLModel]:
+) -> ArtifactStep[SkyRLRun]:
     """Run one matched production-shaped rollout benchmark."""
     role_plan = _rl_benchmark_role_plan()
     name = f"{RL_ARTIFACT_NAME}-{label}"
@@ -741,9 +741,9 @@ def _benchmark_step(
     draft: ArtifactStep[EagleDraftArtifact] | None,
     role_plan: SkyRLRolePlan,
     seed: int,
-) -> ArtifactStep[SkyRLModel]:
+) -> ArtifactStep[SkyRLRun]:
     """Build a benchmark with the shared target, topology, and execution policy."""
-    return skyrl_step(
+    return skyrl_smoke(
         SkyRLSpec(
             name=user_owned_name(name),
             version=resolve_version(name, None),
@@ -783,7 +783,7 @@ def build_agentic_rl_benchmark(
     *,
     label: str,
     draft: ArtifactStep[EagleDraftArtifact] | None,
-) -> ArtifactStep[SkyRLModel]:
+) -> ArtifactStep[SkyRLRun]:
     """Run a matched acceptance benchmark on disjoint multi-turn terminal tasks."""
     role_plan = _rl_benchmark_role_plan()
     name = f"{RL_ARTIFACT_NAME}-agentic-{label}"

@@ -42,9 +42,9 @@ from marin.rl.skyrl import (
     ArtifactHfModel,
     IrisSkyRLExecution,
     SkyRLEvaluationModel,
-    SkyRLModel,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
+    SkyRLRun,
     SkyRLRuntime,
     SkyRLRuntimeProfile,
     SkyRLSpec,
@@ -632,7 +632,7 @@ data:
 @dataclass(frozen=True)
 class CurriculumArm:
     spec: ArmSpec
-    rl: ArtifactStep[SkyRLModel]
+    rl: ArtifactStep[SkyRLRun]
     evaluation: ArtifactStep[EvaluationResult]
 
 
@@ -710,6 +710,7 @@ def build_arm(
             max_retries=1,
             wandb_entity="marin-community",
         ),
+        export_hf=True,
     )
     # The eval artifact is keyed on the model name; include the owner so two
     # users at the same fixed version evaluate their own checkpoints rather
