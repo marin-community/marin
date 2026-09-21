@@ -37,7 +37,7 @@ from hero_health import (
     telemetry_alert_rows,
     watched_runs,
 )
-from hero_runs import HeroRun, active_hero_runs, task_state_query
+from hero_runs import HeroRun, active_hero_runs, phase_execution_query, recent_phase_query, task_state_query
 from k8s_source import K8sFleet
 from loom_alerts import (
     LoomAlertClient,
@@ -626,6 +626,76 @@ def test_training_stall_alert_gives_a_new_execution_its_own_initialization_windo
 
 def _hero_run(run_id: str) -> HeroRun:
     return HeroRun("cw-a", f"/u/{run_id}-coord", run_id, datetime(2026, 7, 28, 11, tzinfo=UTC))
+
+
+def test_phase_enrollment_discovers_recent_runs_then_probes_stale_active_runs_exactly():
+    now = datetime(2026, 8, 21, 12, tzinfo=UTC)
+    database = duckdb.connect()
+    database.execute(
+        """
+        CREATE TABLE "levanter.metrics"(
+            cluster VARCHAR,
+            run_id VARCHAR,
+            job_id VARCHAR,
+            execution_uid VARCHAR,
+            process_index BIGINT,
+            name VARCHAR,
+            timestamp_ms BIGINT,
+            seq BIGINT
+        )
+        """
+    )
+    database.execute("CREATE MACRO to_timestamp_millis(value) AS to_timestamp(value / 1000.0)")
+    database.executemany(
+        "INSERT INTO \"levanter.metrics\" VALUES (?, ?, ?, ?, 0, 'phase', ?, ?)",
+        [
+            (
+                "cw-a",
+                "hero-active",
+                "/u/hero-active-coord/train",
+                "attempt-active",
+                int((now - timedelta(hours=2)).timestamp() * 1000),
+                1,
+            ),
+            (
+                "cw-a",
+                "hero-recent",
+                "/u/hero-recent-coord/train",
+                "attempt-recent",
+                int((now - timedelta(minutes=5)).timestamp() * 1000),
+                2,
+            ),
+            (
+                "cw-a",
+                "hero-old",
+                "/u/hero-old-coord/train",
+                "attempt-old",
+                int((now - timedelta(hours=2)).timestamp() * 1000),
+                3,
+            ),
+        ],
+    )
+
+    recent_phase = database.execute(recent_phase_query(now)).fetch_arrow_table()
+    assert recent_phase.column("run_id").to_pylist() == ["hero-recent"]
+
+    active = (_hero_run("hero-active"),)
+    phase_history = database.execute(phase_execution_query(now, active)).fetch_arrow_table()
+    assert phase_history.column("run_id").to_pylist() == ["hero-active"]
+
+    task_states = finelog_result(
+        cluster=["cw-a"],
+        job=["/u/hero-active-coord"],
+        state_at=[now],
+        running_since=[now - timedelta(hours=3)],
+        running=[64],
+    )
+    runs = watched_runs(task_states, pa.concat_tables((recent_phase, phase_history)), now)
+
+    assert {(run.run_id, run.execution_uid) for run in runs} == {
+        ("hero-active", "attempt-active"),
+        ("hero-recent", "attempt-recent"),
+    }
 
 
 def _loss_windows(now: datetime, runs: tuple[HeroRun, ...], samples: list[tuple[str, datetime, float]]) -> pa.Table:

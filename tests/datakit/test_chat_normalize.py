@@ -15,6 +15,7 @@ from marin.datakit.chat_normalize import (
     normalize_chat_to_parquet,
     validate_chat_messages,
 )
+from marin.datakit.chat_render import render_chat_record
 from marin.datakit.download.coderforge import SOURCE_CHAT_SCHEMA
 from marin.datakit.download.coderforge import transform_chat as transform_coderforge_chat
 from openai_harmony import Author, Message, Role
@@ -41,6 +42,26 @@ def test_normalization_preserves_native_harmony_channels_without_interpreting_te
     normalized = _normalize_chat_record(record, "messages", "id")
     assert normalized["messages"] == record["messages"]
     assert _normalize_chat_record(normalized, "messages", "id")["id"] == normalized["id"]
+
+
+@pytest.mark.parametrize(
+    ("analysis", "expected_mode", "expected_instruction"),
+    [(None, False, "Reasoning: /nothink"), ("Check the answer.", True, "Reasoning: /think")],
+)
+def test_normalization_derives_conversation_mode_from_analysis(analysis, expected_mode, expected_instruction):
+    messages = [Message.from_role_and_content(Role.USER, "What is two plus two?")]
+    if analysis is not None:
+        messages.append(Message.from_role_and_content(Role.ASSISTANT, analysis).with_channel(ChatChannel.ANALYSIS))
+    messages.append(Message.from_role_and_content(Role.ASSISTANT, "Four.").with_channel(ChatChannel.FINAL))
+    record = {
+        "messages": [message.to_dict() for message in messages],
+        "chat_template_kwargs": {"enable_thinking": not expected_mode},
+    }
+
+    normalized = _normalize_chat_record(record, "messages", "id")
+
+    assert json.loads(normalized["chat_template_kwargs"])["enable_thinking"] is expected_mode
+    assert expected_instruction in render_chat_record(normalized)["text"]
 
 
 def test_normalization_rejects_legacy_source_turns():
@@ -106,6 +127,107 @@ def test_harmony_tool_handoff_requires_matching_observations_before_continuation
     )
     with pytest.raises(ValueError, match="match pending calls"):
         validate_chat_messages([user, call, wrong_observation, final])
+
+
+def test_normalization_filters_repeated_tool_call_after_identical_replies(tmp_path: Path):
+    def call(arguments: str) -> Message:
+        return (
+            Message.from_role_and_content(Role.ASSISTANT, arguments)
+            .with_channel(ChatChannel.COMMENTARY)
+            .with_recipient("functions.search")
+        )
+
+    def reply(text: str) -> Message:
+        return (
+            Message.from_author_and_content(Author.new(Role.TOOL, "functions.search"), text)
+            .with_channel(ChatChannel.COMMENTARY)
+            .with_recipient("assistant")
+        )
+
+    repeated = [
+        Message.from_role_and_content(Role.USER, "Search again."),
+        call('{"query":"x","limit":1}'),
+        reply("same result"),
+        call('{"limit":1,"query":"x"}'),
+        reply("same result"),
+        call('{"query":"x","limit":1}'),
+    ]
+    clean = [
+        Message.from_role_and_content(Role.USER, "Hello."),
+        Message.from_role_and_content(Role.ASSISTANT, "Hi.").with_channel(ChatChannel.FINAL),
+    ]
+    records = [
+        {"messages": [message.to_dict() for message in clean]},
+        {
+            "messages": [message.to_dict() for message in repeated],
+            "chat_template_kwargs": {"tools": [{"name": "search", "parameters": {"type": "object"}}]},
+        },
+    ]
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    (input_dir / "data.jsonl").write_text("".join(json.dumps(record) + "\n" for record in records))
+
+    result = normalize_chat_to_parquet(input_path=str(input_dir), output_path=str(tmp_path / "normalized"))
+
+    normalized = [
+        row
+        for path in (tmp_path / "normalized" / "outputs" / "main").glob("*.parquet")
+        for row in pq.read_table(path).to_pylist()
+    ]
+    assert len(normalized) == 1
+    assert normalized[0]["messages"][0]["content"][0]["text"] == "Hello."
+    assert result.counters["normalize_chat/repeated_tool_calls_filtered"] == 1
+    assert result.counters.get("normalize_chat/records_quarantined", 0) == 0
+
+
+def test_normalization_counts_conversations_with_long_final_responses_once(tmp_path: Path):
+    messages = [
+        Message.from_role_and_content(Role.USER, "First question"),
+        Message.from_role_and_content(Role.ASSISTANT, "word " * 2_001).with_channel(ChatChannel.FINAL),
+        Message.from_role_and_content(Role.USER, "Second question"),
+        Message.from_role_and_content(Role.ASSISTANT, "word " * 2_001).with_channel(ChatChannel.FINAL),
+    ]
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    (input_dir / "data.jsonl").write_text(json.dumps({"messages": [message.to_dict() for message in messages]}))
+
+    result = normalize_chat_to_parquet(input_path=str(input_dir), output_path=str(tmp_path / "normalized"))
+
+    assert result.counters["normalize_chat/conversations_with_final_over_2k_estimated_tokens"] == 1
+
+
+@pytest.mark.parametrize("replies", [("43% complete", "65% complete"), ("same result", "same result")])
+def test_tool_call_repetition_requires_unchanged_feedback_and_sequential_calls(replies):
+    user = Message.from_role_and_content(Role.USER, "Search.")
+    call = (
+        Message.from_role_and_content(Role.ASSISTANT, '{"query":"x"}')
+        .with_channel(ChatChannel.COMMENTARY)
+        .with_recipient("functions.search")
+    )
+    observations = [
+        Message.from_author_and_content(Author.new(Role.TOOL, "functions.search"), text)
+        .with_channel(ChatChannel.COMMENTARY)
+        .with_recipient("assistant")
+        for text in replies
+    ]
+    messages = [user, call, observations[0], call, observations[1], call]
+    if replies[0] == replies[1]:
+        messages = [
+            user,
+            call,
+            call,
+            call,
+            observations[0],
+            observations[1],
+            observations[0],
+            Message.from_role_and_content(Role.ASSISTANT, "Done.").with_channel(ChatChannel.FINAL),
+        ]
+    record = {
+        "messages": [message.to_dict() for message in messages],
+        "chat_template_kwargs": {"tools": [{"name": "search", "parameters": {"type": "object"}}]},
+    }
+
+    assert _normalize_chat_record(record, "messages", "id")["messages"] == record["messages"]
 
 
 @pytest.mark.parametrize(

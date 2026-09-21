@@ -27,6 +27,7 @@ from hero_runs import (
     as_number,
     as_utc,
     hero_run_id,
+    phase_root_key,
     root_job_for,
     run_id_predicate,
     sql_epoch_ms,
@@ -225,10 +226,9 @@ def watched_runs(task_states: pa.Table, phase_runs: pa.Table, now: datetime) -> 
     enrolled = [key for key, (age, running) in states.items() if running and age <= TASK_STATE_FRESHNESS]
     executions: dict[tuple[str, str], str] = {}
     for row in phase_runs.to_pylist():
-        root_job = root_job_for(str(row["telemetry_job"]))
-        if root_job is None:
+        key = phase_root_key(row)
+        if key is None:
             continue
-        key = (str(row["cluster"]), root_job)
         executions[key] = str(row["execution_uid"])
         if key not in enrolled and now - as_utc(row["phase_at"]) <= PHASE_ENROLLMENT_LOOKBACK:
             enrolled.append(key)

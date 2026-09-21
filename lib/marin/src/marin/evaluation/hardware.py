@@ -5,12 +5,13 @@
 
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 
 from fray.types import tpu_family, tpu_hbm_capacity_bytes
 
-from marin.evaluation.model_config import ModelConfig
+from marin.evaluation.model_config import ModelConfig, ServeConfig
+from marin.inference.config import ServingGeometry
 
 _BYTES_PER_GIB = 1024**3
 _GPU_OVERRIDE = re.compile(r"^(?P<type>[A-Za-z0-9]+)x(?P<count>\d+)$")
@@ -31,6 +32,7 @@ class AcceleratorChoice:
     gpu_count: int = 0
     region: str | None = None
     target_cluster: str | None = None
+    geometry: ServingGeometry | None = None
 
     @property
     def label(self) -> str:
@@ -84,14 +86,12 @@ class HardwarePolicy:
             choice = _parse_override(override, self)
             if hint.gpu and choice.platform is not Platform.GPU:
                 raise ValueError(f"model {model.name!r} requires GPU; accelerator override {override!r} selects TPU")
-            _validate_parallelism(model, choice)
-            return choice
+            return replace(choice, geometry=serving_geometry(model.serve, choice))
         if hint.gpu:
             if platform is not Platform.GPU:
                 raise ValueError(f"model {model.name!r} requires GPU; launch with --platform gpu")
             choice = _select_required_gpu(model, self)
-            _validate_parallelism(model, choice)
-            return choice
+            return replace(choice, geometry=serving_geometry(model.serve, choice))
         if hint.hbm_gb is None:
             raise ValueError(
                 f"model {model.name!r} sets neither resource_hint.hbm_gb nor resource_hint.gpu; " "cannot size a slice"
@@ -100,8 +100,7 @@ class HardwarePolicy:
             choice = _select_gpu(hint.hbm_gb, self)
         else:
             choice = _select_tpu(hint.hbm_gb, self)
-        _validate_parallelism(model, choice)
-        return choice
+        return replace(choice, geometry=serving_geometry(model.serve, choice))
 
 
 def default_platform(model: ModelConfig) -> Platform:
@@ -167,17 +166,25 @@ def _select_required_gpu(model: ModelConfig, policy: HardwarePolicy) -> Accelera
     raise ValueError(f"model {model.name!r} has no GPU resource hint compatible with this fleet")
 
 
-def _validate_parallelism(model: ModelConfig, choice: AcceleratorChoice) -> None:
-    serve = model.serve
+def serving_geometry(serve: ServeConfig, choice: AcceleratorChoice) -> ServingGeometry | None:
+    """Validate per-task GPU ranks while preserving worker-resolved single-node TP."""
+    if serve.pipeline_parallel_size > 1 and choice.platform is not Platform.GPU:
+        raise ValueError("pipeline parallelism requires a GPU accelerator")
     if choice.platform is not Platform.GPU or serve.tensor_parallel_size is None:
-        return
+        return None
     ranks = serve.tensor_parallel_size * (serve.data_parallel_size or 1)
     if ranks != choice.gpu_count:
         raise ValueError(
-            f"model {model.name!r} configures tensor_parallel_size={serve.tensor_parallel_size} and "
+            f"configures tensor_parallel_size={serve.tensor_parallel_size} and "
             f"data_parallel_size={serve.data_parallel_size or 1}, requiring {ranks} GPUs, but selected "
             f"{choice.label}"
         )
+    return ServingGeometry(
+        tensor_parallel_size=serve.tensor_parallel_size,
+        data_parallel_size=serve.data_parallel_size or 1,
+        pipeline_parallel_size=serve.pipeline_parallel_size,
+        gpus_per_task=choice.gpu_count,
+    )
 
 
 def _parse_override(override: str, policy: HardwarePolicy) -> AcceleratorChoice:
