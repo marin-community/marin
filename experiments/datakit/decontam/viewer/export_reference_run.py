@@ -19,8 +19,9 @@ import time
 from collections import Counter
 
 import pyarrow.parquet as pq
-from marin.datakit.decon import DeconAttributes
+from marin.datakit.decon import DeconAttributes, NGramConfig
 from marin.execution.artifact import read_artifact
+from marin.execution.step_runner import step_is_built
 from marin.execution.step_spec import StepSpec
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath
@@ -36,6 +37,8 @@ from experiments.datakit.reference_pipeline import (
     AA_BENCHMARK_NAMES,
     EVAL_CORPUS_VERSION,
     EVAL_ROOT,
+    MIN_MATCHED_FEATURES,
+    NGRAM_LENGTH,
     decontamination_steps,
     select_sources,
 )
@@ -76,20 +79,12 @@ def _sample_flagged_rows(output_dir: str, limit: int, seed: int) -> tuple[list[d
     return rows, used_files
 
 
-def _completed_marks(all_marks: dict[str, StepSpec]) -> dict[str, StepSpec]:
-    complete: dict[str, StepSpec] = {}
-    for name, step in all_marks.items():
-        if StoragePath(f"{step.output_path.rstrip('/')}/.artifact.json").exists():
-            complete[name] = step
-    return complete
-
-
 def _wait_for_marks(all_marks: dict[str, StepSpec], minimum_sources: int, timeout: int) -> dict[str, StepSpec]:
     if minimum_sources > len(all_marks):
         raise ValueError(f"minimum sources {minimum_sources} exceeds the {len(all_marks)} configured marks")
     deadline = time.monotonic() + timeout
     while True:
-        complete = _completed_marks(all_marks)
+        complete = {name: step for name, step in all_marks.items() if step_is_built(step)}
         logger.info("completed marks: %d/%d; gate=%d", len(complete), len(all_marks), minimum_sources)
         if len(complete) >= minimum_sources:
             return complete
@@ -232,6 +227,7 @@ def main() -> None:
 
     gallery: dict[str, list[dict]] = {}
     gallery_eval_ids: set[str] = set()
+    ngram = NGramConfig(ngram_length=NGRAM_LENGTH, min_matched_features=MIN_MATCHED_FEATURES)
     for source, rows in sampled_by_source.items():
         selected = rows[:GALLERY_ROWS_PER_SOURCE]
         docs: list[dict] = []
@@ -246,7 +242,7 @@ def main() -> None:
             chosen_evals = eval_hits.most_common(MAX_MATCHED_EVALS)
             gallery_eval_ids.update(eval_id for eval_id, _ in chosen_evals)
             text = str(row["text"])
-            matched_ngrams = _overlapping_ngrams(text, set(matched_hashes))
+            matched_ngrams = _overlapping_ngrams(text, set(matched_hashes), ngram)
             docs.append(
                 {
                     "id": str(row["id"]),
