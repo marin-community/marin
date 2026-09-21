@@ -42,17 +42,19 @@ BASE = (
 TOKENIZER = "gs://marin-us-central2/grug_sft/tokenizer/2026.09.18"
 MIX_PATH = Path(__file__).with_name("special_token_1000_mix.json")
 MIXTURE_BLOCK_SIZE = 64_000
+MIN_SAMPLES_PER_BLOCK = 1.000001
 SFT_COMPONENT_PREFIX = "sft/source/"
 SFT_POOLED_COMPONENT = "sft/pooled"
-ANCHORS = {
-    128006: " role",
-    128007: " message",
-    128002: " think",
-    128003: " answer",
-    128005: " tool",
-    128011: " end",
-    128009: "<|end_of_text|>",
-}
+PRETRAIN_COMPONENT_PREFIX = "pretrain/"
+ANCHORS = (
+    (128006, " role"),
+    (128007, " message"),
+    (128002, " think"),
+    (128003, " answer"),
+    (128005, " tool"),
+    (128011, " end"),
+    (128009, "<|end_of_text|>"),
+)
 EXPECTED_ANCHOR_IDS = ((3560,), (1984,), (1781,), (4320,), (5507,), (842,), (128001,))
 
 
@@ -113,7 +115,7 @@ def _sft_components(
     weights: dict[str, float] = {}
     pooled: dict[str, DatasetComponent] = {}
     pooled_weight = 0.0
-    minimum_weight = 1.000001 / MIXTURE_BLOCK_SIZE
+    minimum_weight = MIN_SAMPLES_PER_BLOCK / MIXTURE_BLOCK_SIZE
     for name, allocated_tokens in sorted(allocations.items()):
         store = stores[name]
         if store.tokenizer != TOKENIZER:
@@ -185,23 +187,25 @@ def data_config(steps: int, stores_manifest: str) -> tuple[LmDataConfig, int]:
                     source=None, cache_dir=path, format=TextLmDatasetFormat(), flat_cache=True
                 )
         share = (1.0 - sft_fraction) * record["weight"]
-        if share * MIXTURE_BLOCK_SIZE < 1.000001:
+        if share * MIXTURE_BLOCK_SIZE < MIN_SAMPLES_PER_BLOCK:
             replay_tail.update({name + "/" + key: child for key, child in children.items()})
             replay_tail_weight += share
         else:
-            components["pretrain/" + name] = ConcatDatasetComponent(children=children)
-            weights["pretrain/" + name] = share
-    if replay_tail and replay_tail_weight * MIXTURE_BLOCK_SIZE < 1.000001:
-        smallest = min((key for key in weights if key.startswith("pretrain/")), key=weights.__getitem__)
+            components[PRETRAIN_COMPONENT_PREFIX + name] = ConcatDatasetComponent(children=children)
+            weights[PRETRAIN_COMPONENT_PREFIX + name] = share
+    if replay_tail and replay_tail_weight * MIXTURE_BLOCK_SIZE < MIN_SAMPLES_PER_BLOCK:
+        smallest = min((key for key in weights if key.startswith(PRETRAIN_COMPONENT_PREFIX)), key=weights.__getitem__)
         smallest_component = components.pop(smallest)
         assert isinstance(smallest_component, ConcatDatasetComponent)
         replay_tail.update(smallest_component.children)
         replay_tail_weight += weights.pop(smallest)
     if replay_tail:
-        components["pretrain/pooled"] = ConcatDatasetComponent(children=replay_tail)
-        weights["pretrain/pooled"] = replay_tail_weight
+        components[PRETRAIN_COMPONENT_PREFIX + "pooled"] = ConcatDatasetComponent(children=replay_tail)
+        weights[PRETRAIN_COMPONENT_PREFIX + "pooled"] = replay_tail_weight
     assert math.isclose(sum(weights.values()), 1.0)
-    assert math.isclose(sum(v for k, v in weights.items() if k.startswith("pretrain/")), 1.0 - sft_fraction)
+    assert math.isclose(
+        sum(v for k, v in weights.items() if k.startswith(PRETRAIN_COMPONENT_PREFIX)), 1.0 - sft_fraction
+    )
     if any(int(weight * MIXTURE_BLOCK_SIZE) == 0 for weight in weights.values()):
         raise ValueError("Mixture contains a component that rounds to zero")
     logger.info(
@@ -229,11 +233,11 @@ def data_config(steps: int, stores_manifest: str) -> tuple[LmDataConfig, int]:
 
 def train(steps: int, stores_manifest: str) -> None:
     data, steps = data_config(steps, stores_manifest)
-    metadata = json.loads(StoragePath(BASE + "/metadata.json").read_text())
+    metadata = json.loads((StoragePath(BASE) / "metadata.json").read_text())
     assert metadata["step"] == START_STEP
     tokenizer = load_tokenizer(TOKENIZER)
-    token_ids = tuple(ANCHORS)
-    anchor_ids = tuple(tuple(tokenizer.encode(text, add_special_tokens=False)) for text in ANCHORS.values())
+    token_ids = tuple(token_id for token_id, _ in ANCHORS)
+    anchor_ids = tuple(tuple(tokenizer.encode(text, add_special_tokens=False)) for _, text in ANCHORS)
     assert anchor_ids == EXPECTED_ANCHOR_IDS, anchor_ids
     logger.info("Semantic token anchors: %s", dict(zip(token_ids, anchor_ids, strict=True)))
     model = dataclasses.replace(
@@ -260,7 +264,7 @@ def train(steps: int, stores_manifest: str) -> None:
         initialize_from=BASE,
         load_checkpoint=None,
         checkpointer=CheckpointerConfig(
-            base_path=OUTPUT + "/checkpoints",
+            base_path=str(StoragePath(OUTPUT) / "checkpoints"),
             temporary_base_path=temporary_checkpoint_base_path(OUTPUT),
             append_run_id_to_base_path=False,
             save_interval=timedelta(minutes=30),

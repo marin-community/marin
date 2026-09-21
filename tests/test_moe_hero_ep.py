@@ -117,12 +117,7 @@ def test_sequence_extension_preserves_optimizer_at_fixed_token_budget():
 
 
 def _validated_trainer_and_batch_axis_size(step, device_count: int):
-    """Run `TrainerConfig`'s own batch validation for `step` as if `device_count` devices existed.
-
-    `_validate_and_set_defaults` is what `trainer.initialize()` calls before anything is placed, and
-    it is the only consumer of `TrainerConfig.data_axis_size` on the grug path. Faking the device
-    count is what lets a 64-device mesh be validated on CPU.
-    """
+    """Validate a trainer configuration against a simulated device count."""
     config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
     trainer = config.trainer.trainer
     with patch("jax.device_count", return_value=device_count):

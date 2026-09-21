@@ -1512,3 +1512,10 @@ def test_load_tokenizer_from_storage_url(tmp_path):
     assert tokenizer.encode("ab") == [0, 1]
     assert tokenizer.eos_token_id == 2
     assert tokenizer.apply_chat_template([{"role": "user", "content": "ab"}], tokenize=False) == "ab<eos>"
+
+
+def test_load_tokenizer_rejects_incomplete_storage_artifact(tmp_path):
+    (tmp_path / "tokenizer_config.json").write_text(json.dumps({"eos_token": "<eos>"}))
+
+    with pytest.raises(ValueError, match="Storage tokenizer artifact is incomplete"):
+        load_tokenizer(tmp_path.as_uri())
