@@ -1476,5 +1476,18 @@ Flattening the 118 values shows exactly one difference:
 Their W&B runs are
 [`d6js2ztv`](https://wandb.ai/marin-community/marin-async-rl/runs/d6js2ztv)
 and [`s0amakmj`](https://wandb.ai/marin-community/marin-async-rl/runs/s0amakmj).
-Both entered the initial held-out evaluation with five running Iris tasks and
-no retry or failure.
+Both completed the initial held-out evaluation with five running Iris tasks
+and no retry or failure. The raw response snapshots have per-file byte counts
+and SHA-256 manifests under `~/data/sources/devbox/score-centering/`; immutable
+copies are also stored under each run's `exports/attempt0_step0_evals` prefix.
+The [response analysis](results/score_centering_snowball_full_pair_step0_evals.csv)
+confirms identical 756-question core-math membership. TIS scored 269/756
+rewarded answers, while SC32 scored 262/756. Requiring a completed response or
+a matching terminal box gives 383/756 for TIS
+([GSM8K](results/score_centering_snowball_full_pair_tis_gsm8k_step0_probe.json),
+[Math500](results/score_centering_snowball_full_pair_tis_math500_step0_probe.json))
+and 376/756 for SC32
+([GSM8K](results/score_centering_snowball_full_pair_sc32_gsm8k_step0_probe.json),
+[Math500](results/score_centering_snowball_full_pair_sc32_math500_step0_probe.json)).
+The final comparison therefore subtracts each arm's own baseline as well as
+reporting its endpoint score.
