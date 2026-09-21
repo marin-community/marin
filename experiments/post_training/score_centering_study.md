@@ -1324,6 +1324,13 @@ and 357/756 for SC32
 The Math500 audit uses exact answer strings, so these remain conservative
 format-inclusive counts. The two baselines differ by -2 rewarded or +2
 format-inclusive answers (SC32 minus TIS); neither is an effect of training.
+The raw attempt-zero step-zero evaluations are preserved separately at
+`s3://marin-us-east-02a/marin/users/romain/checkpoints/async-rl/snowball-default-set-6f0ff39c/2026.09.21.3/exports/attempt0_step0_evals`
+and
+`s3://marin-us-east-02a/marin/users/romain/checkpoints/async-rl/snowball-default-set-d7f4bce1/2026.09.21.3/exports/attempt0_step0_evals`.
+Each snapshot has a byte-count and SHA-256 capture manifest; local raw copies
+are under `~/data/sources/devbox/score-centering/`. This matters because an
+Iris retry can overwrite the live step-zero dump under `dumped_evals`.
 
 The pair's first SC32 attempt completed two updates, then failed during the
 third policy backward with a `torch.OutOfMemoryError` on one learner GPU. The
@@ -1340,3 +1347,5 @@ MarinSkyRL `e1356698` computes selected logprobs from the already available
 sampled normalizer and gathered logits; 45 targeted numerical and gradient
 tests passed. This new commit is not in either running arm, which still uses
 `26a4b7e1`.
+The first attempt's [W&B history](results/score_centering_snowball_flash_pair_sc32_attempt0_wandb.jsonl)
+preserves its two completed update metrics under run ID `034pny10`.

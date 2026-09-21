@@ -19,5 +19,8 @@
   "runtime_commit": "26a4b7e13ab7aaa97ba9c86329d888af1ad19839",
   "source_exception": "s3://marin-us-east-02a/tmp/ttl=14d/skyrl/marin/users/romain/checkpoints/async-rl/snowball-default-set-d7f4bce1/2026.09.21.3/attempts/rendezvous/debug_artifacts/rank0-g83a1bc/outcomes/skyrl-entrypoint-driver.g83a1bc.9728.1789960790392997084.exception.json",
   "state": "failed",
+  "step0_local_capture": "/home/romain/data/sources/devbox/score-centering/2026-09-21-snowball-flash-sc32-attempt0-step0",
+  "step0_raw_snapshot": "s3://marin-us-east-02a/marin/users/romain/checkpoints/async-rl/snowball-default-set-d7f4bce1/2026.09.21.3/exports/attempt0_step0_evals",
+  "wandb_history": "results/score_centering_snowball_flash_pair_sc32_attempt0_wandb.jsonl",
   "wandb_run_id": "034pny10"
 }
