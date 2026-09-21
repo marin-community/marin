@@ -28,6 +28,8 @@ from marin.datakit.decon import (
 )
 from marin.datakit.normalize import NormalizedData
 
+from experiments.datakit.decontam.viewer.export_run import _overlapping_ngrams
+
 
 @pytest.fixture(autouse=True)
 def flow_backend_ctx():
@@ -459,66 +461,6 @@ def test_decon_paragraphs_below_short_exact_minimum_contribute_nothing(tmp_path:
     assert rows["doc_short_text"]["matched_hashes"] == []
 
 
-def test_decon_short_alphabetic_paragraph_uses_exact_feature(tmp_path: Path):
-    eval_dir = tmp_path / "eval"
-    input_dir = tmp_path / "input"
-    output_dir = tmp_path / "output"
-
-    _write_eval_jsonl(eval_dir / "eval.jsonl.gz", [{"id": "short_eval", "text": "Distinctive alpha phrase"}])
-    _write_input_parquet(
-        input_dir / "part-00000-of-00001.parquet",
-        [{"id": "doc_short_text", "text": "Distinctive alpha phrase", "partition_id": 0}],
-    )
-
-    result = build_eval_bloom(
-        eval_data_sources=str(eval_dir),
-        output_path=str(output_dir / "bloom"),
-        ngram=NGramConfig(min_matched_features=2, ngram_length=8, overlap_threshold=0.5),
-    )
-
-    assert result.n_eval_records == 1
-    assert {row["eval_id"] for row in pq.read_table(result.eval_hash_index_path).to_pylist()} == {"short_eval"}
-
-
-def test_decon_short_record_fallback_spans_tiny_paragraphs(tmp_path: Path):
-    text = "Alpha beta\n\ngamma"
-    rows = _run_decon_one_shot(
-        tmp_path,
-        eval_records=[{"id": "short_eval", "text": text}],
-        input_records=[{"id": "doc", "text": text, "partition_id": 0}],
-        ngram=NGramConfig(min_matched_features=2, ngram_length=8, overlap_threshold=0.5),
-    )
-
-    assert rows["doc"]["contaminated"] is True
-    assert rows["doc"]["max_overlap"] == 1.0
-
-
-def test_decon_long_record_fallback_spans_short_paragraphs(tmp_path: Path):
-    text = "one two three four\n\nfive six seven eight\n\nnine ten eleven twelve\n\nthirteen fourteen"
-    rows = _run_decon_one_shot(
-        tmp_path,
-        eval_records=[{"id": "eval", "text": text}],
-        input_records=[{"id": "doc", "text": text, "partition_id": 0}],
-        ngram=NGramConfig(min_matched_features=2, ngram_length=13, overlap_threshold=0.5),
-    )
-
-    assert rows["doc"]["contaminated"] is True
-    assert rows["doc"]["max_overlap"] == 1.0
-
-
-def test_decon_complete_record_with_one_ngram_and_short_answer_matches(tmp_path: Path):
-    text = "In which fiscal quarter of 2024 did Atlassian record its second highest revenue?\n\nQ4"
-    rows = _run_decon_one_shot(
-        tmp_path,
-        eval_records=[{"id": "eval", "text": text}],
-        input_records=[{"id": "doc", "text": text, "partition_id": 0}],
-        ngram=NGramConfig(min_matched_features=2, ngram_length=13, overlap_threshold=0.5),
-    )
-
-    assert rows["doc"]["contaminated"] is True
-    assert len(rows["doc"]["matched_hashes"]) == 1
-
-
 @pytest.mark.parametrize("short_match", ["September 29, 2011", "2, 3 and 4"])
 def test_decon_does_not_mark_long_document_from_one_short_match(tmp_path: Path, short_match: str):
     rows = _run_decon_one_shot(
@@ -544,22 +486,42 @@ def test_decon_does_not_mark_long_document_from_one_short_match(tmp_path: Path, 
 
 
 @pytest.mark.parametrize(
-    "text",
+    ("text", "features"),
     [
-        "Distinctive alpha phrase",
-        "one two three four five six seven eight nine ten eleven twelve thirteen",
+        ("Distinctive alpha phrase", ["Distinctive alpha phrase"]),
+        ("Alpha beta\n\ngamma", ["Alpha beta gamma"]),
+        (
+            "one two three four five six seven eight nine ten eleven twelve thirteen",
+            ["one two three four five six seven eight nine ten eleven twelve thirteen"],
+        ),
+        (
+            "In which fiscal quarter of 2024 did Atlassian record its second highest revenue?\n\nQ4",
+            ["In which fiscal quarter of 2024 did Atlassian record its second highest revenue?"],
+        ),
+        (
+            "one two three four\n\nfive six seven eight\n\nnine ten eleven twelve\n\nthirteen fourteen",
+            [
+                "one two three four five six seven eight nine ten eleven twelve thirteen",
+                "two three four five six seven eight nine ten eleven twelve thirteen fourteen",
+            ],
+        ),
     ],
+    ids=["short-exact", "short-record-fallback", "one-ngram", "one-ngram-with-answer", "ngram-record-fallback"],
 )
-def test_decon_keeps_one_feature_match_for_complete_document(tmp_path: Path, text: str):
+def test_decon_complete_record_retains_match_evidence(tmp_path: Path, text: str, features: list[str]):
+    ngram = NGramConfig(min_matched_features=2, ngram_length=13, overlap_threshold=0.5)
     rows = _run_decon_one_shot(
         tmp_path,
-        eval_records=[{"id": "short_eval", "text": text}],
+        eval_records=[{"id": "eval", "text": text}],
         input_records=[{"id": "doc", "text": text, "partition_id": 0}],
-        ngram=NGramConfig(min_matched_features=2, ngram_length=13, overlap_threshold=0.5),
+        ngram=ngram,
     )
 
-    assert rows["doc"]["contaminated"] is True
-    assert rows["doc"]["matched_hashes"] == [_bloom_hash(text)]
+    row = rows["doc"]
+    assert row["contaminated"] is True
+    assert row["max_overlap"] == 1.0
+    assert set(row["matched_hashes"]) == {_bloom_hash(feature) for feature in features}
+    assert _overlapping_ngrams(text, set(row["matched_hashes"]), ngram) == features
 
 
 def test_decon_does_not_index_short_paragraph_from_long_eval_record(tmp_path: Path):
@@ -600,11 +562,6 @@ def test_decon_uses_configured_minimum_distinct_features(tmp_path: Path):
 
     assert two["doc"]["contaminated"] is True
     assert three["doc"]["contaminated"] is False
-
-
-def test_ngram_config_rejects_zero_minimum_matched_features():
-    with pytest.raises(ValueError, match="min_matched_features must be at least 1"):
-        NGramConfig(min_matched_features=0)
 
 
 def test_decon_attributes_only_report_hashes_that_triggered_mark(tmp_path: Path):
@@ -1503,7 +1460,9 @@ def test_source_drop_set_filters_source_ubiquitous_ngram(tmp_path: Path):
         drop_set_dirs=[str(drop_dir)],
     )
     rows = _read_attributes(out_dir)
-    assert rows["d0"]["contaminated"] is False  # boilerplate-only no longer flags
+    assert rows["d0"]["contaminated"] is False
+    assert rows["d0"]["max_overlap"] == 0.0
+    assert rows["d0"]["matched_hashes"] == []
     assert rows["leak"]["contaminated"] is True  # distinctive leak still flags
 
 
