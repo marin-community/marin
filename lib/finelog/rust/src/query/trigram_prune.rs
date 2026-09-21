@@ -979,8 +979,8 @@ mod tests {
         let paths = vec![path];
         let artifacts = crate::indices::sidecar_artifacts(&paths);
         let indices = crate::indices::test_index_registry();
-        // Each call builds a hash map with a fresh seed. Repeated plans catch
-        // data-first iteration that would read the corrupted section by chance.
+        // Repetition makes a regression to unordered column iteration likely to
+        // expose a data-first plan that reads the corrupted section.
         for _ in 0..16 {
             assert!(
                 prune_segment_paths(&paths, &needles, &ranges, &indices, &artifacts).is_empty()
