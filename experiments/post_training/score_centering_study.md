@@ -1377,3 +1377,15 @@ and 253 Math500 answers
 ([audit](results/score_centering_snowball_flash_tis_math500_step10_probe.json)),
 or 468/756 combined. This is an interim control result and does not compare
 SC's effect.
+
+After those artifacts completed, the TIS attempt failed during update eleven's
+policy backward with a separate `torch.OutOfMemoryError`: the
+[failure record](results/score_centering_snowball_flash_pair_tis_attempt0_failure.json)
+reports a 1.82 GiB request with 1.78 GiB free. Its
+[W&B history](results/score_centering_snowball_flash_pair_tis_attempt0_wandb.jsonl)
+preserves updates one through ten. The attempt used 63.96 reserved H100-hours.
+Iris began one automatic retry from the verified step-ten checkpoint. Unlike
+the failed SC attempts, this arm has no selected-logprob score-centering copy;
+the sampled-logprob backward itself operates in 1,024-position vocabulary
+chunks. A smaller chunk would preserve the objective but change runtime from
+the frozen comparison, so the existing checkpoint retry is tested first.

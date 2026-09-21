@@ -6,3 +6,4 @@ iris_job,attempt,arm,attention_backend,state,gpu_tasks,h100_per_task,task_second
 /romain/users-romain-checkpoints-async-rl-snowball-default-set-d7f4bce1-2026.09.21.2-370e4cfb7f4b,0,sc32,flash,planned_stop,5,8,13106.125,29.124722,3
 /romain/users-romain-checkpoints-async-rl-snowball-default-set-d7f4bce1-2026.09.21.3-992bcb1ba2f1,0,sc32,flash,failed,5,8,11955.03,26.566733,2
 /romain/users-romain-checkpoints-async-rl-snowball-default-set-d7f4bce1-2026.09.21.3-992bcb1ba2f1,1,sc32,flash,failed,5,8,12196.8,27.104000,2
+/romain/users-romain-checkpoints-async-rl-snowball-default-set-6f0ff39c-2026.09.21.3-6902c969a370,0,tis,flash,failed,5,8,28782.775,63.961722,10
