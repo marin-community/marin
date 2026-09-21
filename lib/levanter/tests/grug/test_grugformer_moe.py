@@ -1176,11 +1176,13 @@ def test_portable_ep_backends_match_dense_cross_shard_value_and_gradients(
         )
         return jnp.einsum("tkh,tk->th", expert_output, combine_weights * token_valid[:, None])
 
-    expected = dense_output(x, w_up_gate, w_down)
-    expected_gradients = jax.grad(
-        lambda x, w_up_gate, w_down: jnp.sum(dense_output(x, w_up_gate, w_down) * cotangent),
-        argnums=(0, 1, 2),
-    )(x, w_up_gate, w_down)
+    # TPU's default matmul precision rounds inputs differently across these contractions.
+    with jax.default_matmul_precision("highest"):
+        expected = dense_output(x, w_up_gate, w_down)
+        expected_gradients = jax.grad(
+            lambda x, w_up_gate, w_down: jnp.sum(dense_output(x, w_up_gate, w_down) * cotangent),
+            argnums=(0, 1, 2),
+        )(x, w_up_gate, w_down)
 
     batch_sharding = NamedSharding(mesh, P(("data", "expert"), None))
     token_sharding = NamedSharding(mesh, P(("data", "expert")))
@@ -1213,7 +1215,7 @@ def test_portable_ep_backends_match_dense_cross_shard_value_and_gradients(
             **extra,
         )
 
-    with jax.set_mesh(mesh):
+    with jax.set_mesh(mesh), jax.default_matmul_precision("highest"):
         actual, overflow = backend_output(x, w_up_gate, w_down)
         actual_gradients = jax.grad(
             lambda x, w_up_gate, w_down: jnp.sum(backend_output(x, w_up_gate, w_down)[0] * cotangent),
