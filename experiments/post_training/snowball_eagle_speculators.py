@@ -17,6 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import click
+import yaml
 from fray.types import ResourceConfig
 from marin.evaluation.evalchemy.result import FineStoreEvalchemyResult
 from marin.execution.artifact import Artifact
@@ -85,123 +86,117 @@ _TORCHAUDIO_CU128_REQUIREMENT = (
     "#sha256=78b86a17f164bdaabdcee93fdfde2587fc43b9ebf15cd61dcf730b4f8615176b"
 )
 
-RL_SMOKE_ROLE_PLAN = SkyRLRolePlan(
-    colocate_all=False,
-    policy_num_nodes=4,
-    policy_num_gpus_per_node=GPUS_PER_NODE,
-    num_inference_engines=GPUS_PER_NODE,
-    inference_engine_tensor_parallel_size=1,
-    inference_engine_data_parallel_size=GPUS_PER_NODE,
-    inference_engine_expert_parallel_size=GPUS_PER_NODE,
-    train_batch_size=512,
-    policy_mini_batch_size=64,
-    micro_train_batch_size_per_gpu=1,
-    n_samples_per_prompt=16,
-)
 
-RL_SMOKE_CONFIG = f"""
-entrypoint: standard
-
-context_budget:
-  request_window_tokens: 9856
-  max_new_tokens_per_turn: 8192
-  max_turns: 1
-
-environment:
-  env_class: aime
-
-trainer:
-  strategy: megatron
-  flash_attn: false
-  use_sample_packing: false
-  offload_optimizer_during_rollouts: true
-  gradient_checkpointing: true
-  algorithm:
-    advantage_estimator: rloo_n
-    group_advantage_min_size: 4
-    use_kl_loss: false
-  epochs: 1
-  max_steps: 1
-  update_epochs_per_batch: 1
-  train_batch_size: {RL_SMOKE_ROLE_PLAN.train_batch_size}
-  policy_mini_batch_size: {RL_SMOKE_ROLE_PLAN.policy_mini_batch_size}
-  eval_batch_size: 512
-  micro_forward_batch_size_per_gpu: 1
-  micro_train_batch_size_per_gpu: {RL_SMOKE_ROLE_PLAN.micro_train_batch_size_per_gpu}
-  eval_before_train: false
-  eval_interval: -1
-  ckpt_interval: 100
-  resume_mode: none
-  logger: console
-  policy:
-    optimizer_config:
-      lr: 1.0e-6
-      max_grad_norm: 1.0
-    megatron_config:
-      tensor_model_parallel_size: 1
-      pipeline_model_parallel_size: 2
-      context_parallel_size: 1
-      expert_model_parallel_size: 8
-      expert_tensor_parallel_size: 1
-      optimizer_checkpoint_sharding_type: dp_reshardable
-      ddp_config:
-        overlap_grad_reduce: true
-        overlap_param_gather: true
-        grad_reduce_in_fp32: false
-  placement:
-    colocate_all: false
-    policy_strict_spread_pg: true
-    policy_num_nodes: {RL_SMOKE_ROLE_PLAN.policy_num_nodes}
-    policy_num_gpus_per_node: {RL_SMOKE_ROLE_PLAN.policy_num_gpus_per_node}
-
-generator:
-  backend: vllm
-  model_dtype: bfloat16
-  vllm_attention_backend: FLASH_ATTN
-  inference_engine_tensor_parallel_size: {RL_SMOKE_ROLE_PLAN.inference_engine_tensor_parallel_size}
-  inference_engine_pipeline_parallel_size: 1
-  inference_engine_data_parallel_size: {RL_SMOKE_ROLE_PLAN.inference_engine_data_parallel_size}
-  inference_engine_expert_parallel_size: {RL_SMOKE_ROLE_PLAN.inference_engine_expert_parallel_size}
-  num_inference_engines: {RL_SMOKE_ROLE_PLAN.num_inference_engines}
-  n_samples_per_prompt: {RL_SMOKE_ROLE_PLAN.n_samples_per_prompt}
-  gpu_memory_utilization: 0.75
-  max_num_seqs: 16
-  max_num_batched_tokens: 16384
-  enforce_eager: false
-  vllm_v1_disable_multiproc: false
-  run_engines_locally: true
-  weight_sync_backend: nccl
-  async_engine: true
-  batched: false
-  engine_init_kwargs:
-    async_scheduling: false
-    enable_mfu_metrics: true
-  speculative_decoding:
-    method: eagle3
-    model: {{}}
-    num_speculative_tokens: 3
-    training: null
-  sampling_params:
-    temperature: 1.0
-    top_p: 1.0
-
-data:
-  kind: parquet
-  train_data: []
-  val_data: []
-  shuffle: false
-
-extra_env:
-  PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
-"""
+def _rl_smoke_role_plan() -> SkyRLRolePlan:
+    return SkyRLRolePlan(
+        colocate_all=False,
+        policy_num_nodes=4,
+        policy_num_gpus_per_node=GPUS_PER_NODE,
+        num_inference_engines=GPUS_PER_NODE,
+        inference_engine_tensor_parallel_size=1,
+        inference_engine_data_parallel_size=GPUS_PER_NODE,
+        inference_engine_expert_parallel_size=GPUS_PER_NODE,
+        train_batch_size=512,
+        policy_mini_batch_size=64,
+        micro_train_batch_size_per_gpu=1,
+        n_samples_per_prompt=16,
+    )
 
 
-def _conversation_step(evaluation: ArtifactStep) -> ArtifactStep[Artifact]:
-    name = "data/snowball-eagle-math-conversations"
+def _rl_smoke_config(role_plan: SkyRLRolePlan) -> str:
+    config = {
+        "entrypoint": "standard",
+        "context_budget": {
+            "request_window_tokens": 9856,
+            "max_new_tokens_per_turn": 8192,
+            "max_turns": 1,
+        },
+        "environment": {"env_class": "aime"},
+        "trainer": {
+            "strategy": "megatron",
+            "flash_attn": False,
+            "use_sample_packing": False,
+            "offload_optimizer_during_rollouts": True,
+            "gradient_checkpointing": True,
+            "algorithm": {
+                "advantage_estimator": "rloo_n",
+                "group_advantage_min_size": 4,
+                "use_kl_loss": False,
+            },
+            "epochs": 1,
+            "max_steps": 1,
+            "update_epochs_per_batch": 1,
+            "train_batch_size": role_plan.train_batch_size,
+            "policy_mini_batch_size": role_plan.policy_mini_batch_size,
+            "eval_batch_size": 512,
+            "micro_forward_batch_size_per_gpu": 1,
+            "micro_train_batch_size_per_gpu": role_plan.micro_train_batch_size_per_gpu,
+            "eval_before_train": False,
+            "eval_interval": -1,
+            "ckpt_interval": 100,
+            "resume_mode": "none",
+            "logger": "console",
+            "policy": {
+                "optimizer_config": {"lr": 1.0e-6, "max_grad_norm": 1.0},
+                "megatron_config": {
+                    "tensor_model_parallel_size": 1,
+                    "pipeline_model_parallel_size": 2,
+                    "context_parallel_size": 1,
+                    "expert_model_parallel_size": 8,
+                    "expert_tensor_parallel_size": 1,
+                    "optimizer_checkpoint_sharding_type": "dp_reshardable",
+                    "ddp_config": {
+                        "overlap_grad_reduce": True,
+                        "overlap_param_gather": True,
+                        "grad_reduce_in_fp32": False,
+                    },
+                },
+            },
+            "placement": {
+                "colocate_all": False,
+                "policy_strict_spread_pg": True,
+                "policy_num_nodes": role_plan.policy_num_nodes,
+                "policy_num_gpus_per_node": role_plan.policy_num_gpus_per_node,
+            },
+        },
+        "generator": {
+            "backend": "vllm",
+            "model_dtype": "bfloat16",
+            "vllm_attention_backend": "FLASH_ATTN",
+            "inference_engine_tensor_parallel_size": role_plan.inference_engine_tensor_parallel_size,
+            "inference_engine_pipeline_parallel_size": 1,
+            "inference_engine_data_parallel_size": role_plan.inference_engine_data_parallel_size,
+            "inference_engine_expert_parallel_size": role_plan.inference_engine_expert_parallel_size,
+            "num_inference_engines": role_plan.num_inference_engines,
+            "n_samples_per_prompt": role_plan.n_samples_per_prompt,
+            "gpu_memory_utilization": 0.75,
+            "max_num_seqs": 16,
+            "max_num_batched_tokens": 16384,
+            "enforce_eager": False,
+            "vllm_v1_disable_multiproc": False,
+            "run_engines_locally": True,
+            "weight_sync_backend": "nccl",
+            "async_engine": True,
+            "batched": False,
+            "engine_init_kwargs": {"async_scheduling": False, "enable_mfu_metrics": True},
+            "speculative_decoding": {
+                "method": "eagle3",
+                "model": {},
+                "num_speculative_tokens": 3,
+                "training": None,
+            },
+            "sampling_params": {"temperature": 1.0, "top_p": 1.0},
+        },
+        "data": {"kind": "parquet", "train_data": [], "val_data": [], "shuffle": False},
+        "extra_env": {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"},
+    }
+    return yaml.safe_dump(config, sort_keys=False)
 
+
+def _conversation_step(*, name: str, rollouts: ArtifactStep) -> ArtifactStep[Artifact]:
     def build_config(ctx: StepContext) -> RolloutConversationConfig:
         return RolloutConversationConfig(
-            source_archives=(ctx.artifact_path(evaluation),),
+            source_archives=(ctx.artifact_path(rollouts),),
             output_path=ctx.output_path,
         )
 
@@ -214,17 +209,15 @@ def _conversation_step(evaluation: ArtifactStep) -> ArtifactStep[Artifact]:
             resources=ResourceConfig.with_cpu(cpu=4, ram="16g", disk="16g"),
         ),
         build_config=build_config,
-        deps=(evaluation,),
+        deps=(rollouts,),
     )
 
 
-def _initial_draft_step() -> ArtifactStep[Artifact]:
-    name = "models/snowball-eagle3-initial-draft"
-
+def _initial_draft_step(*, name: str, repo_id: str, revision: str) -> ArtifactStep[Artifact]:
     def build_config(ctx: StepContext) -> HfSnapshotConfig:
         return HfSnapshotConfig(
-            repo_id=INITIAL_DRAFT_REPO,
-            revision=INITIAL_DRAFT_REVISION,
+            repo_id=repo_id,
+            revision=revision,
             output_path=ctx.output_path,
         )
 
@@ -240,13 +233,16 @@ def _initial_draft_step() -> ArtifactStep[Artifact]:
     )
 
 
-def _verifier_step() -> ArtifactStep[Artifact]:
-    name = "models/snowball-eagle3-verifier-view"
-
+def _verifier_step(
+    *,
+    name: str,
+    target_model: ArtifactStep,
+    transformers_model_type: str,
+) -> ArtifactStep[Artifact]:
     def build_config(ctx: StepContext) -> VerifierViewConfig:
         return VerifierViewConfig(
-            source_model=ctx.artifact_path(SNOWBALL_MODEL),
-            transformers_model_type="llama",
+            source_model=ctx.artifact_path(target_model),
+            transformers_model_type=transformers_model_type,
             output_path=ctx.output_path,
         )
 
@@ -259,23 +255,31 @@ def _verifier_step() -> ArtifactStep[Artifact]:
             resources=ResourceConfig.with_cpu(cpu=8, ram="32g", disk="32g"),
         ),
         build_config=build_config,
-        deps=(SNOWBALL_MODEL,),
+        deps=(target_model,),
     )
 
 
-def _capture_step(dataset: ArtifactStep) -> ArtifactStep[Artifact]:
-    name = "data/snowball-eagle3-hidden-states"
-
+def _capture_step(
+    *,
+    name: str,
+    dataset: ArtifactStep,
+    target_model: ArtifactStep,
+    processor_model: str,
+    target_layer_ids: tuple[int, ...],
+    verifier_num_hidden_layers: int,
+    sequence_length: int,
+    gpu_count: int,
+) -> ArtifactStep[Artifact]:
     def build_config(ctx: StepContext) -> HiddenStateCaptureConfig:
         return HiddenStateCaptureConfig(
             dataset_path=prefix_join(ctx.artifact_path(dataset), SPECULATORS_DATA_FILENAME),
-            target_model=ctx.artifact_path(SNOWBALL_MODEL),
-            processor_model=MARIN_TOKENIZER,
+            target_model=ctx.artifact_path(target_model),
+            processor_model=processor_model,
             output_path=ctx.output_path,
-            target_layer_ids=TARGET_LAYER_IDS,
-            verifier_num_hidden_layers=VERIFIER_NUM_HIDDEN_LAYERS,
-            sequence_length=SEQUENCE_LENGTH,
-            data_parallel_size=_DRAFT_GPU_COUNT,
+            target_layer_ids=target_layer_ids,
+            verifier_num_hidden_layers=verifier_num_hidden_layers,
+            sequence_length=sequence_length,
+            data_parallel_size=gpu_count,
             concurrency=64,
             max_samples=None,
             gpu_memory_utilization=0.9,
@@ -287,34 +291,37 @@ def _capture_step(dataset: ArtifactStep) -> ArtifactStep[Artifact]:
         artifact_type=Artifact,
         run=remote(
             capture_hidden_states,
-            resources=ResourceConfig.with_gpu("H100", count=_DRAFT_GPU_COUNT, cpu=96, ram="512g", disk="1t"),
+            resources=ResourceConfig.with_gpu("H100", count=gpu_count, cpu=96, ram="512g", disk="1t"),
             pip_packages=[SPECULATORS.requirement(), _TORCHAUDIO_CU128_REQUIREMENT],
             max_retries_failure=2,
         ),
         build_config=build_config,
-        deps=(dataset, SNOWBALL_MODEL),
+        deps=(dataset, target_model),
     )
 
 
 def _draft_step(
+    *,
+    name: str,
     captured_data: ArtifactStep,
     verifier: ArtifactStep,
     initial_draft: ArtifactStep,
+    target_layer_ids: tuple[int, ...],
+    sequence_length: int,
+    gpu_count: int,
 ) -> ArtifactStep[EagleDraftArtifact]:
-    name = "models/snowball-eagle3-speculators"
-
     def build_config(ctx: StepContext) -> DraftTrainingConfig:
         return DraftTrainingConfig(
             captured_data_path=ctx.artifact_path(captured_data),
             verifier_path=ctx.artifact_path(verifier),
             initial_draft_path=ctx.artifact_path(initial_draft),
             output_path=ctx.output_path,
-            target_layer_ids=TARGET_LAYER_IDS,
-            sequence_length=SEQUENCE_LENGTH,
+            target_layer_ids=target_layer_ids,
+            sequence_length=sequence_length,
             epochs=4,
             learning_rate=1e-5,
             muon_learning_rate=0.02,
-            num_processes=_DRAFT_GPU_COUNT,
+            num_processes=gpu_count,
         )
 
     return ArtifactStep(
@@ -323,11 +330,112 @@ def _draft_step(
         artifact_type=EagleDraftArtifact,
         run=remote(
             train_draft,
-            resources=ResourceConfig.with_gpu("H100", count=_DRAFT_GPU_COUNT, cpu=96, ram="512g", disk="1t"),
+            resources=ResourceConfig.with_gpu("H100", count=gpu_count, cpu=96, ram="512g", disk="1t"),
             pip_packages=[SPECULATORS.requirement(), _TORCHAUDIO_CU128_REQUIREMENT],
         ),
         build_config=build_config,
         deps=(captured_data, verifier, initial_draft),
+    )
+
+
+@dataclass(frozen=True)
+class DraftSftArtifactNames:
+    conversations: str
+    initial_draft: str
+    verifier: str
+    captured_data: str
+    draft: str
+
+
+@dataclass(frozen=True)
+class DraftSftPipeline:
+    conversations: ArtifactStep[Artifact]
+    initial_draft: ArtifactStep[Artifact]
+    verifier: ArtifactStep[Artifact]
+    captured_data: ArtifactStep[Artifact]
+    draft: ArtifactStep[EagleDraftArtifact]
+
+
+def sft_draft_model(
+    *,
+    names: DraftSftArtifactNames,
+    rollouts: ArtifactStep,
+    target_model: ArtifactStep,
+    initial_draft_repo: str,
+    initial_draft_revision: str,
+    processor_model: str,
+    transformers_model_type: str,
+    target_layer_ids: tuple[int, ...],
+    verifier_num_hidden_layers: int,
+    sequence_length: int,
+    gpu_count: int,
+) -> DraftSftPipeline:
+    """Build reusable Speculators SFT artifacts for a target model."""
+    conversations = _conversation_step(name=names.conversations, rollouts=rollouts)
+    initial_draft = _initial_draft_step(
+        name=names.initial_draft,
+        repo_id=initial_draft_repo,
+        revision=initial_draft_revision,
+    )
+    verifier = _verifier_step(
+        name=names.verifier,
+        target_model=target_model,
+        transformers_model_type=transformers_model_type,
+    )
+    captured_data = _capture_step(
+        name=names.captured_data,
+        dataset=conversations,
+        target_model=target_model,
+        processor_model=processor_model,
+        target_layer_ids=target_layer_ids,
+        verifier_num_hidden_layers=verifier_num_hidden_layers,
+        sequence_length=sequence_length,
+        gpu_count=gpu_count,
+    )
+    draft = _draft_step(
+        name=names.draft,
+        captured_data=captured_data,
+        verifier=verifier,
+        initial_draft=initial_draft,
+        target_layer_ids=target_layer_ids,
+        sequence_length=sequence_length,
+        gpu_count=gpu_count,
+    )
+    return DraftSftPipeline(
+        conversations=conversations,
+        initial_draft=initial_draft,
+        verifier=verifier,
+        captured_data=captured_data,
+        draft=draft,
+    )
+
+
+def snowball_eagle_sft() -> DraftSftPipeline:
+    """Build the Snowball-specific EAGLE-3 SFT pipeline."""
+    rollouts = ArtifactStep.adopt(
+        name="data/snowball-eagle-math-rollouts",
+        version=VERSION,
+        source=ROLLOUT_ARCHIVE_URI,
+        kind=FineStoreEvalchemyResult,
+    )
+    return sft_draft_model(
+        names=DraftSftArtifactNames(
+            conversations="data/snowball-eagle-math-conversations",
+            initial_draft="models/snowball-eagle3-initial-draft",
+            verifier="models/snowball-eagle3-verifier-view",
+            captured_data="data/snowball-eagle3-hidden-states",
+            draft="models/snowball-eagle3-speculators",
+        ),
+        rollouts=rollouts,
+        target_model=SNOWBALL_MODEL,
+        initial_draft_repo=INITIAL_DRAFT_REPO,
+        initial_draft_revision=INITIAL_DRAFT_REVISION,
+        processor_model=MARIN_TOKENIZER,
+        transformers_model_type="llama",
+        target_layer_ids=TARGET_LAYER_IDS,
+        verifier_num_hidden_layers=VERIFIER_NUM_HIDDEN_LAYERS,
+        sequence_length=SEQUENCE_LENGTH,
+        gpu_count=_DRAFT_GPU_COUNT,
     )
 
 
@@ -344,11 +452,12 @@ class SnowballDraftPipeline:
 def build_rl_smoke(draft: ArtifactStep[EagleDraftArtifact]) -> ArtifactStep[SkyRLModel]:
     """Run one production-shaped RLOO-N step with eight node-local rollout pools."""
     pool = pool_step(POOL_ARTIFACT_NAME, RL_DATA_VERSION)
+    role_plan = _rl_smoke_role_plan()
     return skyrl_step(
         SkyRLSpec(
             name=user_owned_name(RL_ARTIFACT_NAME),
             version=resolve_version(RL_ARTIFACT_NAME, None),
-            config_yaml=RL_SMOKE_CONFIG,
+            config_yaml=_rl_smoke_config(role_plan),
             runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
             model=ArtifactHfModel(
                 step=SNOWBALL_MODEL,
@@ -361,7 +470,7 @@ def build_rl_smoke(draft: ArtifactStep[EagleDraftArtifact]) -> ArtifactStep[SkyR
                 num_nodes=12,
                 gpus_per_node=GPUS_PER_NODE,
                 gpu_variant="H100",
-                role_plan=RL_SMOKE_ROLE_PLAN,
+                role_plan=role_plan,
             ),
             retention=SkyRLRetentionPolicy(),
             seed=17,
@@ -382,24 +491,14 @@ def build_rl_smoke(draft: ArtifactStep[EagleDraftArtifact]) -> ArtifactStep[SkyR
 
 def build_pipeline() -> SnowballDraftPipeline:
     """Build the offline capture and draft-training artifact graph."""
-    evaluation = ArtifactStep.adopt(
-        name="data/snowball-eagle-math-rollouts",
-        version=VERSION,
-        source=ROLLOUT_ARCHIVE_URI,
-        kind=FineStoreEvalchemyResult,
-    )
-    conversations = _conversation_step(evaluation)
-    initial_draft = _initial_draft_step()
-    verifier = _verifier_step()
-    captured_data = _capture_step(conversations)
-    draft = _draft_step(captured_data, verifier, initial_draft)
-    smoke = build_rl_smoke(draft)
+    sft = snowball_eagle_sft()
+    smoke = build_rl_smoke(sft.draft)
     return SnowballDraftPipeline(
-        conversations=conversations,
-        initial_draft=initial_draft,
-        verifier=verifier,
-        captured_data=captured_data,
-        draft=draft,
+        conversations=sft.conversations,
+        initial_draft=sft.initial_draft,
+        verifier=sft.verifier,
+        captured_data=sft.captured_data,
+        draft=sft.draft,
         smoke=smoke,
     )
 
