@@ -86,24 +86,10 @@ pub fn prune_segment_paths(
     indices: &IndexRegistry,
     artifacts: &SegmentArtifacts,
 ) -> Vec<String> {
-    let trigrams_by_column: HashMap<&str, Vec<Vec<[u8; 3]>>> = needles
-        .iter()
-        .filter_map(|(column, values)| {
-            let trigrams: Vec<_> = values
-                .iter()
-                .filter_map(|value| needle_trigrams(value))
-                .collect();
-            (!trigrams.is_empty()).then_some((column.as_str(), trigrams))
-        })
-        .collect();
-    if trigrams_by_column.is_empty() {
+    let columns = ordered_trigram_needles(needles, key_ranges);
+    if columns.is_empty() {
         return segment_paths.to_vec();
     }
-    // A range-constrained column is usually the segment's sort key. Its small
-    // trigram section can rule out the whole segment before a wide data section
-    // is read, even when catalog min/max bounds overlap the requested range.
-    let mut columns: Vec<_> = trigrams_by_column.iter().collect();
-    columns.sort_by_key(|(column, _)| (!key_ranges.contains_key(**column), **column));
 
     let mut pruned = 0usize;
     let retained = segment_paths
@@ -117,7 +103,7 @@ pub fn prune_segment_paths(
             };
             let mut combined: Option<Vec<bool>> = None;
             let mut span_rows = None;
-            for (&column, needle_sets) in &columns {
+            for (column, needle_sets) in &columns {
                 let Some((coverage, index)) = indices.summary_trigram(&segment, column) else {
                     continue;
                 };
@@ -138,7 +124,7 @@ pub fn prune_segment_paths(
                 }
                 span_rows = Some(coverage.span_rows);
                 let mask = combined.get_or_insert_with(|| vec![true; coverage.span_count as usize]);
-                for trigrams in needle_sets.iter() {
+                for trigrams in needle_sets {
                     for (keep, matches) in mask.iter_mut().zip(index.keep_mask_for(trigrams)) {
                         *keep &= matches;
                     }
@@ -156,6 +142,27 @@ pub fn prune_segment_paths(
         tracing::debug!(segments_pruned = pruned, "trigram segment prune");
     }
     retained
+}
+
+fn ordered_trigram_needles<'a>(
+    needles: &'a HashMap<String, Vec<String>>,
+    key_ranges: &HashMap<String, StringRange>,
+) -> Vec<(&'a str, Vec<Vec<[u8; 3]>>)> {
+    let mut columns: Vec<_> = needles
+        .iter()
+        .filter_map(|(column, values)| {
+            let trigrams: Vec<_> = values
+                .iter()
+                .filter_map(|value| needle_trigrams(value))
+                .collect();
+            (!trigrams.is_empty()).then_some((column.as_str(), trigrams))
+        })
+        .collect();
+    // A range-constrained column is usually the segment's sort key. Its small
+    // trigram section can rule out the whole segment before a wide data section
+    // is read, even when catalog min/max bounds overlap the requested range.
+    columns.sort_by_key(|(column, _)| (!key_ranges.contains_key(*column), *column));
+    columns
 }
 
 /// Inclusive per-column key ranges implied by a query's top-level conjuncts.
@@ -428,22 +435,10 @@ fn build_access_plans(
     indices: &IndexRegistry,
     artifacts: &SegmentArtifacts,
 ) -> HashMap<String, ParquetAccessPlan> {
-    // Decompose each constrained column's needles into trigram sets ONCE, not
-    // once per segment — a single query commonly spans dozens of segments.
-    // Needles arrive pre-filtered to `>= MIN_TRIGRAM_LEN`, so each yields a
-    // non-empty set; a column whose needles all degrade is dropped here.
-    let trigrams_by_column: HashMap<&str, Vec<Vec<[u8; 3]>>> = needles
-        .iter()
-        .filter_map(|(col, ns)| {
-            let tg: Vec<Vec<[u8; 3]>> = ns.iter().filter_map(|n| needle_trigrams(n)).collect();
-            (!tg.is_empty()).then_some((col.as_str(), tg))
-        })
-        .collect();
-    if trigrams_by_column.is_empty() {
+    let columns = ordered_trigram_needles(needles, key_ranges);
+    if columns.is_empty() {
         return HashMap::new();
     }
-    let mut columns: Vec<_> = trigrams_by_column.iter().collect();
-    columns.sort_by_key(|(column, _)| (!key_ranges.contains_key(**column), **column));
 
     let mut out = HashMap::new();
     let mut total_row_groups = 0usize;
@@ -474,7 +469,7 @@ fn build_access_plans(
         let mut keep: Option<Vec<bool>> = None;
         let mut span_rows = None;
         let mut applied_any = false;
-        for (&col, needle_trigrams) in &columns {
+        for (col, needle_trigrams) in &columns {
             let Some((coverage, index)) = indices.trigram(&segment, col) else {
                 continue;
             };
@@ -499,7 +494,7 @@ fn build_access_plans(
             }
             span_rows = Some(coverage.span_rows as usize);
             applied_any = true;
-            for trigrams in needle_trigrams.iter() {
+            for trigrams in needle_trigrams {
                 for (k, m) in keep.iter_mut().zip(index.keep_mask_for(trigrams)) {
                     *k &= m;
                 }
@@ -539,7 +534,7 @@ fn build_access_plans(
     }
     if !out.is_empty() || scoped_out > 0 {
         tracing::debug!(
-            indexed_columns = trigrams_by_column.len(),
+            indexed_columns = columns.len(),
             segments_pruned = out.len(),
             segments_scoped_out = scoped_out,
             row_groups_skipped = skipped_row_groups,
@@ -633,9 +628,12 @@ fn rewrite_file_groups(
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::FileExt;
+
     use datafusion::logical_expr::{col, lit};
 
     use super::*;
+    use crate::indices::format;
 
     fn scalar_predicate_expr(name: &str, column: &str, value: &str) -> Expr {
         use datafusion::execution::FunctionRegistry;
@@ -946,10 +944,6 @@ mod tests {
 
     #[test]
     fn key_trigrams_skip_unneeded_data_section() {
-        use std::os::unix::fs::FileExt;
-
-        use crate::indices::format;
-
         let dir = std::env::temp_dir().join(format!(
             "finelog_prune_key_first_{}",
             std::time::SystemTime::now()
@@ -997,7 +991,7 @@ mod tests {
             );
         }
         assert_eq!(indices.cache().corruption_counts().sections, 0);
-        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
