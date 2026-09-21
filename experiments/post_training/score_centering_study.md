@@ -1349,3 +1349,17 @@ tests passed. This new commit is not in either running arm, which still uses
 `26a4b7e1`.
 The first attempt's [W&B history](results/score_centering_snowball_flash_pair_sc32_attempt0_wandb.jsonl)
 preserves its two completed update metrics under run ID `034pny10`.
+The automatic retry also completed two updates and reproduced the same failure
+during update three: its [record](results/score_centering_snowball_flash_pair_sc32_attempt1_failure.json)
+shows a 2.28 GiB request with 1.88 GiB reported free, and its
+[W&B history](results/score_centering_snowball_flash_pair_sc32_attempt1_wandb.jsonl)
+is run `bwu42gko`. It used another 27.10 reserved H100-hours. This repeat on a
+different learner node makes the old-runtime memory limit reproducible.
+
+A replacement SC32 arm uses the same rendered training YAML, seed, pool, and
+optimization settings at version `2026.09.21.4`, with runtime `e1356698` as the
+only source change from the failed SC attempts. Its
+[Iris job](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-default-set-28b80d60-2026.09.21.4-b548196e6619)
+is at `interactive` priority. The original TIS arm continues on `26a4b7e1`;
+the new runtime changes only the score-centering selected-logprob calculation,
+which TIS does not execute.
