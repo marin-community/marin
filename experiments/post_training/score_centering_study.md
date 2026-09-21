@@ -1324,3 +1324,19 @@ and 357/756 for SC32
 The Math500 audit uses exact answer strings, so these remain conservative
 format-inclusive counts. The two baselines differ by -2 rewarded or +2
 format-inclusive answers (SC32 minus TIS); neither is an effect of training.
+
+The pair's first SC32 attempt completed two updates, then failed during the
+third policy backward with a `torch.OutOfMemoryError` on one learner GPU. The
+[failure record](results/score_centering_snowball_flash_pair_sc32_attempt0_failure.json)
+links the preserved Ray exception: a 2.16 GiB allocation was requested with
+2.16 GiB reported free on a 79.18 GiB H100. This is a PyTorch memory
+failure, distinct from the earlier TransformerEngine fused-attention error.
+The attempt used 26.57 reserved H100-hours. Iris automatically began a
+second attempt; there was no optimizer checkpoint before step ten, so it
+restarts from the base model. The selected-logprob path held a full float32
+vocabulary-logit copy during policy backward, a plausible source of extra
+memory pressure but not an allocation attribution proved by the exception.
+MarinSkyRL `e1356698` computes selected logprobs from the already available
+sampled normalizer and gathered logits; 45 targeted numerical and gradient
+tests passed. This new commit is not in either running arm, which still uses
+`26a4b7e1`.
