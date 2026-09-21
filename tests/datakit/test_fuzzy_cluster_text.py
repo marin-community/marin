@@ -313,6 +313,30 @@ def test_truncated_text_is_marked_for_conservative_verification(tmp_path: Path, 
     assert row["text_truncated"] is True
 
 
+def test_truncated_text_preserves_split_hashes(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(cluster_text_script, "MAXIMUM_VERIFICATION_TEXT_CHARS", 8)
+    normalized = tmp_path / "normalized.parquet"
+    candidates = tmp_path / "candidates.parquet"
+    texts = [f"{index} document longer than the cap" for index in range(16)]
+    texts.append(texts[0])
+    _write_parquet(normalized, [{"id": str(index), "text": text} for index, text in enumerate(texts)])
+    _write_parquet(candidates, [{"id": str(index), "dup_cluster_id": "7"} for index in range(len(texts))])
+    shard = TextShard(
+        file_idx=0,
+        normalized_path=str(normalized),
+        candidate_path=str(candidates),
+        source_key="normalized/source",
+        source_tag="source_000",
+        basename="part.parquet",
+    )
+
+    rows = list(_join_shard(shard, {"7": 256}))
+
+    assert all(row["text"] == "" and row["text_truncated"] for row in rows)
+    assert len({row["cluster_key"] for row in rows}) > 1
+    assert rows[0]["cluster_key"] == rows[-1]["cluster_key"]
+
+
 def test_repeated_normalized_id_requires_equal_text(tmp_path: Path) -> None:
     normalized = tmp_path / "normalized.parquet"
     candidates = tmp_path / "candidates.parquet"

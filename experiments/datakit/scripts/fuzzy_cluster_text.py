@@ -191,7 +191,7 @@ def _join_shard(shard: TextShard, oversized: Mapping[str, int]) -> Iterator[dict
                     splits = oversized.get(cluster_id, 1)
                     cluster_key = cluster_id
                     if splits > 1:
-                        split_index = _split_hash(text) % splits
+                        split_index = _split_hash(raw_text[:MAXIMUM_VERIFICATION_TEXT_CHARS]) % splits
                         cluster_key = f"{cluster_id}:{split_index:04d}"
                         counters.pipeline.update_counter(f"{COUNTER_PREFIX}/split_members", 1)
                     yield {
