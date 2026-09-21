@@ -198,6 +198,11 @@ class IsolatedCudaVllm:
     """Exact PyPI pin; required for ``UPSTREAM`` and ignored for ``MARIN_FORK``."""
     # Match the workspace interpreter so cloudpickled entrypoints stay compatible.
     python_version: str = WORKER_PYTHON_VERSION
+    with_packages: tuple[str, ...] = ()
+    """Extra ``uvx --with`` package specs, e.g. prebuilt FlashInfer kernel artifacts
+    (``flashinfer-cubin``, ``flashinfer-jit-cache``) that skip FlashInfer's JIT build at startup."""
+    extra_index_urls: tuple[str, ...] = ()
+    """Additional ``uvx --index`` URLs for :attr:`with_packages`."""
 
     def __post_init__(self) -> None:
         if self.source is VllmType.UPSTREAM and not self.version:
@@ -237,6 +242,10 @@ class IsolatedCudaVllm:
         ]
         for requirement in _CUDA_TOOLCHAIN_REQUIREMENTS:
             command.extend(("--with", requirement))
+        for package in self.with_packages:
+            command.extend(("--with", package))
+        for index_url in self.extra_index_urls:
+            command.extend(("--index", index_url))
         command.extend(
             (
                 "--python",
@@ -263,7 +272,15 @@ class IsolatedCudaVllm:
     def cache_identity(self) -> str:
         install = self._install()
         toolchain = ",".join(_CUDA_TOOLCHAIN_REQUIREMENTS)
-        return f"cuda:{install.requirement}:{self.python_version}:{install.torch_backend}:{toolchain}"
+        identity = f"cuda:{install.requirement}:{self.python_version}:{install.torch_backend}:{toolchain}"
+        if self.with_packages:
+            identity += ":" + ",".join(self.with_packages)
+        if self.extra_index_urls:
+            # Distinct indexes can serve different builds of the same requirement
+            # (e.g. cu130-vs-cu129 FlashInfer), and uv gives earlier --index flags priority, so
+            # the identity keeps the URLs in resolution order rather than sorting them.
+            identity += ":" + ",".join(self.extra_index_urls)
+        return identity
 
 
 def _write_virtual_hosted_s3_config() -> str:
