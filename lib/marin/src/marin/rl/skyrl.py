@@ -652,12 +652,6 @@ def skyrl_step(
 
 def skyrl_smoke(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[SkyRLRun]:
     """Build a run that emits metrics without checkpointing or exporting a model."""
-    config = yaml.safe_load(spec.config_yaml)
-    if not isinstance(config, dict):
-        raise ValueError("SkyRL smoke configuration must be a YAML mapping")
-    trainer = config.get("trainer")
-    if not isinstance(trainer, dict):
-        raise ValueError("SkyRL smoke configuration requires trainer")
-    trainer["callbacks"] = [{"type": "inference_stats"}, {"type": "logging"}]
-    smoke_spec = replace(spec, config_yaml=yaml.safe_dump(config, sort_keys=False))
+    callbacks_override = "++trainer.callbacks=[{type:inference_stats},{type:logging}]"
+    smoke_spec = replace(spec, overrides=(*spec.overrides, callbacks_override))
     return skyrl_step(smoke_spec, execution)

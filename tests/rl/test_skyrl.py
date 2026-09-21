@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import IO, cast
 
 import pytest
-import yaml
 from marin.evaluation.model_config import ModelConfig, ResourceHint
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -247,8 +246,7 @@ def test_skyrl_smoke_disables_checkpoint_and_export_callbacks() -> None:
     step = skyrl_smoke(_spec(), _execution())
     config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
 
-    parsed = yaml.safe_load(config.request.config_yaml)
-    assert parsed["trainer"]["callbacks"] == [{"type": "inference_stats"}, {"type": "logging"}]
+    assert config.request.overrides[-4] == "++trainer.callbacks=[{type:inference_stats},{type:logging}]"
     assert config.request.export_hf is False
 
 
