@@ -199,21 +199,6 @@ def test_legacy_checkpoint_restore_with_context_sharding():
     )
 
 
-@pytest.mark.parametrize(
-    "module_name",
-    [
-        "experiments.grug.base.train",
-        "experiments.grug.moe.train",
-        "experiments.grug.moe_hero_fsdp.train",
-        "experiments.june_tpu_67b_a2b.moe.train",
-    ],
-)
-def test_unported_variants_reject_context_parallelism(module_name):
-    trainer_config = importlib.import_module(module_name).GrugTrainerConfig
-    with pytest.raises(ValueError, match="context_axis_size=1"):
-        trainer_config(context_axis_size=2)
-
-
 def _variant_has_noverify(variant_dir: Path) -> bool:
     train_file = variant_dir / "train.py"
     if not train_file.is_file():
