@@ -1,0 +1,11 @@
+{
+  "arm": "flash_sc32_replacement",
+  "attempt": 1,
+  "completed_optimizer_updates": 0,
+  "iris_job": "/romain/users-romain-checkpoints-async-rl-snowball-default-set-28b80d60-2026.09.21.4-b548196e6619",
+  "iris_task_seconds_total": 74.44,
+  "reason": "Canceled the automatic identical retry after the attempt-zero update-ten OOM; no checkpoint existed to advance it.",
+  "reserved_h100_hours": 0.165422,
+  "runtime_commit": "e1356698154f3a38707231beb372fb7c95126947",
+  "state": "cancelled"
+}

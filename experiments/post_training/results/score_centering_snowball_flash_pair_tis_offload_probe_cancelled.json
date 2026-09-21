@@ -1,0 +1,12 @@
+{
+  "arm": "flash_tis_step10_offload_probe",
+  "attempt": 0,
+  "completed_optimizer_updates_after_resume": 0,
+  "config_sha256": "67c5b16c67d0d5d761defc94b475a7baef26f6637b64b83ba5cbc6434cd720e1",
+  "iris_job": "/romain/users-romain-checkpoints-async-rl-snowball-default-set-7c561612-2026.09.21.6-df0d3130dea3",
+  "iris_task_seconds_total": 595.07,
+  "reason": "Canceled before useful training after choosing a clean full matched pair with the same optimizer-offload and logprob-chunk protections in both arms.",
+  "reserved_h100_hours": 1.322378,
+  "runtime_commit": "22a37adc7135a54995cfb4f3b5cd07504af796b3",
+  "state": "cancelled"
+}

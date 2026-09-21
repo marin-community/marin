@@ -1382,6 +1382,15 @@ corrections were 0.0135, 0.0065, and 0.0089. Updates two and three emitted
 transient 20 MiB expandable-segment mapping warnings on some ranks at their
 memory peaks, but both updates completed and the allocator returned to more
 than 8 GiB free per GPU on the four learner nodes after update three.
+It eventually completed updates one through nine, then failed during update
+ten's policy backward before the first scheduled checkpoint. The
+[failure record](results/score_centering_snowball_flash_pair_sc32_fixed_attempt0_failure.json)
+links the preserved exception: actor 24 requested 1.82 GiB with 1.82 GiB free
+on its 79.18 GiB H100. This attempt used 56.20 reserved H100-hours. Its
+[W&B history](results/score_centering_snowball_flash_pair_sc32_fixed_attempt0_wandb.jsonl)
+retains all nine completed updates. The automatic identical retry was
+[canceled](results/score_centering_snowball_flash_pair_sc32_fixed_attempt1_cancelled.json)
+after 0.17 reserved H100-hours because no checkpoint existed to advance it.
 
 The TIS control passed its step-ten operational gate on `26a4b7e1`. Its full
 DP-reshardable checkpoint has 32 distributed policy shards, 45 files, and
@@ -1426,3 +1435,46 @@ learner time, so its timing is reported separately from the original arm. The
 [continuation job](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-default-set-17ed1d4f-2026.09.21.5-9e06721dbfad)
 uses version `2026.09.21.5`; the launcher now validates `from_path` resumes and
 places their mode and source checkpoint after the backend's default override.
+The continuation restored all optimizer and trainer state, temporarily
+offloaded the optimizer, completed the initial policy broadcast, and restored
+the configured optimizer residency. This directly exercises the action that
+failed in the old-runtime retry. A fresh repeated step-ten pass then scored
+476/756 rewarded core-math answers, nine more than the original pass from the
+same checkpoint. This is repeated sampling from one checkpoint rather than a
+training gain. Before update eleven completed, its policy forward failed in
+TransformerEngine's unfused attention softmax while casting probabilities to
+bfloat16: a 702 MiB allocation had 589.19 MiB free. The
+[failure record](results/score_centering_snowball_flash_pair_tis_continuation_attempt0_failure.json)
+and [W&B evaluation row](results/score_centering_snowball_flash_pair_tis_continuation_attempt0_wandb.jsonl)
+preserve the evidence. The attempt used 19.24 reserved H100-hours; its
+automatic retry was [canceled](results/score_centering_snowball_flash_pair_tis_continuation_attempt1_cancelled.json)
+after another 0.29 reserved H100-hours.
+
+The continuation failure happens before vocabulary projection, so the
+512-position logprob chunk does not address its peak. Keeping the optimizer
+offloaded during rollout, evaluation, and the pretraining policy forward does.
+A short version `2026.09.21.6` probe added that setting, then was
+[canceled](results/score_centering_snowball_flash_pair_tis_offload_probe_cancelled.json)
+after 1.32 reserved H100-hours when the study switched to a clean full matched
+pair. This avoids combining different base trajectories, checkpoint histories,
+and runtime settings into the causal comparison.
+
+The new full pair uses version `2026.09.21.7`, seed 17, pool `2026.09.18`, and
+MarinSkyRL `22a37adc` from the same base model with `resume_mode=none`. Both
+arms use 20 updates, evaluation and a full checkpoint every five updates,
+maximum token age eight, TIS cap 1.05, 4,096-token responses, FlashAttention,
+top-k-32 behavior logprobs, a 512-position policy-logprob chunk, and optimizer
+offload through rollout, evaluation, and the pretraining policy forward. The
+rendered local and staged-pod YAML SHA-256 values match:
+`7430a3f72e3539c2e3ecd63258459ae60d6355b0b6b617c7f605ac62b8a50e42`
+for [TIS](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-default-set-e1183dd2-2026.09.21.7-c68eb40f03e2)
+and
+`f0ba018e072542b8f72773e2aca4012a05ca9e81dc266e1595fe2346cf7e9156`
+for [SC32](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-default-set-6379e701-2026.09.21.7-415cae46b3bb).
+Flattening the 118 values shows exactly one difference:
+`trainer.algorithm.score_centering_topk` is zero for TIS and 32 for SC32.
+Their W&B runs are
+[`d6js2ztv`](https://wandb.ai/marin-community/marin-async-rl/runs/d6js2ztv)
+and [`s0amakmj`](https://wandb.ai/marin-community/marin-async-rl/runs/s0amakmj).
+Both entered the initial held-out evaluation with five running Iris tasks and
+no retry or failure.
