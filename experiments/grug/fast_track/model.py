@@ -238,10 +238,13 @@ class InklingRelPos(eqx.Module):
     @named_call
     def __call__(self, x: Float[Array, "B S D"]) -> Float[Array, "B H S L"]:
         relative_states = jnp.einsum("bsd,dk->bsk", x, self.r_proj.astype(x.dtype))
-        relative_states = rearrange(relative_states, "b s (h r) -> b s h r", r=self.rel_dim)
-        # A[b,h,i,delta] = sum_r R[b,i,h,r] * proj[r,delta]; heads keep the model-axis sharding.
+        # Transpose the tiny R to [B,H,S,rel_dim] BEFORE the bank matmul so the einsum emits the
+        # [B,H,S,L] bias directly. The alternative "bshr,rl->bhsl" makes XLA transpose the large
+        # [B,H,S,L] output (a ~1 GB pass at d512); moving the transpose onto R (64x smaller) is free.
+        relative_states = rearrange(relative_states, "b s (h r) -> b h s r", r=self.rel_dim)
+        # A[b,h,i,delta] = sum_r R[b,h,i,r] * proj[r,delta]; heads keep the model-axis sharding.
         return jnp.einsum(
-            "bshr,rl->bhsl",
+            "bhsr,rl->bhsl",
             relative_states,
             self.proj.astype(x.dtype),
             out_sharding=P(_BATCH_AXES, "model", None, None),
