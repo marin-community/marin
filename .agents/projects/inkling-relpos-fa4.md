@@ -223,3 +223,20 @@ in the way assumed; the per-element scalar 16-dim dot dominates. Reverted to the
 (HEAD after 19cce3c0fc). BEST STATE = materialized fully-fused free-dA: d512 6.03(1024)/6.55(512),
 d1280 11.34 vs rope 15.44. <10% MFU impact is NOT reachable with these approaches.
 Remaining micro-lever: bf16 dA output (~0.3pt). Otherwise ship materialized + run the science.
+
+## bf16 dA: banked (2026-09-20) -- FINAL optimized materialized kernel
+Grad still PASS (dA rel 5.3e-3). MFU:
+- d512 rel_extent=1024: 6.03 -> 6.33 (21% impact)
+- d512 rel_extent=512:  6.55 -> 6.96 (13.4% impact)  <- near target
+- d1280 rel_extent=512: 11.34 -> 12.75 (27% -> 17.4% impact)   [rope d1280 15.44]
+bf16 dA helps MORE at scale (dA[B,Hq,S,L] traffic scales with heads): +1.41pt at d1280.
+Campaign total: correct fused Inkling backward 5.25 -> 6.96 (d512-512); d1280 impact 27% -> 17.4%.
+
+Kernel is at its practical floor for the materialized approach. Remaining fundamental cost = the A
+read (fwd + bwd, ~1.3pt) inherent to a per-position bias. Micro-opts (acc_S_pre skip, scale fold) are
+<0.1pt (compute, not memory; model is memory-bound) -> not worth the vendored-kernel risk.
+On-the-fly per-element FAILED (2.4x slower). The ONE remaining big lever: precompute the A TILE via a
+small tensor-core GEMM into smem per (m_block,n_block) (R_tile[128,16] @ proj_slice[16,~192]) in both
+fwd and bwd prologues -- amortizes the 16-dim dot via tensor cores + smem reads (unlike the failed
+scalar per-element on-the-fly), removing the global A HBM materialization+reads. High effort/risk;
+needs the R+proj interface (reverted) back + smem staging. Deferred.
