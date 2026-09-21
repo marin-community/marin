@@ -22,6 +22,7 @@ REPORT_URL = (
     "535B-A23B-18T-Token-Hero-Run-Scaling-Ladder--VmlldzoxNzc2MDM5Ng"
 )
 _GRAPHQL_URL = "https://api.wandb.ai/graphql"
+_WANDB_TIMEOUT = 30.0
 _ENTITY = "marin-community"
 _PROJECT = "marin_moe"
 _PARENT_CHECKPOINT_PATTERN = re.compile(r".*/(?P<run>[^/]+)/[^/]+/checkpoints/step-(?P<step>\d+)/?")
@@ -89,7 +90,7 @@ def _hero_checkpoint_runs() -> list[_HeroCheckpointRun]:
     without that field are excluded. Missing phase bounds or checkpoint config
     raise an error. The report read does not require a W&B API key.
     """
-    with httpx.Client(timeout=30.0) as client:
+    with httpx.Client(timeout=_WANDB_TIMEOUT) as client:
         view_id = REPORT_URL.rsplit("--", 1)[1]
         view_id += "=" * (-len(view_id) % 4)
         view = _graphql(client, _REPORT_QUERY, {"id": view_id})["view"]
@@ -173,7 +174,7 @@ def hero_checkpoint_paths_from_run(run_id: str = CURRENT_HERO_RUN_ID) -> list[st
     runs: list[_HeroCheckpointRun] = []
     seen: set[str] = set()
     end_step: int | None = None
-    with httpx.Client(timeout=30.0) as client:
+    with httpx.Client(timeout=_WANDB_TIMEOUT) as client:
         while True:
             if run_id in seen:
                 raise ValueError(f"Checkpoint ancestry contains a cycle at {run_id}")
