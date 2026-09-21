@@ -1305,4 +1305,22 @@ response cap, 20 updates, and the same 756 core math questions. The
 [TIS arm](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-default-set-6f0ff39c-2026.09.21.3-6902c969a370)
 and [SC32 arm](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-default-set-d7f4bce1-2026.09.21.3-992bcb1ba2f1)
 were submitted at `interactive` priority after the pilot stopped, with their
-starts staggered by about three minutes.
+starts staggered by about three minutes. Their W&B run IDs are
+[`34kgw441`](https://wandb.ai/marin-community/marin-async-rl/runs/34kgw441)
+and [`034pny10`](https://wandb.ai/marin-community/marin-async-rl/runs/034pny10),
+respectively.
+The source YAML SHA-256 values were checked against the files staged on the
+running Iris pods, not just against local launch filenames. Their
+[step-zero response analysis](results/score_centering_snowball_flash_pair_evals.csv)
+has identical core-math held-out membership
+(`1a2e720553aeb0d0a11854355d0d7be84709e2b617c85d03e40d65253b61474b`).
+At that pre-update pass, TIS and SC32 scored 256/756 and 254/756 completed
+rewarded answers. The conservative terminal-box audits count 355/756 for TIS
+([GSM8K](results/score_centering_snowball_flash_pair_tis_gsm8k_step0_probe.json),
+[Math500](results/score_centering_snowball_flash_pair_tis_math500_step0_probe.json))
+and 357/756 for SC32
+([GSM8K](results/score_centering_snowball_flash_pair_sc32_gsm8k_step0_probe.json),
+[Math500](results/score_centering_snowball_flash_pair_sc32_math500_step0_probe.json)).
+The Math500 audit uses exact answer strings, so these remain conservative
+format-inclusive counts. The two baselines differ by -2 rewarded or +2
+format-inclusive answers (SC32 minus TIS); neither is an effect of training.
