@@ -16,6 +16,9 @@ consumable by :func:`marin.processing.classification.consolidate.consolidate`):
     max_overlap              : float          — highest paragraph overlap fraction in [0, 1]
     matched_hashes           : list[uint64]   — bloom-hit hashes that caused the mark
 
+The overlap score does not apply the minimum-evidence gate. Use ``contaminated``
+to select marked records.
+
 Build also emits ``<output>/_bloom/eval_hash_index.parquet`` with columns
 ``hash: uint64, eval_id: string`` (flattened, one row per (hash, eval_id) pair).
 Join ``matched_hashes`` against this sidecar to attribute
@@ -92,6 +95,7 @@ DROP_SET_STAGE_PARTITIONS_PER_SOURCE = 128
 DROP_SET_STAGE_TASKS_PER_WORKER = 4
 DEFAULT_DROP_SET_STAGE_PARTITIONS = 4_000
 LARGE_TEXT_STREAMING_THRESHOLD = 1024 * 1024
+DEFAULT_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="4g")
 _TOKEN_PATTERN = re.compile(r"\S+")
 
 
@@ -327,18 +331,25 @@ def _extract_features(text: str, ngram: NGramConfig | None) -> Iterator[str]:
         yield from _extract_ngrams(text, ngram.ngram_length, ngram.stride)
 
 
+class _ParagraphOverlap(NamedTuple):
+    score: float
+    matched_hashes: list[int]
+    feature_count: int
+    has_ngrams: bool
+
+
 def _paragraph_overlap_matches_and_presence(
     paragraph: str,
     bf: Container[int],
     ngram: NGramConfig | None,
     drop_hashes: frozenset[int] = frozenset(),
-) -> tuple[float, list[int], int, bool]:
-    """Return overlap details, feature counts, and n-gram presence."""
+) -> _ParagraphOverlap:
+    """Return overlap after drop filtering and n-gram presence before filtering."""
     if ngram is None:
         h = _bloom_hash(paragraph)
         if h in drop_hashes:
-            return 0.0, [], 0, False
-        return (1.0, [h], 1, False) if h in bf else (0.0, [], 1, False)
+            return _ParagraphOverlap(0.0, [], 0, False)
+        return _ParagraphOverlap(1.0, [h], 1, False) if h in bf else _ParagraphOverlap(0.0, [], 1, False)
 
     has_ngram_features = False
     feature_count = 0
@@ -358,8 +369,8 @@ def _paragraph_overlap_matches_and_presence(
         if hash_value in bf:
             matched.append(hash_value)
     if feature_count == 0:
-        return 0.0, [], feature_count, has_ngram_features
-    return len(matched) / feature_count, matched, feature_count, has_ngram_features
+        return _ParagraphOverlap(0.0, [], feature_count, has_ngram_features)
+    return _ParagraphOverlap(len(matched) / feature_count, matched, feature_count, has_ngram_features)
 
 
 def _document_overlap_and_matches(
@@ -408,8 +419,7 @@ def _document_overlap_and_matches(
         if score >= threshold and (distinct_hits >= minimum or complete_single_feature_document):
             matched.update(hits)
 
-    # A complete eval record can have one n-gram and short answer metadata. Keep
-    # the complete-record exception only when no other usable n-gram is present.
+    # Retain a match when drop filtering leaves one usable n-gram in the document.
     if ngram is not None and document_ngram_feature_count == 1 and document_ngram_hits:
         matched.update(document_ngram_hits)
 
@@ -552,8 +562,6 @@ def _build_filter(
     ``(hash, eval_id)`` pair, with the hash deduped *within* a single eval
     record). Inter-record duplicates are allowed; joins handle them naturally.
 
-    This local path supports inline builds in :func:`decon_to_parquet`.
-    :func:`build_eval_bloom` uses Zephyr for reusable Bloom artifacts.
     """
     bf = dupekit.Bloom(estimated_doc_count, false_positive_rate)
     stats = _EvalIndexStats()
@@ -863,7 +871,7 @@ def decon_to_parquet(
         _make_marker(bloom_path, output_path, text_field, ngram, drop_hashes, flagged_sample_size)
     )
 
-    resources = worker_resources or ResourceConfig(cpu=2, ram="4g")
+    resources = worker_resources or DEFAULT_WORKER_RESOURCES
     ctx_kwargs: dict[str, Any] = {"name": "decon-mark", "resources": resources}
     if max_workers is not None:
         ctx_kwargs["max_workers"] = max_workers
@@ -979,7 +987,7 @@ def build_eval_bloom(
     eval_files = sorted(_discover_eval_files(eval_paths, exclude_eval_dirs))
     bloom_path, index_path = bloom_paths(output_path)
     parts_dir = prefix_join(output_path, "_bloom/_index_parts")
-    resources = worker_resources or ResourceConfig(cpu=2, ram="4g")
+    resources = worker_resources or DEFAULT_WORKER_RESOURCES
     ctx_kwargs: dict[str, Any] = {"name": "decon-bloom", "resources": resources}
     if max_workers is not None:
         ctx_kwargs["max_workers"] = max_workers
@@ -1390,27 +1398,6 @@ def merge_eval_blooms_step(
 # ---------------------------------------------------------------------------
 
 
-class SourceDropSet(BaseModel):
-    """Outcome of :func:`build_source_drop_set`: a source's common-ngram hashes.
-
-    Consumers read the drop hashes from ``output_dir`` (via :func:`_load_drop_set`);
-    the counts are informational.
-    """
-
-    output_dir: DatakitArtifactPath
-    n_sampled: int
-    n_dropped: int
-
-
-def _iter_normalized_texts(main_output_dir: str, text_field: str) -> Iterator[str]:
-    files = sorted(str(m) for m in StoragePath(f"{main_output_dir.rstrip('/')}/**/*.parquet").glob())
-    for path in files:
-        for record in load_file(path):
-            text = record.get(text_field)
-            if text:
-                yield str(text)
-
-
 def _load_drop_set(drop_set_dir: str) -> frozenset[int]:
     drop_path = StoragePath(f"{drop_set_dir.rstrip('/')}/drop.parquet")
     if not drop_path.exists():
@@ -1423,75 +1410,12 @@ def _load_drop_sets(drop_set_dirs: list[str]) -> frozenset[int]:
     return frozenset().union(*(_load_drop_set(drop_set_dir) for drop_set_dir in drop_set_dirs))
 
 
-def _document_frequency_counts(
-    df_sample_dir: str,
-    bf: dupekit.Bloom,
-    text_field: str,
-    ngram: NGramConfig | None,
-    sample_docs: int,
-) -> tuple[Counter[int], int]:
-    counts: Counter[int] = Counter()
-    n = 0
-    for text in islice(_iter_normalized_texts(df_sample_dir, text_field), sample_docs):
-        n += 1
-        counts.update({h for feat in _extract_features(text, ngram) if (h := _bloom_hash(feat)) in bf})
-    return counts, n
-
-
-def _drop_set_for_source(
-    df_sample_dir: str,
-    bf: dupekit.Bloom,
-    text_field: str,
-    ngram: NGramConfig | None,
-    sample_docs: int,
-    common_frac: float,
-    common_min_abs: int,
-) -> tuple[list[int], int, int]:
-    """Core DF count for one source given a *loaded* bloom → (drop_hashes, n_sampled, threshold).
-
-    Reads a prefix of *sample_docs* docs from *df_sample_dir* (shuffled upstream,
-    so a prefix is representative), counts how many contain each eval ngram
-    (membership via the bloom — the only ngrams a drop-set can hold), and keeps
-    those in at least ``max(common_min_abs, common_frac * n_sampled)`` docs."""
-    counts, n = _document_frequency_counts(df_sample_dir, bf, text_field, ngram, sample_docs)
-    threshold = max(common_min_abs, int(common_frac * n))
-    return [h for h, c in counts.items() if c >= threshold], n, threshold
-
-
 def _write_drop_set(output_dir: str, drop: list[int]) -> str:
     StoragePath(output_dir).mkdirs()
     out_file = f"{output_dir.rstrip('/')}/drop.parquet"
     with StoragePath(out_file).open("wb") as fh:
         pq.write_table(pa.table({"hash": pa.array(drop, pa.uint64())}), fh, compression="zstd")
     return out_file
-
-
-def build_source_drop_set(
-    *,
-    df_sample_dir: str,
-    prebuilt_bloom_dir: str,
-    output_path: str,
-    text_field: str = "text",
-    ngram: NGramConfig | None,
-    sample_docs: int,
-    common_frac: float,
-    common_min_abs: int,
-) -> SourceDropSet:
-    """Single-source drop-set (loads the bloom, counts DF, writes ``drop.parquet``).
-
-    The building block; :func:`build_all_source_drop_sets` distributes this over
-    many sources. *df_sample_dir* should point at a pool large enough to estimate
-    DF (~5k docs); it need not be the sample being deconned (DF is a source
-    property, so a 100M mark can reuse a drop-set estimated from a 1T sample).
-    """
-    bloom_path, _ = bloom_paths(prebuilt_bloom_dir)
-    bf = dupekit.Bloom.load_bytes(StoragePath(bloom_path).read_bytes())
-    drop, n, threshold = _drop_set_for_source(
-        df_sample_dir, bf, text_field, ngram, sample_docs, common_frac, common_min_abs
-    )
-    out_file = _write_drop_set(output_path, drop)
-    logger.info("decon drop-set: sampled %d docs, %d common ngrams (df>=%d) → %s", n, len(drop), threshold, out_file)
-    return SourceDropSet(output_dir=output_path, n_sampled=n, n_dropped=len(drop))
 
 
 class AllSourceDropSets(BaseModel):
@@ -1839,7 +1763,7 @@ def build_all_source_drop_sets(
         )
         .filter(lambda row: row is not None)
     )
-    resources = worker_resources or ResourceConfig(cpu=2, ram="4g")
+    resources = worker_resources or DEFAULT_WORKER_RESOURCES
     ctx_kwargs: dict[str, Any] = {"name": "decon-drop-set", "resources": resources}
     if max_workers is not None:
         ctx_kwargs["max_workers"] = max_workers

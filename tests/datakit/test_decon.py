@@ -22,13 +22,10 @@ from marin.datakit.decon import (
     bloom_paths,
     build_all_source_drop_sets,
     build_eval_bloom,
-    build_source_drop_set,
     decon_to_parquet,
     merge_eval_blooms,
 )
 from marin.datakit.normalize import NormalizedData
-
-from experiments.datakit.decontam.viewer.export_run import _overlapping_ngrams
 
 
 @pytest.fixture(autouse=True)
@@ -521,7 +518,6 @@ def test_decon_complete_record_retains_match_evidence(tmp_path: Path, text: str,
     assert row["contaminated"] is True
     assert row["max_overlap"] == 1.0
     assert set(row["matched_hashes"]) == {_bloom_hash(feature) for feature in features}
-    assert _overlapping_ngrams(text, set(row["matched_hashes"]), ngram) == features
 
 
 def test_decon_does_not_index_short_paragraph_from_long_eval_record(tmp_path: Path):
@@ -1440,8 +1436,11 @@ def test_source_drop_set_filters_source_ubiquitous_ngram(tmp_path: Path):
     _write_input_parquet(input_dir / "part-00000-of-00001.parquet", docs)
 
     drop_dir = tmp_path / "drop"
-    result = build_source_drop_set(
-        df_sample_dir=str(input_dir),
+    result = build_all_source_drop_sets(
+        sources=[("source", str(input_dir))],
+        global_sample_docs=1000,
+        global_common_min_abs=2,
+        global_common_min_sources=2,
         prebuilt_bloom_dir=str(bloom_dir),
         output_path=str(drop_dir),
         ngram=NGramConfig(min_matched_features=2, ngram_length=4, paragraph_delimiter="\n"),
@@ -1449,7 +1448,7 @@ def test_source_drop_set_filters_source_ubiquitous_ngram(tmp_path: Path):
         common_frac=0.5,
         common_min_abs=2,
     )
-    assert result.n_dropped > 0  # boilerplate ngrams (df=20) dropped; distinctive (df=1) kept
+    assert result.counters["decon_drop/ngrams_dropped"] > 0
 
     out_dir = tmp_path / "out"
     decon_to_parquet(
@@ -1457,7 +1456,7 @@ def test_source_drop_set_filters_source_ubiquitous_ngram(tmp_path: Path):
         prebuilt_bloom_dir=str(bloom_dir),
         output_path=str(out_dir),
         ngram=NGramConfig(min_matched_features=2, ngram_length=4, overlap_threshold=0.5, paragraph_delimiter="\n"),
-        drop_set_dirs=[str(drop_dir)],
+        drop_set_dirs=[str(drop_dir / "source")],
     )
     rows = _read_attributes(out_dir)
     assert rows["d0"]["contaminated"] is False
@@ -1486,8 +1485,11 @@ def test_source_drop_set_empty_leaves_marks_unchanged(tmp_path: Path):
         [{"id": "leak", "text": "the platypus juggled seventeen luminous kumquats", "partition_id": 0}],
     )
     drop_dir = tmp_path / "drop"
-    result = build_source_drop_set(
-        df_sample_dir=str(input_dir),
+    result = build_all_source_drop_sets(
+        sources=[("source", str(input_dir))],
+        global_sample_docs=1000,
+        global_common_min_abs=2,
+        global_common_min_sources=2,
         prebuilt_bloom_dir=str(bloom_dir),
         output_path=str(drop_dir),
         ngram=NGramConfig(min_matched_features=2, ngram_length=4, paragraph_delimiter="\n"),
@@ -1495,14 +1497,14 @@ def test_source_drop_set_empty_leaves_marks_unchanged(tmp_path: Path):
         common_frac=0.5,
         common_min_abs=5,
     )
-    assert result.n_dropped == 0
+    assert result.counters["decon_drop/ngrams_dropped"] == 0
     out_dir = tmp_path / "out"
     decon_to_parquet(
         normalized_data=_as_source(input_dir),
         prebuilt_bloom_dir=str(bloom_dir),
         output_path=str(out_dir),
         ngram=NGramConfig(min_matched_features=2, ngram_length=4, overlap_threshold=0.5, paragraph_delimiter="\n"),
-        drop_set_dirs=[str(drop_dir)],
+        drop_set_dirs=[str(drop_dir / "source")],
     )
     assert _read_attributes(out_dir)["leak"]["contaminated"] is True
 
