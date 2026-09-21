@@ -119,11 +119,22 @@ def test_format_audit_counts_exact_boxes_only_when_completed_and_unrewarded(tmp_
         }
         for index, (stop, score, answer) in enumerate((("stop", 1, 7), ("stop", 0, 7), ("length", 1, 7), ("stop", 0, 8)))
     ]
+    rows.append(
+        {
+            "input_prompt": "earlier correct box",
+            "env_extras": {"reward_spec": {"ground_truth": "7"}},
+            "stop_reason": "stop",
+            "score": 0,
+            "output_response": "<|end_think|>\\boxed{7}\nFinal answer: 8",
+        }
+    )
     path.write_text("".join(json.dumps(row) + "\n" for row in rows))
     audit = summarize_format(str(path), "https://unused.example")
-    assert audit["final_turn_boxed_exact_unrewarded"] == 1
+    assert audit["final_turn_boxed_exact_unrewarded"] == 2
+    assert audit["terminal_boxed_exact_unrewarded"] == 1
     assert audit["rewarded_correct_completed"] == 1
-    assert audit["completed_rewarded_or_exact_boxed"] == 2
+    assert audit["completed_rewarded_or_exact_boxed"] == 3
+    assert audit["completed_rewarded_or_terminal_boxed"] == 2
 
 
 def test_iris_mirror_uses_the_resumed_attempt_for_repeated_steps(tmp_path):

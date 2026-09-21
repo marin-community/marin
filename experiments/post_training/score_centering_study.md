@@ -1197,7 +1197,13 @@ The seven-answer starting gap cannot be a training effect; compare both terminal
 passes and the baseline-adjusted difference. The
 [SC32 retry GSM8K format audit](results/score_centering_snowball_sc32_attempt1_gsm8k_step0_probe.json)
 found 58 completed outputs with an exact boxed ground-truth number but no
-reward. The pair comparison remains within one pool.
+reward. A stricter check requires the box to end the final turn. It found 55
+unrewarded exact terminal boxes for TIS and 50 for the SC retry. Adding these
+to completed rewarded GSM8K answers gives 183/256 and 190/256 at baseline,
+respectively, versus 128/256 and 140/256 from the format-specific grader.
+The terminal-box count is a high-confidence numeric diagnostic; it does not
+replace the training reward or Math500's symbolic grader. The pair comparison
+remains within one pool.
 
 The first SC32 Iris attempt completed two optimizer updates and then failed
 during update three. A TransformerEngine fused-attention backward call on
@@ -1257,3 +1263,9 @@ attributed to SC against the earlier fused-attention TIS control: a matched
 FlashAttention TIS arm is required. This original-pin SC run qualifies the
 backend through the updates at which fused attention failed; a quality pair
 must use the same new runtime pin for both arms.
+Its [step-zero pass](results/score_centering_snowball_flash_sc32_pilot_step0_evals.csv)
+scored 232/756 completed rewarded core math answers and 118/256 rewarded
+completed GSM8K answers. Another 64 GSM8K answers were unrewarded but ended
+with an exact boxed ground-truth number, for a strict format-inclusive
+[182/256](results/score_centering_snowball_flash_sc32_pilot_gsm8k_step0_probe.json).
+These are starting scores before its first update, not evidence of SC's effect.

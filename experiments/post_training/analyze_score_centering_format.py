@@ -9,10 +9,10 @@ Example::
       --responses s3://bucket/run/exports/dumped_evals/global_step_0_evals/val-gsm8k.jsonl \
       --output /tmp/snowball-format.json
 
-The boxed comparison is deliberately strict: it counts only the last boxed
-number after the thinking turn when that number exactly matches ground truth.
-It diagnoses grader-format misses; a box earlier than another final-answer
-line may still be counted, so it is not a replacement reward rule.
+The boxed comparison counts the last boxed number after the thinking turn
+when it exactly matches ground truth. The terminal-boxed subset further
+requires the box to end the final turn, avoiding an earlier correct box
+followed by a different final answer.
 """
 
 from __future__ import annotations
@@ -33,19 +33,34 @@ def summarize(responses: str, s3_endpoint: str) -> dict:
         raise ValueError(f"no responses in {responses}")
     completed = [row for row in rows if row["stop_reason"] in ACCEPTED_STOPS]
     boxed = []
+    terminal_boxed = []
     for row in completed:
         final_turn = row["output_response"].split("<|end_think|>")[-1]
         answer = boxed_answer(final_turn)
         if answer is not None:
             boxed.append((row, answer))
-    exact = [
-        row
-        for row, answer in boxed
-        if answer.strip().replace(",", "")
-        == str(row["env_extras"]["reward_spec"]["ground_truth"]).strip().replace(",", "")
-    ]
+            start = final_turn.rfind("\\boxed{") + len("\\boxed")
+            depth = 0
+            for index in range(start, len(final_turn)):
+                if final_turn[index] == "{":
+                    depth += 1
+                elif final_turn[index] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        if final_turn[index + 1 :].strip() in ("", "<|eot_id|>", "<|im_end|>"):
+                            terminal_boxed.append((row, answer))
+                        break
+
+    def is_exact(row: dict, answer: str) -> bool:
+        return answer.strip().replace(",", "") == str(row["env_extras"]["reward_spec"]["ground_truth"]).strip().replace(
+            ",", ""
+        )
+
+    exact = [row for row, answer in boxed if is_exact(row, answer)]
+    terminal_exact = [row for row, answer in terminal_boxed if is_exact(row, answer)]
     rewarded_completed = sum(row["score"] > 0 for row in completed)
     exact_unrewarded = sum(row["score"] <= 0 for row in exact)
+    terminal_exact_unrewarded = sum(row["score"] <= 0 for row in terminal_exact)
     return {
         "responses": responses,
         "membership_sha256": _membership_hash(rows),
@@ -54,9 +69,12 @@ def summarize(responses: str, s3_endpoint: str) -> dict:
         "final_turn_boxed": len(boxed),
         "final_turn_boxed_exact_ground_truth": len(exact),
         "final_turn_boxed_exact_unrewarded": exact_unrewarded,
+        "terminal_boxed_exact_ground_truth": len(terminal_exact),
+        "terminal_boxed_exact_unrewarded": terminal_exact_unrewarded,
         "rewarded_correct": sum(row["score"] > 0 for row in rows),
         "rewarded_correct_completed": rewarded_completed,
         "completed_rewarded_or_exact_boxed": rewarded_completed + exact_unrewarded,
+        "completed_rewarded_or_terminal_boxed": rewarded_completed + terminal_exact_unrewarded,
     }
 
 
