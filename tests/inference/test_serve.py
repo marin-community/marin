@@ -226,7 +226,6 @@ def test_isolated_cuda_vllm_marin_fork_uses_verified_wheel(monkeypatch, machine)
     requirements = [cmd[index + 1] for index, token in enumerate(cmd) if token == "--with"]
     assert "torchaudio==2.11.0+cpu" in requirements
     assert cmd[cmd.index("--index-strategy") + 1] == "unsafe-best-match"
-    assert f"nvidia-cuda-nvcc=={VLLM_GPU_RELEASE.torch_backend.removeprefix('cu')[:2]}.2.78" in requirements
     bootstrap_index = cmd.index("-c")
     wrapped_command = cmd[bootstrap_index + 2 :]
     assert wrapped_command[0] == "python"

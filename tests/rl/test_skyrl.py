@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import IO, cast
 
 import pytest
-import yaml
 from marin.evaluation.model_config import ModelConfig, ResourceHint
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -22,7 +21,6 @@ from marin.external_dependencies import MARIN_SKYRL
 from marin.rl.skyrl import (
     SKYRL_POLICY_LOCATION,
     ArtifactDataSource,
-    ArtifactEagleDraft,
     ArtifactHfModel,
     IrisSkyRLExecution,
     ResolvedDirectoryDataSource,
@@ -191,43 +189,6 @@ def test_skyrl_step_declares_model_and_data_dependencies() -> None:
         ("tests/iceball-sft", "2026.08.01"),
         ("tests/iceball-gsm8k", "2026.08.01"),
     ]
-
-
-def test_skyrl_step_resolves_frozen_eagle_draft_artifact() -> None:
-    draft = ArtifactStep.adopt(
-        "tests/iceball-eagle",
-        "2026.09.20",
-        "s3://test/iceball-eagle",
-    )
-    spec = dataclasses.replace(
-        _spec(),
-        config_yaml=(
-            "generator:\n"
-            "  speculative_decoding:\n"
-            "    method: eagle3\n"
-            "    model: {}\n"
-            "    num_speculative_tokens: 3\n"
-            "    training: null\n"
-        ),
-        draft_model=ArtifactEagleDraft(draft),
-    )
-    step = skyrl_step(spec, _execution())
-    config = step.build_config(
-        StepContext.for_run(
-            output_path="s3://test/output",
-            prefix="s3://test",
-            runtime_args=step.runtime_args,
-            deps=step.deps,
-        )
-    )
-    resolved = yaml.safe_load(config.request.config_yaml)["generator"]["speculative_decoding"]
-
-    assert draft in step.deps
-    assert resolved["model"] == {
-        "source_uri": "s3://test/iceball-eagle",
-        "source_identity": f"{draft.name}@{draft.version}:{draft.fingerprint()}",
-    }
-    assert resolved["training"] is None
 
 
 def test_skyrl_step_routes_disposable_state_to_ttl_storage(

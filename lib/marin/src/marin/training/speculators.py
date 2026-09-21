@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Artifact steps for offline draft-model training with vLLM Speculators."""
+"""Concrete operations for offline draft-model training with Speculators."""
 
 from __future__ import annotations
 
@@ -20,14 +20,9 @@ from typing import Any
 
 from finestore.eval import ARCHIVE_ROLLOUTS_TABLE, ParticipantType
 from finestore.reader import ReadView
-from fray.types import ResourceConfig
 from levanter.model_cache import cache_hf_model
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-from marin.execution.artifact import Artifact
-from marin.execution.build_context import resolve_version
-from marin.execution.lazy import ArtifactStep, StepContext
-from marin.execution.remote import remote
 from marin.inference.backend import OPENAI_API_SUFFIX, ModelSpec
 from marin.inference.config import VllmEngineConfig, VllmLauncherType, VllmSource
 from marin.inference.vllm_backend import VllmBackend
@@ -38,19 +33,7 @@ SPECULATORS_DATA_FILENAME = "conversations.jsonl"
 SPECULATORS_PREPARED_DATA_DIR = "data"
 SPECULATORS_HIDDEN_STATES_DIR = "hidden_states"
 _VLLM_SCALE_OUT_ENDPOINTS_ENV = {"VLLM_ENABLE_SCALE_OUT_ENDPOINTS": "1"}
-_DRAFT_GPU_COUNT = 8
 _OBJECT_STORE_BATCH_SIZE = 16
-_DRAFT_GPU_RESOURCES = ResourceConfig.with_gpu("H100", count=_DRAFT_GPU_COUNT, cpu=96, ram="512g", disk="1t")
-
-# Speculators installs torchaudio for multimodal preprocessing. PyPI's Linux
-# wheel follows CUDA 13, while Iris H100 tasks currently provide PyTorch's
-# CUDA 12.8 runtime. Pin the matching wheel so importing Transformers does not
-# fail before the text-only CLI can start.
-_TORCHAUDIO_CU128_REQUIREMENT = (
-    "torchaudio @ https://download.pytorch.org/whl/cu128/"
-    "torchaudio-2.11.0%2Bcu128-cp312-cp312-manylinux_2_28_x86_64.whl"
-    "#sha256=78b86a17f164bdaabdcee93fdfde2587fc43b9ebf15cd61dcf730b4f8615176b"
-)
 
 _VERIFIER_TENSORS = (
     "model.embed_tokens.weight",
@@ -122,13 +105,6 @@ class DraftTrainingConfig:
     num_processes: int
 
 
-@dataclass(frozen=True)
-class SpeculatorsRecipe:
-    requirement: str
-    target_layer_ids: tuple[int, ...]
-    sequence_length: int
-
-
 def _rollout_key(row: Mapping[str, Any]) -> tuple[str, str, str]:
     return str(row["task"]), str(row["doc_id"]), str(row.get("trial_id") or "")
 
@@ -190,56 +166,9 @@ def write_rollout_conversations(config: RolloutConversationConfig) -> None:
     logger.info("Wrote %d on-policy conversations to %s", count, destination)
 
 
-def rollout_conversation_step(
-    *,
-    name: str,
-    version: str | None = None,
-    evaluations: tuple[ArtifactStep, ...],
-    resources: ResourceConfig = ResourceConfig.with_cpu(cpu=4, ram="16g", disk="16g"),
-) -> ArtifactStep[Artifact]:
-    """Build a Speculators-compatible conversation JSONL artifact."""
-
-    def build_config(ctx: StepContext) -> RolloutConversationConfig:
-        return RolloutConversationConfig(
-            source_archives=tuple(ctx.artifact_path(evaluation) for evaluation in evaluations),
-            output_path=ctx.output_path,
-        )
-
-    return ArtifactStep(
-        name=name,
-        version=resolve_version(name, version),
-        artifact_type=Artifact,
-        run=remote(write_rollout_conversations, resources=resources),
-        build_config=build_config,
-        deps=evaluations,
-    )
-
-
 def mirror_hf_snapshot(config: HfSnapshotConfig) -> None:
     """Mirror one immutable Hugging Face snapshot into artifact storage."""
     cache_hf_model(config.output_path, config.repo_id, revision=config.revision)
-
-
-def hf_snapshot_step(
-    *,
-    name: str,
-    version: str | None = None,
-    repo_id: str,
-    revision: str,
-    resources: ResourceConfig = ResourceConfig.with_cpu(cpu=4, ram="16g", disk="64g"),
-) -> ArtifactStep[Artifact]:
-    """Cache a pinned Hugging Face repository as a Marin artifact."""
-
-    def build_config(ctx: StepContext) -> HfSnapshotConfig:
-        return HfSnapshotConfig(repo_id=repo_id, revision=revision, output_path=ctx.output_path)
-
-    return ArtifactStep(
-        name=name,
-        version=resolve_version(name, version),
-        artifact_type=Artifact,
-        run=remote(mirror_hf_snapshot, resources=resources),
-        build_config=build_config,
-    )
 
 
 def verifier_config_for_transformers(config: Mapping[str, Any], model_type: str) -> dict[str, Any]:
@@ -279,33 +208,6 @@ def build_verifier_view(config: VerifierViewConfig) -> None:
             if source_file.exists():
                 source_file.download_to(str(work_path / filename))
         _publish_directory(work_path, config.output_path)
-
-
-def verifier_view_step(
-    *,
-    name: str,
-    version: str | None = None,
-    target_model: ArtifactStep,
-    transformers_model_type: str,
-    resources: ResourceConfig = ResourceConfig.with_cpu(cpu=8, ram="32g", disk="32g"),
-) -> ArtifactStep[Artifact]:
-    """Build the small verifier checkpoint view loaded by Speculators training."""
-
-    def build_config(ctx: StepContext) -> VerifierViewConfig:
-        return VerifierViewConfig(
-            source_model=ctx.artifact_path(target_model),
-            transformers_model_type=transformers_model_type,
-            output_path=ctx.output_path,
-        )
-
-    return ArtifactStep(
-        name=name,
-        version=resolve_version(name, version),
-        artifact_type=Artifact,
-        run=remote(build_verifier_view, resources=resources),
-        build_config=build_config,
-        deps=(target_model,),
-    )
 
 
 def _run_command(command: Sequence[str], *, environment: Mapping[str, str] | None = None) -> None:
@@ -480,53 +382,6 @@ def capture_hidden_states(config: HiddenStateCaptureConfig) -> None:
                 _publish_directory(prepared_data, config.output_path)
 
 
-def hidden_state_capture_step(
-    *,
-    name: str,
-    version: str | None = None,
-    dataset: ArtifactStep,
-    target_model: ArtifactStep,
-    processor_model: str,
-    recipe: SpeculatorsRecipe,
-    verifier_num_hidden_layers: int,
-    data_parallel_size: int = _DRAFT_GPU_COUNT,
-    concurrency: int = 64,
-    max_samples: int | None = None,
-    gpu_memory_utilization: float = 0.9,
-    resources: ResourceConfig = _DRAFT_GPU_RESOURCES,
-) -> ArtifactStep[Artifact]:
-    """Capture a reusable offline Speculators training dataset."""
-
-    def build_config(ctx: StepContext) -> HiddenStateCaptureConfig:
-        return HiddenStateCaptureConfig(
-            dataset_path=prefix_join(ctx.artifact_path(dataset), SPECULATORS_DATA_FILENAME),
-            target_model=ctx.artifact_path(target_model),
-            processor_model=processor_model,
-            output_path=ctx.output_path,
-            target_layer_ids=recipe.target_layer_ids,
-            verifier_num_hidden_layers=verifier_num_hidden_layers,
-            sequence_length=recipe.sequence_length,
-            data_parallel_size=data_parallel_size,
-            concurrency=concurrency,
-            max_samples=max_samples,
-            gpu_memory_utilization=gpu_memory_utilization,
-        )
-
-    return ArtifactStep(
-        name=name,
-        version=resolve_version(name, version),
-        artifact_type=Artifact,
-        run=remote(
-            capture_hidden_states,
-            resources=resources,
-            pip_packages=[recipe.requirement, _TORCHAUDIO_CU128_REQUIREMENT],
-            max_retries_failure=2,
-        ),
-        build_config=build_config,
-        deps=(dataset, target_model),
-    )
-
-
 def _best_checkpoint(checkpoints: Path) -> Path:
     best = checkpoints / "checkpoint_best"
     if best.exists():
@@ -625,47 +480,3 @@ def train_draft(config: DraftTrainingConfig) -> None:
         _make_checkpoint_portable(published)
         _validate_draft_checkpoint(published)
         _publish_directory(published, config.output_path)
-
-
-def draft_training_step(
-    *,
-    name: str,
-    version: str | None = None,
-    captured_data: ArtifactStep,
-    verifier: ArtifactStep,
-    initial_draft: ArtifactStep,
-    recipe: SpeculatorsRecipe,
-    epochs: int = 4,
-    learning_rate: float = 1e-5,
-    muon_learning_rate: float = 0.02,
-    num_processes: int = _DRAFT_GPU_COUNT,
-    resources: ResourceConfig = _DRAFT_GPU_RESOURCES,
-) -> ArtifactStep[Artifact]:
-    """Fine-tune a deployable draft checkpoint from a captured artifact."""
-
-    def build_config(ctx: StepContext) -> DraftTrainingConfig:
-        return DraftTrainingConfig(
-            captured_data_path=ctx.artifact_path(captured_data),
-            verifier_path=ctx.artifact_path(verifier),
-            initial_draft_path=ctx.artifact_path(initial_draft),
-            output_path=ctx.output_path,
-            target_layer_ids=recipe.target_layer_ids,
-            sequence_length=recipe.sequence_length,
-            epochs=epochs,
-            learning_rate=learning_rate,
-            muon_learning_rate=muon_learning_rate,
-            num_processes=num_processes,
-        )
-
-    return ArtifactStep(
-        name=name,
-        version=resolve_version(name, version),
-        artifact_type=Artifact,
-        run=remote(
-            train_draft,
-            resources=resources,
-            pip_packages=[recipe.requirement, _TORCHAUDIO_CU128_REQUIREMENT],
-        ),
-        build_config=build_config,
-        deps=(captured_data, verifier, initial_draft),
-    )

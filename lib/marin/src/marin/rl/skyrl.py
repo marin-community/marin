@@ -126,10 +126,12 @@ class ResolvedDirectoryDataSource:
     kind: Literal["directory"] = "directory"
 
 
-@dataclass(frozen=True)
-class ResolvedEagleDraft:
-    source_uri: str
-    source_identity: str
+class EagleDraftArtifact(Artifact):
+    """A deployable EAGLE draft checkpoint."""
+
+    @property
+    def source_uri(self) -> str:
+        return self.path
 
 
 class TaskTroveTagMatch(StrEnum):
@@ -247,22 +249,6 @@ class ArtifactDataSource:
 
 
 @dataclass(frozen=True)
-class ArtifactEagleDraft:
-    """An immutable EAGLE draft produced by another Marin artifact step."""
-
-    step: ArtifactStep[Artifact]
-
-    def deps(self) -> tuple[ArtifactStep, ...]:
-        return (self.step,)
-
-    def resolve(self, ctx: StepContext) -> ResolvedEagleDraft:
-        return ResolvedEagleDraft(
-            source_uri=ctx.artifact_path(self.step),
-            source_identity=_artifact_identity(self.step),
-        )
-
-
-@dataclass(frozen=True)
 class TaskTroveDataSource:
     """A metadata-selected cohort from the compatibility RL view of a TaskTrove release."""
 
@@ -315,7 +301,7 @@ class SkyRLSpec:
     retention: SkyRLRetentionPolicy
     seed: int
     overrides: tuple[str, ...] = ()
-    draft_model: ArtifactEagleDraft | None = None
+    draft_model: ArtifactStep[EagleDraftArtifact] | None = None
 
 
 @dataclass(frozen=True)
@@ -369,7 +355,7 @@ def _effective_strategy(config_yaml: str, overrides: tuple[str, ...]) -> str | N
     return trainer.get("strategy") if isinstance(trainer, dict) else None
 
 
-def _config_yaml_with_eagle_draft(config_yaml: str, draft: ResolvedEagleDraft) -> str:
+def _config_yaml_with_eagle_draft(config_yaml: str, source_uri: str, source_identity: str) -> str:
     config = yaml.safe_load(config_yaml)
     if not isinstance(config, dict):
         raise ValueError("EAGLE configuration must be a YAML mapping")
@@ -380,8 +366,8 @@ def _config_yaml_with_eagle_draft(config_yaml: str, draft: ResolvedEagleDraft) -
     if not isinstance(speculative, dict):
         raise ValueError("EAGLE configuration requires generator.speculative_decoding")
     speculative["model"] = {
-        "source_uri": draft.source_uri,
-        "source_identity": draft.source_identity,
+        "source_uri": source_uri,
+        "source_identity": source_identity,
     }
     return yaml.safe_dump(config, sort_keys=False)
 
@@ -588,7 +574,7 @@ def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[S
         dict.fromkeys(
             (
                 *spec.model.deps(),
-                *(spec.draft_model.deps() if spec.draft_model is not None else ()),
+                *((spec.draft_model,) if spec.draft_model is not None else ()),
                 *(dep for source in spec.train_data for dep in source.deps()),
                 *(dep for source in spec.validation_data for dep in source.deps()),
             )
@@ -619,7 +605,16 @@ def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[S
         )
         config_yaml = spec.config_yaml
         if spec.draft_model is not None:
-            config_yaml = _config_yaml_with_eagle_draft(config_yaml, spec.draft_model.resolve(ctx))
+            source_uri = (
+                f"{_artifact_identity(spec.draft_model)}/<draft>"
+                if ctx.is_fingerprint
+                else ctx.resolved(spec.draft_model).source_uri
+            )
+            config_yaml = _config_yaml_with_eagle_draft(
+                config_yaml,
+                source_uri,
+                _artifact_identity(spec.draft_model),
+            )
         request = SkyRLLaunchRequest(
             run_id=f"{step_name}-{spec.version}",
             attempt_id=attempt_id,
