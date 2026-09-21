@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import textwrap
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -99,6 +100,19 @@ def _preflight(
         check=check,
         extra_python_path=extra_python_path,
     )
+
+
+def _effective_job(policy_path: Path, overlay_path: Path) -> dict[str, Any]:
+    script = (
+        "import json; "
+        "from pathlib import Path; "
+        "from marin.evaluation.harbor.trial_driver import effective_job_config; "
+        f"config=effective_job_config(Path({str(policy_path)!r}), Path({str(overlay_path)!r})); "
+        'print(json.dumps({"config": config.model_dump(mode="json"), '
+        '"api_base": config.agents[0].kwargs["api_base"], '
+        '"job_dir": str(config.jobs_dir / config.job_name)}))'
+    )
+    return json.loads(_external_python("-c", script).stdout)
 
 
 def _run_single_turn_aime_agent(
@@ -484,14 +498,7 @@ def test_effective_job_applies_runtime_precedence_and_validates_nested_updates(t
             }
         )
     )
-    script = (
-        "from pathlib import Path; "
-        "from marin.evaluation.harbor.trial_driver import effective_job_config; "
-        f"config=effective_job_config(Path({str(policy_path)!r}), Path({str(overlay_path)!r})); "
-        "print(config.model_dump_json())"
-    )
-
-    effective = json.loads(_external_python("-c", script).stdout)
+    effective = _effective_job(policy_path, overlay_path)["config"]
 
     assert effective["job_name"] == "runtime-job"
     assert effective["jobs_dir"] == str(tmp_path / "jobs")
@@ -558,14 +565,7 @@ def test_effective_acp_job_routes_model_requests_to_served_endpoint(tmp_path):
             }
         )
     )
-    script = (
-        "from pathlib import Path; "
-        "from marin.evaluation.harbor.trial_driver import effective_job_config; "
-        f"config=effective_job_config(Path({str(policy_path)!r}), Path({str(overlay_path)!r})); "
-        "print(config.model_dump_json())"
-    )
-
-    effective = json.loads(_external_python("-c", script).stdout)
+    effective = _effective_job(policy_path, overlay_path)["config"]
 
     agent = effective["agents"][0]
     assert agent["name"] == "acp:pi-acp"
@@ -594,21 +594,11 @@ def test_effective_aime_job_preserves_capability_url_in_live_config_and_redacts_
             }
         )
     )
-    script = (
-        "import json; "
-        "from pathlib import Path; "
-        "from marin.evaluation.harbor.trial_driver import effective_job_config; "
-        f"config=effective_job_config(Path({str(policy_path)!r}), Path({str(overlay_path)!r})); "
-        'print(json.dumps({"api_base": config.agents[0].kwargs["api_base"], '
-        '"job_dir": str(config.jobs_dir / config.job_name), '
-        '"serialized": config.model_dump(mode="json")}))'
-    )
-
-    result = json.loads(_external_python("-c", script).stdout)
+    result = _effective_job(policy_path, overlay_path)
 
     assert result["api_base"] == capability_url
     assert result["job_dir"] == str(tmp_path / "jobs" / "runtime-job")
-    serialized = result["serialized"]
+    serialized = result["config"]
     assert serialized["agents"][0]["kwargs"]["api_base"] == (
         "https://iris.example/proxy/t/<redacted>/serve.inference-test/v1"
     )
