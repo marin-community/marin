@@ -193,6 +193,29 @@ def _rl_smoke_config(role_plan: SkyRLRolePlan) -> str:
     return yaml.safe_dump(config, sort_keys=False)
 
 
+@dataclass(frozen=True)
+class DraftSftArtifactNames:
+    """Artifact names for each reusable draft-SFT stage."""
+
+    conversations: str
+    initial_draft: str
+    verifier: str
+    captured_data: str
+    draft: str
+
+
+@dataclass(frozen=True)
+class DraftSftExecutionConfig:
+    """Model-specific hidden-state capture and training settings."""
+
+    processor_model: str
+    transformers_model_type: str
+    target_layer_ids: tuple[int, ...]
+    verifier_num_hidden_layers: int
+    sequence_length: int
+    gpu_count: int
+
+
 def _conversation_step(*, name: str, rollouts: ArtifactStep) -> ArtifactStep[Artifact]:
     def build_config(ctx: StepContext) -> RolloutConversationConfig:
         return RolloutConversationConfig(
@@ -264,22 +287,18 @@ def _capture_step(
     name: str,
     dataset: ArtifactStep,
     target_model: ArtifactStep,
-    processor_model: str,
-    target_layer_ids: tuple[int, ...],
-    verifier_num_hidden_layers: int,
-    sequence_length: int,
-    gpu_count: int,
+    execution: DraftSftExecutionConfig,
 ) -> ArtifactStep[Artifact]:
     def build_config(ctx: StepContext) -> HiddenStateCaptureConfig:
         return HiddenStateCaptureConfig(
             dataset_path=prefix_join(ctx.artifact_path(dataset), SPECULATORS_DATA_FILENAME),
             target_model=ctx.artifact_path(target_model),
-            processor_model=processor_model,
+            processor_model=execution.processor_model,
             output_path=ctx.output_path,
-            target_layer_ids=target_layer_ids,
-            verifier_num_hidden_layers=verifier_num_hidden_layers,
-            sequence_length=sequence_length,
-            data_parallel_size=gpu_count,
+            target_layer_ids=execution.target_layer_ids,
+            verifier_num_hidden_layers=execution.verifier_num_hidden_layers,
+            sequence_length=execution.sequence_length,
+            data_parallel_size=execution.gpu_count,
             concurrency=64,
             max_samples=None,
             gpu_memory_utilization=0.9,
@@ -291,7 +310,7 @@ def _capture_step(
         artifact_type=Artifact,
         run=remote(
             capture_hidden_states,
-            resources=ResourceConfig.with_gpu("H100", count=gpu_count, cpu=96, ram="512g", disk="1t"),
+            resources=ResourceConfig.with_gpu("H100", count=execution.gpu_count, cpu=96, ram="512g", disk="1t"),
             pip_packages=[SPECULATORS.requirement(), _TORCHAUDIO_CU128_REQUIREMENT],
             max_retries_failure=2,
         ),
@@ -306,9 +325,7 @@ def _draft_step(
     captured_data: ArtifactStep,
     verifier: ArtifactStep,
     initial_draft: ArtifactStep,
-    target_layer_ids: tuple[int, ...],
-    sequence_length: int,
-    gpu_count: int,
+    execution: DraftSftExecutionConfig,
 ) -> ArtifactStep[EagleDraftArtifact]:
     def build_config(ctx: StepContext) -> DraftTrainingConfig:
         return DraftTrainingConfig(
@@ -316,12 +333,12 @@ def _draft_step(
             verifier_path=ctx.artifact_path(verifier),
             initial_draft_path=ctx.artifact_path(initial_draft),
             output_path=ctx.output_path,
-            target_layer_ids=target_layer_ids,
-            sequence_length=sequence_length,
+            target_layer_ids=execution.target_layer_ids,
+            sequence_length=execution.sequence_length,
             epochs=4,
             learning_rate=1e-5,
             muon_learning_rate=0.02,
-            num_processes=gpu_count,
+            num_processes=execution.gpu_count,
         )
 
     return ArtifactStep(
@@ -330,7 +347,7 @@ def _draft_step(
         artifact_type=EagleDraftArtifact,
         run=remote(
             train_draft,
-            resources=ResourceConfig.with_gpu("H100", count=gpu_count, cpu=96, ram="512g", disk="1t"),
+            resources=ResourceConfig.with_gpu("H100", count=execution.gpu_count, cpu=96, ram="512g", disk="1t"),
             pip_packages=[SPECULATORS.requirement(), _TORCHAUDIO_CU128_REQUIREMENT],
         ),
         build_config=build_config,
@@ -339,16 +356,9 @@ def _draft_step(
 
 
 @dataclass(frozen=True)
-class DraftSftArtifactNames:
-    conversations: str
-    initial_draft: str
-    verifier: str
-    captured_data: str
-    draft: str
-
-
-@dataclass(frozen=True)
 class DraftSftPipeline:
+    """Artifact handles produced by a draft-SFT pipeline."""
+
     conversations: ArtifactStep[Artifact]
     initial_draft: ArtifactStep[Artifact]
     verifier: ArtifactStep[Artifact]
@@ -363,12 +373,7 @@ def sft_draft_model(
     target_model: ArtifactStep,
     initial_draft_repo: str,
     initial_draft_revision: str,
-    processor_model: str,
-    transformers_model_type: str,
-    target_layer_ids: tuple[int, ...],
-    verifier_num_hidden_layers: int,
-    sequence_length: int,
-    gpu_count: int,
+    execution: DraftSftExecutionConfig,
 ) -> DraftSftPipeline:
     """Build reusable Speculators SFT artifacts for a target model."""
     conversations = _conversation_step(name=names.conversations, rollouts=rollouts)
@@ -380,26 +385,20 @@ def sft_draft_model(
     verifier = _verifier_step(
         name=names.verifier,
         target_model=target_model,
-        transformers_model_type=transformers_model_type,
+        transformers_model_type=execution.transformers_model_type,
     )
     captured_data = _capture_step(
         name=names.captured_data,
         dataset=conversations,
         target_model=target_model,
-        processor_model=processor_model,
-        target_layer_ids=target_layer_ids,
-        verifier_num_hidden_layers=verifier_num_hidden_layers,
-        sequence_length=sequence_length,
-        gpu_count=gpu_count,
+        execution=execution,
     )
     draft = _draft_step(
         name=names.draft,
         captured_data=captured_data,
         verifier=verifier,
         initial_draft=initial_draft,
-        target_layer_ids=target_layer_ids,
-        sequence_length=sequence_length,
-        gpu_count=gpu_count,
+        execution=execution,
     )
     return DraftSftPipeline(
         conversations=conversations,
@@ -430,17 +429,21 @@ def snowball_eagle_sft() -> DraftSftPipeline:
         target_model=SNOWBALL_MODEL,
         initial_draft_repo=INITIAL_DRAFT_REPO,
         initial_draft_revision=INITIAL_DRAFT_REVISION,
-        processor_model=MARIN_TOKENIZER,
-        transformers_model_type="llama",
-        target_layer_ids=TARGET_LAYER_IDS,
-        verifier_num_hidden_layers=VERIFIER_NUM_HIDDEN_LAYERS,
-        sequence_length=SEQUENCE_LENGTH,
-        gpu_count=_DRAFT_GPU_COUNT,
+        execution=DraftSftExecutionConfig(
+            processor_model=MARIN_TOKENIZER,
+            transformers_model_type="llama",
+            target_layer_ids=TARGET_LAYER_IDS,
+            verifier_num_hidden_layers=VERIFIER_NUM_HIDDEN_LAYERS,
+            sequence_length=SEQUENCE_LENGTH,
+            gpu_count=_DRAFT_GPU_COUNT,
+        ),
     )
 
 
 @dataclass(frozen=True)
 class SnowballDraftPipeline:
+    """Snowball draft SFT stages and its RL smoke run."""
+
     conversations: ArtifactStep[Artifact]
     initial_draft: ArtifactStep[Artifact]
     verifier: ArtifactStep[Artifact]

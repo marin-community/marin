@@ -68,25 +68,23 @@ filters for one Evalchemy response share one rollout. Harbor's normalized `steps
 complete Harbor trajectory remain source objects and blobs, so normalization does not replace the
 raw record.
 
-### Offline EAGLE corpora
+### Offline EAGLE drafts
 
-[`eagle_rollout_corpus_step`](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/rl/eagle.py) projects one or more
-normalized evaluation artifacts into a target-independent JSONL corpus. Harbor rows retain their
-exact prompt and completion token IDs when the trajectory recorded them. Evalchemy rows retain the
-prompt messages and response text for rendering with the target tokenizer later. Assistant turns
-from the same evaluation attempt share a `group_id`, so train and holdout selection cannot split one
-conversation across both sets.
+The [Speculators draft recipe](https://github.com/marin-community/marin/blob/main/experiments/post_training/snowball_eagle_speculators.py)
+turns a normalized FineStore rollout archive into a reusable EAGLE draft. Its artifact graph converts
+rollouts to conversation JSONL, mirrors the initial draft, builds a compact verifier view, captures
+target-model hidden states, and trains the draft. `sft_draft_model` defines the model-independent
+graph; `snowball_eagle_sft` supplies the Snowball model, tokenizer, layer selection, and artifact
+names.
 
-The corpus is durable and reusable. Checkpoint-specific verifier hidden states are not: MarinSkyRL
-teacher-forces the cached sequences through the selected target checkpoint, trains the draft from
-the resulting bounded feature capture, and discards those features with the temporary run output.
-Changing the draft optimizer or epoch count therefore reuses the same generated responses; changing
-the target checkpoint recomputes verifier features without regenerating the responses.
+Hidden-state capture publishes completed files as it runs and restores them on retry. A later
+training version can reuse the capture artifact when only the optimizer or epoch count changes.
+Changing the target checkpoint produces a new capture because the target model is an explicit
+artifact dependency.
 
-`ArtifactEagleDraft` composes the published checkpoint into a later `skyrl_step`. At resolution time
-Marin injects the draft URI and revision into speculative decoding, so the downstream run depends on
-the exact draft artifact without hard-coding its object-store path. Omit the speculative-decoding
-`training` block in that run to keep the draft frozen during RL.
+`EagleDraftArtifact` composes the published checkpoint into a later `skyrl_step`. Marin injects its
+URI and artifact identity into speculative decoding, so the downstream run uses the exact draft
+without a hard-coded local path. MarinSkyRL stages that source into its standard node-local cache.
 
 ### Rollout run catalog
 

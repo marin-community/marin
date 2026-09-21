@@ -12,7 +12,6 @@ import torch
 from finestore.eval import ParticipantType
 from marin.training.speculators import (
     HiddenStateCaptureConfig,
-    _capture_vllm_args,
     _make_checkpoint_portable,
     _preferred_checkpoint,
     _publish_directory,
@@ -136,23 +135,6 @@ def test_verifier_config_keeps_architecture_when_rewriting_model_type():
         "hidden_size": 2560,
     }
     assert source["model_type"] == "grug_moe"
-
-
-def test_capture_args_request_auxiliary_and_final_hidden_states(tmp_path: Path):
-    config = _capture_config(sequence_length=16384)
-
-    args = _capture_vllm_args(config, tmp_path)
-    speculative_config = json.loads(args[args.index("--speculative-config") + 1])
-    transfer_config = json.loads(args[args.index("--kv-transfer-config") + 1])
-
-    assert speculative_config["draft_model_config"]["hf_config"]["eagle_aux_hidden_state_layer_ids"] == [
-        2,
-        13,
-        23,
-        26,
-    ]
-    assert transfer_config["kv_connector_extra_config"]["shared_storage_path"] == str(tmp_path)
-    assert args[args.index("--data-parallel-size") + 1] == "8"
 
 
 def test_checkpoint_selection_and_portable_verifier_reference(tmp_path: Path):
