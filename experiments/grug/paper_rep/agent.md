@@ -24,8 +24,10 @@ and retry or report the failure — do not block waiting for input.
 ## Procedure
 
 1. Run the arms one at a time (see README for the submit command). The first
-   arm materializes the FineWeb caches; the later arms reuse them.
-2. Monitor via `iris job logs <id>` / W&B. Each arm is ~30 minutes.
+   arm materializes the FineWeb caches; the later arms reuse them. Screening
+   arms (`screen-*`, 1000 steps, see README) follow the same flow.
+2. Monitor via `iris job logs <id>` / W&B. Each arm is ~30 minutes
+   (screening arms ~20).
 3. Pull final metrics from W&B: `eval/loss` at the final step (the single
    tagged validation set is the held-out FineWeb file, so the micro average
    is exactly its loss; the per-tag key is `eval/fineweb-val-gpt2/loss`).

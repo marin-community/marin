@@ -111,3 +111,27 @@ result.
 Full analysis: https://github.com/marin-community/marin/issues/9292
 W&B runs: `paper_rep_d8_vanilla`, `paper_rep_d8_op1`,
 `paper_rep_d8_op1_vanilla_recipe` (project `marin`).
+
+## Screening sweep: what drives the own-recipe penalty?
+
+The full-length verdict above shows the Operator-1 own recipe is +0.208
+worse than the same model under the vanilla recipe, behind from the first
+eval and partially healing — an early-training injury. The screen flips one
+suspect cluster at a time between the two Table 5 columns, always on the
+Operator-1 model, at 1000 steps with 250-step evals (screening runs get
+their own coherent schedule, so they are comparable to each other but not
+to the full-length arms):
+
+| Arm | Recipe | Tests |
+| --- | --- | --- |
+| `screen-base` | Vanilla | good-config reference |
+| `screen-own` | Operator-1 | bad-config reference |
+| `screen-wu0` | Vanilla + WU=0 | does killing warmup alone break the good config? |
+| `screen-init-own` | Vanilla + own WTE/UIS/RM/OM | does the init/scale cluster alone break it? |
+| `screen-opt-own` | Vanilla + own ELRM/HLRM/WD/WDR/β2 | does the optimizer cluster alone break it? |
+| `screen-own-wu40` | Operator-1 + WU=40 | does restoring warmup alone repair the bad config? |
+
+`screen-wu0` and `screen-own-wu40` test the top suspect (no warmup at full
+GLR) in both directions. Submit with the same command as the main arms,
+e.g. `--arm screen-wu0`. Results land in W&B as
+`paper_rep_d8_screen_<name>`.

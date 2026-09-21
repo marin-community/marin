@@ -26,6 +26,7 @@ Submit (v4-8, one arm at a time)::
 """
 
 import dataclasses
+import functools
 import os
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -52,6 +53,7 @@ from experiments.grug.paper_rep.model import GrugModelConfig
 from experiments.grug.paper_rep.recipes import (
     OPERATOR1_RECIPE,
     VANILLA_RECIPE,
+    PaperRecipe,
     model_config,
     optimizer_config,
 )
@@ -70,6 +72,14 @@ _NUM_LAYERS = 8
 _BATCH_SEQS = 256  # 256 sequences x 2048 tokens = 524,288 tokens/step.
 _NUM_STEPS = 1907  # 1907 x 524,288 ~= 1.0B tokens.
 _MAX_SEQ_LEN = 2048
+
+_FULL_EVAL = GrugEvalConfig(
+    eval_batch_size=256,
+    steps_per_eval=500,
+    max_eval_batches=200,
+    eval_current=True,
+    eval_ema=False,
+)
 
 
 @dataclass(frozen=True)
@@ -153,11 +163,14 @@ def paper_rep_arm(
     recipe,
     boundary_operator: bool,
     version: str | None = None,
+    steps: int = _NUM_STEPS,
+    eval_config: GrugEvalConfig | None = None,
 ) -> ArtifactStep[LevanterCheckpoint]:
     """One base-size replication arm as a lazy checkpoint.
 
     Model + optimizer derive from the recipe (paper Table 5); the boundary
     operator follows the paper Table 2 split (d8: 2/3/3) with alpha = 1.
+    ``steps``/``eval_config`` override the full-length defaults (screening).
     """
     name = f"grug/paper_rep_d8_{name_suffix}"
     version = resolve_version(name, version)
@@ -179,7 +192,7 @@ def paper_rep_arm(
             output_path=ctx.output_path,
             run_id=_resolve_run_id(f"paper_rep_d8_{name_suffix}"),
             resources=ctx.runtime_arg("train_resources"),
-            steps=_NUM_STEPS,
+            steps=steps,
             batch_size=_BATCH_SEQS,
             seed=0,
             mp="params=float32,compute=bfloat16,output=bfloat16",
@@ -191,13 +204,7 @@ def paper_rep_arm(
             ),
             optimizer=optimizer,
             grug_trainer=GrugTrainerConfig(z_loss_weight=0.0, ema_beta=None, log_every=1),
-            eval=GrugEvalConfig(
-                eval_batch_size=256,
-                steps_per_eval=500,
-                max_eval_batches=200,
-                eval_current=True,
-                eval_ema=False,
-            ),
+            eval=eval_config if eval_config is not None else _FULL_EVAL,
         )
 
     return ArtifactStep(
@@ -241,10 +248,76 @@ def operator1_vanilla_recipe_d8(*, version: str | None = None) -> ArtifactStep[L
     )
 
 
+# Screening sweep for the own-recipe penalty (issue #9292): the full-length
+# arms showed Operator-1's own recipe is +0.218 worse than the same model under
+# the vanilla recipe, behind from the first eval and partially healing — an
+# early-training injury. The screen flips one suspect cluster at a time between
+# the two Table 5 columns, always on the Operator-1 model, at 1000 steps with
+# 250-step evals (screening runs get their own coherent schedule, so they are
+# comparable to each other but not to the full-length arms):
+#
+# - wu0 / own-wu40: the warmup knob (WU 40 -> 0), tested in both directions —
+#   break the good config vs. repair the bad one. Top suspect: no warmup at
+#   full GLR 0.04 is the classic early-injury signature.
+# - init-own: the model-side init/scale cluster (WTE 16x, UIS 5.6x, RM/OM 2x).
+# - opt-own: the optimizer-side cluster (ELRM/HLRM/WD/WDR/beta2), warmup kept.
+# - base / own: the two endpoints at the screening schedule, for reference.
+_SCREEN_STEPS = 1000
+
+_SCREEN_EVAL = GrugEvalConfig(
+    eval_batch_size=256,
+    steps_per_eval=250,
+    max_eval_batches=100,
+    eval_current=True,
+    eval_ema=False,
+)
+
+_OWN_MODEL_CLUSTER = {
+    "wte": OPERATOR1_RECIPE.wte,
+    "uis": OPERATOR1_RECIPE.uis,
+    "rm": OPERATOR1_RECIPE.rm,
+    "om": OPERATOR1_RECIPE.om,
+}
+_OWN_OPTIMIZER_CLUSTER = {
+    "elrm": OPERATOR1_RECIPE.elrm,
+    "hlrm": OPERATOR1_RECIPE.hlrm,
+    "wd": OPERATOR1_RECIPE.wd,
+    "wdr": OPERATOR1_RECIPE.wdr,
+    "beta2": OPERATOR1_RECIPE.beta2,
+}
+
+
+def _screening_arm(
+    name_suffix: str, recipe: PaperRecipe, *, version: str | None = None
+) -> ArtifactStep[LevanterCheckpoint]:
+    """One 1000-step screening arm: the Operator-1 model under a mixed recipe."""
+    return paper_rep_arm(
+        name_suffix=f"screen_{name_suffix}",
+        recipe=recipe,
+        boundary_operator=True,
+        version=version,
+        steps=_SCREEN_STEPS,
+        eval_config=_SCREEN_EVAL,
+    )
+
+
 _ARMS = {
     "vanilla": vanilla_d8,
     "op1": operator1_d8,
     "op1-vanilla-recipe": operator1_vanilla_recipe_d8,
+    # Screening sweep arms (1000 steps, Operator-1 model; see the sweep notes above).
+    "screen-base": functools.partial(_screening_arm, "base", VANILLA_RECIPE),
+    "screen-own": functools.partial(_screening_arm, "own", OPERATOR1_RECIPE),
+    "screen-wu0": functools.partial(_screening_arm, "wu0", dataclasses.replace(VANILLA_RECIPE, wu=0)),
+    "screen-init-own": functools.partial(
+        _screening_arm, "init_own", dataclasses.replace(VANILLA_RECIPE, **_OWN_MODEL_CLUSTER)
+    ),
+    "screen-opt-own": functools.partial(
+        _screening_arm, "opt_own", dataclasses.replace(VANILLA_RECIPE, **_OWN_OPTIMIZER_CLUSTER)
+    ),
+    "screen-own-wu40": functools.partial(
+        _screening_arm, "own_wu40", dataclasses.replace(OPERATOR1_RECIPE, wu=VANILLA_RECIPE.wu)
+    ),
 }
 
 
@@ -264,7 +337,7 @@ def materialize_data(*, version: str | None = None) -> list[ArtifactStep[Tokeniz
     "--arm",
     type=click.Choice([*sorted(_ARMS), "data"]),
     required=True,
-    help="Which Table 6 arm to run, or 'data' to materialize the FineWeb caches only.",
+    help="Which Table 6 arm to run, a screening arm (see the sweep notes), or 'data' to materialize the caches only.",
 )
 @build_options
 def build(arm: str):
