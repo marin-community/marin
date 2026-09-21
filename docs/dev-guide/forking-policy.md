@@ -13,7 +13,7 @@ Every fork is pinned under `config/external/`. The pins feed
 `lib/marin/src/marin/external_dependencies.py`; nothing else imports a fork
 revision directly. There are three pin kinds:
 
-- Isolated uv lock (`evalchemy`, `harbor`, `MarinSkyRL`): the fork is a git
+- Isolated uv lock (`evalchemy`, `harbor`, `MarinSkyRL`, `speculators`): the fork is a git
   dependency in `config/external/<fork>/uv.lock`. `uv run
   config/update-external.py <fork>` advances the lock and regenerates the pins.
 - Descriptor SHA (`vllm` TPU source, `tpu-inference`): the exact pair lives in
@@ -121,6 +121,7 @@ promotion. Its paired tpu-inference refresh still follows the normal
 | evalchemy | [`marin-community/evalchemy`](https://github.com/marin-community/evalchemy) | [`mlfoundations/evalchemy`](https://github.com/mlfoundations/evalchemy) | isolated uv lock |
 | harbor | [`marin-community/harbor`](https://github.com/marin-community/harbor) | [`harbor-framework/harbor`](https://github.com/harbor-framework/harbor) | isolated uv lock |
 | MarinSkyRL | [`marin-community/MarinSkyRL`](https://github.com/marin-community/MarinSkyRL) | [`NovaSky-AI/SkyRL`](https://github.com/NovaSky-AI/SkyRL) | isolated uv lock |
+| speculators | [`marin-community/speculators`](https://github.com/marin-community/speculators) | [`vllm-project/speculators`](https://github.com/vllm-project/speculators) | isolated uv lock |
 | xla | [`marin-community/xla`](https://github.com/marin-community/xla) | [`openxla/xla`](https://github.com/openxla/xla) | wheel URL in `lib/marin/pyproject.toml` (gpu extra) |
 
 ## The XLA fork

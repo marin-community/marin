@@ -8,5 +8,5 @@ dependencies = ["marinskyrl"]
 package = false
 
 [tool.uv.sources]
-# Keep this branch-based: uv.lock pins the runtime commit, and the external dependency updater advances it.
-marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", branch = "main" }
+# Pin the node-local data-parallel engine placement used by Snowball rollout pools.
+marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", rev = "97316ad14c07455edd44b162189a2c2cc4e35400" }

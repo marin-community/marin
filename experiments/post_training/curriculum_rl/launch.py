@@ -262,6 +262,8 @@ SMOKE = ScalePreset(
         policy_num_gpus_per_node=GPUS_PER_NODE,
         num_inference_engines=GPUS_PER_NODE,
         inference_engine_tensor_parallel_size=1,
+        inference_engine_data_parallel_size=1,
+        inference_engine_expert_parallel_size=1,
         train_batch_size=64,
         policy_mini_batch_size=32,
         micro_train_batch_size_per_gpu=4,
@@ -288,6 +290,8 @@ FULL = ScalePreset(
         policy_num_gpus_per_node=GPUS_PER_NODE,
         num_inference_engines=6 * GPUS_PER_NODE,
         inference_engine_tensor_parallel_size=1,
+        inference_engine_data_parallel_size=1,
+        inference_engine_expert_parallel_size=1,
         train_batch_size=512,
         policy_mini_batch_size=64,
         micro_train_batch_size_per_gpu=8,
@@ -315,6 +319,8 @@ SNOWBALL_SMOKE = ScalePreset(
         policy_num_gpus_per_node=GPUS_PER_NODE,
         num_inference_engines=1,
         inference_engine_tensor_parallel_size=1,
+        inference_engine_data_parallel_size=8,
+        inference_engine_expert_parallel_size=8,
         train_batch_size=32,
         policy_mini_batch_size=32,
         micro_train_batch_size_per_gpu=4,
@@ -343,6 +349,8 @@ SNOWBALL_FULL = ScalePreset(
         policy_num_gpus_per_node=GPUS_PER_NODE,
         num_inference_engines=4,
         inference_engine_tensor_parallel_size=1,
+        inference_engine_data_parallel_size=8,
+        inference_engine_expert_parallel_size=8,
         train_batch_size=128,
         policy_mini_batch_size=64,
         # At micro=1 the FSDP update ran 32 sequential micro-steps, each
@@ -387,6 +395,8 @@ SNOWBALL_SMOKE_R4 = ScalePreset(
         policy_num_gpus_per_node=GPUS_PER_NODE,
         num_inference_engines=1,
         inference_engine_tensor_parallel_size=1,
+        inference_engine_data_parallel_size=8,
+        inference_engine_expert_parallel_size=8,
         train_batch_size=64,
         policy_mini_batch_size=64,
         micro_train_batch_size_per_gpu=8,
@@ -411,6 +421,8 @@ SNOWBALL_FULL_R4 = ScalePreset(
         policy_num_gpus_per_node=GPUS_PER_NODE,
         num_inference_engines=4,
         inference_engine_tensor_parallel_size=1,
+        inference_engine_data_parallel_size=8,
+        inference_engine_expert_parallel_size=8,
         train_batch_size=64,
         policy_mini_batch_size=64,
         # Eight 3072-token sequences per micro-batch fit in HBM at this window;
@@ -443,6 +455,8 @@ SNOWBALL_SMOKE_R5 = ScalePreset(
         policy_num_gpus_per_node=GPUS_PER_NODE,
         num_inference_engines=1,
         inference_engine_tensor_parallel_size=1,
+        inference_engine_data_parallel_size=8,
+        inference_engine_expert_parallel_size=8,
         train_batch_size=64,
         policy_mini_batch_size=64,
         micro_train_batch_size_per_gpu=2,
@@ -467,6 +481,8 @@ SNOWBALL_FULL_R5 = ScalePreset(
         policy_num_gpus_per_node=GPUS_PER_NODE,
         num_inference_engines=4,
         inference_engine_tensor_parallel_size=1,
+        inference_engine_data_parallel_size=8,
+        inference_engine_expert_parallel_size=8,
         train_batch_size=64,
         policy_mini_batch_size=64,
         micro_train_batch_size_per_gpu=2,
@@ -592,6 +608,8 @@ generator:
   model_dtype: bfloat16
   vllm_attention_backend: FLASH_ATTN
   inference_engine_tensor_parallel_size: {plan.inference_engine_tensor_parallel_size}
+  inference_engine_data_parallel_size: {plan.inference_engine_data_parallel_size}
+  inference_engine_expert_parallel_size: {plan.inference_engine_expert_parallel_size}
   num_inference_engines: {plan.num_inference_engines}
   n_samples_per_prompt: {plan.n_samples_per_prompt}
   gpu_memory_utilization: 0.75

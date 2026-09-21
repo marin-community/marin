@@ -72,6 +72,8 @@ ROLE_PLAN = SkyRLRolePlan(
     policy_num_gpus_per_node=GPUS_PER_NODE,
     num_inference_engines=GPUS_PER_NODE,
     inference_engine_tensor_parallel_size=1,
+    inference_engine_data_parallel_size=1,
+    inference_engine_expert_parallel_size=1,
     train_batch_size=SELECTED_TASKS,
     policy_mini_batch_size=SELECTED_TASKS,
     micro_train_batch_size_per_gpu=1,
@@ -183,6 +185,8 @@ generator:
   model_dtype: bfloat16
   vllm_attention_backend: FLASH_ATTN
   inference_engine_tensor_parallel_size: {plan.inference_engine_tensor_parallel_size}
+  inference_engine_data_parallel_size: {plan.inference_engine_data_parallel_size}
+  inference_engine_expert_parallel_size: {plan.inference_engine_expert_parallel_size}
   num_inference_engines: {plan.num_inference_engines}
   n_samples_per_prompt: {plan.n_samples_per_prompt}
   gpu_memory_utilization: 0.75

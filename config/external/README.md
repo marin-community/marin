@@ -3,10 +3,10 @@
 This directory tracks Python tools and artifacts that Marin installs into
 isolated runtime environments.
 
-The Evalchemy, Harbor, and MarinSkyRL uv projects are excluded from the root
+The Evalchemy, Harbor, MarinSkyRL, and Speculators uv projects are excluded from the root
 workspace so their dependency graphs do not have to resolve with Marin's
-training and serving dependencies. Each `pyproject.toml` follows the external
-repository's `main` branch, and its adjacent `uv.lock` records the exact commit
+training and serving dependencies. Each `pyproject.toml` follows its configured
+external repository branch, and its adjacent `uv.lock` records the exact commit
 Marin uses.
 
 `vllm/gpu.toml` records the promoted CUDA release, Torch backend, and
@@ -74,6 +74,8 @@ The external configurations intentionally model only what Marin needs:
   external lock resolves its CPU-safe base for the isolated launcher. The
   launcher synchronizes the selected `fsdp` or `megatron` profile from that
   revision's frozen root lock inside the cluster's standard Iris task image.
+- `speculators` tracks the draft-training library used by Marin's offline
+  hidden-state capture and training artifacts.
 - `vllm` records the promoted GPU wheels (`gpu.toml`) and a main-line source
   paired with tpu-inference for TPU (`tpu.toml`). The GPU and TPU wheels have
   independent build and promotion paths. Neither is a workspace dependency.

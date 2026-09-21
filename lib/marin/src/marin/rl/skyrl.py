@@ -72,6 +72,8 @@ class SkyRLRolePlan:
     policy_num_gpus_per_node: int
     num_inference_engines: int
     inference_engine_tensor_parallel_size: int
+    inference_engine_data_parallel_size: int
+    inference_engine_expert_parallel_size: int
     train_batch_size: int
     policy_mini_batch_size: int
     micro_train_batch_size_per_gpu: int
@@ -122,6 +124,13 @@ class ResolvedDirectoryDataSource:
     local_path: str
     relative_path: str
     kind: Literal["directory"] = "directory"
+
+
+@dataclass(frozen=True)
+class ResolvedEagleDraft:
+    source_uri: str
+    source_identity: str
+    local_path: str
 
 
 class TaskTroveTagMatch(StrEnum):
@@ -239,6 +248,23 @@ class ArtifactDataSource:
 
 
 @dataclass(frozen=True)
+class ArtifactEagleDraft:
+    """An immutable EAGLE draft produced by another Marin artifact step."""
+
+    step: ArtifactStep[Artifact]
+
+    def deps(self) -> tuple[ArtifactStep, ...]:
+        return (self.step,)
+
+    def resolve(self, ctx: StepContext) -> ResolvedEagleDraft:
+        return ResolvedEagleDraft(
+            source_uri=ctx.artifact_path(self.step),
+            source_identity=_artifact_identity(self.step),
+            local_path=_artifact_local_path("drafts", self.step),
+        )
+
+
+@dataclass(frozen=True)
 class TaskTroveDataSource:
     """A metadata-selected cohort from the compatibility RL view of a TaskTrove release."""
 
@@ -291,6 +317,7 @@ class SkyRLSpec:
     retention: SkyRLRetentionPolicy
     seed: int
     overrides: tuple[str, ...] = ()
+    draft_model: ArtifactEagleDraft | None = None
 
 
 @dataclass(frozen=True)
@@ -342,6 +369,24 @@ def _effective_strategy(config_yaml: str, overrides: tuple[str, ...]) -> str | N
         return None
     trainer = declared.get("trainer")
     return trainer.get("strategy") if isinstance(trainer, dict) else None
+
+
+def _config_yaml_with_eagle_draft(config_yaml: str, draft: ResolvedEagleDraft) -> str:
+    config = yaml.safe_load(config_yaml)
+    if not isinstance(config, dict):
+        raise ValueError("EAGLE configuration must be a YAML mapping")
+    generator = config.get("generator")
+    if not isinstance(generator, dict):
+        raise ValueError("EAGLE configuration requires generator")
+    speculative = generator.get("speculative_decoding")
+    if not isinstance(speculative, dict):
+        raise ValueError("EAGLE configuration requires generator.speculative_decoding")
+    speculative["model"] = {
+        "source_uri": draft.source_uri,
+        "source_identity": draft.source_identity,
+        "materialized_path": draft.local_path,
+    }
+    return yaml.safe_dump(config, sort_keys=False)
 
 
 @dataclass(frozen=True)
@@ -546,6 +591,7 @@ def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[S
         dict.fromkeys(
             (
                 *spec.model.deps(),
+                *(spec.draft_model.deps() if spec.draft_model is not None else ()),
                 *(dep for source in spec.train_data for dep in source.deps()),
                 *(dep for source in spec.validation_data for dep in source.deps()),
             )
@@ -574,10 +620,13 @@ def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[S
             f"++terminal_bench_config.trials_dir='{prefix_join(attempts_root, _TRACE_JOBS_SUBDIR)}'",
             f"++generator.trajectory_retention.output_path='{prefix_join(attempts_root, _TRAJECTORIES_SUBDIR)}'",
         )
+        config_yaml = spec.config_yaml
+        if spec.draft_model is not None:
+            config_yaml = _config_yaml_with_eagle_draft(config_yaml, spec.draft_model.resolve(ctx))
         request = SkyRLLaunchRequest(
             run_id=f"{step_name}-{spec.version}",
             attempt_id=attempt_id,
-            config_yaml=spec.config_yaml,
+            config_yaml=config_yaml,
             runtime=spec.runtime,
             model=spec.model.resolve(ctx),
             train_data=tuple(source.resolve(ctx) for source in spec.train_data),

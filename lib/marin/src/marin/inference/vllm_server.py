@@ -57,14 +57,28 @@ _REMOVED_VLLM_MODE_MESSAGE = (
 # Pin the RunAI loader for both CUDA variants. The upstream vllm[runai] extra allows a compatible
 # range, while the Marin git fork does not bundle it.
 _RUNAI_STREAMER_REQUIREMENT = "runai-model-streamer[s3]==0.16.1"
+_TORCHAUDIO_REQUIREMENT = "torchaudio==2.11.0+cpu"
 _UPSTREAM_CUDA_TORCH_BACKEND = "cu130"
+_PYTORCH_INDEX_URL = "https://download.pytorch.org/whl/{torch_backend}"
+_PYTORCH_CPU_INDEX_URL = "https://download.pytorch.org/whl/cpu"
+# CUDA 13.2 vLLM uses a CPU-only torchaudio build from the PyTorch CPU index. Both PyTorch
+# indexes are trusted release inputs, so resolution must consider compatible versions from
+# both instead of stopping at the first package name match.
+_PYTORCH_INDEX_STRATEGY = "unsafe-best-match"
 # CoreWeave task images provide the NVIDIA driver but not nvcc. FlashInfer JIT-compiles SM100
 # attention, MoE, sampling, and all-reduce kernels even when vLLM itself comes from a native wheel.
-_CUDA_TOOLCHAIN_REQUIREMENTS = (
-    "nvidia-cuda-nvcc==13.0.88",
-    "nvidia-cuda-crt==13.0.88",
-    "nvidia-nvvm==13.0.88",
-)
+_CUDA_TOOLCHAIN_REQUIREMENTS = {
+    "cu130": (
+        "nvidia-cuda-nvcc==13.0.88",
+        "nvidia-cuda-crt==13.0.88",
+        "nvidia-nvvm==13.0.88",
+    ),
+    "cu132": (
+        "nvidia-cuda-nvcc==13.2.78",
+        "nvidia-cuda-crt==13.2.78",
+        "nvidia-nvvm==13.2.78",
+    ),
+}
 _CUDA_NVCC_BOOTSTRAP = """\
 import importlib.metadata
 import os
@@ -228,21 +242,31 @@ class IsolatedCudaVllm:
 
     def command(self) -> list[str]:
         install = self._install()
+        toolchain = _CUDA_TOOLCHAIN_REQUIREMENTS[install.torch_backend]
+        requirements = [_RUNAI_STREAMER_REQUIREMENT, *toolchain]
+        resolver_args = ["--torch-backend", install.torch_backend]
+        if self.source is VllmType.MARIN_FORK:
+            requirements.append(_TORCHAUDIO_REQUIREMENT)
+            resolver_args = [
+                "--index",
+                _PYTORCH_INDEX_URL.format(torch_backend=install.torch_backend),
+                "--index",
+                _PYTORCH_CPU_INDEX_URL,
+                "--index-strategy",
+                _PYTORCH_INDEX_STRATEGY,
+            ]
         command = [
             "uvx",
             "--from",
             install.requirement,
-            "--with",
-            _RUNAI_STREAMER_REQUIREMENT,
         ]
-        for requirement in _CUDA_TOOLCHAIN_REQUIREMENTS:
+        for requirement in requirements:
             command.extend(("--with", requirement))
         command.extend(
             (
                 "--python",
                 self.python_version,
-                "--torch-backend",
-                install.torch_backend,
+                *resolver_args,
                 "python",
                 "-c",
                 _CUDA_NVCC_BOOTSTRAP,
@@ -262,7 +286,7 @@ class IsolatedCudaVllm:
 
     def cache_identity(self) -> str:
         install = self._install()
-        toolchain = ",".join(_CUDA_TOOLCHAIN_REQUIREMENTS)
+        toolchain = ",".join(_CUDA_TOOLCHAIN_REQUIREMENTS[install.torch_backend])
         return f"cuda:{install.requirement}:{self.python_version}:{install.torch_backend}:{toolchain}"
 
 

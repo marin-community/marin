@@ -153,7 +153,7 @@ def test_vllm_backend_serves_the_pinned_revision(monkeypatch):
 
     monkeypatch.setattr("marin.inference.vllm_backend.VllmEnvironment", environment)
     monkeypatch.setattr("marin.inference.vllm_backend.vllm_launcher", lambda config: object())
-    monkeypatch.setattr("marin.inference.vllm_backend.read_tool_chat_template", lambda *_args: "{{ messages }}")
+    monkeypatch.setattr("marin.inference.model_preparation.read_tool_chat_template", lambda *_args: "{{ messages }}")
     spec = ModelSpec(
         weights="org/model",
         revision="abc123",
@@ -218,7 +218,11 @@ def test_isolated_cuda_vllm_marin_fork_uses_verified_wheel(monkeypatch, machine)
     assert separator
     assert urlunsplit(parsed_url._replace(fragment="")) == wheel.url
     assert parse_qs(parsed_url.fragment) == {"sha256": [wheel.sha256]}
-    assert cmd[cmd.index("--torch-backend") + 1] == VLLM_GPU_RELEASE.torch_backend
+    assert cmd[cmd.index("--index") + 1] == (f"https://download.pytorch.org/whl/{VLLM_GPU_RELEASE.torch_backend}")
+    assert "https://download.pytorch.org/whl/cpu" in cmd
+    assert "torchaudio==2.11.0+cpu" in cmd
+    assert cmd[cmd.index("--index-strategy") + 1] == "unsafe-best-match"
+    assert f"nvidia-cuda-nvcc=={VLLM_GPU_RELEASE.torch_backend.removeprefix('cu')[:2]}.2.78" in cmd
     bootstrap_index = cmd.index("-c")
     wrapped_command = cmd[bootstrap_index + 2 :]
     assert wrapped_command[0] == "python"
@@ -275,6 +279,8 @@ def test_isolated_cuda_vllm_bootstrap_exposes_wheel_nvcc(tmp_path):
         "nvidia-cuda-crt==13.0.88",
         "nvidia-nvvm==13.0.88",
     }
+    assert "torchaudio==2.11.0+cpu" not in requirements
+    assert command[command.index("--torch-backend") + 1] == "cu130"
     assert "addressing_style = virtual" in Path(launcher.env()["AWS_CONFIG_FILE"]).read_text()
     bootstrap_index = command.index("-c")
     bootstrap = command[bootstrap_index + 1]

@@ -821,6 +821,17 @@ def test_remote_direct_call_dependency_groups_can_override_device_extra(fray_cli
     _assert_single_submit_extras(_call_remote_with_submit_spy(my_step, fray_client), [])
 
 
+def test_remote_direct_call_forwards_failure_retries(fray_client):
+    @remote(max_retries_failure=2)
+    def my_step() -> None:
+        return None
+
+    spy = _call_remote_with_submit_spy(my_step, fray_client)
+
+    assert spy.requests[0].max_retries_failure == 2
+    assert spy.requests[0].max_task_failures == 2
+
+
 # ---------------------------------------------------------------------------
 # @remote decorator tests
 # ---------------------------------------------------------------------------

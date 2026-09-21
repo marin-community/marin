@@ -19,7 +19,6 @@ from marin.inference.config import (
     VllmLauncherType,
     VllmSource,
 )
-from marin.inference.model_preparation import read_tool_chat_template
 from marin.inference.vllm_server import (
     IsolatedCudaVllm,
     IsolatedTpuVllm,
@@ -96,6 +95,8 @@ class VllmBackend:
 
     @contextlib.contextmanager
     def serve(self, spec: ModelSpec) -> Iterator[VllmServedModel]:
+        from marin.inference.model_preparation import read_tool_chat_template  # noqa: PLC0415
+
         chat_template_content = (
             spec.chat_template_content
             if spec.chat_template_content is not None

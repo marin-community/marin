@@ -54,6 +54,7 @@ class RemoteCallable(Generic[P, R]):
     env_vars: dict[str, str] = field(default_factory=dict)
     pip_dependency_groups: list[str] | None = None
     pip_packages: list[str] | None = None
+    max_retries_failure: int = 0
     name: str | None = None
 
     def named(self, name: str) -> "RemoteCallable":
@@ -83,6 +84,8 @@ class RemoteCallable(Generic[P, R]):
                     pip_packages=self.pip_packages,
                     env_vars=self.env_vars,
                 ),
+                max_retries_failure=self.max_retries_failure,
+                max_task_failures=self.max_retries_failure,
             )
         )
         handle.wait(raise_on_failure=True)
@@ -97,6 +100,7 @@ def remote(
     env_vars: dict[str, str] | None = None,
     pip_dependency_groups: list[str] | None = None,
     pip_packages: list[str] | None = None,
+    max_retries_failure: int = 0,
 ) -> RemoteCallable[P, R]: ...
 
 
@@ -108,6 +112,7 @@ def remote(
     env_vars: dict[str, str] | None = None,
     pip_dependency_groups: list[str] | None = None,
     pip_packages: list[str] | None = None,
+    max_retries_failure: int = 0,
 ) -> Callable[[Callable[P, R]], RemoteCallable[P, R]]: ...
 
 
@@ -119,15 +124,19 @@ def remote(
     env_vars: dict[str, str] | None = None,
     pip_dependency_groups: list[str] | None = None,
     pip_packages: list[str] | None = None,
+    max_retries_failure: int = 0,
 ) -> RemoteCallable[P, R] | Callable[[Callable[P, R]], RemoteCallable[P, R]]:
     """Mark a step function for remote execution via Fray.
 
     When applied without arguments (``@remote``), the function will run with
     default CPU resources. When called with ``resources=``, the supplied
-    ``ResourceConfig`` is used instead.
+    ``ResourceConfig`` is used instead. ``max_retries_failure`` retries a failed
+    single-task remote job while counting each failed attempt against its job budget.
     """
     if resources is None:
         resources = ResourceConfig.with_cpu()
+    if max_retries_failure < 0:
+        raise ValueError("max_retries_failure must be non-negative")
 
     def decorator(f: Callable[P, R]) -> RemoteCallable[P, R]:
         return RemoteCallable(
@@ -136,6 +145,7 @@ def remote(
             env_vars=env_vars or {},
             pip_dependency_groups=pip_dependency_groups,
             pip_packages=pip_packages,
+            max_retries_failure=max_retries_failure,
             name=name,
         )
 

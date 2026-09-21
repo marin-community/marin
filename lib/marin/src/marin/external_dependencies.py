@@ -75,35 +75,44 @@ MARIN_SKYRL = ExternalDependency(
     distribution="marinskyrl",
     repository="https://github.com/marin-community/MarinSkyRL.git",
     version="0.1.0",
-    commit="6b981f54b3cbdc9c60493bc76d6090ff678229fd",
+    commit="97316ad14c07455edd44b162189a2c2cc4e35400",
+    runtime_requirements=(),
+)
+
+SPECULATORS = ExternalDependency(
+    config_name="speculators",
+    distribution="speculators",
+    repository="https://github.com/marin-community/speculators.git",
+    version="0.9.0.dev33",
+    commit="f02541efa7319b75370308b9bf768585033e8c62",
     runtime_requirements=(),
 )
 
 VLLM_GPU_RELEASE = VllmGpuRelease(
-    release_tag="marin-vllm-gpu-20260827-f0d7cc7f5874",
-    source_commit="f0d7cc7f587482e0ab771e3c9715e726eb914e60",
-    version="0.0.0.dev20260827+marin.f0d7cc7f5874",
-    torch_backend="cu130",
+    release_tag="marin-vllm-gpu-20260920-fb02daf1d713",
+    source_commit="fb02daf1d7139d2adaeb0588448649591657d1e3",
+    version="0.0.0.dev20260920+marin.fb02daf1d713.cu132",
+    torch_backend="cu132",
     wheels=(
         VllmGpuWheel(
             architecture="aarch64",
             sm_targets=("10.0",),
             url=(
                 "https://github.com/marin-community/vllm/releases/download/"
-                "marin-vllm-gpu-20260827-f0d7cc7f5874/vllm-0.0.0.dev20260827%2Bmarin.f0d7cc7f5874-cp38-"
-                "abi3-manylinux_2_28_aarch64.whl"
+                "marin-vllm-gpu-20260920-fb02daf1d713/vllm-0.0.0.dev20260920%2Bmarin.fb02daf1d713.cu132-"
+                "cp38-abi3-manylinux_2_28_aarch64.whl"
             ),
-            sha256="de51618bb9ca6074edb0b8ff3ee53396742586c6c738e2161921c840867939c5",
+            sha256="b33a0e0fb3e5406ac01a86f57f6173cea27a47caa0a68dc9dde46c9ac6deddd9",
         ),
         VllmGpuWheel(
             architecture="x86_64",
             sm_targets=("9.0",),
             url=(
                 "https://github.com/marin-community/vllm/releases/download/"
-                "marin-vllm-gpu-20260827-f0d7cc7f5874/vllm-0.0.0.dev20260827%2Bmarin.f0d7cc7f5874-cp38-"
-                "abi3-manylinux_2_28_x86_64.whl"
+                "marin-vllm-gpu-20260920-fb02daf1d713/vllm-0.0.0.dev20260920%2Bmarin.fb02daf1d713.cu132-"
+                "cp38-abi3-manylinux_2_28_x86_64.whl"
             ),
-            sha256="400cb816aea3d46841da6cf9f8e3f4e40bcb7b6a60cf66ecf59e7afd7da4c7c7",
+            sha256="c1c0993fdd0b47935e93ad56f82d30d23b3c4dcfa946c456b7f368d9cab97f65",
         ),
     ),
 )
@@ -117,4 +126,5 @@ EXTERNAL_DEPENDENCIES = (
     EVALCHEMY,
     HARBOR,
     MARIN_SKYRL,
+    SPECULATORS,
 )
