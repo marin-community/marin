@@ -463,22 +463,14 @@ def attention(
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
     *,
     implementation: GrugAttentionImplementation | None = None,
-    rel_r: Float[Array, "B Q Hq R"] | None = None,
-    rel_proj: Float[Array, "R L"] | None = None,
+    rel_bias: Float[Array, "B Hq Q L"] | None = None,
 ) -> Float[Array, "B Q Hq D"]:
-    # Inkling relative-position bias, supplied as low-rank factors R [B,Q,Hq,rel_dim] + proj [rel_dim,L].
-    # The GPU kernel computes A = R·proj on the fly; the reference/TPU paths materialize A first.
-    def _materialize_rel_bias() -> Float[Array, "B Hq Q L"] | None:
-        if rel_r is None or rel_proj is None:
-            return None
-        return jnp.einsum("bshr,rl->bhsl", rel_r.astype(jnp.float32), rel_proj.astype(jnp.float32))
-
     if implementation == "reference":
-        return reference_attention(q, k, v, mask, logits_dtype=jnp.float32, rel_bias=_materialize_rel_bias())
+        return reference_attention(q, k, v, mask, logits_dtype=jnp.float32, rel_bias=rel_bias)
     if implementation == "gpu_fa4_cute":
         from levanter.grug.attention._fa4_cute import gpu_fa4_cute_attention  # noqa: PLC0415
 
-        return gpu_fa4_cute_attention(q, k, v, mask, rel_r=rel_r, rel_proj=rel_proj)
+        return gpu_fa4_cute_attention(q, k, v, mask, rel_bias=rel_bias)
     if implementation == "gpu_fa4_cute_wide":
         from levanter.grug.attention._fa4_cute import gpu_fa4_cute_wide_attention  # noqa: PLC0415
 
@@ -491,10 +483,10 @@ def attention(
         raise ValueError(f"Unknown Grug attention implementation: {implementation}")
 
     if jax.default_backend() == "tpu":
-        if isinstance(mask, jax.Array) or rel_r is not None:
-            return reference_attention(q, k, v, mask, logits_dtype=jnp.float32, rel_bias=_materialize_rel_bias())
+        if isinstance(mask, jax.Array) or rel_bias is not None:
+            return reference_attention(q, k, v, mask, logits_dtype=jnp.float32, rel_bias=rel_bias)
         return _tpu_splash_attention(q, k, v, mask)
-    return reference_attention(q, k, v, mask, logits_dtype=jnp.float32, rel_bias=_materialize_rel_bias())
+    return reference_attention(q, k, v, mask, logits_dtype=jnp.float32, rel_bias=rel_bias)
 
 
 __all__ = [

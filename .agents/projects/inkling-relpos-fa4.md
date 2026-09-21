@@ -240,3 +240,13 @@ small tensor-core GEMM into smem per (m_block,n_block) (R_tile[128,16] @ proj_sl
 fwd and bwd prologues -- amortizes the 16-dim dot via tensor cores + smem reads (unlike the failed
 scalar per-element on-the-fly), removing the global A HBM materialization+reads. High effort/risk;
 needs the R+proj interface (reverted) back + smem staging. Deferred.
+
+## R-hoist on-the-fly: also FAILED (2026-09-20), reverted to materialized+bf16
+Hoisting R[q,:rel_dim] into registers per query row (removing the per-element gmem gather of R)
+made NO difference: d512-512 2.48 -> 2.52, d1280 4.23 (vs materialized+bf16 6.96 / 12.75). Grad PASS.
+=> The killer is the per-element 16-dim dot ITSELF (16 FMAs + 16 cached proj reads for EVERY score
+element, in fwd and bwd), not the R gather. Any per-element on-the-fly is ~2.5% (hopeless).
+The ONLY way to beat materialized is a tensor-core smem-GEMM (amortize the 16-dim dot to ONE MMA per
+TILE, store A_tile to smem, 1 smem read/element) -- research-grade CuTe authoring; deferred.
+BEST/CURRENT = materialized + bf16 dA: d512 6.33(1024)/6.96(512), d1280-512 12.75 (17.4% impact vs
+rope 15.44). Campaign: 5.25 -> 6.96 (d512-512); d1280 impact 27% -> 17.4%.

@@ -1012,10 +1012,8 @@ class FlashAttentionBackwardSm90:
         # unit bias A[q, delta=q-k, head, batch] for 0 <= delta < rel_extent. This backward is never
         # Pack-GQA (qhead_per_kvhead_packgqa == 1), so head_idx/coords are the true q-head and positions.
         del seqlen_info, fastdiv_mods
-        rel_r_t = aux_data.tensors[2]  # kernel layout [S, rel_dim, Hq, B]
-        rel_proj_t = aux_data.tensors[3]  # [rel_dim, L], shared
-        rel_extent = rel_proj_t.shape[1]
-        rel_dim = const_expr(rel_proj_t.shape[0])
+        rel_bias_t = aux_data.tensors[2]  # kernel layout [S, L, Hq, B]
+        rel_extent = rel_bias_t.shape[1]
         cS = cute.make_identity_tensor((self.tile_n, self.tile_m) if self.SdP_swapAB else (self.tile_m, self.tile_n))
         cS = cute.domain_offset(
             (
@@ -1031,17 +1029,12 @@ class FlashAttentionBackwardSm90:
         COL = const_expr(1 if not self.SdP_swapAB else 0)
         for r in cutlass.range_constexpr(cute.size(tScS_mn.shape[0])):
             q_pos = tScS_mn[r, 0][ROW]
-            # Hoist R[q, :rel_dim] into registers once per query row (reused across all keys).
-            r_vals = [rel_r_t[q_pos, ri, head_idx, batch_idx].to(Float32) for ri in range(rel_dim)]
             for c in cutlass.range_constexpr(cute.size(tScS_mn.shape[1])):
                 k_pos = tScS_mn[r, c][COL]
                 acc_S_mn[r, c] = acc_S_mn[r, c] * softmax_scale
                 delta = q_pos - k_pos
                 delta_safe = cutlass.min(cutlass.max(delta, Int32(0)), rel_extent - 1)
-                # A[q, delta] = sum_r R[q, r]*proj[r, delta] from hoisted r_vals + tiny cached proj.
-                bias = Float32(0.0)
-                for ri in cutlass.range_constexpr(rel_dim):
-                    bias = bias + r_vals[ri] * rel_proj_t[ri, delta_safe].to(Float32)
+                bias = rel_bias_t[q_pos, delta_safe, head_idx, batch_idx].to(Float32)
                 in_band = cute.elem_less(delta, rel_extent) and cute.elem_less(Int32(-1), delta)
                 if in_band:
                     acc_S_mn[r, c] = acc_S_mn[r, c] + bias
@@ -1066,7 +1059,7 @@ class FlashAttentionBackwardSm90:
         # dS = grad_tensor here (P*(dP - dPsum)). Scatter dS into the dA output aux tensor (aux[3],
         # kernel layout [S, L, Hq, B]); each (q, k) maps to a unique (q, delta), so writes never race.
         del score_tensor, softmax_scale, seqlen_info, fastdiv_mods
-        da_t = aux_data.tensors[4]  # dA output (aux[2]=R, aux[3]=proj)
+        da_t = aux_data.tensors[3]
         rel_extent = da_t.shape[1]
         cS = cute.make_identity_tensor((self.tile_n, self.tile_m) if self.SdP_swapAB else (self.tile_m, self.tile_n))
         cS = cute.domain_offset(
