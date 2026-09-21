@@ -936,9 +936,9 @@ def create_app(config: MarinaConfig) -> ASGIApp:
     @api.get("/a/{applet_id}/", include_in_schema=False)
     @public
     def current_applet(applet_id: uuid.UUID, request: Request) -> RedirectResponse:
+        require_applet_read(applet_id, request)
         if applet_store is None:
             raise HTTPException(status_code=404, detail="applet not found")
-        require_applet_read(applet_id, request)
         try:
             version = applet_store.current_version(applet_id)
         except AppletNotFound as error:
