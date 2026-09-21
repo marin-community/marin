@@ -43,7 +43,7 @@ QUESTION = [
     {"role": "assistant", "content": "The answer is 4."},
 ]
 
-_RESERVED_SPECIAL_TOKENS = ("<|reserved_special_token_0|>", "<|reserved_special_token_1|>")
+_RESERVED_SPECIAL_TOKENS = tuple(f"<|reserved_special_token_{i}|>" for i in range(4))
 
 
 @dataclass(frozen=True)
@@ -224,6 +224,13 @@ def test_chat_processor_renders_tool_calls(marin_chat_tokenizer: MarinTokenizer)
     assert '{"name": "check_valid_vin", "arguments": {"vin": "1FMXK92W8YPA12345"}}' in rendered
     assert '<tool_response name="check_valid_vin">' in rendered
     assert result["assistant_masks"].sum() > 0
+
+
+def test_tool_call_delimiters_are_single_tokens(marin_tokenizer: PreTrainedTokenizer):
+    for delimiter in ("<tool_call>", "</tool_call>"):
+        token_ids = marin_tokenizer.encode(delimiter, add_special_tokens=False)
+        assert len(token_ids) == 1
+        assert marin_tokenizer.decode(token_ids, skip_special_tokens=False) == delimiter
 
 
 def test_chat_processor_renders_ipython_output(marin_chat_tokenizer: MarinTokenizer):

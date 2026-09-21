@@ -1,6 +1,8 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -17,7 +19,9 @@ from levanter.grug.attention import (
     gpu_fa4_cute_attention,
     reference_attention,
 )
-from levanter.grug.attention._fa4_cute import _simple_causal_lower_bounds
+from levanter.grug.attention._fa4_cute import _segmented_kernel_config, _simple_causal_lower_bounds
+from levanter.grug.sharding import compact_grug_mesh
+from levanter.testing.cpu_devices import run_on_cpu_devices
 
 
 class _reset_abstract_mesh:
@@ -143,8 +147,8 @@ def test_simple_causal_lower_bounds_match_full_causal_semantics():
 
 
 def test_fa4_frontend_shards_metadata_with_qkv_batch_axis(monkeypatch):
-    def fake_forward(q, k, v, lower_bounds, valid, *, sm_scale, kernel_config):
-        del k, v, sm_scale, kernel_config
+    def fake_forward(q, k, v, lower_bounds, valid, *, sm_scale, kernel_config, q_offset):
+        del k, v, sm_scale, kernel_config, q_offset
         if q.shape[:2] != lower_bounds.shape:
             raise ValueError(f"local lower_bounds shape {lower_bounds.shape} does not match q {q.shape}")
         if q.shape[:2] != valid.shape:
@@ -174,6 +178,123 @@ def test_fa4_frontend_shards_metadata_with_qkv_batch_axis(monkeypatch):
 
     assert out.shape == q.shape
     assert out.sharding.spec == qkv_sharding.spec
+
+
+def _fake_unsharded_forward(q, k, v, lower_bounds, valid, *, sm_scale, kernel_config, q_offset):
+    del k, v, lower_bounds, valid, sm_scale, kernel_config, q_offset
+    return q
+
+
+def test_fa4_rejects_non_context_sequence_sharding(monkeypatch):
+    monkeypatch.setattr(jax, "default_backend", lambda: "gpu")
+    monkeypatch.setattr(fa4_cute, "_segmented_kernel_config", lambda head_dim: object())
+    monkeypatch.setattr(fa4_cute, "fa4_cute_attention_forward", _fake_unsharded_forward)
+    mesh = AbstractMesh(
+        axis_sizes=(1, 2, 8, 1),
+        axis_names=("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 4,
+    )
+    q = jax.ShapeDtypeStruct(
+        (16, 4, 2, 8), jnp.bfloat16, sharding=NamedSharding(mesh, P(("replica_dcn", "expert"), "data", "model", None))
+    )
+    kv_sharding = NamedSharding(mesh, P(("replica_dcn", "data", "expert"), None, "model", None))
+    k = jax.ShapeDtypeStruct((16, 4, 1, 8), jnp.bfloat16, sharding=kv_sharding)
+    v = jax.ShapeDtypeStruct((16, 4, 1, 8), jnp.bfloat16, sharding=kv_sharding)
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        with pytest.raises(ValueError, match="q sequence axis sharded only over 'context'"):
+            jax.eval_shape(
+                lambda q_arg, k_arg, v_arg: gpu_fa4_cute_attention(q_arg, k_arg, v_arg, AttentionMask.causal()),
+                q,
+                k,
+                v,
+            )
+
+
+@pytest.mark.parametrize("context_entry", ["context", ("context", "model")])
+def test_fa4_accepts_unit_context_axis(monkeypatch, context_entry):
+    monkeypatch.setattr(jax, "default_backend", lambda: "gpu")
+    monkeypatch.setattr(fa4_cute, "_segmented_kernel_config", lambda head_dim: object())
+    monkeypatch.setattr(fa4_cute, "fa4_cute_attention_forward", _fake_unsharded_forward)
+    mesh = AbstractMesh(
+        axis_sizes=(1, 2, 1, 8, 1),
+        axis_names=("replica_dcn", "data", "context", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 5,
+    )
+    batch_axes = ("replica_dcn", "data", "expert")
+    q_sharding = NamedSharding(mesh, P(batch_axes, context_entry, None, None))
+    # Naming the length-1 axis on K/V's batch dim partitions nothing either.
+    kv_sharding = NamedSharding(mesh, P((*batch_axes, "context"), None, "model", None))
+    q = jax.ShapeDtypeStruct((16, 4, 2, 8), jnp.bfloat16, sharding=q_sharding)
+    k = jax.ShapeDtypeStruct((16, 4, 1, 8), jnp.bfloat16, sharding=kv_sharding)
+    v = jax.ShapeDtypeStruct((16, 4, 1, 8), jnp.bfloat16, sharding=kv_sharding)
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        out = jax.eval_shape(
+            lambda q_arg, k_arg, v_arg: gpu_fa4_cute_attention(q_arg, k_arg, v_arg, AttentionMask.causal()),
+            q,
+            k,
+            v,
+        )
+
+    assert out.shape == q.shape
+    assert out.sharding.spec == P(batch_axes, None, "model", None)
+
+
+def test_fa4_precomputed_bounds_reject_mismatched_context_lengths(monkeypatch):
+    monkeypatch.setattr(jax, "default_backend", lambda: "gpu")
+    monkeypatch.setattr(fa4_cute, "_segmented_kernel_config", lambda head_dim: object())
+    mesh = AbstractMesh((2,), ("context",), axis_types=(AxisType.Explicit,))
+    q = jax.ShapeDtypeStruct((1, 8, 2, 8), jnp.bfloat16, sharding=NamedSharding(mesh, P(None, "context")))
+    k = jax.ShapeDtypeStruct((1, 4, 1, 8), jnp.bfloat16, sharding=NamedSharding(mesh, P()))
+    v = jax.ShapeDtypeStruct((1, 4, 1, 8), jnp.bfloat16, sharding=NamedSharding(mesh, P()))
+
+    def forward(q, k, v):
+        # Precomputed metadata bypasses the ordinary mask-building validation.
+        mask = AttentionMask.causal().with_fa4_bounds(jnp.zeros((1, 8), jnp.int32), jnp.ones((1, 8), jnp.bool_))
+        return gpu_fa4_cute_attention(q, k, v, mask)
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        with pytest.raises(ValueError, match="q_len == k_len globally"):
+            jax.eval_shape(forward, q, k, v)
+
+
+_CONTEXT_METADATA_SCRIPT = """
+    import jax
+    import jax.numpy as jnp
+    import numpy as np
+    from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+
+    from levanter.grug.attention import AttentionMask
+    from levanter.grug.attention._fa4_cute import fa4_cute_segment_bounds
+
+    segment_ids = jnp.asarray(
+        [[3] * 7 + [4] * 13 + [5] * 9 + [-1] * 3, [6] * 20 + [7] * 12],
+        dtype=jnp.int32,
+    )
+    for window in (None, 5):
+        def bounds(ids):
+            return fa4_cute_segment_bounds(
+                AttentionMask.causal(sliding_window=window).with_segment_ids(ids),
+                batch_size=2, seq_len=32, sliding_window=window,
+            )
+
+        expected = bounds(segment_ids)
+        for context_size in (1, 2, 4):
+            mesh = Mesh(
+                np.asarray(jax.devices()).reshape(8 // context_size, context_size),
+                ("data", "context"), axis_types=(AxisType.Explicit,) * 2,
+            )
+            with jax.set_mesh(mesh):
+                ids = jax.device_put(segment_ids, NamedSharding(mesh, P(None, "context")))
+                actual = jax.jit(bounds)(ids)
+            for actual_array, expected_array in zip(actual, expected, strict=True):
+                np.testing.assert_array_equal(np.asarray(actual_array), np.asarray(expected_array))
+"""
+
+
+def test_context_sharded_segment_ids_preserve_global_bounds():
+    run_on_cpu_devices(_CONTEXT_METADATA_SCRIPT, device_count=8)
 
 
 def test_fa4_wide_attention_rejects_unsupported_hardware(monkeypatch):
@@ -291,6 +412,59 @@ def test_real_gpu_fa4_cute_attention_matches_reference_with_leading_padding(slid
     cotangent = cotangent * valid[..., None, None].astype(jnp.bfloat16)
 
     _assert_real_gpu_fa4_cute_matches_reference(q, k, v, mask, cotangent, valid_tokens=valid)
+
+
+@pytest.mark.parametrize("implementation", ["gpu_fa4_cute", "gpu_fa4_cute_wide"])
+@pytest.mark.parametrize("context_size", [1, 2, 4])
+@pytest.mark.parametrize(("q_heads", "kv_heads", "head_dim"), [(4, 1, 64), (8, 2, 128), (4, 4, 128)])
+def test_real_gpu_fa4_cute_attention_matches_reference_with_context_sharded_queries(
+    q_heads, kv_heads, head_dim, context_size, implementation
+):
+    if jax.default_backend() != "gpu":
+        pytest.skip("FA4/CuTe correctness requires a GPU backend.")
+    if implementation == "gpu_fa4_cute_wide" and (head_dim != 128 or fa4_cute.gpu_compute_capability() != 100):
+        pytest.skip("Wide tiles require sm100 and head_dim=128.")
+    if jax.device_count() < context_size:
+        pytest.skip(f"Context-parallel FA4/CuTe needs at least {context_size} devices.")
+    pytest.importorskip("cutlass")
+    pytest.importorskip("cutlass.cute")
+    pytest.importorskip("flash_attn.cute.flash_bwd_preprocess")
+    if (
+        context_size > 1
+        and head_dim == 128
+        and q_heads != kv_heads
+        and _segmented_kernel_config(head_dim).sm90_backward is not None
+    ):
+        pytest.skip("The native SM90 GQA backward carries no context-parallel query offset.")
+    # Multiple query tiles exercise offset bounds in both forward and backward kernels.
+    seq_len = 512
+    mesh = compact_grug_mesh(replica_axis_size=1, context_axis_size=context_size)
+    batch_axes = ("replica_dcn", "data", "expert")
+    # Use one sequence per batch coordinate.
+    batch = math.prod(mesh.shape[axis] for axis in batch_axes)
+    key = jax.random.PRNGKey(7)
+    q_key, k_key, v_key, cotangent_key = jax.random.split(key, 4)
+    q = jax.random.normal(q_key, (batch, seq_len, q_heads, head_dim), dtype=jnp.bfloat16)
+    k = jax.random.normal(k_key, (batch, seq_len, kv_heads, head_dim), dtype=jnp.bfloat16)
+    v = jax.random.normal(v_key, (batch, seq_len, kv_heads, head_dim), dtype=jnp.bfloat16)
+    segment_ids = jnp.broadcast_to(jnp.array([[11] * 213 + [12] * 291 + [-1] * 8], dtype=jnp.int32), (batch, seq_len))
+    mask = AttentionMask.causal(sliding_window=129).with_segment_ids(segment_ids)
+    valid = segment_ids >= 0
+    cotangent = jax.random.normal(cotangent_key, q.shape, dtype=jnp.bfloat16)
+    cotangent = cotangent * valid[..., None, None].astype(jnp.bfloat16)
+
+    q_sharding = NamedSharding(mesh, P(batch_axes, "context", "model", None))
+    kv_sharding = NamedSharding(mesh, P(batch_axes, None, "model", None))
+    with jax.set_mesh(mesh):
+        _assert_real_gpu_fa4_cute_matches_reference(
+            jax.device_put(q, q_sharding),
+            jax.device_put(k, kv_sharding),
+            jax.device_put(v, kv_sharding),
+            mask,
+            jax.device_put(cotangent, q_sharding),
+            valid_tokens=valid,
+            implementation=implementation,
+        )
 
 
 def test_real_gpu_fa4_cute_attention_matches_reference_for_simple_sliding_mask():

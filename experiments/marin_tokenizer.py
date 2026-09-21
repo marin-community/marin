@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Saves a modified version of the llama3 tokenizer with:
+Saves a modified version of the Marin tokenizer with:
 1) a simple Olmo2-inspired chat format and
 2) special tokens defined in this module.
 
@@ -18,17 +18,19 @@ from typing import cast
 from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from transformers import AutoTokenizer, PreTrainedTokenizer
 
-from experiments.llama import llama3_tokenizer as llama3_tokenizer_hf_path
-
 marin_tokenizer = "marin-community/marin-tokenizer"
 """
 The HF Hub name for the Marin tokenizer.
 The Marin tokenizer is (currently) just the Llama 3 tokenizer with a custom chat template (MARIN_CHAT_TEMPLATE).
 """
+MARIN_TOKENIZER_BASE_REVISION = "a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2"
+MARIN_TOKENIZER_TOOLS_REPO = "marin-community/marin-tokenizer-tools"
 
 MARIN_CUSTOM_SPECIAL_TOKENS = {
     128002: "<|start_think|>",  # Originally "<|reserved_special_token_0|>"
     128003: "<|end_think|>",  # Originally "<|reserved_special_token_1|>"
+    128005: "<tool_call>",  # Originally "<|reserved_special_token_2|>"
+    128011: "</tool_call>",  # Originally "<|reserved_special_token_3|>"
 }
 
 
@@ -133,29 +135,31 @@ def create_marin_tokenizer(
     return marin_tokenizer
 
 
-def load_llama3_tokenizer() -> PreTrainedTokenizer:
+def load_base_marin_tokenizer() -> PreTrainedTokenizer:
     """
-    Load the base llama3 tokenizer.
+    Load the pinned Marin tokenizer used for the tool-token variant.
 
     Returns:
-        The llama3 tokenizer instance
+        The base Marin tokenizer instance
 
     Raises:
         OSError, GatedRepoError, HTTPError: If access to the tokenizer is not available
     """
-    return cast(PreTrainedTokenizer, AutoTokenizer.from_pretrained(llama3_tokenizer_hf_path))
+    return cast(
+        PreTrainedTokenizer, AutoTokenizer.from_pretrained(marin_tokenizer, revision=MARIN_TOKENIZER_BASE_REVISION)
+    )
 
 
 def main(dry_run: bool = False):
     """
     Create the Marin tokenizer and push it to the Hugging Face Hub.
 
-    Loads the base llama3 tokenizer, applies the custom chat format and special
+    Loads the pinned Marin tokenizer, applies the custom chat format and special
     tokens, performs a roundtrip write-read to ensure consistency, and (unless
     ``dry_run``) pushes the result to the Hub.
     """
-    llama3_tokenizer = load_llama3_tokenizer()
-    tokenizer = create_marin_tokenizer(llama3_tokenizer, MARIN_CUSTOM_SPECIAL_TOKENS)
+    base_tokenizer = load_base_marin_tokenizer()
+    tokenizer = create_marin_tokenizer(base_tokenizer, MARIN_CUSTOM_SPECIAL_TOKENS)
 
     # Roundtrip write-read to ensure consistency.
     with tempfile.TemporaryDirectory() as temp_path:
@@ -163,7 +167,7 @@ def main(dry_run: bool = False):
         tokenizer = AutoTokenizer.from_pretrained(temp_path, local_files_only=True)
 
     if not dry_run:
-        tokenizer.push_to_hub(marin_tokenizer)
+        tokenizer.push_to_hub(MARIN_TOKENIZER_TOOLS_REPO)
 
 
 if __name__ == "__main__":

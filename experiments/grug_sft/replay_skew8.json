@@ -1,0 +1,1233 @@
+{
+  "c01q0": {
+    "weight": 0.03193684031579842,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=1/quality=0/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=1/quality=0/length=gt_64k": 8
+    }
+  },
+  "c01q1": {
+    "weight": 0.041845790771046144,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=1/quality=1/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=1/quality=1/length=gt_64k": 8
+    }
+  },
+  "c01q2": {
+    "weight": 0.05356373218133909,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=1/quality=2/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=1/quality=2/length=gt_64k": 8
+    }
+  },
+  "c01q3": {
+    "weight": 0.0937555312223439,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=1/quality=3/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=1/quality=3/length=gt_64k": 8
+    }
+  },
+  "c01q4": {
+    "weight": 0.10380348098259508,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=1/quality=4/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=1/quality=4/length=gt_64k": 8
+    }
+  },
+  "c02q0": {
+    "weight": 0.013404932975335123,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=2/quality=0/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=2/quality=0/length=gt_64k": 8
+    }
+  },
+  "c02q1": {
+    "weight": 0.006229968850155749,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=2/quality=1/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=2/quality=1/length=gt_64k": 8
+    }
+  },
+  "c02q2": {
+    "weight": 0.0038419807900960494,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=2/quality=2/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=2/quality=2/length=gt_64k": 8
+    }
+  },
+  "c02q3": {
+    "weight": 0.013841930790346048,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=2/quality=3/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=2/quality=3/length=gt_64k": 8
+    }
+  },
+  "c02q4": {
+    "weight": 0.008705956470217649,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=2/quality=4/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=2/quality=4/length=gt_64k": 8
+    }
+  },
+  "c03q0": {
+    "weight": 0.008814955925220374,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=3/quality=0/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=3/quality=0/length=gt_64k": 8
+    }
+  },
+  "c03q1": {
+    "weight": 0.0013489932550337248,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=3/quality=1/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=3/quality=1/length=gt_64k": 8
+    }
+  },
+  "c03q2": {
+    "weight": 0.0036789816050919744,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=3/quality=2/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=3/quality=2/length=gt_64k": 8
+    }
+  },
+  "c03q3": {
+    "weight": 0.0062979685101574485,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=3/quality=3/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=3/quality=3/length=gt_64k": 8
+    }
+  },
+  "c03q4": {
+    "weight": 0.00279798601006995,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=3/quality=4/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=3/quality=4/length=gt_64k": 8
+    }
+  },
+  "c05q0": {
+    "weight": 0.012138939305303473,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=5/quality=0/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=5/quality=0/length=gt_64k": 8
+    }
+  },
+  "c05q1": {
+    "weight": 0.023055884720576396,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=5/quality=1/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=5/quality=1/length=gt_64k": 8
+    }
+  },
+  "c05q2": {
+    "weight": 0.0172359138204309,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=5/quality=2/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=5/quality=2/length=gt_64k": 8
+    }
+  },
+  "c05q3": {
+    "weight": 0.010703946480267599,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=5/quality=3/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=5/quality=3/length=gt_64k": 8
+    }
+  },
+  "c05q4": {
+    "weight": 0.009903950480247599,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=5/quality=4/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=5/quality=4/length=gt_64k": 8
+    }
+  },
+  "c06q0": {
+    "weight": 0.010893945530272347,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=6/quality=0/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=6/quality=0/length=gt_64k": 8
+    }
+  },
+  "c06q1": {
+    "weight": 0.017408912955435223,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=6/quality=1/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=6/quality=1/length=gt_64k": 8
+    }
+  },
+  "c06q2": {
+    "weight": 0.005936970315148424,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=6/quality=2/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=6/quality=2/length=gt_64k": 8
+    }
+  },
+  "c06q3": {
+    "weight": 0.0019049904750476248,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=6/quality=3/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=6/quality=3/length=gt_64k": 8
+    }
+  },
+  "c06q4": {
+    "weight": 0.0007089964550177249,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=6/quality=4/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=6/quality=4/length=gt_64k": 8
+    }
+  },
+  "c08q0": {
+    "weight": 0.003703981480092599,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=8/quality=0/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=8/quality=0/length=gt_64k": 8
+    }
+  },
+  "c08q1": {
+    "weight": 0.0008489957550212249,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=8/quality=1/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=8/quality=1/length=gt_64k": 8
+    }
+  },
+  "c08q2": {
+    "weight": 0.0015699921500392498,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=8/quality=2/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=8/quality=2/length=gt_64k": 8
+    }
+  },
+  "c08q3": {
+    "weight": 0.0006289968550157249,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=8/quality=3/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=8/quality=3/length=gt_64k": 8
+    }
+  },
+  "c08q4": {
+    "weight": 0.00027899860500697494,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=8/quality=4/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=8/quality=4/length=gt_64k": 8
+    }
+  },
+  "c10q0": {
+    "weight": 9.999950000249999e-05,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=10/quality=0/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=10/quality=0/length=gt_64k": 8
+    }
+  },
+  "c11q0": {
+    "weight": 0.0023629881850590747,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=11/quality=0/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=11/quality=0/length=gt_64k": 8
+    }
+  },
+  "c11q1": {
+    "weight": 0.0017999910000449997,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=11/quality=1/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=11/quality=1/length=gt_64k": 8
+    }
+  },
+  "c11q2": {
+    "weight": 0.0022969885150574245,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=11/quality=2/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=11/quality=2/length=gt_64k": 8
+    }
+  },
+  "c11q3": {
+    "weight": 0.0012589937050314747,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=11/quality=3/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=11/quality=3/length=gt_64k": 8
+    }
+  },
+  "c11q4": {
+    "weight": 0.0006719966400167999,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=11/quality=4/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=11/quality=4/length=gt_64k": 8
+    }
+  },
+  "c12q0": {
+    "weight": 0.0005449972750136249,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=12/quality=0/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=12/quality=0/length=gt_64k": 8
+    }
+  },
+  "c12q1": {
+    "weight": 0.0004189979050104749,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=12/quality=1/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=12/quality=1/length=gt_64k": 8
+    }
+  },
+  "c12q2": {
+    "weight": 0.0007909960450197749,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=12/quality=2/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=12/quality=2/length=gt_64k": 8
+    }
+  },
+  "c12q3": {
+    "weight": 0.0008809955950220248,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=12/quality=3/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=12/quality=3/length=gt_64k": 8
+    }
+  },
+  "c12q4": {
+    "weight": 0.0006869965650171749,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=12/quality=4/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=12/quality=4/length=gt_64k": 8
+    }
+  },
+  "c13q0": {
+    "weight": 0.00052599737001315,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=13/quality=0/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=13/quality=0/length=gt_64k": 8
+    }
+  },
+  "c13q1": {
+    "weight": 9.499952500237499e-05,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=13/quality=1/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=13/quality=1/length=gt_64k": 8
+    }
+  },
+  "c13q2": {
+    "weight": 0.0004999975000124999,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=13/quality=2/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=13/quality=2/length=gt_64k": 8
+    }
+  },
+  "c13q3": {
+    "weight": 0.0020499897500512497,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=13/quality=3/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=13/quality=3/length=gt_64k": 8
+    }
+  },
+  "c13q4": {
+    "weight": 0.00015699921500392496,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=13/quality=4/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=13/quality=4/length=gt_64k": 8
+    }
+  },
+  "c14q0": {
+    "weight": 0.0005119974400127999,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=14/quality=0/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=14/quality=0/length=gt_64k": 8
+    }
+  },
+  "c14q1": {
+    "weight": 0.0005159974200128999,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=14/quality=1/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=14/quality=1/length=gt_64k": 8
+    }
+  },
+  "c14q2": {
+    "weight": 0.00039899800500997493,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=14/quality=2/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=14/quality=2/length=gt_64k": 8
+    }
+  },
+  "c14q3": {
+    "weight": 0.0004619976900115499,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=14/quality=3/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=14/quality=3/length=gt_64k": 8
+    }
+  },
+  "c14q4": {
+    "weight": 0.00052599737001315,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=14/quality=4/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=14/quality=4/length=gt_64k": 8
+    }
+  },
+  "c15q0": {
+    "weight": 0.006217968910155448,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=15/quality=0/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=15/quality=0/length=gt_64k": 8
+    }
+  },
+  "c15q1": {
+    "weight": 0.0030749846250768746,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=15/quality=1/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=15/quality=1/length=gt_64k": 8
+    }
+  },
+  "c15q2": {
+    "weight": 0.0025129874350628247,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=15/quality=2/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=15/quality=2/length=gt_64k": 8
+    }
+  },
+  "c15q3": {
+    "weight": 0.0034049829750851246,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=15/quality=3/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=15/quality=3/length=gt_64k": 8
+    }
+  },
+  "c15q4": {
+    "weight": 0.0007729961350193249,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=15/quality=4/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=15/quality=4/length=gt_64k": 8
+    }
+  },
+  "c16q0": {
+    "weight": 0.005489972550137249,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=16/quality=0/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=16/quality=0/length=gt_64k": 8
+    }
+  },
+  "c16q1": {
+    "weight": 0.007017964910175449,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=16/quality=1/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=16/quality=1/length=gt_64k": 8
+    }
+  },
+  "c16q2": {
+    "weight": 0.004356978215108924,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=16/quality=2/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=16/quality=2/length=gt_64k": 8
+    }
+  },
+  "c16q3": {
+    "weight": 0.0027879860600696998,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=16/quality=3/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=16/quality=3/length=gt_64k": 8
+    }
+  },
+  "c16q4": {
+    "weight": 0.0015649921750391248,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=16/quality=4/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=16/quality=4/length=gt_64k": 8
+    }
+  },
+  "c17q0": {
+    "weight": 0.0014009929950350246,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=17/quality=0/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=17/quality=0/length=gt_64k": 8
+    }
+  },
+  "c17q1": {
+    "weight": 0.0019489902550487246,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=17/quality=1/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=17/quality=1/length=gt_64k": 8
+    }
+  },
+  "c17q2": {
+    "weight": 0.0069449652751736235,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=17/quality=2/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=17/quality=2/length=gt_64k": 8
+    }
+  },
+  "c17q3": {
+    "weight": 0.0025179874100629495,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=17/quality=3/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=17/quality=3/length=gt_64k": 8
+    }
+  },
+  "c17q4": {
+    "weight": 0.0009729951350243249,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=17/quality=4/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=17/quality=4/length=gt_64k": 8
+    }
+  },
+  "c18q0": {
+    "weight": 0.0035649821750891246,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=18/quality=0/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=18/quality=0/length=gt_64k": 8
+    }
+  },
+  "c18q1": {
+    "weight": 0.0035269823650881747,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=18/quality=1/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=18/quality=1/length=gt_64k": 8
+    }
+  },
+  "c18q2": {
+    "weight": 0.004374978125109375,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=18/quality=2/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=18/quality=2/length=gt_64k": 8
+    }
+  },
+  "c18q3": {
+    "weight": 0.0036179819100904498,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=18/quality=3/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=18/quality=3/length=gt_64k": 8
+    }
+  },
+  "c18q4": {
+    "weight": 0.0021429892850535746,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=18/quality=4/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=18/quality=4/length=gt_64k": 8
+    }
+  },
+  "c19q0": {
+    "weight": 0.0021859890700546497,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=19/quality=0/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=19/quality=0/length=gt_64k": 8
+    }
+  },
+  "c19q1": {
+    "weight": 0.0018799906000469997,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=19/quality=1/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=19/quality=1/length=gt_64k": 8
+    }
+  },
+  "c19q2": {
+    "weight": 0.002510987445062775,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=19/quality=2/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=19/quality=2/length=gt_64k": 8
+    }
+  },
+  "c19q3": {
+    "weight": 0.0014739926300368499,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=19/quality=3/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=19/quality=3/length=gt_64k": 8
+    }
+  },
+  "c19q4": {
+    "weight": 0.0009949950250248748,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=19/quality=4/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=19/quality=4/length=gt_64k": 8
+    }
+  },
+  "c20q0": {
+    "weight": 0.0021329893350533246,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=20/quality=0/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=20/quality=0/length=gt_64k": 8
+    }
+  },
+  "c20q1": {
+    "weight": 0.0017149914250428747,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=20/quality=1/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=20/quality=1/length=gt_64k": 8
+    }
+  },
+  "c20q2": {
+    "weight": 0.0011489942550287249,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=20/quality=2/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=20/quality=2/length=gt_64k": 8
+    }
+  },
+  "c20q3": {
+    "weight": 0.0009899950500247498,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=20/quality=3/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=20/quality=3/length=gt_64k": 8
+    }
+  },
+  "c20q4": {
+    "weight": 0.0005399973000134999,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=20/quality=4/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=20/quality=4/length=gt_64k": 8
+    }
+  },
+  "c21q0": {
+    "weight": 0.0008779956100219499,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=21/quality=0/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=21/quality=0/length=gt_64k": 8
+    }
+  },
+  "c21q1": {
+    "weight": 0.0011999940000299997,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=21/quality=1/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=21/quality=1/length=gt_64k": 8
+    }
+  },
+  "c21q2": {
+    "weight": 0.0009479952600236998,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=21/quality=2/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=21/quality=2/length=gt_64k": 8
+    }
+  },
+  "c21q3": {
+    "weight": 0.0009739951300243499,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=21/quality=3/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=21/quality=3/length=gt_64k": 8
+    }
+  },
+  "c21q4": {
+    "weight": 0.0019019904900475497,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=21/quality=4/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=21/quality=4/length=gt_64k": 8
+    }
+  },
+  "c22q0": {
+    "weight": 0.0031759841200793993,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=22/quality=0/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=22/quality=0/length=gt_64k": 8
+    }
+  },
+  "c22q1": {
+    "weight": 0.0037709811450942743,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=22/quality=1/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=22/quality=1/length=gt_64k": 8
+    }
+  },
+  "c22q2": {
+    "weight": 0.0022349888250558746,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=22/quality=2/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=22/quality=2/length=gt_64k": 8
+    }
+  },
+  "c22q3": {
+    "weight": 0.0032159839200803994,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=22/quality=3/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=22/quality=3/length=gt_64k": 8
+    }
+  },
+  "c22q4": {
+    "weight": 0.0007199964000179999,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=22/quality=4/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=22/quality=4/length=gt_64k": 8
+    }
+  },
+  "c23q0": {
+    "weight": 0.0028329858350708247,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=23/quality=0/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=23/quality=0/length=gt_64k": 8
+    }
+  },
+  "c23q1": {
+    "weight": 0.0027989860050699742,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=23/quality=1/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=23/quality=1/length=gt_64k": 8
+    }
+  },
+  "c23q2": {
+    "weight": 0.004730976345118274,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=23/quality=2/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=23/quality=2/length=gt_64k": 8
+    }
+  },
+  "c23q3": {
+    "weight": 0.0023629881850590747,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=23/quality=3/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=23/quality=3/length=gt_64k": 8
+    }
+  },
+  "c23q4": {
+    "weight": 0.0024309878450607747,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=23/quality=4/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=23/quality=4/length=gt_64k": 8
+    }
+  },
+  "c24q0": {
+    "weight": 0.004442977785111074,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=24/quality=0/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=24/quality=0/length=gt_64k": 8
+    }
+  },
+  "c24q1": {
+    "weight": 0.006301968490157549,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=24/quality=1/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=24/quality=1/length=gt_64k": 8
+    }
+  },
+  "c24q2": {
+    "weight": 0.0029429852850735745,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=24/quality=2/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=24/quality=2/length=gt_64k": 8
+    }
+  },
+  "c24q3": {
+    "weight": 0.0016899915500422499,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=24/quality=3/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=24/quality=3/length=gt_64k": 8
+    }
+  },
+  "c24q4": {
+    "weight": 0.0006839965800171,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=24/quality=4/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=24/quality=4/length=gt_64k": 8
+    }
+  },
+  "c25q0": {
+    "weight": 0.005435972820135899,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=25/quality=0/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=25/quality=0/length=gt_64k": 8
+    }
+  },
+  "c25q1": {
+    "weight": 0.0039009804950975242,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=25/quality=1/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=25/quality=1/length=gt_64k": 8
+    }
+  },
+  "c25q2": {
+    "weight": 0.006287968560157199,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=25/quality=2/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=25/quality=2/length=gt_64k": 8
+    }
+  },
+  "c25q3": {
+    "weight": 0.0026659866700666497,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=25/quality=3/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=25/quality=3/length=gt_64k": 8
+    }
+  },
+  "c25q4": {
+    "weight": 0.0004809975950120249,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=25/quality=4/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=25/quality=4/length=gt_64k": 8
+    }
+  },
+  "c26q0": {
+    "weight": 0.004449977750111249,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=26/quality=0/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=26/quality=0/length=gt_64k": 8
+    }
+  },
+  "c26q1": {
+    "weight": 0.004101979490102549,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=26/quality=1/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=26/quality=1/length=gt_64k": 8
+    }
+  },
+  "c26q2": {
+    "weight": 0.00496197519012405,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=26/quality=2/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=26/quality=2/length=gt_64k": 8
+    }
+  },
+  "c26q3": {
+    "weight": 0.0026559867200663997,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=26/quality=3/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=26/quality=3/length=gt_64k": 8
+    }
+  },
+  "c26q4": {
+    "weight": 0.0017509912450437747,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=26/quality=4/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=26/quality=4/length=gt_64k": 8
+    }
+  },
+  "c27q0": {
+    "weight": 0.0012629936850315749,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=27/quality=0/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=27/quality=0/length=gt_64k": 8
+    }
+  },
+  "c27q1": {
+    "weight": 0.0015389923050384748,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=27/quality=1/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=27/quality=1/length=gt_64k": 8
+    }
+  },
+  "c27q2": {
+    "weight": 0.0028619856900715494,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=27/quality=2/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=27/quality=2/length=gt_64k": 8
+    }
+  },
+  "c27q3": {
+    "weight": 0.0010189949050254748,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=27/quality=3/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=27/quality=3/length=gt_64k": 8
+    }
+  },
+  "c27q4": {
+    "weight": 0.0034249828750856246,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=27/quality=4/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=27/quality=4/length=gt_64k": 8
+    }
+  },
+  "c28q0": {
+    "weight": 0.015221923890380547,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=28/quality=0/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=28/quality=0/length=gt_64k": 8
+    }
+  },
+  "c28q1": {
+    "weight": 0.01583792081039595,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=28/quality=1/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=28/quality=1/length=gt_64k": 8
+    }
+  },
+  "c28q2": {
+    "weight": 0.010676946615266924,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=28/quality=2/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=28/quality=2/length=gt_64k": 8
+    }
+  },
+  "c28q3": {
+    "weight": 0.0027969860150699245,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=28/quality=3/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=28/quality=3/length=gt_64k": 8
+    }
+  },
+  "c28q4": {
+    "weight": 0.0015489922550387249,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=28/quality=4/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=28/quality=4/length=gt_64k": 8
+    }
+  },
+  "c29q0": {
+    "weight": 0.003880980595097024,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=29/quality=0/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=29/quality=0/length=gt_64k": 8
+    }
+  },
+  "c29q1": {
+    "weight": 0.0038589807050964744,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=29/quality=1/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=29/quality=1/length=gt_64k": 8
+    }
+  },
+  "c29q2": {
+    "weight": 0.00231398843005785,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=29/quality=2/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=29/quality=2/length=gt_64k": 8
+    }
+  },
+  "c29q3": {
+    "weight": 0.0018949905250473748,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=29/quality=3/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=29/quality=3/length=gt_64k": 8
+    }
+  },
+  "c29q4": {
+    "weight": 0.0025609871950640246,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=29/quality=4/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=29/quality=4/length=gt_64k": 8
+    }
+  },
+  "c30q0": {
+    "weight": 0.035270823645881764,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=30/quality=0/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=30/quality=0/length=gt_64k": 8
+    }
+  },
+  "c30q1": {
+    "weight": 0.007996960015199924,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=30/quality=1/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=30/quality=1/length=gt_64k": 8
+    }
+  },
+  "c30q2": {
+    "weight": 0.009055954720226399,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=30/quality=2/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=30/quality=2/length=gt_64k": 8
+    }
+  },
+  "c30q3": {
+    "weight": 0.005008974955125225,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=30/quality=3/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=30/quality=3/length=gt_64k": 8
+    }
+  },
+  "c30q4": {
+    "weight": 0.0012609936950315247,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=30/quality=4/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=30/quality=4/length=gt_64k": 8
+    }
+  },
+  "c31q0": {
+    "weight": 0.003530982345088274,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=31/quality=0/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=31/quality=0/length=gt_64k": 8
+    }
+  },
+  "c31q1": {
+    "weight": 0.004689976550117249,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=31/quality=1/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=31/quality=1/length=gt_64k": 8
+    }
+  },
+  "c31q2": {
+    "weight": 0.00286598567007165,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=31/quality=2/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=31/quality=2/length=gt_64k": 8
+    }
+  },
+  "c31q3": {
+    "weight": 0.0017569912150439248,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=31/quality=3/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=31/quality=3/length=gt_64k": 8
+    }
+  },
+  "c31q4": {
+    "weight": 0.0010239948800255998,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=31/quality=4/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=31/quality=4/length=gt_64k": 8
+    }
+  },
+  "c32q0": {
+    "weight": 0.0024649876750616247,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=32/quality=0/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=32/quality=0/length=gt_64k": 8
+    }
+  },
+  "c32q1": {
+    "weight": 0.008456957715211422,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=32/quality=1/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=32/quality=1/length=gt_64k": 8
+    }
+  },
+  "c32q2": {
+    "weight": 0.0026199869000654995,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=32/quality=2/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=32/quality=2/length=gt_64k": 8
+    }
+  },
+  "c32q3": {
+    "weight": 0.0014469927650361746,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=32/quality=3/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=32/quality=3/length=gt_64k": 8
+    }
+  },
+  "c32q4": {
+    "weight": 0.00013499932500337497,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=32/quality=4/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=32/quality=4/length=gt_64k": 8
+    }
+  },
+  "c33q0": {
+    "weight": 0.0037709811450942743,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=33/quality=0/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=33/quality=0/length=gt_64k": 8
+    }
+  },
+  "c33q1": {
+    "weight": 0.0055349723251383745,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=33/quality=1/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=33/quality=1/length=gt_64k": 8
+    }
+  },
+  "c33q2": {
+    "weight": 0.0023879880600596996,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=33/quality=2/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=33/quality=2/length=gt_64k": 8
+    }
+  },
+  "c33q3": {
+    "weight": 0.0013259933700331497,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=33/quality=3/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=33/quality=3/length=gt_64k": 8
+    }
+  },
+  "c33q4": {
+    "weight": 0.0006829965850170749,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=33/quality=4/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=33/quality=4/length=gt_64k": 8
+    }
+  },
+  "c34q0": {
+    "weight": 0.0007359963200183998,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=34/quality=0/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=34/quality=0/length=gt_64k": 8
+    }
+  },
+  "c34q1": {
+    "weight": 0.0009239953800230998,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=34/quality=1/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=34/quality=1/length=gt_64k": 8
+    }
+  },
+  "c34q2": {
+    "weight": 0.007027964860175699,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=34/quality=2/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=34/quality=2/length=gt_64k": 8
+    }
+  },
+  "c34q3": {
+    "weight": 0.010663946680266599,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=34/quality=3/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=34/quality=3/length=gt_64k": 8
+    }
+  },
+  "c34q4": {
+    "weight": 0.0033299833500832496,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=34/quality=4/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=34/quality=4/length=gt_64k": 8
+    }
+  },
+  "c35q0": {
+    "weight": 0.0039009804950975242,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=35/quality=0/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=35/quality=0/length=gt_64k": 8
+    }
+  },
+  "c35q1": {
+    "weight": 0.0027189864050679744,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=35/quality=1/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=35/quality=1/length=gt_64k": 8
+    }
+  },
+  "c35q2": {
+    "weight": 0.002238988805055975,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=35/quality=2/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=35/quality=2/length=gt_64k": 8
+    }
+  },
+  "c35q3": {
+    "weight": 0.0017259913700431498,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=35/quality=3/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=35/quality=3/length=gt_64k": 8
+    }
+  },
+  "c35q4": {
+    "weight": 0.00052599737001315,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=35/quality=4/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=35/quality=4/length=gt_64k": 8
+    }
+  },
+  "c36q0": {
+    "weight": 0.0027089864550677244,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=36/quality=0/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=36/quality=0/length=gt_64k": 8
+    }
+  },
+  "c36q1": {
+    "weight": 0.0021489892550537247,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=36/quality=1/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=36/quality=1/length=gt_64k": 8
+    }
+  },
+  "c36q2": {
+    "weight": 0.0022559887200564,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=36/quality=2/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=36/quality=2/length=gt_64k": 8
+    }
+  },
+  "c36q3": {
+    "weight": 0.003360983195084024,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=36/quality=3/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=36/quality=3/length=gt_64k": 8
+    }
+  },
+  "c36q4": {
+    "weight": 0.0022049889750551245,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=36/quality=4/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=36/quality=4/length=gt_64k": 8
+    }
+  },
+  "c37q0": {
+    "weight": 0.0037369813150934243,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=37/quality=0/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=37/quality=0/length=gt_64k": 8
+    }
+  },
+  "c37q1": {
+    "weight": 0.004735976320118399,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=37/quality=1/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=37/quality=1/length=gt_64k": 8
+    }
+  },
+  "c37q2": {
+    "weight": 0.020838895805520972,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=37/quality=2/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=37/quality=2/length=gt_64k": 8
+    }
+  },
+  "c37q3": {
+    "weight": 0.031542842285788575,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=37/quality=3/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=37/quality=3/length=gt_64k": 8
+    }
+  },
+  "c37q4": {
+    "weight": 0.021404892975535123,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=37/quality=4/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=37/quality=4/length=gt_64k": 8
+    }
+  },
+  "c38q0": {
+    "weight": 0.00017899910500447495,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=38/quality=0/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=38/quality=0/length=gt_64k": 8
+    }
+  },
+  "tail": {
+    "weight": 2.9999850000749997e-05,
+    "copies": {
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=0/quality=0/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=0/quality=0/length=gt_64k": 8,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=0/quality=1/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=0/quality=1/length=gt_64k": 8,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=0/quality=2/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=0/quality=2/length=gt_64k": 8,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=0/quality=3/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=0/quality=3/length=gt_64k": 8,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=0/quality=4/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=0/quality=4/length=gt_64k": 8,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=4/quality=0/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=4/quality=0/length=gt_64k": 8,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=4/quality=1/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=4/quality=1/length=gt_64k": 8,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=4/quality=2/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=4/quality=2/length=gt_64k": 8,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=4/quality=3/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=4/quality=3/length=gt_64k": 8,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=4/quality=4/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=4/quality=4/length=gt_64k": 8,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=7/quality=0/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=7/quality=0/length=gt_64k": 8,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=7/quality=1/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=7/quality=1/length=gt_64k": 8,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=7/quality=2/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=7/quality=2/length=gt_64k": 8,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=7/quality=3/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=7/quality=4/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=7/quality=4/length=gt_64k": 8,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=9/quality=0/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=9/quality=0/length=gt_64k": 8,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=9/quality=1/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=9/quality=1/length=gt_64k": 8,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=9/quality=2/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=9/quality=2/length=gt_64k": 8,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=9/quality=3/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=9/quality=3/length=gt_64k": 8,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=9/quality=4/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=9/quality=4/length=gt_64k": 8,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=10/quality=1/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=10/quality=1/length=gt_64k": 8,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=10/quality=2/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=10/quality=2/length=gt_64k": 8,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=10/quality=3/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=10/quality=3/length=gt_64k": 8,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=10/quality=4/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=10/quality=4/length=gt_64k": 8,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=38/quality=1/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=38/quality=2/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=38/quality=2/length=gt_64k": 8,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=38/quality=3/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=38/quality=4/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=39/quality=0/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=39/quality=1/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=39/quality=2/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=39/quality=3/length=lte_64k": 1,
+      "gs://marin-us-central2/datakit/store/june-67b-a2b-length64k/2026.08.24/cluster=39/quality=4/length=lte_64k": 1
+    }
+  }
+}
