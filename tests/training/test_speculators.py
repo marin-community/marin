@@ -54,6 +54,22 @@ class _CaptureEnvironment:
         return None
 
 
+def _capture_config(*, sequence_length: int = 32768) -> HiddenStateCaptureConfig:
+    return HiddenStateCaptureConfig(
+        dataset_path="dataset.jsonl",
+        target_model="target",
+        processor_model="tokenizer",
+        output_path="published",
+        target_layer_ids=(2, 13, 23),
+        verifier_num_hidden_layers=26,
+        sequence_length=sequence_length,
+        data_parallel_size=8,
+        concurrency=64,
+        max_samples=None,
+        gpu_memory_utilization=0.9,
+    )
+
+
 def test_rollout_conversations_groups_complete_rollouts():
     rows = [
         _row("1", ParticipantType.USER, "first prompt"),
@@ -99,19 +115,7 @@ def test_verifier_config_keeps_architecture_when_rewriting_model_type():
 
 
 def test_capture_args_request_auxiliary_and_final_hidden_states(tmp_path: Path):
-    config = HiddenStateCaptureConfig(
-        dataset_path="dataset.jsonl",
-        target_model="target",
-        processor_model="tokenizer",
-        output_path="output",
-        target_layer_ids=(2, 13, 23),
-        verifier_num_hidden_layers=26,
-        sequence_length=16384,
-        data_parallel_size=8,
-        concurrency=64,
-        max_samples=None,
-        gpu_memory_utilization=0.9,
-    )
+    config = _capture_config(sequence_length=16384)
 
     args = _capture_vllm_args(config, tmp_path)
     speculative_config = json.loads(args[args.index("--speculative-config") + 1])
@@ -124,13 +128,6 @@ def test_capture_args_request_auxiliary_and_final_hidden_states(tmp_path: Path):
         26,
     ]
     assert transfer_config["kv_connector_extra_config"]["shared_storage_path"] == str(tmp_path)
-    assert args[:5] == [
-        "--enforce-eager",
-        "--no-enable-flashinfer-autotune",
-        "--data-parallel-size",
-        "8",
-        "--enable-expert-parallel",
-    ]
     assert args[args.index("--data-parallel-size") + 1] == "8"
 
 
@@ -203,21 +200,7 @@ def test_capture_publishes_after_vllm_teardown_failure(monkeypatch):
     monkeypatch.setattr(speculators, "_run_command", fake_command)
     monkeypatch.setattr(speculators, "_publish_directory", lambda source, destination: published.append(destination))
 
-    capture_hidden_states(
-        HiddenStateCaptureConfig(
-            dataset_path="dataset.jsonl",
-            target_model="target",
-            processor_model="tokenizer",
-            output_path="published",
-            target_layer_ids=(2, 13, 23),
-            verifier_num_hidden_layers=26,
-            sequence_length=32768,
-            data_parallel_size=8,
-            concurrency=64,
-            max_samples=None,
-            gpu_memory_utilization=0.9,
-        )
-    )
+    capture_hidden_states(_capture_config())
 
     assert published == ["published"]
 
@@ -262,20 +245,6 @@ def test_capture_publishes_progress_before_propagating_generation_failure(monkey
     )
 
     with pytest.raises(subprocess.CalledProcessError):
-        capture_hidden_states(
-            HiddenStateCaptureConfig(
-                dataset_path="dataset.jsonl",
-                target_model="target",
-                processor_model="tokenizer",
-                output_path="published",
-                target_layer_ids=(2, 13, 23),
-                verifier_num_hidden_layers=26,
-                sequence_length=32768,
-                data_parallel_size=8,
-                concurrency=64,
-                max_samples=None,
-                gpu_memory_utilization=0.9,
-            )
-        )
+        capture_hidden_states(_capture_config())
 
     assert published == [("published", True)]

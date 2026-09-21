@@ -68,7 +68,7 @@ _PYTORCH_INDEX_STRATEGY = "unsafe-best-match"
 # CoreWeave task images provide the NVIDIA driver but not nvcc. FlashInfer JIT-compiles SM100
 # attention, MoE, sampling, and all-reduce kernels even when vLLM itself comes from a native wheel.
 _CUDA_TOOLCHAIN_REQUIREMENTS = {
-    "cu130": (
+    _UPSTREAM_CUDA_TORCH_BACKEND: (
         "nvidia-cuda-nvcc==13.0.88",
         "nvidia-cuda-crt==13.0.88",
         "nvidia-nvvm==13.0.88",

@@ -21,7 +21,7 @@ from typing import Any
 from finestore.eval import ARCHIVE_ROLLOUTS_TABLE, ParticipantType
 from finestore.reader import ReadView
 from fray.types import ResourceConfig
-from huggingface_hub import snapshot_download
+from levanter.model_cache import cache_hf_model
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from marin.execution.artifact import Artifact
@@ -37,7 +37,9 @@ SPECULATORS_DATA_FILENAME = "conversations.jsonl"
 SPECULATORS_PREPARED_DATA_DIR = "data"
 SPECULATORS_HIDDEN_STATES_DIR = "hidden_states"
 _VLLM_SCALE_OUT_ENDPOINTS_ENV = {"VLLM_ENABLE_SCALE_OUT_ENDPOINTS": "1"}
-_DRAFT_GPU_RESOURCES = ResourceConfig.with_gpu("H100", count=8, cpu=96, ram="512g", disk="1t")
+_DRAFT_GPU_COUNT = 8
+_OBJECT_STORE_BATCH_SIZE = 16
+_DRAFT_GPU_RESOURCES = ResourceConfig.with_gpu("H100", count=_DRAFT_GPU_COUNT, cpu=96, ram="512g", disk="1t")
 
 # Speculators installs torchaudio for multimodal preprocessing. PyPI's Linux
 # wheel follows CUDA 13, while Iris H100 tasks currently provide PyTorch's
@@ -207,21 +209,7 @@ def rollout_conversation_step(
 
 def mirror_hf_snapshot(config: HfSnapshotConfig) -> None:
     """Mirror one immutable Hugging Face snapshot into artifact storage."""
-    with tempfile.TemporaryDirectory() as workdir:
-        snapshot = Path(
-            snapshot_download(
-                config.repo_id,
-                revision=config.revision,
-                local_dir=str(Path(workdir) / "snapshot"),
-                cache_dir=str(Path(workdir) / "cache"),
-            )
-        )
-        for surplus in (snapshot / ".cache", snapshot / ".gitattributes"):
-            if surplus.is_dir():
-                shutil.rmtree(surplus)
-            elif surplus.exists():
-                surplus.unlink()
-        _publish_directory(snapshot, config.output_path)
+    cache_hf_model(config.output_path, config.repo_id, revision=config.revision)
 
 
 def hf_snapshot_step(
@@ -346,7 +334,7 @@ def _restore_directory(source: str, destination: Path) -> None:
         return
 
     logger.info("Restoring capture progress from %s", source_path)
-    source_path.download_to(str(destination), recursive=True, batch_size=16)
+    source_path.download_to(str(destination), recursive=True, batch_size=_OBJECT_STORE_BATCH_SIZE)
 
 
 def _capture_vllm_args(config: HiddenStateCaptureConfig, hidden_states_path: Path) -> list[str]:
@@ -437,7 +425,9 @@ def capture_hidden_states(config: HiddenStateCaptureConfig) -> None:
         connector_staging = work_path / "connector"
         target_model = work_path / "target_model"
         StoragePath(config.dataset_path).download_to(str(raw_data))
-        StoragePath(config.target_model).download_to(str(target_model), recursive=True, batch_size=16)
+        StoragePath(config.target_model).download_to(
+            str(target_model), recursive=True, batch_size=_OBJECT_STORE_BATCH_SIZE
+        )
         _restore_directory(config.output_path, prepared_data)
         connector_staging.mkdir()
 
@@ -493,7 +483,7 @@ def hidden_state_capture_step(
     target_layer_ids: tuple[int, ...],
     verifier_num_hidden_layers: int,
     sequence_length: int,
-    data_parallel_size: int = 8,
+    data_parallel_size: int = _DRAFT_GPU_COUNT,
     concurrency: int = 64,
     max_samples: int | None = None,
     gpu_memory_utilization: float = 0.9,
@@ -620,7 +610,7 @@ def draft_training_step(
     epochs: int = 4,
     learning_rate: float = 1e-5,
     muon_learning_rate: float = 0.02,
-    num_processes: int = 8,
+    num_processes: int = _DRAFT_GPU_COUNT,
     resources: ResourceConfig = _DRAFT_GPU_RESOURCES,
 ) -> ArtifactStep[Artifact]:
     """Fine-tune a deployable draft checkpoint from a captured artifact."""
