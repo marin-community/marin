@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run 100B-token proof and science curricula on preemptible central2 v4 TPUs."""
+"""Run 100B-token proof and science curricula on preemptible 2048-chip TPU slices."""
 
 import argparse
 import dataclasses
@@ -56,6 +56,11 @@ BASE = (
 )
 TOKENIZER = f"{PREFIX}/grug_sft/tokenizer/2026.09.12"
 SFT_VERSION = "2026.09.20"
+SUPPORTED_TPU_ZONES = {
+    ("v4-2048", "us-central2-b"),
+    ("v5p-2048", "us-central1-a"),
+    ("v5p-2048", "us-east5-a"),
+}
 
 ANCHORS = {
     128006: " role",
@@ -283,8 +288,10 @@ def data_config(mix: ScienceMix) -> LmDataConfig:
     )
 
 
-def train(mix: ScienceMix, version: str) -> None:
-    """Dispatch one preemptible v4-2048 curriculum run."""
+def train(mix: ScienceMix, version: str, tpu: str, zone: str) -> None:
+    """Dispatch one preemptible 2048-chip curriculum run."""
+    if (tpu, zone) not in SUPPORTED_TPU_ZONES:
+        raise ValueError(f"Unsupported TPU and zone combination: {tpu} in {zone}")
     identity = run_id(mix, version)
     output = f"{OUTPUT_ROOT}/{identity}"
     data = data_config(mix)
@@ -354,7 +361,7 @@ def train(mix: ScienceMix, version: str) -> None:
             model=model,
             data=data,
             optimizer=optimizer,
-            resources=ResourceConfig.with_tpu("v4-2048", zone="us-central2-b", preemptible=True),
+            resources=ResourceConfig.with_tpu(tpu, zone=zone, preemptible=True),
             trainer=GrugTrainerConfig(
                 trainer=trainer,
                 sft_weights_only_init=False,
@@ -381,5 +388,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--mix", type=ScienceMix, choices=ScienceMix, required=True)
     parser.add_argument("--version", required=True)
+    parser.add_argument("--tpu", choices=("v4-2048", "v5p-2048"), required=True)
+    parser.add_argument("--zone", choices=("us-central2-b", "us-central1-a", "us-east5-a"), required=True)
     args = parser.parse_args()
-    train(args.mix, args.version)
+    train(args.mix, args.version, args.tpu, args.zone)
