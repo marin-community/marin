@@ -278,6 +278,17 @@ _OWN_MODEL_CLUSTER = {
     "rm": OPERATOR1_RECIPE.rm,
     "om": OPERATOR1_RECIPE.om,
 }
+# Second-stage split of the init cluster: embedding-side scales vs depth
+# multipliers. The first-stage screen isolated the cluster; these arms
+# attribute it to individual knobs.
+_OWN_EMBED_CLUSTER = {
+    "wte": OPERATOR1_RECIPE.wte,
+    "uis": OPERATOR1_RECIPE.uis,
+}
+_OWN_DEPTH_CLUSTER = {
+    "rm": OPERATOR1_RECIPE.rm,
+    "om": OPERATOR1_RECIPE.om,
+}
 _OWN_OPTIMIZER_CLUSTER = {
     "elrm": OPERATOR1_RECIPE.elrm,
     "hlrm": OPERATOR1_RECIPE.hlrm,
@@ -317,6 +328,12 @@ _ARMS = {
     ),
     "screen-own-wu40": functools.partial(
         _screening_arm, "own_wu40", dataclasses.replace(OPERATOR1_RECIPE, wu=VANILLA_RECIPE.wu)
+    ),
+    "screen-init-embed": functools.partial(
+        _screening_arm, "init_embed", dataclasses.replace(VANILLA_RECIPE, **_OWN_EMBED_CLUSTER)
+    ),
+    "screen-init-depth": functools.partial(
+        _screening_arm, "init_depth", dataclasses.replace(VANILLA_RECIPE, **_OWN_DEPTH_CLUSTER)
     ),
 }
 
