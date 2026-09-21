@@ -47,6 +47,7 @@ from experiments.june_tpu_67b_a2b.moe.optimizer import GrugMoeMuonHConfig
 logger = logging.getLogger(__name__)
 
 PREFIX = "gs://marin-us-central2"
+MIN_EXPECTED_SEQUENCES_PER_BLOCK = 1.000001
 OUTPUT_ROOT = f"{PREFIX}/users/benfeuer/grug_sft"
 BASE = (
     f"{PREFIX}/grug/"
@@ -123,10 +124,33 @@ def _add_weighted_group(
     capacity = math.fsum(value for _, value in entries.values())
     if capacity <= 0:
         raise ValueError(f"{group} has no training sequences")
+    pooled: dict[str, DatasetComponent] = {}
+    pooled_weight = 0.0
+    weighted_entries: list[tuple[str, DatasetComponent, float]] = []
     for name, (component, sequences) in entries.items():
+        weight = share * sequences / capacity
+        if weight * MIXTURE_BLOCK_SIZE < MIN_EXPECTED_SEQUENCES_PER_BLOCK:
+            pooled[name] = component
+            pooled_weight += weight
+        else:
+            weighted_entries.append((name, component, weight))
+
+    if pooled and pooled_weight * MIXTURE_BLOCK_SIZE < MIN_EXPECTED_SEQUENCES_PER_BLOCK:
+        if not weighted_entries:
+            raise ValueError(f"{group} is too small to receive one sequence per mixture block")
+        smallest = min(weighted_entries, key=lambda entry: entry[2])
+        weighted_entries.remove(smallest)
+        name, component, weight = smallest
+        pooled[name] = component
+        pooled_weight += weight
+
+    for name, component, weight in weighted_entries:
         key = f"{group}/{name}"
         components[key] = component
-        weights[key] = share * sequences / capacity
+        weights[key] = weight
+    if pooled:
+        components[f"{group}/pooled"] = ConcatDatasetComponent(children=pooled)
+        weights[f"{group}/pooled"] = pooled_weight
 
 
 def _text_entries(names: tuple[str, ...]) -> dict[str, tuple[DatasetComponent, float]]:
@@ -174,13 +198,13 @@ def _add_replay(
             for copy in range(copies)
         }
         weight = share * record["weight"]
-        if weight * MIXTURE_BLOCK_SIZE < 1.000001:
+        if weight * MIXTURE_BLOCK_SIZE < MIN_EXPECTED_SEQUENCES_PER_BLOCK:
             pooled.update({f"{name}/{key}": child for key, child in children.items()})
             pooled_weight += weight
         else:
             components[f"replay/{name}"] = ConcatDatasetComponent(children=children)
             weights[f"replay/{name}"] = weight
-    if pooled and pooled_weight * MIXTURE_BLOCK_SIZE < 1.000001:
+    if pooled and pooled_weight * MIXTURE_BLOCK_SIZE < MIN_EXPECTED_SEQUENCES_PER_BLOCK:
         smallest = min((key for key in weights if key.startswith("replay/")), key=weights.__getitem__)
         pooled.update(components.pop(smallest).children)
         pooled_weight += weights.pop(smallest)
@@ -264,7 +288,7 @@ def train(mix: ScienceMix, version: str) -> None:
     identity = run_id(mix, version)
     output = f"{OUTPUT_ROOT}/{identity}"
     data = data_config(mix)
-    metadata = json.loads(StoragePath(BASE + "/metadata.json").read_text())
+    metadata = json.loads(StoragePath(prefix_join(BASE, "metadata.json")).read_text())
     if metadata["step"] != START_STEP:
         raise ValueError(f"Expected base step {START_STEP}, found {metadata['step']}")
     tokenizer = load_tokenizer(TOKENIZER)
@@ -303,7 +327,7 @@ def train(mix: ScienceMix, version: str) -> None:
         initialize_from=BASE,
         load_checkpoint=None,
         checkpointer=CheckpointerConfig(
-            base_path=output + "/checkpoints",
+            base_path=prefix_join(output, "checkpoints"),
             temporary_base_path=temporary_checkpoint_base_path(output),
             append_run_id_to_base_path=False,
             save_interval=timedelta(minutes=30),

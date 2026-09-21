@@ -14,7 +14,9 @@ START_STEP = 157_000
 STEPS = 1_491
 FINAL_STEP = START_STEP + STEPS
 TOKENS = STEPS * BATCH * CONTEXT
-MIXTURE_BLOCK_SIZE = STEPS * BATCH
+# Seven equal blocks cover the run exactly while staying below MixtureDataset's
+# 16-bit per-block index limit.
+MIXTURE_BLOCK_SIZE = STEPS * BATCH // 7
 _VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
@@ -43,9 +45,9 @@ class MixBudget:
 
 
 MIX_BUDGETS = {
-    ScienceMix.BALANCED: MixBudget(14.5, 15.0, 10.0, 41.65, 14.5, 0.35, 4.0),
-    ScienceMix.PROOF_FIRST: MixBudget(14.5, 22.0, 18.0, 24.65, 14.5, 0.35, 6.0),
-    ScienceMix.SCIENCE_FORWARD: MixBudget(10.0, 10.0, 7.0, 51.0, 14.5, 0.35, 7.15),
+    ScienceMix.BALANCED: MixBudget(14.5, 15.0, 10.0, 47.15, 9.0, 0.35, 4.0),
+    ScienceMix.PROOF_FIRST: MixBudget(14.5, 22.0, 15.0, 33.15, 9.0, 0.35, 6.0),
+    ScienceMix.SCIENCE_FORWARD: MixBudget(10.0, 15.0, 10.5, 48.0, 9.0, 0.35, 7.15),
 }
 
 
