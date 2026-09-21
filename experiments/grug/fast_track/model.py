@@ -742,6 +742,10 @@ class Block(eqx.Module):
 
         attn_in = self.attn_gated_norm(self.rms_attn(x))
         attn_out = self.attn(attn_in, mask, disable_rope=disable_rope, is_global=is_global)
+        # Checkpoint the attention output so the layer-level remat does not recompute the (expensive,
+        # Inkling-bias-carrying) attention forward in the backward pass. Paired with the scan's
+        # save_only_these_names policy below.
+        attn_out = jax.ad_checkpoint.checkpoint_name(attn_out, "grug_attn_out")
         if self.sconv_attn is not None:
             attn_out = self.sconv_attn(attn_out, sconv_segment_ids)
         x = x + attn_out
@@ -866,7 +870,9 @@ class Transformer(eqx.Module):
             use_long = jnp.asarray(layer_use_long_mask, dtype=jnp.bool_)
             lower_bounds = jnp.where(use_long, long_lower_bounds, short_lower_bounds)
             layer_mask = long_mask.with_fa4_bounds(lower_bounds, valid)
-            return eqx.filter_checkpoint(layer, policy=None)(
+            # Save the attention output (named above) instead of full remat (policy=None), so the
+            # attention forward is not recomputed in the backward. Everything else is still recomputed.
+            return eqx.filter_checkpoint(layer, policy=jax.checkpoint_policies.save_only_these_names("grug_attn_out"))(
                 carry_hidden,
                 layer_mask,
                 use_long,
