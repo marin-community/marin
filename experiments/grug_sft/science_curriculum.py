@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run 100B-token proof and science curricula on preemptible 2048-chip TPU slices."""
+"""Run 100B-token proof and science curricula on supported preemptible TPU slices."""
 
 import argparse
 import dataclasses
@@ -57,7 +57,9 @@ BASE = (
 TOKENIZER = f"{PREFIX}/grug_sft/tokenizer/2026.09.12"
 SFT_VERSION = "2026.09.20"
 SUPPORTED_TPU_ZONES = {
+    ("v4-1024", "us-central2-b"),
     ("v4-2048", "us-central2-b"),
+    ("v5p-1024", "us-east5-a"),
     ("v5p-2048", "us-central1-a"),
     ("v5p-2048", "us-east5-a"),
 }
@@ -289,7 +291,7 @@ def data_config(mix: ScienceMix) -> LmDataConfig:
 
 
 def train(mix: ScienceMix, version: str, tpu: str, zone: str) -> None:
-    """Dispatch one preemptible 2048-chip curriculum run."""
+    """Dispatch one preemptible curriculum run on a supported TPU slice."""
     if (tpu, zone) not in SUPPORTED_TPU_ZONES:
         raise ValueError(f"Unsupported TPU and zone combination: {tpu} in {zone}")
     identity = run_id(mix, version)
@@ -388,7 +390,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--mix", type=ScienceMix, choices=ScienceMix, required=True)
     parser.add_argument("--version", required=True)
-    parser.add_argument("--tpu", choices=("v4-2048", "v5p-2048"), required=True)
+    parser.add_argument("--tpu", choices=("v4-1024", "v4-2048", "v5p-1024", "v5p-2048"), required=True)
     parser.add_argument("--zone", choices=("us-central2-b", "us-central1-a", "us-east5-a"), required=True)
     args = parser.parse_args()
     train(args.mix, args.version, args.tpu, args.zone)
