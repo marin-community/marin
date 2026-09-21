@@ -1227,10 +1227,24 @@ total and produced no trained-quality endpoint.
 The TIS control reached update ten and saved its full optimizer checkpoint,
 but its evaluation dump received an S3 `SlowDown` error. Iris restarted with
 `resume_mode=latest` after the [step-ten checkpoint](results/score_centering_snowball_tis_attempt0_failure.json)
-was saved; the restored step still needs verification.
-The first attempt used 61.75 reserved H100-hours. Its old W&B run ID is
-`fmc3c94l`; the resumed attempt is `p4g0xa72`. The evaluation failure is
-separate from the SC policy-backward failures.
+was saved. The first attempt used 61.75 reserved H100-hours. Its W&B run ID
+was `fmc3c94l`. The retry (W&B `p4g0xa72`) found trainer and dataloader state
+at update ten, then failed while downloading policy shards: S3 returned
+`SlowDown` on `GetObject`, before the full optimizer was restored. Its
+[failure record](results/score_centering_snowball_tis_attempt1_failure.json)
+accounts for another 7.04 H100-hours. The TIS job used 68.79 H100-hours
+total, reached ten optimizer updates, and has no step-ten evaluation dump.
+These S3 failures are separate from the SC policy-backward failures.
+The [attempt cost ledger](results/score_centering_snowball_formatfixed_cost.csv)
+counts all four failed and partial fused-attention attempts individually.
+
+SkyRL commit `aa94c5c8` addresses the observed storage failures: checkpoint
+downloads use one concurrent file per node and up to eight bounded retries;
+evaluation JSONL writes retry the complete object, including close. The
+targeted S3/I/O suite passed 46 tests. Future runs use that pinned runtime.
+The failed fused-attention TIS control remains an operational observation;
+continuing it to update twenty would not provide the control for the new
+FlashAttention SC arm.
 
 To test a supported workaround, a new SC32 run keeps the same model, pool,
 seed, batch, response length, age allowance, and correction width, but sets
@@ -1239,4 +1253,6 @@ disables TransformerEngine fused attention for this setting. The
 [FlashAttention SC job](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-default-set-d7f4bce1-2026.09.21.2-370e4cfb7f4b)
 uses version `2026.09.21.2` and runtime `cd04007912`. Its quality cannot be
 attributed to SC against the earlier fused-attention TIS control: a matched
-FlashAttention TIS arm is required if this SC run passes the failing updates.
+FlashAttention TIS arm is required. This original-pin SC run qualifies the
+backend through the updates at which fused attention failed; a quality pair
+must use the same new runtime pin for both arms.
