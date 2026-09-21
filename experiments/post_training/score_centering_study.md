@@ -1376,6 +1376,12 @@ or 357/756 combined. These differ from the original TIS baseline by +2
 completed rewarded answers and +2 conservative format-inclusive answers; the
 final comparison therefore reports both final counts and baseline-adjusted
 changes.
+The replacement passed update three, where both old-runtime attempts failed.
+Its first three mean consumed-token ages were 0, 1, and 1.94; mean absolute SC
+corrections were 0.0135, 0.0065, and 0.0089. Updates two and three emitted
+transient 20 MiB expandable-segment mapping warnings on some ranks at their
+memory peaks, but both updates completed and the allocator returned to more
+than 8 GiB free per GPU on the four learner nodes after update three.
 
 The TIS control passed its step-ten operational gate on `26a4b7e1`. Its full
 DP-reshardable checkpoint has 32 distributed policy shards, 45 files, and
@@ -1401,8 +1407,22 @@ Iris began one automatic retry from the verified step-ten checkpoint. Unlike
 the failed SC attempts, this arm has no selected-logprob score-centering copy;
 the sampled-logprob backward itself operates in 1,024-position vocabulary
 chunks. A smaller chunk would preserve the objective but change runtime from
-the frozen comparison, so the existing checkpoint retry is tested first.
+the frozen comparison, so the existing checkpoint retry was tested first.
 The retry is W&B run
 [`3skpf0m2`](https://wandb.ai/marin-community/marin-async-rl/runs/3skpf0m2).
-It selected `global_step_10`, then successfully restored the trainer and
-dataloader state before loading the distributed policy and optimizer state.
+It selected `global_step_10` and restored the complete distributed state, but
+then failed before update eleven during the initial policy-weight broadcast.
+The [failure record](results/score_centering_snowball_flash_pair_tis_attempt1_failure.json)
+reports a 32 MiB expert-weight gather with only 13.19 MiB free while the
+populated restored optimizer was resident. It used another 21.94 reserved
+H100-hours.
+
+MarinSkyRL `22a37adc` temporarily offloads that populated optimizer for the
+initial post-restore broadcast, then restores the configured GPU residency;
+18 focused checkpoint and async-sync tests pass. A new explicit continuation
+from the same step-ten checkpoint uses that runtime and a 512-position policy
+logprob chunk. The chunk change is mathematically equivalent but may increase
+learner time, so its timing is reported separately from the original arm. The
+[continuation job](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-default-set-17ed1d4f-2026.09.21.5-9e06721dbfad)
+uses version `2026.09.21.5`; the launcher now validates `from_path` resumes and
+places their mode and source checkpoint after the backend's default override.
