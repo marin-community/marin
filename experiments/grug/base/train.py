@@ -73,13 +73,7 @@ class GrugTrainerConfig:
         default_factory=lambda: BackwardFlowConfig(interval=_BACKWARD_FLOW_DEFAULT_INTERVAL)
     )
     loss_implementation: str | tuple[str, ...] | None = None
-    # This variant does not support sequence sharding.
-    context_axis_size: int = 1
     sharding_dump_path: str | None = None
-
-    def __post_init__(self):
-        if self.context_axis_size != 1:
-            raise ValueError("This Grug variant requires context_axis_size=1.")
 
 
 @dataclass(frozen=True)
@@ -452,7 +446,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
     # Grug uses raw PartitionSpecs rather than Trainer's logical axis mapping.
     # Keep the mesh compact so P(("replica_dcn", "data")) spans slices directly.
-    mesh = compact_grug_mesh(context_axis_size=config.trainer.context_axis_size)
+    mesh = compact_grug_mesh()
     checkpointer = trainer.checkpointer.create(run_id)
     with set_mesh(mesh), TrainingDashboard(config, checkpointer.request_checkpoint, run_id):
         batch_schedule = trainer.batch_schedule

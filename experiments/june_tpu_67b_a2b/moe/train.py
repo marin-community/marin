@@ -72,8 +72,6 @@ class GrugTrainerConfig:
     # slice) and expert_axis_size>1 (expert parallelism over the intra-slice devices).
     expert_axis_size: int = 1
     replica_axis_size: int | None = None
-    # This variant has no sequence sharding; context parallelism requires moe_hero_ep.
-    context_axis_size: int = 1
     model_axis_size: int = 1
 
     sft_weights_only_init: bool = False
@@ -84,10 +82,6 @@ class GrugTrainerConfig:
     not a full-state resume. False (default) keeps the byte-identical continued-pretrain
     behaviour where ``initialize_from`` loads the whole train state (weights + optimizer +
     step). Own-run checkpoints still take precedence, so preemption resumes normally."""
-
-    def __post_init__(self):
-        if self.context_axis_size != 1:
-            raise ValueError("This Grug variant requires context_axis_size=1; use moe_hero_ep for context parallelism.")
 
 
 @dataclass(frozen=True)
@@ -522,7 +516,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         expert_axis_size=config.trainer.expert_axis_size,
         replica_axis_size=config.trainer.replica_axis_size,
         model_axis_size=config.trainer.model_axis_size,
-        context_axis_size=config.trainer.context_axis_size,
     )
     with set_mesh(mesh):
         batch_schedule = trainer.batch_schedule
