@@ -61,11 +61,11 @@ from experiments.grug.paper_rep.train import GrugEvalConfig, GrugRunConfig, Grug
 
 # The TPU the training job is dispatched onto. A run-arg, not part of the
 # config's identity: re-running on a different TPU is the same checkpoint.
-# v4-16 rather than v4-8: the v4-8 pools were degraded/booting at launch
-# time (2026-09-20) while preemptible v4-16 slices were ready. Batch 256
-# sequences divides over 16 devices; the global batch and data order are
-# unchanged, so the arms stay comparable to each other and to the paper.
-_TRAIN_RESOURCES = ResourceConfig.with_tpu("v4-16")
+# v4-32 rather than v4-8/v4-16: the v4-8 and v4-16 preemptible pools went
+# into boot backoff on 2026-09-21 while tpu_v4-preemptible_32 was healthy
+# (2 slices ready). Batch 256 sequences divides over 32 devices; the global
+# batch and data order are unchanged, so arms stay comparable to each other.
+_TRAIN_RESOURCES = ResourceConfig.with_tpu("v4-32")
 
 # Paper base-size run geometry: d8 (width 1024), 1B tokens, batch 524,288.
 _NUM_LAYERS = 8
