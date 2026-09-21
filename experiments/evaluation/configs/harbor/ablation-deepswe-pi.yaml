@@ -1,5 +1,5 @@
-# Harness ablation cell: deepswe x pi (eval-policy campaign, version harness-ablation-v1).
-# Standard policy retry/error handling; dataset reference mirrors the policy suite.
+# Harness ablation cell for marin#9080: deepswe x pi (launched as harness-ablation-v1).
+# Retry/error handling and dataset references match the suite configs in this directory.
 n_concurrent_trials: 16
 release_trial_payloads_in_memory: true
 retry:
