@@ -190,10 +190,10 @@ def lease_refresh(
 ) -> Generator[None, None, None]:
     """Keep an acquired lease fresh for the duration of a block.
 
-    A definitive lease loss is logged and stops the background thread. Other
-    refresh failures are retried with exponential backoff. Neither condition
-    interrupts the caller because the protected operation may already have
-    produced externally visible side effects when the failure is detected.
+    A definitive lease loss is logged and ends further refresh attempts. Other
+    refresh failures are retried. Neither condition interrupts the caller
+    because the protected operation may already have produced externally
+    visible side effects when the failure is detected.
 
     Args:
         lease: An acquired distributed lease.
