@@ -1207,9 +1207,36 @@ retains the exact task durations, worker-log hash, and original debug paths;
 the five tasks used 26.69 reserved H100-hours. Its
 [step-zero responses](results/score_centering_snowball_sc32_attempt0_evals.csv)
 and [training history](results/score_centering_snowball_sc32_attempt0_wandb.jsonl)
-are retained because Iris is retrying from the source model before the first
+are retained because Iris retried from the source model before the first
 step-ten optimizer checkpoint. That attempt's step-zero core result was 272/756,
 28 above TIS; its [GSM8K format audit](results/score_centering_snowball_sc32_attempt0_gsm8k_step0_probe.json)
 found 59 unrewarded exact boxed outputs. The failed attempt is not an outcome
 comparison. The retry has a distinct W&B run ID, `zxrf462l`, and the new
-step-zero baseline reported above.
+step-zero baseline reported above. It completed update one, then a different
+policy actor (23) failed during update two in the same TransformerEngine
+fused-attention backward function. The [second attempt record](results/score_centering_snowball_sc32_attempt1_failure.json)
+retains its worker error, debug artifact, and 22.89 reserved H100-hours;
+its [one-update training history](results/score_centering_snowball_sc32_attempt1_wandb.jsonl)
+is separate from the first attempt. The
+cuDNN error included CUDA result `2` on this attempt, versus `1` on the first;
+NVIDIA's [CUDA error enum](https://docs.nvidia.com/cuda/archive/12.9.2/cuda-driver-api/group__CUDA__TYPES.html)
+names these `OUT_OF_MEMORY` and `INVALID_VALUE`. The log does not establish
+why these different results arose. The two attempts used 49.58 H100-hours in
+total and produced no trained-quality endpoint.
+
+The TIS control reached update ten and saved its full optimizer checkpoint,
+but its evaluation dump received an S3 `SlowDown` error. Iris restarted with
+`resume_mode=latest` after the [step-ten checkpoint](results/score_centering_snowball_tis_attempt0_failure.json)
+was saved; the restored step still needs verification.
+The first attempt used 61.75 reserved H100-hours. Its old W&B run ID is
+`fmc3c94l`; the resumed attempt is `p4g0xa72`. The evaluation failure is
+separate from the SC policy-backward failures.
+
+To test a supported workaround, a new SC32 run keeps the same model, pool,
+seed, batch, response length, age allowance, and correction width, but sets
+`trainer.flash_attn=true`. MarinSkyRL selects the FlashAttention backend and
+disables TransformerEngine fused attention for this setting. The
+[FlashAttention SC job](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-default-set-d7f4bce1-2026.09.21.2-370e4cfb7f4b)
+uses version `2026.09.21.2` and runtime `cd04007912`. Its quality cannot be
+attributed to SC against the earlier fused-attention TIS control: a matched
+FlashAttention TIS arm is required if this SC run passes the failing updates.
