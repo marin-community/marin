@@ -86,6 +86,7 @@ def publish_applet(
     payload: bytes,
     applet_id: str | None = None,
     base_version: int | None = None,
+    mode: str | None = None,
 ) -> dict[str, object]:
     """Publish an applet archive and return Marina's structured response."""
     path = "/api/marina/applets" + (f"/{applet_id}" if applet_id is not None else "")
@@ -93,7 +94,8 @@ def publish_applet(
         service_url,
         "POST",
         path,
-        params={"base_version": base_version} if base_version is not None else None,
+        params={key: value for key, value in {"base_version": base_version, "mode": mode}.items() if value is not None}
+        or None,
         payload=payload,
     )
     if not isinstance(value, dict):

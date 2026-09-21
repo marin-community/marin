@@ -13,7 +13,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
 
 # Checkpoint 121638 resumes at global_step 121638; parent W&B _step 121637
 # was verified to record global_step 121637 before the replayed window.
-RUN_ID=hero-main-step121638
+RUN_ID=$(uv run python -m experiments.grug.moe_hero_ep.current_run)
 HANDOFF_CHECKPOINT=s3://hero-checkpoints/tmp/ttl=14d/checkpoints-temp/marin-us-east-02a/marin/grug/hero-nopdl-step108k/2026.08.19.2/checkpoints/step-121638
 WANDB_FORK_FROM='hero-nopdl-step108k?_step=121637'
 WANDB_PROJECT=marin_moe
