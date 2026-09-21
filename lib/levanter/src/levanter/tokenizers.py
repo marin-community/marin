@@ -17,6 +17,7 @@ Usage:
 import contextlib
 import dataclasses
 import functools
+import hashlib
 import json
 import logging
 import os
@@ -36,6 +37,7 @@ from huggingface_hub import hf_hub_download, snapshot_download
 from huggingface_hub.utils import EntryNotFoundError, RepositoryNotFoundError
 from rigging.filesystem.atomic import fetch_file_atomic
 from rigging.filesystem.factory import filesystem, open_url
+from rigging.filesystem.storage_path import StoragePath
 from tokenizers import Encoding as HfEncoding
 from tokenizers import Tokenizer as HfBaseTokenizer
 
@@ -735,10 +737,10 @@ def load_tokenizer(
     *,
     backend: TokenizerBackend = TokenizerBackend.HF,
 ) -> MarinTokenizer:
-    """Load a tokenizer by HF model name or local path.
+    """Load a tokenizer by HF model name, local path, or storage URL.
 
-    Files are staged once via mirror://tokenizers/ (GCS/S3) before falling back
-    to HF Hub. Cached per (name_or_path, backend).
+    HF names are staged via mirror://tokenizers/ before falling back to the Hub.
+    Storage URLs are read directly. Cached per (name_or_path, backend).
     """
     local_dir = _stage_tokenizer(name_or_path) if not os.path.isdir(name_or_path) else name_or_path
     if backend == TokenizerBackend.HF:
@@ -916,12 +918,23 @@ def _stage_tokenizer(name_or_path: str) -> str:
     local_dir = os.path.join(
         tempfile.gettempdir(),
         "levanter_tokenizers",
-        name_or_path,
+        hashlib.sha256(name_or_path.encode()).hexdigest() if "://" in name_or_path else name_or_path,
         f"hf-hub-{_hf_hub_version}",
     )
     os.makedirs(local_dir, exist_ok=True)
 
     with _STAGE_LOCK:
+        if "://" in name_or_path:
+            # Explicit storage artifacts must not fall back to the Hub or mirror.
+            # Fetch all files before loading so a partial download cannot hide
+            # missing special-token configuration or the chat template.
+            for source in StoragePath(name_or_path.rstrip("/") + "/*").glob():
+                if source.isfile():
+                    destination = os.path.join(local_dir, os.path.basename(str(source)))
+                    if not fetch_file_atomic(str(source), destination):
+                        raise FileNotFoundError(str(source))
+            return local_dir
+
         # 1. Local cache hit (also the double-checked fast path for threads that
         #    waited on the lock while another thread staged this same ref).
         if _try_load_tokenizer_from_dir(local_dir):
