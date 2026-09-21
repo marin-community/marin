@@ -1031,17 +1031,17 @@ class FlashAttentionBackwardSm90:
         COL = const_expr(1 if not self.SdP_swapAB else 0)
         for r in cutlass.range_constexpr(cute.size(tScS_mn.shape[0])):
             q_pos = tScS_mn[r, 0][ROW]
+            # Hoist R[q, :rel_dim] into registers once per query row (reused across all keys).
+            r_vals = [rel_r_t[q_pos, ri, head_idx, batch_idx].to(Float32) for ri in cutlass.range_constexpr(rel_dim)]
             for c in cutlass.range_constexpr(cute.size(tScS_mn.shape[1])):
                 k_pos = tScS_mn[r, c][COL]
                 acc_S_mn[r, c] = acc_S_mn[r, c] * softmax_scale
                 delta = q_pos - k_pos
                 delta_safe = cutlass.min(cutlass.max(delta, Int32(0)), rel_extent - 1)
-                # A[q, delta] = sum_r R[q, r, head, batch] * proj[r, delta], computed on the fly.
+                # A[q, delta] = sum_r R[q, r]*proj[r, delta] from hoisted r_vals + tiny cached proj.
                 bias = Float32(0.0)
                 for ri in cutlass.range_constexpr(rel_dim):
-                    bias = bias + rel_r_t[q_pos, ri, head_idx, batch_idx].to(Float32) * rel_proj_t[ri, delta_safe].to(
-                        Float32
-                    )
+                    bias = bias + r_vals[ri] * rel_proj_t[ri, delta_safe].to(Float32)
                 in_band = cute.elem_less(delta, rel_extent) and cute.elem_less(Int32(-1), delta)
                 if in_band:
                     acc_S_mn[r, c] = acc_S_mn[r, c] + bias

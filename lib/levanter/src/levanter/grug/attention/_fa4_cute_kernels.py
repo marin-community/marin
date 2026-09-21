@@ -806,6 +806,8 @@ def segmented_flash_attention_forward_launcher(
             tScS = mma_params.thr_mma.partition_C(cS)
             tScS_mn = self._make_acc_tensor_mn_view(tScS)
 
+            rel_dim = cutlass.const_expr(basic_params.mProj.shape[0])
+            rel_extent = basic_params.mProj.shape[1]
             for r in cutlass.range_constexpr(cute.size(softmax_params.row_max)):
                 query_idx = tScS_mn[r, 0][1]
                 query_in_bounds = cute.elem_less(query_idx, basic_params.mQ.shape[0])
@@ -815,6 +817,15 @@ def segmented_flash_attention_forward_launcher(
                 # tile so no [B, S, S] mask or THD repacking is required.
                 query_valid = basic_params.mValid[basic_params.batch_idx, query_meta_idx] != 0
                 query_lower_bound = basic_params.mLowerBounds[basic_params.batch_idx, query_meta_idx]
+
+                # Hoist R[query, :rel_dim] into registers ONCE per query row (reused across all keys);
+                # the per-element gmem gather of R was what made the naive on-the-fly bias slow.
+                r_vals = [
+                    basic_params.mR[query_meta_idx, ri, basic_params.q_head, basic_params.batch_idx].to(
+                        cutlass.Float32
+                    )
+                    for ri in cutlass.range_constexpr(rel_dim)
+                ]
 
                 for c in cutlass.range_constexpr(cute.size(tScS_mn.shape[1])):
                     key_idx = tScS_mn[0, c][3]
@@ -830,22 +841,18 @@ def segmented_flash_attention_forward_launcher(
                     )
                     if not keep:
                         acc_S_mn[r, c] = -cutlass.Float32.inf
-                    # Inkling relative-position bias, computed ON THE FLY from the low-rank factors:
-                    # A[query, delta] = sum_r R[query, r, q_head, batch] * proj[r, delta]. This avoids
-                    # materializing/streaming the [B,Hq,S,L] bias tensor (the dominant cost at scale).
+                    # Inkling relative-position bias, computed ON THE FLY: A[query, delta] =
+                    # sum_r R[query,r]*proj[r,delta], using the row-hoisted r_vals + tiny cached proj.
+                    # Avoids materializing/streaming the [B,Hq,S,L] bias tensor (dominant cost at scale).
                     # acc_S is raw-qk units and softmax multiplies by softmax_scale_log2 inside exp2, so
                     # scale the natural-unit bias by LOG2E/softmax_scale_log2 = 1/scale.
-                    rel_extent = basic_params.mProj.shape[1]
-                    rel_dim = cutlass.const_expr(basic_params.mProj.shape[0])
                     delta = query_idx - key_idx
                     # cute evaluates GMEM loads unconditionally, so clamp the distance into [0, rel_extent)
                     # (masked positions can have delta < 0); gate the actual add on keep and in-band.
                     delta_safe = cutlass.min(cutlass.max(delta, cutlass.Int32(0)), rel_extent - 1)
                     bias_acc = cutlass.Float32(0.0)
                     for ri in cutlass.range_constexpr(rel_dim):
-                        bias_acc = bias_acc + basic_params.mR[
-                            query_meta_idx, ri, basic_params.q_head, basic_params.batch_idx
-                        ].to(cutlass.Float32) * basic_params.mProj[ri, delta_safe].to(cutlass.Float32)
+                        bias_acc = bias_acc + r_vals[ri] * basic_params.mProj[ri, delta_safe].to(cutlass.Float32)
                     in_band = keep and cute.elem_less(delta, rel_extent) and cute.elem_less(cutlass.Int32(-1), delta)
                     if in_band:
                         acc_S_mn[r, c] = (
