@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from marin.datakit.decon import DeconAttributes
+from marin.datakit.decon import DeconAttributes, NGramConfig, _bloom_hash
 from marin.execution.artifact import read_artifact, write_artifact
 from marin.execution.step_runner import step_is_built
 from marin.execution.step_spec import StepSpec
@@ -13,7 +13,16 @@ from marin.execution.step_status import STATUS_FAILED, STATUS_SUCCESS, StatusFil
 
 from experiments.datakit import reference_pipeline
 from experiments.datakit.decontam.viewer.export_reference_run import _wait_for_marks
+from experiments.datakit.decontam.viewer.export_run import _overlapping_ngrams
 from experiments.datakit.reports.common import StageReport
+
+
+@pytest.fixture(autouse=True)
+def unavailable_workers(fray_client, monkeypatch):
+    def reject_allocation(*args, **kwargs):
+        pytest.fail("worker allocation is unavailable")
+
+    monkeypatch.setattr(fray_client, "create_actor_group", reject_allocation)
 
 
 def test_reference_export_requires_success_status(tmp_path: Path):
@@ -60,9 +69,6 @@ def test_report_target_renders_completed_marks_without_workers(tmp_path: Path, m
             "source",
             "--target",
             "decon-report",
-            # A report must succeed without a worker, even with an unusable pool size.
-            "--pool-workers",
-            "-1",
         ],
     )
 
@@ -73,3 +79,46 @@ def test_report_target_renders_completed_marks_without_workers(tmp_path: Path, m
     assert report.stats["contaminated_docs"] == 0
     assert Path(str(report.html_path)).is_file()
     assert step_is_built(steps.report)
+
+
+@pytest.mark.parametrize(
+    ("text", "features"),
+    [
+        ("Distinctive alpha phrase", ["Distinctive alpha phrase"]),
+        (
+            "one two three four\n\nfive six seven eight\n\nnine ten eleven twelve\n\nthirteen fourteen",
+            [
+                "one two three four five six seven eight nine ten eleven twelve thirteen",
+                "two three four five six seven eight nine ten eleven twelve thirteen fourteen",
+            ],
+        ),
+    ],
+)
+def test_gallery_includes_short_and_whole_record_matches(text: str, features: list[str]):
+    matched = {_bloom_hash(feature) for feature in features}
+    assert _overlapping_ngrams(text, matched, NGramConfig(ngram_length=13, min_matched_features=2)) == features
+
+
+def test_mark_target_rejects_missing_preparation_before_worker_allocation(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
+    samples = tmp_path / "samples"
+    write_artifact({}, str(samples / "source"))
+    StatusFile(str(samples / "source"), "test").write_status(STATUS_SUCCESS)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "reference_pipeline",
+            "--mode",
+            "sample",
+            "--sample-prefix",
+            str(samples),
+            "--sources",
+            "source",
+            "--target",
+            "decon-mark",
+        ],
+    )
+
+    with pytest.raises(RuntimeError):
+        reference_pipeline.main()

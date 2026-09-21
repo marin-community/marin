@@ -78,7 +78,7 @@ def test_benchmark_routes_every_stage_under_one_prefix():
 def test_no_region_path_in_hash_attrs_except_known_bloom_gap():
     # A region-specific gs:// path in a hash means byte-identical data gets a
     # different output path per region. The only remaining leak is the decontam
-    # bloom's EVAL_ROOT (tracked follow-up); everything else must be clean.
+    # bloom's eval root (tracked follow-up); everything else must be clean.
     for step in _build().all_steps:
         if step.name == "datakit/bloom/_combined_fixed":
             continue

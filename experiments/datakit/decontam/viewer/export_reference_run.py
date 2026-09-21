@@ -16,6 +16,7 @@ import json
 import logging
 import random
 import time
+from bisect import bisect_left
 from collections import Counter
 
 import pyarrow.parquet as pq
@@ -24,7 +25,7 @@ from marin.execution.artifact import read_artifact
 from marin.execution.step_runner import step_is_built
 from marin.execution.step_spec import StepSpec
 from rigging.filesystem.factory import url_to_fs
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.datakit.decontam.prepare_eval_corpus import AA_EVALS
 from experiments.datakit.decontam.viewer.export_run import (
@@ -32,14 +33,14 @@ from experiments.datakit.decontam.viewer.export_run import (
     _window,
     eval_id_to_family,
 )
-from experiments.datakit.decontam.viewer.report import _single
+from experiments.datakit.decontam.viewer.report import render_run
 from experiments.datakit.reference_pipeline import (
     AA_BENCHMARK_NAMES,
     EVAL_CORPUS_VERSION,
-    EVAL_ROOT,
     MIN_MATCHED_FEATURES,
     NGRAM_LENGTH,
     decontamination_steps,
+    eval_corpus_root,
     select_sources,
 )
 
@@ -64,7 +65,8 @@ def _seed_for_source(seed: int, source: str) -> int:
 
 
 def _sample_flagged_rows(output_dir: str, limit: int, seed: int) -> tuple[list[dict], list[str]]:
-    files = sorted(str(path) for path in StoragePath(f"{output_dir.rstrip('/')}/*.parquet").glob())
+    """Return sampled rows and the shard paths read for the sample."""
+    files = sorted(str(path) for path in StoragePath(prefix_join(output_dir, "*.parquet")).glob())
     random.Random(seed).shuffle(files)
     rows: list[dict] = []
     used_files: list[str] = []
@@ -111,8 +113,10 @@ def _hash_to_evals(index_path: str, needed_hashes: set[int]) -> dict[int, set[st
     return mapping
 
 
-def _load_eval_texts(eval_ids: set[str]) -> dict[str, str]:
-    fs, root = url_to_fs(EVAL_ROOT)
+def _load_eval_texts(eval_ids: set[str], eval_root: str) -> dict[str, str]:
+    if not eval_ids:
+        return {}
+    fs, root = url_to_fs(eval_root)
     texts: dict[str, str] = {}
     for path in sorted(path for path in fs.find(root) if path.endswith(".parquet")):
         with fs.open(path, "rb") as fh:
@@ -127,6 +131,8 @@ def _load_eval_texts(eval_ids: set[str]) -> dict[str, str]:
                 ):
                     if eval_id in eval_ids:
                         texts[str(eval_id)] = str(text)
+                if len(texts) == len(eval_ids):
+                    return texts
     return texts
 
 
@@ -141,22 +147,12 @@ def _rate_histogram(rates: list[float]) -> str:
         "(1e-5,1e-4]",
         "(1e-4,1e-3]",
         "(1e-3,1e-2]",
-        ">1e-2",
+        "(1e-2,1]",
     ]
     counts = [0] * len(labels)
     for rate in rates:
-        if rate == 0:
-            counts[0] += 1
-            continue
-        placed = False
-        for index, bound in enumerate(bounds[1:], start=1):
-            if rate <= bound:
-                counts[index] += 1
-                placed = True
-                break
-        if not placed:
-            counts[-1] += 1
-    maximum = max(counts, default=1) or 1
+        counts[bisect_left(bounds, rate)] += 1
+    maximum = max(counts) or 1
     rows = "".join(
         f"<div style='display:grid;grid-template-columns:110px 1fr 45px;gap:8px;margin:3px 0'>"
         f"<span>{html.escape(label)}</span>"
@@ -170,12 +166,12 @@ def _rate_histogram(rates: list[float]) -> str:
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     parser = argparse.ArgumentParser()
-    parser.add_argument("--minimum-sources", type=int, required=True)
-    parser.add_argument("--timeout", type=int, default=28_800)
-    parser.add_argument("--samples-per-source", type=int, default=100)
-    parser.add_argument("--seed", type=int, default=20260815)
-    parser.add_argument("--label", required=True)
-    parser.add_argument("--out", required=True)
+    parser.add_argument("--minimum-sources", type=int, required=True, help="wait for this many successful source marks")
+    parser.add_argument("--timeout", type=int, default=28_800, help="maximum wait in seconds")
+    parser.add_argument("--samples-per-source", type=int, default=100, help="maximum flagged rows per source")
+    parser.add_argument("--seed", type=int, default=20260815, help="seed for source shard order")
+    parser.add_argument("--label", required=True, help="label for the exported run")
+    parser.add_argument("--out", required=True, help="directory for reports and sample provenance")
     args = parser.parse_args()
     if args.minimum_sources <= 0:
         parser.error("--minimum-sources must be positive")
@@ -184,6 +180,7 @@ def main() -> None:
     if args.samples_per_source <= 0:
         parser.error("--samples-per-source must be positive")
 
+    eval_root = eval_corpus_root()
     sources = select_sources(None)
     all_marks = decontamination_steps(sources).marks
     complete = _wait_for_marks(all_marks, args.minimum_sources, args.timeout)
@@ -256,7 +253,7 @@ def main() -> None:
             )
         gallery[source] = docs
 
-    eval_texts = _load_eval_texts(gallery_eval_ids)
+    eval_texts = _load_eval_texts(gallery_eval_ids, eval_root)
     per_source: list[dict] = []
     total_aa_hits: Counter[str] = Counter()
     for source, attrs in attrs_by_source.items():
@@ -296,9 +293,6 @@ def main() -> None:
     per_source.sort(key=lambda item: item["rate"], reverse=True)
     run = {
         "label": args.label,
-        "target_tokens_b": 0,
-        "exclude": [],
-        "root": str(next(iter(attrs_by_source.values())).main_output_dir),
         "sources": per_source,
     }
     exact_docs = sum(source["docs"] for source in per_source)
@@ -321,19 +315,19 @@ def main() -> None:
         f"<table style='max-width:620px'><thead><tr><th>benchmark</th><th>sample feature hits</th></tr></thead>"
         f"<tbody>{aa_rows}</tbody></table></section>"
     )
-    page = _single(run).replace("<main>", f"<main>{summary}", 1)
+    page = render_run(run, summary_html=summary)
 
-    output = args.out.rstrip("/")
+    output = args.out
     StoragePath(output).mkdirs()
-    with StoragePath(f"{output}/report.json").open("w") as fh:
+    with StoragePath(prefix_join(output, "report.json")).open("w") as fh:
         json.dump(run, fh)
-    with StoragePath(f"{output}/sample_manifest.jsonl").open("w") as fh:
+    with StoragePath(prefix_join(output, "sample_manifest.jsonl")).open("w") as fh:
         for row in manifest_rows:
             fh.write(json.dumps(row) + "\n")
     sampling = {
         "label": args.label,
         "eval_corpus_version": EVAL_CORPUS_VERSION,
-        "eval_root": EVAL_ROOT,
+        "eval_root": eval_root,
         "eval_hash_index": index_path,
         "completed_sources": len(complete),
         "total_sources": len(all_marks),
@@ -343,9 +337,9 @@ def main() -> None:
         "sample_files": sample_files,
         "source_outputs": {source: step.output_path for source, step in complete.items()},
     }
-    with StoragePath(f"{output}/sampling.json").open("w") as fh:
+    with StoragePath(prefix_join(output, "sampling.json")).open("w") as fh:
         json.dump(sampling, fh, indent=2)
-    with StoragePath(f"{output}/report.html").open("w") as fh:
+    with StoragePath(prefix_join(output, "report.html")).open("w") as fh:
         fh.write(page)
     logger.info("wrote %s with %d sources and %d sampled flagged rows", output, len(complete), len(manifest_rows))
 

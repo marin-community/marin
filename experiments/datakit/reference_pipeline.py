@@ -69,7 +69,7 @@ domain centroids (``None`` trains them inline).
 Region-agnostic: worker sizing is one :class:`PoolConfig`. ``MARIN_PREFIX`` is
 resolved by :func:`rigging.filesystem.cluster_config.marin_prefix` -- unset (the normal iris-
 worker case) it falls back to the in-region bucket, so source artifacts, the
-eval corpus (``EVAL_ROOT``), and every output land in-region. Override via
+eval corpus (``eval_corpus_root()``), and every output land in-region. Override via
 ``iris job run -e MARIN_PREFIX <bucket>``.
 
 Submit the sample-mode end-to-end run on iris::
@@ -100,7 +100,7 @@ data gets a different output path per region). Two consequences:
   store exactly, replicate those bytes (pass the trained centroids as
   ``domain_centroids``) rather than recomputing inline.
 
-Known gap: ``EVAL_ROOT`` (the decontam bloom's eval corpus) is still hashed as a
+Known gap: ``eval_corpus_root()`` (the decontam bloom's eval corpus) is still hashed as a
 ``marin_prefix()``-derived path via ``build_eval_bloom_step``, so the bloom (and
 its decontam consumers) re-key per region -- tracked as a follow-up to give the
 eval corpus a version tag.
@@ -150,7 +150,7 @@ from marin.processing.tokenize.attributes import (
     tokenize_attributes_step,
 )
 from rigging.filesystem.cluster_config import marin_prefix
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
 from zephyr.context import ZephyrContext
 from zephyr.runners import SubprocessRunner
@@ -224,7 +224,6 @@ TOKENIZER_BACKEND = TokenizerBackend.HF
 SPLIT = "train"
 
 # Decontam. Mandatory AA and best-effort lm-eval artifacts use one versioned root.
-EVAL_ROOT = f"{marin_prefix()}/{EVALS_RELATIVE}"
 # Bloom capacity -- unique ngram hashes the filter must hold: ~21.78M unique
 # hashes across the AA + LMH corpus, with 2.3x headroom. At FPR=1e-9 this is a
 # ~270 MB filter.
@@ -691,6 +690,11 @@ def zephyr_datakit_steps(
     )
 
 
+def eval_corpus_root() -> str:
+    """Return the evaluation corpus path for the current storage prefix."""
+    return prefix_join(marin_prefix(), EVALS_RELATIVE)
+
+
 def decontamination_steps(
     sources: dict[str, StepSpec],
     *,
@@ -710,7 +714,7 @@ def decontamination_steps(
         raise ValueError(f"unknown mark sources: {sorted(unknown_names)}")
 
     worker_resources = scale.pool.task if zephyr_context is not None else scale.pool.worker
-    eval_root = f"{marin_prefix()}/{EVALS_RELATIVE}"
+    eval_root = eval_corpus_root()
     bloom = build_eval_bloom_step(
         name="datakit/bloom/_combined_fixed",
         eval_data_sources=[eval_root],
@@ -1131,10 +1135,8 @@ def _apply_pool_overrides(scale: PipelineScale, args: argparse.Namespace) -> Pip
         device=worker_device,
         **{k: v for k, v in (("cpu", args.pool_cpu), ("ram", args.pool_ram), ("disk", args.pool_disk)) if v is not None},
     )
-    task_device = worker_device if args.pool_gpu is not None else scale.pool.task.device
     task = replace(
         scale.pool.task,
-        device=task_device,
         **{
             k: v
             for k, v in (
@@ -1163,14 +1165,13 @@ def _apply_pool_overrides(scale: PipelineScale, args: argparse.Namespace) -> Pip
     )
 
 
-def _require_normalized_sources(sources: dict[str, StepSpec]) -> None:
-    """Fail before pool creation when a decontamination input is not built."""
-    missing = [name for name, step in sources.items() if not step_is_built(step)]
+def _require_built_steps(steps: dict[str, StepSpec], label: str) -> None:
+    missing = [name for name, step in steps.items() if not step_is_built(step)]
     if not missing:
         return
     shown = ", ".join(missing[:20])
     remainder = f" and {len(missing) - 20} more" if len(missing) > 20 else ""
-    raise RuntimeError(f"missing normalized artifacts for {len(missing)} sources: {shown}{remainder}")
+    raise RuntimeError(f"missing {label} for {len(missing)} sources: {shown}{remainder}")
 
 
 def _decontamination_target_steps(result: DecontaminationSteps, target: str) -> list[StepSpec]:
@@ -1184,11 +1185,7 @@ def _decontamination_target_steps(result: DecontaminationSteps, target: str) -> 
             raise RuntimeError(f"decontamination preparation is not complete: {', '.join(missing)}")
         return list(result.marks.values())
     if target == "decon-report":
-        missing = [name for name, step in result.marks.items() if not step_is_built(step)]
-        if missing:
-            shown = ", ".join(missing[:20])
-            remainder = f" and {len(missing) - 20} more" if len(missing) > 20 else ""
-            raise RuntimeError(f"missing decontamination marks for {len(missing)} sources: {shown}{remainder}")
+        _require_built_steps(result.marks, "decontamination marks")
         return [result.report]
     raise ValueError(f"unknown decontamination target: {target}")
 
@@ -1250,7 +1247,7 @@ def main() -> None:
     parser.add_argument("--pool-cpu", type=float, default=None, help="per-worker CPUs (override scale)")
     parser.add_argument("--pool-ram", default=None, help="per-worker RAM, e.g. 16g (override scale)")
     parser.add_argument("--pool-disk", default=None, help="per-worker disk, e.g. 16g (override scale)")
-    parser.add_argument("--pool-gpu", default=None, help="one GPU of this type for each shared-pool worker")
+    parser.add_argument("--pool-gpu", default=None, help="place shared-pool workers on nodes with one GPU of this type")
     parser.add_argument("--pool-task-cpu", type=float, default=None, help="CPUs for each shared-pool task")
     parser.add_argument("--pool-task-ram", default=None, help="RAM for each shared-pool task, e.g. 32g")
     parser.add_argument("--pool-task-disk", default=None, help="disk for each shared-pool task, e.g. 16g")
@@ -1274,7 +1271,7 @@ def main() -> None:
     scale = _apply_pool_overrides(SMOKE_SCALE if args.mode == "sample" else DEFAULT_SCALE, args)
     sources = _select_pipeline_sources(args)
     if args.target in ("decon-drop", "decon-mark"):
-        _require_normalized_sources(sources)
+        _require_built_steps(sources, "normalized artifacts")
 
     mark_source_names = None
     if args.mark_sources not in (None, "all"):
@@ -1282,8 +1279,8 @@ def main() -> None:
         if not mark_source_names:
             parser.error("--mark-sources must name at least one source or use 'all'")
 
-    with (
-        nullcontext()
+    zephyr_context = (
+        None
         if args.target == "decon-report"
         else ZephyrContext(
             name="datakit-reference",
@@ -1292,26 +1289,27 @@ def main() -> None:
             max_workers=scale.pool.n_workers,
             stage_runner_factory=SubprocessRunner,
         )
-    ) as zephyr_context:
-        if args.target == "all":
-            result = reference_datakit_steps(
-                sources,
-                quality_model=args.quality_model,
-                quality_model_version=args.quality_model_version,
-                domain_centroids=args.domain_centroids,
-                centroids_version=args.domain_centroids_version,
-                scale=scale,
-                zephyr_context=zephyr_context,
-            )
-            target_steps = result.all_steps
-        else:
-            decontamination = decontamination_steps(
-                sources,
-                scale=scale,
-                zephyr_context=zephyr_context,
-                mark_source_names=mark_source_names,
-            )
-            target_steps = _decontamination_target_steps(decontamination, args.target)
+    )
+    if args.target == "all":
+        result = reference_datakit_steps(
+            sources,
+            quality_model=args.quality_model,
+            quality_model_version=args.quality_model_version,
+            domain_centroids=args.domain_centroids,
+            centroids_version=args.domain_centroids_version,
+            scale=scale,
+            zephyr_context=zephyr_context,
+        )
+        target_steps = result.all_steps
+    else:
+        decontamination = decontamination_steps(
+            sources,
+            scale=scale,
+            zephyr_context=zephyr_context,
+            mark_source_names=mark_source_names,
+        )
+        target_steps = _decontamination_target_steps(decontamination, args.target)
+    with zephyr_context if zephyr_context is not None else nullcontext():
         StepRunner().run(target_steps, max_concurrent=args.max_concurrent)
 
 
