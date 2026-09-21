@@ -137,6 +137,25 @@ def test_format_audit_counts_exact_boxes_only_when_completed_and_unrewarded(tmp_
     assert audit["completed_rewarded_or_terminal_boxed"] == 2
 
 
+def test_format_audit_exact_string_mode_is_conservative_for_math(tmp_path):
+    path = tmp_path / "val-math500.jsonl"
+    rows = [
+        {
+            "input_prompt": str(index),
+            "env_extras": {"reward_spec": {"ground_truth": truth}},
+            "stop_reason": "stop",
+            "score": 0,
+            "output_response": f"<|end_think|>\\boxed{{{answer}}}<|eot_id|>",
+        }
+        for index, (truth, answer) in enumerate((("1000", "1,000"), (r"\frac{1}{2}", r"\frac{1}{2}")))
+    ]
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    assert summarize_format(str(path), "https://unused.example")["terminal_boxed_exact_unrewarded"] == 2
+    exact = summarize_format(str(path), "https://unused.example", match_mode="exact_string")
+    assert exact["terminal_boxed_exact_unrewarded"] == 1
+    assert exact["match_mode"] == "exact_string"
+
+
 def test_iris_mirror_uses_the_resumed_attempt_for_repeated_steps(tmp_path):
     path = tmp_path / "iris.log"
 

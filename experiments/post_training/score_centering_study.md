@@ -1204,6 +1204,15 @@ respectively, versus 128/256 and 140/256 from the format-specific grader.
 The terminal-box count is a high-confidence numeric diagnostic; it does not
 replace the training reward or Math500's symbolic grader. The pair comparison
 remains within one pool.
+An exact-string terminal-box audit also catches some missed Math500 answers:
+[TIS](results/score_centering_snowball_formatfixed_math500_step0_probe.json)
+has 56 unrewarded exact matches beyond 116 rewarded completed answers, and
+[SC retry](results/score_centering_snowball_sc32_attempt1_math500_step0_probe.json)
+has 63 beyond 111. These counts exclude LaTeX-equivalent strings written
+differently. Adding the strict GSM8K and Math500 counts gives a conservative
+format-inclusive starting count of 355/756 for TIS and 364/756 for SC retry,
+versus rewarded counts of 244/756 and 251/756. Neither starting gap is a
+training effect.
 
 The first SC32 Iris attempt completed two optimizer updates and then failed
 during update three. A TransformerEngine fused-attention backward call on
@@ -1268,4 +1277,8 @@ scored 232/756 completed rewarded core math answers and 118/256 rewarded
 completed GSM8K answers. Another 64 GSM8K answers were unrewarded but ended
 with an exact boxed ground-truth number, for a strict format-inclusive
 [182/256](results/score_centering_snowball_flash_sc32_pilot_gsm8k_step0_probe.json).
-These are starting scores before its first update, not evidence of SC's effect.
+Its [Math500 audit](results/score_centering_snowball_flash_sc32_pilot_math500_step0_probe.json)
+finds another 66 exact-string terminal boxes beyond 114 rewarded completed
+answers. The strict format-inclusive core count is therefore 362/756 at this
+step-zero pass, versus 232/756 from the reward graders. These are starting
+scores before its first update, not evidence of SC's effect.
