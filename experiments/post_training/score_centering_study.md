@@ -1282,3 +1282,27 @@ finds another 66 exact-string terminal boxes beyond 114 rewarded completed
 answers. The strict format-inclusive core count is therefore 362/756 at this
 step-zero pass, versus 232/756 from the reward graders. These are starting
 scores before its first update, not evidence of SC's effect.
+The [pilot record](results/score_centering_snowball_flash_sc32_pilot_record.json)
+and [training metrics](results/score_centering_snowball_flash_sc32_pilot_wandb.jsonl)
+show that it completed three updates without a policy-backward failure,
+including updates two and three where the fused-attention SC attempts failed.
+Mean consumed-token ages were 0, 1, and 1.84 updates; mean absolute SC
+corrections were 0.0133, 0.0056, and 0.0083. It was stopped deliberately
+after update three, before the first optimizer checkpoint, so the matched
+pair could use the same corrected S3 runtime. It used 29.12 reserved
+H100-hours. This proves short-run backend feasibility, not a quality effect
+or full-run stability.
+
+The new matched pair uses version `2026.09.21.3`, pool `2026.09.18`, seed 17,
+and SkyRL runtime `26a4b7e1`. The staged source configurations' SHA-256
+prefixes match the launch paths (`bf6cbc8d` for
+[TIS](configs/score_centering/snowball_flash_tis.yaml), `85ac5da4` for
+[SC32](configs/score_centering/snowball_flash_sc32.yaml)). Their 117 flattened
+values differ only in `trainer.algorithm.score_centering_topk` (zero versus
+32). Both use
+FlashAttention, the same TIS cap 1.05, top-k-32 behavior capture, 4,096-token
+response cap, 20 updates, and the same 756 core math questions. The
+[TIS arm](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-default-set-6f0ff39c-2026.09.21.3-6902c969a370)
+and [SC32 arm](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-default-set-d7f4bce1-2026.09.21.3-992bcb1ba2f1)
+were submitted at `interactive` priority after the pilot stopped, with their
+starts staggered by about three minutes.
