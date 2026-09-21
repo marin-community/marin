@@ -1556,3 +1556,28 @@ The first-pass counts were 425 and 399, moving the baseline-adjusted
 difference from -19 to +11. This observed repeat spread is larger than the
 interim method difference and requires repeated terminal evaluation before
 interpreting a small Snowball effect.
+
+The 3,840-token cap was still too large for the resumed training state. After
+generating update six, the TIS arm failed in its first resumed policy forward
+inside TransformerEngine's unfused attention softmax. Its worker requested
+1.38 GiB with 167.19 MiB free on a 79.18 GiB H100. The raw
+[exception](results/score_centering_snowball_full_pair_tis_continuation_attempt0_failure.json)
+is preserved. That attempt used 31.43 reserved H100-hours; its automatic
+[retry](results/score_centering_snowball_full_pair_tis_continuation_attempt1_cancelled.json)
+was canceled after another 0.95 H100-hours. The SC32 arm had not reached its
+first resumed policy update, so it was
+[canceled](results/score_centering_snowball_full_pair_sc32_continuation_attempt0_cancelled.json)
+after 32.51 H100-hours to keep the comparison matched.
+
+Version `2026.09.21.9` retries the same step-five states with a 3,072-token
+training response cap and the unchanged 4,096-token held-out evaluation cap.
+The [TIS](configs/score_centering/snowball_full_pair_tis_continuation2.yaml)
+and [SC32](configs/score_centering/snowball_full_pair_sc32_continuation2.yaml)
+rendered configs have SHA-256 values
+`3909b9784f9914b427d83746230cc2a55bb9f0739e23e40c740083577ae55ddc`
+and
+`69267f73ea8a05852dddbe4d7386a7471a435990f4f850b26be7e1c11243b745`.
+Their valid first-attempt jobs are
+[`740d61b2`](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-default-set-740d61b2-2026.09.21.9-2423ad7b70ab)
+and
+[`3ed8a4fb`](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-default-set-3ed8a4fb-2026.09.21.9-cc0f3024e4b0).
