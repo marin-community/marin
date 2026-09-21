@@ -246,6 +246,8 @@ def build_h100_ladder_run(
     rel_extent: int = 1024,
     mla: bool = False,
     mla_o_latent: int | None = None,
+    latent_div: int = 2,
+    expert_intermediate_mult: int = 1,
     rel_r_proj_group: RelBiasGroup = RelBiasGroup.MUONH,
     rel_proj_group: RelBiasGroup = RelBiasGroup.MUONH,
 ) -> ArtifactStep[ThroughputResult]:
@@ -263,6 +265,15 @@ def build_h100_ladder_run(
 
     rung = _h100_ladder_rung(size)
     model = dataclasses.replace(_h100_ladder_model(rung, dense=dense), vocab_size=vocab_size)
+    if not dense and (latent_div != 2 or expert_intermediate_mult != 1):
+        # LatentMoE compression / expert-width trade: shrink the routed-expert latent (hidden//latent_div)
+        # and widen the routed-expert intermediate (x expert_intermediate_mult). Flop-neutral when the
+        # two compensate (e.g. latent_div 4 + mult 2). Shared experts are unchanged.
+        model = dataclasses.replace(
+            model,
+            latent_dim=model.hidden_dim // latent_div,
+            intermediate_dim=model.intermediate_dim * expert_intermediate_mult,
+        )
     if inkling_relpos:
         # Inkling relative-position bias in place of RoPE (fused forward + reference backward).
         model = dataclasses.replace(model, inkling_relpos=True, rel_extent=rel_extent)
@@ -467,6 +478,26 @@ def build_h100_ladder_run(
     "--mla", is_flag=True, help="DeepSeek-V2 MLA attention (128-dim heads; rope dropped when --inkling-relpos)."
 )
 @click.option(
+    "--mla-o-latent",
+    type=click.IntRange(min=1),
+    default=None,
+    help="MLA output-projection latent dim (no norm); default: full-rank w_o.",
+)
+@click.option(
+    "--latent-div",
+    type=click.IntRange(min=1),
+    default=2,
+    show_default=True,
+    help="Routed-expert latent = hidden // latent_div (baseline 2 -> hidden//2).",
+)
+@click.option(
+    "--expert-intermediate-mult",
+    type=click.IntRange(min=1),
+    default=1,
+    show_default=True,
+    help="Scale the routed-expert intermediate_dim (baseline 1).",
+)
+@click.option(
     "--save-checkpoints",
     is_flag=True,
     default=False,
@@ -488,6 +519,8 @@ def main(
     rel_proj_opt: str,
     mla: bool,
     mla_o_latent: int | None,
+    latent_div: int,
+    expert_intermediate_mult: int,
 ) -> ArtifactStep[ThroughputResult]:
     return build_h100_ladder_run(
         run_id=run_id,
@@ -502,6 +535,8 @@ def main(
         rel_extent=rel_extent,
         mla=mla,
         mla_o_latent=mla_o_latent,
+        latent_div=latent_div,
+        expert_intermediate_mult=expert_intermediate_mult,
         rel_r_proj_group=RelBiasGroup(rel_r_proj_opt),
         rel_proj_group=RelBiasGroup(rel_proj_opt),
     )
