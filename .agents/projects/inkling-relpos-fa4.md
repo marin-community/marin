@@ -271,3 +271,19 @@ Fourier bank: separable, no kernel change, not Inkling). CAUTION: run <=2 concur
 CUMULATIVE (Lever1 + transpose + remat): d512-512 7.27 (9.6% impact vs orig rope 8.04);
 d1280-512 14.06 (8.9% impact vs orig rope 15.44). From start 5.25/35% and 12.75/27%(bf16).
 CAVEAT: remat speeds RoPE too (less, no bias) -> re-baseline RoPE w/ these opts for fair impact.
+
+## Lever status after Lever1+transpose+remat (2026-09-20) -- GOAL MET (<10% at measured scales)
+Branch fast_track_inkling_relpos @ c1f6189933 = correct+fast (Lever1 gating + transpose R + remat).
+  d512-512 7.27 (9.6% impact), d1280-512 14.06 (8.9%). 4 science runs (d512/d768 x 512/1024, full
+  train+eval+ckpt) launched from that commit. Speedup work continues on branch fast_track_inkling_speedups.
+Lever 2 (per-element scale): LIGHT version (prescale A in model) = negligible MFU (fwd factor
+  LOG2E/softmax_scale_log2 is loop-invariant, compiler-hoisted to ~1 mul/elem) AND breaks the reference
+  oracle (adds un-prescaled bias to natural scores) -> reverted. Its real value is the R,proj custom_vjp
+  boundary (enables Lever 5 + private A dtype), which is the big Milestone-1-style re-plumb.
+Lever 3 (Music-Transformer skew): low-risk version widens A by 2*Tn -> MORE [B,H,S,L] traffic (bad at
+  scale, where A traffic dominates); aggressive block-skew is traffic-neutral + async-prefetchable but
+  a large kernel rewrite.
+Lever 5 (fidelity arms): R-per-KV-head divides A/dA traffic by qhead_per_kvhead (big scale win) but
+  per-kv dA has write races across q-heads (needs atomics or per-q-head-A which loses the win). Fourier
+  bank = separable bias as extra rotated q/k dims -> ZERO bias tensor / zero kernel overhead, but smooth
+  (no hard rel_extent cutoff) so not exactly Inkling. Both are separate model arms (quality must be checked).
