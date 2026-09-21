@@ -1535,3 +1535,24 @@ to that arm. Their first-attempt Iris jobs are
 [`041c320c`](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-default-set-041c320c-2026.09.21.8-8b6d1802015f)
 and
 [`fb6b91f4`](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-default-set-fb6b91f4-2026.09.21.8-b8fda2e76e40).
+
+Both continuations restored the complete distributed state from step five in
+about 24 minutes. The initial policy broadcast then completed with the
+populated optimizer temporarily offloaded, directly exercising the resume
+path that had failed on the older runtime. Their repeated step-five responses
+were copied to immutable `attempt0_step5_evals` prefixes before training
+continued. The [response analysis](results/score_centering_snowball_full_pair_continuation_step5_evals.csv)
+counts 405/756 rewarded core-math answers for TIS and 407/756 for SC32. Those
+same checkpoints scored 416 and 384 in their first pass, so the raw SC32-minus-
+TIS difference moved from -32 to +2 without a weight change. Relative to each
+arm's frozen step-zero baseline, the difference moved from -25 to +9.
+The completed-or-terminal-box audit similarly counts 426 for TIS
+([GSM8K](results/score_centering_snowball_full_pair_continuation_tis_gsm8k_step5_probe.json),
+[Math500](results/score_centering_snowball_full_pair_continuation_tis_math500_step5_probe.json))
+and 430 for SC32
+([GSM8K](results/score_centering_snowball_full_pair_continuation_sc32_gsm8k_step5_probe.json),
+[Math500](results/score_centering_snowball_full_pair_continuation_sc32_math500_step5_probe.json)).
+The first-pass counts were 425 and 399, moving the baseline-adjusted
+difference from -19 to +11. This observed repeat spread is larger than the
+interim method difference and requires repeated terminal evaluation before
+interpreting a small Snowball effect.
