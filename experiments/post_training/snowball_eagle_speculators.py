@@ -43,6 +43,7 @@ from marin.rl.skyrl import (
     ArtifactHfModel,
     EagleDraftArtifact,
     IrisSkyRLExecution,
+    SkyRLDataSource,
     SkyRLModel,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
@@ -722,18 +723,38 @@ def build_rl_benchmark(
     """Run one matched production-shaped rollout benchmark."""
     role_plan = _rl_benchmark_role_plan()
     name = f"{RL_ARTIFACT_NAME}-{label}"
+    return _benchmark_step(
+        name=name,
+        config_yaml=_rl_benchmark_config(role_plan, speculative=draft is not None),
+        train_data=(ArtifactDataSource(pool, relative_path=data_file),),
+        draft=draft,
+        role_plan=role_plan,
+        seed=17,
+    )
+
+
+def _benchmark_step(
+    *,
+    name: str,
+    config_yaml: str,
+    train_data: tuple[SkyRLDataSource, ...],
+    draft: ArtifactStep[EagleDraftArtifact] | None,
+    role_plan: SkyRLRolePlan,
+    seed: int,
+) -> ArtifactStep[SkyRLModel]:
+    """Build a benchmark with the shared target, topology, and execution policy."""
     return skyrl_step(
         SkyRLSpec(
             name=user_owned_name(name),
             version=resolve_version(name, None),
-            config_yaml=_rl_benchmark_config(role_plan, speculative=draft is not None),
+            config_yaml=config_yaml,
             runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
             model=ArtifactHfModel(
                 step=TARGET_MODEL,
                 tokenizer_uri=TARGET_TOKENIZER,
                 tokenizer_revision=TARGET_TOKENIZER_REVISION,
             ),
-            train_data=(ArtifactDataSource(pool, relative_path=data_file),),
+            train_data=train_data,
             validation_data=(),
             topology=SkyRLTopology(
                 num_nodes=12,
@@ -742,13 +763,13 @@ def build_rl_benchmark(
                 role_plan=role_plan,
             ),
             retention=SkyRLRetentionPolicy(),
-            seed=17,
+            seed=seed,
             draft_model=draft,
         ),
         IrisSkyRLExecution(
             cluster=CLUSTER,
             cluster_config=f"lib/iris/config/{CLUSTER}.yaml",
-            cpu=16,
+            cpu=32,
             memory="512GB",
             disk="2TB",
             priority="interactive",
@@ -766,48 +787,22 @@ def build_agentic_rl_benchmark(
     """Run a matched acceptance benchmark on disjoint multi-turn terminal tasks."""
     role_plan = _rl_benchmark_role_plan()
     name = f"{RL_ARTIFACT_NAME}-agentic-{label}"
-    return skyrl_step(
-        SkyRLSpec(
-            name=user_owned_name(name),
-            version=resolve_version(name, None),
-            config_yaml=_agentic_benchmark_config(role_plan, speculative=draft is not None),
-            runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
-            model=ArtifactHfModel(
-                step=TARGET_MODEL,
-                tokenizer_uri=TARGET_TOKENIZER,
-                tokenizer_revision=TARGET_TOKENIZER_REVISION,
-            ),
-            train_data=(
-                TaskTroveDataSource(
-                    TASKTROVE_RELEASE,
-                    TaskTroveSelection(
-                        sources=(AGENTIC_BENCHMARK_SOURCE,),
-                        limit=_AGENTIC_BENCHMARK_PROMPTS,
-                        seed=71,
-                    ),
+    return _benchmark_step(
+        name=name,
+        config_yaml=_agentic_benchmark_config(role_plan, speculative=draft is not None),
+        train_data=(
+            TaskTroveDataSource(
+                TASKTROVE_RELEASE,
+                TaskTroveSelection(
+                    sources=(AGENTIC_BENCHMARK_SOURCE,),
+                    limit=_AGENTIC_BENCHMARK_PROMPTS,
+                    seed=71,
                 ),
             ),
-            validation_data=(),
-            topology=SkyRLTopology(
-                num_nodes=12,
-                gpus_per_node=GPUS_PER_NODE,
-                gpu_variant=GPU_VARIANT,
-                role_plan=role_plan,
-            ),
-            retention=SkyRLRetentionPolicy(),
-            seed=71,
-            draft_model=draft,
         ),
-        IrisSkyRLExecution(
-            cluster=CLUSTER,
-            cluster_config=f"lib/iris/config/{CLUSTER}.yaml",
-            cpu=32,
-            memory="512GB",
-            disk="2TB",
-            priority="interactive",
-            max_retries=1,
-            wandb_entity="marin-community",
-        ),
+        draft=draft,
+        role_plan=role_plan,
+        seed=71,
     )
 
 

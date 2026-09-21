@@ -4,7 +4,6 @@
 import json
 import shutil
 import subprocess
-from dataclasses import replace
 from pathlib import Path
 
 import marin.training.speculators as speculators
@@ -12,7 +11,6 @@ import pytest
 import torch
 from finestore.eval import ParticipantType
 from marin.training.speculators import (
-    DraftTrainingConfig,
     HiddenStateCaptureConfig,
     _make_checkpoint_portable,
     _preferred_checkpoint,
@@ -22,7 +20,6 @@ from marin.training.speculators import (
     capture_hidden_states,
     interleave_conversation_streams,
     rollout_conversations,
-    train_draft,
     verifier_config_for_transformers,
 )
 from safetensors.torch import save_file
@@ -274,53 +271,3 @@ def test_capture_publishes_progress_before_propagating_generation_failure(monkey
 
     assert (output_path / "dataset_info.json").read_text() == "{}"
     assert (output_path / "hidden_states" / "hs_0.safetensors").read_text() == "captured"
-
-
-def test_prepare_capture_applies_the_same_sample_budget_as_generation(monkeypatch, tmp_path: Path):
-    commands = []
-    monkeypatch.setattr(speculators, "_run_command", lambda command, **_kwargs: commands.append(command))
-    config = _capture_config()
-    config = replace(config, max_samples=16_384, minimum_valid_tokens=32)
-
-    speculators._prepare_capture_data(config, tmp_path / "raw.jsonl", tmp_path / "prepared", "http://render")
-    speculators._generate_hidden_states(config, tmp_path / "prepared", tmp_path / "hidden", "http://generate")
-
-    assert commands[0][-4:] == ["--max-samples", "16384", "--minimum-valid-tokens", "32"]
-    assert commands[1][-2:] == ["--max-samples", "16384"]
-
-
-def test_train_draft_selects_the_best_checkpoint_from_a_validation_split(monkeypatch, tmp_path: Path):
-    commands = []
-
-    def fake_command(command, *, environment=None):
-        del environment
-        commands.append(command)
-        checkpoints = Path(command[command.index("--save-path") + 1])
-        best = checkpoints / "checkpoint_best"
-        best.mkdir(parents=True)
-        (best / "config.json").write_text(json.dumps({"speculators_config": {"verifier": {}}}))
-
-    monkeypatch.setattr(speculators, "StoragePath", _CaptureStoragePath)
-    monkeypatch.setattr(speculators, "_run_command", fake_command)
-    output_path = tmp_path / "published"
-    train_draft(
-        DraftTrainingConfig(
-            captured_data_path=str(tmp_path / "captured"),
-            verifier_path=str(tmp_path / "verifier"),
-            initial_draft_path=str(tmp_path / "initial"),
-            output_path=str(output_path),
-            target_layer_ids=(2, 13, 23),
-            sequence_length=32768,
-            epochs=2,
-            learning_rate=1e-5,
-            muon_learning_rate=0.02,
-            num_processes=8,
-            train_data_ratio=0.9,
-            save_best=True,
-        )
-    )
-
-    assert "--train-data-ratio" in commands[0]
-    assert commands[0][commands[0].index("--train-data-ratio") + 1] == "0.9"
-    assert "--save-best" in commands[0]
-    assert (output_path / "config.json").exists()

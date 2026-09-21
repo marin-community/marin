@@ -349,7 +349,7 @@ def _generate_hidden_states(
 
 
 def capture_hidden_states(config: HiddenStateCaptureConfig) -> None:
-    """Prepare conversations and cache verifier hidden states with vLLM."""
+    """Prepare conversations and publish their cached verifier hidden states."""
     with tempfile.TemporaryDirectory() as workdir:
         work_path = Path(workdir)
         raw_data = work_path / SPECULATORS_DATA_FILENAME
@@ -449,7 +449,7 @@ def _validate_draft_checkpoint(checkpoint: Path) -> None:
 
 
 def train_draft(config: DraftTrainingConfig) -> None:
-    """Train a draft from cached hidden states with the Speculators CLI."""
+    """Train and publish a draft checkpoint from cached verifier states."""
     with tempfile.TemporaryDirectory() as workdir:
         work_path = Path(workdir)
         data = work_path / "data"
