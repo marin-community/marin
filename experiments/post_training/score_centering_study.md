@@ -1610,3 +1610,25 @@ the completed-only SC32-minus-TIS difference ranges from -33 to +2 and the
 audited difference ranges from -26 to +4 without any weight change. The
 terminal comparison therefore retains both evaluations separately and treats
 one training seed as descriptive.
+
+The 3,072-token cap also failed before completing a resumed optimizer update.
+During the step-six TIS policy forward, TransformerEngine's unfused attention
+softmax requested 708 MiB with 487.19 MiB free on a 79.18 GiB H100. The raw
+[exception](results/score_centering_snowball_full_pair_tis_continuation2_attempt0_failure.json)
+is preserved. Both arms were
+[canceled](results/score_centering_snowball_full_pair_continuation2_cancelled.json)
+before a retry or unmatched update; they used 25.77 reserved H100-hours each.
+
+Version `2026.09.21.10` reduces only the training response cap again, to 2,560
+tokens. The 4,096-token evaluation contract and all scheduling and optimization
+settings remain unchanged. The rendered
+[TIS](configs/score_centering/snowball_full_pair_tis_continuation3.yaml) and
+[SC32](configs/score_centering/snowball_full_pair_sc32_continuation3.yaml)
+configs have SHA-256 values
+`1d89e5d5f77d1acb2a3ca0c1bcd1b767ecc1bb76216f2899eea659719ce6a323`
+and
+`758896e1e3f2b8d1d24634ae898d3b1aafd2a7b06f6cda1be6afe34e850aaebd`.
+Their jobs are
+[`e41c3859`](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-default-set-e41c3859-2026.09.21.10-272554da28e5)
+and
+[`7f9bbe93`](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-default-set-7f9bbe93-2026.09.21.10-0744985fbb88).
