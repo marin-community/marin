@@ -1462,7 +1462,7 @@ and runtime settings into the causal comparison.
 The new full pair uses version `2026.09.21.7`, seed 17, pool `2026.09.18`, and
 MarinSkyRL `22a37adc` from the same base model with `resume_mode=none`. Both
 arms use 20 updates, evaluation and a full checkpoint every five updates,
-maximum token age eight, TIS cap 1.05, 4,096-token responses, FlashAttention,
+maximum token age eight, TIS cap 1.05, 4,096-token responses, `trainer.flash_attn=true`,
 top-k-32 behavior logprobs, a 512-position policy-logprob chunk, and optimizer
 offload through rollout, evaluation, and the pretraining policy forward. The
 rendered local and staged-pod YAML SHA-256 values match:
@@ -1476,6 +1476,11 @@ Flattening the 118 values shows exactly one difference:
 Their W&B runs are
 [`d6js2ztv`](https://wandb.ai/marin-community/marin-async-rl/runs/d6js2ztv)
 and [`s0amakmj`](https://wandb.ai/marin-community/marin-async-rl/runs/s0amakmj).
+The rendered configs request FlashAttention, but runtime `22a37adc` reports
+installed `flash-attn` 2.8.4 outside the Megatron bridge's supported range
+through 2.8.3. The continuation failure stacks execute TransformerEngine's
+unfused attention, so FlashAttention was requested rather than effective for
+this full pair.
 Both completed the initial held-out evaluation with five running Iris tasks
 and no retry or failure. The raw response snapshots have per-file byte counts
 and SHA-256 manifests under `~/data/sources/devbox/score-centering/`; immutable
@@ -1632,3 +1637,19 @@ Their jobs are
 [`e41c3859`](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-default-set-e41c3859-2026.09.21.10-272554da28e5)
 and
 [`7f9bbe93`](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-default-set-7f9bbe93-2026.09.21.10-0744985fbb88).
+
+Both jobs restored successfully and produced a fourth immutable step-five
+pass before resumed training. The
+[response analysis](results/score_centering_snowball_full_pair_continuation3_step5_evals.csv)
+counts 391 completed rewarded answers for TIS and 384 for SC32, a
+baseline-adjusted SC32-minus-TIS difference of +6. Correct raw rewards at any
+stop were 394 and 386, for an adjusted difference of -1. The
+completed-or-terminal-box audit counts 413 for TIS
+([GSM8K](results/score_centering_snowball_full_pair_continuation3_tis_gsm8k_step5_probe.json),
+[Math500](results/score_centering_snowball_full_pair_continuation3_tis_math500_step5_probe.json))
+and 406 for SC32
+([GSM8K](results/score_centering_snowball_full_pair_continuation3_sc32_gsm8k_step5_probe.json),
+[Math500](results/score_centering_snowball_full_pair_continuation3_sc32_math500_step5_probe.json)),
+an adjusted difference of zero. Across four passes, the completed-only
+SC32-minus-TIS difference still ranges from -33 to +2 and the audited
+difference from -26 to +4 at identical weights.
