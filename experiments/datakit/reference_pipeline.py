@@ -109,6 +109,7 @@ eval corpus a version tag.
 import argparse
 import logging
 import posixpath
+from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 
 from fray.types import ResourceConfig
@@ -617,6 +618,7 @@ def zephyr_datakit_steps(
 ) -> ZephyrDatakitSteps:
     """Build exact-dedup, tokenize, MinHash, and fuzzy-dedup stages."""
     source_names = sorted(sources)
+    worker_resources = scale.pool.task if zephyr_context is not None else scale.pool.worker
     exact_dedup = StepSpec(
         name="datakit/global_exact_dedup",
         deps=[sources[name] for name in source_names],
@@ -624,7 +626,7 @@ def zephyr_datakit_steps(
         fn=lambda output_path: global_exact_deduplicate(
             sources={name: read_artifact(sources[name].output_path, NormalizedData) for name in source_names},
             output_path=output_path,
-            worker_resources=scale.pool.task,
+            worker_resources=worker_resources,
             max_workers=scale.pool.n_workers,
             zephyr_context=zephyr_context,
         ),
@@ -641,7 +643,7 @@ def zephyr_datakit_steps(
             tokenizer_backend=TOKENIZER_BACKEND,
             tokenizer_revision=TOKENIZER_REVISION,
             max_workers=scale.pool.n_workers,
-            worker_resources=scale.pool.task,
+            worker_resources=worker_resources,
             zephyr_context=zephyr_context,
         )
         minhash_steps[name] = StepSpec(
@@ -663,7 +665,7 @@ def zephyr_datakit_steps(
                 ngram_size=mh.ngram_size,
                 text_cap_chars=mh.text_cap_chars,
                 seed=mh.seed,
-                worker_resources=scale.pool.task,
+                worker_resources=worker_resources,
                 zephyr_context=zephyr_context,
             ),
         )
@@ -677,7 +679,7 @@ def zephyr_datakit_steps(
             output_path=output_path,
             max_parallelism=scale.dedup_max_parallelism,
             cc_resume=True,
-            worker_resources=scale.pool.task,
+            worker_resources=worker_resources,
             zephyr_context=zephyr_context,
         ),
     )
@@ -707,6 +709,7 @@ def decontamination_steps(
     if unknown_names:
         raise ValueError(f"unknown mark sources: {sorted(unknown_names)}")
 
+    worker_resources = scale.pool.task if zephyr_context is not None else scale.pool.worker
     eval_root = f"{marin_prefix()}/{EVALS_RELATIVE}"
     bloom = build_eval_bloom_step(
         name="datakit/bloom/_combined_fixed",
@@ -722,7 +725,7 @@ def decontamination_steps(
         required_eval_names=AA_BENCHMARK_NAMES,
         best_effort_eval_manifest_path=f"{eval_root}/{LMH_MANIFEST_RELATIVE}",
         best_effort_eval_corpus_version=EVAL_CORPUS_VERSION,
-        worker_resources=scale.pool.task,
+        worker_resources=worker_resources,
         max_workers=scale.pool.n_workers,
         zephyr_context=zephyr_context,
     )
@@ -744,7 +747,7 @@ def decontamination_steps(
         global_sample_docs=GLOBAL_DF_SAMPLE_DOCS,
         global_common_min_abs=GLOBAL_DF_COMMON_MIN_ABS,
         global_common_min_sources=GLOBAL_DF_COMMON_MIN_SOURCES,
-        worker_resources=scale.pool.task,
+        worker_resources=worker_resources,
         max_workers=scale.pool.n_workers,
         zephyr_context=zephyr_context,
     )
@@ -761,7 +764,7 @@ def decontamination_steps(
             estimated_doc_count=ESTIMATED_DOC_COUNT,
             false_positive_rate=FALSE_POSITIVE_RATE,
             flagged_sample_size=FLAGGED_SAMPLE_SIZE,
-            worker_resources=scale.pool.task,
+            worker_resources=worker_resources,
             zephyr_context=zephyr_context,
         )
         for name, normalize_step in sources.items()
@@ -1279,12 +1282,16 @@ def main() -> None:
         if not mark_source_names:
             parser.error("--mark-sources must name at least one source or use 'all'")
 
-    with ZephyrContext(
-        name="datakit-reference",
-        resources=scale.pool.worker,
-        coordinator_resources=scale.pool.coordinator,
-        max_workers=scale.pool.n_workers,
-        stage_runner_factory=SubprocessRunner,
+    with (
+        nullcontext()
+        if args.target == "decon-report"
+        else ZephyrContext(
+            name="datakit-reference",
+            resources=scale.pool.worker,
+            coordinator_resources=scale.pool.coordinator,
+            max_workers=scale.pool.n_workers,
+            stage_runner_factory=SubprocessRunner,
+        )
     ) as zephyr_context:
         if args.target == "all":
             result = reference_datakit_steps(
