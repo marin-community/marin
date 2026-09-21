@@ -204,6 +204,31 @@ def test_settings_change_existing_keys_and_reject_unknown_ones():
     assert added["trainer"]["fully_async"]["weight_sync_interval"] == 1
 
 
+def test_explicit_resume_path_becomes_final_request_overrides(owner):
+    checkpoint = "s3://bucket/tmp/ttl=14d/run/checkpoints/global_step_10"
+    settings = (
+        "trainer.resume_mode=from_path",
+        f"+trainer.resume_path={checkpoint}",
+    )
+    config = rendered(settings=settings)
+    assert config["trainer"]["resume_mode"] == "from_path"
+    assert config["trainer"]["resume_path"] == checkpoint
+
+    run = async_rl.build_run(SNOWBALL_POLICY, async_rl.SMOKE_PRESET, version="2026.09.21", settings=settings)
+    request = run.rl.build_config(StepContext.for_fingerprint(run.rl.runtime_args.keys(), run.rl.deps)).request
+    resume_overrides = (
+        "++trainer.resume_mode=from_path",
+        f'++trainer.resume_path="{checkpoint}"',
+    )
+    assert all(override in request.overrides for override in resume_overrides)
+    assert request.overrides.index(resume_overrides[0]) < request.overrides.index(resume_overrides[1])
+
+    with pytest.raises(click.BadParameter, match="resume_path is required"):
+        rendered(settings=("trainer.resume_mode=from_path",))
+    with pytest.raises(click.BadParameter, match=r"unknown trainer\.resume_mode"):
+        rendered(settings=("trainer.resume_mode=somewhere",))
+
+
 def test_settings_preserve_core_worker_floor_and_check_prompt_window():
     with pytest.raises(click.BadParameter, match="cannot fill a policy mini-batch"):
         rendered(settings=("trainer.fully_async.num_parallel_generation_workers=8",))

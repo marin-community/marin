@@ -37,6 +37,7 @@ when Hydra parses the config, before any GPU is used.
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import asdict, dataclass, fields, replace
 from typing import NamedTuple
 
@@ -360,7 +361,6 @@ TOPOLOGY_OWNED_SETTINGS = frozenset(
         "trainer.policy_mini_batch_size",
         "trainer.micro_train_batch_size_per_gpu",
         "generator.n_samples_per_prompt",
-        "trainer.resume_mode",
         "trainer.max_ckpts_to_keep",
     }
 )
@@ -419,6 +419,11 @@ def check_loop_preflight(config: dict) -> None:
     """Reject request budgets or worker counts the downstream trainer would reject."""
     budget = config["context_budget"]
     trainer = config["trainer"]
+    resume_mode = trainer["resume_mode"]
+    if resume_mode not in ("latest", "none", "from_path"):
+        raise click.BadParameter(f"unknown trainer.resume_mode {resume_mode!r}")
+    if resume_mode == "from_path" and not trainer.get("resume_path"):
+        raise click.BadParameter("trainer.resume_path is required when trainer.resume_mode=from_path")
     workers = trainer["fully_async"]["num_parallel_generation_workers"]
     mini_batch = trainer["policy_mini_batch_size"]
     # Every retained prompt must fit the request window beside the response budget, or rows skip
@@ -634,11 +639,20 @@ def config_keys(node: dict, prefix: str = "") -> set[str]:
 def request_overrides(policy: PolicySpec, config: dict) -> tuple[str, ...]:
     """Keep inherited Hydra overrides only for keys absent from the rendered config."""
     written = config_keys(config)
-    return tuple(
+    overrides = tuple(
         override
         for override in (*BASE_OVERRIDES, *policy.overrides)
         if override.lstrip("+").partition("=")[0] not in written
     )
+    # The Iris backend supplies ``latest`` after the source config. An explicit
+    # stage-boundary resume must therefore travel as a final request override.
+    resume_mode = config["trainer"]["resume_mode"]
+    if resume_mode == "latest":
+        return overrides
+    resume_overrides = (f"++trainer.resume_mode={resume_mode}",)
+    if resume_mode == "from_path":
+        resume_overrides += (f"++trainer.resume_path={json.dumps(str(config['trainer']['resume_path']))}",)
+    return (*overrides, *resume_overrides)
 
 
 @dataclass(frozen=True)
