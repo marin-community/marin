@@ -25,7 +25,7 @@ from iac.gcp.iam import (
 _REGION = "us-central1"
 _PROJECT_NUMBER = "748532799086"
 _SERVICE = "marina"
-_PUBLIC_APPLET_SERVICE = "marina-public-applets"
+PUBLIC_APPLET_SERVICE = "marina-public-applets"
 _DATA_BUCKET = "marin-marina"
 _MIRROR_TOKEN_SECRET = "marinmirror-token"
 _COREWEAVE_SECRETS = ("cw-object-storage-key-id", "cw-object-storage-key-secret")
@@ -108,7 +108,7 @@ def iam_grants(project: str, principals: Mapping[str, GcpEncryptedMember]) -> Gc
             ),
             GcpCloudRunIapIam(
                 location=_REGION,
-                service=_PUBLIC_APPLET_SERVICE,
+                service=PUBLIC_APPLET_SERVICE,
                 iap_grants=(),
                 service_grants=(GcpRoleGrant(role="roles/run.invoker", members=("allUsers",)),),
             ),

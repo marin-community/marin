@@ -25,6 +25,7 @@ import re
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -59,7 +60,6 @@ from marina.applets import (
     AppletPackage,
     AppletRuntime,
     AppletStore,
-    AppletSummary,
     InvalidQuery,
     PublishResult,
     QueryLimitExceeded,
@@ -76,7 +76,6 @@ INDEX_FILE = "index.html"
 # A file committed as `x.gz` is served at `x` with a Content-Encoding header, so a large
 # static asset can live in the repository compressed.
 PRECOMPRESSED_SUFFIX = ".gz"
-# Cloud Run sets K_SERVICE in every container; its presence means IAP is the front door.
 CLOUD_RUN_SERVICE_ENV = "K_SERVICE"
 APPS_DIR_ENV = "MARINA_APPS_DIR"
 DATA_ROOT_ENV = "MARINA_DATA_ROOT"
@@ -89,7 +88,7 @@ HOST_APPS_ENV = "MARINA_HOST_APPS"
 CANONICAL_ORIGIN_ENV = "MARINA_CANONICAL_ORIGIN"
 APPLET_ORIGIN_ENV = "MARINA_APPLET_ORIGIN"
 PUBLIC_APPLET_ORIGIN_ENV = "MARINA_PUBLIC_APPLET_ORIGIN"
-PUBLIC_APPLETS_ONLY_ENV = "MARINA_PUBLIC_APPLETS_ONLY"
+MARINA_SURFACE_ENV = "MARINA_SURFACE"
 APPLET_HOSTS_ENV = "MARINA_APPLET_HOSTS"
 APPLET_OPERATORS_ENV = "MARINA_APPLET_OPERATORS"
 AGENT_ORIGIN_ENV = "MARINA_AGENT_ORIGIN"
@@ -112,6 +111,11 @@ class AgentPanelService:
     origin: str
 
 
+class MarinaSurface(StrEnum):
+    AUTHENTICATED = "authenticated"
+    PUBLIC_APPLETS = "public_applets"
+
+
 @dataclass(frozen=True)
 class MarinaConfig:
     apps_dir: Path
@@ -129,24 +133,24 @@ class MarinaConfig:
     applet_origin: str | None = None
     # An unauthenticated origin that exposes GET/HEAD routes for public applets only.
     public_applet_origin: str | None = None
-    public_applets_only: bool = False
+    surface: MarinaSurface = MarinaSurface.AUTHENTICATED
     applet_hosts: dict[str, uuid.UUID] = field(default_factory=dict)
     applet_operators: frozenset[str] = frozenset()
     agent_panel: AgentPanelService | None = None
 
     @classmethod
     def from_env(cls, default_apps_dir: Path) -> "MarinaConfig":
-        """Resolve the process configuration once; refuse to start on Cloud Run without IAP."""
+        """Resolve process configuration and require IAP on the authenticated Cloud Run surface."""
         apps_dir = Path(os.environ.get(APPS_DIR_ENV) or default_apps_dir)
         data_root = os.environ.get(DATA_ROOT_ENV)
         if not data_root:
             raise ValueError(f"{DATA_ROOT_ENV} is not set")
-        public_applets_only_value = os.environ.get(PUBLIC_APPLETS_ONLY_ENV, "0")
-        if public_applets_only_value not in {"0", "1"}:
-            raise ValueError(f"{PUBLIC_APPLETS_ONLY_ENV} must be 0 or 1")
-        public_applets_only = public_applets_only_value == "1"
+        try:
+            surface = MarinaSurface(os.environ.get(MARINA_SURFACE_ENV, MarinaSurface.AUTHENTICATED))
+        except ValueError as error:
+            raise ValueError(f"{MARINA_SURFACE_ENV} must be authenticated or public_applets") from error
         audience = os.environ.get(IAP_AUDIENCE_ENV) or None
-        if os.environ.get(CLOUD_RUN_SERVICE_ENV) and not audience and not public_applets_only:
+        if os.environ.get(CLOUD_RUN_SERVICE_ENV) and not audience and surface is MarinaSurface.AUTHENTICATED:
             raise ValueError(f"{IAP_AUDIENCE_ENV} must be set when running on Cloud Run")
         return cls(
             apps_dir=apps_dir,
@@ -157,7 +161,7 @@ class MarinaConfig:
             canonical_origin=(os.environ.get(CANONICAL_ORIGIN_ENV) or "").rstrip("/") or None,
             applet_origin=(os.environ.get(APPLET_ORIGIN_ENV) or "").rstrip("/") or None,
             public_applet_origin=(os.environ.get(PUBLIC_APPLET_ORIGIN_ENV) or "").rstrip("/") or None,
-            public_applets_only=public_applets_only,
+            surface=surface,
             applet_hosts={
                 host: uuid.UUID(applet_id)
                 for host, applet_id in parse_host_mapping(os.environ.get(APPLET_HOSTS_ENV, ""), APPLET_HOSTS_ENV).items()
@@ -296,9 +300,14 @@ def app_directory(apps: list[AppManifest]) -> list[dict[str, str]]:
     return [{"name": app.name, "title": app.title, "description": app.description, "path": app.path} for app in apps]
 
 
-def applet_url(applet: AppletSummary, applet_origin: str | None, public_applet_origin: str | None) -> str:
-    origin = public_applet_origin if applet.mode is AppletMode.PUBLIC else applet_origin
-    return (origin or "") + applet.path
+def applet_url(
+    path: str,
+    mode: AppletMode,
+    applet_origin: str | None,
+    public_applet_origin: str | None,
+) -> str:
+    origin = public_applet_origin if mode is AppletMode.PUBLIC else applet_origin
+    return (origin or "") + path
 
 
 def applet_directory(
@@ -313,7 +322,7 @@ def applet_directory(
             "name": str(applet.id),
             "title": applet.title,
             "description": applet.description,
-            "path": applet_url(applet, applet_origin, public_applet_origin),
+            "path": applet_url(applet.path, applet.mode, applet_origin, public_applet_origin),
             "kind": "applet",
             "published_by": applet.owner,
             "version": applet.current_version,
@@ -557,16 +566,6 @@ async def uploaded_applet_package(request: Request) -> AppletPackage:
     return package
 
 
-def mode_applet_url(
-    path: str,
-    mode: AppletMode,
-    applet_origin: str | None,
-    public_applet_origin: str | None,
-) -> str:
-    origin = public_applet_origin if mode is AppletMode.PUBLIC else applet_origin
-    return (origin or "") + path
-
-
 def publish_result_response(
     published: PublishResult,
     applet_origin: str | None,
@@ -578,7 +577,7 @@ def publish_result_response(
             "version": published.version,
             "mode": published.mode.value,
             "path": published.path,
-            "url": mode_applet_url(
+            "url": applet_url(
                 published.path,
                 published.mode,
                 applet_origin,
@@ -664,7 +663,7 @@ def create_app(config: MarinaConfig) -> ASGIApp:
     validate_applet_hosts(config)
     validate_applet_origin(config.applet_origin, APPLET_ORIGIN_ENV)
     validate_applet_origin(config.public_applet_origin, PUBLIC_APPLET_ORIGIN_ENV)
-    apps = [] if config.public_applets_only else discover_apps(config.apps_dir)
+    apps = [] if config.surface is MarinaSurface.PUBLIC_APPLETS else discover_apps(config.apps_dir)
     shadowed = sorted(app.name for app in apps if app.name in KERNEL_PREFIXES)
     if shadowed:
         raise ValueError(f"app {shadowed[0]!r} is named for a kernel route; rename it")
@@ -696,7 +695,7 @@ def create_app(config: MarinaConfig) -> ASGIApp:
             raise HTTPException(status_code=401, detail="authentication required") from error
 
     def require_applet_read(applet_id: uuid.UUID, request: Request) -> None:
-        if not config.public_applets_only:
+        if config.surface is MarinaSurface.AUTHENTICATED:
             request_identity(request)
             return
         if applet_store is None:
@@ -815,7 +814,7 @@ def create_app(config: MarinaConfig) -> ASGIApp:
                 "id": str(applet_id),
                 "current_version": current,
                 "mode": mode.value,
-                "url": mode_applet_url(
+                "url": applet_url(
                     f"/a/{applet_id}/",
                     mode,
                     config.applet_origin,
@@ -874,7 +873,7 @@ def create_app(config: MarinaConfig) -> ASGIApp:
                 "id": str(applet_id),
                 "version": body["base_version"],
                 "mode": mode.value,
-                "url": mode_applet_url(path, mode, config.applet_origin, config.public_applet_origin),
+                "url": applet_url(path, mode, config.applet_origin, config.public_applet_origin),
             }
         )
 
@@ -996,9 +995,9 @@ def create_app(config: MarinaConfig) -> ASGIApp:
     )
     @public
     async def current_applet_api_read(applet_id: uuid.UUID, path: str, request: Request) -> Response:
-        if config.public_applets_only:
+        if config.surface is MarinaSurface.PUBLIC_APPLETS:
             await run_in_threadpool(require_applet_read, applet_id, request)
-        identity = None if config.public_applets_only else request_identity(request)
+        identity = None if config.surface is MarinaSurface.PUBLIC_APPLETS else request_identity(request)
         return await dispatch_applet_api(applet_store, applet_runtime, applet_id, None, path, request, identity)
 
     @api.api_route(
@@ -1008,9 +1007,9 @@ def create_app(config: MarinaConfig) -> ASGIApp:
     )
     @public
     async def versioned_applet_api_read(applet_id: uuid.UUID, version: int, path: str, request: Request) -> Response:
-        if config.public_applets_only:
+        if config.surface is MarinaSurface.PUBLIC_APPLETS:
             await run_in_threadpool(require_applet_read, applet_id, request)
-        identity = None if config.public_applets_only else request_identity(request)
+        identity = None if config.surface is MarinaSurface.PUBLIC_APPLETS else request_identity(request)
         return await dispatch_applet_api(applet_store, applet_runtime, applet_id, version, path, request, identity)
 
     @api.api_route(
@@ -1065,7 +1064,7 @@ def create_app(config: MarinaConfig) -> ASGIApp:
         headers = {
             "Cache-Control": (
                 "public, max-age=31536000, immutable"
-                if config.public_applets_only
+                if config.surface is MarinaSurface.PUBLIC_APPLETS
                 else "private, max-age=31536000, immutable"
             ),
             "Content-Security-Policy": content_security_policy(record.manifest.connect_src),
@@ -1162,6 +1161,6 @@ def create_app(config: MarinaConfig) -> ASGIApp:
         install_app_routes(api, app, config.data_root, config.agent_panel)
 
     authenticated = RouteAuthMiddleware(api, policy)
-    if config.public_applets_only:
+    if config.surface is MarinaSurface.PUBLIC_APPLETS:
         return public_applet_surface(authenticated)
     return named_applet_hosts(authenticated, config.applet_hosts) if config.applet_hosts else authenticated

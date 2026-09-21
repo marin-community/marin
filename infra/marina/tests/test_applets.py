@@ -15,12 +15,21 @@ from marina.applets import AppletForbidden, AppletMode, AppletStore, package_app
 from marina.cli import cli
 from marina.database_setup import APPLET_READER_ROLE, ensure_applet_provisioning
 from marina.db import UrlDatabase, grant_read
-from marina.server import MarinaConfig, create_app
+from marina.server import MarinaConfig, MarinaSurface, create_app
 from marina.table_load import read_table, table_statements
+from requests import Response as RequestsResponse
 from sqlalchemy import text
 from starlette.testclient import TestClient
 
 DEMO_APPLET = Path(__file__).parents[1] / "examples" / "problem-set-applet"
+
+
+def json_response(value: object) -> RequestsResponse:
+    response = RequestsResponse()
+    response.status_code = 200
+    response.headers["Content-Type"] = "application/json"
+    response._content = json.dumps(value).encode()
+    return response
 
 
 def applet_client_and_store(tmp_path: Path, database_url: str) -> tuple[TestClient, AppletStore]:
@@ -271,7 +280,7 @@ def test_public_applet_surface_serves_only_public_reads(tmp_path: Path, database
         iap_audience=None,
         database=store.database,
         public_applet_origin="https://public.applets.example",
-        public_applets_only=True,
+        surface=MarinaSurface.PUBLIC_APPLETS,
     )
     public_client = TestClient(
         create_app(public_config),
@@ -615,55 +624,51 @@ def test_publish_dry_run_reports_package_checks_and_runtime_omissions() -> None:
 
 
 def test_publish_cli_sends_public_mode(monkeypatch: pytest.MonkeyPatch) -> None:
-    request: dict[str, object] = {}
+    requests: list[tuple[str, str, dict[str, object] | None]] = []
 
-    def publish(
-        _service_url: str,
-        _payload: bytes,
-        applet_id: str | None = None,
-        base_version: int | None = None,
-        mode: str | None = None,
-    ) -> dict[str, object]:
-        request.update(applet_id=applet_id, base_version=base_version, mode=mode)
-        return {
-            "id": "00000000-0000-0000-0000-000000000001",
-            "version": 1,
-            "mode": "public",
-            "path": "/a/00000000-0000-0000-0000-000000000001/v/1/",
-            "url": "https://public.applets.example/a/00000000-0000-0000-0000-000000000001/v/1/",
-        }
+    def http_request(method: str, url: str, **kwargs: object) -> RequestsResponse:
+        params = kwargs.get("params")
+        requests.append((method, url, params if isinstance(params, dict) else None))
+        return json_response(
+            {
+                "id": "00000000-0000-0000-0000-000000000001",
+                "version": 1,
+                "mode": "public",
+                "path": "/a/00000000-0000-0000-0000-000000000001/v/1/",
+                "url": "https://public.applets.example/a/00000000-0000-0000-0000-000000000001/v/1/",
+            }
+        )
 
-    monkeypatch.setattr("marina.cli.publish_applet", publish)
-    result = CliRunner().invoke(cli, ["publish", str(DEMO_APPLET), "--mode", "public", "--json"])
+    monkeypatch.setattr("marina.client.requests.request", http_request)
+    result = CliRunner().invoke(
+        cli,
+        ["publish", str(DEMO_APPLET), "--url", "http://localhost:8080", "--mode", "public", "--json"],
+    )
 
     assert result.exit_code == 0
-    assert request == {"applet_id": None, "base_version": None, "mode": "public"}
+    assert requests == [("POST", "http://localhost:8080/api/marina/applets", {"mode": "public"})]
     assert json.loads(result.output)["mode"] == "public"
 
 
 def test_mode_cli_updates_current_revision(monkeypatch: pytest.MonkeyPatch) -> None:
     requests: list[tuple[str, str, object | None]] = []
 
-    def request(
-        _service_url: str,
-        method: str,
-        path: str,
-        *,
-        json_body: object | None = None,
-        **_kwargs: object,
-    ) -> object:
-        requests.append((method, path, json_body))
+    def http_request(method: str, url: str, **kwargs: object) -> RequestsResponse:
+        requests.append((method, url, kwargs.get("json")))
         if method == "GET":
-            return {"current_version": 9}
-        return {"url": "https://public.applets.example/a/example/"}
+            return json_response({"current_version": 9})
+        return json_response({"url": "https://public.applets.example/a/example/"})
 
-    monkeypatch.setattr("marina.cli.marina_request", request)
-    result = CliRunner().invoke(cli, ["applets", "mode", "example", "public"])
+    monkeypatch.setattr("marina.client.requests.request", http_request)
+    result = CliRunner().invoke(
+        cli,
+        ["applets", "mode", "example", "public", "--url", "http://localhost:8080"],
+    )
 
     assert result.exit_code == 0
     assert requests == [
-        ("GET", "/api/marina/applets/example", None),
-        ("PUT", "/api/marina/applets/example/mode", {"mode": "public", "base_version": 9}),
+        ("GET", "http://localhost:8080/api/marina/applets/example", None),
+        ("PUT", "http://localhost:8080/api/marina/applets/example/mode", {"mode": "public", "base_version": 9}),
     ]
     assert result.output.strip() == "https://public.applets.example/a/example/"
 

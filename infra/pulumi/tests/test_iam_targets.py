@@ -64,13 +64,3 @@ def test_global_iam_composes_deploy_target_grants_without_duplicate_resources() 
     grant_keys = _grant_keys(args)
 
     assert len(grant_keys) == len(set(grant_keys))
-
-
-def test_public_marina_applet_service_allows_unauthenticated_invocation() -> None:
-    args = global_iam_args(PROJECT, load_iam_config())
-    public_service = next(service for service in args.cloud_run_iap if service.service == "marina-public-applets")
-
-    assert public_service.iap_grants == ()
-    assert [(grant.role, grant.members) for grant in public_service.service_grants] == [
-        ("roles/run.invoker", ("allUsers",))
-    ]

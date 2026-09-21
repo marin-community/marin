@@ -20,11 +20,12 @@ from marina.server import (
     CLOUD_RUN_SERVICE_ENV,
     DATA_ROOT_ENV,
     IAP_AUDIENCE_ENV,
+    MARINA_SURFACE_ENV,
     MCP_PATH,
     MCP_READ_PATH,
-    PUBLIC_APPLETS_ONLY_ENV,
     AgentPanelService,
     MarinaConfig,
+    MarinaSurface,
     create_app,
     serve_app_file,
 )
@@ -503,15 +504,15 @@ def test_non_loopback_without_iap_is_denied(tmp_path: Path) -> None:
 
 
 def test_public_applet_cloud_run_config_does_not_require_iap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv(CLOUD_RUN_SERVICE_ENV, "marina-public-applets")
+    monkeypatch.setenv(CLOUD_RUN_SERVICE_ENV, "public-service")
     monkeypatch.setenv(DATA_ROOT_ENV, str(tmp_path / "data"))
-    monkeypatch.setenv(PUBLIC_APPLETS_ONLY_ENV, "1")
+    monkeypatch.setenv(MARINA_SURFACE_ENV, MarinaSurface.PUBLIC_APPLETS)
     monkeypatch.delenv(IAP_AUDIENCE_ENV, raising=False)
 
     config = MarinaConfig.from_env(tmp_path / "apps")
 
     assert config.iap_audience is None
-    assert config.public_applets_only is True
+    assert config.surface is MarinaSurface.PUBLIC_APPLETS
 
 
 def test_an_app_named_for_a_kernel_route_is_rejected(tmp_path: Path) -> None:

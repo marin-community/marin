@@ -461,6 +461,31 @@ class AppletStore:
     def _lock_applet(connection: Connection, applet_id: uuid.UUID) -> None:
         connection.execute(text(APPLET_LOCK_SQL), {"id": str(applet_id)})
 
+    @classmethod
+    def _authorize_versioned_mutation(
+        cls,
+        connection: Connection,
+        applet_id: uuid.UUID,
+        actor: str,
+        base_version: int,
+        operators: frozenset[str],
+    ) -> None:
+        cls._lock_applet(connection, applet_id)
+        applet = (
+            connection.execute(
+                text("SELECT owner, current_version FROM applets WHERE id = :id AND archived_at IS NULL FOR UPDATE"),
+                {"id": applet_id},
+            )
+            .mappings()
+            .first()
+        )
+        if applet is None:
+            raise AppletNotFound(str(applet_id))
+        if applet["owner"] != actor and actor not in operators:
+            raise AppletForbidden(str(applet_id))
+        if int(applet["current_version"]) != base_version:
+            raise AppletConflict(str(applet_id))
+
     @staticmethod
     def _allocate_version(
         connection: Connection,
@@ -684,23 +709,7 @@ class AppletStore:
         operators: frozenset[str] = frozenset(),
     ) -> None:
         with self.engine.begin() as connection:
-            self._lock_applet(connection, applet_id)
-            applet = (
-                connection.execute(
-                    text(
-                        "SELECT owner, current_version FROM applets " "WHERE id = :id AND archived_at IS NULL FOR UPDATE"
-                    ),
-                    {"id": applet_id},
-                )
-                .mappings()
-                .first()
-            )
-            if applet is None:
-                raise AppletNotFound(str(applet_id))
-            if applet["owner"] != actor and actor not in operators:
-                raise AppletForbidden(str(applet_id))
-            if int(applet["current_version"]) != base_version:
-                raise AppletConflict(str(applet_id))
+            self._authorize_versioned_mutation(connection, applet_id, actor, base_version, operators)
             connection.execute(
                 text("UPDATE applets SET mode = :mode, updated_at = now() WHERE id = :id"),
                 {"id": applet_id, "mode": mode.value},
@@ -768,21 +777,7 @@ class AppletStore:
         operators: frozenset[str] = frozenset(),
     ) -> None:
         with self.engine.begin() as connection:
-            self._lock_applet(connection, applet_id)
-            applet = (
-                connection.execute(
-                    text("SELECT owner, current_version FROM applets WHERE id = :id AND archived_at IS NULL FOR UPDATE"),
-                    {"id": applet_id},
-                )
-                .mappings()
-                .first()
-            )
-            if applet is None:
-                raise AppletNotFound(str(applet_id))
-            if applet["owner"] != actor and actor not in operators:
-                raise AppletForbidden(str(applet_id))
-            if int(applet["current_version"]) != base_version:
-                raise AppletConflict(str(applet_id))
+            self._authorize_versioned_mutation(connection, applet_id, actor, base_version, operators)
             exists = connection.execute(
                 text("SELECT 1 FROM applet_versions WHERE applet_id = :id AND version = :version"),
                 {"id": applet_id, "version": version},

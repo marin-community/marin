@@ -31,12 +31,12 @@ import pulumi_cloudflare as cloudflare
 import pulumi_command as command
 import pulumi_gcp as gcp
 from iac.gcp.cloud_run import CloudRunService, CloudRunServiceArgs, SecretEnv
+from iac.gcp.marina import PUBLIC_APPLET_SERVICE
 from marina.manifest import JobRunner, discover_apps, job_runners
 
 PROJECT = "hai-gcp-models"
 REGION = "us-central1"
 SERVICE = "marina"
-PUBLIC_APPLET_SERVICE = "marina-public-applets"
 INSTANCE = "marin-metadata"
 CONNECTION_NAME = f"{PROJECT}:{REGION}:{INSTANCE}"
 DATABASE = "marina"
@@ -319,7 +319,7 @@ def main() -> None:
                         for key, value in {
                             "MARINA_DATA_ROOT": f"gs://{DATA_BUCKET}",
                             "MARINA_PUBLIC_APPLET_ORIGIN": f"https://{PUBLIC_APPLET_HOST}",
-                            "MARINA_PUBLIC_APPLETS_ONLY": "1",
+                            "MARINA_SURFACE": "public_applets",
                             **DATABASE_ENV,
                         }.items()
                     ]
