@@ -1513,3 +1513,25 @@ and 399/756 for SC32
 Those conservative changes are +42 and +23, a baseline-adjusted SC32 minus TIS
 difference of -19. This is an interim single-seed checkpoint rather than the
 terminal quality result.
+
+The first full attempts then exposed a matched memory boundary. Both arms
+finished updates six through nine, but update ten failed during the policy
+backward when a worker requested 1.82 GiB with only 1.80--1.81 GiB free. The
+preserved exceptions are available for
+[TIS](results/score_centering_snowball_full_pair_tis_attempt0_failure.json) and
+[SC32](results/score_centering_snowball_full_pair_sc32_attempt0_failure.json).
+This was an operational failure shared by the two methods, rather than evidence
+about their relative quality. Their redundant automatic retries were stopped
+after the exception and Ray artifacts were uploaded.
+
+The matched continuations resume each arm's complete step-five checkpoint. To
+create activation-memory margin, they reduce the training response cap from
+4,096 to 3,840 tokens while preserving the 4,096-token held-out evaluation
+contract. All other scheduling and optimization settings remain matched; the
+two [rendered TIS](configs/score_centering/snowball_full_pair_tis_continuation.yaml)
+and [SC32](configs/score_centering/snowball_full_pair_sc32_continuation.yaml)
+configs differ only in `score_centering_topk` and the checkpoint path appropriate
+to that arm. Their first-attempt Iris jobs are
+[`041c320c`](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-default-set-041c320c-2026.09.21.8-8b6d1802015f)
+and
+[`fb6b91f4`](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-default-set-fb6b91f4-2026.09.21.8-b8fda2e76e40).
