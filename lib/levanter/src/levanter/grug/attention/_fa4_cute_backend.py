@@ -31,7 +31,6 @@ from levanter.grug.attention._fa4_cute_kernels import (
     segmented_flash_attention_forward_launcher,
 )
 from levanter.grug.attention._fa4_cute_config import Flash4CuteKernelConfig
-from levanter.grug.attention._inkling_relpos import rel_bias_backward
 
 
 @dataclass(frozen=True)
@@ -92,7 +91,8 @@ def segmented_flash_attention_forward(
     v: jax.Array,
     lower_bounds: jax.Array,
     valid: jax.Array,
-    rel_bias: jax.Array | None = None,
+    rel_r: jax.Array | None = None,
+    rel_proj: jax.Array | None = None,
     *,
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
@@ -140,10 +140,11 @@ def segmented_flash_attention_forward(
         use_static_tensors=True,
         softmax_scale=softmax_scale,
     )
-    if rel_bias is None:
-        # Zero bias A [B, Hq, S, 1] -> the kernel only ever adds A[i, 0] on the diagonal (delta=0), = 0.
-        rel_bias = jnp.zeros((q.shape[0], q.shape[2], q.shape[1], 1), dtype=q.dtype)
-    return call(q, k, v, lower_bounds, valid.astype(jnp.int32), rel_bias.astype(q.dtype))
+    if rel_r is None or rel_proj is None:
+        # No-bias (RoPE) placeholder: rel_dim=1, rel_extent=1, R=0 -> A = R.proj = 0 (diagonal only).
+        rel_r = jnp.zeros((q.shape[0], q.shape[1], q.shape[2], 1), dtype=q.dtype)
+        rel_proj = jnp.zeros((1, 1), dtype=q.dtype)
+    return call(q, k, v, lower_bounds, valid.astype(jnp.int32), rel_r.astype(q.dtype), rel_proj.astype(q.dtype))
 
 
 def segmented_flash_attention_backward(
@@ -155,15 +156,17 @@ def segmented_flash_attention_backward(
     lse: jax.Array,
     lower_bounds: jax.Array,
     valid: jax.Array,
-    rel_bias: jax.Array | None = None,
+    rel_r: jax.Array | None = None,
+    rel_proj: jax.Array | None = None,
     *,
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
 ) -> tuple[jax.Array, ...]:
     """Return gradients for FA4/CuTe packed-segment attention.
 
-    Returns ``(dq, dk, dv)``, or ``(dq, dk, dv, dA)`` when the sm90 vendored path also produces the
-    Inkling bias gradient in-kernel.
+    The Inkling bias is passed as low-rank factors ``rel_r`` [B,S,Hq,rel_dim] and ``rel_proj``
+    [rel_dim,L]; the kernel computes ``A=R·proj`` on the fly. Returns ``(dq, dk, dv)``, or
+    ``(dq, dk, dv, dA)`` when the sm90 vendored path also produces the bias gradient in-kernel.
     """
     _validate_forward_inputs(q, k, v, lower_bounds, valid, softmax_scale=softmax_scale)
     _validate_backward_inputs(q, k, v, out, dout, lse)
@@ -198,7 +201,8 @@ def segmented_flash_attention_backward(
             sparse_metadata.partial_block_idx,
             sparse_metadata.full_block_cnt,
             sparse_metadata.full_block_idx,
-            rel_bias=rel_bias,
+            rel_r=rel_r,
+            rel_proj=rel_proj,
             softmax_scale=softmax_scale,
             kernel_config=kernel_config,
             window_size_left=None,
@@ -231,8 +235,12 @@ def segmented_flash_attention_backward(
         use_static_tensors=True,
         softmax_scale=softmax_scale,
     )
-    if rel_bias is None:
+    # Fallback (non-sm90, e.g. MLA) segmented backward still reads a materialized A[B,Hq,S,L]; build it
+    # from the low-rank factors here (this path is not the throughput-critical GQA one).
+    if rel_r is None or rel_proj is None:
         rel_bias = jnp.zeros((q.shape[0], q.shape[2], q.shape[1], 1), dtype=q.dtype)
+    else:
+        rel_bias = jnp.einsum("bshr,rl->bhsl", rel_r.astype(jnp.float32), rel_proj.astype(jnp.float32)).astype(q.dtype)
     dq, dk, dv, *_scratch = call(
         q, k, v, out, dout, lse, lower_bounds, valid.astype(jnp.int32), rel_bias.astype(q.dtype)
     )
@@ -253,17 +261,19 @@ def segmented_flash_attention_backward_sm90_native(
     full_block_cnt: jax.Array | None = None,
     full_block_idx: jax.Array | None = None,
     *,
-    rel_bias: jax.Array | None = None,
+    rel_r: jax.Array | None = None,
+    rel_proj: jax.Array | None = None,
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
     window_size_left: int | None = None,
 ) -> tuple[jax.Array, ...]:
     """Run the native SM90 segmented backward path for D128 GQA kernels.
 
-    ``rel_bias`` (Inkling A [B, Hq, S, L]) is added to the recomputed scores via the kernel's
-    ``score_mod`` so dQ/dK/dV match the biased forward; ``None`` runs the plain (RoPE) path.
+    The Inkling bias is computed on the fly from low-rank factors ``rel_r`` [B,S,Hq,rel_dim] and
+    ``rel_proj`` [rel_dim,L] in the kernel's score_mod so dQ/dK/dV match the biased forward; the bias
+    gradient dA [B,Hq,S,L] is scattered from the kernel's dS. ``None`` runs the plain (RoPE) path.
     """
-    use_rel_bias = rel_bias is not None
+    use_rel_bias = rel_r is not None and rel_proj is not None
     _validate_forward_inputs(q, k, v, lower_bounds, valid, softmax_scale=softmax_scale)
     _validate_backward_inputs(q, k, v, out, dout, lse)
     sm90_config = kernel_config.sm90_backward
@@ -341,9 +351,13 @@ def segmented_flash_attention_backward_sm90_native(
 
     backward_input_spec, backward_output_spec = _cutlass_attention_backward_sm90_accum_specs(modules, vector_elems=8)
     if not use_rel_bias:
-        rel_bias = jnp.zeros((q.shape[0], q.shape[2], q.shape[1], 1), dtype=q.dtype)
+        # No-bias placeholder (rel_dim=1, rel_extent=1, R=0 => A=0).
+        rel_r = jnp.zeros((q.shape[0], q.shape[1], q.shape[2], 1), dtype=q.dtype)
+        rel_proj = jnp.zeros((1, 1), dtype=q.dtype)
+    rel_extent = rel_proj.shape[1]
+    d_rel_bias_shape = (q.shape[0], q.shape[2], q.shape[1], rel_extent)  # dA [B, Hq, S, L]
     backward_output_shape_dtype = _cutlass_attention_backward_sm90_backward_output_shapes(
-        q, k, v, sm90_config.tile, rel_bias
+        q, k, v, sm90_config.tile, d_rel_bias_shape
     )
     backward_call = cutlass_call(
         backward_launcher,
@@ -366,7 +380,8 @@ def segmented_flash_attention_backward_sm90_native(
         mask_block_idx,
         full_block_cnt,
         full_block_idx,
-        rel_bias.astype(q.dtype),
+        rel_r.astype(q.dtype),
+        rel_proj.astype(q.dtype),
     )
     postprocess_input_spec, postprocess_output_spec = _cutlass_attention_backward_sm90_postprocess_specs(
         modules,
@@ -443,11 +458,13 @@ def _cutlass_attention_forward_specs(
     qkv_spec = tensor_spec(mode=(1, 3, 2, 0), divisibility=(1, 1, 1, vector_elems), static=True)
     lse_spec = tensor_spec(divisibility=(1, 1, 1), static=True)
     metadata_spec = tensor_spec(static=True)
-    # Inkling relative-position bias A [B, Hq, S, L] -> kernel [S, L, Hq, B] (mode=(2,3,1,0)), so the
-    # kernel scalar-indexes mRelBias[query_idx, delta, q_head, batch_idx]. Always present; callers that
-    # do not use it pass a zero [B, Hq, S, 1] bias.
-    rel_bias_spec = tensor_spec(mode=(2, 3, 1, 0), static=True)
-    return (qkv_spec, qkv_spec, qkv_spec, metadata_spec, metadata_spec, rel_bias_spec), (qkv_spec, lse_spec)
+    # Inkling low-rank bias factors (computed on the fly in-kernel):
+    #   R [B, S, Hq, rel_dim] -> kernel [S, rel_dim, Hq, B] (mode=(1,3,2,0)), indexed mR[q, r, q_head, b];
+    #   proj [rel_dim, L] shared -> kernel [rel_dim, L] (mode=(0,1)), indexed mProj[r, delta].
+    # Non-Inkling callers pass R=zeros[B,S,Hq,1], proj=zeros[1,1] (rel_dim=rel_extent=1 => A=0).
+    r_spec = tensor_spec(mode=(1, 3, 2, 0), static=True)
+    proj_spec = tensor_spec(mode=(0, 1), static=True)
+    return (qkv_spec, qkv_spec, qkv_spec, metadata_spec, metadata_spec, r_spec, proj_spec), (qkv_spec, lse_spec)
 
 
 def _cutlass_attention_backward_specs(
@@ -493,8 +510,11 @@ def _cutlass_attention_backward_sm90_accum_specs(
     metadata_spec = tensor_spec(mode=(0, 1), static=True)
     sparse_cnt_spec = tensor_spec(mode=(0, 1, 2), static=True)
     sparse_idx_spec = tensor_spec(mode=(0, 1, 2, 3), static=True)
-    # rel_bias A [B,Hq,S,L] -> kernel [S,L,Hq,B] (mode=(2,3,1,0)); zero [.,1] when unused.
-    rel_bias_spec = tensor_spec(mode=(2, 3, 1, 0), static=True)
+    # Low-rank bias factors: R[B,S,Hq,rel_dim] -> kernel [S,rel_dim,Hq,B] (mode=(1,3,2,0)); proj[rel_dim,L].
+    r_spec = tensor_spec(mode=(1, 3, 2, 0), static=True)
+    proj_spec = tensor_spec(mode=(0, 1), static=True)
+    # dA output in A-layout [B,Hq,S,L] -> kernel [S,L,Hq,B] (mode=(2,3,1,0)).
+    da_spec = tensor_spec(mode=(2, 3, 1, 0), static=True)
     input_spec = (
         qkv_spec,
         qkv_spec,
@@ -508,10 +528,11 @@ def _cutlass_attention_backward_sm90_accum_specs(
         sparse_idx_spec,
         sparse_cnt_spec,
         sparse_idx_spec,
-        rel_bias_spec,
+        r_spec,
+        proj_spec,
     )
     # Outputs: dq/dk/dv accumulators (flat scratch) + dA (bias gradient, A-layout [B,Hq,S,L]).
-    return input_spec, (scratch_spec, scratch_spec, scratch_spec, rel_bias_spec)
+    return input_spec, (scratch_spec, scratch_spec, scratch_spec, da_spec)
 
 
 def _cutlass_attention_backward_sm90_preprocess_specs(
@@ -689,7 +710,7 @@ def _cutlass_attention_backward_sm90_backward_output_shapes(
     k: jax.Array,
     v: jax.Array,
     backward_tile: tuple[int, int],
-    rel_bias: jax.Array,
+    d_rel_bias_shape: tuple[int, ...],
 ) -> tuple[jax.ShapeDtypeStruct, ...]:
     batch, seq_len, q_heads, head_dim = q.shape
     kv_heads = k.shape[2]
@@ -704,7 +725,7 @@ def _cutlass_attention_backward_sm90_backward_output_shapes(
     # dA (bias gradient) in the A layout [B, Hq, S, L]; the kernel scatters dS by distance into it.
     # bf16 (matching A) halves the scatter-write + the downstream dA->(dR,dproj) read traffic; dA is a
     # direct write (no accumulation), so bf16 precision is fine.
-    d_rel_bias = jax.ShapeDtypeStruct(rel_bias.shape, rel_bias.dtype)
+    d_rel_bias = jax.ShapeDtypeStruct(d_rel_bias_shape, q.dtype)
     return dq_accum, dk_accum, dv_accum, d_rel_bias
 
 
@@ -714,42 +735,45 @@ def fa4_cute_attention_forward(
     v: jax.Array,
     lower_bounds: jax.Array,
     valid: jax.Array,
-    rel_bias: jax.Array | None = None,
+    rel_r: jax.Array | None = None,
+    rel_proj: jax.Array | None = None,
     *,
     sm_scale: float | None = None,
     kernel_config: Flash4CuteKernelConfig,
 ) -> jax.Array:
-    """FA4/CuTe attention boundary with packed causal metadata and optional Inkling relative-position
-    bias ``rel_bias`` (compact A, [B, Hq, S, L]).
+    """FA4/CuTe attention boundary with packed causal metadata and the Inkling relative-position bias
+    supplied as low-rank factors ``rel_r`` [B,S,Hq,rel_dim] and ``rel_proj`` [rel_dim,L].
 
-    Forward uses the CUTLASS/CuTe JAX FFI path. Backward is routed through a custom VJP so JAX does not
-    attempt to autodiff through ``cutlass_call``. ``rel_bias`` is a differentiable input; its gradient
-    (dA) is computed by the banded ``rel_bias_backward`` helper.
+    Forward uses the CUTLASS/CuTe JAX FFI path (bias computed on the fly). Backward is a custom VJP so
+    JAX does not autodiff through ``cutlass_call``; ``rel_r``/``rel_proj`` are differentiable inputs.
     """
     if sm_scale is None:
         sm_scale = float(q.shape[-1] ** -0.5)
-    if rel_bias is None:
-        rel_bias = jnp.zeros((q.shape[0], q.shape[2], q.shape[1], 1), dtype=q.dtype)
+    if rel_r is None or rel_proj is None:
+        rel_r = jnp.zeros((q.shape[0], q.shape[1], q.shape[2], 1), dtype=q.dtype)
+        rel_proj = jnp.zeros((1, 1), dtype=q.dtype)
     return _segmented_flash_attention_custom_vjp(
         q,
         k,
         v,
         lower_bounds,
         valid,
-        rel_bias,
+        rel_r,
+        rel_proj,
         sm_scale,
         kernel_config,
     )
 
 
-@partial(jax.custom_vjp, nondiff_argnums=(6, 7))
+@partial(jax.custom_vjp, nondiff_argnums=(7, 8))
 def _segmented_flash_attention_custom_vjp(
     q: jax.Array,
     k: jax.Array,
     v: jax.Array,
     lower_bounds: jax.Array,
     valid: jax.Array,
-    rel_bias: jax.Array,
+    rel_r: jax.Array,
+    rel_proj: jax.Array,
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
 ) -> jax.Array:
@@ -759,7 +783,8 @@ def _segmented_flash_attention_custom_vjp(
         v,
         lower_bounds,
         valid,
-        rel_bias,
+        rel_r,
+        rel_proj,
         softmax_scale=softmax_scale,
         kernel_config=kernel_config,
     )
@@ -772,7 +797,8 @@ def _segmented_flash_attention_custom_vjp_fwd(
     v: jax.Array,
     lower_bounds: jax.Array,
     valid: jax.Array,
-    rel_bias: jax.Array,
+    rel_r: jax.Array,
+    rel_proj: jax.Array,
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
 ) -> tuple[jax.Array, tuple[jax.Array, ...]]:
@@ -782,53 +808,54 @@ def _segmented_flash_attention_custom_vjp_fwd(
         v,
         lower_bounds,
         valid,
-        rel_bias,
+        rel_r,
+        rel_proj,
         softmax_scale=softmax_scale,
         kernel_config=kernel_config,
     )
-    return out, (q, k, v, out, lse, lower_bounds, valid, rel_bias)
+    return out, (q, k, v, out, lse, lower_bounds, valid, rel_r, rel_proj)
 
 
-def _reference_bias_vjp(
+def _reference_lowrank_vjp(
     q: jax.Array,
     k: jax.Array,
     v: jax.Array,
     lower_bounds: jax.Array,
     valid: jax.Array,
-    rel_bias: jax.Array,
+    rel_r: jax.Array,
+    rel_proj: jax.Array,
     cot: jax.Array,
     softmax_scale: float,
-) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
-    """Correctness-first backward for the Inkling-biased attention via a materialized reference VJP.
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+    """Correctness-first backward: autodiff a materialized reference forward in (q,k,v,R,proj).
 
-    Used only when a real relative bias is present (rel_extent > 1). The forward stays on the fused
-    kernel; this recomputes dq/dk/dv/dA exactly (matching the reference oracle) at the cost of an [S,S]
-    score matrix in the backward. The fully fused backward is a follow-up optimization.
+    Recomputes an [S,S] score matrix, so it is slow; used unless the fused sm90 path is enabled.
     """
     b, s, hq, _ = q.shape
     hkv = k.shape[2]
-    rel_extent = rel_bias.shape[-1]
+    rel_extent = rel_proj.shape[-1]
     rep = hq // hkv
     i_idx = jnp.arange(s)[:, None]
     j_idx = jnp.arange(s)[None, :]
     delta = i_idx - j_idx
     in_band = (delta >= 0) & (delta < rel_extent)
     gather_idx = jnp.clip(delta, 0, rel_extent - 1)
-    allowed = (j_idx <= i_idx) & (j_idx >= lower_bounds[:, :, None]) & (valid[:, :, None] != 0)  # [B,S,S]
+    allowed = (j_idx <= i_idx) & (j_idx >= lower_bounds[:, :, None]) & (valid[:, :, None] != 0)
 
-    def fwd(q_, k_, v_, rel_bias_):
+    def fwd(q_, k_, v_, r_, proj_):
         kk = jnp.repeat(k_, rep, axis=2).astype(jnp.float32)
         vv = jnp.repeat(v_, rep, axis=2).astype(jnp.float32)
-        scores = jnp.einsum("bqhd,bkhd->bhqk", q_.astype(jnp.float32) * softmax_scale, kk)  # [B,Hq,S,S]
+        scores = jnp.einsum("bqhd,bkhd->bhqk", q_.astype(jnp.float32) * softmax_scale, kk)
+        a_full = jnp.einsum("bshr,rl->bhsl", r_.astype(jnp.float32), proj_.astype(jnp.float32))  # [B,Hq,S,L]
         gi = jnp.broadcast_to(gather_idx, (b, hq, s, s))
-        a = jnp.take_along_axis(rel_bias_.astype(jnp.float32), gi, axis=-1)
+        a = jnp.take_along_axis(a_full, gi, axis=-1)
         scores = scores + jnp.where(in_band, a, 0.0)
         scores = jnp.where(allowed[:, None, :, :], scores, -jnp.inf)
         p = jax.nn.softmax(scores, axis=-1)
         out = jnp.einsum("bhqk,bkhd->bqhd", p, vv)
         return out.astype(q_.dtype)
 
-    _, vjp_fn = jax.vjp(fwd, q, k, v, rel_bias)
+    _, vjp_fn = jax.vjp(fwd, q, k, v, rel_r, rel_proj)
     return vjp_fn(cot)
 
 
@@ -837,59 +864,69 @@ def _segmented_flash_attention_custom_vjp_bwd(
     kernel_config: Flash4CuteKernelConfig,
     residuals: tuple[jax.Array, ...],
     cotangent: jax.Array | jax.custom_derivatives.SymbolicZero,
-) -> tuple[jax.Array | None, jax.Array | None, jax.Array | None, None, None, jax.Array | None]:
-    q, k, v, out, lse, lower_bounds, valid, rel_bias = residuals
+) -> tuple[jax.Array | None, jax.Array | None, jax.Array | None, None, None, jax.Array | None, jax.Array | None]:
+    q, k, v, out, lse, lower_bounds, valid, rel_r, rel_proj = residuals
     if isinstance(cotangent, jax.custom_derivatives.SymbolicZero):
-        return jnp.zeros_like(q), jnp.zeros_like(k), jnp.zeros_like(v), None, None, jnp.zeros_like(rel_bias)
+        return (
+            jnp.zeros_like(q),
+            jnp.zeros_like(k),
+            jnp.zeros_like(v),
+            None,
+            None,
+            jnp.zeros_like(rel_r),
+            jnp.zeros_like(rel_proj),
+        )
     cot = cotangent.astype(q.dtype)
-    # rel_extent == 1 is the zero placeholder for non-Inkling callers: use the fast fused sm90 backward.
-    if rel_bias.shape[-1] == 1:
+    # rel_extent == 1 is the zero placeholder for non-Inkling callers: plain fused sm90 backward.
+    if rel_proj.shape[-1] == 1:
         dq, dk, dv = segmented_flash_attention_backward(
             q, k, v, out, cot, lse, lower_bounds, valid, softmax_scale=softmax_scale, kernel_config=kernel_config
         )
-        return dq, dk, dv, None, None, jnp.zeros_like(rel_bias)
-    # Inkling bias present. Default: materialized reference VJP (correct; ~2.8% MFU at d512 because it
-    # forms an [S,S] score matrix). Opt in to the fused segmented backward with
-    # FAST_TRACK_INKLING_FUSED_BWD=1 -- correct at single-config shapes, but the external
-    # flash_attn.cute preprocess/postprocess aux kernels are version-drifted with shape / local-vs-global
-    # dependent arities, so it does not yet run across the interleaved sliding-window + global layers.
+        return dq, dk, dv, None, None, jnp.zeros_like(rel_r), jnp.zeros_like(rel_proj)
+    # Default: correctness-first reference VJP. Opt into the fused sm90 backward with
+    # FAST_TRACK_INKLING_FUSED_BWD=1 (dQ/dK/dV from the Hopper kernel, dA scattered in-kernel).
     if os.environ.get("FAST_TRACK_INKLING_FUSED_BWD") != "1":
-        dq, dk, dv, d_rel_bias = _reference_bias_vjp(q, k, v, lower_bounds, valid, rel_bias, cot, softmax_scale)
+        dq, dk, dv, d_rel_r, d_rel_proj = _reference_lowrank_vjp(
+            q, k, v, lower_bounds, valid, rel_r, rel_proj, cot, softmax_scale
+        )
         return (
             dq.astype(q.dtype),
             dk.astype(k.dtype),
             dv.astype(v.dtype),
             None,
             None,
-            d_rel_bias.astype(rel_bias.dtype),
+            d_rel_r.astype(rel_r.dtype),
+            d_rel_proj.astype(rel_proj.dtype),
         )
     result = segmented_flash_attention_backward(
-        q, k, v, out, cot, lse, lower_bounds, valid, rel_bias, softmax_scale=softmax_scale, kernel_config=kernel_config
+        q,
+        k,
+        v,
+        out,
+        cot,
+        lse,
+        lower_bounds,
+        valid,
+        rel_r,
+        rel_proj,
+        softmax_scale=softmax_scale,
+        kernel_config=kernel_config,
     )
     if len(result) == 4:
-        # sm90 vendored path: dA is scattered from the kernel's own dS (free); no standalone pass.
-        dq, dk, dv, d_rel_bias = result
+        dq, dk, dv, d_rel_bias = result  # d_rel_bias = dA [B,Hq,S,L], scattered in-kernel
         if os.environ.get("FAST_TRACK_INKLING_ZERO_DA") == "1":
-            return dq, dk, dv, None, None, jnp.zeros_like(rel_bias)
-        return dq, dk, dv, None, None, d_rel_bias.astype(rel_bias.dtype)
-    # Fallback (non-sm90) segmented path: dA via the standalone banded gather of dScore.
+            return dq, dk, dv, None, None, jnp.zeros_like(rel_r), jnp.zeros_like(rel_proj)
+        # dA -> (dR, dproj) via the low-rank chain rule A = einsum("bshr,rl->bhsl", R, proj).
+        d_rel_bias = d_rel_bias.astype(jnp.float32)
+        d_rel_r = jnp.einsum("bhsl,rl->bshr", d_rel_bias, rel_proj.astype(jnp.float32))
+        d_rel_proj = jnp.einsum("bhsl,bshr->rl", d_rel_bias, rel_r.astype(jnp.float32))
+        return dq, dk, dv, None, None, d_rel_r.astype(rel_r.dtype), d_rel_proj.astype(rel_proj.dtype)
+    # Fallback (non-sm90, e.g. MLA): reference VJP for the bias grads.
     dq, dk, dv = result
-    if os.environ.get("FAST_TRACK_INKLING_ZERO_DA") == "1":
-        # Throughput-isolation only (WRONG grads): measures fwd + fused dq/dk/dv without the dA pass.
-        return dq, dk, dv, None, None, jnp.zeros_like(rel_bias)
-    d_rel_bias = rel_bias_backward(
-        jnp.swapaxes(q, 1, 2),
-        jnp.swapaxes(k, 1, 2),
-        jnp.swapaxes(v, 1, 2),
-        jnp.swapaxes(out, 1, 2),
-        jnp.swapaxes(cot, 1, 2),
-        lse,
-        rel_bias,
-        lower_bounds.astype(jnp.int32),
-        valid.astype(jnp.bool_),
-        softmax_scale=softmax_scale,
-    ).astype(rel_bias.dtype)
-    return dq, dk, dv, None, None, d_rel_bias
+    _, _, _, d_rel_r, d_rel_proj = _reference_lowrank_vjp(
+        q, k, v, lower_bounds, valid, rel_r, rel_proj, cot, softmax_scale
+    )
+    return dq, dk, dv, None, None, d_rel_r.astype(rel_r.dtype), d_rel_proj.astype(rel_proj.dtype)
 
 
 _segmented_flash_attention_custom_vjp.defvjp(

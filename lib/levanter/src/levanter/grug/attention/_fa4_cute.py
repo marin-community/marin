@@ -224,7 +224,8 @@ def _fa4_cute_attention_forward_sharded(
     v: jax.Array,
     lower_bounds: jax.Array,
     valid: jax.Array,
-    rel_bias: jax.Array,
+    rel_r: jax.Array,
+    rel_proj: jax.Array,
     *,
     sm_scale: float,
     kernel_config: Flash4CuteKernelConfig,
@@ -237,7 +238,8 @@ def _fa4_cute_attention_forward_sharded(
             v,
             lower_bounds,
             valid,
-            rel_bias,
+            rel_r,
+            rel_proj,
             sm_scale=sm_scale,
             kernel_config=kernel_config,
         )
@@ -250,15 +252,18 @@ def _fa4_cute_attention_forward_sharded(
             v,
             lower_bounds,
             valid,
-            rel_bias,
+            rel_r,
+            rel_proj,
             sm_scale=sm_scale,
             kernel_config=kernel_config,
         )
 
     qkv_spec = P(batch_axes, None, _head_axis(mesh), None)
     metadata_spec = P(batch_axes, None)
-    # rel_bias is [B, Hq, S, L]: batch on batch_axes, head on the model/head axis, seq & L unsharded.
-    rel_bias_spec = P(batch_axes, _head_axis(mesh), None, None)
+    # R is [B, S, Hq, rel_dim]: same sharding as q/k/v (batch + head axis). proj [rel_dim, L] is tiny
+    # and shared across batch/head -> replicated.
+    rel_r_spec = P(batch_axes, None, _head_axis(mesh), None)
+    rel_proj_spec = P(None, None)
     _assert_sequence_axis_unsharded("q", q)
     _assert_sequence_axis_unsharded("k", k)
     _assert_sequence_axis_unsharded("v", v)
@@ -266,26 +271,28 @@ def _fa4_cute_attention_forward_sharded(
     _assert_sequence_axis_unsharded("valid", valid)
     lower_bounds = reshard(lower_bounds, metadata_spec)
     valid = reshard(valid, metadata_spec)
-    rel_bias = reshard(rel_bias, rel_bias_spec)
+    rel_r = reshard(rel_r, rel_r_spec)
+    rel_proj = reshard(rel_proj, rel_proj_spec)
 
     @shard_map(
         mesh=mesh,
         out_specs=qkv_spec,
         check_vma=False,
     )
-    def _local_fa4_attention(q_local, k_local, v_local, lower_bounds_local, valid_local, rel_bias_local):
+    def _local_fa4_attention(q_local, k_local, v_local, lower_bounds_local, valid_local, rel_r_local, rel_proj_local):
         return fa4_cute_attention_forward(
             q_local,
             k_local,
             v_local,
             lower_bounds_local,
             valid_local,
-            rel_bias_local,
+            rel_r_local,
+            rel_proj_local,
             sm_scale=sm_scale,
             kernel_config=kernel_config,
         )
 
-    return _local_fa4_attention(q, k, v, lower_bounds, valid, rel_bias)
+    return _local_fa4_attention(q, k, v, lower_bounds, valid, rel_r, rel_proj)
 
 
 def _segmented_kernel_config(head_dim: int) -> Flash4CuteKernelConfig:
@@ -317,7 +324,8 @@ def _gpu_fa4_cute_attention(
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
     *,
     kernel_config: Flash4CuteKernelConfig,
-    rel_bias: Float[Array, "B Hq Q L"] | None = None,
+    rel_r: Float[Array, "B Q Hq R"] | None = None,
+    rel_proj: Float[Array, "R L"] | None = None,
 ) -> Float[Array, "B Q Hq D"]:
     _validate_head_layout(q, k, backend_name="gpu_fa4_cute_attention")
     if isinstance(mask, AttentionMask) and mask.fa4_bounds is not None:
@@ -332,8 +340,9 @@ def _gpu_fa4_cute_attention(
             backend_name="gpu_fa4_cute_attention",
         )
 
-    if rel_bias is None:
-        rel_bias = jnp.zeros((q.shape[0], q.shape[2], q.shape[1], 1), dtype=q.dtype)
+    if rel_r is None or rel_proj is None:
+        rel_r = jnp.zeros((q.shape[0], q.shape[1], q.shape[2], 1), dtype=q.dtype)
+        rel_proj = jnp.zeros((1, 1), dtype=q.dtype)
 
     return _fa4_cute_attention_forward_sharded(
         q,
@@ -341,7 +350,8 @@ def _gpu_fa4_cute_attention(
         v,
         lower_bounds,
         valid,
-        rel_bias,
+        rel_r,
+        rel_proj,
         sm_scale=1.0 / math.sqrt(q.shape[-1]),
         kernel_config=kernel_config,
     )
@@ -353,14 +363,16 @@ def gpu_fa4_cute_attention(
     v: Float[Array, "B K Hkv D"],
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
     *,
-    rel_bias: Float[Array, "B Hq Q L"] | None = None,
+    rel_r: Float[Array, "B Q Hq R"] | None = None,
+    rel_proj: Float[Array, "R L"] | None = None,
 ) -> Float[Array, "B Q Hq D"]:
     """Run causal self-attention through the segmented FA4/CuTe kernel, with the optional Inkling
-    relative-position bias ``rel_bias`` (compact A, [B, Hq, Q, L])."""
+    relative-position bias supplied as low-rank factors ``rel_r`` [B,Q,Hq,rel_dim] + ``rel_proj``
+    [rel_dim,L] (A = R·proj computed on the fly)."""
     if jax.default_backend() != "gpu":
         raise RuntimeError("gpu_fa4_cute_attention requires the JAX GPU backend.")
     return _gpu_fa4_cute_attention(
-        q, k, v, mask, kernel_config=_segmented_kernel_config(q.shape[-1]), rel_bias=rel_bias
+        q, k, v, mask, kernel_config=_segmented_kernel_config(q.shape[-1]), rel_r=rel_r, rel_proj=rel_proj
     )
 
 
