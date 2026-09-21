@@ -57,6 +57,7 @@ BASE = (
 TOKENIZER = f"{PREFIX}/grug_sft/tokenizer/2026.09.12"
 SFT_VERSION = "2026.09.20"
 SUPPORTED_TPU_ZONES = {
+    ("v4-32", "us-central2-b"),
     ("v4-64", "us-central2-b"),
     ("v4-1024", "us-central2-b"),
     ("v4-2048", "us-central2-b"),
@@ -398,6 +399,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--tpu",
         choices=(
+            "v4-32",
             "v4-64",
             "v4-1024",
             "v4-2048",
