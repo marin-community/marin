@@ -3,12 +3,11 @@
 
 """Multi-device MoE drop accounting and loss reductions over context shards."""
 
-import os
-import subprocess
-import sys
 import textwrap
 
 import pytest
+
+from levanter.testing.cpu_devices import run_on_cpu_devices
 
 _PRELUDE = """
 import math
@@ -55,17 +54,7 @@ def count_hlo_collectives(lowered):
 
 
 def _run(body: str) -> None:
-    env = os.environ.copy()
-    env["JAX_PLATFORMS"] = "cpu"
-    env["JAX_NUM_CPU_DEVICES"] = "4"
-    result = subprocess.run(
-        [sys.executable, "-c", _PRELUDE + textwrap.dedent(body)],
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr
+    run_on_cpu_devices(_PRELUDE + textwrap.dedent(body), device_count=4)
 
 
 @pytest.mark.timeout(300)

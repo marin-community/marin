@@ -56,11 +56,7 @@ def _active_batch_axes(mesh, batch_axes: Sequence[str]) -> tuple[str, ...]:
 
 
 def _partition_spec(array: jax.Array) -> P | None:
-    """Partition spec of a concrete array or tracer, or None without one.
-
-    A tracer's aval records only Explicit mesh axes, so a concrete array is read from its own
-    sharding: on an Auto-axis mesh that is the only place its placement shows.
-    """
+    """Return the partition spec carried by a concrete array or tracer."""
     if isinstance(array, jax.Array) and not isinstance(array, jax.core.Tracer):
         sharding = array.sharding
     else:
@@ -197,12 +193,7 @@ def _short_conv_sharded(
     seq_axis: str | None,
     padded_local_seq: int,
 ) -> Float[Array, "B S C"]:
-    """Run ``local_call`` inside an explicit ``shard_map``.
-
-    Sequence shards prepend a left halo and right-pad to ``padded_local_seq`` before
-    convolution, then discard halo and padding outputs. Causality keeps right padding
-    from affecting retained outputs. An unsharded sequence needs no communication.
-    """
+    """Run a shard-local convolution with the halo required by sequence shards."""
     if mesh is None:
         return local_call(weight, x, segment_ids)
     # An axis that shards the sequence cannot also shard the batch of the same array.

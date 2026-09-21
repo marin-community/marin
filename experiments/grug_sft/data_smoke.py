@@ -20,6 +20,7 @@ from experiments.grug_sft.special_token_lr import BATCH, CONTEXT, DEFAULT_STEPS,
 DEFAULT_SAMPLE_SIZE = 64
 MAX_PADDING_FRACTION = 0.07
 POLL_INTERVAL = 60
+COMPONENT_INDEX_SHIFT = 16
 
 
 def _wait_for_manifest(path: str, timeout: int) -> None:
@@ -56,7 +57,7 @@ def smoke(stores_manifest: str, output_path: str, sample_size: int) -> dict:
         raise ValueError("The SFT smoke test requires a fixed mixture")
 
     block = np.asarray(mixture._get_block(0))
-    component_counts = np.bincount(block >> 16, minlength=len(mixture.dataset_index))
+    component_counts = np.bincount(block >> COMPONENT_INDEX_SHIFT, minlength=len(mixture.dataset_index))
     realized_rates = {
         name: int(component_counts[index]) / mixture.block_size for index, name in enumerate(mixture.dataset_index)
     }
@@ -76,7 +77,7 @@ def smoke(stores_manifest: str, output_path: str, sample_size: int) -> dict:
     sampled_components: Counter[str] = Counter()
     padding_by_component: dict[str, list[int]] = defaultdict(lambda: [0, 0])
     for index, example in zip(indices, examples, strict=True):
-        component = mixture.dataset_index[int(block[index]) >> 16]
+        component = mixture.dataset_index[int(block[index]) >> COMPONENT_INDEX_SHIFT]
         sampled_components[component] += 1
         padding, tokens = _padding_tokens(example)
         padding_by_component[component][0] += padding

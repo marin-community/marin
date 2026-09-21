@@ -60,19 +60,13 @@ from experiments.grug.moe_hero_ep.train import (
 
 DEFAULT_HERO_STEPS = 25
 HERO_CHECKPOINT_INTERVAL = timedelta(minutes=15)
-# The hero has no tensor parallelism.
 HERO_MODEL_AXIS_SIZE = 1
 
 
 def validated_batch_axis_size(
     *, device_count: int, dp_racks: int, batch_size: int, context_axis_size: int, expert_axis_size: int
 ) -> int:
-    """Run the compact-mesh divisibility checks before allocation; return the batch-axes product.
-
-    The mesh shape comes from the same function ``compact_grug_mesh`` uses on the gang, so the
-    launcher cannot accept a layout the run would reject. The batch spans the replica, data and
-    expert axes; context and model do not partition it.
-    """
+    """Validate the requested mesh and return its batch-axis product."""
     replica, data, _context, expert, _model = _compact_grug_mesh_shape(
         process_count=device_count,
         local_device_count=1,

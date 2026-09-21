@@ -928,12 +928,14 @@ def _stage_tokenizer(name_or_path: str) -> str:
             # Explicit storage artifacts must not fall back to the Hub or mirror.
             # Fetch all files before loading so a partial download cannot hide
             # missing special-token configuration or the chat template.
-            for source in StoragePath(name_or_path.rstrip("/") + "/*").glob():
+            for source in (StoragePath(name_or_path) / "*").glob():
                 if source.isfile():
                     destination = os.path.join(local_dir, os.path.basename(str(source)))
                     if not fetch_file_atomic(str(source), destination):
                         raise FileNotFoundError(str(source))
-            return local_dir
+            if _try_load_tokenizer_from_dir(local_dir):
+                return local_dir
+            raise ValueError(f"Storage tokenizer artifact is incomplete: {name_or_path}")
 
         # 1. Local cache hit (also the double-checked fast path for threads that
         #    waited on the lock while another thread staged this same ref).
