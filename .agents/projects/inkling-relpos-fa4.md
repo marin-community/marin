@@ -263,3 +263,11 @@ bank -> contiguous run, drops clamp/branch/gather/in_band on in-band tiles), 4 (
 2nd fwd kernel [subtle w/ custom_vjp]; transpose R not A [in progress]; per-layer extent [hard: stacked
 layers share one bank]), 5 (R per KV head: /qhead_per_kvhead traffic but breaks free dA scatter [races];
 Fourier bank: separable, no kernel change, not Inkling). CAUTION: run <=2 concurrent MFU jobs (S3 SlowDown).
+
+## Transpose fix + remat (2026-09-20) -- BOTH SCALES NOW UNDER 10% IMPACT
+- Transpose R (not A) before bank matmul: d512-512 6.96->7.27; d1280-512 13.38->13.75.
+- Remat: checkpoint attention output (save_only_these_names "grug_attn_out") so attn fwd isn't
+  recomputed in backward: d1280-512 13.75->14.06 (+0.31). Exact (remat).
+CUMULATIVE (Lever1 + transpose + remat): d512-512 7.27 (9.6% impact vs orig rope 8.04);
+d1280-512 14.06 (8.9% impact vs orig rope 15.44). From start 5.25/35% and 12.75/27%(bf16).
+CAVEAT: remat speeds RoPE too (less, no bias) -> re-baseline RoPE w/ these opts for fair impact.
