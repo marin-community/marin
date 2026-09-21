@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
 import fsspec
@@ -47,6 +48,9 @@ logger = logging.getLogger(__name__)
 DEFAULT_WANDB_PROJECT = "marin-eval"
 DEFAULT_WANDB_TAGS = ("olmo_base_eval_table9",)
 RESULTS_FILENAME = "olmo_base_eval_table9_results.json"
+# Per-task BPB written as each task lands, so a preempted attempt resumes from the tasks it
+# has not scored yet instead of restarting the whole 104-task pass from zero.
+TASK_PROGRESS_FILENAME = "olmo_base_eval_table9_task_progress.json"
 # Pad each batch up to a multiple of the flash-attention block size, which the
 # kernel requires the position axis to be a multiple of. This bounds the number
 # of jit recompiles (one per distinct padded length) while keeping padding small.
@@ -194,6 +198,42 @@ def score_summed_logprobs(
     return results
 
 
+def _load_task_progress(path: str) -> dict[str, float]:
+    fs, _ = fsspec.core.url_to_fs(path)
+    if not fs.exists(path):
+        return {}
+    with fsspec.open(path, "r") as handle:
+        return {task: float(bpb) for task, bpb in json.load(handle).items()}
+
+
+def _save_task_progress(path: str, scores: dict[str, float]) -> None:
+    with fsspec.open(path, "w") as handle:
+        handle.write(json.dumps(scores, indent=2, sort_keys=True))
+
+
+def score_tasks_resumable(
+    tasks: Sequence[str], score_task: Callable[[str], float], *, output_path: str
+) -> dict[str, float]:
+    """Score ``tasks`` in order, persisting each BPB as it lands and skipping tasks already persisted.
+
+    Tasks are independent (one scalar each, no cross-task state), so the progress file under
+    ``output_path`` is the only thing a restarted attempt needs. Every host reads it so that all
+    hosts make the same skip decisions before joining the scoring collectives; only process 0
+    writes it.
+    """
+    progress_path = os.path.join(output_path, TASK_PROGRESS_FILENAME)
+    scores = _load_task_progress(progress_path)
+    if scores:
+        logger.info("resuming: %d of %d tasks already scored in %s", len(scores), len(tasks), progress_path)
+    for task in tasks:
+        if task in scores:
+            continue
+        scores[task] = score_task(task)
+        if jax.process_index() == 0:
+            _save_task_progress(progress_path, scores)
+    return scores
+
+
 def _score_tasks(
     model, hf_tokenizer, requests_by_task: dict[str, list[RequestInstance]], config: OlmoBaseEvalConfig, model_config, mp
 ) -> dict[str, float]:
@@ -203,8 +243,7 @@ def _score_tasks(
     compute_axis_mapping = config.trainer.compute_axis_mapping
     pad_id = hf_tokenizer.pad_token_id if hf_tokenizer.pad_token_id is not None else hf_tokenizer.eos_token_id
 
-    task_scores: dict[str, float] = {}
-    for task in sorted(requests_by_task):
+    def score_task(task: str) -> float:
         instances = requests_by_task[task]
         encoded = _encode_instances(hf_tokenizer, instances, bos_token_id)
         summed_logprobs = score_summed_logprobs(
@@ -218,9 +257,11 @@ def _score_tasks(
             max_eval_length=config.max_eval_length,
         )
         num_bytes = [e.num_bytes for e in encoded]
-        task_scores[task] = task_bpb(summed_logprobs, num_bytes)
-        logger.info("task %s: %d instances, bpb=%.6f", task, len(instances), task_scores[task])
-    return task_scores
+        bpb = task_bpb(summed_logprobs, num_bytes)
+        logger.info("task %s: %d instances, bpb=%.6f", task, len(instances), bpb)
+        return bpb
+
+    return score_tasks_resumable(sorted(requests_by_task), score_task, output_path=config.output_path)
 
 
 def _build_metrics_and_results(task_scores: dict[str, float], manifest, config: OlmoBaseEvalConfig) -> tuple[dict, dict]:
