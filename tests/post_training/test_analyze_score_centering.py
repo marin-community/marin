@@ -12,6 +12,7 @@ from experiments.post_training.analyze_score_centering import (
     summarize_run,
     verify_membership,
 )
+from experiments.post_training.analyze_score_centering_format import summarize as summarize_format
 from experiments.post_training.analyze_score_centering_pairs import summarize as summarize_pairs
 
 
@@ -104,6 +105,25 @@ def test_pair_comparison_can_use_core_subset_with_broader_validation():
     pairs, summary = summarize_pairs(evaluations, repeats, ["pilot:17:control:centered"], 20, dataset="core-math")
     assert pairs[0]["mean_terminal_difference"] == 12.5
     assert summary[0]["mean_terminal_difference"] == 12.5
+
+
+def test_format_audit_counts_exact_boxes_only_when_completed_and_unrewarded(tmp_path):
+    path = tmp_path / "val-gsm8k.jsonl"
+    rows = [
+        {
+            "input_prompt": str(index),
+            "env_extras": {"reward_spec": {"ground_truth": "7"}},
+            "stop_reason": stop,
+            "score": score,
+            "output_response": f"<|end_think|>\\boxed{{{answer}}}",
+        }
+        for index, (stop, score, answer) in enumerate((("stop", 1, 7), ("stop", 0, 7), ("length", 1, 7), ("stop", 0, 8)))
+    ]
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    audit = summarize_format(str(path), "https://unused.example")
+    assert audit["final_turn_boxed_exact_unrewarded"] == 1
+    assert audit["rewarded_correct_completed"] == 1
+    assert audit["completed_rewarded_or_exact_boxed"] == 2
 
 
 def test_iris_mirror_uses_the_resumed_attempt_for_repeated_steps(tmp_path):

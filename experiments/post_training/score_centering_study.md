@@ -1155,9 +1155,12 @@ quality across those two pool versions is not a controlled comparison.
 Its 1,199 validation rows include the same 256 GSM8K and 500 Math500
 question, index, and ground-truth identities as the old pool, plus four
 other suites. The new TIS and SC32 arms use the same pool and source SFT model.
-The core 756 math questions are the primary completed-answer endpoint; the
-1,199-question aggregate is secondary. Step-zero reward-format compliance
-must be checked before interpreting a training curve. Use seed 17, the
+The core 756 math questions are the primary completed-answer endpoint. The
+other suites and 1,199-row aggregate are secondary diagnostics: they mix
+binary answer rewards with other reward scales, so an aggregate count of
+completed positive scores is not a common answer-accuracy measure.
+Step-zero reward-format compliance must be checked before interpreting a
+training curve. Use seed 17, the
 same 40-H100 Megatron/vLLM topology with 1,980 GB per task, 128 prompts
 and four responses per update, 192 generation workers, a 32-group buffer, age limit eight,
 per-update publication with abort and resume, top-k-32 behavior capture,
@@ -1170,3 +1173,20 @@ completed-answer quality, response lengths and stops, consumed-token age,
 rejected work, elapsed time, and all reserved H100-hours. One training seed
 is a pilot, so its pair difference will be descriptive; further Snowball
 training depends on its measured signal and cost.
+
+The [replacement TIS control](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-default-set-8a955e17-2026.09.21.1-1df146645f7a)
+and [SC32 arm](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-default-set-4ce2cc1a-2026.09.21.1-91a8f7081d4d)
+use version `2026.09.21.1` and SkyRL commit `cd04007912`. Their
+[TIS resolved config](configs/score_centering/snowball_formatfixed_tis.json)
+has 154 Hydra arguments identical to the aborted control's after excluding
+run-owned names and output paths. The
+[SC32 resolved config](configs/score_centering/snowball_formatfixed_sc32.json)
+has the same 154 arguments in order, with only `score_centering_topk` changed
+from zero to 32 after excluding run-owned paths and names. The new pool yielded
+128 completed rewarded
+GSM8K answers and 116 Math500 answers at the TIS step-zero evaluation,
+compared with zero rewarded GSM8K answers on the old pool. The
+[step-zero GSM8K format audit](results/score_centering_snowball_formatfixed_gsm8k_step0_probe.json)
+also found 68 exact boxed answers that still received no reward. This is a
+remaining limitation of the format-specific grader, even though the new pool
+provides usable reward signal. The pair comparison remains within one pool.

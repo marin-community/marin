@@ -58,3 +58,7 @@ input. Its 154 Hydra arguments match `snowball_pilot_tis.json` after excluding
 run-owned names and output paths. The launcher changed the pool reference from
 `2026.08.29.1` to `2026.09.18`; that reference is recorded in the study and
 Iris job, while the resolved SkyRL config contains only its staged local paths.
+`snowball_formatfixed_sc32.json` is the replacement SC arm's resolved input.
+After excluding run-owned names and output paths, its 154 arguments match the
+replacement TIS control in order except for `trainer.algorithm.score_centering_topk`
+(`32` versus `0`).

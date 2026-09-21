@@ -11,7 +11,8 @@ Example::
 
 The boxed comparison is deliberately strict: it counts only the last boxed
 number after the thinking turn when that number exactly matches ground truth.
-It is a lower bound on correct responses, not a replacement reward rule.
+It diagnoses grader-format misses; a box earlier than another final-answer
+line may still be counted, so it is not a replacement reward rule.
 """
 
 from __future__ import annotations
@@ -43,6 +44,8 @@ def summarize(responses: str, s3_endpoint: str) -> dict:
         if answer.strip().replace(",", "")
         == str(row["env_extras"]["reward_spec"]["ground_truth"]).strip().replace(",", "")
     ]
+    rewarded_completed = sum(row["score"] > 0 for row in completed)
+    exact_unrewarded = sum(row["score"] <= 0 for row in exact)
     return {
         "responses": responses,
         "membership_sha256": _membership_hash(rows),
@@ -50,8 +53,10 @@ def summarize(responses: str, s3_endpoint: str) -> dict:
         "completed": len(completed),
         "final_turn_boxed": len(boxed),
         "final_turn_boxed_exact_ground_truth": len(exact),
-        "final_turn_boxed_exact_unrewarded": sum(row["score"] <= 0 for row in exact),
+        "final_turn_boxed_exact_unrewarded": exact_unrewarded,
         "rewarded_correct": sum(row["score"] > 0 for row in rows),
+        "rewarded_correct_completed": rewarded_completed,
+        "completed_rewarded_or_exact_boxed": rewarded_completed + exact_unrewarded,
     }
 
 
