@@ -1189,14 +1189,14 @@ compared with zero rewarded GSM8K answers on the old pool. The
 [step-zero GSM8K format audit](results/score_centering_snowball_formatfixed_gsm8k_step0_probe.json)
 also found 68 exact boxed answers that still received no reward. This is a
 remaining limitation of the format-specific grader, even though the new pool
-provides usable reward signal. The SC32 step-zero pass scored 272 of the 756
-core math questions, while TIS scored 244, before either arm trained. The
+provides usable reward signal. The SC32 retry's step-zero pass scored 251 of
+the 756 core math questions, while TIS scored 244, before either arm trained. The
 held-out prompt and ground-truth membership hash is identical across arms
 (`1a2e720553aeb0d0a11854355d0d7be84709e2b617c85d03e40d65253b61474b`).
-The 28-answer starting gap cannot be a training effect; compare both terminal
+The seven-answer starting gap cannot be a training effect; compare both terminal
 passes and the baseline-adjusted difference. The
-[SC32 GSM8K format audit](results/score_centering_snowball_formatfixed_sc32_gsm8k_step0_probe.json)
-found 59 completed outputs with an exact boxed ground-truth number but no
+[SC32 retry GSM8K format audit](results/score_centering_snowball_sc32_attempt1_gsm8k_step0_probe.json)
+found 58 completed outputs with an exact boxed ground-truth number but no
 reward. The pair comparison remains within one pool.
 
 The first SC32 Iris attempt completed two optimizer updates and then failed
@@ -1208,6 +1208,8 @@ the five tasks used 26.69 reserved H100-hours. Its
 [step-zero responses](results/score_centering_snowball_sc32_attempt0_evals.csv)
 and [training history](results/score_centering_snowball_sc32_attempt0_wandb.jsonl)
 are retained because Iris is retrying from the source model before the first
-step-ten optimizer checkpoint. The failed attempt is not an outcome comparison.
-The retry has a distinct W&B run ID, `zxrf462l`, and must establish its own
-step-zero baseline before comparison with TIS.
+step-ten optimizer checkpoint. That attempt's step-zero core result was 272/756,
+28 above TIS; its [GSM8K format audit](results/score_centering_snowball_sc32_attempt0_gsm8k_step0_probe.json)
+found 59 unrewarded exact boxed outputs. The failed attempt is not an outcome
+comparison. The retry has a distinct W&B run ID, `zxrf462l`, and the new
+step-zero baseline reported above.
