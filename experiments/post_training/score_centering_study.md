@@ -1253,7 +1253,7 @@ These S3 failures are separate from the SC policy-backward failures.
 The [attempt cost ledger](results/score_centering_snowball_formatfixed_cost.csv)
 counts all four failed and partial fused-attention attempts individually.
 
-SkyRL commit `e92dbea8` addresses the observed storage failures: checkpoint
+SkyRL runtime `26a4b7e1` addresses the observed storage failures: checkpoint
 downloads use one file and one large-file range request at a time per node,
 with up to eight bounded retries;
 evaluation JSONL writes retry the complete object, including close. The
