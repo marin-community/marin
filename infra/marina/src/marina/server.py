@@ -1063,7 +1063,7 @@ def create_app(config: MarinaConfig) -> ASGIApp:
         etag = f'"{stored.digest.hex()}"'
         headers = {
             "Cache-Control": (
-                "public, max-age=31536000, immutable"
+                "public, no-cache"
                 if config.surface is MarinaSurface.PUBLIC_APPLETS
                 else "private, max-age=31536000, immutable"
             ),

@@ -312,7 +312,7 @@ def test_public_applet_surface_serves_only_public_reads(tmp_path: Path, database
     assert current.headers["location"] == revision_path
     page = public_client.get(revision_path)
     assert page.status_code == 200
-    assert page.headers["cache-control"] == "public, max-age=31536000, immutable"
+    assert page.headers["cache-control"] == "public, no-cache"
     assert public_client.head(f"{revision_path}app.js").status_code == 200
     assert public_client.get(f"{revision_path}api/problems").status_code == 200
     assert public_client.get(f"{revision_path}api/identity").json() == {"user": None}
@@ -328,6 +328,13 @@ def test_public_applet_surface_serves_only_public_reads(tmp_path: Path, database
     )
     assert updated.status_code == 201
     assert updated.json()["mode"] == "public"
+
+    revoked = publisher.put(
+        f"/api/marina/applets/{applet_id}/mode",
+        json={"mode": "private", "base_version": 2},
+    )
+    assert revoked.status_code == 200
+    assert public_client.get(revision_path).status_code == 404
 
 
 def test_named_applet_host_pins_revisions_and_isolates_routes(tmp_path: Path, database_url: str) -> None:
