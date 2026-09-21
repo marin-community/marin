@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pulumi entry point for Marina: one Cloud Run service serving every app under infra/marina/apps.
+"""Pulumi entry point for Marina's authenticated apps and public applet reader.
 
 The stack also carries the ``context`` database and the Loom VM's Cloud SQL login, which the
 codehealth review workbench (infra/codehealth) uses directly, and the group login people
@@ -9,18 +9,19 @@ read the apps' schemas with.
 
 The stack owns what the apps share: the ``marina`` database on the ``marin-metadata`` Cloud
 SQL instance (one schema per Python app, all owned by the service account), the
-``marin-marina`` bucket the data root points at, the request-based service, and the Cloud
-Run runners declared by app manifests. A runner uses the service image and account, runs
-migrations first, and then executes its app commands. IAP is the front door; the container
-verifies IAP's signed assertion against the service's audience so each request carries the
-caller's email. IAM grants live in the ``marin`` stack (iac.gcp.marina).
+``marin-marina`` bucket the data root points at, the IAP-gated service, the public
+read-only applet service, and the Cloud Run runners declared by app manifests. A runner
+uses the service image and account, runs migrations first, and then executes its app
+commands. The public service admits only GET and HEAD routes for applets marked public.
+IAM grants live in the ``marin`` stack (iac.gcp.marina).
 
 Vanity hosts: the apps are served from ``marina.oa.dev``. ``echo.oa.dev`` and
-``evaldash.oa.dev`` map to the same service. Legacy API paths route to the corresponding
+``evaldash.oa.dev`` map to the authenticated service. Legacy API paths route to the corresponding
 app without a redirect; pages redirect to ``marina.oa.dev/echo/`` or
 ``marina.oa.dev/evaldash/`` with their path, so old links keep resolving and one origin
 holds the checked-in apps. ``applets.marina.oa.dev`` maps to the service but the kernel
 exposes only dynamic applet routes on that host.
+``public.applets.marina.oa.dev`` maps to the unauthenticated public applet reader.
 """
 
 from pathlib import Path
@@ -35,6 +36,7 @@ from marina.manifest import JobRunner, discover_apps, job_runners
 PROJECT = "hai-gcp-models"
 REGION = "us-central1"
 SERVICE = "marina"
+PUBLIC_APPLET_SERVICE = "marina-public-applets"
 INSTANCE = "marin-metadata"
 CONNECTION_NAME = f"{PROJECT}:{REGION}:{INSTANCE}"
 DATABASE = "marina"
@@ -56,6 +58,7 @@ CLOUD_RUN_FRONTEND = "ghs.googlehosted.com"
 HOST_APPS = {"echo.oa.dev": "echo", "evaldash.oa.dev": "evaldash"}
 MARINA_HOST = "marina.oa.dev"
 APPLET_HOST = "applets.marina.oa.dev"
+PUBLIC_APPLET_HOST = "public.applets.marina.oa.dev"
 APPLET_HOSTS = {"zephyr.marina.oa.dev": "6c2b0dc9-9a31-4777-82d4-e759c0292aa3"}
 GRANTS_SCRIPT = Path(__file__).parent / "database_grants.py"
 APPS_DIR = Path(__file__).parent / "apps"
@@ -255,6 +258,7 @@ def main() -> None:
                 "MARINA_HOST_APPS": ",".join(f"{host}={app}" for host, app in HOST_APPS.items()),
                 "MARINA_CANONICAL_ORIGIN": f"https://{MARINA_HOST}",
                 "MARINA_APPLET_ORIGIN": f"https://{APPLET_HOST}",
+                "MARINA_PUBLIC_APPLET_ORIGIN": f"https://{PUBLIC_APPLET_HOST}",
                 "MARINA_APPLET_HOSTS": ",".join(f"{host}={applet_id}" for host, applet_id in APPLET_HOSTS.items()),
                 "MARINA_APPLET_OPERATORS": ",".join(applet_operators),
                 "MARINA_AGENT_ORIGIN": "https://loom.oa.dev",
@@ -277,23 +281,104 @@ def main() -> None:
         gcp_provider=gcp_provider,
     )
 
+    public_applet_service = gcp.cloudrunv2.Service(
+        "public-applet-service",
+        name=PUBLIC_APPLET_SERVICE,
+        project=PROJECT,
+        location=REGION,
+        ingress="INGRESS_TRAFFIC_ALL",
+        iap_enabled=False,
+        deletion_protection=False,
+        scaling=gcp.cloudrunv2.ServiceScalingArgs(min_instance_count=0, max_instance_count=4),
+        template=gcp.cloudrunv2.ServiceTemplateArgs(
+            service_account=SERVICE_ACCOUNT,
+            timeout="60s",
+            max_instance_request_concurrency=8,
+            vpc_access=gcp.cloudrunv2.ServiceTemplateVpcAccessArgs(
+                egress="PRIVATE_RANGES_ONLY",
+                network_interfaces=[
+                    gcp.cloudrunv2.ServiceTemplateVpcAccessNetworkInterfaceArgs(
+                        network="default",
+                        subnetwork="default",
+                    )
+                ],
+            ),
+            volumes=[
+                gcp.cloudrunv2.ServiceTemplateVolumeArgs(
+                    name="cloudsql",
+                    cloud_sql_instance=gcp.cloudrunv2.ServiceTemplateVolumeCloudSqlInstanceArgs(
+                        instances=[CONNECTION_NAME]
+                    ),
+                )
+            ],
+            containers=[
+                gcp.cloudrunv2.ServiceTemplateContainerArgs(
+                    image=service.image_ref,
+                    envs=[
+                        gcp.cloudrunv2.ServiceTemplateContainerEnvArgs(name=key, value=value)
+                        for key, value in {
+                            "MARINA_DATA_ROOT": f"gs://{DATA_BUCKET}",
+                            "MARINA_PUBLIC_APPLET_ORIGIN": f"https://{PUBLIC_APPLET_HOST}",
+                            "MARINA_PUBLIC_APPLETS_ONLY": "1",
+                            **DATABASE_ENV,
+                        }.items()
+                    ]
+                    + [
+                        gcp.cloudrunv2.ServiceTemplateContainerEnvArgs(
+                            name=secret.name,
+                            value_source=gcp.cloudrunv2.ServiceTemplateContainerEnvValueSourceArgs(
+                                secret_key_ref=gcp.cloudrunv2.ServiceTemplateContainerEnvValueSourceSecretKeyRefArgs(
+                                    secret=secret.secret,
+                                    version=secret.version,
+                                )
+                            ),
+                        )
+                        for secret in coreweave_keys
+                    ],
+                    resources=gcp.cloudrunv2.ServiceTemplateContainerResourcesArgs(
+                        limits={"cpu": "2", "memory": "2Gi"},
+                        cpu_idle=True,
+                        startup_cpu_boost=True,
+                    ),
+                    volume_mounts=[
+                        gcp.cloudrunv2.ServiceTemplateContainerVolumeMountArgs(
+                            name="cloudsql",
+                            mount_path="/cloudsql",
+                        )
+                    ],
+                )
+            ],
+        ),
+        opts=pulumi.ResourceOptions.merge(
+            child,
+            pulumi.ResourceOptions(depends_on=[service, database_user, grants]),
+        ),
+    )
+
     # Vanity hosts: a Cloud Run domain mapping per host routes it to the service and provisions
     # the managed cert; a DNS-only Cloudflare CNAME points the host at Cloud Run's frontend
     # (a Cloudflare proxy would block cert issuance). Mappings are immutable and carry
     # server-set metadata, so those fields are ignored. Set marin-marina:dns_zone_id to enable.
     dns_zone_id = config.get("dns_zone_id")
     if dns_zone_id:
-        for host in (MARINA_HOST, APPLET_HOST, *HOST_APPS, *APPLET_HOSTS):
+        hosts = {
+            MARINA_HOST: (SERVICE, service),
+            APPLET_HOST: (SERVICE, service),
+            PUBLIC_APPLET_HOST: (PUBLIC_APPLET_SERVICE, public_applet_service),
+            **{host: (SERVICE, service) for host in HOST_APPS},
+            **{host: (SERVICE, service) for host in APPLET_HOSTS},
+        }
+        for host, (route_name, route_service) in hosts.items():
             slug = host.split(".")[0]
             gcp.cloudrun.DomainMapping(
                 f"{slug}-domain",
                 name=host,
                 location=REGION,
                 metadata=gcp.cloudrun.DomainMappingMetadataArgs(namespace=PROJECT),
-                spec=gcp.cloudrun.DomainMappingSpecArgs(route_name=SERVICE),
+                spec=gcp.cloudrun.DomainMappingSpecArgs(route_name=route_name),
                 opts=pulumi.ResourceOptions.merge(
                     child,
-                    pulumi.ResourceOptions(depends_on=[service], ignore_changes=["metadata", "spec", "statuses"]),
+                    pulumi.ResourceOptions(depends_on=[route_service], ignore_changes=["metadata", "spec", "statuses"]),
                 ),
             )
             cloudflare.DnsRecord(
@@ -307,6 +392,7 @@ def main() -> None:
             )
 
     pulumi.export("uri", service.uri)
+    pulumi.export("public_applet_uri", public_applet_service.uri)
     pulumi.export("image", service.image_ref)
     pulumi.export("database", database.name)
     pulumi.export("data_root", bucket.name.apply(lambda name: f"gs://{name}"))

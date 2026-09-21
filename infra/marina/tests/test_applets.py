@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
-from marina.applets import AppletForbidden, AppletStore, package_applet, read_applet_package
+from marina.applets import AppletForbidden, AppletMode, AppletStore, package_applet, read_applet_package
 from marina.cli import cli
 from marina.database_setup import APPLET_READER_ROLE, ensure_applet_provisioning
 from marina.db import UrlDatabase, grant_read
@@ -51,6 +51,7 @@ def test_publish_demo_serves_files_schema_query_and_python_api(tmp_path: Path, d
             "kind": "applet",
             "published_by": "anonymous",
             "version": 1,
+            "mode": "private",
         }
     ]
     current = client.get(f"/a/{applet_id}/", follow_redirects=False)
@@ -233,9 +234,11 @@ def test_applet_host_exposes_only_applet_routes(tmp_path: Path, database_url: st
     ).json()
     applet_id = published["id"]
     assert published["url"] == f"https://applets.example/a/{applet_id}/v/1/"
+    assert published["mode"] == "private"
     listed = client.get("/api/marina/applets", headers={"host": "marina.example"}).json()["applets"]
     published_entry = next(applet for applet in listed if applet["name"] == applet_id)
     assert published_entry["path"] == f"https://applets.example/a/{applet_id}/"
+    assert published_entry["mode"] == "private"
 
     redirected = client.get(f"/a/{applet_id}/v/1/", headers={"host": "marina.example"}, follow_redirects=False)
     assert redirected.status_code == 307
@@ -250,6 +253,72 @@ def test_applet_host_exposes_only_applet_routes(tmp_path: Path, database_url: st
         ).status_code
         == 404
     )
+
+
+def test_public_applet_surface_serves_only_public_reads(tmp_path: Path, database_url: str) -> None:
+    _publisher, store = applet_client_and_store(tmp_path, database_url)
+    publisher_config = MarinaConfig(
+        apps_dir=tmp_path / "apps",
+        data_root=str(tmp_path / "data"),
+        iap_audience=None,
+        database=store.database,
+        public_applet_origin="https://public.applets.example",
+    )
+    publisher = TestClient(create_app(publisher_config), client=("127.0.0.1", 40000))
+    public_config = MarinaConfig(
+        apps_dir=tmp_path / "apps",
+        data_root=str(tmp_path / "data"),
+        iap_audience=None,
+        database=store.database,
+        public_applet_origin="https://public.applets.example",
+        public_applets_only=True,
+    )
+    public_client = TestClient(
+        create_app(public_config),
+        base_url="https://public.applets.example",
+        client=("10.0.0.7", 40000),
+    )
+    published = publisher.post("/api/marina/applets", content=package_applet(DEMO_APPLET)).json()
+    applet_id = published["id"]
+    revision_path = f"/a/{applet_id}/v/1/"
+
+    assert published["mode"] == "private"
+    assert public_client.get(revision_path).status_code == 404
+    assert public_client.get(f"{revision_path}api/problems").status_code == 404
+
+    changed = publisher.put(
+        f"/api/marina/applets/{applet_id}/mode",
+        json={"mode": "public", "base_version": 1},
+    )
+    assert changed.status_code == 200
+    assert changed.json() == {
+        "id": applet_id,
+        "version": 1,
+        "mode": "public",
+        "url": f"https://public.applets.example/a/{applet_id}/",
+    }
+
+    current = public_client.get(f"/a/{applet_id}/", follow_redirects=False)
+    assert current.status_code == 307
+    assert current.headers["location"] == revision_path
+    page = public_client.get(revision_path)
+    assert page.status_code == 200
+    assert page.headers["cache-control"] == "public, max-age=31536000, immutable"
+    assert public_client.head(f"{revision_path}app.js").status_code == 200
+    assert public_client.get(f"{revision_path}api/problems").status_code == 200
+    assert public_client.get(f"{revision_path}api/identity").json() == {"user": None}
+
+    assert public_client.post(f"/a/{applet_id}/query", json={"sql": "SELECT 1"}).status_code == 404
+    assert public_client.post(f"{revision_path}api/problems").status_code == 404
+    assert public_client.get("/api/marina/applets").status_code == 404
+
+    updated = publisher.post(
+        f"/api/marina/applets/{applet_id}",
+        params={"base_version": 1},
+        content=package_applet(DEMO_APPLET),
+    )
+    assert updated.status_code == 201
+    assert updated.json()["mode"] == "public"
 
 
 def test_named_applet_host_pins_revisions_and_isolates_routes(tmp_path: Path, database_url: str) -> None:
@@ -330,7 +399,17 @@ def test_store_rejects_non_owner_and_allows_operator(tmp_path: Path, database_ur
     assert updated.version == 2
     with pytest.raises(AppletForbidden):
         store.rollback(published.applet_id, 1, "other@example", 2)
+    with pytest.raises(AppletForbidden):
+        store.set_mode(published.applet_id, AppletMode.PUBLIC, "other@example", 2)
     assert store.current_version(published.applet_id) == 2
+    store.set_mode(
+        published.applet_id,
+        AppletMode.PUBLIC,
+        "operator@example",
+        2,
+        frozenset({"operator@example"}),
+    )
+    assert store.access_mode(published.applet_id) is AppletMode.PUBLIC
     store.rollback(
         published.applet_id,
         1,
@@ -533,6 +612,60 @@ def test_publish_dry_run_reports_package_checks_and_runtime_omissions() -> None:
         "migration_execution",
         "browser",
     ]
+
+
+def test_publish_cli_sends_public_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    request: dict[str, object] = {}
+
+    def publish(
+        _service_url: str,
+        _payload: bytes,
+        applet_id: str | None = None,
+        base_version: int | None = None,
+        mode: str | None = None,
+    ) -> dict[str, object]:
+        request.update(applet_id=applet_id, base_version=base_version, mode=mode)
+        return {
+            "id": "00000000-0000-0000-0000-000000000001",
+            "version": 1,
+            "mode": "public",
+            "path": "/a/00000000-0000-0000-0000-000000000001/v/1/",
+            "url": "https://public.applets.example/a/00000000-0000-0000-0000-000000000001/v/1/",
+        }
+
+    monkeypatch.setattr("marina.cli.publish_applet", publish)
+    result = CliRunner().invoke(cli, ["publish", str(DEMO_APPLET), "--mode", "public", "--json"])
+
+    assert result.exit_code == 0
+    assert request == {"applet_id": None, "base_version": None, "mode": "public"}
+    assert json.loads(result.output)["mode"] == "public"
+
+
+def test_mode_cli_updates_current_revision(monkeypatch: pytest.MonkeyPatch) -> None:
+    requests: list[tuple[str, str, object | None]] = []
+
+    def request(
+        _service_url: str,
+        method: str,
+        path: str,
+        *,
+        json_body: object | None = None,
+        **_kwargs: object,
+    ) -> object:
+        requests.append((method, path, json_body))
+        if method == "GET":
+            return {"current_version": 9}
+        return {"url": "https://public.applets.example/a/example/"}
+
+    monkeypatch.setattr("marina.cli.marina_request", request)
+    result = CliRunner().invoke(cli, ["applets", "mode", "example", "public"])
+
+    assert result.exit_code == 0
+    assert requests == [
+        ("GET", "/api/marina/applets/example", None),
+        ("PUT", "/api/marina/applets/example/mode", {"mode": "public", "base_version": 9}),
+    ]
+    assert result.output.strip() == "https://public.applets.example/a/example/"
 
 
 def test_validate_reports_backend_import_check() -> None:

@@ -20,6 +20,7 @@ import tomllib
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
+from enum import StrEnum
 from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
 from typing import cast
@@ -102,6 +103,11 @@ class AppletBackendUnavailable(Exception):
     pass
 
 
+class AppletMode(StrEnum):
+    PRIVATE = "private"
+    PUBLIC = "public"
+
+
 @dataclass(frozen=True)
 class AppletManifest:
     title: str
@@ -126,6 +132,7 @@ class AppletSummary:
     description: str
     owner: str
     current_version: int
+    mode: AppletMode
 
     @property
     def path(self) -> str:
@@ -160,6 +167,7 @@ class StoredFile:
 class PublishResult:
     applet_id: uuid.UUID
     version: int
+    mode: AppletMode
 
     @property
     def path(self) -> str:
@@ -367,11 +375,14 @@ class AppletStore:
                 title TEXT NOT NULL,
                 description TEXT NOT NULL,
                 owner TEXT NOT NULL,
+                mode TEXT NOT NULL DEFAULT 'private' CHECK (mode IN ('private', 'public')),
                 current_version INTEGER,
                 archived_at TIMESTAMPTZ,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
             )""",
+            """ALTER TABLE applets ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT 'private'
+                CHECK (mode IN ('private', 'public'))""",
             """CREATE TABLE IF NOT EXISTS applet_versions (
                 applet_id UUID NOT NULL REFERENCES applets(id) ON DELETE CASCADE,
                 version INTEGER NOT NULL,
@@ -420,17 +431,19 @@ class AppletStore:
         applet_id: uuid.UUID | None = None,
         base_version: int | None = None,
         operators: frozenset[str] = frozenset(),
+        mode: AppletMode | None = None,
     ) -> PublishResult:
         applet_id = applet_id or uuid.uuid4()
         with self.engine.begin() as connection:
             self._lock_applet(connection, applet_id)
-            version = self._allocate_version(
+            version, effective_mode = self._allocate_version(
                 connection,
                 applet_id,
                 package.manifest,
                 owner,
                 base_version,
                 operators,
+                mode,
             )
             self._insert_version(connection, applet_id, version, package, owner)
             self._store_files(connection, applet_id, version, package.files)
@@ -440,9 +453,9 @@ class AppletStore:
             grant_read_on_connection(connection, applet_schema(applet_id), APPLET_READER_ROLE)
             connection.execute(text("RESET ROLE"))
             connection.execute(text("SET LOCAL search_path TO marina, public"))
-            self._activate_version(connection, applet_id, version, package.manifest)
+            self._activate_version(connection, applet_id, version, package.manifest, effective_mode)
             self._delete_unreferenced_blobs(connection)
-        return PublishResult(applet_id=applet_id, version=version)
+        return PublishResult(applet_id=applet_id, version=version, mode=effective_mode)
 
     @staticmethod
     def _lock_applet(connection: Connection, applet_id: uuid.UUID) -> None:
@@ -456,10 +469,11 @@ class AppletStore:
         owner: str,
         base_version: int | None,
         operators: frozenset[str],
-    ) -> int:
+        mode: AppletMode | None,
+    ) -> tuple[int, AppletMode]:
         existing = (
             connection.execute(
-                text("SELECT owner, current_version, archived_at FROM applets WHERE id = :id FOR UPDATE"),
+                text("SELECT owner, mode, current_version, archived_at FROM applets WHERE id = :id FOR UPDATE"),
                 {"id": applet_id},
             )
             .mappings()
@@ -472,25 +486,32 @@ class AppletStore:
                 raise AppletForbidden(str(applet_id))
             if base_version is None or existing["current_version"] != base_version:
                 raise AppletConflict(str(applet_id))
-            return int(
+            version = int(
                 connection.execute(
                     text("SELECT COALESCE(MAX(version), 0) + 1 FROM applet_versions WHERE applet_id = :id"),
                     {"id": applet_id},
                 ).scalar_one()
             )
+            effective_mode = AppletMode(existing["mode"]) if mode is None else mode
+            return version, effective_mode
         if base_version is not None:
             raise AppletNotFound(str(applet_id))
+        effective_mode = mode or AppletMode.PRIVATE
         connection.execute(text(f"SELECT {PROVISION_APPLET_FUNCTION}(:id)"), {"id": applet_id})
         connection.execute(
-            text("INSERT INTO applets (id, title, description, owner) VALUES (:id, :title, :description, :owner)"),
+            text(
+                "INSERT INTO applets (id, title, description, owner, mode) "
+                "VALUES (:id, :title, :description, :owner, :mode)"
+            ),
             {
                 "id": applet_id,
                 "title": manifest.title,
                 "description": manifest.description,
                 "owner": owner,
+                "mode": effective_mode.value,
             },
         )
-        return 1
+        return 1, effective_mode
 
     @staticmethod
     def _insert_version(
@@ -593,16 +614,19 @@ class AppletStore:
         applet_id: uuid.UUID,
         version: int,
         manifest: AppletManifest,
+        mode: AppletMode,
     ) -> None:
         connection.execute(
             text(
-                "UPDATE applets SET title = :title, description = :description, current_version = :version, "
+                "UPDATE applets SET title = :title, description = :description, mode = :mode, "
+                "current_version = :version, "
                 "updated_at = now() WHERE id = :id"
             ),
             {
                 "id": applet_id,
                 "title": manifest.title,
                 "description": manifest.description,
+                "mode": mode.value,
                 "version": version,
             },
         )
@@ -625,7 +649,7 @@ class AppletStore:
         with self.engine.connect() as connection:
             rows = connection.execute(
                 text(
-                    "SELECT id, title, description, owner, current_version FROM applets "
+                    "SELECT id, title, description, owner, current_version, mode FROM applets "
                     "WHERE archived_at IS NULL AND current_version IS NOT NULL ORDER BY title, id"
                 )
             ).mappings()
@@ -636,9 +660,51 @@ class AppletStore:
                     description=row["description"],
                     owner=row["owner"],
                     current_version=row["current_version"],
+                    mode=AppletMode(row["mode"]),
                 )
                 for row in rows
             ]
+
+    def access_mode(self, applet_id: uuid.UUID) -> AppletMode:
+        with self.engine.connect() as connection:
+            mode = connection.execute(
+                text("SELECT mode FROM applets WHERE id = :id AND archived_at IS NULL"),
+                {"id": applet_id},
+            ).scalar()
+        if mode is None:
+            raise AppletNotFound(str(applet_id))
+        return AppletMode(mode)
+
+    def set_mode(
+        self,
+        applet_id: uuid.UUID,
+        mode: AppletMode,
+        actor: str,
+        base_version: int,
+        operators: frozenset[str] = frozenset(),
+    ) -> None:
+        with self.engine.begin() as connection:
+            self._lock_applet(connection, applet_id)
+            applet = (
+                connection.execute(
+                    text(
+                        "SELECT owner, current_version FROM applets " "WHERE id = :id AND archived_at IS NULL FOR UPDATE"
+                    ),
+                    {"id": applet_id},
+                )
+                .mappings()
+                .first()
+            )
+            if applet is None:
+                raise AppletNotFound(str(applet_id))
+            if applet["owner"] != actor and actor not in operators:
+                raise AppletForbidden(str(applet_id))
+            if int(applet["current_version"]) != base_version:
+                raise AppletConflict(str(applet_id))
+            connection.execute(
+                text("UPDATE applets SET mode = :mode, updated_at = now() WHERE id = :id"),
+                {"id": applet_id, "mode": mode.value},
+            )
 
     def current_version(self, applet_id: uuid.UUID) -> int:
         with self.engine.connect() as connection:
