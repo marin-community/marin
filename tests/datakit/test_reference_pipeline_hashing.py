@@ -13,6 +13,7 @@ import dataclasses
 import json
 
 import pytest
+from fray.types import ResourceConfig
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.fuzzy_dups import compute_fuzzy_dups_attrs_step
 from marin.processing.classification.deduplication.fuzzy_minhash import compute_minhash_attrs_step
@@ -24,7 +25,6 @@ from experiments.datakit.reference_pipeline import (
     reference_datakit_steps,
     zephyr_datakit_steps,
 )
-from experiments.datakit.zephyr_benchmark import _route_outputs
 
 
 @pytest.fixture(autouse=True)
@@ -66,14 +66,6 @@ def test_global_exact_dedup_filters_only_the_store():
     assert _depends_on(steps["datakit/store"], exact_dedup)
 
 
-def test_benchmark_routes_every_stage_under_one_prefix():
-    routed = _route_outputs(reference_pipeline.zephyr_datakit_steps(_sources()), "gs://temp/benchmark")
-    steps = [routed.exact_dedup, *routed.tokenize.values(), *routed.minhash.values(), routed.fuzzy_dedup]
-
-    assert all(step.output_path.startswith("gs://temp/benchmark/") for step in steps)
-    assert routed.fuzzy_dedup.deps == list(routed.minhash.values())
-
-
 def test_no_region_path_in_hash_attrs_except_known_bloom_gap():
     # A region-specific gs:// path in a hash means byte-identical data gets a
     # different output path per region. The only remaining leak is the decontam
@@ -92,7 +84,14 @@ def test_store_hash_tracks_content_not_resources():
     layout = dataclasses.replace(SMOKE_SCALE.store, task_count=2)
     relaid = _build(scale=dataclasses.replace(SMOKE_SCALE, store=layout)).output_buckets.hash_id
     # The worker fleet is execution policy -> must NOT re-key.
-    pool = dataclasses.replace(SMOKE_SCALE, pool=PoolConfig(n_workers=999))
+    pool = dataclasses.replace(
+        SMOKE_SCALE,
+        pool=PoolConfig(
+            n_workers=999,
+            worker=ResourceConfig(cpu=8, ram="64g", disk="32g"),
+            coordinator=ResourceConfig(cpu=1, ram="8g", preemptible=False),
+        ),
+    )
     resourced = _build(scale=pool).output_buckets.hash_id
     execution = dataclasses.replace(SMOKE_SCALE.store, max_parallel_bucket_writes=1)
     rescheduled = _build(scale=dataclasses.replace(SMOKE_SCALE, store=execution)).output_buckets.hash_id
@@ -211,3 +210,11 @@ def test_dedup_step_builders_match_the_datakit_graph_identity():
         name: step.hash_id for name, step in graph.minhash.items()
     }
     assert dedup.hash_id == graph.fuzzy_dedup.hash_id
+
+
+def test_fuzzy_dedup_iterations_rekey_dedup():
+    base = zephyr_datakit_steps(_sources(), SMOKE_SCALE).fuzzy_dedup
+    three_rounds = dataclasses.replace(SMOKE_SCALE, cc_max_iterations=3)
+    changed = zephyr_datakit_steps(_sources(), three_rounds).fuzzy_dedup
+
+    assert changed.hash_id != base.hash_id
