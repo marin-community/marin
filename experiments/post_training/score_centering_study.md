@@ -1360,9 +1360,22 @@ A replacement SC32 arm uses the same rendered training YAML, seed, pool, and
 optimization settings at version `2026.09.21.4`, with runtime `e1356698` as the
 only source change from the failed SC attempts. Its
 [Iris job](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-default-set-28b80d60-2026.09.21.4-b548196e6619)
-is at `interactive` priority. The original TIS arm continues on `26a4b7e1`;
+and [W&B run](https://wandb.ai/marin-community/marin-async-rl/runs/dlqaxjbl)
+are at `interactive` priority. The staged YAML has the same
+`85ac5da4de44fc0a5eb051de34679a9b9941d3b2e1303ef5eaa0083358464b11`
+SHA-256 as the committed SC configuration. The original TIS arm continues on `26a4b7e1`;
 the new runtime changes only the score-centering selected-logprob calculation,
 which TIS does not execute.
+Its step-zero pass has the same core-math membership as the original pair. It
+scored 258/756 completed rewarded answers. The conservative terminal-box
+audits count 184 GSM8K answers
+([audit](results/score_centering_snowball_flash_pair_sc32_fixed_gsm8k_step0_probe.json))
+and 173 Math500 answers
+([audit](results/score_centering_snowball_flash_pair_sc32_fixed_math500_step0_probe.json)),
+or 357/756 combined. These differ from the original TIS baseline by +2
+completed rewarded answers and +2 conservative format-inclusive answers; the
+final comparison therefore reports both final counts and baseline-adjusted
+changes.
 
 The TIS control passed its step-ten operational gate on `26a4b7e1`. Its full
 DP-reshardable checkpoint has 32 distributed policy shards, 45 files, and
@@ -1389,3 +1402,7 @@ the failed SC attempts, this arm has no selected-logprob score-centering copy;
 the sampled-logprob backward itself operates in 1,024-position vocabulary
 chunks. A smaller chunk would preserve the objective but change runtime from
 the frozen comparison, so the existing checkpoint retry is tested first.
+The retry is W&B run
+[`3skpf0m2`](https://wandb.ai/marin-community/marin-async-rl/runs/3skpf0m2).
+It selected `global_step_10`, then successfully restored the trainer and
+dataloader state before loading the distributed policy and optimizer state.
