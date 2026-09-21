@@ -1238,8 +1238,9 @@ These S3 failures are separate from the SC policy-backward failures.
 The [attempt cost ledger](results/score_centering_snowball_formatfixed_cost.csv)
 counts all four failed and partial fused-attention attempts individually.
 
-SkyRL commit `aa94c5c8` addresses the observed storage failures: checkpoint
-downloads use one concurrent file per node and up to eight bounded retries;
+SkyRL commit `e92dbea8` addresses the observed storage failures: checkpoint
+downloads use one file and one large-file range request at a time per node,
+with up to eight bounded retries;
 evaluation JSONL writes retry the complete object, including close. The
 targeted S3/I/O suite passed 46 tests. Future runs use that pinned runtime.
 The failed fused-attention TIS control remains an operational observation;
