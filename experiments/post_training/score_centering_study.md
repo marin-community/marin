@@ -1653,3 +1653,30 @@ and 406 for SC32
 an adjusted difference of zero. Across four passes, the completed-only
 SC32-minus-TIS difference still ranges from -33 to +2 and the audited
 difference from -26 to +4 at identical weights.
+
+The 2,560-token cap did not complete the first resumed optimizer update. The
+TIS arm again failed in TransformerEngine's unfused attention softmax after
+31 of 32 policy-training microbatches, requesting 708 MiB with 487.19 MiB free.
+The raw [exception](results/score_centering_snowball_full_pair_tis_continuation3_attempt0_failure.json)
+is preserved. Of the 94 step-six TIS trajectory records published before
+teardown, 55 reached the response cap and total prompt-plus-response length
+reached 2,916 tokens; the incomplete-retention
+[summary](results/score_centering_snowball_full_pair_continuation3_step6_length_summary.json)
+does not represent all 128 generated rows. Iris began an automatic retry, so
+both arms were promptly
+[canceled](results/score_centering_snowball_full_pair_continuation3_cancelled.json)
+before a new optimizer update completed. Including that 75--81-second retry,
+TIS used 26.03 reserved H100-hours and SC32 used 26.16.
+
+Version `2026.09.21.11` lowers only the training response cap to 2,048 tokens.
+The held-out evaluation cap remains 4,096 tokens. The rendered
+[TIS](configs/score_centering/snowball_full_pair_tis_continuation4.yaml) and
+[SC32](configs/score_centering/snowball_full_pair_sc32_continuation4.yaml)
+configs have SHA-256 values
+`df1f8f943341ed08a3581e448f8ca730fb36f83f4016623ecdb91b96ad298a69`
+and
+`a9edb3500fd48a9d70f85797443608d6c43e3089331feb6ba27c44b76a5bf903`.
+Their jobs are
+[`43ca90af`](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-default-set-43ca90af-2026.09.21.11-46e30f8d5850)
+and
+[`4bb22e25`](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-default-set-4bb22e25-2026.09.21.11-2161ba35f185).
