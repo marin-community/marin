@@ -248,6 +248,8 @@ def build_h100_ladder_run(
     mla_o_latent: int | None = None,
     latent_div: int = 2,
     expert_intermediate_mult: int = 1,
+    num_shared_experts: int | None = None,
+    num_experts_per_token: int | None = None,
     rel_r_proj_group: RelBiasGroup = RelBiasGroup.MUONH,
     rel_proj_group: RelBiasGroup = RelBiasGroup.MUONH,
 ) -> ArtifactStep[ThroughputResult]:
@@ -274,6 +276,10 @@ def build_h100_ladder_run(
             latent_dim=model.hidden_dim // latent_div,
             intermediate_dim=model.intermediate_dim * expert_intermediate_mult,
         )
+    if num_shared_experts is not None:
+        model = dataclasses.replace(model, num_shared_experts=num_shared_experts)
+    if num_experts_per_token is not None:
+        model = dataclasses.replace(model, num_experts_per_token=num_experts_per_token)
     if inkling_relpos:
         # Inkling relative-position bias in place of RoPE (fused forward + reference backward).
         model = dataclasses.replace(model, inkling_relpos=True, rel_extent=rel_extent)
@@ -498,6 +504,18 @@ def build_h100_ladder_run(
     help="Scale the routed-expert intermediate_dim (baseline 1).",
 )
 @click.option(
+    "--num-shared-experts",
+    type=click.IntRange(min=0),
+    default=None,
+    help="Override the number of shared experts (0 disables them).",
+)
+@click.option(
+    "--num-experts-per-token",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Override routed top-k (active experts per token).",
+)
+@click.option(
     "--save-checkpoints",
     is_flag=True,
     default=False,
@@ -521,6 +539,8 @@ def main(
     mla_o_latent: int | None,
     latent_div: int,
     expert_intermediate_mult: int,
+    num_shared_experts: int | None,
+    num_experts_per_token: int | None,
 ) -> ArtifactStep[ThroughputResult]:
     return build_h100_ladder_run(
         run_id=run_id,
@@ -537,6 +557,8 @@ def main(
         mla_o_latent=mla_o_latent,
         latent_div=latent_div,
         expert_intermediate_mult=expert_intermediate_mult,
+        num_shared_experts=num_shared_experts,
+        num_experts_per_token=num_experts_per_token,
         rel_r_proj_group=RelBiasGroup(rel_r_proj_opt),
         rel_proj_group=RelBiasGroup(rel_proj_opt),
     )
