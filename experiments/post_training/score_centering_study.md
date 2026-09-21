@@ -1680,3 +1680,45 @@ Their jobs are
 [`43ca90af`](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-default-set-43ca90af-2026.09.21.11-46e30f8d5850)
 and
 [`4bb22e25`](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-default-set-4bb22e25-2026.09.21.11-2161ba35f185).
+
+Both jobs restored the complete step-five state and produced a fifth immutable
+held-out pass. The [response analysis](results/score_centering_snowball_full_pair_continuation4_step5_evals.csv)
+counts 383 completed rewarded answers for TIS and 394 for SC32. Relative to
+their completed-only step-zero baselines, the SC32-minus-TIS difference is
++24. Correct raw rewards at any stop were 389 and 401, for an adjusted
+difference of +19. The completed-or-terminal-box audit counts 411 for TIS
+([GSM8K](results/score_centering_snowball_full_pair_continuation4_tis_gsm8k_step5_probe.json),
+[Math500](results/score_centering_snowball_full_pair_continuation4_tis_math500_step5_probe.json))
+and 421 for SC32
+([GSM8K](results/score_centering_snowball_full_pair_continuation4_sc32_gsm8k_step5_probe.json),
+[Math500](results/score_centering_snowball_full_pair_continuation4_sc32_math500_step5_probe.json)),
+an adjusted difference of +17. Across five passes at identical weights, the
+completed-only endpoint difference ranges from -33 to +11 answers. Their W&B
+runs are [`fv6huokg`](https://wandb.ai/marin-community/marin-async-rl/runs/fv6huokg)
+and [`uzubtv2n`](https://wandb.ai/marin-community/marin-async-rl/runs/uzubtv2n).
+
+The 2,048-token cap also failed before update six completed. In this attempt,
+TransformerEngine's unfused attention softmax requested 1.38 GiB with 1.10 GiB
+free. The exact [exception](results/score_centering_snowball_full_pair_tis_continuation4_attempt0_failure.json)
+is preserved. Cancellation interrupted trajectory publication; the
+[retained sample](results/score_centering_snowball_full_pair_continuation4_step6_length_summary.json)
+contains 89 of 128 rows, including 63 responses at the cap and a maximum
+prompt-plus-response length of 2,511 tokens. TIS used 25.68 reserved H100-hours,
+including its stopped retry, and SC32 used 24.93 before both were
+[canceled](results/score_centering_snowball_full_pair_continuation4_cancelled.json)
+without a completed update after the resume point.
+
+Version `2026.09.21.12` lowers the training response cap to 1,536 tokens. The
+largest prompt in the retained preceding sample had 463 tokens, so the same
+prompt at this cap totals 1,999 tokens. The held-out evaluation cap remains
+4,096. The rendered
+[TIS](configs/score_centering/snowball_full_pair_tis_continuation5.yaml) and
+[SC32](configs/score_centering/snowball_full_pair_sc32_continuation5.yaml)
+configs have SHA-256 values
+`6f728f9416170853ac57313035d82745e211eec7d7dc05401632eced92d42f3e`
+and
+`95633cf8ba00531ded98060a0facf5cfb3de86eb5b7813d3df57595e7052adeb`.
+Their jobs are
+[`51ede678`](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-default-set-51ede678-2026.09.21.12-4cd39723b96e)
+and
+[`c1504b0f`](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-default-set-c1504b0f-2026.09.21.12-2ab47596b818).

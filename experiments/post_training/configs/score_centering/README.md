@@ -62,3 +62,9 @@ Iris job, while the resolved SkyRL config contains only its staged local paths.
 After excluding run-owned names and output paths, its 154 arguments match the
 replacement TIS control in order except for `trainer.algorithm.score_centering_topk`
 (`32` versus `0`).
+
+The `snowball_full_pair_*_continuation5.yaml` files retain the rendered
+1,536-token training-cap continuations. They keep the 4,096-token held-out
+evaluation cap and resume the two arm-specific step-five checkpoints. Their
+only other difference is `trainer.algorithm.score_centering_topk` (`0` versus
+`32`).

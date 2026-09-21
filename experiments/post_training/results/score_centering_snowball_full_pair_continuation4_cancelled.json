@@ -1,0 +1,21 @@
+{
+  "attempts": [
+    {
+      "arm": "tis",
+      "completed_optimizer_updates_after_resume": 0,
+      "iris_job": "/romain/users-romain-checkpoints-async-rl-snowball-default-set-43ca90af-2026.09.21.11-46e30f8d5850",
+      "iris_task_seconds_total": 11557.425,
+      "reserved_h100_hours": 25.683167
+    },
+    {
+      "arm": "sc32",
+      "completed_optimizer_updates_after_resume": 0,
+      "iris_job": "/romain/users-romain-checkpoints-async-rl-snowball-default-set-4bb22e25-2026.09.21.11-2161ba35f185",
+      "iris_task_seconds_total": 11218.275,
+      "reserved_h100_hours": 24.9295
+    }
+  ],
+  "reason": "Canceled the matched pair after TIS hit a step-six policy-forward OOM with the 2,048-token training response cap; its automatic retry had started, and SC32 had not completed a new optimizer update.",
+  "runtime_commit": "22a37adc7135a54995cfb4f3b5cd07504af796b3",
+  "state": "cancelled"
+}
