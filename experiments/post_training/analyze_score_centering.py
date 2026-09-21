@@ -323,7 +323,7 @@ def main() -> None:
     membership_hash = verify_membership(result)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("w", newline="") as stream:
-        writer = csv.DictWriter(stream, FIELDS)
+        writer = csv.DictWriter(stream, FIELDS, lineterminator="\n")
         writer.writeheader()
         writer.writerows(result)
     print(f"Wrote {len(result)} rows to {args.output}; held-out membership SHA-256: {membership_hash}")
@@ -348,7 +348,7 @@ def main() -> None:
             metrics.extend(summarize_wandb_history(label, Path(path)))
         args.metrics_output.parent.mkdir(parents=True, exist_ok=True)
         with args.metrics_output.open("w", newline="") as stream:
-            writer = csv.DictWriter(stream, METRIC_FIELDS)
+            writer = csv.DictWriter(stream, METRIC_FIELDS, lineterminator="\n")
             writer.writeheader()
             writer.writerows(metrics)
         print(f"Wrote {len(metrics)} training metric rows to {args.metrics_output}")

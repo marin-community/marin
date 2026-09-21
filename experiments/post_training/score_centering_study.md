@@ -1189,4 +1189,12 @@ compared with zero rewarded GSM8K answers on the old pool. The
 [step-zero GSM8K format audit](results/score_centering_snowball_formatfixed_gsm8k_step0_probe.json)
 also found 68 exact boxed answers that still received no reward. This is a
 remaining limitation of the format-specific grader, even though the new pool
-provides usable reward signal. The pair comparison remains within one pool.
+provides usable reward signal. The SC32 step-zero pass scored 272 of the 756
+core math questions, while TIS scored 244, before either arm trained. The
+held-out prompt and ground-truth membership hash is identical across arms
+(`1a2e720553aeb0d0a11854355d0d7be84709e2b617c85d03e40d65253b61474b`).
+The 28-answer starting gap cannot be a training effect; compare both terminal
+passes and the baseline-adjusted difference. The
+[SC32 GSM8K format audit](results/score_centering_snowball_formatfixed_sc32_gsm8k_step0_probe.json)
+found 59 completed outputs with an exact boxed ground-truth number but no
+reward. The pair comparison remains within one pool.

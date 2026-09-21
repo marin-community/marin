@@ -10,6 +10,9 @@ are -1/1, so the completed counts can be recovered from their signed metrics.
 The final reconstructed counts must match the saved response analysis CSV.
 When an Iris pod log is unavailable, pass retained W&B evaluation history as
 JSONL with the run label, W&B run ID, history step, optimizer step, and metrics.
+The legacy `*_all` output columns sum only GSM8K and Math500. When the pool
+contains other validation suites, they must be compared with the `core-math`
+response row rather than the heterogeneous `all` row.
 """
 
 from __future__ import annotations
@@ -152,7 +155,7 @@ def main() -> None:
         parser.error("pass at least one --iris-log or --wandb-history")
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("w", newline="") as stream:
-        writer = csv.DictWriter(stream, FIELDS)
+        writer = csv.DictWriter(stream, FIELDS, lineterminator="\n")
         writer.writeheader()
         writer.writerows(result)
     print(f"Wrote {len(result)} paired evaluation records to {args.output}")
