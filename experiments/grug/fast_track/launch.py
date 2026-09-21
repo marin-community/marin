@@ -251,6 +251,7 @@ def build_h100_ladder_run(
     latent_div: int = 2,
     expert_intermediate_mult: int = 1,
     num_shared_experts: int | None = None,
+    num_experts: int | None = None,
     num_experts_per_token: int | None = None,
     residual_mult: int = 1,
     lr_match_base_hidden: bool = False,
@@ -291,6 +292,8 @@ def build_h100_ladder_run(
         )
     if num_shared_experts is not None:
         model = dataclasses.replace(model, num_shared_experts=num_shared_experts)
+    if num_experts is not None:
+        model = dataclasses.replace(model, num_experts=num_experts)
     if num_experts_per_token is not None:
         model = dataclasses.replace(model, num_experts_per_token=num_experts_per_token)
     if inkling_relpos:
@@ -544,6 +547,7 @@ def build_h100_ladder_run(
     default=None,
     help="Override the number of shared experts (0 disables them).",
 )
+@click.option("--num-experts", type=click.IntRange(min=1), default=None, help="Override total routed experts.")
 @click.option(
     "--num-experts-per-token",
     type=click.IntRange(min=1),
@@ -598,6 +602,7 @@ def main(
     latent_div: int,
     expert_intermediate_mult: int,
     num_shared_experts: int | None,
+    num_experts: int | None,
     num_experts_per_token: int | None,
     residual_mult: int,
     lr_match_base_hidden: bool,
@@ -623,6 +628,7 @@ def main(
         latent_div=latent_div,
         expert_intermediate_mult=expert_intermediate_mult,
         num_shared_experts=num_shared_experts,
+        num_experts=num_experts,
         num_experts_per_token=num_experts_per_token,
         residual_mult=residual_mult,
         lr_match_base_hidden=lr_match_base_hidden,
