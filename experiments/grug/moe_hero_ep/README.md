@@ -132,8 +132,7 @@ with no increase above their post-warmup baselines. Live memory was sampled ever
 steps and at completion; the allocator peak includes warmup. The largest per-rank RSS increase in treatment was
 54.4 MiB above its post-warmup baseline. This single pair exercised checkpoint decisions with writes
 and evaluation disabled. The result supports the mechanism and short-term memory behavior at this
-batch size. Cycles can still retain device buffers between collections. Validation at the hero's
-full training batch must include entering and leaving evaluation and memory tracking over multiple GC intervals.
+batch size. Cycles can still retain device buffers between collections.
 See [#9205](https://github.com/marin-community/marin/issues/9205).
 
 ## Why this recipe
