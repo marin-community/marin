@@ -824,7 +824,7 @@ def segmented_flash_attention_forward_launcher(
                     basic_params.mR[query_meta_idx, ri, basic_params.q_head, basic_params.batch_idx].to(
                         cutlass.Float32
                     )
-                    for ri in cutlass.range_constexpr(rel_dim)
+                    for ri in range(rel_dim)
                 ]
 
                 for c in cutlass.range_constexpr(cute.size(tScS_mn.shape[1])):

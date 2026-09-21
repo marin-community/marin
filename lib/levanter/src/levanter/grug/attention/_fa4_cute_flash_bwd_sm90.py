@@ -1032,7 +1032,7 @@ class FlashAttentionBackwardSm90:
         for r in cutlass.range_constexpr(cute.size(tScS_mn.shape[0])):
             q_pos = tScS_mn[r, 0][ROW]
             # Hoist R[q, :rel_dim] into registers once per query row (reused across all keys).
-            r_vals = [rel_r_t[q_pos, ri, head_idx, batch_idx].to(Float32) for ri in cutlass.range_constexpr(rel_dim)]
+            r_vals = [rel_r_t[q_pos, ri, head_idx, batch_idx].to(Float32) for ri in range(rel_dim)]
             for c in cutlass.range_constexpr(cute.size(tScS_mn.shape[1])):
                 k_pos = tScS_mn[r, c][COL]
                 acc_S_mn[r, c] = acc_S_mn[r, c] * softmax_scale
