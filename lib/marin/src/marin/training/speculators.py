@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections import deque
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -88,6 +89,7 @@ class HiddenStateCaptureConfig:
     data_parallel_size: int
     concurrency: int
     max_samples: int | None
+    minimum_valid_tokens: int | None
     gpu_memory_utilization: float
 
 
@@ -103,6 +105,8 @@ class DraftTrainingConfig:
     learning_rate: float
     muon_learning_rate: float
     num_processes: int
+    train_data_ratio: float
+    save_best: bool
 
 
 def _rollout_key(row: Mapping[str, Any]) -> tuple[str, str, str]:
@@ -148,19 +152,36 @@ def rollout_conversations(rows: Iterable[Mapping[str, Any]]) -> Iterator[dict[st
         yield {"conversations": messages}
 
 
+def interleave_conversation_streams(
+    streams: Iterable[Iterator[dict[str, Any]]],
+) -> Iterator[dict[str, Any]]:
+    """Round-robin conversation streams until every source is exhausted."""
+    active = deque(streams)
+    while active:
+        stream = active.popleft()
+        try:
+            yield next(stream)
+        except StopIteration:
+            continue
+        active.append(stream)
+
+
 def write_rollout_conversations(config: RolloutConversationConfig) -> None:
-    """Write on-policy conversations from one or more FineStore archives."""
+    """Write source-interleaved on-policy conversations from FineStore archives."""
     destination = StoragePath(prefix_join(config.output_path, SPECULATORS_DATA_FILENAME))
+    streams: list[Iterator[dict[str, Any]]] = []
+    for archive in config.source_archives:
+        reader = ReadView(archive)
+        if not reader.list_shards(ARCHIVE_ROLLOUTS_TABLE):
+            raise ValueError(f"evaluation archive has no {ARCHIVE_ROLLOUTS_TABLE} table: {archive}")
+        streams.append(rollout_conversations(reader.iter_rows(ARCHIVE_ROLLOUTS_TABLE)))
+
     count = 0
     with destination.open("w") as output:
-        for archive in config.source_archives:
-            reader = ReadView(archive)
-            if not reader.list_shards(ARCHIVE_ROLLOUTS_TABLE):
-                raise ValueError(f"evaluation archive has no {ARCHIVE_ROLLOUTS_TABLE} table: {archive}")
-            for record in rollout_conversations(reader.iter_rows(ARCHIVE_ROLLOUTS_TABLE)):
-                output.write(json.dumps(record, separators=(",", ":")))
-                output.write("\n")
-                count += 1
+        for record in interleave_conversation_streams(streams):
+            output.write(json.dumps(record, separators=(",", ":")))
+            output.write("\n")
+            count += 1
     if count == 0:
         raise ValueError("evaluation archives contain no assistant responses")
     logger.info("Wrote %d on-policy conversations to %s", count, destination)
@@ -280,24 +301,27 @@ def _capture_vllm_args(config: HiddenStateCaptureConfig, hidden_states_path: Pat
 def _prepare_capture_data(
     config: HiddenStateCaptureConfig, raw_data: Path, prepared_data: Path, render_endpoint: str
 ) -> None:
-    _run_command(
-        [
-            sys.executable,
-            "-m",
-            "speculators",
-            "prepare-data",
-            "--model",
-            config.processor_model,
-            "--data",
-            str(raw_data),
-            "--output",
-            str(prepared_data),
-            "--seq-length",
-            str(config.sequence_length),
-            "--render-endpoint",
-            render_endpoint,
-        ]
-    )
+    command = [
+        sys.executable,
+        "-m",
+        "speculators",
+        "prepare-data",
+        "--model",
+        config.processor_model,
+        "--data",
+        str(raw_data),
+        "--output",
+        str(prepared_data),
+        "--seq-length",
+        str(config.sequence_length),
+        "--render-endpoint",
+        render_endpoint,
+    ]
+    if config.max_samples is not None:
+        command.extend(("--max-samples", str(config.max_samples)))
+    if config.minimum_valid_tokens is not None:
+        command.extend(("--minimum-valid-tokens", str(config.minimum_valid_tokens)))
+    _run_command(command)
 
 
 def _generate_hidden_states(
@@ -470,9 +494,13 @@ def train_draft(config: DraftTrainingConfig) -> None:
             str(config.learning_rate),
             "--muon-lr",
             str(config.muon_learning_rate),
+            "--train-data-ratio",
+            str(config.train_data_ratio),
             "--checkpoint-freq",
             "1",
         ]
+        if config.save_best:
+            command.append("--save-best")
         _run_command(command, environment=os.environ | {"TOKENIZERS_PARALLELISM": "false"})
 
         shutil.copytree(_preferred_checkpoint(checkpoints), published)
