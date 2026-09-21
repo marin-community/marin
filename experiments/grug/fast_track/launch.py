@@ -246,6 +246,8 @@ def build_h100_ladder_run(
     rel_extent: int = 1024,
     mla: bool = False,
     mla_o_latent: int | None = None,
+    mla_q_latent_div: int | None = None,
+    mla_o_latent_div: int | None = None,
     latent_div: int = 2,
     expert_intermediate_mult: int = 1,
     num_shared_experts: int | None = None,
@@ -293,6 +295,10 @@ def build_h100_ladder_run(
             mla_rope_head_dim=0 if inkling_relpos else 64,
             mla_o_latent_dim=mla_o_latent,
         )
+        if mla_q_latent_div is not None:
+            model = dataclasses.replace(model, mla_q_latent_dim=model.hidden_dim // mla_q_latent_div)
+        if mla_o_latent_div is not None:
+            model = dataclasses.replace(model, mla_o_latent_dim=model.hidden_dim // mla_o_latent_div)
     mp_policy = "params=float32,compute=bfloat16,output=bfloat16"
     expert_axis_size = 1 if dense else rung.gpus_per_task
     replica_axis_size = 1
@@ -490,6 +496,18 @@ def build_h100_ladder_run(
     help="MLA output-projection latent dim (no norm); default: full-rank w_o.",
 )
 @click.option(
+    "--mla-q-latent-div",
+    type=click.IntRange(min=1),
+    default=None,
+    help="MLA Q latent = hidden // this (hidden-relative; overrides the fixed 512 default).",
+)
+@click.option(
+    "--mla-o-latent-div",
+    type=click.IntRange(min=1),
+    default=None,
+    help="MLA output latent = hidden // this (hidden-relative; overrides --mla-o-latent).",
+)
+@click.option(
     "--latent-div",
     type=click.IntRange(min=1),
     default=2,
@@ -537,6 +555,8 @@ def main(
     rel_proj_opt: str,
     mla: bool,
     mla_o_latent: int | None,
+    mla_q_latent_div: int | None,
+    mla_o_latent_div: int | None,
     latent_div: int,
     expert_intermediate_mult: int,
     num_shared_experts: int | None,
@@ -555,6 +575,8 @@ def main(
         rel_extent=rel_extent,
         mla=mla,
         mla_o_latent=mla_o_latent,
+        mla_q_latent_div=mla_q_latent_div,
+        mla_o_latent_div=mla_o_latent_div,
         latent_div=latent_div,
         expert_intermediate_mult=expert_intermediate_mult,
         num_shared_experts=num_shared_experts,
