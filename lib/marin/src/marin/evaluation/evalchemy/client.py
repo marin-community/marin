@@ -165,9 +165,8 @@ def build_model_args(config: dict, use_chat: bool, max_length: int | None) -> st
         chat_template_kwargs = config.get("chat_template_kwargs") or {}
         if chat_template_kwargs:
             if len(chat_template_kwargs) > 1:
-                raise ValueError(
-                    f"chat_template_kwargs must hold one key for the comma-joined --model_args, got {sorted(chat_template_kwargs)}"
-                )
+                keys = sorted(chat_template_kwargs)
+                raise ValueError(f"chat_template_kwargs must hold one key for the comma-joined --model_args, got {keys}")
             args["chat_template_kwargs"] = json.dumps(chat_template_kwargs, separators=(",", ":"))
     return ",".join(f"{key}={value}" for key, value in args.items())
 
