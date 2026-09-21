@@ -62,7 +62,11 @@ def _checkpoint_root(trainer: dict) -> str:
 
 def _parent_run_and_step(config: dict, run_id: str) -> tuple[str, int] | None:
     handoff = config.get("hero_handoff_checkpoint")
-    paths = [handoff] if handoff else config["trainer"]["trainer"]["load_checkpoint_path"]
+    paths = handoff or config["trainer"]["trainer"]["load_checkpoint_path"]
+    if paths is None:
+        return None
+    if isinstance(paths, str):
+        paths = [paths]
     parents: set[tuple[str, int]] = set()
     for path in paths:
         if not handoff and not path.rstrip("/").rsplit("/", 1)[-1].startswith("step-"):
