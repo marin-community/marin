@@ -68,6 +68,9 @@ class ServeConfig:
     inference settings. The remaining typed vLLM fields map onto command-line flags or process
     settings. The two ``vllm_*`` boolean process settings apply to GPU workers. ``vllm_extra_args``
     is the escape hatch for flags without a typed field and wins when it names the same option.
+    ``env`` is the escape hatch for process settings without a typed field (e.g.
+    ``VLLM_ENGINE_READY_TIMEOUT_S`` for checkpoints whose weight load exceeds vLLM's 600 s default)
+    and is overridden by the typed settings for the keys they own.
 
     When ``auto_overrides`` is true, the lowering path inspects the Hugging Face ``config.json`` to
     fill portable architecture-specific vLLM flags and clamp an explicit context length to the
@@ -88,6 +91,7 @@ class ServeConfig:
     vllm_use_flashinfer_sampler: bool | None = None
     vllm_extra_args: tuple[str, ...] = ()
     chat_template: str | None = None
+    env: Mapping[str, str] = field(default_factory=dict)
     auto_overrides: bool = True
 
 

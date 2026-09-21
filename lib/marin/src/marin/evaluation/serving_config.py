@@ -234,6 +234,10 @@ def inference_config_for_model(
     vllm_environment_variables = _vllm_environment_variables(serve, accelerator.platform)
     extra_args = serve_config_vllm_args(serve)
     max_model_len = serve.max_model_len
+    if serve.env:
+        # Config-authored process settings ride on the serve worker; the catalog-owned
+        # vllm_environment_variables below still win for the keys they own.
+        env_vars = {**env_vars, **serve.env}
 
     hint = model.resource_hint
     cpu = hint.cpu or DEFAULT_SERVE_CPU
