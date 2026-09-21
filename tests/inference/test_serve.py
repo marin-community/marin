@@ -218,11 +218,15 @@ def test_isolated_cuda_vllm_marin_fork_uses_verified_wheel(monkeypatch, machine)
     assert separator
     assert urlunsplit(parsed_url._replace(fragment="")) == wheel.url
     assert parse_qs(parsed_url.fragment) == {"sha256": [wheel.sha256]}
-    assert cmd[cmd.index("--index") + 1] == (f"https://download.pytorch.org/whl/{VLLM_GPU_RELEASE.torch_backend}")
-    assert "https://download.pytorch.org/whl/cpu" in cmd
-    assert "torchaudio==2.11.0+cpu" in cmd
+    index_urls = [cmd[index + 1] for index, token in enumerate(cmd) if token == "--index"]
+    assert index_urls == [
+        f"https://download.pytorch.org/whl/{VLLM_GPU_RELEASE.torch_backend}",
+        "https://download.pytorch.org/whl/cpu",
+    ]
+    requirements = [cmd[index + 1] for index, token in enumerate(cmd) if token == "--with"]
+    assert "torchaudio==2.11.0+cpu" in requirements
     assert cmd[cmd.index("--index-strategy") + 1] == "unsafe-best-match"
-    assert f"nvidia-cuda-nvcc=={VLLM_GPU_RELEASE.torch_backend.removeprefix('cu')[:2]}.2.78" in cmd
+    assert f"nvidia-cuda-nvcc=={VLLM_GPU_RELEASE.torch_backend.removeprefix('cu')[:2]}.2.78" in requirements
     bootstrap_index = cmd.index("-c")
     wrapped_command = cmd[bootstrap_index + 2 :]
     assert wrapped_command[0] == "python"

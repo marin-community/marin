@@ -31,6 +31,29 @@ def _row(doc_id: str, participant: str, content: str) -> dict:
     }
 
 
+class _CaptureStoragePath:
+    def __init__(self, path: str):
+        self.path = path
+
+    def download_to(self, local_path: str, *, recursive: bool = False, batch_size: int | None = None):
+        del batch_size
+        destination = Path(local_path)
+        if recursive:
+            destination.mkdir()
+        else:
+            destination.write_text(self.path)
+
+    def exists(self):
+        return False
+
+
+class _CaptureEnvironment:
+    server_url = "http://127.0.0.1:8000/v1"
+
+    def wait_until_ready(self):
+        return None
+
+
 def test_rollout_conversations_groups_complete_rollouts():
     rows = [
         _row("1", ParticipantType.USER, "first prompt"),
@@ -81,7 +104,6 @@ def test_capture_args_request_auxiliary_and_final_hidden_states(tmp_path: Path):
         target_model="target",
         processor_model="tokenizer",
         output_path="output",
-        speculators_requirement="speculators@commit",
         target_layer_ids=(2, 13, 23),
         verifier_num_hidden_layers=26,
         sequence_length=16384,
@@ -102,10 +124,14 @@ def test_capture_args_request_auxiliary_and_final_hidden_states(tmp_path: Path):
         26,
     ]
     assert transfer_config["kv_connector_extra_config"]["shared_storage_path"] == str(tmp_path)
-    assert "--enforce-eager" in args
-    assert "--no-enable-flashinfer-autotune" in args
+    assert args[:5] == [
+        "--enforce-eager",
+        "--no-enable-flashinfer-autotune",
+        "--data-parallel-size",
+        "8",
+        "--enable-expert-parallel",
+    ]
     assert args[args.index("--data-parallel-size") + 1] == "8"
-    assert "--enable-expert-parallel" in args
 
 
 def test_checkpoint_selection_and_portable_verifier_reference(tmp_path: Path):
@@ -151,30 +177,9 @@ def test_restore_directory_recovers_published_capture_progress(tmp_path: Path):
 def test_capture_publishes_after_vllm_teardown_failure(monkeypatch):
     published = []
 
-    class FakeStoragePath:
-        def __init__(self, path: str):
-            self.path = path
-
-        def download_to(self, local_path: str, *, recursive: bool = False, batch_size: int | None = None):
-            del batch_size
-            destination = Path(local_path)
-            if recursive:
-                destination.mkdir()
-            else:
-                destination.write_text(self.path)
-
-        def exists(self):
-            return False
-
-    class FakeEnvironment:
-        server_url = "http://127.0.0.1:8000/v1"
-
-        def wait_until_ready(self):
-            return None
-
     class FailingExit:
         def __enter__(self):
-            return FakeEnvironment()
+            return _CaptureEnvironment()
 
         def __exit__(self, exc_type, exc, traceback):
             del exc_type, exc, traceback
@@ -193,7 +198,7 @@ def test_capture_publishes_after_vllm_teardown_failure(monkeypatch):
         if "prepare-data" in command:
             Path(command[command.index("--output") + 1]).mkdir()
 
-    monkeypatch.setattr(speculators, "StoragePath", FakeStoragePath)
+    monkeypatch.setattr(speculators, "StoragePath", _CaptureStoragePath)
     monkeypatch.setattr(speculators, "VllmBackend", FakeBackend)
     monkeypatch.setattr(speculators, "_run_command", fake_command)
     monkeypatch.setattr(speculators, "_publish_directory", lambda source, destination: published.append(destination))
@@ -204,7 +209,6 @@ def test_capture_publishes_after_vllm_teardown_failure(monkeypatch):
             target_model="target",
             processor_model="tokenizer",
             output_path="published",
-            speculators_requirement="speculators@commit",
             target_layer_ids=(2, 13, 23),
             verifier_num_hidden_layers=26,
             sequence_length=32768,
@@ -221,27 +225,6 @@ def test_capture_publishes_after_vllm_teardown_failure(monkeypatch):
 def test_capture_publishes_progress_before_propagating_generation_failure(monkeypatch):
     published = []
 
-    class FakeStoragePath:
-        def __init__(self, path: str):
-            self.path = path
-
-        def download_to(self, local_path: str, *, recursive: bool = False, batch_size: int | None = None):
-            del batch_size
-            destination = Path(local_path)
-            if recursive:
-                destination.mkdir()
-            else:
-                destination.write_text(self.path)
-
-        def exists(self):
-            return False
-
-    class FakeEnvironment:
-        server_url = "http://127.0.0.1:8000/v1"
-
-        def wait_until_ready(self):
-            return None
-
     class FakeBackend:
         def __init__(self, config):
             del config
@@ -251,7 +234,7 @@ def test_capture_publishes_progress_before_propagating_generation_failure(monkey
             return self
 
         def __enter__(self):
-            return FakeEnvironment()
+            return _CaptureEnvironment()
 
         def __exit__(self, exc_type, exc, traceback):
             del exc_type, exc, traceback
@@ -267,7 +250,7 @@ def test_capture_publishes_progress_before_propagating_generation_failure(monkey
         (hidden_states / "hs_0.safetensors").write_text("captured")
         raise subprocess.CalledProcessError(1, command)
 
-    monkeypatch.setattr(speculators, "StoragePath", FakeStoragePath)
+    monkeypatch.setattr(speculators, "StoragePath", _CaptureStoragePath)
     monkeypatch.setattr(speculators, "VllmBackend", FakeBackend)
     monkeypatch.setattr(speculators, "_run_command", fake_command)
     monkeypatch.setattr(
@@ -285,7 +268,6 @@ def test_capture_publishes_progress_before_propagating_generation_failure(monkey
                 target_model="target",
                 processor_model="tokenizer",
                 output_path="published",
-                speculators_requirement="speculators@commit",
                 target_layer_ids=(2, 13, 23),
                 verifier_num_hidden_layers=26,
                 sequence_length=32768,

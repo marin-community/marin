@@ -37,6 +37,7 @@ SPECULATORS_DATA_FILENAME = "conversations.jsonl"
 SPECULATORS_PREPARED_DATA_DIR = "data"
 SPECULATORS_HIDDEN_STATES_DIR = "hidden_states"
 _VLLM_SCALE_OUT_ENDPOINTS_ENV = {"VLLM_ENABLE_SCALE_OUT_ENDPOINTS": "1"}
+_DRAFT_GPU_RESOURCES = ResourceConfig.with_gpu("H100", count=8, cpu=96, ram="512g", disk="1t")
 
 # Speculators installs torchaudio for multimodal preprocessing. PyPI's Linux
 # wheel follows CUDA 13, while Iris H100 tasks currently provide PyTorch's
@@ -95,7 +96,6 @@ class HiddenStateCaptureConfig:
     target_model: str
     processor_model: str
     output_path: str
-    speculators_requirement: str
     target_layer_ids: tuple[int, ...]
     verifier_num_hidden_layers: int
     sequence_length: int
@@ -111,7 +111,6 @@ class DraftTrainingConfig:
     verifier_path: str
     initial_draft_path: str
     output_path: str
-    speculators_requirement: str
     target_layer_ids: tuple[int, ...]
     sequence_length: int
     epochs: int
@@ -381,9 +380,55 @@ def _capture_vllm_args(config: HiddenStateCaptureConfig, hidden_states_path: Pat
     ]
 
 
+def _prepare_capture_data(
+    config: HiddenStateCaptureConfig, raw_data: Path, prepared_data: Path, render_endpoint: str
+) -> None:
+    _run_command(
+        [
+            sys.executable,
+            "-m",
+            "speculators",
+            "prepare-data",
+            "--model",
+            config.processor_model,
+            "--data",
+            str(raw_data),
+            "--output",
+            str(prepared_data),
+            "--seq-length",
+            str(config.sequence_length),
+            "--render-endpoint",
+            render_endpoint,
+        ]
+    )
+
+
+def _generate_hidden_states(
+    config: HiddenStateCaptureConfig, prepared_data: Path, hidden_states: Path, endpoint: str
+) -> None:
+    command = [
+        sys.executable,
+        "-m",
+        "speculators",
+        "generate-offline-data",
+        "--endpoint",
+        endpoint,
+        "--preprocessed-data",
+        str(prepared_data),
+        "--output",
+        str(hidden_states),
+        "--concurrency",
+        str(config.concurrency),
+        "--validate-outputs",
+        "--fail-on-error",
+    ]
+    if config.max_samples is not None:
+        command.extend(("--max-samples", str(config.max_samples)))
+    _run_command(command)
+
+
 def capture_hidden_states(config: HiddenStateCaptureConfig) -> None:
     """Prepare conversations and cache verifier hidden states with vLLM."""
-    logger.info("Using Speculators runtime %s", config.speculators_requirement)
     with tempfile.TemporaryDirectory() as workdir:
         work_path = Path(workdir)
         raw_data = work_path / SPECULATORS_DATA_FILENAME
@@ -423,45 +468,10 @@ def capture_hidden_states(config: HiddenStateCaptureConfig) -> None:
             ) as environment:
                 environment.wait_until_ready()
                 render_endpoint = environment.server_url.removesuffix(OPENAI_API_SUFFIX)
-                _run_command(
-                    [
-                        sys.executable,
-                        "-m",
-                        "speculators",
-                        "prepare-data",
-                        "--model",
-                        config.processor_model,
-                        "--data",
-                        str(raw_data),
-                        "--output",
-                        str(prepared_data),
-                        "--seq-length",
-                        str(config.sequence_length),
-                        "--render-endpoint",
-                        render_endpoint,
-                    ]
-                )
+                _prepare_capture_data(config, raw_data, prepared_data, render_endpoint)
                 prepared_complete = True
                 hidden_states.mkdir(exist_ok=True)
-                command = [
-                    sys.executable,
-                    "-m",
-                    "speculators",
-                    "generate-offline-data",
-                    "--endpoint",
-                    environment.server_url,
-                    "--preprocessed-data",
-                    str(prepared_data),
-                    "--output",
-                    str(hidden_states),
-                    "--concurrency",
-                    str(config.concurrency),
-                    "--validate-outputs",
-                    "--fail-on-error",
-                ]
-                if config.max_samples is not None:
-                    command.extend(("--max-samples", str(config.max_samples)))
-                _run_command(command)
+                _generate_hidden_states(config, prepared_data, hidden_states, environment.server_url)
                 capture_complete = True
         except Exception:
             if not capture_complete:
@@ -487,7 +497,7 @@ def hidden_state_capture_step(
     concurrency: int = 64,
     max_samples: int | None = None,
     gpu_memory_utilization: float = 0.9,
-    resources: ResourceConfig = ResourceConfig.with_gpu("H100", count=8, cpu=96, ram="512g", disk="1t"),
+    resources: ResourceConfig = _DRAFT_GPU_RESOURCES,
 ) -> ArtifactStep[Artifact]:
     """Capture a reusable offline Speculators training dataset."""
 
@@ -497,7 +507,6 @@ def hidden_state_capture_step(
             target_model=ctx.artifact_path(target_model),
             processor_model=processor_model,
             output_path=ctx.output_path,
-            speculators_requirement=speculators_requirement,
             target_layer_ids=target_layer_ids,
             verifier_num_hidden_layers=verifier_num_hidden_layers,
             sequence_length=sequence_length,
@@ -544,7 +553,6 @@ def _make_checkpoint_portable(checkpoint: Path) -> None:
 
 def train_draft(config: DraftTrainingConfig) -> None:
     """Train a draft from cached hidden states with the Speculators CLI."""
-    logger.info("Using Speculators runtime %s", config.speculators_requirement)
     with tempfile.TemporaryDirectory() as workdir:
         work_path = Path(workdir)
         data = work_path / "data"
@@ -613,7 +621,7 @@ def draft_training_step(
     learning_rate: float = 1e-5,
     muon_learning_rate: float = 0.02,
     num_processes: int = 8,
-    resources: ResourceConfig = ResourceConfig.with_gpu("H100", count=8, cpu=96, ram="512g", disk="1t"),
+    resources: ResourceConfig = _DRAFT_GPU_RESOURCES,
 ) -> ArtifactStep[Artifact]:
     """Fine-tune a deployable draft checkpoint from a captured artifact."""
 
@@ -623,7 +631,6 @@ def draft_training_step(
             verifier_path=ctx.artifact_path(verifier),
             initial_draft_path=ctx.artifact_path(initial_draft),
             output_path=ctx.output_path,
-            speculators_requirement=speculators_requirement,
             target_layer_ids=target_layer_ids,
             sequence_length=sequence_length,
             epochs=epochs,

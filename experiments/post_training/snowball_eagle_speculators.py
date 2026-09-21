@@ -46,6 +46,7 @@ from marin.training.speculators import (
 )
 
 from experiments.post_training.curriculum_rl.launch import (
+    GPUS_PER_NODE,
     MARIN_TOKENIZER,
     MARIN_TOKENIZER_REVISION,
     POOL_ARTIFACT_NAME,
@@ -65,9 +66,22 @@ SEQUENCE_LENGTH = 32768
 RL_DATA_VERSION = "2026.09.18"
 RL_ARTIFACT_NAME = "checkpoints/snowball-67b-a2b-eagle3-speculators-smoke"
 CLUSTER = "cw-rno2a"
-GPUS_PER_NODE = 8
 
-RL_SMOKE_CONFIG = """
+RL_SMOKE_ROLE_PLAN = SkyRLRolePlan(
+    colocate_all=False,
+    policy_num_nodes=4,
+    policy_num_gpus_per_node=GPUS_PER_NODE,
+    num_inference_engines=GPUS_PER_NODE,
+    inference_engine_tensor_parallel_size=1,
+    inference_engine_data_parallel_size=GPUS_PER_NODE,
+    inference_engine_expert_parallel_size=GPUS_PER_NODE,
+    train_batch_size=512,
+    policy_mini_batch_size=64,
+    micro_train_batch_size_per_gpu=1,
+    n_samples_per_prompt=16,
+)
+
+RL_SMOKE_CONFIG = f"""
 entrypoint: standard
 
 context_budget:
@@ -91,11 +105,11 @@ trainer:
   epochs: 1
   max_steps: 1
   update_epochs_per_batch: 1
-  train_batch_size: 512
-  policy_mini_batch_size: 64
+  train_batch_size: {RL_SMOKE_ROLE_PLAN.train_batch_size}
+  policy_mini_batch_size: {RL_SMOKE_ROLE_PLAN.policy_mini_batch_size}
   eval_batch_size: 512
   micro_forward_batch_size_per_gpu: 1
-  micro_train_batch_size_per_gpu: 1
+  micro_train_batch_size_per_gpu: {RL_SMOKE_ROLE_PLAN.micro_train_batch_size_per_gpu}
   eval_before_train: false
   eval_interval: -1
   ckpt_interval: 100
@@ -119,19 +133,19 @@ trainer:
   placement:
     colocate_all: false
     policy_strict_spread_pg: true
-    policy_num_nodes: 4
-    policy_num_gpus_per_node: 8
+    policy_num_nodes: {RL_SMOKE_ROLE_PLAN.policy_num_nodes}
+    policy_num_gpus_per_node: {RL_SMOKE_ROLE_PLAN.policy_num_gpus_per_node}
 
 generator:
   backend: vllm
   model_dtype: bfloat16
   vllm_attention_backend: FLASH_ATTN
-  inference_engine_tensor_parallel_size: 1
+  inference_engine_tensor_parallel_size: {RL_SMOKE_ROLE_PLAN.inference_engine_tensor_parallel_size}
   inference_engine_pipeline_parallel_size: 1
-  inference_engine_data_parallel_size: 8
-  inference_engine_expert_parallel_size: 8
-  num_inference_engines: 8
-  n_samples_per_prompt: 16
+  inference_engine_data_parallel_size: {RL_SMOKE_ROLE_PLAN.inference_engine_data_parallel_size}
+  inference_engine_expert_parallel_size: {RL_SMOKE_ROLE_PLAN.inference_engine_expert_parallel_size}
+  num_inference_engines: {RL_SMOKE_ROLE_PLAN.num_inference_engines}
+  n_samples_per_prompt: {RL_SMOKE_ROLE_PLAN.n_samples_per_prompt}
   gpu_memory_utilization: 0.75
   max_num_seqs: 16
   max_num_batched_tokens: 16384
@@ -146,7 +160,7 @@ generator:
     enable_mfu_metrics: true
   speculative_decoding:
     method: eagle3
-    model: {}
+    model: {{}}
     num_speculative_tokens: 3
     training: null
   sampling_params:
@@ -194,19 +208,7 @@ def build_rl_smoke(draft: ArtifactStep[Artifact]) -> ArtifactStep[SkyRLModel]:
                 num_nodes=12,
                 gpus_per_node=GPUS_PER_NODE,
                 gpu_variant="H100",
-                role_plan=SkyRLRolePlan(
-                    colocate_all=False,
-                    policy_num_nodes=4,
-                    policy_num_gpus_per_node=GPUS_PER_NODE,
-                    num_inference_engines=8,
-                    inference_engine_tensor_parallel_size=1,
-                    inference_engine_data_parallel_size=8,
-                    inference_engine_expert_parallel_size=8,
-                    train_batch_size=512,
-                    policy_mini_batch_size=64,
-                    micro_train_batch_size_per_gpu=1,
-                    n_samples_per_prompt=16,
-                ),
+                role_plan=RL_SMOKE_ROLE_PLAN,
             ),
             retention=SkyRLRetentionPolicy(),
             seed=17,
