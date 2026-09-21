@@ -541,10 +541,10 @@ class FlashAttentionBackwardSm90:
         grid_dim = TileScheduler.get_grid_shape(tile_sched_params)
 
         LOG2_E = math.log2(math.e)
-        if const_expr(self.score_mod is None):
-            softmax_scale_log2 = softmax_scale * LOG2_E
-        else:
-            softmax_scale_log2 = LOG2_E
+        # GRUG: always use the folded convention (softmax_scale_log2 = scale*LOG2E), even with our bias
+        # score_mod. apply_score_mod adds the bias in raw-qk units (A/scale) into in-band elements only,
+        # so there is no per-element `acc_S * scale` multiply across the whole tile (the RoPE path).
+        softmax_scale_log2 = softmax_scale * LOG2_E
 
         fastdiv_mods = None
         if const_expr(aux_data.tensors is not None):
@@ -1014,30 +1014,36 @@ class FlashAttentionBackwardSm90:
         del seqlen_info, fastdiv_mods
         rel_bias_t = aux_data.tensors[2]  # kernel layout [S, L, Hq, B]
         rel_extent = rel_bias_t.shape[1]
-        cS = cute.make_identity_tensor((self.tile_n, self.tile_m) if self.SdP_swapAB else (self.tile_m, self.tile_n))
-        cS = cute.domain_offset(
-            (
-                (n_block * self.tile_n, m_block * self.tile_m)
-                if self.SdP_swapAB
-                else (m_block * self.tile_m, n_block * self.tile_n)
-            ),
-            cS,
-        )
-        tScS_mn = layout_utils.reshape_acc_to_mn(thr_mma_SdP.partition_C(cS), transpose=self.SdP_swapAB)
-        acc_S_mn = layout_utils.reshape_acc_to_mn(acc_S, transpose=self.SdP_swapAB)
-        ROW = const_expr(0 if not self.SdP_swapAB else 1)
-        COL = const_expr(1 if not self.SdP_swapAB else 0)
-        for r in cutlass.range_constexpr(cute.size(tScS_mn.shape[0])):
-            q_pos = tScS_mn[r, 0][ROW]
-            for c in cutlass.range_constexpr(cute.size(tScS_mn.shape[1])):
-                k_pos = tScS_mn[r, c][COL]
-                acc_S_mn[r, c] = acc_S_mn[r, c] * softmax_scale
-                delta = q_pos - k_pos
-                delta_safe = cutlass.min(cutlass.max(delta, Int32(0)), rel_extent - 1)
-                bias = rel_bias_t[q_pos, delta_safe, head_idx, batch_idx].to(Float32)
-                in_band = cute.elem_less(delta, rel_extent) and cute.elem_less(Int32(-1), delta)
-                if in_band:
-                    acc_S_mn[r, c] = acc_S_mn[r, c] + bias
+        inv_scale = 1.0 / softmax_scale
+        # Per-tile runtime gate: the softmax uses the folded convention (softmax_scale_log2 = scale*LOG2E),
+        # so we add the bias in raw-qk units A/scale to in-band elements only and never touch acc_S
+        # elsewhere. Skip the whole tile when it is fully out of band (min q-k >= rel_extent).
+        tile_min_delta = m_block * self.tile_m - (n_block * self.tile_n + self.tile_n - 1)
+        if cute.elem_less(tile_min_delta, rel_extent):
+            cS = cute.make_identity_tensor(
+                (self.tile_n, self.tile_m) if self.SdP_swapAB else (self.tile_m, self.tile_n)
+            )
+            cS = cute.domain_offset(
+                (
+                    (n_block * self.tile_n, m_block * self.tile_m)
+                    if self.SdP_swapAB
+                    else (m_block * self.tile_m, n_block * self.tile_n)
+                ),
+                cS,
+            )
+            tScS_mn = layout_utils.reshape_acc_to_mn(thr_mma_SdP.partition_C(cS), transpose=self.SdP_swapAB)
+            acc_S_mn = layout_utils.reshape_acc_to_mn(acc_S, transpose=self.SdP_swapAB)
+            ROW = const_expr(0 if not self.SdP_swapAB else 1)
+            COL = const_expr(1 if not self.SdP_swapAB else 0)
+            for r in cutlass.range_constexpr(cute.size(tScS_mn.shape[0])):
+                q_pos = tScS_mn[r, 0][ROW]
+                for c in cutlass.range_constexpr(cute.size(tScS_mn.shape[1])):
+                    delta = q_pos - tScS_mn[r, c][COL]
+                    delta_safe = cutlass.min(cutlass.max(delta, Int32(0)), rel_extent - 1)
+                    bias = rel_bias_t[q_pos, delta_safe, head_idx, batch_idx].to(Float32)
+                    in_band = cute.elem_less(delta, rel_extent) and cute.elem_less(Int32(-1), delta)
+                    if in_band:
+                        acc_S_mn[r, c] = acc_S_mn[r, c] + bias * inv_scale
 
     @cute.jit
     def apply_score_mod_bwd(
@@ -1061,27 +1067,32 @@ class FlashAttentionBackwardSm90:
         del score_tensor, softmax_scale, seqlen_info, fastdiv_mods
         da_t = aux_data.tensors[3]
         rel_extent = da_t.shape[1]
-        cS = cute.make_identity_tensor((self.tile_n, self.tile_m) if self.SdP_swapAB else (self.tile_m, self.tile_n))
-        cS = cute.domain_offset(
-            (
-                (n_block * self.tile_n, m_block * self.tile_m)
-                if self.SdP_swapAB
-                else (m_block * self.tile_m, n_block * self.tile_n)
-            ),
-            cS,
-        )
-        tScS_mn = layout_utils.reshape_acc_to_mn(thr_mma_SdP.partition_C(cS), transpose=self.SdP_swapAB)
-        grad_mn = layout_utils.reshape_acc_to_mn(grad_tensor, transpose=self.SdP_swapAB)
-        ROW = const_expr(0 if not self.SdP_swapAB else 1)
-        COL = const_expr(1 if not self.SdP_swapAB else 0)
-        for r in cutlass.range_constexpr(cute.size(tScS_mn.shape[0])):
-            q_pos = tScS_mn[r, 0][ROW]
-            for c in cutlass.range_constexpr(cute.size(tScS_mn.shape[1])):
-                delta = q_pos - tScS_mn[r, c][COL]
-                in_band = cute.elem_less(delta, rel_extent) and cute.elem_less(Int32(-1), delta)
-                if in_band:
-                    delta_safe = cutlass.min(cutlass.max(delta, Int32(0)), rel_extent - 1)
-                    da_t[q_pos, delta_safe, head_idx, batch_idx] = grad_mn[r, c].to(da_t.element_type)
+        # Per-tile runtime gate: fully out-of-band tiles scatter nothing, so skip them entirely.
+        tile_min_delta = m_block * self.tile_m - (n_block * self.tile_n + self.tile_n - 1)
+        if cute.elem_less(tile_min_delta, rel_extent):
+            cS = cute.make_identity_tensor(
+                (self.tile_n, self.tile_m) if self.SdP_swapAB else (self.tile_m, self.tile_n)
+            )
+            cS = cute.domain_offset(
+                (
+                    (n_block * self.tile_n, m_block * self.tile_m)
+                    if self.SdP_swapAB
+                    else (m_block * self.tile_m, n_block * self.tile_n)
+                ),
+                cS,
+            )
+            tScS_mn = layout_utils.reshape_acc_to_mn(thr_mma_SdP.partition_C(cS), transpose=self.SdP_swapAB)
+            grad_mn = layout_utils.reshape_acc_to_mn(grad_tensor, transpose=self.SdP_swapAB)
+            ROW = const_expr(0 if not self.SdP_swapAB else 1)
+            COL = const_expr(1 if not self.SdP_swapAB else 0)
+            for r in cutlass.range_constexpr(cute.size(tScS_mn.shape[0])):
+                q_pos = tScS_mn[r, 0][ROW]
+                for c in cutlass.range_constexpr(cute.size(tScS_mn.shape[1])):
+                    delta = q_pos - tScS_mn[r, c][COL]
+                    in_band = cute.elem_less(delta, rel_extent) and cute.elem_less(Int32(-1), delta)
+                    if in_band:
+                        delta_safe = cutlass.min(cutlass.max(delta, Int32(0)), rel_extent - 1)
+                        da_t[q_pos, delta_safe, head_idx, batch_idx] = grad_mn[r, c].to(da_t.element_type)
 
     @cute.jit
     def mma(

@@ -569,6 +569,17 @@ def segmented_flash_attention_forward_launcher(
             softmax_params = SimpleNamespace(row_max=row_max, row_sum=row_sum, softmax_scale_log2=softmax_scale_log2)
 
             if n_block_min < n_block_max:
+                # Per-tile bias gating: the band 0 <= q-k < L only touches the near-diagonal key blocks.
+                # Split the n-loop so in-band blocks run with the bias code (has_bias=True) and the far
+                # (fully out-of-band) blocks run the exact RoPE path (has_bias=False), skipping the bias
+                # gmem load + delta math on ~2/3 of visited tiles. Boundary is conservative (one extra
+                # block) so no in-band element is ever missed.
+                total_n_blocks = n_block_max - n_block_min
+                rel_extent = basic_params.mRelBias.shape[1]
+                m0 = basic_params.m_block * self._m_block_size
+                n_bias_min = cutlass.max(n_block_min, (m0 - rel_extent) // self._n_block_size - 1)
+                n_inband = cutlass.max(1, cutlass.min(total_n_blocks, n_block_max - n_bias_min))
+
                 basic_params.n_block = n_block_max - 1
                 self.compute_one_n_block(
                     basic_params,
@@ -577,8 +588,9 @@ def segmented_flash_attention_forward_launcher(
                     smem_copy_params,
                     softmax_params,
                     is_first_n_block=True,
+                    has_bias=True,
                 )
-                for n_tile in range(1, n_block_max - n_block_min, 1):
+                for n_tile in range(1, n_inband, 1):
                     basic_params.n_block = n_block_max - n_tile - 1
                     self.compute_one_n_block(
                         basic_params,
@@ -587,6 +599,18 @@ def segmented_flash_attention_forward_launcher(
                         smem_copy_params,
                         softmax_params,
                         is_first_n_block=False,
+                        has_bias=True,
+                    )
+                for n_tile in range(n_inband, total_n_blocks, 1):
+                    basic_params.n_block = n_block_max - n_tile - 1
+                    self.compute_one_n_block(
+                        basic_params,
+                        mma_params,
+                        gmem_copy_params,
+                        smem_copy_params,
+                        softmax_params,
+                        is_first_n_block=False,
+                        has_bias=False,
                     )
             else:
                 # Q and O alias shared storage. Even an all-padding tile has
@@ -663,6 +687,7 @@ def segmented_flash_attention_forward_launcher(
             smem_copy_params: SimpleNamespace,
             softmax_params: SimpleNamespace,
             is_first_n_block: cutlass.Constexpr,
+            has_bias: cutlass.Constexpr = True,
         ):
             acc_S = cute.make_rmem_tensor(
                 mma_params.thr_mma.partition_shape_C((self._m_block_size, self._n_block_size)),
@@ -733,7 +758,7 @@ def segmented_flash_attention_forward_launcher(
                 )
                 cute.arch.cp_async_commit_group()
 
-            self.softmax_rescale_O(basic_params, mma_params, softmax_params, acc_S, is_first_n_block)
+            self.softmax_rescale_O(basic_params, mma_params, softmax_params, acc_S, is_first_n_block, has_bias)
 
             rP = cute.make_fragment_like(acc_S, self._dtype)
             rP.store(acc_S.load().to(self._dtype))
@@ -779,6 +804,7 @@ def segmented_flash_attention_forward_launcher(
             softmax_params: SimpleNamespace,
             acc_S: cute.Tensor,
             is_first_n_block: cutlass.Constexpr,
+            has_bias: cutlass.Constexpr = True,
         ):
             acc_S_mn = self._make_acc_tensor_mn_view(acc_S)
             acc_O_mn = self._make_acc_tensor_mn_view(mma_params.acc_O)
@@ -829,23 +855,28 @@ def segmented_flash_attention_forward_launcher(
                     # Inkling relative-position bias: add A[query, delta=query-key] (natural units) to the
                     # logit for kept positions. acc_S is in raw-qk units and the softmax multiplies it by
                     # softmax_scale_log2 inside exp2, so scale the bias by LOG2E/softmax_scale_log2 = 1/scale.
-                    rel_extent = basic_params.mRelBias.shape[1]
-                    delta = query_idx - key_idx
-                    # cute evaluates the GMEM load unconditionally, so clamp the gather index into
-                    # [0, rel_extent) (masked positions can have delta < 0); gate the actual add on
-                    # keep and 0 <= delta < rel_extent. Non-Inkling callers pass a zero [.,1] bias.
-                    delta_safe = cutlass.min(cutlass.max(delta, cutlass.Int32(0)), rel_extent - 1)
-                    bias_val = basic_params.mRelBias[
-                        query_meta_idx, delta_safe, basic_params.q_head, basic_params.batch_idx
-                    ]
-                    in_band = keep and cute.elem_less(delta, rel_extent) and cute.elem_less(cutlass.Int32(-1), delta)
-                    if in_band:
-                        acc_S_mn[r, c] = (
-                            acc_S_mn[r, c]
-                            + bias_val.to(cutlass.Float32)
-                            * cutlass.Float32(1.4426950408889634)
-                            / softmax_params.softmax_scale_log2
+                    # `has_bias` is a per-tile Constexpr: tiles fully outside the band [0, rel_extent) skip
+                    # all of this (the gmem load, clamp, delta math) and run the exact RoPE code path.
+                    if cutlass.const_expr(has_bias):
+                        rel_extent = basic_params.mRelBias.shape[1]
+                        delta = query_idx - key_idx
+                        # cute evaluates the GMEM load unconditionally, so clamp the gather index into
+                        # [0, rel_extent) (masked positions can have delta < 0); gate the actual add on
+                        # keep and 0 <= delta < rel_extent.
+                        delta_safe = cutlass.min(cutlass.max(delta, cutlass.Int32(0)), rel_extent - 1)
+                        bias_val = basic_params.mRelBias[
+                            query_meta_idx, delta_safe, basic_params.q_head, basic_params.batch_idx
+                        ]
+                        in_band = (
+                            keep and cute.elem_less(delta, rel_extent) and cute.elem_less(cutlass.Int32(-1), delta)
                         )
+                        if in_band:
+                            acc_S_mn[r, c] = (
+                                acc_S_mn[r, c]
+                                + bias_val.to(cutlass.Float32)
+                                * cutlass.Float32(1.4426950408889634)
+                                / softmax_params.softmax_scale_log2
+                            )
 
                 acc_S_row = acc_S_mn[r, None].load()
                 row_max_cur_row = acc_S_row.reduce(cute.ReductionOp.MAX, -cutlass.Float32.inf, 0)
