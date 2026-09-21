@@ -19,6 +19,7 @@ from dataclasses import dataclass
 import click
 from marin.evaluation.evalchemy.result import FineStoreEvalchemyResult
 from marin.execution.artifact import Artifact
+from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_owned_name
@@ -194,7 +195,7 @@ def build_rl_smoke(draft: ArtifactStep[Artifact]) -> ArtifactStep[SkyRLModel]:
     return skyrl_step(
         SkyRLSpec(
             name=user_owned_name(RL_ARTIFACT_NAME),
-            version=VERSION,
+            version=resolve_version(RL_ARTIFACT_NAME, None),
             config_yaml=RL_SMOKE_CONFIG,
             runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.MEGATRON),
             model=ArtifactHfModel(
@@ -237,24 +238,20 @@ def build_pipeline() -> SnowballDraftPipeline:
     )
     conversations = rollout_conversation_step(
         name="data/snowball-eagle-math-conversations",
-        version=VERSION,
         evaluations=(evaluation,),
     )
     initial_draft = hf_snapshot_step(
         name="models/snowball-eagle3-initial-draft",
-        version=VERSION,
         repo_id=INITIAL_DRAFT_REPO,
         revision=INITIAL_DRAFT_REVISION,
     )
     verifier = verifier_view_step(
         name="models/snowball-eagle3-verifier-view",
-        version=VERSION,
         target_model=SNOWBALL_MODEL,
         transformers_model_type="llama",
     )
     captured_data = hidden_state_capture_step(
         name="data/snowball-eagle3-hidden-states",
-        version=VERSION,
         dataset=conversations,
         target_model=SNOWBALL_MODEL,
         processor_model=MARIN_TOKENIZER,
@@ -265,7 +262,6 @@ def build_pipeline() -> SnowballDraftPipeline:
     )
     draft = draft_training_step(
         name="models/snowball-eagle3-speculators",
-        version=VERSION,
         captured_data=captured_data,
         verifier=verifier,
         initial_draft=initial_draft,

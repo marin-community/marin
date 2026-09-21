@@ -9,4 +9,4 @@ package = false
 
 [tool.uv.sources]
 # The Marin fork carries verifier compatibility needed by Snowball draft training.
-speculators = { git = "https://github.com/marin-community/speculators.git", rev = "f02541efa7319b75370308b9bf768585033e8c62" }
+speculators = { git = "https://github.com/marin-community/speculators.git", rev = "3310d75af585fa4d5b11a3caf97eb8ece6c262b4" }

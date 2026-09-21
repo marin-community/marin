@@ -7,6 +7,7 @@ from pathlib import Path
 
 import marin.training.speculators as speculators
 import pytest
+import torch
 from finestore.eval import ParticipantType
 from marin.training.speculators import (
     HiddenStateCaptureConfig,
@@ -15,10 +16,12 @@ from marin.training.speculators import (
     _make_checkpoint_portable,
     _publish_directory,
     _restore_directory,
+    _validate_draft_checkpoint,
     capture_hidden_states,
     rollout_conversations,
     verifier_config_for_transformers,
 )
+from safetensors.torch import save_file
 
 
 def _row(doc_id: str, participant: str, content: str) -> dict:
@@ -143,6 +146,14 @@ def test_checkpoint_selection_and_portable_verifier_reference(tmp_path: Path):
 
     saved = json.loads((checkpoint / "config.json").read_text())
     assert saved["speculators_config"]["verifier"]["name_or_path"] is None
+
+
+def test_validate_draft_checkpoint_rejects_serialized_target_owned_embedding(tmp_path: Path):
+    (tmp_path / "config.json").write_text(json.dumps({"embed_requires_grad": False}))
+    save_file({"embed_tokens.weight": torch.zeros(2, 2)}, tmp_path / "model.safetensors")
+
+    with pytest.raises(ValueError, match="Frozen EAGLE embeddings must be omitted"):
+        _validate_draft_checkpoint(tmp_path)
 
 
 def test_publish_directory_resumes_complete_files(tmp_path: Path):

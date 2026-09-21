@@ -25,6 +25,7 @@ from levanter.model_cache import cache_hf_model
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from marin.execution.artifact import Artifact
+from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
 from marin.inference.backend import OPENAI_API_SUFFIX, ModelSpec
@@ -185,7 +186,7 @@ def write_rollout_conversations(config: RolloutConversationConfig) -> None:
 def rollout_conversation_step(
     *,
     name: str,
-    version: str,
+    version: str | None = None,
     evaluations: tuple[ArtifactStep, ...],
     resources: ResourceConfig = ResourceConfig.with_cpu(cpu=4, ram="16g", disk="16g"),
 ) -> ArtifactStep[Artifact]:
@@ -199,7 +200,7 @@ def rollout_conversation_step(
 
     return ArtifactStep(
         name=name,
-        version=version,
+        version=resolve_version(name, version),
         artifact_type=Artifact,
         run=remote(write_rollout_conversations, resources=resources),
         build_config=build_config,
@@ -215,7 +216,7 @@ def mirror_hf_snapshot(config: HfSnapshotConfig) -> None:
 def hf_snapshot_step(
     *,
     name: str,
-    version: str,
+    version: str | None = None,
     repo_id: str,
     revision: str,
     resources: ResourceConfig = ResourceConfig.with_cpu(cpu=4, ram="16g", disk="64g"),
@@ -227,7 +228,7 @@ def hf_snapshot_step(
 
     return ArtifactStep(
         name=name,
-        version=version,
+        version=resolve_version(name, version),
         artifact_type=Artifact,
         run=remote(mirror_hf_snapshot, resources=resources),
         build_config=build_config,
@@ -276,7 +277,7 @@ def build_verifier_view(config: VerifierViewConfig) -> None:
 def verifier_view_step(
     *,
     name: str,
-    version: str,
+    version: str | None = None,
     target_model: ArtifactStep,
     transformers_model_type: str,
     resources: ResourceConfig = ResourceConfig.with_cpu(cpu=8, ram="32g", disk="32g"),
@@ -292,7 +293,7 @@ def verifier_view_step(
 
     return ArtifactStep(
         name=name,
-        version=version,
+        version=resolve_version(name, version),
         artifact_type=Artifact,
         run=remote(build_verifier_view, resources=resources),
         build_config=build_config,
@@ -475,7 +476,7 @@ def capture_hidden_states(config: HiddenStateCaptureConfig) -> None:
 def hidden_state_capture_step(
     *,
     name: str,
-    version: str,
+    version: str | None = None,
     dataset: ArtifactStep,
     target_model: ArtifactStep,
     processor_model: str,
@@ -508,7 +509,7 @@ def hidden_state_capture_step(
 
     return ArtifactStep(
         name=name,
-        version=version,
+        version=resolve_version(name, version),
         artifact_type=Artifact,
         run=remote(
             capture_hidden_states,
@@ -539,6 +540,29 @@ def _make_checkpoint_portable(checkpoint: Path) -> None:
     config = json.loads(config_path.read_text())
     config["speculators_config"]["verifier"]["name_or_path"] = None
     config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
+
+
+def _safetensors_tensor_names(path: Path) -> set[str]:
+    with path.open("rb") as checkpoint:
+        header_size_bytes = checkpoint.read(8)
+        if len(header_size_bytes) != 8:
+            raise ValueError(f"Invalid safetensors header: {path}")
+        header_size = int.from_bytes(header_size_bytes, "little")
+        header = json.loads(checkpoint.read(header_size))
+    return set(header) - {"__metadata__"}
+
+
+def _validate_draft_checkpoint(checkpoint: Path) -> None:
+    config = json.loads((checkpoint / "config.json").read_text())
+    if config.get("embed_requires_grad", False):
+        return
+
+    for weights_path in checkpoint.glob("*.safetensors"):
+        if "embed_tokens.weight" in _safetensors_tensor_names(weights_path):
+            raise ValueError(
+                "Frozen EAGLE embeddings must be omitted so vLLM shares the verifier embedding: "
+                f"{weights_path} contains embed_tokens.weight"
+            )
 
 
 def train_draft(config: DraftTrainingConfig) -> None:
@@ -594,13 +618,14 @@ def train_draft(config: DraftTrainingConfig) -> None:
 
         shutil.copytree(_best_checkpoint(checkpoints), published)
         _make_checkpoint_portable(published)
+        _validate_draft_checkpoint(published)
         _publish_directory(published, config.output_path)
 
 
 def draft_training_step(
     *,
     name: str,
-    version: str,
+    version: str | None = None,
     captured_data: ArtifactStep,
     verifier: ArtifactStep,
     initial_draft: ArtifactStep,
@@ -631,7 +656,7 @@ def draft_training_step(
 
     return ArtifactStep(
         name=name,
-        version=version,
+        version=resolve_version(name, version),
         artifact_type=Artifact,
         run=remote(
             train_draft,

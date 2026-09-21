@@ -83,8 +83,8 @@ SPECULATORS = ExternalDependency(
     config_name="speculators",
     distribution="speculators",
     repository="https://github.com/marin-community/speculators.git",
-    version="0.9.0.dev33",
-    commit="f02541efa7319b75370308b9bf768585033e8c62",
+    version="0.9.0.dev34",
+    commit="3310d75af585fa4d5b11a3caf97eb8ece6c262b4",
     runtime_requirements=(),
 )
 

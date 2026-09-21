@@ -351,8 +351,8 @@ wheels = [
 
 [[package]]
 name = "hs-connectors"
-version = "0.8.1a33"
-source = { git = "https://github.com/marin-community/speculators.git?subdirectory=hs_connectors&rev=f02541efa7319b75370308b9bf768585033e8c62#f02541efa7319b75370308b9bf768585033e8c62" }
+version = "0.8.1a34"
+source = { git = "https://github.com/marin-community/speculators.git?subdirectory=hs_connectors&rev=3310d75af585fa4d5b11a3caf97eb8ece6c262b4#3310d75af585fa4d5b11a3caf97eb8ece6c262b4" }
 dependencies = [
     { name = "safetensors" },
     { name = "torch" },
@@ -514,7 +514,7 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "speculators", git = "https://github.com/marin-community/speculators.git?rev=f02541efa7319b75370308b9bf768585033e8c62" }]
+requires-dist = [{ name = "speculators", git = "https://github.com/marin-community/speculators.git?rev=3310d75af585fa4d5b11a3caf97eb8ece6c262b4" }]
 
 [[package]]
 name = "markdown-it-py"
@@ -1147,8 +1147,8 @@ wheels = [
 
 [[package]]
 name = "speculators"
-version = "0.9.0.dev33"
-source = { git = "https://github.com/marin-community/speculators.git?rev=f02541efa7319b75370308b9bf768585033e8c62#f02541efa7319b75370308b9bf768585033e8c62" }
+version = "0.9.0.dev34"
+source = { git = "https://github.com/marin-community/speculators.git?rev=3310d75af585fa4d5b11a3caf97eb8ece6c262b4#3310d75af585fa4d5b11a3caf97eb8ece6c262b4" }
 dependencies = [
     { name = "aiohttp" },
     { name = "click" },
