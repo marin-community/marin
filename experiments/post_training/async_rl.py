@@ -462,7 +462,8 @@ def training_config(
     }
     config["trainer"] = {
         "strategy": recipe.strategy,
-        # Megatron brings its own fused attention; flash_attn is the FSDP2 switch.
+        # MarinSkyRL uses this flag to choose the Megatron attention backend too. Recipes default
+        # to TransformerEngine fused attention; experiments may explicitly select FlashAttention.
         "flash_attn": False,
         # One sequence per row, as every measured run trained; packing changes the micro-step shape.
         "use_sample_packing": False,

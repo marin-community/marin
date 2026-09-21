@@ -4,6 +4,9 @@ iris_job,cluster,model,purpose,state,gpu_tasks,h100_per_task,task_seconds_total,
 /romain/score-centering-qwen-mixed-span-01a0bb6f-r3,cw-us-east-02a,Qwen,normal_publication_probe,succeeded,2,8,1093.96,2.431022
 /romain/score-centering-qwen-mixed-span-lowprefetch-01a0bb6f,cw-us-east-02a,Qwen,lower_prefetch_probe,succeeded,2,8,1092.12,2.426933
 /romain/score-centering-qwen-fresh-version-01a0bb6f/users-romain-checkpoints-async-rl-qwen-default-set-45f29203-2026.09.20.11-d7b8fb16aa8c,cw-rno2a,Qwen,fresh_published_versions_probe,succeeded,2,8,1225.53,2.723400
+/romain/users-romain-checkpoints-async-rl-qwen-smoke-set-02747901-2026.09.20.6-e9656d108b01,cw-rno2a,Qwen,matched_weight_abc_probe,succeeded,2,8,1060.28,2.356178
+/romain/users-romain-checkpoints-async-rl-qwen-smoke-set-02747901-2026.09.20.6-e9656d108b01-export-2,cw-rno2a,Qwen,matched_weight_abc_terminal_export,succeeded,1,8,222.03,0.493400
+/romain/users-romain-checkpoints-async-rl-qwen-default-set-59b72b7a-2026.09.20.7-a6c25a09ef63,cw-rno2a,Qwen,fixed_sampler_age_calibration,succeeded,2,8,1735.39,3.856422
 /romain/score-centering-snowball-resume-smoke-01a0bb6f,cw-us-east-02a,Snowball,invalid_resume_config,failed,5,8,1647.80,3.661778
 /romain/score-centering-snowball-resume-smoke-01a0bb6f-r2,cw-us-east-02a,Snowball,wrong_wandb_entity,failed,5,8,1502.80,3.339556
 /romain/score-centering-snowball-resume-smoke-01a0bb6f-r3,cw-us-east-02a,Snowball,missing_wandb_key,failed,5,8,1390.05,3.089000

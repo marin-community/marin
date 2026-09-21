@@ -986,22 +986,22 @@ drift for those later versions or an actual mixed-version response; none
 occurred in this probe.
 
 The [round-two diagnostic cost ledger](results/score_centering_round2_diagnostic_cost.csv)
-records the three Qwen probes, their two failed setup attempts, the Snowball
+records the five Qwen probes, their two failed setup attempts, the Snowball
 model-only recovery, six failed Snowball resume attempts, and the successful
 r8 full-optimizer resume, DP-local save, terminal HF export, and a stopped
 Snowball format probe. It uses
 the durations of every GPU task shown by `iris job describe`, multiplied by
 eight H100s per task; coscheduled siblings still reserve GPUs until a failed
-head task exits. These finished jobs used 9.02 Qwen and 57.86 Snowball reserved
+head task exits. These finished jobs used 15.73 Qwen and 57.86 Snowball reserved
 H100-hours before r6. The r6 save failure added 29.46 Snowball H100-hours,
 and r7's setup failure added 3.16, bringing the round-two diagnostic total
-to 99.50. The 17.42-hour Snowball recovery in this
+to 106.21. The 17.42-hour Snowball recovery in this
 ledger is the same job described above, so it is counted once. The six completed
 Qwen confirmation runs used another 148.82 reserved H100-hours, including
 training and terminal export. The successful r8 training and separate HF export
 used 31.38 and 18.23 H100-hours, respectively. The invalid-format Snowball
 probe added 10.01 H100-hours. Thus the completed round-two diagnostic and
-Qwen confirmation tasks total 307.94 H100-hours. These are
+Qwen confirmation tasks total 314.65 H100-hours. These are
 reserved task-hours, not a billing estimate.
 
 ## Matched Qwen confirmation design
@@ -1081,7 +1081,7 @@ margin.
 
 The [W&B training histories](results/score_centering_qwen_confirm_wandb_train.jsonl)
 and [derived step metrics](results/score_centering_qwen_confirm_metrics.csv)
-show mean consumed-token age 4.60–4.62 updates, 89.0–89.7% of consumed tokens
+show token-weighted mean consumed age 4.68–4.73 updates, 89.0–89.7% of consumed tokens
 at age four or older, no stale rejection, mean absolute pooled log ratio
 0.0152–0.0154, and TIS caps on 5.3–5.4% of loss tokens. Each arm consumed
 13.05–13.24 million loss tokens through step 40. The reported group rejection
@@ -1473,18 +1473,21 @@ top-k-32 behavior logprobs, a 512-position policy-logprob chunk, and optimizer
 offload through rollout, evaluation, and the pretraining policy forward. The
 rendered local and staged-pod YAML SHA-256 values match:
 `7430a3f72e3539c2e3ecd63258459ae60d6355b0b6b617c7f605ac62b8a50e42`
-for [TIS](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-default-set-e1183dd2-2026.09.21.7-c68eb40f03e2)
+for [TIS](configs/score_centering/snowball_full_pair_tis.yaml)
+([job](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-default-set-e1183dd2-2026.09.21.7-c68eb40f03e2))
 and
 `f0ba018e072542b8f72773e2aca4012a05ca9e81dc266e1595fe2346cf7e9156`
-for [SC32](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-default-set-6379e701-2026.09.21.7-415cae46b3bb).
+for [SC32](configs/score_centering/snowball_full_pair_sc32.yaml)
+([job](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-default-set-6379e701-2026.09.21.7-415cae46b3bb)).
 Flattening the 118 values shows exactly one difference:
 `trainer.algorithm.score_centering_topk` is zero for TIS and 32 for SC32.
 Their W&B runs are
 [`d6js2ztv`](https://wandb.ai/marin-community/marin-async-rl/runs/d6js2ztv)
 and [`s0amakmj`](https://wandb.ai/marin-community/marin-async-rl/runs/s0amakmj).
-The rendered configs request FlashAttention, but runtime `22a37adc` reports
-installed `flash-attn` 2.8.4 outside the Megatron bridge's supported range
-through 2.8.3. The continuation failure stacks execute TransformerEngine's
+The rendered configs request FlashAttention, but retained
+[runtime evidence](results/score_centering_snowball_attention_backend.json)
+reports installed `flash-attn` 2.8.4 outside the Megatron bridge's supported
+range through 2.8.3. The continuation failure stacks execute TransformerEngine's
 unfused attention, so FlashAttention was requested rather than effective for
 this full pair.
 Both completed the initial held-out evaluation with five running Iris tasks
@@ -1782,5 +1785,5 @@ The [full-pair task-attempt ledger](results/score_centering_snowball_full_pair_c
 totals 393.62 reserved H100-hours for versions `2026.09.21.7` through
 `2026.09.21.12`, including invalid-path attempts, retries, and matched
 cancellations. The [round-two campaign ledger](results/score_centering_round2_campaign_cost.csv)
-links the nonoverlapping detailed ledgers and totals 1,065.84 reserved
+links the nonoverlapping detailed ledgers and totals 1,072.55 reserved
 H100-hours. These are task reservations rather than a billing estimate.

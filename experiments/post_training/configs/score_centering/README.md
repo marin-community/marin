@@ -63,6 +63,13 @@ After excluding run-owned names and output paths, its 154 arguments match the
 replacement TIS control in order except for `trainer.algorithm.score_centering_topk`
 (`32` versus `0`).
 
+`snowball_full_pair_tis.yaml` and `snowball_full_pair_sc32.yaml` retain the
+rendered inputs for the clean version `2026.09.21.7` pair. Their SHA-256 values
+are `7430a3f72e3539c2e3ecd63258459ae60d6355b0b6b617c7f605ac62b8a50e42`
+and `f0ba018e072542b8f72773e2aca4012a05ca9e81dc266e1595fe2346cf7e9156`,
+matching the staged pod files. Their 118 flattened values differ only at
+`trainer.algorithm.score_centering_topk` (`0` versus `32`).
+
 The `snowball_full_pair_*_continuation5.yaml` files retain the rendered
 1,536-token training-cap continuations. They keep the 4,096-token held-out
 evaluation cap and resume the two arm-specific step-five checkpoints. Their
