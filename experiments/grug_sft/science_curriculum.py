@@ -395,7 +395,7 @@ def train(mix: ScienceMix, version: str, tpu: str, zone: str) -> None:
 if __name__ == "__main__":
     configure_logging(logging.INFO)
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mix", type=ScienceMix, choices=ScienceMix, required=True)
+    parser.add_argument("--mix", type=ScienceMix, choices=ScienceMix, nargs="+", required=True)
     parser.add_argument("--version", required=True)
     parser.add_argument(
         "--tpu",
@@ -416,4 +416,5 @@ if __name__ == "__main__":
     )
     parser.add_argument("--zone", choices=("us-central2-b", "us-central1-a", "us-east5-a", "us-east5-b"), required=True)
     args = parser.parse_args()
-    train(args.mix, args.version, args.tpu, args.zone)
+    for mix in args.mix:
+        train(mix, args.version, args.tpu, args.zone)
