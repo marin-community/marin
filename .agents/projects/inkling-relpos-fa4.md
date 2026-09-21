@@ -250,3 +250,16 @@ The ONLY way to beat materialized is a tensor-core smem-GEMM (amortize the 16-di
 TILE, store A_tile to smem, 1 smem read/element) -- research-grade CuTe authoring; deferred.
 BEST/CURRENT = materialized + bf16 dA: d512 6.33(1024)/6.96(512), d1280-512 12.75 (17.4% impact vs
 rope 15.44). Campaign: 5.25 -> 6.96 (d512-512); d1280 impact 27% -> 17.4%.
+
+## Lever 1 (per-tile bias gating + folded scale) DONE + grad-verified (2026-09-20)
+Forward: split n-loop into in-band (has_bias=True Constexpr) / out-of-band (has_bias=False -> RoPE path).
+Backward: folded softmax_scale convention (no per-element acc_S*scale), add bias in raw-qk units A/scale
+to in-band only, + per-tile runtime skip (min q-k >= rel_extent) in apply_score_mod and apply_score_mod_bwd.
+MFU: d512-1024 6.33->6.61 (+0.28); d1280-512 12.75->13.38 (+0.63, impact 27%->13.4%). d512-512 pending
+(1st run preempted by SIGTERM; also hit S3 SlowDown throttling from too many concurrent jobs).
+Next levers (from Larry): 2 (R,proj custom_vjp boundary + proj/scale prescale, needs boundary for clean
+dR=dS.projT/dproj=RT.dS, no unit corr; enables Lever 5), 3 (Music-Transformer skew: flipped zero-padded
+bank -> contiguous run, drops clamp/branch/gather/in_band on in-band tiles), 4 (remat save out+lse to skip
+2nd fwd kernel [subtle w/ custom_vjp]; transpose R not A [in progress]; per-layer extent [hard: stacked
+layers share one bank]), 5 (R per KV head: /qhead_per_kvhead traffic but breaks free dA scatter [races];
+Fourier bank: separable, no kernel change, not Inkling). CAUTION: run <=2 concurrent MFU jobs (S3 SlowDown).
