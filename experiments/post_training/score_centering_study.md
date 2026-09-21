@@ -1363,3 +1363,17 @@ only source change from the failed SC attempts. Its
 is at `interactive` priority. The original TIS arm continues on `26a4b7e1`;
 the new runtime changes only the score-centering selected-logprob calculation,
 which TIS does not execute.
+
+The TIS control passed its step-ten operational gate on `26a4b7e1`. Its full
+DP-reshardable checkpoint has 32 distributed policy shards, 45 files, and
+939.44 GB of stored data; the latest-checkpoint marker and the complete
+step-ten evaluation dump were both written. Its
+[interim response analysis](results/score_centering_snowball_flash_tis_progress_evals.csv)
+rose from 256/756 completed rewarded core answers at step zero to 467/756 at
+step ten, with the frozen membership hash unchanged. The conservative
+step-ten terminal-box audits count 215 GSM8K answers
+([audit](results/score_centering_snowball_flash_tis_gsm8k_step10_probe.json))
+and 253 Math500 answers
+([audit](results/score_centering_snowball_flash_tis_math500_step10_probe.json)),
+or 468/756 combined. This is an interim control result and does not compare
+SC's effect.

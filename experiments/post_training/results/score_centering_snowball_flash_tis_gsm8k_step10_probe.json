@@ -1,0 +1,16 @@
+{
+  "completed": 239,
+  "completed_rewarded_or_exact_boxed": 216,
+  "completed_rewarded_or_terminal_boxed": 215,
+  "final_turn_boxed": 32,
+  "final_turn_boxed_exact_ground_truth": 31,
+  "final_turn_boxed_exact_unrewarded": 2,
+  "match_mode": "numeric",
+  "membership_sha256": "4083423960844b0cf33b1de9a413e412db755c4a4446696ba9c548b67a1ab6ea",
+  "questions": 256,
+  "responses": "s3://marin-us-east-02a/marin/users/romain/checkpoints/async-rl/snowball-default-set-6f0ff39c/2026.09.21.3/exports/dumped_evals/global_step_10_evals/val-gsm8k.jsonl",
+  "rewarded_correct": 217,
+  "rewarded_correct_completed": 214,
+  "terminal_boxed_exact_ground_truth": 14,
+  "terminal_boxed_exact_unrewarded": 1
+}
