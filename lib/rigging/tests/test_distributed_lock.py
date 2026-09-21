@@ -37,6 +37,20 @@ class LostLease:
         raise LeaseLostError("lease changed owners")
 
 
+class FlakyLease:
+    lock_path = "memory://flaky.lock"
+
+    def __init__(self) -> None:
+        self.refresh_succeeded = threading.Event()
+        self.fail_next_refresh = True
+
+    def refresh(self) -> None:
+        if self.fail_next_refresh:
+            self.fail_next_refresh = False
+            raise OSError("temporary storage failure")
+        self.refresh_succeeded.set()
+
+
 def _gcs_client_with_blob(blob: MagicMock | None) -> MagicMock:
     client = MagicMock()
     client.bucket.return_value.get_blob.return_value = blob
@@ -85,7 +99,14 @@ def test_lease_refresh_keeps_lease_fresh_during_block() -> None:
     assert lease.refresh_count >= 1
 
 
-def test_lease_refresh_does_not_interrupt_caller_after_refresh_failure() -> None:
+def test_lease_refresh_retries_after_refresh_failure() -> None:
+    lease = FlakyLease()
+
+    with lease_refresh(cast(DistributedLease, lease), interval=0.001):
+        assert lease.refresh_succeeded.wait(timeout=1)
+
+
+def test_lease_refresh_does_not_interrupt_caller_after_lease_loss() -> None:
     lease = LostLease()
 
     # Lease loss may be detected after the caller has produced external side

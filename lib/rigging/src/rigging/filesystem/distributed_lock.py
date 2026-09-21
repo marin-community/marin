@@ -31,18 +31,17 @@ from dataclasses import asdict, dataclass
 
 from rigging.filesystem.conditional_object import ConditionalWriteError, conditional_object
 from rigging.filesystem.storage_path import StoragePath
+from rigging.timing import ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 
 HEARTBEAT_INTERVAL = 30  # seconds between lease refreshes
 HEARTBEAT_TIMEOUT = 90  # seconds before considering a lease stale
+_REFRESH_RETRY_INITIAL = 1.0
 
 
 class LeaseLostError(Exception):
-    """The lease is held by another worker.
-
-    This is a fatal condition: the step must terminate immediately.
-    """
+    """The caller no longer holds the lease."""
 
 
 @dataclass
@@ -191,10 +190,10 @@ def lease_refresh(
 ) -> Generator[None, None, None]:
     """Keep an acquired lease fresh for the duration of a block.
 
-    Refresh failures are logged and stop the background thread. They do not
-    interrupt the caller because the protected operation may already have
-    produced externally visible side effects by the time lease loss is
-    detected.
+    A definitive lease loss is logged and stops the background thread. Other
+    refresh failures are retried with exponential backoff. Neither condition
+    interrupts the caller because the protected operation may already have
+    produced externally visible side effects when the failure is detected.
 
     Args:
         lease: An acquired distributed lease.
@@ -204,14 +203,27 @@ def lease_refresh(
         raise ValueError("lease refresh interval must be positive")
 
     stop = threading.Event()
+    retry = ExponentialBackoff(initial=min(_REFRESH_RETRY_INITIAL, interval), maximum=interval)
 
     def refresh() -> None:
-        while not stop.wait(interval):
+        delay = interval
+        while not stop.wait(delay):
             try:
                 lease.refresh()
-            except Exception:
-                logger.error("Failed to refresh distributed lease %s", lease.lock_path, exc_info=True)
+            except LeaseLostError:
+                logger.error("Lost distributed lease %s", lease.lock_path, exc_info=True)
                 return
+            except Exception:
+                delay = min(interval, retry.next_interval())
+                logger.warning(
+                    "Failed to refresh distributed lease %s; retrying in %.1f seconds",
+                    lease.lock_path,
+                    delay,
+                    exc_info=True,
+                )
+            else:
+                retry.reset()
+                delay = interval
 
     thread = threading.Thread(target=refresh, name="distributed-lease-refresh", daemon=True)
     thread.start()
