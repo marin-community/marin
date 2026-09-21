@@ -39,6 +39,7 @@ LOCAL_EXCLUDED_MODULE_MARKERS = frozenset(
 )
 MAX_DISPLAYED_TEST_PATHS = 5
 MULTIDEVICE_CPU_DEVICE_COUNT = 8
+MULTIDEVICE_PACKAGES = frozenset({"haliax", "levanter", "marin"})
 DEFAULT_WORKERS = max(2, os.cpu_count() or 2)
 JAX_CPU_DEVICE_ENV = "JAX_NUM_CPU_DEVICES"
 
@@ -223,8 +224,8 @@ def local_invocation(selection: SelectionResult) -> PytestInvocation | None:
 
 def pytest_lanes(invocation: PytestInvocation, workers: int) -> tuple[PytestLane, ...]:
     """Group suites by CPU device count while preserving one worker budget."""
-    multidevice = tuple(package for package in invocation.packages if package.label in {"haliax", "levanter", "marin"})
-    ordinary = tuple(package for package in invocation.packages if package.label not in {"haliax", "levanter", "marin"})
+    multidevice = tuple(package for package in invocation.packages if package.label in MULTIDEVICE_PACKAGES)
+    ordinary = tuple(package for package in invocation.packages if package.label not in MULTIDEVICE_PACKAGES)
     if not multidevice:
         return (PytestLane("workspace", invocation, workers, 1),)
     if not ordinary:

@@ -17,7 +17,7 @@ from haliax import Axis
 from haliax.partitioning import ResourceAxis
 from jax._src import config as jax_config
 from jax.lax import Precision
-from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, PartitionSpec
+from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec
 from levanter.testing.helpers import (
     skip_if_module_missing,
     skip_if_no_torch,
@@ -53,14 +53,6 @@ class _reset_abstract_mesh:
 def _make_explicit_mesh() -> Mesh:
     return Mesh(
         np.array(jax.devices()[:8]).reshape(4, 2),
-        axis_names=("data", "model"),
-        axis_types=(AxisType.Explicit, AxisType.Explicit),
-    )
-
-
-def _make_explicit_abstract_mesh() -> AbstractMesh:
-    return AbstractMesh(
-        axis_sizes=(4, 2),
         axis_names=("data", "model"),
         axis_types=(AxisType.Explicit, AxisType.Explicit),
     )
