@@ -2,10 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import importlib.util
-import os
-import subprocess
-import sys
-import textwrap
 
 import numpy as np
 import pytest
@@ -44,6 +40,7 @@ from levanter.grug.grug_moe import (
     _expert_granular_a2a_params,
     moe_mlp,
 )
+from levanter.testing.cpu_devices import run_on_cpu_devices
 from levanter.utils.activation import ActivationFunctionEnum
 
 
@@ -1150,9 +1147,6 @@ def test_portable_ep_backends_match_dense_cross_shard_value_and_gradients(
     implementation: MoeImplementation,
     token_valid: list[bool],
 ):
-    env = os.environ.copy()
-    env["JAX_PLATFORMS"] = "cpu"
-    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
     script = """
         import jax
         import jax.numpy as jnp
@@ -1246,15 +1240,7 @@ def test_portable_ep_backends_match_dense_cross_shard_value_and_gradients(
         assert int(overflow.padding_skipped) == int(jnp.sum(~token_valid)) * 2
     """
     script = script.replace("__IMPLEMENTATION__", implementation).replace("__TOKEN_VALID__", repr(token_valid))
-    result = subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(script)],
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert result.returncode == 0, result.stderr
+    run_on_cpu_devices(script, device_count=4)
 
 
 def _simulate_ragged_a2a(operands, outputs, params):

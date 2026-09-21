@@ -34,6 +34,7 @@ from levanter.models.snowball import (
     SnowballLMHeadModel,
     validate_single_name_config,
 )
+from levanter.testing.cpu_devices import run_on_cpu_devices
 
 
 def _tiny_config(**overrides) -> SnowballConfig:
@@ -276,11 +277,8 @@ def test_snowball_load_path_multidevice_sharding():
     router_bias`` was illegally sharded. Runs in a fresh 8-CPU-device interpreter (XLA device count
     is process-global) and force-shards the state dict like safetensors to reproduce the condition.
     """
-    script = textwrap.dedent(
+    run_on_cpu_devices(
         """
-        import os
-        os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count=8"
-        os.environ["JAX_PLATFORMS"] = "cpu"
         import equinox as eqx
         import haliax as hax
         import jax
@@ -326,12 +324,9 @@ def test_snowball_load_path_multidevice_sharding():
             loaded = hax.named_jit(lambda t, s: from_torch_compatible_state_dict(t, s))(template, sd)
             got = np.asarray(hax.named_jit(lambda m, x: m(x))(loaded, ids).array)
         assert np.array_equal(ref, got), "data-sharded load-path logits differ from the reference"
-        print("OK")
-        """
+        """,
+        device_count=8,
     )
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
-    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
-    assert "OK" in result.stdout
 
 
 def test_snowball_fresh_process_hf_discovery(tmp_path):
