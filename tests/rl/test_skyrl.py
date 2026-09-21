@@ -226,7 +226,6 @@ def test_skyrl_step_resolves_frozen_eagle_draft_artifact() -> None:
     assert resolved["model"] == {
         "source_uri": "s3://test/iceball-eagle",
         "source_identity": f"{draft.name}@{draft.version}:{draft.fingerprint()}",
-        "materialized_path": "/tmp/marinskyrl/drafts/iceball-eagle",
     }
     assert resolved["training"] is None
 

@@ -130,7 +130,6 @@ class ResolvedDirectoryDataSource:
 class ResolvedEagleDraft:
     source_uri: str
     source_identity: str
-    local_path: str
 
 
 class TaskTroveTagMatch(StrEnum):
@@ -260,7 +259,6 @@ class ArtifactEagleDraft:
         return ResolvedEagleDraft(
             source_uri=ctx.artifact_path(self.step),
             source_identity=_artifact_identity(self.step),
-            local_path=_artifact_local_path("drafts", self.step),
         )
 
 
@@ -384,7 +382,6 @@ def _config_yaml_with_eagle_draft(config_yaml: str, draft: ResolvedEagleDraft) -
     speculative["model"] = {
         "source_uri": draft.source_uri,
         "source_identity": draft.source_identity,
-        "materialized_path": draft.local_path,
     }
     return yaml.safe_dump(config, sort_keys=False)
 
