@@ -29,9 +29,8 @@ produced this data: each tokenizer was applied to the whole registry in a single
 fleet run, and each of those runs wrote a different version. The dedup stages,
 domain cluster assignment and decontamination are pinned to specific runs
 outright. Decontamination reads its own source-to-path map, in
-``hero_data_decontam_paths.json``: the marking rule is still under review, and a
-rule change moves the mark hash away from the data the ``v4-final-20260815`` run
-wrote.
+``hero_data_decontam_paths.json``, because the marking rule is still under
+review and every mark hangs off two shared upstream steps.
 
 All paths resolve against ``MARIN_PREFIX``. CoreWeave Datakit has one storage
 root, ``s3://marin-us-east-02a/marin``; use it regardless of worker placement.
@@ -198,9 +197,11 @@ def minhash(source: str) -> StepSpec:
 def decontaminated(source: str) -> StepSpec:
     """Return the pinned decontamination attributes for ``source``.
 
-    Pinned rather than resolved from current code: the mark hash covers the
-    marking rule, so tightening that rule repoints every source away from the
-    ``v4-final-20260815`` outputs without moving the data.
+    A mark's hash covers its eval Bloom and drop-set dependencies, not just its
+    own config, so a change to the marking rule rekeys those two shared steps
+    and repoints all 292 marks at once. The ``v4-final-20260815`` outputs stay
+    where they are, so resolving from current code would hand out paths with
+    nothing behind them.
     """
     return _frozen_step(f"hero/decontam/{source}", decontam_paths()[source])
 
