@@ -223,14 +223,15 @@ def _resolved_model(model: ServedModelConfig, iris: IrisConfig) -> tuple[ServedM
     weights = resolve_model_path(model.weights, iris.cache_ttl_days, model.revision)
     num_chips = iris.worker_resources.device.chip_count()
     tensor_parallel_size = model.tensor_parallel_size
-    revision = model.revision if weights == model.weights else None
     if tensor_parallel_size is None:
-        num_attention_heads, num_key_value_heads = read_attention_heads(weights, revision)
+        num_attention_heads, num_key_value_heads = read_attention_heads(weights, model.revision)
         tensor_parallel_size = select_tensor_parallel_size(num_attention_heads, num_chips, num_key_value_heads)
+    # The pinned revision survives weight resolution: the tokenizer probe for remote-code
+    # models needs it to load dynamic modules from the mirrored snapshot, where a dropped
+    # revision degrades to "main" and crashes transformers' module loader. Backends forward
+    # the revision to their loaders only for bare hub ids, never for resolved paths.
     return (
-        replace(
-            model, weights=weights, api_model=api_model, revision=revision, tensor_parallel_size=tensor_parallel_size
-        ),
+        replace(model, weights=weights, api_model=api_model, tensor_parallel_size=tensor_parallel_size),
         num_chips,
     )
 

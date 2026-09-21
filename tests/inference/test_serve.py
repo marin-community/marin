@@ -57,11 +57,12 @@ from marin.inference.iris_cli import (
 )
 from marin.inference.levanter_backend import (
     DEFAULT_LEVANTER_MAX_SEQ_LEN,
+    _checkpoint_ref,
     inference_mesh,
     levanter_max_seq_len,
     validate_levanter_dtype,
 )
-from marin.inference.model_preparation import resolve_model_path, select_tensor_parallel_size
+from marin.inference.model_preparation import is_hub_model_id, resolve_model_path, select_tensor_parallel_size
 from marin.inference.serve_cli import main as serve_main
 from marin.inference.types import OpenAIEndpoint, RunningModel
 from marin.inference.vllm_backend import VllmBackend, vllm_launcher
@@ -139,12 +140,18 @@ def test_resolve_model_path_returns_filesystem_path_for_local_cache(monkeypatch,
     assert resolve_model_path("Qwen/Qwen3-0.6B", 14, revision) == "/models/cached model"
 
 
-def test_vllm_backend_serves_the_pinned_revision(monkeypatch):
-    observed: dict[str, object] = {}
+@pytest.mark.parametrize(
+    ("weights", "expected_revision"),
+    [("org/model", "abc123"), ("gs://cache/quick-serve/model", None)],
+)
+def test_vllm_backend_revision_argument_follows_weights_kind(monkeypatch, weights, expected_revision):
+    """vLLM gets ``--revision`` only for bare hub ids; a resolved cache path carries its own pin."""
+
+    observed_extra_args: list[list[str]] = []
 
     @contextmanager
     def environment(**kwargs):
-        observed.update(kwargs)
+        observed_extra_args.append(kwargs["extra_args"])
         yield SimpleNamespace(
             model_id="public-model",
             server_url="http://127.0.0.1:8000/v1",
@@ -155,7 +162,7 @@ def test_vllm_backend_serves_the_pinned_revision(monkeypatch):
     monkeypatch.setattr("marin.inference.vllm_backend.vllm_launcher", lambda config: object())
     monkeypatch.setattr("marin.inference.vllm_backend.read_tool_chat_template", lambda *_args: "{{ messages }}")
     spec = ModelSpec(
-        weights="org/model",
+        weights=weights,
         revision="abc123",
         api_model="public-model",
         num_chips=1,
@@ -168,9 +175,11 @@ def test_vllm_backend_serves_the_pinned_revision(monkeypatch):
     with VllmBackend(VllmEngineConfig()).serve(spec):
         pass
 
-    extra_args = observed["extra_args"]
-    assert isinstance(extra_args, list)
-    assert extra_args[extra_args.index("--revision") + 1] == "abc123"
+    extra_args = observed_extra_args[0]
+    if expected_revision is None:
+        assert "--revision" not in extra_args
+    else:
+        assert extra_args[extra_args.index("--revision") + 1] == expected_revision
 
 
 def test_resolved_model_keeps_requested_id_as_served_name(monkeypatch):
@@ -192,6 +201,60 @@ def test_resolved_model_keeps_requested_id_as_served_name(monkeypatch):
 
     assert resolved.weights == "gs://cache/quick-serve/qwen3-0.6b"
     assert resolved.model_id == "Qwen/Qwen3-0.6B"
+
+
+def test_resolved_model_keeps_revision_for_cached_weights(monkeypatch):
+    """A cache hit must not drop the pinned revision.
+
+    The tokenizer probe for remote-code models loads dynamic modules through the
+    revision; a dropped pin degrades to the default branch and crashes transformers'
+    module loader with ``PosixPath / NoneType`` on every cache-hit serve.
+    """
+    monkeypatch.setattr(
+        "marin.inference.model_preparation.resolve_model_path",
+        lambda model, cache_ttl_days, revision=None: "gs://cache/quick-serve/ling-lite",
+    )
+    iris = IrisConfig(
+        worker_resources=ResourceConfig.with_tpu("v6e-4"),
+        worker_environment=create_environment(extras=["tpu"]),
+    )
+
+    resolved, _num_chips = _resolved_model(
+        ServedModelConfig(weights="inclusionAI/Ling-lite-1.5", revision="ef1ac33ce4c3", tensor_parallel_size=1), iris
+    )
+
+    assert resolved.weights == "gs://cache/quick-serve/ling-lite"
+    assert resolved.revision == "ef1ac33ce4c3"
+
+
+@pytest.mark.parametrize(
+    ("weights", "expected"),
+    [
+        ("inclusionAI/Ling-lite-1.5", "inclusionAI/Ling-lite-1.5@ef1ac33ce4c3"),
+        ("gs://cache/quick-serve/ling-lite", "gs://cache/quick-serve/ling-lite"),
+        ("/models/cached model", "/models/cached model"),
+    ],
+)
+def test_checkpoint_ref_pins_revision_only_for_hub_ids(weights, expected):
+    # The ref string is the wire format handed to the checkpoint loader; an @revision
+    # suffix only parses for hub ids and would corrupt resolved cache paths.
+    spec = SimpleNamespace(weights=weights, revision="ef1ac33ce4c3")
+    assert _checkpoint_ref(spec) == expected
+
+
+@pytest.mark.parametrize(
+    ("weights", "expected"),
+    [
+        ("org/model", True),
+        ("s3://marin-us-east-02a/tmp/ttl=14d/quick-serve-models/org_model-abc123", False),
+        ("gs://cache/model", False),
+        ("/models/cached model", False),
+        ("org/model/file.py", False),
+        ("model", False),
+    ],
+)
+def test_is_hub_model_id_classifies_weights_refs(weights, expected):
+    assert is_hub_model_id(weights) is expected
 
 
 def test_checkout_free_setup_script_pins_marin_core_with_extras():

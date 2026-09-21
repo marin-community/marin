@@ -40,6 +40,16 @@ def _vllm_model_path(path: str) -> str:
     return unquote(parsed.path)
 
 
+# A bare Hugging Face repo id is exactly two segments: org and model name.
+_HUB_ID_SEGMENTS = 2
+
+
+def is_hub_model_id(weights: str) -> bool:
+    """True when *weights* is a bare Hugging Face repo id (``org/model``) rather than a path."""
+
+    return "://" not in weights and not weights.startswith("/") and len(weights.split("/")) == _HUB_ID_SEGMENTS
+
+
 def select_tensor_parallel_size(
     num_attention_heads: int,
     num_chips: int,
