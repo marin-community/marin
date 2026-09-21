@@ -4,8 +4,8 @@ Each JSON file copies `resolved-skyrl.json` from the corresponding
 `s3://marin-us-east-02a/marin/users/romain/checkpoints/async-rl/<run>/<version>/` artifact,
 with one terminal newline added for repository lint. Its JSON values and Hydra arguments
 are unchanged.
-The file contains the 151 materialized Hydra arguments and the model/data references used
-by the Iris child. `r23_r26.json` describes the shared PPO artifact continued by both jobs.
+Each file contains the materialized Hydra arguments and the model/data references used
+by its Iris child. `r23_r26.json` describes the shared PPO artifact continued by both jobs.
 Run labels, artifact names, versions, and launcher source commits are in
 [`score_centering_study.md`](../../score_centering_study.md).
 
@@ -45,3 +45,9 @@ material difference across seeds is `trainer.seed` (`20`, `21`, or `22`).
 input. It publishes weights after each update and admits only responses from
 the current version, so versions one through three can use the consuming
 trainer as their exactly matched B scorer before its next optimizer update.
+
+`snowball_pilot_tis.json` is the resolved input for the 20-update full-response
+Snowball TIS control. It has 154 Hydra arguments, including the
+`dp_reshardable` policy optimizer checkpoint setting qualified by the r8
+full-optimizer restore, save, and terminal export. The matched SC32 arm is
+planned with the same source model, pool, seed, geometry, and schedule.
