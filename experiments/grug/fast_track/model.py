@@ -149,6 +149,9 @@ class GrugModelConfig:
     mla_kv_latent_dim: int = 512
     mla_nope_head_dim: int = 64
     mla_rope_head_dim: int = 64
+    # Optional low-rank latent on the output projection (w_o -> w_o_down @ w_o_up). Unlike the
+    # input latents it carries NO learnable norm. None keeps the single full-rank w_o.
+    mla_o_latent_dim: int | None = None
 
     def __post_init__(self) -> None:
         if not self.dense_mlp and self.num_experts_per_token >= self.num_experts:
@@ -263,7 +266,7 @@ class CausalSelfAttention(eqx.Module):
     w_q: "jax.Array | None"
     w_k: "jax.Array | None"
     w_v: "jax.Array | None"
-    w_o: Float[Array, "NH D"]
+    w_o: "jax.Array | None"
     attn_gate: Float[Array, "D N"]
     sconv_k: "ShortConv | None"  # SConv after the K projection (cfg.sconv)
     rel_pos: "InklingRelPos | None"  # Inkling relative-position bias (replaces RoPE when set)
@@ -277,23 +280,30 @@ class CausalSelfAttention(eqx.Module):
     w_uv: "jax.Array | None"
     w_kr: "jax.Array | None"
     kv_latent_norm: "RMSNorm | None"
+    # Output latent (no norm): w_o_down (n*nd -> o_latent), w_o_up (o_latent -> d). None -> use w_o.
+    w_o_down: "jax.Array | None"
+    w_o_up: "jax.Array | None"
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "CausalSelfAttention":
-        keys = random.split(key, 8)
+        keys = random.split(key, 9)
         d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.stored_kv_heads, cfg.inferred_head_dim
         std = cfg.initializer_std
         attn_gate = reshard(jnp.zeros((d, n)), P(None, None))
         if cfg.mla:
             ql, kvl = cfg.mla_q_latent_dim, cfg.mla_kv_latent_dim
             nd, rd = cfg.mla_nope_head_dim, cfg.mla_rope_head_dim
-            k_dq, k_uq, k_dkv, k_uk, k_uv, k_kr, k_o, k_rel = keys
+            k_dq, k_uq, k_dkv, k_uk, k_uv, k_kr, k_o, k_rel, k_ou = keys
             return CausalSelfAttention(
                 w_q=None,
                 w_k=None,
                 w_v=None,
-                w_o=reshard(_init_weight(k_o, (n * nd, d), std), P("model", _FSDP_AXES)),
+                w_o=(
+                    None
+                    if cfg.mla_o_latent_dim is not None
+                    else reshard(_init_weight(k_o, (n * nd, d), std), P("model", _FSDP_AXES))
+                ),
                 attn_gate=attn_gate,
                 sconv_k=(ShortConv.init(n * nd, cfg.sconv_kernel) if cfg.sconv and "k" in cfg.sconv_sites else None),
                 w_dq=reshard(_init_weight(k_dq, (d, ql), std), P(_FSDP_AXES, None)),
@@ -305,6 +315,16 @@ class CausalSelfAttention(eqx.Module):
                 w_kr=(reshard(_init_weight(k_kr, (d, rd), std), P(_FSDP_AXES, None)) if rd > 0 else None),
                 kv_latent_norm=RMSNorm.init(kvl, cfg.layer_norm_eps),
                 rel_pos=InklingRelPos.init(cfg, key=k_rel) if cfg.inkling_relpos else None,
+                w_o_down=(
+                    None
+                    if cfg.mla_o_latent_dim is None
+                    else reshard(_init_weight(k_o, (n * nd, cfg.mla_o_latent_dim), std), P("model", None))
+                ),
+                w_o_up=(
+                    None
+                    if cfg.mla_o_latent_dim is None
+                    else reshard(_init_weight(k_ou, (cfg.mla_o_latent_dim, d), std), P(None, _FSDP_AXES))
+                ),
                 cfg=cfg,
             )
         k_q, k_k, k_v, k_o, k_rel = keys[0], keys[1], keys[2], keys[3], keys[7]
@@ -324,6 +344,8 @@ class CausalSelfAttention(eqx.Module):
             w_uv=None,
             w_kr=None,
             kv_latent_norm=None,
+            w_o_down=None,
+            w_o_up=None,
             cfg=cfg,
         )
 
@@ -510,6 +532,10 @@ class CausalSelfAttention(eqx.Module):
             (*attn_out.shape[:-2], attn_out.shape[-2] * attn_out.shape[-1]),
             out_sharding=P(_BATCH_AXES, None, "model"),
         )
+        if self.cfg.mla and self.cfg.mla_o_latent_dim is not None:
+            # Output latent (no norm): project heads -> o_latent -> hidden.
+            o_latent = jnp.einsum("bsh,hl->bsl", attn_out, self.w_o_down, out_sharding=P(_BATCH_AXES, None, None))
+            return jnp.einsum("bsl,ld->bsd", o_latent, self.w_o_up, out_sharding=batch_spec)
         return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec)
 
 

@@ -171,7 +171,8 @@ def _active_params(cfg: GrugModelConfig) -> int:
         n = cfg.num_heads
         nd, rd = cfg.mla_nope_head_dim, cfg.mla_rope_head_dim
         ql, kvl = cfg.mla_q_latent_dim, cfg.mla_kv_latent_dim
-        attn = d * ql + ql * n * (nd + rd) + d * kvl + 2 * kvl * n * nd + d * rd + n * nd * d
+        o_proj = n * nd * cfg.mla_o_latent_dim + cfg.mla_o_latent_dim * d if cfg.mla_o_latent_dim else n * nd * d
+        attn = d * ql + ql * n * (nd + rd) + d * kvl + 2 * kvl * n * nd + d * rd + o_proj
     else:
         attn = 2 * d * cfg.num_heads * cfg.head_dim + 2 * d * cfg.num_kv_heads * cfg.head_dim
     if cfg.inkling_relpos:
@@ -244,6 +245,7 @@ def build_h100_ladder_run(
     inkling_relpos: bool = False,
     rel_extent: int = 1024,
     mla: bool = False,
+    mla_o_latent: int | None = None,
     rel_r_proj_group: RelBiasGroup = RelBiasGroup.MUONH,
     rel_proj_group: RelBiasGroup = RelBiasGroup.MUONH,
 ) -> ArtifactStep[ThroughputResult]:
@@ -268,7 +270,11 @@ def build_h100_ladder_run(
         # DeepSeek-V2 MLA low-rank Q/KV. With the Inkling bias the decoupled RoPE is dropped
         # (mla_rope_head_dim=0 -> 128-dim content-only heads); standalone MLA keeps the 64-dim rope.
         model = dataclasses.replace(
-            model, mla=True, mla_nope_head_dim=128, mla_rope_head_dim=0 if inkling_relpos else 64
+            model,
+            mla=True,
+            mla_nope_head_dim=128,
+            mla_rope_head_dim=0 if inkling_relpos else 64,
+            mla_o_latent_dim=mla_o_latent,
         )
     mp_policy = "params=float32,compute=bfloat16,output=bfloat16"
     expert_axis_size = 1 if dense else rung.gpus_per_task
@@ -481,6 +487,7 @@ def main(
     rel_r_proj_opt: str,
     rel_proj_opt: str,
     mla: bool,
+    mla_o_latent: int | None,
 ) -> ArtifactStep[ThroughputResult]:
     return build_h100_ladder_run(
         run_id=run_id,
@@ -494,6 +501,7 @@ def main(
         inkling_relpos=inkling_relpos,
         rel_extent=rel_extent,
         mla=mla,
+        mla_o_latent=mla_o_latent,
         rel_r_proj_group=RelBiasGroup(rel_r_proj_opt),
         rel_proj_group=RelBiasGroup(rel_proj_opt),
     )
