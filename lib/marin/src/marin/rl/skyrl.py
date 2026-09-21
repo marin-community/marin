@@ -240,7 +240,7 @@ class ArtifactDataSource:
 
 @dataclass(frozen=True)
 class TaskTroveDataSource:
-    """A metadata-selected cohort from one packed TaskTrove Clean release."""
+    """A metadata-selected cohort from the compatibility RL view of a TaskTrove release."""
 
     step: ArtifactStep[Artifact]
     selection: TaskTroveSelection

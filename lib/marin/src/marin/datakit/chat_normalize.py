@@ -8,7 +8,7 @@ import re
 from collections import deque
 from collections.abc import Callable, Iterator
 from enum import StrEnum
-from typing import Any
+from typing import Any, NamedTuple
 
 import dupekit
 import pyarrow as pa
@@ -31,8 +31,9 @@ from marin.datakit.normalize import (
 )
 from marin.execution.step_spec import StepSpec
 
-CHAT_NORMALIZE_VERSION = "2026.09.17.completed-assistant-turns"
+CHAT_NORMALIZE_VERSION = "2026.09.18.1"
 MAX_REJECTED_RECORD_FRACTION = 0.05
+LONG_FINAL_RESPONSE_ESTIMATED_TOKEN_THRESHOLD = 2_000
 
 
 _SAFE_TOOL_IDENTIFIER = re.compile(r"[A-Za-z0-9_.:-]+")
@@ -77,11 +78,78 @@ class ChatChannel(StrEnum):
     FINAL = "final"
 
 
+class RepeatedToolCallError(ValueError):
+    """A conversation repeats one tool call after two identical replies."""
+
+
+class _ToolCall(NamedTuple):
+    position: int
+    recipient: str
+    arguments: str
+
+
+class _ToolReply(NamedTuple):
+    position: int
+    text: str
+
+
 def message_text(message: Message) -> str:
     """Read the text-only content supported by Datakit chat artifacts."""
     if not message.content or any(not isinstance(part, TextContent) for part in message.content):
         raise ValueError("Datakit chat messages require text content parts")
     return "".join(part.text for part in message.content)
+
+
+def _estimated_token_count(text: str) -> int:
+    # Keep normalization tokenizer-free; the larger estimate handles long words,
+    # punctuation-heavy code, and non-ASCII text better than either proxy alone.
+    byte_estimate = (len(text.encode("utf-8")) + 3) // 4
+    lexical_estimate = len(re.findall(r"[A-Za-z0-9_]+|[^\s]", text))
+    return max(byte_estimate, lexical_estimate)
+
+
+def _has_long_final_response(messages: list[Message]) -> bool:
+    return any(
+        message.author.role == Role.ASSISTANT
+        and message.channel == ChatChannel.FINAL
+        and _estimated_token_count(message_text(message)) > LONG_FINAL_RESPONSE_ESTIMATED_TOKEN_THRESHOLD
+        for message in messages
+    )
+
+
+def has_stalled_tool_call(messages: list[Message]) -> bool:
+    """Find a third identical tool call after two identical replies between user messages."""
+    calls: list[_ToolCall] = []
+    replies: list[_ToolReply] = []
+
+    def turn_has_repetition() -> bool:
+        for first, second, third, first_reply, second_reply in zip(
+            calls, calls[1:], calls[2:], replies, replies[1:], strict=False
+        ):
+            if (
+                first.recipient == second.recipient == third.recipient
+                and first.arguments == second.arguments == third.arguments
+                and first_reply.text == second_reply.text
+                and first.position < first_reply.position < second.position < second_reply.position < third.position
+            ):
+                return True
+        return False
+
+    for position, message in enumerate(messages):
+        match message.author.role:
+            case Role.USER:
+                if turn_has_repetition():
+                    return True
+                calls.clear()
+                replies.clear()
+            case Role.ASSISTANT if message.recipient is not None:
+                arguments = json.loads(message_text(message))
+                calls.append(
+                    _ToolCall(position, message.recipient, json.dumps(arguments, sort_keys=True, separators=(",", ":")))
+                )
+            case Role.TOOL:
+                replies.append(_ToolReply(position, message_text(message)))
+    return turn_has_repetition()
 
 
 def validate_chat_messages(messages: list[Message]) -> None:
@@ -205,10 +273,15 @@ def _normalize_chat_record(record: dict[str, Any], messages_field: str, id_field
     if not isinstance(raw_kwargs, dict):
         raise ValueError("chat_template_kwargs must be a JSON object")
     kwargs = dict(raw_kwargs)
+    kwargs["enable_thinking"] = any(
+        message.author.role == Role.ASSISTANT and message.channel == ChatChannel.ANALYSIS for message in messages
+    )
     tools = kwargs.get("tools", [])
     if not isinstance(tools, list):
         raise ValueError("tools must be a list of function definitions")
     validate_tool_definitions(tools, messages)
+    if has_stalled_tool_call(messages):
+        raise RepeatedToolCallError("A tool call repeated after two identical tool replies")
     serialized_messages = [message.to_dict() for message in messages]
 
     source_id = record.get("source_id")
@@ -242,10 +315,17 @@ def _build_chat_pipeline(
     def normalize_record(record: dict[str, Any]) -> list[dict[str, Any]]:
         try:
             normalized = _normalize_chat_record(record, messages_field, id_field)
+        except RepeatedToolCallError:
+            counters.pipeline.update_counter("normalize_chat/repeated_tool_calls_filtered", 1)
+            return []
         except (UnicodeError, ValueError) as error:
             counters.pipeline.update_counter("normalize_chat/records_quarantined", 1)
             counters.pipeline.update_counter(f"normalize_chat/quarantined/{type(error).__name__}", 1)
             return []
+        messages = [Message.from_dict(message) for message in normalized["messages"]]
+        if _has_long_final_response(messages):
+            # Long finals can indicate reasoning that a source adapter failed to separate.
+            counters.pipeline.update_counter("normalize_chat/conversations_with_final_over_2k_estimated_tokens", 1)
         counters.pipeline.update_counter("normalize_chat/records_validated", 1)
         return [normalized]
 
