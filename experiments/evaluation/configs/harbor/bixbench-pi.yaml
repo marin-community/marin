@@ -25,6 +25,10 @@ retry:
   max_wait_sec: 60.0
 environment:
   type: daytona
+  # The correction-set tasks request 20 GB sandboxes, over the org's 10 GB Daytona cap
+  # (DaytonaValidationError at sandbox creation, every trial; same failure class as the
+  # DeepSWE drop in harbor#172). Clamp every task to the cap so trials can build at all.
+  override_storage_mb: 10240
 agents:
   - name: pi
 datasets:
