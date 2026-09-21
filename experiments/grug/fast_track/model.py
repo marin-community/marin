@@ -127,6 +127,8 @@ class GrugModelConfig:
     qk_mult: float = 1.3
     # QK-norm: non-parametric RMS norm on per-head q/k. Canonical MLA omits it (latent norms only).
     qk_norm: bool = True
+    # Multiplier on the routed-expert gate/up init std (fan-in-correct for latent experts = sqrt(hidden/latent)).
+    expert_gate_up_init_mult: float = 1.0
     sconv: bool = True
     sconv_kernel: int = 4
     sconv_sites: tuple[str, ...] = ("k", "attn", "mlp")
@@ -734,6 +736,7 @@ class MoEMLP(eqx.Module):
                 hidden_dim=expert_width,
                 intermediate_dim=cfg.intermediate_dim,
                 initializer_std=cfg.initializer_std,
+                gate_up_initializer_std=cfg.initializer_std * cfg.expert_gate_up_init_mult,
                 key=k_expert,
                 implementation="fixed_pooled_wave_all_to_all",
                 activation=ActivationFunctionEnum.silu,

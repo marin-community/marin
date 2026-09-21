@@ -256,6 +256,7 @@ def build_h100_ladder_run(
     lr_match_base_hidden: bool = False,
     qk_norm: bool = True,
     qk_mult: float | None = None,
+    expert_gate_up_init_mult: float = 1.0,
     rel_r_proj_group: RelBiasGroup = RelBiasGroup.MUONH,
     rel_proj_group: RelBiasGroup = RelBiasGroup.MUONH,
 ) -> ArtifactStep[ThroughputResult]:
@@ -277,6 +278,8 @@ def build_h100_ladder_run(
         model = dataclasses.replace(model, qk_norm=False)
     if qk_mult is not None:
         model = dataclasses.replace(model, qk_mult=qk_mult)
+    if expert_gate_up_init_mult != 1.0:
+        model = dataclasses.replace(model, expert_gate_up_init_mult=expert_gate_up_init_mult)
     if not dense and (latent_div != 2 or expert_intermediate_mult != 1):
         # LatentMoE compression / expert-width trade: shrink the routed-expert latent (hidden//latent_div)
         # and widen the routed-expert intermediate (x expert_intermediate_mult). Flop-neutral when the
@@ -562,6 +565,13 @@ def build_h100_ladder_run(
 @click.option("--qk-norm/--no-qk-norm", default=True, show_default=True, help="Non-parametric RMS norm on per-head q/k.")
 @click.option("--qk-mult", type=float, default=None, help="Override qk_mult (query scale); default: config 1.3.")
 @click.option(
+    "--expert-gate-up-init-mult",
+    type=float,
+    default=1.0,
+    show_default=True,
+    help="Multiplier on routed-expert gate/up init std (fan-in-correct for latent/N = sqrtN).",
+)
+@click.option(
     "--save-checkpoints",
     is_flag=True,
     default=False,
@@ -593,6 +603,7 @@ def main(
     lr_match_base_hidden: bool,
     qk_norm: bool,
     qk_mult: float | None,
+    expert_gate_up_init_mult: float,
 ) -> ArtifactStep[ThroughputResult]:
     return build_h100_ladder_run(
         run_id=run_id,
@@ -617,6 +628,7 @@ def main(
         lr_match_base_hidden=lr_match_base_hidden,
         qk_norm=qk_norm,
         qk_mult=qk_mult,
+        expert_gate_up_init_mult=expert_gate_up_init_mult,
         rel_r_proj_group=RelBiasGroup(rel_r_proj_opt),
         rel_proj_group=RelBiasGroup(rel_proj_opt),
     )
