@@ -1,0 +1,7 @@
+source,iris_job,attempt,arm,state,iris_task_seconds_total,reserved_h100_hours
+score_centering_snowball_flash_pair_sc32_fixed_attempt0_failure.json,/romain/users-romain-checkpoints-async-rl-snowball-default-set-28b80d60-2026.09.21.4-b548196e6619,0,flash_sc32_replacement,failed,25290.945,56.202100
+score_centering_snowball_flash_pair_sc32_fixed_attempt1_cancelled.json,/romain/users-romain-checkpoints-async-rl-snowball-default-set-28b80d60-2026.09.21.4-b548196e6619,1,flash_sc32_replacement,cancelled,74.44,0.165422
+score_centering_snowball_flash_pair_tis_attempt1_failure.json,/romain/users-romain-checkpoints-async-rl-snowball-default-set-6f0ff39c-2026.09.21.3-6902c969a370,1,flash_tis,failed,9872.49,21.938867
+score_centering_snowball_flash_pair_tis_continuation_attempt0_failure.json,/romain/users-romain-checkpoints-async-rl-snowball-default-set-17ed1d4f-2026.09.21.5-9e06721dbfad,0,flash_tis_step10_continuation,failed,8656.865,19.237478
+score_centering_snowball_flash_pair_tis_continuation_attempt1_cancelled.json,/romain/users-romain-checkpoints-async-rl-snowball-default-set-17ed1d4f-2026.09.21.5-9e06721dbfad,1,flash_tis_step10_continuation,cancelled,128.726,0.286058
+score_centering_snowball_flash_pair_tis_offload_probe_cancelled.json,/romain/users-romain-checkpoints-async-rl-snowball-default-set-7c561612-2026.09.21.6-df0d3130dea3,0,flash_tis_step10_offload_probe,cancelled,595.07,1.322378

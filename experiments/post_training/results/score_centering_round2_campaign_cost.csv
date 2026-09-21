@@ -1,0 +1,7 @@
+component,detail_source,reserved_h100_hours,note
+round_two_diagnostics,score_centering_round2_diagnostic_cost.csv,159.116285,"Every diagnostic, setup failure, recovery, qualification, export, and invalid-format probe in the round-two ledger."
+qwen_confirmation,score_centering_qwen_confirm_cost.csv,148.824749,Six unique matched confirmation runs; repeated checkpoint rows are counted once per run.
+snowball_formatfixed,score_centering_snowball_formatfixed_cost.csv,265.132267,Format-corrected Snowball arms and their listed attempts.
+snowball_postformat_pre_full_pair,score_centering_snowball_postformat_cost.csv,99.152303,"Replacement, continuation, retry, and offload-probe attempts after the format-fixed ledger and before the clean full pair."
+snowball_full_pair,score_centering_snowball_full_pair_cost.csv,393.616699,"All task attempts for versions 2026.09.21.7 through 2026.09.21.12, including canceled retries and invalid-path attempts."
+TOTAL,,1065.842303,Reserved H100 task-hours; not a billing estimate.

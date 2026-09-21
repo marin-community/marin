@@ -45,17 +45,23 @@ controlled follow-up where active TIS and older rollouts are expected, but these
 runs do not justify routine adoption or a claim of recovered useful staleness.
 Top-k-eight behavior capture cut measured Qwen cost by more than half versus
 top-k 32 at the same schedule; its quality effect was inconclusive. The Snowball
-pair validated two Megatron optimizer updates with active TIS and finite
-correction, but its SC job did not finish terminal export after preemption and
-restore failures, so this report makes no Snowball quality claim.
-Snowball's mismatch was about 0.034–0.035 with about 9% capped tokens, making a
-completed Snowball quality comparison the natural next check. The Qwen result
-does not establish the effect in that more active regime.
+arms reached nine Megatron optimizer updates with active TIS and finite
+correction. Six evaluations at the same step-five weights put the unadjusted
+SC32-minus-TIS endpoint difference between -33 and +11 completed answers.
+Neither arm reached the next evaluation: the installed attention stack fell
+back to TransformerEngine's unfused path, and matched continuations with
+training response caps from 3,840 down to 1,536 tokens still ran out of memory
+before update six completed. This report therefore makes no Snowball quality
+claim beyond step five. In the nine completed original updates, Snowball's
+token-weighted mismatch was about 0.0387 and TIS capped about 10.4% of tokens;
+testing that more active regime through a terminal comparison
+requires a compatible fused-attention runtime or a new parallel layout.
 
 ## Implementation and frozen inputs
 
-- MarinSkyRL branch `goal/score-centering-01a0bb6f`, pinned at
-  `a7b51d31d7ed44157219b5852f49ffd69de4038b` by the launcher. Qualification runs r10-r16
+- MarinSkyRL branch `goal/score-centering-01a0bb6f`. The current launcher pins
+  `22a37adc7135a54995cfb4f3b5cd07504af796b3`; the main Qwen experiments used
+  `a7b51d31d7ed44157219b5852f49ffd69de4038b`. Qualification runs r10-r16
   used earlier commit `e3186d29f29bfccddc37bca5c9940231b878761b`; r17 uses
   `c7b4ac4bdd9c57de18f9b01809f082227e2dae06`. The newer commits add tail-mass metrics,
   explicit W&B finish, and an optional delayed weight-publication cadence. The correction applies to the
@@ -1722,3 +1728,59 @@ Their jobs are
 [`51ede678`](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-default-set-51ede678-2026.09.21.12-4cd39723b96e)
 and
 [`c1504b0f`](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-default-set-c1504b0f-2026.09.21.12-2ab47596b818).
+
+Both arms restored successfully and produced a sixth immutable step-five pass.
+The [response analysis](results/score_centering_snowball_full_pair_continuation5_step5_evals.csv)
+counts 394 completed rewarded answers for TIS and 401 for SC32, a
+baseline-adjusted SC32-minus-TIS difference of +20. Correct raw rewards at any
+stop were 402 and 405, for an adjusted difference of +10. The
+completed-or-terminal-box audit counts 417 for TIS
+([GSM8K](results/score_centering_snowball_full_pair_continuation5_tis_gsm8k_step5_probe.json),
+[Math500](results/score_centering_snowball_full_pair_continuation5_tis_math500_step5_probe.json))
+and 432 for SC32
+([GSM8K](results/score_centering_snowball_full_pair_continuation5_sc32_gsm8k_step5_probe.json),
+[Math500](results/score_centering_snowball_full_pair_continuation5_sc32_math500_step5_probe.json)),
+an adjusted difference of +22. The completed endpoint difference is +7 and
+remains inside the -33 to +11 range observed across the six passes at identical
+weights. The [repeat summary](results/score_centering_snowball_full_pair_step5_repeats.csv)
+retains every count and adjustment. Averaging those six evaluation draws, the
+baseline-adjusted SC32-minus-TIS differences are +4.5 completed answers, -2.0
+raw-reward answers, and +2.0
+completed-or-terminal-box answers out of 756. The corresponding unadjusted
+endpoint ranges are -33 to +11, -34 to +12, and -26 to +15. This spread is
+descriptive sampling variation at one pair of weights, rather than uncertainty
+across training seeds. Their W&B runs are
+[`fdynpz58`](https://wandb.ai/marin-community/marin-async-rl/runs/fdynpz58)
+and [`91anpsc6`](https://wandb.ai/marin-community/marin-async-rl/runs/91anpsc6).
+
+The 1,536-token cap did not clear the attention-memory boundary. Both arms
+failed in the first resumed policy forward before completing update six. TIS's
+[exception](results/score_centering_snowball_full_pair_tis_continuation5_attempt0_failure.json)
+requested 708 MiB with 565.19 MiB free on pipeline stage one. SC32's
+[exception](results/score_centering_snowball_full_pair_sc32_continuation5_attempt0_failure.json)
+requested 162 MiB with 43.19 MiB free on pipeline stage zero. Both stacks again
+execute TransformerEngine's unfused attention softmax. Their automatic retries
+started and were promptly
+[canceled](results/score_centering_snowball_full_pair_continuation5_cancelled.json).
+Including those retries, TIS used 24.89 reserved H100-hours and SC32 used 24.90.
+A substantially shorter training cap would heavily truncate the reasoning
+responses, while effective fused attention or a new parallel layout changes
+the runtime experiment.
+
+The retained [initial W&B history](results/score_centering_snowball_full_pair_initial_wandb.jsonl)
+and [derived training metrics](results/score_centering_snowball_full_pair_training_metrics.csv)
+cover all nine completed updates in each original arm. TIS consumed 10.37
+million loss tokens at token-weighted mean age 1.62 updates; SC32 consumed
+10.52 million at mean age 1.67. Neither arm rejected a trajectory, and their
+maximum per-update age p90 was two. Their token-weighted mean absolute
+trainer-versus-behavior log ratios were 0.03877 and 0.03865, while TIS capped
+10.40% of tokens in both arms. SC32's token-weighted mean absolute correction
+was 0.00804. The [continuation W&B rows](results/score_centering_snowball_full_pair_step5_repeat_wandb.jsonl)
+retain the ten repeated-evaluation records and their run identities.
+
+The [full-pair task-attempt ledger](results/score_centering_snowball_full_pair_cost.csv)
+totals 393.62 reserved H100-hours for versions `2026.09.21.7` through
+`2026.09.21.12`, including invalid-path attempts, retries, and matched
+cancellations. The [round-two campaign ledger](results/score_centering_round2_campaign_cost.csv)
+links the nonoverlapping detailed ledgers and totals 1,065.84 reserved
+H100-hours. These are task reservations rather than a billing estimate.
