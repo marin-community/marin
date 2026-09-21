@@ -7,9 +7,9 @@ not attach answers, verifiers, earlier reviews, or blind-fit results.
 ```text
 Perform a fresh complete-subject curriculum review. Return strict JSON using the holistic-review contract.
 
-Read every capability, group, sampling facet, prerequisite edge, entry probe, representative probe, guidepost, and
-evidence item. Score: coverage 25; mutual self-confidence 25; progression and epsilon continuity 25; observable
-boundaries 15; probe quality and parsimony 10.
+Read every capability, group, sampling facet, entry probe, representative probe, guidepost, and evidence item. Also
+confirm that embedded prerequisite arrays are empty. Score: coverage 25; mutual self-confidence 25; local
+progression 25; observable boundaries 15; probe quality and parsimony 10.
 
 Required checks:
 - Account for every guidepost and evidence item with a primary capability or exclusion rationale.
@@ -18,13 +18,13 @@ Required checks:
 - Compare each pair's input representation, central transformation, output artifact, and correctness contract.
 - For every sampling facet, compare its most distant values and reject it if the solver loop, state transition, or
   evaluation contract changes.
-- For every prerequisite edge, identify where every dependent representative uses the full prerequisite outcome,
-  the one new operation in the entry, and the completed-artifact counterfactual.
+- Confirm that embedded `prerequisites` arrays are empty. Learning prerequisites receive a separate catalog-level
+  proposal and review after capability boundaries are stable.
 - Check every internal capability for one natural cross-child synthesis. A concatenated set of child deliverables is
   not synthesis. Also verify that every child probe is an instance of the parent's outcome; otherwise use a group and
   a sibling synthesis capability.
-- Check all entry-to-representative orderings for a plausible epsilon step. Structural plausibility is not evidence
-  of actual training transfer.
+- Check every entry-to-representative ordering for a plausible local difficulty increase within the same capability.
+  Do not infer cross-capability learning edges in this review.
 - Execute each probe on paper and reject missing facts, undefined factors, contradictory premises, trivial optima,
   and uncheckable outputs.
 - Distinguish evidence confidence from structural quality. High confidence requires direct or held-out evidence

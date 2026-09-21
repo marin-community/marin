@@ -32,11 +32,10 @@ CONSTRAINTS
 - Use a sampling facet only when the central operation and evaluation contract remain stable across its values.
   Apply the same distant-pair test to the facet's most distant values. Split instead when values change the solver
   loop, state transition, or evaluation contract.
-- Prerequisites connect capabilities only. For each edge, identify the full upstream outcome used by every dependent
-  representative, the single new operation in the dependent entry, and whether supplying the completed upstream
-  artifact would eliminate the dependency. Reject workflow-order edges.
-- The entry probe must give a learner who mastered all prerequisites a non-trivial chance of success. The
-  representative probe must exercise the full outcome.
+- Set every capability's `prerequisites` field to an empty array. A separate subject-local catalog pass proposes
+  learning prerequisites after capability boundaries are stable. Cross-subject progression is a separate follow-up.
+- The entry probe must be the smallest self-contained exercise of the capability's outcome. The representative probe
+  must exercise the full outcome. Do not encode an assumed cross-capability sequence in either probe.
 - Execute every probe on paper. Reject missing state or geometry, undefined factors, inconsistent premises, trivial
   optima, and outputs that cannot be checked from the supplied facts.
 - Substitute every child probe into its capability parent's outcome. If the parent does not contain every child,
@@ -46,7 +45,7 @@ CONSTRAINTS
 
 DESIGN AUDIT
 Return as a separate file: operation families; guidepost/evidence accounting; the distant-pair operation signatures
-and result for every capability and facet; the role decision for every node; accepted and rejected prerequisite
-edges with the completed-artifact counterfactual; probe execute-on-paper results; parent containment results; and
-known evidence limitations. Do not mention or infer a target section count.
+and result for every capability and facet; the role decision for every node; probe execute-on-paper results; parent
+containment results; and known evidence limitations. Do not propose learning-prerequisite edges or mention a target
+section count.
 ```

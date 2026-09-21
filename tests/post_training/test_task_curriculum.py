@@ -19,6 +19,8 @@ from experiments.post_training.task_curriculum.models import (
     GroupSection,
     HolisticReview,
     HolisticReviewStatus,
+    LearningProgression,
+    LearningProgressionReview,
     RoutingFacet,
     SampleTask,
     SystematicGapDisposition,
@@ -43,6 +45,9 @@ from experiments.post_training.task_curriculum.validation import (
     validate_subject_promotion,
     validate_subject_run,
 )
+
+LEARNING_PROMPT_VERSION = "learning-v1"
+LEARNING_REVIEW_PROMPT_VERSION = "learning-review-v1"
 
 
 def _section(section_id: str, parent_id: str | None, task_texts: tuple[str, str]) -> CapabilitySection:
@@ -179,7 +184,7 @@ def _subject_run() -> tuple[SubjectRunArtifacts, SubjectEvidenceIds]:
             "dimension_scores": {
                 "coverage": 22,
                 "mutual_self_confidence": 22,
-                "progression_and_epsilon_continuity": 21,
+                "local_progression": 21,
                 "observable_boundaries": 12,
                 "probe_quality_and_parsimony": 8,
             },
@@ -284,6 +289,194 @@ def test_subject_promotion_rejects_gap_in_uncovered_guidepost() -> None:
 
     with pytest.raises(ValueError):
         validate_subject_promotion(replace(artifacts, fit_review=uncovered_fit, holistic_review=uncovered_review))
+
+
+def _learning_edge(prerequisite_id: str, dependent_id: str) -> dict[str, object]:
+    return {
+        "prerequisite_id": prerequisite_id,
+        "dependent_id": dependent_id,
+        "enabled_scope": "Recurring tasks that reuse the upstream operation.",
+        "transfer_basis": "The upstream representation remains active in the dependent task.",
+        "artifact_substitution_test": "A supplied artifact does not remove the reasoning operation.",
+        "witnesses": [
+            {
+                "prerequisite_family": "Construct the upstream representation for case one.",
+                "dependent_entry_family": "Reuse it and add one operation for case one.",
+                "shared_foundation": "The same representation and invariant.",
+                "new_operation": "One dependent operation.",
+            },
+            {
+                "prerequisite_family": "Construct the upstream representation for case two.",
+                "dependent_entry_family": "Reuse it and add one operation for case two.",
+                "shared_foundation": "The same representation and invariant.",
+                "new_operation": "One dependent operation.",
+            },
+        ],
+    }
+
+
+def test_learning_progression_validates_cross_subject_edges_against_catalog() -> None:
+    catalog = _catalog()
+    progression = LearningProgression.model_validate(
+        {
+            "catalog_version": catalog.catalog_version,
+            "prompt_version": LEARNING_PROMPT_VERSION,
+            "scope_subject_ids": ["C01"],
+            "edges": [_learning_edge("files.search", "practice.processes.logs")],
+        }
+    )
+
+    progression.validate_against_catalog(catalog)
+
+    reversed_progression = LearningProgression.model_validate(
+        {
+            "catalog_version": catalog.catalog_version,
+            "prompt_version": LEARNING_PROMPT_VERSION,
+            "scope_subject_ids": ["C01"],
+            "edges": [_learning_edge("practice.processes.logs", "files.search")],
+        }
+    )
+    with pytest.raises(ValueError, match="out-of-scope dependents"):
+        reversed_progression.validate_against_catalog(catalog)
+
+
+def test_catalog_validates_embedded_learning_progression() -> None:
+    catalog_data = _catalog().model_dump(mode="json")
+    catalog_data["learning_progression"] = {
+        "catalog_version": catalog_data["catalog_version"],
+        "prompt_version": LEARNING_PROMPT_VERSION,
+        "scope_subject_ids": ["C00"],
+        "edges": [_learning_edge("files.search", "processes.logs")],
+    }
+
+    catalog = CurriculumCatalog.model_validate(catalog_data)
+
+    assert catalog.learning_progression is not None
+    assert len(catalog.learning_progression.edges) == 1
+
+    catalog_data["curricula"][0]["curriculum"]["sections"][1]["prerequisites"] = ["processes.logs"]
+    with pytest.raises(ValueError, match="cannot embed capability prerequisites"):
+        CurriculumCatalog.model_validate(catalog_data)
+
+
+def test_learning_progression_rejects_cycles() -> None:
+    with pytest.raises(ValueError):
+        LearningProgression.model_validate(
+            {
+                "catalog_version": "catalog-1",
+                "prompt_version": LEARNING_PROMPT_VERSION,
+                "scope_subject_ids": ["C00"],
+                "edges": [
+                    _learning_edge("files.search", "processes.logs"),
+                    _learning_edge("processes.logs", "files.search"),
+                ],
+            }
+        )
+
+
+def test_generation_contract_rejects_embedded_learning_prerequisites() -> None:
+    curriculum = _curriculum()
+    section = next(section for section in curriculum.capability_sections() if section.id == "files.search")
+    section.prerequisites = ["processes.logs"]
+
+    with pytest.raises(ValueError):
+        curriculum.check_generation_contract(maximum_depth=4)
+
+
+def test_learning_progression_review_requires_exact_edge_accounting() -> None:
+    catalog = _catalog()
+    progression = LearningProgression.model_validate(
+        {
+            "catalog_version": catalog.catalog_version,
+            "prompt_version": LEARNING_PROMPT_VERSION,
+            "scope_subject_ids": ["C00"],
+            "edges": [_learning_edge("files.search", "processes.logs")],
+        }
+    )
+    review = LearningProgressionReview.model_validate(
+        {
+            "catalog_version": catalog.catalog_version,
+            "progression_prompt_version": LEARNING_PROMPT_VERSION,
+            "review_prompt_version": LEARNING_REVIEW_PROMPT_VERSION,
+            "scope_subject_ids": ["C00"],
+            "edge_reviews": [],
+            "missing_edges": [],
+            "findings": ["The proposed edge was not reviewed."],
+            "recommendation": "accept",
+        }
+    )
+
+    with pytest.raises(ValueError):
+        review.validate_against_progression(progression, catalog)
+
+
+def test_learning_progression_review_treats_scope_as_unique_set() -> None:
+    catalog = _catalog()
+    progression = LearningProgression.model_validate(
+        {
+            "catalog_version": catalog.catalog_version,
+            "prompt_version": LEARNING_PROMPT_VERSION,
+            "scope_subject_ids": ["C00", "C01"],
+            "edges": [_learning_edge("files.search", "practice.processes.logs")],
+        }
+    )
+    review_data = {
+        "catalog_version": catalog.catalog_version,
+        "progression_prompt_version": LEARNING_PROMPT_VERSION,
+        "review_prompt_version": LEARNING_REVIEW_PROMPT_VERSION,
+        "scope_subject_ids": ["C01", "C00"],
+        "edge_reviews": [
+            {
+                "prerequisite_id": "files.search",
+                "dependent_id": "practice.processes.logs",
+                "verdict": "accept",
+                "rationale": "Both witness families reuse the upstream operation.",
+            }
+        ],
+        "missing_edges": [],
+        "findings": [],
+        "recommendation": "accept",
+    }
+    LearningProgressionReview.model_validate(review_data).validate_against_progression(progression, catalog)
+
+    review_data["scope_subject_ids"] = ["C00", "C00"]
+    duplicate_scope_review = LearningProgressionReview.model_validate(review_data)
+    with pytest.raises(ValueError, match="subject IDs must be unique"):
+        duplicate_scope_review.validate_against_progression(progression, catalog)
+
+
+def test_learning_progression_review_rejects_combined_cycle() -> None:
+    catalog = _catalog()
+    progression = LearningProgression.model_validate(
+        {
+            "catalog_version": catalog.catalog_version,
+            "prompt_version": LEARNING_PROMPT_VERSION,
+            "scope_subject_ids": ["C00"],
+            "edges": [_learning_edge("files.search", "processes.logs")],
+        }
+    )
+    review = LearningProgressionReview.model_validate(
+        {
+            "catalog_version": catalog.catalog_version,
+            "progression_prompt_version": LEARNING_PROMPT_VERSION,
+            "review_prompt_version": LEARNING_REVIEW_PROMPT_VERSION,
+            "scope_subject_ids": ["C00"],
+            "edge_reviews": [
+                {
+                    "prerequisite_id": "files.search",
+                    "dependent_id": "processes.logs",
+                    "verdict": "accept",
+                    "rationale": "The witness pairs reuse the upstream operation.",
+                }
+            ],
+            "missing_edges": [_learning_edge("processes.logs", "files.search")],
+            "findings": ["The omitted reverse edge would create a cycle."],
+            "recommendation": "revise",
+        }
+    )
+
+    with pytest.raises(ValueError):
+        review.validate_against_progression(progression, catalog)
 
 
 def test_section_anchors_include_only_capabilities() -> None:

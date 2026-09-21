@@ -7,17 +7,11 @@ import json
 
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep
-from rigging.filesystem.buckets import filesystem_for
-from rigging.filesystem.storage_path import prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.post_training.task_curriculum.models import CurriculumCatalog, SubjectInventory
 
 CATALOG_ARTIFACT_NAME = "post-training/task-curriculum/catalog"
-
-
-def _artifact_bytes(uri: str) -> bytes:
-    filesystem, path = filesystem_for(uri)
-    return filesystem.cat_file(path)
 
 
 class TaskCurriculumCatalogArtifact(Artifact):
@@ -29,7 +23,7 @@ class TaskCurriculumCatalogArtifact(Artifact):
 
     def read_catalog(self) -> CurriculumCatalog:
         """Load and validate the catalog from the artifact."""
-        return CurriculumCatalog.model_validate_json(_artifact_bytes(self.catalog_uri))
+        return CurriculumCatalog.model_validate_json(StoragePath(self.catalog_uri).read_bytes())
 
 
 class TaskCurriculumSubjectInventoryArtifact(Artifact):
@@ -41,10 +35,17 @@ class TaskCurriculumSubjectInventoryArtifact(Artifact):
 
     def read_inventory(self) -> SubjectInventory:
         """Load and validate the subject inventory from the artifact."""
-        return SubjectInventory.model_validate(json.loads(_artifact_bytes(self.inventory_uri)))
+        return SubjectInventory.model_validate(json.loads(StoragePath(self.inventory_uri).read_bytes()))
 
 
 TASK_CURRICULUM = ArtifactStep.adopt(
+    CATALOG_ARTIFACT_NAME,
+    "2026.09.20.1",
+    source="s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.20-subject-local-v3-0ce32038771d",
+    kind=TaskCurriculumCatalogArtifact,
+)
+
+TASK_CURRICULUM_V2 = ArtifactStep.adopt(
     CATALOG_ARTIFACT_NAME,
     "2026.09.19.2",
     source="s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-json-1faada4eeda8/publish",

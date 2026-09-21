@@ -8,5 +8,5 @@ runtime:
   # venv with no Pulumi SDK.
   options:
     virtualenv: ../../.venv
-description: Marina, the IAP-gated Cloud Run service hosting Marin's small web apps.
+description: Marina's authenticated web apps and public applet reader on Cloud Run.
 # Pulumi.marin-marina.yaml records the production stack's shared GCP KMS provider.

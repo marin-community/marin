@@ -31,7 +31,8 @@ Each checkpoint job requests **32 GB200 GPUs** across eight nodes and uses a bat
 size of 32 across the job. With `submission=all`, two checkpoint jobs can run concurrently when
 64 GPUs and the corresponding node resources are available. The backfill skips
 completed results, active jobs, and requests that exhausted their retries. The
-checkpoint selection comes from [`CHECKPOINT_RUNS`](config.py).
+checkpoint selection comes from [`hero_checkpoint_paths()`](../../checkpoints.py),
+which reads the current hero run and its ancestors.
 
 The workflow runs hourly. With its default, `submission=next`, it submits no new
 request while jobs for the current sampling specification are active. Otherwise,

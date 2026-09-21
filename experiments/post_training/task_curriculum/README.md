@@ -3,29 +3,30 @@
 This experiment turns a broad subject inventory into trainable curricula and maps tasks onto reviewed sections. It
 keeps curriculum design separate from task correctness:
 TaskCompendium owns model-visible task semantics and private verifier contracts; a curriculum describes observable
-capabilities, boundaries, examples, and prerequisites.
+capabilities, boundaries, and examples. A separate catalog-level pass proposes learning prerequisites after those
+capability boundaries are stable.
 
-The canonical cross-domain v2 catalog is the immutable object registered by `catalog_artifact.py`. Canonical means
+The canonical cross-domain v3 catalog is the immutable object registered by `catalog_artifact.py`. Canonical means
 versioned and addressable. It contains all 45 D-series subject roots and 2,405 globally unique nodes: 1,999 trainable
-capabilities and 406 organizational groups. One bounded repair pass raised the same-call holistic mean from 78.36 to
-92.81 across 42 reviewed subjects; 41 repairs were selected, one baseline was retained, and three previously accepted
-graphs were unchanged. Twenty-four subjects are `pilot_ready`; 21 remain explicitly provisional after the stopping
-rule. `HISTORY.md` records the experiments and tradeoffs. The 3.6 MB canonical JSON payload lives in CoreWeave S3.
+capabilities and 406 organizational groups. Its catalog-level learning graph adds 1,812 reviewed same-subject edges;
+the capability definitions otherwise retain production v2. Twenty-four subjects are `pilot_ready`; 21 remain
+explicitly provisional after the stopping rule. `HISTORY.md` records the experiments and tradeoffs. The 7.6 MB
+canonical JSON payload lives in CoreWeave S3.
 
-- Artifact handle: `TASK_CURRICULUM`, version `2026.09.19.2`
-- Catalog: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-json-1faada4eeda8/publish/curriculum.json`
-- Summary: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-json-1faada4eeda8/publish/catalog_summary.json`
-- Comparison: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-json-1faada4eeda8/publish/comparison.json`
-- Routing audit: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-json-1faada4eeda8/publish/routing_audit.json`
-- Evidence: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-json-1faada4eeda8/publish/evidence.tar.gz`
+- Artifact handle: `TASK_CURRICULUM`, version `2026.09.20.1`
+- Catalog: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.20-subject-local-v3-0ce32038771d/curriculum.json`
+- Progression summary: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.20-subject-local-v3-0ce32038771d/summary.json`
+- Capability scores: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.20-subject-local-v3-0ce32038771d/comparison.json`
+- Routing audit: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.20-subject-local-v3-0ce32038771d/routing_audit.json`
+- Evidence: `s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.20-subject-local-v3-0ce32038771d/evidence.tar.gz`
 - Human viewer: [Task curriculum](https://applets.marina.oa.dev/a/67f69132-2ef4-4c9e-b8b5-77cabd126442/)
 
 Materialize the JSON before local validation or mapping:
 
 ```bash
 uv run fsutil cp \
-  s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.19-json-1faada4eeda8/publish/curriculum.json \
-  /tmp/task-curriculum-cross-domain-v2.json
+  s3://marin-us-east-02a/marin/task-curriculum/catalogs/2026.09.20-subject-local-v3-0ce32038771d/curriculum.json \
+  /tmp/task-curriculum-cross-domain-v3.json
 ```
 
 `fsutil` reads `CW_KEY_ID` and `CW_KEY_SECRET` for this bucket. CoreWeave Iris tasks receive the same credentials from
@@ -67,6 +68,14 @@ three misses were unrelated operation families, not evidence for another omnibus
 AAII metadata found subject homes across all 45 roots; ten benchmark entries were classified as cross-domain task
 mechanics rather than subjects.
 
+The embedded prerequisite arrays in production v2 were a conservative hard-dependency experiment: only 17 edges in
+four subjects survived it, so they were not a useful easy-to-hard ordering. Production v3 replaces them with one
+catalog-level `learning_progression` graph under the original learning-enablement rule: mastery of A should materially
+improve the chance of some success on a recurring family of entry-level B tasks. It was generated subject by subject
+from compact capability packets, with one Sol/high proposer and one independent reviewer per subject. Capability
+definitions are unchanged from v2 except that the 17 obsolete embedded prerequisites are cleared. Cross-subject
+progression is deliberately deferred rather than inferred from incomplete context.
+
 ## Curriculum iteration
 
 One-off agent runs produce curricula and reviews. Their reports record the evidence, and reviewed changes are promoted
@@ -74,17 +83,20 @@ into a new immutable catalog version. For each selected macro area:
 
 1. Give a high-reasoning generator the inventory area, rubric, a maximum tree depth, and representative tasks. Before
    emitting the curriculum, it enumerates operation families, tests the most distant permitted pair for every
-   capability, and audits proposed prerequisites with the completed-artifact counterfactual. Every section includes
-   an `entry` probe that isolates the smallest prerequisite delta and a `representative` probe for the full outcome.
+   capability, and leaves embedded prerequisite arrays empty. Every section includes an `entry` probe for the
+   smallest self-contained exercise of its outcome and a `representative` probe for the full outcome.
 2. Validate the JSON with `Curriculum` and `Curriculum.check_generation_contract`.
 3. Give the curriculum and rubric to an independent high-reasoning reviewer. The reviewer returns a score, verdict,
    concrete findings, and proposed rubric changes in one call for the complete subject curriculum.
 4. When an uncertain boundary or difficulty claim could change the review, the reviewer may generate focused tasks
    and send them to a blinded Luna model in batches of 8–16. These diagnostics are optional and do not replace the
    whole-subject judgment.
-5. Compare findings across subjects. Mutual self-confidence and prerequisite continuity are blocking criteria even
-   when the numeric score is high. Revise the rubric or generation instructions only for problems that recur, then
-   generate another version.
+5. Compare findings across subjects. Mutual self-confidence and local entry-to-representative continuity are
+   blocking criteria even when the numeric score is high. Revise the rubric or generation instructions only for
+   problems that recur, then generate another version.
+6. After capability boundaries are stable, run one Sol/high learning-progression proposer and one independent
+   reviewer per compact subject packet. Each accepted edge has two witness-family sketches. `workflow.md` defines the
+   subject-local procedure.
 
 The holistic score controls structural readiness: 85 or higher with no structural blockers is `pilot_ready`.
 Evidence confidence is tracked independently. Low confidence marks branches that need better discovery or held-out
@@ -99,10 +111,10 @@ During initial calibration, a systematic operation-family gap blocks promotion; 
 independence and reporting rules.
 
 The hierarchy has two node kinds. A `capability` is a trainable outcome and the only kind that may receive task
-assignments, declare prerequisites, or carry entry and representative probes. A `group` is an organizational scope;
-it has no outcome, probes, or prerequisite edges. Use a group when a parent would otherwise be a routing menu or an
-artificial bundle of child deliverables. Capabilities may still contain narrower capabilities when their
-representative probe exercises a natural cross-child synthesis.
+assignments or carry entry and representative probes. A `group` is an organizational scope; it has no outcome or
+probes. Catalog-level learning edges connect capabilities and may cross subject roots. Use a group when a parent
+would otherwise be a routing menu or an artificial bundle of child deliverables. Capabilities may still contain
+narrower capabilities when their representative probe exercises a natural cross-child synthesis.
 
 Reusable knowledge dimensions belong in a capability's `sampling_facets`. A facet declares an axis such as language
 direction, jurisdiction, or scientific-model family; its concrete value is recorded with task annotations outside
