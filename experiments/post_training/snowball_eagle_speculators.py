@@ -77,6 +77,7 @@ SEQUENCE_LENGTH = 32768
 RL_DATA_VERSION = "2026.09.18"
 RL_ARTIFACT_NAME = "checkpoints/snowball-67b-a2b-eagle3-speculators-smoke"
 CLUSTER = "cw-rno2a"
+GPU_VARIANT = "H100"
 _DRAFT_GPU_COUNT = 8
 # Speculators installs torchaudio through its multimodal dependencies. Pin the
 # CUDA 12.8 wheel used by the Iris H100 PyTorch runtime so Transformers imports.
@@ -153,7 +154,7 @@ def _rl_smoke_config(role_plan: SkyRLRolePlan) -> str:
                 },
             },
             "placement": {
-                "colocate_all": False,
+                "colocate_all": role_plan.colocate_all,
                 "policy_strict_spread_pg": True,
                 "policy_num_nodes": role_plan.policy_num_nodes,
                 "policy_num_gpus_per_node": role_plan.policy_num_gpus_per_node,
@@ -310,7 +311,7 @@ def _capture_step(
         artifact_type=Artifact,
         run=remote(
             capture_hidden_states,
-            resources=ResourceConfig.with_gpu("H100", count=execution.gpu_count, cpu=96, ram="512g", disk="1t"),
+            resources=ResourceConfig.with_gpu(GPU_VARIANT, count=execution.gpu_count, cpu=96, ram="512g", disk="1t"),
             pip_packages=[SPECULATORS.requirement(), _TORCHAUDIO_CU128_REQUIREMENT],
             max_retries_failure=2,
         ),
@@ -347,7 +348,7 @@ def _draft_step(
         artifact_type=EagleDraftArtifact,
         run=remote(
             train_draft,
-            resources=ResourceConfig.with_gpu("H100", count=execution.gpu_count, cpu=96, ram="512g", disk="1t"),
+            resources=ResourceConfig.with_gpu(GPU_VARIANT, count=execution.gpu_count, cpu=96, ram="512g", disk="1t"),
             pip_packages=[SPECULATORS.requirement(), _TORCHAUDIO_CU128_REQUIREMENT],
         ),
         build_config=build_config,
@@ -472,7 +473,7 @@ def build_rl_smoke(draft: ArtifactStep[EagleDraftArtifact]) -> ArtifactStep[SkyR
             topology=SkyRLTopology(
                 num_nodes=12,
                 gpus_per_node=GPUS_PER_NODE,
-                gpu_variant="H100",
+                gpu_variant=GPU_VARIANT,
                 role_plan=role_plan,
             ),
             retention=SkyRLRetentionPolicy(),

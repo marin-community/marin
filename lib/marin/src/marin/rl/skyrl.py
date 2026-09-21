@@ -129,10 +129,6 @@ class ResolvedDirectoryDataSource:
 class EagleDraftArtifact(Artifact):
     """A deployable EAGLE draft checkpoint."""
 
-    @property
-    def source_uri(self) -> str:
-        return self.path
-
 
 class TaskTroveTagMatch(StrEnum):
     ALL = "all"
@@ -608,7 +604,7 @@ def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[S
             source_uri = (
                 f"{_artifact_identity(spec.draft_model)}/<draft>"
                 if ctx.is_fingerprint
-                else ctx.resolved(spec.draft_model).source_uri
+                else ctx.resolved(spec.draft_model).path
             )
             config_yaml = _config_yaml_with_eagle_draft(
                 config_yaml,
