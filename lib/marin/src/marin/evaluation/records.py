@@ -135,6 +135,7 @@ class ModelServeConfig(BaseModel):
     vllm_use_flashinfer_sampler: bool | None = None
     vllm_extra_args: tuple[str, ...]
     chat_template: str | None
+    env: dict[str, str] = {}
     auto_overrides: bool
 
 
