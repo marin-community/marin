@@ -1,0 +1,31 @@
+# BFCL-Parity on the pi harness for the campaign cohort.
+# Dataset is the registry's bfcl parity subset (123 stratified tasks, harbor PR #179 registry).
+n_concurrent_trials: 32
+release_trial_payloads_in_memory: true
+retry:
+  max_retries: 10
+  include_exceptions:
+    - InternalServerError
+    - APIConnectionError
+    - APITimeoutError
+    - ArtifactUploadTimeoutError
+    - ArtifactWriterBacklogError
+    - CancelledError
+    - ContextManagementInfrastructureError
+    - LLMRequestTimeoutError
+    - SandboxBuildFailedError
+    - TrialTimeoutError
+    - AgentKilledBySignalError
+    - VerifierTimeoutError
+    - VerifierRuntimeError
+  wait_multiplier: 2.0
+  min_wait_sec: 1.0
+  max_wait_sec: 60.0
+environment:
+  type: daytona
+agents:
+  - name: pi
+datasets:
+  - name: bfcl_parity
+    version: "1.0"
+    registry_url: https://raw.githubusercontent.com/marin-community/harbor/1764f698834e8459a46768339443e23e134f3504/registry.json

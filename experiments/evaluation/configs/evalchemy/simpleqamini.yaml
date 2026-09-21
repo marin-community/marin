@@ -1,0 +1,11 @@
+tasks: [SimpleQAMini]
+task_options:
+  SimpleQAMini:
+    num_fewshot: 0
+    task_alias: simpleqamini
+    generation: true
+apply_chat_template: true
+batch_size: 1
+seed: 42
+max_tokens: 512
+runtime_extras: [simpleqamini]

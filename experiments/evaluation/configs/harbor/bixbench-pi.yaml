@@ -1,0 +1,38 @@
+# BixBench CLI with the marin-1 correction set (bixbench-cli-marin-corrections@1), run on the
+# pi harness. Results must stay labeled with this dataset name and version: they include the
+# three reviewed corrections and are not canonical BixBench CLI v1.5 results.
+# Judge: Together-hosted GPT OSS 120B through verifier env (one judge call per task).
+n_concurrent_trials: 16
+release_trial_payloads_in_memory: true
+retry:
+  max_retries: 10
+  include_exceptions:
+    - InternalServerError
+    - APIConnectionError
+    - APITimeoutError
+    - ArtifactUploadTimeoutError
+    - ArtifactWriterBacklogError
+    - CancelledError
+    - ContextManagementInfrastructureError
+    - LLMRequestTimeoutError
+    - SandboxBuildFailedError
+    - TrialTimeoutError
+    - AgentKilledBySignalError
+    - VerifierTimeoutError
+    - VerifierRuntimeError
+  wait_multiplier: 2.0
+  min_wait_sec: 1.0
+  max_wait_sec: 60.0
+environment:
+  type: daytona
+agents:
+  - name: pi
+datasets:
+  - name: bixbench-cli-marin-corrections
+    version: "1"
+    registry_url: https://raw.githubusercontent.com/marin-community/harbor/1764f698834e8459a46768339443e23e134f3504/registry.json
+verifier:
+  env:
+    OPENAI_API_KEY: ${TOGETHER_API_KEY}
+    OPENAI_BASE_URL: https://api.together.xyz/v1
+    MODEL_NAME: openai/gpt-oss-120b
