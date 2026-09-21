@@ -1,0 +1,20 @@
+{
+  "attempts": [
+    {
+      "arm": "tis",
+      "iris_job": "/romain/users-romain-checkpoints-async-rl-snowball-default-set-71ed0cf5-2026.09.21.9-bc40f9a2b3be",
+      "iris_task_seconds_total": 360.105,
+      "reserved_h100_hours": 0.800233
+    },
+    {
+      "arm": "sc32",
+      "iris_job": "/romain/users-romain-checkpoints-async-rl-snowball-default-set-e6e7659e-2026.09.21.9-f814e2c68fac",
+      "iris_task_seconds_total": 359.8,
+      "reserved_h100_hours": 0.799556
+    }
+  ],
+  "completed_optimizer_updates_after_resume": 0,
+  "reason": "Canceled before restore after verifying that the submitted canonical-prefix resume paths contained no checkpoint objects.",
+  "runtime_commit": "22a37adc7135a54995cfb4f3b5cd07504af796b3",
+  "state": "cancelled"
+}

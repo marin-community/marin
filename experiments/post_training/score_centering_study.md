@@ -1581,3 +1581,7 @@ Their valid first-attempt jobs are
 [`740d61b2`](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-default-set-740d61b2-2026.09.21.9-2423ad7b70ab)
 and
 [`3ed8a4fb`](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-default-set-3ed8a4fb-2026.09.21.9-cc0f3024e4b0).
+An initial pair with the wrong canonical-prefix resume paths was
+[canceled](results/score_centering_snowball_full_pair_continuation2_bad_path_cancelled.json)
+before restore began. It produced no training evidence and added 1.60 reserved
+H100-hours to the campaign audit.
