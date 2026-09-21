@@ -1,0 +1,16 @@
+{
+  "completed": 330,
+  "completed_rewarded_or_exact_boxed": 231,
+  "completed_rewarded_or_terminal_boxed": 214,
+  "final_turn_boxed": 86,
+  "final_turn_boxed_exact_ground_truth": 57,
+  "final_turn_boxed_exact_unrewarded": 27,
+  "match_mode": "exact_string",
+  "membership_sha256": "d9ea04a7ab0747d31b186881c5cb10a597932a160241e94e6b8c12f5f26b2216",
+  "questions": 500,
+  "responses": "/home/romain/data/sources/devbox/score-centering/2026-09-21-snowball-full-pair-sc32-step5/val-math500.jsonl",
+  "rewarded_correct": 206,
+  "rewarded_correct_completed": 204,
+  "terminal_boxed_exact_ground_truth": 31,
+  "terminal_boxed_exact_unrewarded": 10
+}

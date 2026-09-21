@@ -1491,3 +1491,25 @@ and 376/756 for SC32
 [Math500](results/score_centering_snowball_full_pair_sc32_math500_step0_probe.json)).
 The final comparison therefore subtracts each arm's own baseline as well as
 reporting its endpoint score.
+
+Both arms passed the first operational gate at update five on their first Iris
+attempt. Their complete checkpoints contain trainer, dataloader, generation
+buffer, and RNG state plus 32 distributed policy shards; the latest-checkpoint
+markers point to step five. Stored size is 939.31 GB for TIS and 939.25 GB for
+SC32. Across the first five updates, neither arm rejected a trajectory. Mean
+consumed-token age was 1.29 updates for TIS and 1.35 for SC32; SC32's mean
+absolute centering correction was 0.00967.
+
+The immutable [step-five response analysis](results/score_centering_snowball_full_pair_progress_evals.csv)
+keeps the same held-out membership. TIS scored 416/756 rewarded core answers,
+up 147 from its own baseline; SC32 scored 384/756, up 122. The raw endpoint
+difference is -32 answers for SC32 and the baseline-adjusted difference is
+-25. The conservative completed-or-terminal-box audit counts 425/756 for TIS
+([GSM8K](results/score_centering_snowball_full_pair_tis_gsm8k_step5_probe.json),
+[Math500](results/score_centering_snowball_full_pair_tis_math500_step5_probe.json))
+and 399/756 for SC32
+([GSM8K](results/score_centering_snowball_full_pair_sc32_gsm8k_step5_probe.json),
+[Math500](results/score_centering_snowball_full_pair_sc32_math500_step5_probe.json)).
+Those conservative changes are +42 and +23, a baseline-adjusted SC32 minus TIS
+difference of -19. This is an interim single-seed checkpoint rather than the
+terminal quality result.
