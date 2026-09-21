@@ -6,6 +6,8 @@ import subprocess
 import sys
 import textwrap
 
+_CPU_TEST_ENV = {**os.environ, "JAX_PLATFORMS": "cpu", "JAX_NUM_CPU_DEVICES": "2"}
+
 
 def test_context_parallel_packed_model_matches_unsharded_loss_and_gradients():
     # Device count is process-global. A fresh CPU process exercises real collectives
@@ -55,8 +57,7 @@ def test_context_parallel_packed_model_matches_unsharded_loss_and_gradients():
             np.testing.assert_allclose(actual, expected, rtol=1e-4, atol=1e-4)
         """
     )
-    env = {**os.environ, "JAX_PLATFORMS": "cpu", "JAX_NUM_CPU_DEVICES": "2"}
-    result = subprocess.run([sys.executable, "-c", script], env=env, capture_output=True, text=True)
+    result = subprocess.run([sys.executable, "-c", script], env=_CPU_TEST_ENV, capture_output=True, text=True)
     assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
 
 
@@ -102,6 +103,5 @@ def test_context_parallel_splash_matches_reference_loss_and_gradients():
                 np.testing.assert_allclose(observed, reference, rtol=1e-4, atol=1e-4)
         """
     )
-    env = {**os.environ, "JAX_PLATFORMS": "cpu", "JAX_NUM_CPU_DEVICES": "2"}
-    result = subprocess.run([sys.executable, "-c", script], env=env, capture_output=True, text=True)
+    result = subprocess.run([sys.executable, "-c", script], env=_CPU_TEST_ENV, capture_output=True, text=True)
     assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
