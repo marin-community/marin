@@ -32,7 +32,7 @@ from experiments.june_tpu_67b_a2b.moe.heuristic_muonh import MoeMuonHHeuristic
 from experiments.june_tpu_67b_a2b.moe.optimizer import GrugMoeMuonHConfig
 
 logger = logging.getLogger(__name__)
-RUN_ID = "grug-67b-sft-20260920-special-token-lr-frozen-bias-1000"
+RUN_ID = "grug-67b-sft-20260920-special-token-lr-frozen-bias-1000-cpfix"
 OUTPUT = f"gs://marin-us-central2/users/held/grug_sft/{RUN_ID}"
 BASE = (
     "gs://marin-us-central2/grug/"
