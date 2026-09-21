@@ -22,13 +22,16 @@ or use it as a dependency of a step you do intend to run::
 :func:`harrier` returns a path string. It reads the fixed source-to-path
 map in ``hero_data_emb_paths.json`` and adds the active Marin prefix.
 
-:func:`normalized`, :func:`minhash`, and :func:`decontaminated` follow current
-code, so they track main as the registry moves. :func:`tokenized` pins the
-artifact version instead, because the tokenize hash includes one and it has
-changed under the runs that produced this data: each tokenizer was applied to
-the whole registry in a single fleet run, and each of those runs wrote a
-different version. The dedup stages and domain cluster assignment are pinned to
-specific runs outright.
+:func:`normalized` and :func:`minhash` follow current code, so they track main
+as the registry moves. :func:`tokenized` pins the artifact version instead,
+because the tokenize hash includes one and it has changed under the runs that
+produced this data: each tokenizer was applied to the whole registry in a single
+fleet run, and each of those runs wrote a different version. The dedup stages,
+domain cluster assignment and decontamination are pinned to specific runs
+outright. Decontamination reads its own source-to-path map, in
+``hero_data_decontam_paths.json``: the marking rule is still under review, and a
+rule change moves the mark hash away from the data the ``v4-final-20260815`` run
+wrote.
 
 All paths resolve against ``MARIN_PREFIX``. CoreWeave Datakit has one storage
 root, ``s3://marin-us-east-02a/marin``; use it regardless of worker placement.
@@ -51,12 +54,7 @@ from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datakit.cluster.domain.v0.assign import assign_hash_attrs
-from experiments.datakit.reference_pipeline import (
-    DecontaminationSteps,
-    decontamination_steps,
-    select_sources,
-    zephyr_datakit_steps,
-)
+from experiments.datakit.reference_pipeline import select_sources, zephyr_datakit_steps
 
 _MARIN_PREFIX_ENV = "MARIN_PREFIX"
 
@@ -77,6 +75,18 @@ def harrier_paths_path() -> pathlib.Path:
 def harrier_paths() -> dict[str, str]:
     """Load the complete Harrier path map."""
     return json.loads(harrier_paths_path().read_text())
+
+
+@cache
+def decontam_paths_path() -> pathlib.Path:
+    """Return the path to the pinned decontamination path map."""
+    return pathlib.Path(__file__).with_name("hero_data_decontam_paths.json")
+
+
+@cache
+def decontam_paths() -> dict[str, str]:
+    """Load the pinned decontamination path map."""
+    return json.loads(decontam_paths_path().read_text())
 
 
 # The manifest records paths relative to the sole CoreWeave Datakit root.
@@ -185,15 +195,14 @@ def minhash(source: str) -> StepSpec:
     return _read_only(steps.minhash[source])
 
 
-@cache
-def _decontamination_steps(_prefix: str) -> DecontaminationSteps:
-    """Resolve all decontamination marks once for a storage prefix."""
-    return decontamination_steps(select_sources(None))
-
-
 def decontaminated(source: str) -> StepSpec:
-    """Return the decontamination attributes for ``source``."""
-    return _read_only(_decontamination_steps(marin_prefix()).marks[source])
+    """Return the pinned decontamination attributes for ``source``.
+
+    Pinned rather than resolved from current code: the mark hash covers the
+    marking rule, so tightening that rule repoints every source away from the
+    ``v4-final-20260815`` outputs without moving the data.
+    """
+    return _frozen_step(f"hero/decontam/{source}", decontam_paths()[source])
 
 
 def exact_dups() -> StepSpec:
