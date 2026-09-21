@@ -9,6 +9,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from jax.sharding import AxisType, Mesh
 from levanter.checkpoint import save_checkpoint
 from levanter.grug.sharding import compact_grug_mesh
 
@@ -135,7 +136,11 @@ def full_sequence_logits(model, tokens):
 
 
 def test_logits_select_each_rows_last_input_position(spec):
-    mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)
+    mesh = Mesh(
+        np.asarray(jax.devices()[:1]).reshape((1,) * 5),
+        ("replica_dcn", "data", "context", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 5,
+    )
     with jax.set_mesh(mesh):
         model = COMPUTE_POLICY.cast_to_compute(
             Transformer.init(draccus.decode(GrugModelConfig, spec.model), key=jax.random.PRNGKey(7))

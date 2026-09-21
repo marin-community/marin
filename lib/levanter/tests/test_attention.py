@@ -17,7 +17,7 @@ from haliax import Axis
 from haliax.partitioning import ResourceAxis
 from jax._src import config as jax_config
 from jax.lax import Precision
-from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, PartitionSpec, use_abstract_mesh
+from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, PartitionSpec
 from levanter.testing.helpers import (
     skip_if_module_missing,
     skip_if_no_torch,
@@ -230,15 +230,14 @@ def test_align_kv_heads_repeats_grouped_query_heads():
 @skip_if_not_enough_devices(8)
 def test_align_kv_heads_lowers_with_explicit_mesh_axes():
     mesh = _make_explicit_mesh()
-    abstract_mesh = _make_explicit_abstract_mesh()
     sharding = NamedSharding(mesh, PartitionSpec("data", None, "model", None))
     kv = jax.ShapeDtypeStruct((8, 3, 2, 4), jnp.float32, sharding=sharding)
 
-    with _reset_abstract_mesh(), use_abstract_mesh(abstract_mesh):
-        aligned = eqx.filter_eval_shape(lambda: align_kv_heads(kv, num_q_heads=4))
+    with _reset_abstract_mesh(), jax.set_mesh(mesh):
+        aligned = jax.eval_shape(lambda value: align_kv_heads(value, num_q_heads=4), kv)
 
     assert aligned.shape == (8, 3, 4, 4)
-    assert aligned.sharding == NamedSharding(abstract_mesh, PartitionSpec("data", None, "model", None))
+    assert aligned.sharding == NamedSharding(mesh.abstract_mesh, PartitionSpec("data", None, "model", None))
 
 
 def test_te_bin_and_group_axes_by_function():

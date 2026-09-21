@@ -344,7 +344,7 @@ def best_effort_sharding(shape, *, devices=None, mesh=None):
     if mesh is None:
         # TODO: we shouldn't be getting a concrete mesh here. Need to fix/remove this whole function
         mesh = get_concrete_mesh()
-        if mesh is not None and mesh.shape == ():
+        if mesh is not None and mesh.empty:
             mesh = None
 
     if mesh is None:
