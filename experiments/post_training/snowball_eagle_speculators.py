@@ -77,7 +77,6 @@ RL_DATA_VERSION = "2026.09.18"
 RL_ARTIFACT_NAME = "checkpoints/snowball-67b-a2b-eagle3-speculators-smoke"
 CLUSTER = "cw-rno2a"
 _DRAFT_GPU_COUNT = 8
-_DRAFT_GPU_RESOURCES = ResourceConfig.with_gpu("H100", count=_DRAFT_GPU_COUNT, cpu=96, ram="512g", disk="1t")
 # Speculators installs torchaudio through its multimodal dependencies. Pin the
 # CUDA 12.8 wheel used by the Iris H100 PyTorch runtime so Transformers imports.
 _TORCHAUDIO_CU128_REQUIREMENT = (
@@ -288,7 +287,7 @@ def _capture_step(dataset: ArtifactStep) -> ArtifactStep[Artifact]:
         artifact_type=Artifact,
         run=remote(
             capture_hidden_states,
-            resources=_DRAFT_GPU_RESOURCES,
+            resources=ResourceConfig.with_gpu("H100", count=_DRAFT_GPU_COUNT, cpu=96, ram="512g", disk="1t"),
             pip_packages=[SPECULATORS.requirement(), _TORCHAUDIO_CU128_REQUIREMENT],
             max_retries_failure=2,
         ),
@@ -324,7 +323,7 @@ def _draft_step(
         artifact_type=EagleDraftArtifact,
         run=remote(
             train_draft,
-            resources=_DRAFT_GPU_RESOURCES,
+            resources=ResourceConfig.with_gpu("H100", count=_DRAFT_GPU_COUNT, cpu=96, ram="512g", disk="1t"),
             pip_packages=[SPECULATORS.requirement(), _TORCHAUDIO_CU128_REQUIREMENT],
         ),
         build_config=build_config,

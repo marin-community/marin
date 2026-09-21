@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -11,9 +12,9 @@ import torch
 from finestore.eval import ParticipantType
 from marin.training.speculators import (
     HiddenStateCaptureConfig,
-    _best_checkpoint,
     _capture_vllm_args,
     _make_checkpoint_portable,
+    _preferred_checkpoint,
     _publish_directory,
     _restore_directory,
     _validate_draft_checkpoint,
@@ -47,7 +48,27 @@ class _CaptureStoragePath:
             destination.write_text(self.path)
 
     def exists(self):
-        return False
+        return Path(self.path).exists()
+
+    def size(self):
+        return Path(self.path).stat().st_size
+
+    @property
+    def is_local(self):
+        return True
+
+    @property
+    def parent(self):
+        return _CaptureStoragePath(str(Path(self.path).parent))
+
+    def mkdirs(self):
+        Path(self.path).mkdir(parents=True, exist_ok=True)
+
+    def upload_from(self, local_path: str):
+        shutil.copy2(local_path, self.path)
+
+    def __truediv__(self, relative_path: str):
+        return _CaptureStoragePath(str(Path(self.path) / relative_path))
 
 
 class _CaptureEnvironment:
@@ -57,12 +78,12 @@ class _CaptureEnvironment:
         return None
 
 
-def _capture_config(*, sequence_length: int = 32768) -> HiddenStateCaptureConfig:
+def _capture_config(*, sequence_length: int = 32768, output_path: str = "published") -> HiddenStateCaptureConfig:
     return HiddenStateCaptureConfig(
         dataset_path="dataset.jsonl",
         target_model="target",
         processor_model="tokenizer",
-        output_path="published",
+        output_path=output_path,
         target_layer_ids=(2, 13, 23),
         verifier_num_hidden_layers=26,
         sequence_length=sequence_length,
@@ -141,7 +162,7 @@ def test_checkpoint_selection_and_portable_verifier_reference(tmp_path: Path):
         json.dumps({"speculators_config": {"verifier": {"name_or_path": "/tmp/verifier"}}})
     )
 
-    assert _best_checkpoint(checkpoint.parent) == checkpoint
+    assert _preferred_checkpoint(checkpoint.parent) == checkpoint
     _make_checkpoint_portable(checkpoint)
 
     saved = json.loads((checkpoint / "config.json").read_text())
@@ -182,9 +203,7 @@ def test_restore_directory_recovers_published_capture_progress(tmp_path: Path):
     assert (destination / "hidden_states" / "hs_7.safetensors").read_text() == "captured"
 
 
-def test_capture_publishes_after_vllm_teardown_failure(monkeypatch):
-    published = []
-
+def test_capture_publishes_after_vllm_teardown_failure(monkeypatch, tmp_path: Path):
     class FailingExit:
         def __enter__(self):
             return _CaptureEnvironment()
@@ -204,21 +223,21 @@ def test_capture_publishes_after_vllm_teardown_failure(monkeypatch):
     def fake_command(command, *, environment=None):
         del environment
         if "prepare-data" in command:
-            Path(command[command.index("--output") + 1]).mkdir()
+            prepared_data = Path(command[command.index("--output") + 1])
+            prepared_data.mkdir()
+            (prepared_data / "dataset_info.json").write_text("{}")
 
     monkeypatch.setattr(speculators, "StoragePath", _CaptureStoragePath)
     monkeypatch.setattr(speculators, "VllmBackend", FakeBackend)
     monkeypatch.setattr(speculators, "_run_command", fake_command)
-    monkeypatch.setattr(speculators, "_publish_directory", lambda source, destination: published.append(destination))
+    output_path = tmp_path / "published"
 
-    capture_hidden_states(_capture_config())
+    capture_hidden_states(_capture_config(output_path=str(output_path)))
 
-    assert published == ["published"]
+    assert (output_path / "dataset_info.json").read_text() == "{}"
 
 
-def test_capture_publishes_progress_before_propagating_generation_failure(monkeypatch):
-    published = []
-
+def test_capture_publishes_progress_before_propagating_generation_failure(monkeypatch, tmp_path: Path):
     class FakeBackend:
         def __init__(self, config):
             del config
@@ -247,15 +266,10 @@ def test_capture_publishes_progress_before_propagating_generation_failure(monkey
     monkeypatch.setattr(speculators, "StoragePath", _CaptureStoragePath)
     monkeypatch.setattr(speculators, "VllmBackend", FakeBackend)
     monkeypatch.setattr(speculators, "_run_command", fake_command)
-    monkeypatch.setattr(
-        speculators,
-        "_publish_directory",
-        lambda source, destination: published.append(
-            (destination, (source / "hidden_states" / "hs_0.safetensors").exists())
-        ),
-    )
+    output_path = tmp_path / "published"
 
     with pytest.raises(subprocess.CalledProcessError):
-        capture_hidden_states(_capture_config())
+        capture_hidden_states(_capture_config(output_path=str(output_path)))
 
-    assert published == [("published", True)]
+    assert (output_path / "dataset_info.json").read_text() == "{}"
+    assert (output_path / "hidden_states" / "hs_0.safetensors").read_text() == "captured"

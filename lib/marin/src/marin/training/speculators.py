@@ -32,7 +32,6 @@ logger = logging.getLogger(__name__)
 SPECULATORS_DATA_FILENAME = "conversations.jsonl"
 SPECULATORS_PREPARED_DATA_DIR = "data"
 SPECULATORS_HIDDEN_STATES_DIR = "hidden_states"
-_VLLM_SCALE_OUT_ENDPOINTS_ENV = {"VLLM_ENABLE_SCALE_OUT_ENDPOINTS": "1"}
 _OBJECT_STORE_BATCH_SIZE = 16
 
 _VERIFIER_TENSORS = (
@@ -43,6 +42,7 @@ _VERIFIER_TENSORS = (
     "model.final_gated_norm.up_proj.weight",
 )
 _CHECKPOINT_INDEX = "model.safetensors.index.json"
+_CONFIG_FILENAME = "config.json"
 _TOKENIZER_FILES = (
     "added_tokens.json",
     "chat_template.jinja",
@@ -167,7 +167,6 @@ def write_rollout_conversations(config: RolloutConversationConfig) -> None:
 
 
 def mirror_hf_snapshot(config: HfSnapshotConfig) -> None:
-    """Mirror one immutable Hugging Face snapshot into artifact storage."""
     cache_hf_model(config.output_path, config.repo_id, revision=config.revision)
 
 
@@ -199,9 +198,9 @@ def build_verifier_view(config: VerifierViewConfig) -> None:
         }
         (work_path / _CHECKPOINT_INDEX).write_text(json.dumps(selected_index, indent=2, sort_keys=True) + "\n")
 
-        source_config = json.loads((source / "config.json").read_text())
+        source_config = json.loads((source / _CONFIG_FILENAME).read_text())
         transformed = verifier_config_for_transformers(source_config, config.transformers_model_type)
-        (work_path / "config.json").write_text(json.dumps(transformed, indent=2, sort_keys=True) + "\n")
+        (work_path / _CONFIG_FILENAME).write_text(json.dumps(transformed, indent=2, sort_keys=True) + "\n")
 
         for filename in _TOKENIZER_FILES:
             source_file = source / filename
@@ -364,7 +363,7 @@ def capture_hidden_states(config: HiddenStateCaptureConfig) -> None:
             with backend.start(
                 model,
                 extra_args=_capture_vllm_args(config, connector_staging),
-                subprocess_env=_VLLM_SCALE_OUT_ENDPOINTS_ENV,
+                subprocess_env={"VLLM_ENABLE_SCALE_OUT_ENDPOINTS": "1"},
             ) as environment:
                 environment.wait_until_ready()
                 render_endpoint = environment.server_url.removesuffix(OPENAI_API_SUFFIX)
@@ -382,7 +381,7 @@ def capture_hidden_states(config: HiddenStateCaptureConfig) -> None:
                 _publish_directory(prepared_data, config.output_path)
 
 
-def _best_checkpoint(checkpoints: Path) -> Path:
+def _preferred_checkpoint(checkpoints: Path) -> Path:
     best = checkpoints / "checkpoint_best"
     if best.exists():
         return best.resolve()
@@ -396,7 +395,7 @@ def _best_checkpoint(checkpoints: Path) -> Path:
 
 
 def _make_checkpoint_portable(checkpoint: Path) -> None:
-    config_path = checkpoint / "config.json"
+    config_path = checkpoint / _CONFIG_FILENAME
     config = json.loads(config_path.read_text())
     config["speculators_config"]["verifier"]["name_or_path"] = None
     config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
@@ -413,7 +412,7 @@ def _safetensors_tensor_names(path: Path) -> set[str]:
 
 
 def _validate_draft_checkpoint(checkpoint: Path) -> None:
-    config = json.loads((checkpoint / "config.json").read_text())
+    config = json.loads((checkpoint / _CONFIG_FILENAME).read_text())
     if config.get("embed_requires_grad", False):
         return
 
@@ -476,7 +475,7 @@ def train_draft(config: DraftTrainingConfig) -> None:
         ]
         _run_command(command, environment=os.environ | {"TOKENIZERS_PARALLELISM": "false"})
 
-        shutil.copytree(_best_checkpoint(checkpoints), published)
+        shutil.copytree(_preferred_checkpoint(checkpoints), published)
         _make_checkpoint_portable(published)
         _validate_draft_checkpoint(published)
         _publish_directory(published, config.output_path)

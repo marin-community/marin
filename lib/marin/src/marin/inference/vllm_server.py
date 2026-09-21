@@ -65,20 +65,26 @@ _PYTORCH_CPU_INDEX_URL = "https://download.pytorch.org/whl/cpu"
 # indexes are trusted release inputs, so resolution must consider compatible versions from
 # both instead of stopping at the first package name match.
 _PYTORCH_INDEX_STRATEGY = "unsafe-best-match"
+
+
 # CoreWeave task images provide the NVIDIA driver but not nvcc. FlashInfer JIT-compiles SM100
 # attention, MoE, sampling, and all-reduce kernels even when vLLM itself comes from a native wheel.
-_CUDA_TOOLCHAIN_REQUIREMENTS = {
-    _UPSTREAM_CUDA_TORCH_BACKEND: (
-        "nvidia-cuda-nvcc==13.0.88",
-        "nvidia-cuda-crt==13.0.88",
-        "nvidia-nvvm==13.0.88",
-    ),
-    "cu132": (
-        "nvidia-cuda-nvcc==13.2.78",
-        "nvidia-cuda-crt==13.2.78",
-        "nvidia-nvvm==13.2.78",
-    ),
-}
+def _cuda_toolchain_requirements(torch_backend: str) -> tuple[str, ...]:
+    if torch_backend == _UPSTREAM_CUDA_TORCH_BACKEND:
+        return (
+            "nvidia-cuda-nvcc==13.0.88",
+            "nvidia-cuda-crt==13.0.88",
+            "nvidia-nvvm==13.0.88",
+        )
+    if torch_backend == "cu132":
+        return (
+            "nvidia-cuda-nvcc==13.2.78",
+            "nvidia-cuda-crt==13.2.78",
+            "nvidia-nvvm==13.2.78",
+        )
+    raise ValueError(f"Unsupported CUDA toolchain backend: {torch_backend}")
+
+
 _CUDA_NVCC_BOOTSTRAP = """\
 import importlib.metadata
 import os
@@ -242,7 +248,7 @@ class IsolatedCudaVllm:
 
     def command(self) -> list[str]:
         install = self._install()
-        toolchain = _CUDA_TOOLCHAIN_REQUIREMENTS[install.torch_backend]
+        toolchain = _cuda_toolchain_requirements(install.torch_backend)
         requirements = [_RUNAI_STREAMER_REQUIREMENT, *toolchain]
         resolver_args = ["--torch-backend", install.torch_backend]
         if self.source is VllmType.MARIN_FORK:
@@ -286,7 +292,7 @@ class IsolatedCudaVllm:
 
     def cache_identity(self) -> str:
         install = self._install()
-        toolchain = ",".join(_CUDA_TOOLCHAIN_REQUIREMENTS[install.torch_backend])
+        toolchain = ",".join(_cuda_toolchain_requirements(install.torch_backend))
         return f"cuda:{install.requirement}:{self.python_version}:{install.torch_backend}:{toolchain}"
 
 
