@@ -1,0 +1,27 @@
+# Harness ablation cell: bfclparity x pi (eval-policy campaign, version harness-ablation-v1).
+# Standard policy retry/error handling; dataset reference mirrors the policy suite.
+n_concurrent_trials: 32
+release_trial_payloads_in_memory: true
+retry:
+  max_retries: 10
+  include_exceptions:
+    - InternalServerError
+    - APIConnectionError
+    - APITimeoutError
+    - ArtifactUploadTimeoutError
+    - ArtifactWriterBacklogError
+    - CancelledError
+    - ContextManagementInfrastructureError
+    - LLMRequestTimeoutError
+    - SandboxBuildFailedError
+    - TrialTimeoutError
+  wait_multiplier: 2.0
+  min_wait_sec: 1.0
+  max_wait_sec: 60.0
+environment:
+  type: daytona
+agents:
+  - name: pi
+datasets:
+  - name: bfcl_parity
+    registry_url: https://raw.githubusercontent.com/marin-community/harbor/16ba28939eea7e7070bcd643be0de36f67b93806/registry.json
