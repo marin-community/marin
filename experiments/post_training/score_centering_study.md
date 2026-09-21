@@ -1481,8 +1481,10 @@ and no retry or failure. The raw response snapshots have per-file byte counts
 and SHA-256 manifests under `~/data/sources/devbox/score-centering/`; immutable
 copies are also stored under each run's `exports/attempt0_step0_evals` prefix.
 The [response analysis](results/score_centering_snowball_full_pair_step0_evals.csv)
-confirms identical 756-question core-math membership. TIS scored 269/756
-rewarded answers, while SC32 scored 262/756. Requiring a completed response or
+confirms identical 756-question core-math membership. TIS received a correct
+raw reward for 269/756 answers, while SC32 did so for 262/756; these counts
+include correct responses that stopped at the length limit. The completed-only
+counts were 266 and 253. Requiring a completed response or
 a matching terminal box gives 383/756 for TIS
 ([GSM8K](results/score_centering_snowball_full_pair_tis_gsm8k_step0_probe.json),
 [Math500](results/score_centering_snowball_full_pair_tis_math500_step0_probe.json))
@@ -1501,10 +1503,12 @@ consumed-token age was 1.29 updates for TIS and 1.35 for SC32; SC32's mean
 absolute centering correction was 0.00967.
 
 The immutable [step-five response analysis](results/score_centering_snowball_full_pair_progress_evals.csv)
-keeps the same held-out membership. TIS scored 416/756 rewarded core answers,
-up 147 from its own baseline; SC32 scored 384/756, up 122. The raw endpoint
-difference is -32 answers for SC32 and the baseline-adjusted difference is
--25. The conservative completed-or-terminal-box audit counts 425/756 for TIS
+keeps the same held-out membership. TIS received a correct raw reward for
+416/756 answers, up 147 from its own baseline; SC32 did so for 384/756, up
+122. The raw-reward endpoint difference is -32 answers for SC32 and its
+baseline-adjusted difference is -25. The completed-only counts are 411 and
+380, whose baseline-adjusted difference is -18. The conservative
+completed-or-terminal-box audit counts 425/756 for TIS
 ([GSM8K](results/score_centering_snowball_full_pair_tis_gsm8k_step5_probe.json),
 [Math500](results/score_centering_snowball_full_pair_tis_math500_step5_probe.json))
 and 399/756 for SC32
@@ -1542,10 +1546,13 @@ populated optimizer temporarily offloaded, directly exercising the resume
 path that had failed on the older runtime. Their repeated step-five responses
 were copied to immutable `attempt0_step5_evals` prefixes before training
 continued. The [response analysis](results/score_centering_snowball_full_pair_continuation_step5_evals.csv)
-counts 405/756 rewarded core-math answers for TIS and 407/756 for SC32. Those
-same checkpoints scored 416 and 384 in their first pass, so the raw SC32-minus-
-TIS difference moved from -32 to +2 without a weight change. Relative to each
-arm's frozen step-zero baseline, the difference moved from -25 to +9.
+counts 405/756 completed rewarded core-math answers for TIS and 407/756 for
+SC32. Those same checkpoints had 411 and 380 completed rewarded answers in
+their first pass, so the SC32-minus-TIS difference moved from -31 to +2
+without a weight change. Relative to each arm's completed-only step-zero
+baseline, the difference moved from -18 to +15. Counting correct raw rewards
+at any stop gives 406 and 411 on the repeat, versus 416 and 384 on the first
+pass; its baseline-adjusted difference moved from -25 to +12.
 The completed-or-terminal-box audit similarly counts 426 for TIS
 ([GSM8K](results/score_centering_snowball_full_pair_continuation_tis_gsm8k_step5_probe.json),
 [Math500](results/score_centering_snowball_full_pair_continuation_tis_math500_step5_probe.json))
@@ -1585,3 +1592,21 @@ An initial pair with the wrong canonical-prefix resume paths was
 [canceled](results/score_centering_snowball_full_pair_continuation2_bad_path_cancelled.json)
 before restore began. It produced no training evidence and added 1.60 reserved
 H100-hours to the campaign audit.
+
+Both valid jobs restored the same complete step-five states and produced a
+third immutable evaluation before resumed training. The
+[response analysis](results/score_centering_snowball_full_pair_continuation2_step5_evals.csv)
+counts 406 completed rewarded answers for TIS and 373 for SC32. The
+baseline-adjusted SC32-minus-TIS difference is -20. Correct raw rewards at any
+stop were 408 and 374, for a baseline-adjusted difference of -27. The
+completed-or-terminal-box audit counts 425 for TIS
+([GSM8K](results/score_centering_snowball_full_pair_continuation2_tis_gsm8k_step5_probe.json),
+[Math500](results/score_centering_snowball_full_pair_continuation2_tis_math500_step5_probe.json))
+and 399 for SC32
+([GSM8K](results/score_centering_snowball_full_pair_continuation2_sc32_gsm8k_step5_probe.json),
+[Math500](results/score_centering_snowball_full_pair_continuation2_sc32_math500_step5_probe.json)),
+returning its baseline-adjusted difference to -19. Across the three passes,
+the completed-only SC32-minus-TIS difference ranges from -33 to +2 and the
+audited difference ranges from -26 to +4 without any weight change. The
+terminal comparison therefore retains both evaluations separately and treats
+one training seed as descriptive.
