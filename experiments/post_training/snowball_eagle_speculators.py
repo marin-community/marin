@@ -115,7 +115,7 @@ TARGET_LAYER_IDS = (2, 13, 23)
 VERIFIER_NUM_HIDDEN_LAYERS = 26
 SEQUENCE_LENGTH = 32768
 RL_DATA_VERSION = "2026.09.18"
-RL_ARTIFACT_NAME = "checkpoints/snowball-67b-a2b-eagle3-speculators-benchmark"
+RL_ARTIFACT_NAME = "checkpoints/snowball-e3-bench"
 TASKTROVE_RELEASE = ArtifactStep.adopt(
     "tasktrove/clean",
     "2026.09.18.3",
