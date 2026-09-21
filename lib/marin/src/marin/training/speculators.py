@@ -122,6 +122,13 @@ class DraftTrainingConfig:
     num_processes: int
 
 
+@dataclass(frozen=True)
+class SpeculatorsRecipe:
+    requirement: str
+    target_layer_ids: tuple[int, ...]
+    sequence_length: int
+
+
 def _rollout_key(row: Mapping[str, Any]) -> tuple[str, str, str]:
     return str(row["task"]), str(row["doc_id"]), str(row.get("trial_id") or "")
 
@@ -307,7 +314,7 @@ def _run_command(command: Sequence[str], *, environment: Mapping[str, str] | Non
 
 
 def _publish_directory(source: Path, destination: str) -> None:
-    """Upload a directory one file at a time, resuming files already published."""
+    """Publish missing or size-mismatched files and retain completed output."""
     destination_path = StoragePath(destination)
     for source_file in sorted(path for path in source.rglob("*") if path.is_file()):
         relative_path = source_file.relative_to(source).as_posix()
@@ -480,10 +487,8 @@ def hidden_state_capture_step(
     dataset: ArtifactStep,
     target_model: ArtifactStep,
     processor_model: str,
-    speculators_requirement: str,
-    target_layer_ids: tuple[int, ...],
+    recipe: SpeculatorsRecipe,
     verifier_num_hidden_layers: int,
-    sequence_length: int,
     data_parallel_size: int = _DRAFT_GPU_COUNT,
     concurrency: int = 64,
     max_samples: int | None = None,
@@ -498,9 +503,9 @@ def hidden_state_capture_step(
             target_model=ctx.artifact_path(target_model),
             processor_model=processor_model,
             output_path=ctx.output_path,
-            target_layer_ids=target_layer_ids,
+            target_layer_ids=recipe.target_layer_ids,
             verifier_num_hidden_layers=verifier_num_hidden_layers,
-            sequence_length=sequence_length,
+            sequence_length=recipe.sequence_length,
             data_parallel_size=data_parallel_size,
             concurrency=concurrency,
             max_samples=max_samples,
@@ -514,7 +519,7 @@ def hidden_state_capture_step(
         run=remote(
             capture_hidden_states,
             resources=resources,
-            pip_packages=[speculators_requirement, _TORCHAUDIO_CU128_REQUIREMENT],
+            pip_packages=[recipe.requirement, _TORCHAUDIO_CU128_REQUIREMENT],
             max_retries_failure=2,
         ),
         build_config=build_config,
@@ -629,9 +634,7 @@ def draft_training_step(
     captured_data: ArtifactStep,
     verifier: ArtifactStep,
     initial_draft: ArtifactStep,
-    speculators_requirement: str,
-    target_layer_ids: tuple[int, ...],
-    sequence_length: int,
+    recipe: SpeculatorsRecipe,
     epochs: int = 4,
     learning_rate: float = 1e-5,
     muon_learning_rate: float = 0.02,
@@ -646,8 +649,8 @@ def draft_training_step(
             verifier_path=ctx.artifact_path(verifier),
             initial_draft_path=ctx.artifact_path(initial_draft),
             output_path=ctx.output_path,
-            target_layer_ids=target_layer_ids,
-            sequence_length=sequence_length,
+            target_layer_ids=recipe.target_layer_ids,
+            sequence_length=recipe.sequence_length,
             epochs=epochs,
             learning_rate=learning_rate,
             muon_learning_rate=muon_learning_rate,
@@ -661,7 +664,7 @@ def draft_training_step(
         run=remote(
             train_draft,
             resources=resources,
-            pip_packages=[speculators_requirement, _TORCHAUDIO_CU128_REQUIREMENT],
+            pip_packages=[recipe.requirement, _TORCHAUDIO_CU128_REQUIREMENT],
         ),
         build_config=build_config,
         deps=(captured_data, verifier, initial_draft),

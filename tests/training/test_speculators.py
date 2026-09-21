@@ -156,18 +156,18 @@ def test_validate_draft_checkpoint_rejects_serialized_target_owned_embedding(tmp
         _validate_draft_checkpoint(tmp_path)
 
 
-def test_publish_directory_resumes_complete_files(tmp_path: Path):
+def test_publish_directory_skips_same_size_files(tmp_path: Path):
     source = tmp_path / "source"
     destination = tmp_path / "destination"
     (source / "nested").mkdir(parents=True)
     destination.mkdir()
     (source / "complete.txt").write_text("complete")
-    (destination / "complete.txt").write_text("complete")
+    (destination / "complete.txt").write_text("existing")
     (source / "nested" / "new.txt").write_text("new")
 
     _publish_directory(source, str(destination))
 
-    assert (destination / "complete.txt").read_text() == "complete"
+    assert (destination / "complete.txt").read_text() == "existing"
     assert (destination / "nested" / "new.txt").read_text() == "new"
 
 

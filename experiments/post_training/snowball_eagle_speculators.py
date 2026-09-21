@@ -39,6 +39,7 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from marin.training.speculators import (
+    SpeculatorsRecipe,
     draft_training_step,
     hf_snapshot_step,
     hidden_state_capture_step,
@@ -64,6 +65,11 @@ INITIAL_DRAFT_REVISION = "4bdb47c08e5b5190bea3c7a93c3e14470230e469"
 TARGET_LAYER_IDS = (2, 13, 23)
 VERIFIER_NUM_HIDDEN_LAYERS = 26
 SEQUENCE_LENGTH = 32768
+SPECULATORS_RECIPE = SpeculatorsRecipe(
+    requirement=SPECULATORS.requirement(),
+    target_layer_ids=TARGET_LAYER_IDS,
+    sequence_length=SEQUENCE_LENGTH,
+)
 RL_DATA_VERSION = "2026.09.18"
 RL_ARTIFACT_NAME = "checkpoints/snowball-67b-a2b-eagle3-speculators-smoke"
 CLUSTER = "cw-rno2a"
@@ -255,19 +261,15 @@ def build_pipeline() -> SnowballDraftPipeline:
         dataset=conversations,
         target_model=SNOWBALL_MODEL,
         processor_model=MARIN_TOKENIZER,
-        speculators_requirement=SPECULATORS.requirement(),
-        target_layer_ids=TARGET_LAYER_IDS,
+        recipe=SPECULATORS_RECIPE,
         verifier_num_hidden_layers=VERIFIER_NUM_HIDDEN_LAYERS,
-        sequence_length=SEQUENCE_LENGTH,
     )
     draft = draft_training_step(
         name="models/snowball-eagle3-speculators",
         captured_data=captured_data,
         verifier=verifier,
         initial_draft=initial_draft,
-        speculators_requirement=SPECULATORS.requirement(),
-        target_layer_ids=TARGET_LAYER_IDS,
-        sequence_length=SEQUENCE_LENGTH,
+        recipe=SPECULATORS_RECIPE,
         epochs=4,
         learning_rate=1e-5,
         muon_learning_rate=0.02,
