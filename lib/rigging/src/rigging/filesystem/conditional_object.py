@@ -186,11 +186,14 @@ class S3ConditionalObject:
     @functools.cache
     def _client(endpoint_url: str | None):
         session = botocore.session.get_session()
-        kwargs: dict = {}
+        # Virtual-hosted addressing everywhere: path-style requests are rejected by the org's
+        # S3-compatible endpoints, and virtual addressing works against AWS S3 as well. Tying
+        # the addressing style to whether an endpoint URL is set makes behavior depend on which
+        # env vars a job happens to receive.
+        config = botocore.config.Config(s3={"addressing_style": "virtual"})
         if endpoint_url:
-            kwargs["endpoint_url"] = endpoint_url
-            kwargs["config"] = botocore.config.Config(s3={"addressing_style": "virtual"})
-        return session.create_client("s3", **kwargs)
+            return session.create_client("s3", endpoint_url=endpoint_url, config=config)
+        return session.create_client("s3", config=config)
 
     def _parts(self) -> tuple[str, str]:
         parsed = StoragePath(self.path)
