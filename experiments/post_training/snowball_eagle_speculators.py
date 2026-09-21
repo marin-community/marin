@@ -128,6 +128,9 @@ _DRAFT_GPU_COUNT = 8
 _BENCHMARK_PROMPTS = 128
 _BENCHMARK_SAMPLES_PER_PROMPT = 4
 _AGENTIC_BENCHMARK_PROMPTS = 128
+_AGENTIC_BENCHMARK_SEED = 71
+_BENCHMARK_MEMORY = "512GB"
+_BENCHMARK_DISK = "2TB"
 # Speculators installs torchaudio through its multimodal dependencies. Pin the
 # CUDA 12.8 wheel used by the Iris H100 PyTorch runtime so Transformers imports.
 _TORCHAUDIO_CU128_REQUIREMENT = (
@@ -153,7 +156,7 @@ def _rl_benchmark_role_plan() -> SkyRLRolePlan:
     )
 
 
-def _rl_benchmark_config(role_plan: SkyRLRolePlan, *, speculative: bool) -> str:
+def _rl_benchmark_config_yaml(role_plan: SkyRLRolePlan, *, speculative: bool) -> str:
     config = {
         "entrypoint": "standard",
         "context_budget": {
@@ -244,8 +247,8 @@ def _rl_benchmark_config(role_plan: SkyRLRolePlan, *, speculative: bool) -> str:
     return yaml.safe_dump(config, sort_keys=False)
 
 
-def _agentic_benchmark_config(role_plan: SkyRLRolePlan, *, speculative: bool) -> str:
-    config = yaml.safe_load(_rl_benchmark_config(role_plan, speculative=speculative))
+def _agentic_benchmark_config_yaml(role_plan: SkyRLRolePlan, *, speculative: bool) -> str:
+    config = yaml.safe_load(_rl_benchmark_config_yaml(role_plan, speculative=speculative))
     config["entrypoint"] = "terminal_bench"
     config["config_groups"] = {"terminal_bench_config": "terminal_bench"}
     config["context_budget"] = {
@@ -346,7 +349,9 @@ def _target_evaluation_model() -> ArtifactEvaluationModel:
             location="<artifact>",
             tokenizer=TARGET_TOKENIZER,
             apply_chat_template=True,
-            resource_hint=ResourceHint(gpu={GPU_VARIANT: GPUS_PER_NODE}, cpu=64, memory="512GB", disk="2TB"),
+            resource_hint=ResourceHint(
+                gpu={GPU_VARIANT: GPUS_PER_NODE}, cpu=64, memory=_BENCHMARK_MEMORY, disk=_BENCHMARK_DISK
+            ),
             serve=ServeConfig(
                 tensor_parallel_size=1,
                 data_parallel_size=GPUS_PER_NODE,
@@ -382,8 +387,8 @@ def _qa_rollout_steps() -> tuple[ArtifactStep[FineStoreEvalchemyResult], ...]:
                 resource_hint=ResourceHint(
                     gpu={GPU_VARIANT: GPUS_PER_NODE},
                     cpu=64,
-                    memory="512GB",
-                    disk="2TB",
+                    memory=_BENCHMARK_MEMORY,
+                    disk=_BENCHMARK_DISK,
                 ),
                 accelerator=AcceleratorChoice(
                     platform=Platform.GPU,
@@ -720,12 +725,12 @@ def build_rl_benchmark(
     data_file: str,
     draft: ArtifactStep[EagleDraftArtifact] | None,
 ) -> ArtifactStep[SkyRLRun]:
-    """Run one matched production-shaped rollout benchmark."""
+    """Build one matched production-shaped rollout benchmark."""
     role_plan = _rl_benchmark_role_plan()
     name = f"{RL_ARTIFACT_NAME}-{label}"
     return _benchmark_step(
         name=name,
-        config_yaml=_rl_benchmark_config(role_plan, speculative=draft is not None),
+        config_yaml=_rl_benchmark_config_yaml(role_plan, speculative=draft is not None),
         train_data=(ArtifactDataSource(pool, relative_path=data_file),),
         draft=draft,
         role_plan=role_plan,
@@ -770,8 +775,8 @@ def _benchmark_step(
             cluster=CLUSTER,
             cluster_config=f"lib/iris/config/{CLUSTER}.yaml",
             cpu=32,
-            memory="512GB",
-            disk="2TB",
+            memory=_BENCHMARK_MEMORY,
+            disk=_BENCHMARK_DISK,
             priority="interactive",
             max_retries=1,
             wandb_entity="marin-community",
@@ -784,25 +789,25 @@ def build_agentic_rl_benchmark(
     label: str,
     draft: ArtifactStep[EagleDraftArtifact] | None,
 ) -> ArtifactStep[SkyRLRun]:
-    """Run a matched acceptance benchmark on disjoint multi-turn terminal tasks."""
+    """Build a matched acceptance benchmark on disjoint multi-turn terminal tasks."""
     role_plan = _rl_benchmark_role_plan()
     name = f"{RL_ARTIFACT_NAME}-agentic-{label}"
     return _benchmark_step(
         name=name,
-        config_yaml=_agentic_benchmark_config(role_plan, speculative=draft is not None),
+        config_yaml=_agentic_benchmark_config_yaml(role_plan, speculative=draft is not None),
         train_data=(
             TaskTroveDataSource(
                 TASKTROVE_RELEASE,
                 TaskTroveSelection(
                     sources=(AGENTIC_BENCHMARK_SOURCE,),
                     limit=_AGENTIC_BENCHMARK_PROMPTS,
-                    seed=71,
+                    seed=_AGENTIC_BENCHMARK_SEED,
                 ),
             ),
         ),
         draft=draft,
         role_plan=role_plan,
-        seed=71,
+        seed=_AGENTIC_BENCHMARK_SEED,
     )
 
 
