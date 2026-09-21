@@ -10,7 +10,7 @@ MuonH / Adam learning rates, epsilon, and beta2 from the token budget and batch 
 import math
 from dataclasses import dataclass
 
-from experiments.grug.fast_track.optimizer import GrugMoeMuonHConfig
+from experiments.grug.fast_track.optimizer import GrugMoeMuonHConfig, RelBiasGroup
 
 
 @dataclass(frozen=True)
@@ -59,7 +59,14 @@ class MoeHeuristic:
         return max(self.min_beta2, min(self.max_beta2, self.beta2_base**exponent))
 
     def build_optimizer_config(
-        self, *, num_train_steps: int, batch_size: int, hidden_dim: int, seq_len: int
+        self,
+        *,
+        num_train_steps: int,
+        batch_size: int,
+        hidden_dim: int,
+        seq_len: int,
+        rel_r_proj_group: RelBiasGroup = RelBiasGroup.MUONH,
+        rel_proj_group: RelBiasGroup = RelBiasGroup.MUONH,
     ) -> GrugMoeMuonHConfig:
         """MuonH optimizer with LR / beta2 / epsilon scaled to this token budget (1pct-noclip schedule)."""
         tokens_per_batch = batch_size * seq_len
@@ -72,4 +79,6 @@ class MoeHeuristic:
             beta1=self.beta1,
             beta2=self._beta2(tokens_per_batch),
             epsilon=self._epsilon(tokens_per_batch, tokens),
+            rel_r_proj_group=rel_r_proj_group,
+            rel_proj_group=rel_proj_group,
         )

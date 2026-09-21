@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
+from enum import StrEnum
 
 import jax
 import jax.numpy as jnp
@@ -160,6 +161,13 @@ def scale_with_grug_muonh(
     return optax.GradientTransformation(init_fn, update_fn)
 
 
+class RelBiasGroup(StrEnum):
+    """LR group for an Inkling relative-position-bias weight (values match the transform keys)."""
+
+    ADAM = "adam"
+    MUONH = "muonh"
+
+
 @OptimizerConfig.register_subclass("grug_fast_track_muonh_v1")
 @dataclass(frozen=True)
 class GrugMoeMuonHConfig(OptimizerConfig):
@@ -183,6 +191,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     max_grad_norm: float | None = None
     coefficient_type: CoefficientType = "quintic"
     gate_router_weight_decay: float = 0.02
+    # LR group for the Inkling rel-pos bias weights; default MuonH matches the matrix catch-all.
+    rel_r_proj_group: RelBiasGroup = RelBiasGroup.MUONH
+    rel_proj_group: RelBiasGroup = RelBiasGroup.MUONH
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -250,6 +261,11 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 return "adam"
             if "output_proj" in path_lower or "lm_head" in path_lower:
                 return "adamh"
+            # Inkling rel-pos bias weights: routed per config (default muonh via the catch-all).
+            if path_lower.endswith(".r_proj"):
+                return self.rel_r_proj_group
+            if path_lower.endswith(".proj"):
+                return self.rel_proj_group
             # GatedNorms route to muonh (NS + Frobenius hyperball), same as matrices.
             if "gated_norm" in path_lower:
                 return "muonh"
@@ -266,5 +282,6 @@ class GrugMoeMuonHConfig(OptimizerConfig):
 
 __all__ = [
     "GrugMoeMuonHConfig",
+    "RelBiasGroup",
     "scale_with_grug_muonh",
 ]

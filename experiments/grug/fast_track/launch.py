@@ -38,6 +38,7 @@ from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.checkpointing import RESTORE_BARRIER_TIMEOUT
 from experiments.grug.fast_track.heuristic import MoeHeuristic
 from experiments.grug.fast_track.model import GrugModelConfig
+from experiments.grug.fast_track.optimizer import RelBiasGroup
 from experiments.grug.fast_track.train import (
     GrugEvalConfig,
     GrugRunConfig,
@@ -164,7 +165,18 @@ def _active_params(cfg: GrugModelConfig) -> int:
     """Active (non-embedding) params per token, summed over layers: attention plus either the dense
     MLP or the router + top-k routed experts + LatentMoE projections + shared experts."""
     d = cfg.hidden_dim
-    attn = 2 * d * cfg.num_heads * cfg.head_dim + 2 * d * cfg.num_kv_heads * cfg.head_dim
+    if cfg.mla:
+        # MLA is MHA (q/k/v all have num_heads heads) through low-rank latents. Count the down/up
+        # projections directly: q = d*ql + ql*n*(nd+rd); kv = d*kvl + 2*kvl*n*nd + d*rd; o = n*nd*d.
+        n = cfg.num_heads
+        nd, rd = cfg.mla_nope_head_dim, cfg.mla_rope_head_dim
+        ql, kvl = cfg.mla_q_latent_dim, cfg.mla_kv_latent_dim
+        attn = d * ql + ql * n * (nd + rd) + d * kvl + 2 * kvl * n * nd + d * rd + n * nd * d
+    else:
+        attn = 2 * d * cfg.num_heads * cfg.head_dim + 2 * d * cfg.num_kv_heads * cfg.head_dim
+    if cfg.inkling_relpos:
+        # Inkling bias adds the R projection (d -> n*rel_dim) and the shared bank matmul per layer.
+        attn += d * cfg.num_heads * cfg.rel_dim + cfg.rel_dim * cfg.rel_extent
     if cfg.dense_mlp:
         return cfg.num_layers * (attn + 3 * d * cfg.intermediate_dim)
     expert_width = cfg.latent_dim if cfg.latent_dim is not None else d
@@ -231,6 +243,9 @@ def build_h100_ladder_run(
     save_checkpoints: bool = False,
     inkling_relpos: bool = False,
     rel_extent: int = 1024,
+    mla: bool = False,
+    rel_r_proj_group: RelBiasGroup = RelBiasGroup.MUONH,
+    rel_proj_group: RelBiasGroup = RelBiasGroup.MUONH,
 ) -> ArtifactStep[ThroughputResult]:
     """Build one H100 scaling-ladder rung.
 
@@ -249,6 +264,12 @@ def build_h100_ladder_run(
     if inkling_relpos:
         # Inkling relative-position bias in place of RoPE (fused forward + reference backward).
         model = dataclasses.replace(model, inkling_relpos=True, rel_extent=rel_extent)
+    if mla:
+        # DeepSeek-V2 MLA low-rank Q/KV. With the Inkling bias the decoupled RoPE is dropped
+        # (mla_rope_head_dim=0 -> 128-dim content-only heads); standalone MLA keeps the 64-dim rope.
+        model = dataclasses.replace(
+            model, mla=True, mla_nope_head_dim=128, mla_rope_head_dim=0 if inkling_relpos else 64
+        )
     mp_policy = "params=float32,compute=bfloat16,output=bfloat16"
     expert_axis_size = 1 if dense else rung.gpus_per_task
     replica_axis_size = 1
@@ -284,6 +305,8 @@ def build_h100_ladder_run(
         batch_size=batch_size,
         hidden_dim=model.hidden_dim,
         seq_len=SEQ_LEN,
+        rel_r_proj_group=rel_r_proj_group,
+        rel_proj_group=rel_proj_group,
     )
     grug_trainer = GrugTrainerConfig(
         data_seed=None,
@@ -421,6 +444,23 @@ def build_h100_ladder_run(
     "--rel-extent", type=click.IntRange(min=1), default=1024, show_default=True, help="Inkling rel-pos extent."
 )
 @click.option(
+    "--rel-r-proj-opt",
+    type=click.Choice([g.value for g in RelBiasGroup]),
+    default=RelBiasGroup.MUONH.value,
+    show_default=True,
+    help="LR group for the Inkling r_proj weight.",
+)
+@click.option(
+    "--rel-proj-opt",
+    type=click.Choice([g.value for g in RelBiasGroup]),
+    default=RelBiasGroup.MUONH.value,
+    show_default=True,
+    help="LR group for the Inkling proj bank weight.",
+)
+@click.option(
+    "--mla", is_flag=True, help="DeepSeek-V2 MLA attention (128-dim heads; rope dropped when --inkling-relpos)."
+)
+@click.option(
     "--save-checkpoints",
     is_flag=True,
     default=False,
@@ -438,6 +478,9 @@ def main(
     save_checkpoints: bool,
     inkling_relpos: bool,
     rel_extent: int,
+    rel_r_proj_opt: str,
+    rel_proj_opt: str,
+    mla: bool,
 ) -> ArtifactStep[ThroughputResult]:
     return build_h100_ladder_run(
         run_id=run_id,
@@ -450,6 +493,9 @@ def main(
         save_checkpoints=save_checkpoints,
         inkling_relpos=inkling_relpos,
         rel_extent=rel_extent,
+        mla=mla,
+        rel_r_proj_group=RelBiasGroup(rel_r_proj_opt),
+        rel_proj_group=RelBiasGroup(rel_proj_opt),
     )
 
 
