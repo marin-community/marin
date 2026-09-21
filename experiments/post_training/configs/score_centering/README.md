@@ -46,8 +46,15 @@ input. It publishes weights after each update and admits only responses from
 the current version, so versions one through three can use the consuming
 trainer as their exactly matched B scorer before its next optimizer update.
 
-`snowball_pilot_tis.json` is the resolved input for the 20-update full-response
-Snowball TIS control. It has 154 Hydra arguments, including the
-`dp_reshardable` policy optimizer checkpoint setting qualified by the r8
-full-optimizer restore, save, and terminal export. The matched SC32 arm is
-planned with the same source model, pool, seed, geometry, and schedule.
+`snowball_pilot_tis.json` is the resolved input for the aborted Snowball
+full-response TIS attempt on the old `2026.08.29.1` pool. It has 154 Hydra
+arguments, including the `dp_reshardable` optimizer checkpoint setting.
+Its step-zero evaluation exposed a reward-format failure before the matched
+quality comparison; see the study and format audit. The replacement pair uses
+the format-corrected `2026.09.18` pool.
+
+`snowball_formatfixed_tis.json` is the replacement TIS control's resolved
+input. Its 154 Hydra arguments match `snowball_pilot_tis.json` after excluding
+run-owned names and output paths. The launcher changed the pool reference from
+`2026.08.29.1` to `2026.09.18`; that reference is recorded in the study and
+Iris job, while the resolved SkyRL config contains only its staged local paths.

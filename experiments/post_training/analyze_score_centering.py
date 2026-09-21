@@ -33,6 +33,7 @@ from fsspec.spec import AbstractFileSystem
 from rigging.filesystem.storage_path import prefix_join
 
 ACCEPTED_STOPS = frozenset({"complete", "end_turn", "eos", "stop"})
+CORE_MATH_DATASETS = ("val-gsm8k", "val-math500")
 FIELDS = (
     "run",
     "step",
@@ -113,6 +114,7 @@ def _summarize(
     aggregate: dict[str, Any],
     membership_hash: str,
     eval_dump_written_utc: str,
+    response_tokens_mean: float | None = None,
 ) -> dict[str, Any]:
     if not rows:
         raise ValueError(f"{run} step {step} dataset {dataset} has no responses")
@@ -122,8 +124,9 @@ def _summarize(
     completed = [row["stop_reason"] in ACCEPTED_STOPS for row in rows]
     count = len(rows)
     completed_correct = sum(score > 0 and done for score, done in zip(scores, completed, strict=True))
-    prefix = "eval/all" if dataset == "all" else f"eval/{dataset}"
-    response_tokens_mean = aggregate[f"{prefix}/response_tokens_mean"]
+    if response_tokens_mean is None:
+        prefix = "eval/all" if dataset == "all" else f"eval/{dataset}"
+        response_tokens_mean = aggregate[f"{prefix}/response_tokens_mean"]
     return {
         "run": run,
         "step": step,
@@ -141,7 +144,7 @@ def _summarize(
     }
 
 
-def summarize_run(label: str, export_path: str, s3_endpoint: str) -> list[dict[str, Any]]:
+def summarize_run(label: str, export_path: str, s3_endpoint: str, *, core_math: bool = False) -> list[dict[str, Any]]:
     fs, root = _filesystem(export_path, s3_endpoint)
     sessions = fs.glob(prefix_join(prefix_join(root, "dumped_evals"), "global_step_*_evals"))
     if not sessions:
@@ -156,11 +159,15 @@ def summarize_run(label: str, export_path: str, s3_endpoint: str) -> list[dict[s
         aggregate = aggregate_rows[0]
         eval_dump_written_utc = _modified_utc(fs, aggregate_path)
         all_rows: list[dict[str, Any]] = []
+        by_dataset: dict[str, list[dict[str, Any]]] = {}
         for path in sorted(fs.glob(prefix_join(session, "*.jsonl"))):
             if path.endswith("/aggregated_results.jsonl"):
                 continue
             dataset = path.rsplit("/", 1)[1].removesuffix(".jsonl")
+            if dataset in by_dataset:
+                raise ValueError(f"{label} step {step}: duplicate dataset {dataset}")
             rows = _read_jsonl(fs, path)
+            by_dataset[dataset] = rows
             all_rows.extend(rows)
             output.append(
                 _summarize(label, step, dataset, rows, aggregate, _membership_hash(rows), eval_dump_written_utc)
@@ -168,6 +175,26 @@ def summarize_run(label: str, export_path: str, s3_endpoint: str) -> list[dict[s
         output.append(
             _summarize(label, step, "all", all_rows, aggregate, _membership_hash(all_rows), eval_dump_written_utc)
         )
+        if core_math:
+            if any(dataset not in by_dataset for dataset in CORE_MATH_DATASETS):
+                raise ValueError(f"{label} step {step}: missing core math dataset")
+            core_rows = [row for dataset in CORE_MATH_DATASETS for row in by_dataset[dataset]]
+            core_tokens = sum(
+                len(by_dataset[dataset]) * aggregate[f"eval/{dataset}/response_tokens_mean"]
+                for dataset in CORE_MATH_DATASETS
+            ) / len(core_rows)
+            output.append(
+                _summarize(
+                    label,
+                    step,
+                    "core-math",
+                    core_rows,
+                    aggregate,
+                    _membership_hash(core_rows),
+                    eval_dump_written_utc,
+                    core_tokens,
+                )
+            )
     return sorted(output, key=lambda row: (row["step"], row["dataset"]))
 
 
@@ -282,6 +309,7 @@ def main() -> None:
     parser.add_argument("--wandb-history", action="append", default=[], metavar="LABEL=JSONL")
     parser.add_argument("--metrics-output", type=Path)
     parser.add_argument("--s3-endpoint", default="https://cwobject.com")
+    parser.add_argument("--core-math", action="store_true", help="also summarize the shared GSM8K and Math500 subset")
     args = parser.parse_args()
 
     result: list[dict[str, Any]] = []
@@ -291,7 +319,7 @@ def main() -> None:
         if not separator or not label or not path or label in labels:
             parser.error(f"invalid or duplicate --run {item!r}; expected unique LABEL=EXPORT_PATH")
         labels.add(label)
-        result.extend(summarize_run(label, path, args.s3_endpoint))
+        result.extend(summarize_run(label, path, args.s3_endpoint, core_math=args.core_math))
     membership_hash = verify_membership(result)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("w", newline="") as stream:

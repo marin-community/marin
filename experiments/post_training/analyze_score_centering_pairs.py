@@ -74,18 +74,24 @@ def _interval(values: list[float]) -> tuple[float, float, float]:
 
 
 def summarize(
-    evaluations: list[dict[str, str]], repeats: list[dict[str, str]], pairs: list[str], step: int
+    evaluations: list[dict[str, str]],
+    repeats: list[dict[str, str]],
+    pairs: list[str],
+    step: int,
+    *,
+    dataset: str = "all",
+    questions: int = 756,
 ) -> tuple[list[dict], list[dict]]:
     evals = {}
     memberships = set()
     for row in evaluations:
-        if row["dataset"] != "all" or int(row["step"]) not in (0, step):
+        if row["dataset"] != dataset or int(row["step"]) not in (0, step):
             continue
         key = row["run"], int(row["step"])
         if key in evals:
-            raise ValueError(f"duplicate all-dataset evaluation for {key}")
-        if int(row["questions"]) != 756:
-            raise ValueError(f"{key}: expected 756 held-out questions")
+            raise ValueError(f"duplicate {dataset} evaluation for {key}")
+        if int(row["questions"]) != questions:
+            raise ValueError(f"{key}: expected {questions} held-out questions")
         memberships.add(row["membership_sha256"])
         evals[key] = row
     if len(memberships) != 1:
@@ -167,10 +173,19 @@ def main() -> None:
     parser.add_argument("--repeats", action="append", required=True, type=Path)
     parser.add_argument("--pair", action="append", required=True, metavar="COHORT:SEED:CONTROL:CENTERED")
     parser.add_argument("--step", type=int, default=40)
+    parser.add_argument("--dataset", default="all", help="evaluation subset to compare, such as core-math")
+    parser.add_argument("--questions", type=int, default=756, help="required size of the selected evaluation subset")
     parser.add_argument("--output-pairs", required=True, type=Path)
     parser.add_argument("--output-summary", required=True, type=Path)
     args = parser.parse_args()
-    pair_rows, summary_rows = summarize(_rows(args.evaluations), _rows(args.repeats), args.pair, args.step)
+    pair_rows, summary_rows = summarize(
+        _rows(args.evaluations),
+        _rows(args.repeats),
+        args.pair,
+        args.step,
+        dataset=args.dataset,
+        questions=args.questions,
+    )
     for path, fields, rows in (
         (args.output_pairs, PAIR_FIELDS, pair_rows),
         (args.output_summary, SUMMARY_FIELDS, summary_rows),

@@ -982,7 +982,8 @@ occurred in this probe.
 The [round-two diagnostic cost ledger](results/score_centering_round2_diagnostic_cost.csv)
 records the three Qwen probes, their two failed setup attempts, the Snowball
 model-only recovery, six failed Snowball resume attempts, and the successful
-r8 full-optimizer resume, DP-local save, and terminal HF export. It uses
+r8 full-optimizer resume, DP-local save, terminal HF export, and a stopped
+Snowball format probe. It uses
 the durations of every GPU task shown by `iris job describe`, multiplied by
 eight H100s per task; coscheduled siblings still reserve GPUs until a failed
 head task exits. These finished jobs used 9.02 Qwen and 57.86 Snowball reserved
@@ -992,8 +993,9 @@ to 99.50. The 17.42-hour Snowball recovery in this
 ledger is the same job described above, so it is counted once. The six completed
 Qwen confirmation runs used another 148.82 reserved H100-hours, including
 training and terminal export. The successful r8 training and separate HF export
-used 31.38 and 18.23 H100-hours, respectively. Thus the completed round-two
-diagnostic and Qwen confirmation tasks total 297.93 H100-hours. These are
+used 31.38 and 18.23 H100-hours, respectively. The invalid-format Snowball
+probe added 10.01 H100-hours. Thus the completed round-two diagnostic and
+Qwen confirmation tasks total 307.94 H100-hours. These are
 reserved task-hours, not a billing estimate.
 
 ## Matched Qwen confirmation design
@@ -1127,13 +1129,35 @@ separate [terminal export](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2F
 also succeeded without retry. It published all 39 HF weight shards with the
 config, tokenizer, and weight index to the durable policy path in the
 qualification record; the exporter verified the model. This clears the
-Snowball quality pilot gate. A
-DP-local checkpoint requires the same tensor, pipeline, context, and expert
+Snowball quality pilot gate. A DP-local checkpoint requires the same tensor,
+pipeline, context, and expert
 parallel geometry when resumed. The launcher now selects this format for
 Snowball and leaves Qwen's checkpoint config unchanged.
 
-Run one matched Snowball TIS-versus-TIS-plus-SC32
-pair from the same SFT model and frozen pool as the smoke. Use seed 17, the
+The first [full-response TIS control](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fusers-romain-checkpoints-async-rl-snowball-default-set-8a955e17-2026.09.20.14-301f40b95043)
+used the smoke's `2026.08.29.1` pool. Its step-zero [saved responses](results/score_centering_snowball_invalid_format_evals.csv)
+showed zero rewarded GSM8K answers out of 256. The [format audit](results/score_centering_snowball_format_probe.json)
+found that 242 GSM8K responses completed and all 242 placed a boxed number
+after the thinking turn; 234 of those numbers exactly matched ground truth,
+but none received reward. The old pool requested a `####` answer line. Math500
+also requested an `Answer:` line, while some visibly correct answers were
+boxed and scored negative. The rule-grading format was therefore unsuitable
+for this SFT model. The job was stopped after step-zero evaluation, before any
+quality comparison, and used 10.01 reserved H100-hours. Two local setup
+attempts before it used no GPUs: the first lacked CoreWeave virtual-host S3
+settings, and the second defaulted Marin's output root to local storage.
+The launched config is [retained](configs/score_centering/snowball_pilot_tis.json).
+
+The replacement pair uses the existing `2026.09.18` pool, whose system and
+user turns explicitly require the grader's final-answer line and forbid
+`\boxed{}`. Its 23,265 training rows broaden the old 10,427-row pool, so
+quality across those two pool versions is not a controlled comparison.
+Its 1,199 validation rows include the same 256 GSM8K and 500 Math500
+question, index, and ground-truth identities as the old pool, plus four
+other suites. The new TIS and SC32 arms use the same pool and source SFT model.
+The core 756 math questions are the primary completed-answer endpoint; the
+1,199-question aggregate is secondary. Step-zero reward-format compliance
+must be checked before interpreting a training curve. Use seed 17, the
 same 40-H100 Megatron/vLLM topology with 1,980 GB per task, 128 prompts
 and four responses per update, 192 generation workers, a 32-group buffer, age limit eight,
 per-update publication with abort and resume, top-k-32 behavior capture,

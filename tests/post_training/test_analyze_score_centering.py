@@ -12,6 +12,7 @@ from experiments.post_training.analyze_score_centering import (
     summarize_run,
     verify_membership,
 )
+from experiments.post_training.analyze_score_centering_pairs import summarize as summarize_pairs
 
 
 def test_saved_eval_uses_completed_correct_answers_and_checks_membership(tmp_path):
@@ -46,6 +47,63 @@ def test_saved_eval_uses_completed_correct_answers_and_checks_membership(tmp_pat
     next(row for row in changed if row["dataset"] == "all")["membership_sha256"] = "different"
     with pytest.raises(ValueError, match="membership differs"):
         verify_membership(result + changed)
+
+
+def test_core_math_subset_excludes_other_validation_suites(tmp_path):
+    session = tmp_path / "dumped_evals" / "global_step_0_evals"
+    session.mkdir(parents=True)
+    for dataset, count in (("val-gsm8k", 2), ("val-math500", 1), ("val-amc", 1)):
+        rows = [
+            {
+                "input_prompt": f"{dataset}-{index}",
+                "env_extras": {"reward_spec": {"ground_truth": "1"}},
+                "score": 1 if index == 0 else 0,
+                "stop_reason": "stop",
+            }
+            for index in range(count)
+        ]
+        (session / f"{dataset}.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+    (session / "aggregated_results.jsonl").write_text(
+        json.dumps(
+            {
+                "eval/val-gsm8k/response_tokens_mean": 10,
+                "eval/val-math500/response_tokens_mean": 40,
+                "eval/val-amc/response_tokens_mean": 90,
+                "eval/all/response_tokens_mean": 37.5,
+            }
+        )
+        + "\n"
+    )
+
+    result = summarize_run("arm", str(tmp_path), "https://unused.example", core_math=True)
+    core = next(row for row in result if row["dataset"] == "core-math")
+    overall = next(row for row in result if row["dataset"] == "all")
+    assert (core["questions"], core["completed_correct"], core["response_tokens_mean"]) == (3, 2, 20)
+    assert (overall["questions"], overall["completed_correct"]) == (4, 3)
+    assert core["membership_sha256"] != overall["membership_sha256"]
+    assert verify_membership(result) == overall["membership_sha256"]
+
+
+def test_pair_comparison_can_use_core_subset_with_broader_validation():
+    evaluations = [
+        {
+            "run": run,
+            "step": str(step),
+            "dataset": "core-math",
+            "questions": "756",
+            "membership_sha256": "same-core-questions",
+            "completed_correct": str(correct),
+        }
+        for run, counts in (("control", (100, 130)), ("centered", (100, 140)))
+        for step, correct in zip((0, 20), counts, strict=True)
+    ]
+    repeats = [
+        {"run": "control", "scheduled_all": "120", "final_all": "130"},
+        {"run": "centered", "scheduled_all": "135", "final_all": "140"},
+    ]
+    pairs, summary = summarize_pairs(evaluations, repeats, ["pilot:17:control:centered"], 20, dataset="core-math")
+    assert pairs[0]["mean_terminal_difference"] == 12.5
+    assert summary[0]["mean_terminal_difference"] == 12.5
 
 
 def test_iris_mirror_uses_the_resumed_attempt_for_repeated_steps(tmp_path):

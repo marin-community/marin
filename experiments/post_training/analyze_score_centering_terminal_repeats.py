@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Measure the two step-40 evaluations of the frozen Qwen math pool.
+"""Measure the two terminal evaluations of the GSM8K and Math500 pool subset.
 
 SkyRL evaluates at the last step and again during finalization, overwriting the
 same response dump. The first result remains in the step-40 train mirror; the
@@ -91,7 +91,7 @@ def _wandb_history_mirrors(path: Path, run: str, step: int) -> dict[str, dict]:
 
 def summarize(run: str, log: Path, evaluations: list[dict[str, str]], step: int, *, wandb_history: bool = False) -> dict:
     rows = {row["dataset"]: row for row in evaluations if row["run"] == run and int(row["step"]) == step}
-    if set(rows) != {"all", "val-gsm8k", "val-math500"}:
+    if not {"all", "val-gsm8k", "val-math500"} <= set(rows):
         raise ValueError(f"{run}: missing final response analysis for step {step}")
     if [int(rows[dataset]["questions"]) for dataset in ("val-gsm8k", "val-math500")] != [
         GSM8K_QUESTIONS,
@@ -102,9 +102,12 @@ def summarize(run: str, log: Path, evaluations: list[dict[str, str]], step: int,
     scheduled_gsm, scheduled_math = _completed_counts(mirrors["train"])
     final_gsm, final_math = _completed_counts(mirrors["eval"])
     final_all = final_gsm + final_math
+    combined = rows["core-math"] if "core-math" in rows else rows["all"]
+    if int(combined["questions"]) != GSM8K_QUESTIONS + MATH500_QUESTIONS:
+        raise ValueError(f"{run}: combined math evaluation size changed")
     if [final_gsm, final_math, final_all] != [
-        int(rows[dataset]["completed_correct"]) for dataset in ("val-gsm8k", "val-math500", "all")
-    ]:
+        int(rows[dataset]["completed_correct"]) for dataset in ("val-gsm8k", "val-math500")
+    ] + [int(combined["completed_correct"])]:
         raise ValueError(f"{run}: final mirror disagrees with saved responses")
     return {
         "run": run,
