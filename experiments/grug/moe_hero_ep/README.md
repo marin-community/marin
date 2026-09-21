@@ -44,14 +44,12 @@ Bounded diagnostics write metrics only by default. `--save-checkpoints` writes c
 ## Hero cutovers and W&B lineage
 
 ```python
-from experiments.grug.moe_hero_ep.checkpoints import hero_checkpoint_paths, hero_checkpoint_paths_from_run
+from experiments.grug.moe_hero_ep.checkpoints import hero_checkpoint_paths
 
 paths = hero_checkpoint_paths()
-ancestry_paths = hero_checkpoint_paths_from_run()
 ```
 
-The first function returns permanent checkpoint paths in increasing step order, within the W&B report's inclusive phase bounds.
-The second function returns permanent checkpoint paths for the current run and its ancestors, without the report.
+The function returns permanent checkpoint paths for the current run and its ancestors, in step order.
 Pass a run ID to select another run. The launcher and function share `CURRENT_HERO_RUN_ID` in [`current_run.py`](current_run.py).
 
 Use the [deployment checklist](../../../.agents/skills/deploy-hero-change/SKILL.md)
