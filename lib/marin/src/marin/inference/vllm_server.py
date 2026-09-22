@@ -67,9 +67,6 @@ _REMOVED_VLLM_MODE_MESSAGE = (
 _RUNAI_STREAMER_REQUIREMENT = "runai-model-streamer[s3]==0.16.1"
 _UPSTREAM_CUDA_TORCH_BACKEND = "cu130"
 _PYTORCH_WHEEL_INDEX_BASE = "https://download.pytorch.org/whl"
-# The promoted GPU wheel requires torch 2.13.0. Pin its CUDA build so dependency
-# resolution fails instead of selecting CPU torch when a CUDA dependency conflicts.
-_MARIN_VLLM_CUDA_TORCH_REQUIREMENT = "torch==2.13.0+cu132"
 _NO_NATIVE_LOG_DIRECTORY = "<no log directory available for native vLLM server>"
 _NATIVE_ERROR_SUMMARY_LINES = 40
 _NATIVE_STDOUT_LOG = "stdout.log"
@@ -267,7 +264,8 @@ class IsolatedCudaVllm:
             _RUNAI_STREAMER_REQUIREMENT,
         ]
         if self.source is VllmType.MARIN_FORK:
-            command.extend(("--with", _MARIN_VLLM_CUDA_TORCH_REQUIREMENT))
+            # The promoted release records the CUDA torch build; pin it so a conflict cannot select CPU torch.
+            command.extend(("--with", f"torch=={VLLM_GPU_RELEASE.torch_version}"))
         for package in _CUDA_TOOLCHAIN_PACKAGES:
             # CUDA torch's cuda-toolkit dependency selects the compatible NVRTC patch version.
             if self.source is VllmType.MARIN_FORK and package == _CUDA_NVRTC_DISTRIBUTION:
@@ -298,7 +296,8 @@ class IsolatedCudaVllm:
     def cache_identity(self) -> str:
         install = self._install()
         toolchain_version = install.toolchain_version
-        return f"cuda:{install.requirement}:{self.python_version}:{install.torch_backend}:{toolchain_version}"
+        torch_identity = VLLM_GPU_RELEASE.torch_version if self.source is VllmType.MARIN_FORK else install.torch_backend
+        return f"cuda:{install.requirement}:{self.python_version}:{torch_identity}:{toolchain_version}"
 
 
 def _write_virtual_hosted_s3_config() -> str:

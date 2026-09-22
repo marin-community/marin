@@ -50,6 +50,7 @@ class VllmGpuRelease:
     source_commit: str
     version: str
     torch_backend: str
+    torch_version: str
     wheels: tuple[VllmGpuWheel, ...]
 
 
@@ -93,6 +94,7 @@ VLLM_GPU_RELEASE = VllmGpuRelease(
     source_commit="fb02daf1d7139d2adaeb0588448649591657d1e3",
     version="0.0.0.dev20260920+marin.fb02daf1d713.cu132",
     torch_backend="cu132",
+    torch_version="2.13.0+cu132",
     wheels=(
         VllmGpuWheel(
             architecture="aarch64",
