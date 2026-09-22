@@ -16,6 +16,8 @@ from jax.sharding import PartitionSpec as P
 from jax.sharding import get_abstract_mesh, reshard
 from jaxtyping import Array, Float, Int
 
+from levanter.sharding import partitioning_axes, partition_spec_of
+
 from .config import OOB_SEGMENT, ShortConvBlockSizes
 from .pallas_gpu import (
     pallas_short_conv_available,
@@ -55,33 +57,12 @@ def _active_batch_axes(mesh, batch_axes: Sequence[str]) -> tuple[str, ...]:
     return tuple(axis for axis in batch_axes if axis in mesh.shape)
 
 
-def _partition_spec(array: jax.Array) -> P | None:
-    """Partition spec of a concrete array or tracer, or None without one.
-
-    A tracer's aval records only Explicit mesh axes, so a concrete array is read from its own
-    sharding: on an Auto-axis mesh that is the only place its placement shows.
-    """
-    if isinstance(array, jax.Array) and not isinstance(array, jax.core.Tracer):
-        sharding = array.sharding
-    else:
-        sharding = jax.typeof(array).sharding
-    return getattr(sharding, "spec", None)
-
-
-def _partitioning_axes(entry, mesh) -> tuple[str, ...]:
-    """Mesh axes that partition this dimension, excluding size-1 axes."""
-    if entry is None:
-        return ()
-    names = (entry,) if isinstance(entry, str) else tuple(entry)
-    return tuple(name for name in names if mesh.shape.get(name, 1) > 1)
-
-
 def _partitioned_dims(array: jax.Array, mesh) -> tuple[tuple[str, ...], ...] | None:
     """Per-dimension partitioning mesh axes of ``array``, or None when it carries no spec."""
-    spec = _partition_spec(array)
+    spec = partition_spec_of(array)
     if spec is None:
         return None
-    return tuple(_partitioning_axes(entry, mesh) for entry in spec)
+    return tuple(partitioning_axes(entry, mesh) for entry in spec)
 
 
 def _assert_local_axes(name: str, array: jax.Array, axes: Sequence[int], mesh) -> None:
@@ -93,7 +74,7 @@ def _assert_local_axes(name: str, array: jax.Array, axes: Sequence[int], mesh) -
         if dims[axis]:
             raise ValueError(
                 f"short_conv requires an unsharded {'sequence' if axis == 1 else 'channel'} axis "
-                f"for {name}; got {_partition_spec(array)}."
+                f"for {name}; got {partition_spec_of(array)}."
             )
 
 
@@ -218,7 +199,7 @@ def _short_conv_sharded(
     if unnamed:
         raise ValueError(
             f"short_conv would all-gather x's batch axis over {unnamed}, which is not in "
-            f"batch_axes {tuple(batch_axes)}; got {_partition_spec(x)}."
+            f"batch_axes {tuple(batch_axes)}; got {partition_spec_of(x)}."
         )
     batch_spec = active or None
     x_spec = P(batch_spec, seq_axis, None)
