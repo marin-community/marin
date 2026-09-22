@@ -310,7 +310,8 @@ class MinhashConfig:
     seed: int = 42
 
 
-# Source policy from PR 8405; exact dedup still applies to these sources.
+# Preserve selected source text that the word-shingle rule can misclassify.
+# Exact dedup still applies. Policy: https://github.com/marin-community/marin/pull/8405
 FUZZY_DEDUP_EXEMPT_SOURCES = (
     "biocollection/free_text_stream",
     "biocollection/instruction_stream",
@@ -879,6 +880,9 @@ def reference_datakit_steps(
         zephyr_context: Optional shared context for subprocess-compatible stages.
     """
     cluster = scale.cluster
+    unknown_exempt = set(scale.store.fuzzy_exempt_sources) - (all_sources().keys() | sources.keys())
+    if unknown_exempt:
+        raise ValueError(f"Unknown fuzzy-exempt sources: {sorted(unknown_exempt)!r}")
     zephyr_steps = zephyr_datakit_steps(sources, scale, zephyr_context)
     exact_dedup = zephyr_steps.exact_dedup
     embed_steps = build_per_source_embed_steps(sources, scale)

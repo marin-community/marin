@@ -37,16 +37,16 @@ ORIGINAL = (
     "document and keeps the first representative that already holds the member "
     "content so a shorter copy never survives a longer original"
 )
-"""31 words, thus 29 distinct 3-grams."""
+# 31 words, thus 29 distinct 3-grams.
 
 NEAR_COPY = ORIGINAL.replace("already holds", "now holds")
-"""The original with one word replaced: shorter, and containment 26/29."""
+# One word is replaced; containment is 26/29.
 
 UNRELATED = (
     "a calibration table maps each humidity reading to the pressure coefficient "
     "that the sensor firmware applies before it reports a value to the flight recorder bus"
 )
-"""Shares no 3-gram with the original."""
+# No shared 3-gram with the original.
 
 SOURCES = {"datakit/normalize/left": "source_000", "datakit/normalize/right": "source_001"}
 
@@ -273,3 +273,30 @@ def test_cluster_buffer_uses_the_production_flush_boundary(tmp_path, local_clien
 
     markers = [row for path in (output / "outputs/source_000").glob("*.parquet") for row in load_parquet(str(path))]
     assert [row["id"] for row in markers] == removed_ids
+
+
+def test_final_oversized_buffer_splits_longest_first(tmp_path, local_client):
+    short = "alpha beta gamma"
+    longest = "alpha beta gamma plus a longer reference document with many words"
+    middle = "separate words describe an unrelated calibration"
+    cluster_text = _write_cluster_text(
+        tmp_path / "cluster_text",
+        [
+            _member(cluster="c1", doc_id=doc_id, text=text, file_idx=0)
+            for doc_id, text in zip("abc", (short, longest, middle), strict=True)
+        ],
+    )
+    output = tmp_path / "verified"
+
+    result = verify_cluster_text(
+        cluster_text=cluster_text,
+        output_path=str(output),
+        limits=ClusterVerificationLimits(maximum_cluster_chars=len(short) + len(longest)),
+    )
+
+    # ID-order batching would put a with b and remove a. The production final
+    # buffer puts b alone, then c with a, so all three remain.
+    assert result.counters["fuzzy/cluster_verify/markers"] == 0
+    assert result.counters["fuzzy/cluster_verify/oversized_clusters"] == 1
+    assert result.counters.get("fuzzy/cluster_verify/mid_cluster_flushes", 0) == 0
+    assert not list(output.glob("outputs/**/*.parquet"))
