@@ -103,6 +103,9 @@ GPU_VARIANT = "H100"
 _DRAFT_GPU_COUNT = 8
 _BENCHMARK_PROMPTS = 64
 _BENCHMARK_SAMPLES_PER_PROMPT = 1
+_BENCHMARK_MAX_GENERATION_TOKENS = 8192
+_PREFLIGHT_PROMPTS = 1
+_PREFLIGHT_MAX_GENERATION_TOKENS = 512
 _BENCHMARK_MEMORY = "512GB"
 _BENCHMARK_DISK = "2TB"
 _MAX_NUM_SEQS = 16
@@ -122,7 +125,7 @@ _TORCHAUDIO_CU128_REQUIREMENT = (
 )
 
 
-def _rl_benchmark_role_plan() -> SkyRLRolePlan:
+def _rl_benchmark_role_plan(num_prompts: int) -> SkyRLRolePlan:
     return SkyRLRolePlan(
         colocate_all=True,
         policy_num_nodes=1,
@@ -131,19 +134,19 @@ def _rl_benchmark_role_plan() -> SkyRLRolePlan:
         inference_engine_tensor_parallel_size=1,
         inference_engine_data_parallel_size=GPUS_PER_NODE,
         inference_engine_expert_parallel_size=GPUS_PER_NODE,
-        train_batch_size=_BENCHMARK_PROMPTS,
-        policy_mini_batch_size=_BENCHMARK_PROMPTS,
+        train_batch_size=num_prompts,
+        policy_mini_batch_size=num_prompts,
         micro_train_batch_size_per_gpu=1,
         n_samples_per_prompt=_BENCHMARK_SAMPLES_PER_PROMPT,
     )
 
 
-def _rl_benchmark_config_yaml(role_plan: SkyRLRolePlan) -> str:
+def _rl_benchmark_config_yaml(role_plan: SkyRLRolePlan, max_generation_tokens: int) -> str:
     config = {
         "entrypoint": "standard",
         "context_budget": {
             "request_window_tokens": 9856,
-            "max_new_tokens_per_turn": 8192,
+            "max_new_tokens_per_turn": max_generation_tokens,
             "max_turns": 1,
         },
         "environment": {"env_class": "aime"},
@@ -163,7 +166,7 @@ def _rl_benchmark_config_yaml(role_plan: SkyRLRolePlan) -> str:
             "update_epochs_per_batch": 1,
             "train_batch_size": role_plan.train_batch_size,
             "policy_mini_batch_size": role_plan.policy_mini_batch_size,
-            "eval_batch_size": _BENCHMARK_PROMPTS,
+            "eval_batch_size": role_plan.train_batch_size,
             "micro_forward_batch_size_per_gpu": 1,
             "micro_train_batch_size_per_gpu": role_plan.micro_train_batch_size_per_gpu,
             "eval_before_train": False,
@@ -225,8 +228,8 @@ def _rl_benchmark_config_yaml(role_plan: SkyRLRolePlan) -> str:
     return yaml.safe_dump(config, sort_keys=False)
 
 
-def _eagle_benchmark_config_yaml(role_plan: SkyRLRolePlan) -> str:
-    config = yaml.safe_load(_rl_benchmark_config_yaml(role_plan))
+def _eagle_benchmark_config_yaml(role_plan: SkyRLRolePlan, max_generation_tokens: int) -> str:
+    config = yaml.safe_load(_rl_benchmark_config_yaml(role_plan, max_generation_tokens))
     config["generator"]["speculative_decoding"] = {
         "method": "eagle3",
         "model": {},
@@ -507,13 +510,19 @@ def build_rl_benchmark(
     label: str,
     data_file: str,
     draft: ArtifactStep[EagleDraftArtifact] | None,
+    num_prompts: int = _BENCHMARK_PROMPTS,
+    max_generation_tokens: int = _BENCHMARK_MAX_GENERATION_TOKENS,
 ) -> ArtifactStep[SkyRLRun]:
     """Build one matched production-shaped rollout benchmark."""
-    role_plan = _rl_benchmark_role_plan()
+    role_plan = _rl_benchmark_role_plan(num_prompts)
     name = f"{RL_ARTIFACT_NAME}-{label}"
     return _benchmark_step(
         name=name,
-        config_yaml=(_rl_benchmark_config_yaml(role_plan) if draft is None else _eagle_benchmark_config_yaml(role_plan)),
+        config_yaml=(
+            _rl_benchmark_config_yaml(role_plan, max_generation_tokens)
+            if draft is None
+            else _eagle_benchmark_config_yaml(role_plan, max_generation_tokens)
+        ),
         train_data=(ArtifactDataSource(pool, relative_path=data_file),),
         draft=draft,
         role_plan=role_plan,
@@ -590,13 +599,24 @@ def build_pipeline() -> SnowballDraftPipeline:
 @click.command(help=__doc__)
 @click.option(
     "--stage",
-    type=click.Choice(("conversations", "initial_draft", "verifier", "captured_data", "draft", "benchmarks")),
+    type=click.Choice(
+        ("conversations", "initial_draft", "verifier", "captured_data", "draft", "preflight", "benchmarks")
+    ),
     default="draft",
     show_default=True,
 )
 @build_options
 def main(stage: str) -> ArtifactStep | dict[str, ArtifactStep]:
     pipeline = build_pipeline()
+    if stage == "preflight":
+        return build_rl_benchmark(
+            pool=pool_step(POOL_ARTIFACT_NAME, RL_DATA_VERSION),
+            label="target-preflight",
+            data_file=VALIDATION_FILENAME,
+            draft=None,
+            num_prompts=_PREFLIGHT_PROMPTS,
+            max_generation_tokens=_PREFLIGHT_MAX_GENERATION_TOKENS,
+        )
     if stage == "benchmarks":
         return pipeline.benchmarks
     return getattr(pipeline.sft, stage)
