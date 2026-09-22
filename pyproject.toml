@@ -245,6 +245,13 @@ name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
+# Use CPU Torch for unpinned imports without changing other packages' indexes.
+# marin-core[gpu] explicitly selects its CUDA Torch index.
+[[tool.uv.index]]
+name = "pytorch-cpu-fallback"
+url = "https://download.pytorch.org/whl/cpu/torch/"
+format = "flat"
+
 [tool.black]
 line-length = 121
 target-version = ["py312"]
