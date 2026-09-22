@@ -30,6 +30,8 @@ _BACKEND_POLL_SECONDS = 5.0
 _DRIVER_TERMINATION_GRACE_SECONDS = 30.0
 _DRIVER_SYSTEM_ENV_KEYS = (
     "CURL_CA_BUNDLE",
+    # Harbor downloads gated Hugging Face datasets in preflight and on workers.
+    "HF_TOKEN",
     "HOME",
     "HTTP_PROXY",
     "HTTPS_PROXY",
@@ -69,7 +71,7 @@ _DRIVER_STORAGE_ENV_KEYS = (
     "GOOGLE_CLOUD_PROJECT",
 )
 
-HARBOR_PACKAGES = (HARBOR.requirement(), *HARBOR.runtime_requirements)
+HARBOR_PACKAGES = (HARBOR.requirement(("archive",)), *HARBOR.runtime_requirements)
 HARBOR_RUNTIME = "; ".join(HARBOR_PACKAGES)
 
 # The isolated driver runs against the fully pinned lock under this directory, not a loose ``--with``
@@ -160,6 +162,8 @@ class HarborRuntimeOverlay:
     served_model: str
     task_limit: int | None
     model_agent_kwargs: Mapping[str, object]
+    archive_root: str
+    archive_dataset: str
 
 
 def _driver_command(command: str, *paths: Path) -> list[str]:

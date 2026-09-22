@@ -6,6 +6,7 @@ import CompletionView from './components/CompletionView.vue'
 import HistoryPanel from './components/HistoryPanel.vue'
 import SamplingControls from './components/SamplingControls.vue'
 import { useServing } from './composables/useServing'
+import { ThinkingMode } from './lib/chat_template'
 import { loadConversations, loadParams, newId, saveConversations, saveParams } from './lib/storage'
 import type { Conversation } from './lib/types'
 
@@ -41,6 +42,10 @@ function freshConversation(): Conversation {
     title: '',
     model: model.value,
     system: '',
+    pythonTools: '',
+    shellWorkspace: null,
+    thinkingMode: ThinkingMode.TemplateDefault,
+    customInstructions: '',
     createdAt: Date.now(),
     updatedAt: Date.now(),
     messages: [],
@@ -49,9 +54,10 @@ function freshConversation(): Conversation {
 
 function persist() {
   const current = active.value
-  if (!current.messages.length) return
+  const alreadySaved = conversations.value.some((conversation) => conversation.id === current.id)
+  if (!current.messages.length && !current.pythonTools.trim() && !current.shellWorkspace && !alreadySaved) return
   if (!current.model) current.model = model.value
-  if (!conversations.value.some((c) => c.id === current.id)) conversations.value.push(current)
+  if (!alreadySaved) conversations.value.push(current)
   saveConversations(conversations.value)
 }
 
@@ -134,7 +140,7 @@ function clearHistory() {
           <button
             class="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs transition-colors"
             :class="showParams ? 'bg-surface-sunken text-text' : 'text-text-muted hover:text-text-secondary'"
-            title="More sampling parameters"
+            title="More options"
             @click="showParams = !showParams"
           >
             <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -143,13 +149,21 @@ function clearHistory() {
             <span class="hidden sm:inline">Temperature {{ params.temperature }}</span>
           </button>
         </div>
-        <SamplingControls v-if="showParams" :params="params" v-model:system="active.system" :show-system="mode === 'chat'" />
+        <SamplingControls
+          v-if="showParams"
+          :params="params"
+          v-model:system="active.system"
+          v-model:thinking-mode="active.thinkingMode"
+          v-model:custom-instructions="active.customInstructions"
+          :show-chat-controls="mode === 'chat'"
+        />
         <ChatView
           v-if="mode === 'chat'"
           :conversation="active"
           :params="params"
           :model="model"
           :has-chat-template="info ? info.has_chat_template : true"
+          :chat-template-protocol="info?.chat_template_protocol ?? null"
           :streaming="info ? info.streaming : true"
           @persist="persist"
         />

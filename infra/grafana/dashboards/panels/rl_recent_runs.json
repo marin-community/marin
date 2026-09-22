@@ -99,14 +99,10 @@
       "source": "url",
       "format": "table",
       "parser": "backend",
-      "url": "/query",
+      "url": "/v1/rl/recent",
       "url_options": {
         "method": "GET",
         "params": [
-          {
-            "key": "sql",
-            "value": "SELECT run_id AS run, COALESCE(NULLIF(\"cluster\", ''), 'marin') AS cluster, MAX(value) AS step, COUNT(DISTINCT execution_uid) AS attempts, MIN(timestamp_ms) - 60000 AS window_from_ms, MAX(timestamp_ms) + 60000 AS window_to_ms, MAX(timestamp_ms) AS \"last seen\", CASE WHEN MAX(CASE WHEN json_get(resource_attributes_json, 'training_loop') = 'async' THEN 1 ELSE 0 END) = 1 THEN 'marin-async-rl' ELSE 'marin-rl-runs' END AS dashboard FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'policy_step' AND run_id IS NOT NULL AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY MAX(timestamp_ms) DESC LIMIT 20"
-          },
           {
             "key": "from",
             "value": "${__from}"

@@ -13,11 +13,11 @@ from types import MappingProxyType
 
 from marin.evaluation.evalchemy.config import EvalchemyConfig
 from marin.evaluation.evalchemy.runner import (
-    DEFAULT_MAX_GEN_TOKS,
     DEFAULT_NUM_CONCURRENT,
     EvalchemyRunConfig,
     EvalchemyRuntimeConfig,
 )
+from marin.evaluation.evalchemy.runtime import EVALCHEMY_REQUIRED_EXTRAS
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.harbor.agent_context import MODEL_INFO_KEY, served_model_info
 from marin.evaluation.harbor.driver_config import HARBOR_RUNTIME, ValidatedHarborConfig
@@ -88,7 +88,7 @@ class EvalchemyDefinition:
         model_max_gen_toks = model.generation.max_gen_toks
         max_gen_toks = config.max_gen_toks
         if model_max_gen_toks is not None:
-            if source.max_tokens is None or model_max_gen_toks < max_gen_toks:
+            if max_gen_toks is None or model_max_gen_toks < max_gen_toks:
                 max_gen_toks = model_max_gen_toks
             elif model_max_gen_toks > max_gen_toks:
                 logger.warning(
@@ -230,7 +230,7 @@ def evalchemy_run_config(name: str, config: EvalchemyConfig) -> EvalchemyRunConf
         name=name,
         tasks=tuple(tasks),
         apply_chat_template=config.apply_chat_template or False,
-        max_gen_toks=config.max_tokens or DEFAULT_MAX_GEN_TOKS,
+        max_gen_toks=config.max_tokens,
         max_eval_instances=config.limit,
         num_concurrent=num_concurrent,
         batch_size=config.batch_size,
@@ -238,7 +238,9 @@ def evalchemy_run_config(name: str, config: EvalchemyConfig) -> EvalchemyRunConf
         extra_gen_kwargs=extra_gen_kwargs,
         extra_model_args=extra_model_args,
         max_length=config.max_length,
-        runtime=EvalchemyRuntimeConfig(requirement=EVALCHEMY.requirement(config.runtime_extras)),
+        runtime=EvalchemyRuntimeConfig(
+            requirement=EVALCHEMY.requirement((*EVALCHEMY_REQUIRED_EXTRAS, *config.runtime_extras))
+        ),
     )
 
 

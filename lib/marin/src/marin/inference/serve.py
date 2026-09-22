@@ -17,6 +17,7 @@ class LocalInferenceSession:
     model: RunningModel
     backend_name: str
     tensor_parallel_size: int | None
+    chat_template_content: str | None
     _served: ServedModel
 
     def check_alive(self) -> None:
@@ -66,5 +67,6 @@ def local_inference(
             ),
             backend_name=backend.name,
             tensor_parallel_size=model.tensor_parallel_size,
+            chat_template_content=served.chat_template_content,
             _served=served,
         )

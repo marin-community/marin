@@ -13,7 +13,6 @@ from levanter.checkpoint import save_checkpoint
 from levanter.grug.sharding import compact_grug_mesh
 
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer
-from experiments.grug.moe_hero_ep.ops.vibe_check import config
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import (
     Checkpoint,
     Prompt,
@@ -21,7 +20,7 @@ from experiments.grug.moe_hero_ep.ops.vibe_check.completions import (
     SamplingSpec,
     digest,
 )
-from experiments.grug.moe_hero_ep.ops.vibe_check.config import CheckpointRun, discover_requests
+from experiments.grug.moe_hero_ep.ops.vibe_check.config import discover_requests
 from experiments.grug.moe_hero_ep.ops.vibe_check.generation import score_expected
 from experiments.grug.moe_hero_ep.ops.vibe_check.sample import (
     COMPUTE_POLICY,
@@ -104,9 +103,8 @@ def test_native_restore_preserves_weights_and_applies_pending_router_bias(
             np.testing.assert_array_equal(np.asarray(actual), np.asarray(wanted))
 
 
-def test_discovery_excludes_temporary_incomplete_and_non_lineage_checkpoints(tmp_path, monkeypatch, spec):
-    monkeypatch.setattr(config, "CHECKPOINT_ROOT", str(tmp_path))
-    metadata = {"timestamp": "2026-09-12T10:00:00", "is_temporary": False}
+def test_discovery_uses_selected_checkpoint_paths(tmp_path, spec):
+    metadata = {"timestamp": "2026-09-12T10:00:00Z", "is_temporary": False}
     for run_id, step, temporary in [
         ("old", 6000, False),
         ("old", 12000, False),
@@ -120,15 +118,14 @@ def test_discovery_excludes_temporary_incomplete_and_non_lineage_checkpoints(tmp
     incomplete = tmp_path / "active/v1/checkpoints/step-24000"
     incomplete.mkdir()
     (incomplete / "manifest.json").write_text("{}")
-    runs = (
-        CheckpointRun("old", "v1", max_step=7000),
-        CheckpointRun("active", "v1"),
-    )
-    requests = discover_requests(runs, spec, "a" * 40, target_cluster="test")
-    assert {(row.checkpoint.run_id, row.checkpoint.step) for row in requests} == {
+    paths = [str(tmp_path / "old/v1/checkpoints/step-6000"), str(tmp_path / "active/v1/checkpoints/step-18000")]
+    requests = discover_requests(paths, spec, "a" * 40, target_cluster="test")
+    assert [(row.checkpoint.run_id, row.checkpoint.step) for row in requests] == [
         ("old", 6000),
         ("active", 18000),
-    }
+    ]
+    assert all(row.checkpoint.timestamp == "2026-09-12T10:00:00+00:00" for row in requests)
+    assert requests[0].checkpoint.metadata_digest == digest({**metadata, "step": 6000})
 
 
 @eqx.filter_jit

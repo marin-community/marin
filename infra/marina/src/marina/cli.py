@@ -19,6 +19,7 @@ import uvicorn
 
 from marina.applets import (
     APPLET_MANIFEST,
+    AppletMode,
     AppletPackage,
     AppletStore,
     package_applet,
@@ -270,7 +271,7 @@ def _print_publish_result(result: dict[str, object], service_url: str, *, json_o
     click.echo(result["url"])
 
 
-def _serve_local_applet(payload: bytes, *, json_output: bool) -> None:
+def _serve_local_applet(payload: bytes, *, mode: AppletMode | None, json_output: bool) -> None:
     try:
         with docker_database() as database_url:
             database = UrlDatabase(database_url)
@@ -288,7 +289,7 @@ def _serve_local_applet(payload: bytes, *, json_output: bool) -> None:
                     database=database,
                 )
                 with running_kernel(config) as kernel:
-                    result = publish_applet(kernel.origin, payload)
+                    result = publish_applet(kernel.origin, payload, mode=mode.value if mode is not None else None)
                     _print_publish_result(result, kernel.origin, json_output=json_output)
                     click.echo("Serving until Ctrl-C; Postgres and Marina will be removed on exit.", err=True)
                     try:
@@ -307,6 +308,12 @@ def _serve_local_applet(payload: bytes, *, json_output: bool) -> None:
 @click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
 @click.option("--update", "applet_id", default=None, help="Applet UUID to update.")
 @click.option("--base-version", type=int, default=None, help="Current version required by an update.")
+@click.option(
+    "--mode",
+    type=click.Choice([mode.value for mode in AppletMode]),
+    default=None,
+    help="Access mode. New applets default to private; updates preserve the current mode when omitted.",
+)
 @click.option("--build/--no-build", default=True, help="Run a declared build_command before packaging.")
 @click.option("--local", is_flag=True, help="Run this applet against disposable Postgres and Marina.")
 @click.option("--dry-run", is_flag=True, help="Run package-only validation and print contents without publishing.")
@@ -316,6 +323,7 @@ def publish(
     service_url: str,
     applet_id: str | None,
     base_version: int | None,
+    mode: str | None,
     build: bool,
     local: bool,
     dry_run: bool,
@@ -329,7 +337,7 @@ def publish(
             raise click.UsageError("--local cannot be combined with --update or --base-version")
     payload, package = _publish_package(app_dir, build=build)
     if local:
-        _serve_local_applet(payload, json_output=json_output)
+        _serve_local_applet(payload, mode=AppletMode(mode) if mode is not None else None, json_output=json_output)
         return
     if dry_run:
         _print_validation_report(package, backend_import_checked=False, json_output=json_output)
@@ -337,7 +345,13 @@ def publish(
     if (applet_id is None) != (base_version is None):
         raise click.UsageError("--update and --base-version must be supplied together")
     try:
-        result = publish_applet(service_url, payload, applet_id=applet_id, base_version=base_version)
+        result = publish_applet(
+            service_url,
+            payload,
+            applet_id=applet_id,
+            base_version=base_version,
+            mode=mode,
+        )
     except RuntimeError as error:
         raise click.ClickException(str(error)) from error
     _print_publish_result(result, service_url, json_output=json_output)
@@ -350,9 +364,9 @@ def applets() -> None:
 
 def _applet_origin(service_url: str, applet_id: str) -> str:
     details = marina_request(service_url, "GET", f"/api/marina/applets/{applet_id}")
-    if not isinstance(details, dict) or not isinstance(details.get("url"), str):
+    if not isinstance(details, dict) or not isinstance(details.get("authenticated_url"), str):
         raise RuntimeError("Marina returned invalid applet details")
-    parsed = urlparse(details["url"])
+    parsed = urlparse(details["authenticated_url"])
     return f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc else service_url.rstrip("/")
 
 
@@ -371,7 +385,7 @@ def list_applets(service_url: str, json_output: bool) -> None:
         click.echo(json.dumps(result, sort_keys=True))
         return
     for applet in result["applets"]:
-        click.echo(f"{applet['name']}  v{applet['version']}  {applet['title']}  {applet['path']}")
+        click.echo(f"{applet['name']}  v{applet['version']}  {applet['mode']}  {applet['title']}  {applet['path']}")
 
 
 @applets.command("versions")
@@ -399,6 +413,29 @@ def list_applet_versions(applet_id: str, service_url: str, json_output: bool) ->
             f"v{revision['version']}{current}  {revision['published_at']}  "
             f"{revision['published_by']}  {revision['byte_size']} bytes"
         )
+
+
+@applets.command("mode")
+@click.argument("applet_id")
+@click.argument("mode", type=click.Choice([mode.value for mode in AppletMode]))
+@click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
+def set_applet_mode(applet_id: str, mode: str, service_url: str) -> None:
+    """Change an applet's access mode without publishing a new revision."""
+    try:
+        details = marina_request(service_url, "GET", f"/api/marina/applets/{applet_id}")
+        if not isinstance(details, dict) or not isinstance(details.get("current_version"), int):
+            raise RuntimeError("Marina returned invalid applet details")
+        result = marina_request(
+            service_url,
+            "PUT",
+            f"/api/marina/applets/{applet_id}/mode",
+            json_body={"mode": mode, "base_version": details["current_version"]},
+        )
+    except RuntimeError as error:
+        raise click.ClickException(str(error)) from error
+    if not isinstance(result, dict) or not isinstance(result.get("url"), str):
+        raise click.ClickException("Marina returned invalid applet mode details")
+    click.echo(result["url"])
 
 
 @applets.command("rollback")

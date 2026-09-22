@@ -1,11 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Resolve Marin-owned Harbor dataset sources."""
+"""Resolve Marin workspace paths used by Harbor datasets."""
 
 from pathlib import Path
 
-from huggingface_hub import snapshot_download
 from rigging.config_discovery import find_project_root
 
 from marin.evaluation.harbor.driver_config import HarborDatasetKind, ValidatedHarborConfig
@@ -31,37 +30,9 @@ def validate_harbor_dataset_source(config: ValidatedHarborConfig) -> None:
         raise ValueError(f"Harbor local dataset path must be a directory: {path}")
 
 
-def materialize_harbor_dataset(
-    config: ValidatedHarborConfig,
-    workdir: Path,
-    *,
-    hf_token: str | None,
-) -> Path | None:
-    """Return a local Harbor task directory, or ``None`` for a registry-backed dataset.
-
-    Hugging Face sources are downloaded on the evaluation worker. Relative local
-    sources resolve against the policy file. Harbor registry selectors remain in
-    the opaque policy and need no materialized path.
-    """
-    if config.dataset_kind == HarborDatasetKind.HUGGING_FACE:
-        local_dir = workdir / "hf_dataset"
-        local_dir.mkdir(parents=True, exist_ok=True)
-        root = Path(
-            snapshot_download(
-                repo_id=config.dataset_selector,
-                repo_type="dataset",
-                revision=config.dataset_revision,
-                local_dir=str(local_dir),
-                cache_dir=str(workdir / "hf_cache"),
-                token=hf_token or False,
-            )
-        )
-        gitattributes = root / ".gitattributes"
-        if gitattributes.exists():
-            gitattributes.unlink()
-        return root
-
-    if config.dataset_kind == HarborDatasetKind.HARBOR_REGISTRY:
+def local_harbor_dataset_path(config: ValidatedHarborConfig) -> Path | None:
+    """Return a workspace task path for local datasets; Harbor resolves other sources."""
+    if config.dataset_kind != HarborDatasetKind.LOCAL:
         return None
 
     dataset_path = _local_dataset_path(config)

@@ -207,13 +207,17 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/rl/overview",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, 'trainer step · ' || execution_uid AS series, MAX(value) AS value FROM \"telemetry_v1.marinskyrl\" WHERE name = 'policy_step' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, execution_uid UNION ALL SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, 'producing policy · ' || execution_uid AS series, MAX(CAST(json_get(attributes_json, 'weights_step') AS DOUBLE)) AS value FROM \"telemetry_v1.marinskyrl\" WHERE name = 'work_completed' AND json_get(attributes_json, 'weights_step') IS NOT NULL AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, execution_uid ORDER BY 1"
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
               },
               {
                 "key": "from",
@@ -222,6 +226,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "policy_step"
               }
             ]
           },
@@ -308,13 +320,17 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/rl/overview",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, SUM(CASE WHEN json_get(attributes_json, 'work_kind') = 'rollout' THEN value END) AS rollouts, SUM(CASE WHEN json_get(attributes_json, 'work_kind') = 'sample' THEN value END) AS samples, SUM(CASE WHEN json_get(attributes_json, 'work_kind') = 'generated_token' THEN value END) AS generated_tokens FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'work_completed' AND json_get(attributes_json, 'work_kind') IN ('rollout', 'sample', 'generated_token') AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
               },
               {
                 "key": "from",
@@ -323,6 +339,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "rollout_progress"
               }
             ]
           },
@@ -528,13 +552,17 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/rl/overview",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, json_get(attributes_json, 'phase') || ' · ' || json_get(attributes_json, 'outcome') AS series, AVG(value) AS value FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'phase_duration_seconds' AND json_get(attributes_json, 'clock_domain') = 'critical_path' AND json_get(attributes_json, 'phase') IN ('rollout_or_inference_wait', 'train_step') AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
               },
               {
                 "key": "from",
@@ -543,6 +571,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "critical_path"
               }
             ]
           },
@@ -619,13 +655,17 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/rl/overview",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "WITH raw AS ( SELECT COALESCE(NULLIF(\"cluster\", ''), 'marin') AS cl, date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, service, node_name AS node, run_id AS run, json_get(attributes_json, 'gpu_uuid') AS gpu, name, value FROM \"telemetry_v1.node_agent\" WHERE name = 'gpu_utilization_percent' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) UNION ALL SELECT COALESCE(NULLIF(\"cluster\", ''), 'marin') AS cl, date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, service, node_name AS node, run_id AS run, NULL AS gpu, name, value FROM \"telemetry_v1.marinskyrl\" WHERE 1=1 AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) ), run_node AS ( SELECT cl, t, node, run FROM ( SELECT cl, t, node, run, ROW_NUMBER() OVER (PARTITION BY cl, t, node ORDER BY COUNT(*) DESC) AS rn FROM raw WHERE service = 'marinskyrl' AND node <> '' GROUP BY 1, 2, 3, 4) WHERE rn = 1 ), gpu AS ( SELECT cl, t, node, gpu, AVG(value) AS utilization FROM raw WHERE service = 'iris-node-agent' GROUP BY 1, 2, 3, 4 ) SELECT gpu.t AS t, run_node.run AS series, AVG(gpu.utilization) AS value FROM gpu JOIN run_node ON gpu.cl = run_node.cl AND gpu.t = run_node.t AND gpu.node = run_node.node WHERE run_node.run IN (${run:sqlstring}) GROUP BY 1, 2 ORDER BY 1"
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
               },
               {
                 "key": "from",
@@ -634,6 +674,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "gpu_utilization"
               }
             ]
           },
@@ -721,13 +769,17 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/rl/overview",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "WITH samples AS ( SELECT timestamp_ms, name, attributes_json, value - LAG(value) OVER (PARTITION BY service, run_id, execution_uid, node_name, process_index, name, resource_attributes_json, attributes_json ORDER BY timestamp_ms, seq) AS delta FROM (SELECT * FROM \"telemetry_v1.vllm\" WHERE service = 'vllm' UNION ALL SELECT * FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND json_get(attributes_json, 'metric_source') = 'vllm') AS engine_rows WHERE name IN ('generation_tokens_total', 'prompt_tokens_total') AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) ) SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, SUM(CASE WHEN name = 'generation_tokens_total' THEN GREATEST(delta, 0) END) / (${__interval_ms} / 1000.0) AS generation, SUM(CASE WHEN name = 'prompt_tokens_total' THEN GREATEST(delta, 0) END) / (${__interval_ms} / 1000.0) AS prompt FROM samples WHERE delta IS NOT NULL GROUP BY 1 ORDER BY 1"
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
               },
               {
                 "key": "from",
@@ -736,6 +788,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "engine_tokens"
               }
             ]
           },
@@ -835,13 +895,17 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/rl/overview",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, AVG(CASE WHEN name = 'num_requests_running' THEN value END) AS running, AVG(CASE WHEN name = 'num_requests_waiting' THEN value END) AS waiting, AVG(CASE WHEN name = 'kv_cache_usage_perc' THEN value END) AS kv_cache FROM (SELECT * FROM \"telemetry_v1.vllm\" WHERE service = 'vllm' UNION ALL SELECT * FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND json_get(attributes_json, 'metric_source') = 'vllm') AS engine_rows WHERE name IN ('num_requests_running', 'num_requests_waiting', 'kv_cache_usage_perc') AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
               },
               {
                 "key": "from",
@@ -850,6 +914,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "engine_queue"
               }
             ]
           },
@@ -930,13 +1002,17 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/rl/overview",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "WITH samples AS ( SELECT timestamp_ms, name, attributes_json, value - LAG(value) OVER (PARTITION BY service, run_id, execution_uid, node_name, process_index, name, resource_attributes_json, attributes_json ORDER BY timestamp_ms, seq) AS delta FROM (SELECT * FROM \"telemetry_v1.vllm\" WHERE service = 'vllm' UNION ALL SELECT * FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND json_get(attributes_json, 'metric_source') = 'vllm') AS engine_rows WHERE (name LIKE '%_seconds_sum' OR name LIKE '%_seconds_count') AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) ) SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, replace(replace(name, '_sum', ''), '_count', '') AS series, SUM(CASE WHEN name LIKE '%_sum' THEN GREATEST(delta, 0) END) / NULLIF(SUM(CASE WHEN name LIKE '%_count' THEN GREATEST(delta, 0) END), 0) AS value FROM samples WHERE delta IS NOT NULL GROUP BY 1, 2 ORDER BY 1"
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
               },
               {
                 "key": "from",
@@ -945,6 +1021,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "engine_latency"
               }
             ]
           },
@@ -1019,13 +1103,17 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/rl/overview",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "WITH d AS ( SELECT timestamp_ms, name, value - LAG(value) OVER (PARTITION BY service, run_id, execution_uid, node_name, process_index, name, resource_attributes_json, attributes_json ORDER BY timestamp_ms, seq) AS delta FROM (SELECT * FROM \"telemetry_v1.vllm\" WHERE service = 'vllm' UNION ALL SELECT * FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND json_get(attributes_json, 'metric_source') = 'vllm') AS engine_rows WHERE name IN ('prefix_cache_hits_total', 'prefix_cache_queries_total') AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) ) SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, 'hit rate' AS series, SUM(CASE WHEN name = 'prefix_cache_hits_total' THEN GREATEST(delta, 0) END) / NULLIF(SUM(CASE WHEN name = 'prefix_cache_queries_total' THEN GREATEST(delta, 0) END), 0) AS value FROM d WHERE delta IS NOT NULL GROUP BY 1, 2 ORDER BY 1"
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
               },
               {
                 "key": "from",
@@ -1034,6 +1122,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "engine_prefix_cache"
               }
             ]
           },
@@ -1109,13 +1205,17 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/rl/overview",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "WITH d AS ( SELECT timestamp_ms, value - LAG(value) OVER (PARTITION BY service, run_id, execution_uid, node_name, process_index, name, resource_attributes_json, attributes_json ORDER BY timestamp_ms, seq) AS delta FROM (SELECT * FROM \"telemetry_v1.vllm\" WHERE service = 'vllm' UNION ALL SELECT * FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND json_get(attributes_json, 'metric_source') = 'vllm') AS engine_rows WHERE name = 'num_preemptions_total' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) ) SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, 'preemptions' AS series, SUM(GREATEST(delta, 0)) AS value FROM d WHERE delta IS NOT NULL GROUP BY 1, 2 ORDER BY 1"
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
               },
               {
                 "key": "from",
@@ -1124,6 +1224,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "engine_preemptions"
               }
             ]
           },
@@ -1198,13 +1306,17 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/rl/overview",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, 'p99 / p50' AS series, approx_percentile_cont(value, 0.99) / NULLIF(approx_percentile_cont(value, 0.5), 0) AS value FROM \"telemetry_v1.marinskyrl\" WHERE name = 'phase_duration_seconds' AND json_get(attributes_json, 'clock_domain') = 'critical_path' AND json_get(attributes_json, 'phase') = 'rollout_or_inference_wait' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
               },
               {
                 "key": "from",
@@ -1213,6 +1325,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "straggler"
               }
             ]
           },
@@ -1304,13 +1424,17 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/rl/overview",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "WITH d AS ( SELECT timestamp_ms, attributes_json, value - LAG(value) OVER (PARTITION BY service, run_id, execution_uid, node_name, process_index, name, resource_attributes_json, attributes_json ORDER BY timestamp_ms, seq) AS delta FROM (SELECT * FROM \"telemetry_v1.vllm\" WHERE service = 'vllm' UNION ALL SELECT * FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND json_get(attributes_json, 'metric_source') = 'vllm') AS engine_rows WHERE name = 'request_success_total' AND json_get(attributes_json, 'finished_reason') IS NOT NULL AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) ) SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, json_get(attributes_json, 'finished_reason') AS series, SUM(GREATEST(delta, 0)) AS value FROM d WHERE delta IS NOT NULL GROUP BY 1, 2 ORDER BY 1"
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
               },
               {
                 "key": "from",
@@ -1319,6 +1443,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "engine_finish"
               }
             ]
           },
@@ -1406,13 +1538,17 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/rl/overview",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, SUM(CASE WHEN name = 'ray_object_store_used_memory' THEN value END) / NULLIF(SUM(CASE WHEN name IN ('ray_object_store_used_memory', 'ray_object_store_available_memory') THEN value END), 0) AS object_store_used_fraction FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND json_get(attributes_json, 'metric_source') = 'ray' AND json_get(attributes_json, 'source_temporality') = 'current_snapshot' AND name IN ('ray_object_store_used_memory', 'ray_object_store_available_memory') AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
               },
               {
                 "key": "from",
@@ -1421,6 +1557,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "ray_object_store"
               }
             ]
           },
@@ -1490,13 +1634,17 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/rl/overview",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, COALESCE(json_get(attributes_json, 'state'), 'unlabelled') AS series, AVG(value) AS value FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND json_get(attributes_json, 'metric_source') = 'ray' AND json_get(attributes_json, 'source_temporality') = 'current_snapshot' AND name = 'ray_spill_manager_objects_bytes' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
               },
               {
                 "key": "from",
@@ -1505,6 +1653,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "ray_spill"
               }
             ]
           },

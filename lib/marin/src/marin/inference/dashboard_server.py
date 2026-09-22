@@ -14,6 +14,9 @@ would escape the prefix.
 ``/v1/*`` requests are reverse-proxied to whichever serving backend runs on the
 slice (see :mod:`marin.inference.backend`). Direct sessions preserve server-sent
 events end to end; brokered sessions return buffered JSON and reject streaming.
+``/tools`` returns model-facing JSON schemas for dashboard-authored Python,
+``/tools/{name}`` validates and runs one function, and ``/shell`` executes a
+command in a reconstructed ShellSim agent workspace.
 """
 
 import dataclasses
@@ -23,7 +26,7 @@ import socket
 import threading
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import httpx
 import uvicorn
@@ -33,7 +36,14 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
+from marin.inference.chat_template_protocol import ChatTemplateProtocol
 from marin.inference.http_proxy import forwardable_request_headers, forwardable_response_headers
+from marin.inference.python_tool_routes import (
+    invoke_tool_response,
+    python_tool_definitions_response,
+    shell_workspace_response,
+)
+from marin.inference.repository_snapshot import repository_snapshot_response
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +60,7 @@ class ServingInfo:
     has_chat_template: bool
     endpoint: str
     streaming: bool = True
+    chat_template_protocol: ChatTemplateProtocol = field(default_factory=ChatTemplateProtocol)
 
 
 def build_dashboard_app(
@@ -136,6 +147,10 @@ def build_dashboard_app(
             Route("/dashboard", index),
             Route("/info", serving_info),
             Route("/health", health),
+            Route("/tools", python_tool_definitions_response, methods=["POST"]),
+            Route("/tools/{name}", invoke_tool_response, methods=["POST"]),
+            Route("/shell", shell_workspace_response, methods=["POST"]),
+            Route("/shell/repository", repository_snapshot_response, methods=["POST"]),
             Route("/v1/{path:path}", proxy, methods=["GET", "POST", "OPTIONS"]),
         ],
         lifespan=lifespan,

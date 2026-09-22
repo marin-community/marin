@@ -37,6 +37,10 @@
             "value": "${identity}"
           },
           {
+            "key": "identity_override",
+            "value": "${identity_override}"
+          },
+          {
             "key": "from",
             "value": "${__from}"
           },
@@ -46,7 +50,7 @@
           },
           {
             "key": "bucket_ms",
-            "value": "${__interval_ms}"
+            "value": "15000"
           },
           {
             "key": "view",
