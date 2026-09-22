@@ -194,7 +194,7 @@ def test_apertus_roundtrip(scan_layers, num_kv_heads, local_gpt2_tokenizer_path)
 
         assert np.isclose(torch_out, np.array(jax_out), rtol=1e-4, atol=1e-4).all(), f"{torch_out} != {jax_out}"
 
-        converter.save_pretrained(model, f"{tmpdir}/lev_model", save_reference_code=False, save_tokenizer=False)
+        converter.save_pretrained(model, f"{tmpdir}/lev_model", save_tokenizer=False)
 
         torch_model2 = AutoModelForCausalLM.from_pretrained(f"{tmpdir}/lev_model")
         torch_model2.eval()

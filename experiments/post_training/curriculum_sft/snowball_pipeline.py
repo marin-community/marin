@@ -69,7 +69,6 @@ TRAIN_BATCH_SIZE = 64
 TRAIN_SEQUENCE_LENGTH = 4096
 DATA_AXIS_SIZE = 8
 EXPERT_AXIS_SIZE = 8
-MAX_COMPILED_MEMORY_BYTES = 70 * 1024**3
 
 
 @dataclass(frozen=True)
@@ -114,7 +113,7 @@ class SnowballModelSource(ModelSource):
             num_train_steps,
         )
         mesh = MeshConfig(
-            axes={"data": 1, "expert": EXPERT_AXIS_SIZE, "replica": 1, "model": 1},
+            axes={"expert": EXPERT_AXIS_SIZE, "replica": 1, "model": 1},
             dcn_axes={"data": DATA_AXIS_SIZE, "replica_dcn": 1},
             compute_mapping={"batch": ["replica_dcn", "data", "expert"]},
         )
@@ -123,7 +122,6 @@ class SnowballModelSource(ModelSource):
             mesh=mesh,
             use_explicit_mesh_axes=True,
             per_device_parallelism=1,
-            max_compiled_memory_bytes=MAX_COMPILED_MEMORY_BYTES,
             log_jaxprs=False,
             log_xla_hlo=False,
         )
@@ -132,9 +130,6 @@ class SnowballModelSource(ModelSource):
             trainer=trainer,
             z_loss_weight=1e-4,
             hf_save_dtype="bfloat16",
-            # The staged base is a data artifact, not an HF repository. Snowball needs no
-            # remote model code, so copying the tokenizer and generated config is sufficient.
-            hf_save_reference_code=False,
         )
         return dataclasses.replace(pod_config, train_config=train_config)
 

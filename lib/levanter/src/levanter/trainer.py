@@ -4,7 +4,6 @@
 import atexit
 import copy
 import functools
-import json
 import logging as pylogging
 import os
 import sys
@@ -315,7 +314,6 @@ class Trainer:
 
         self._cmanagers = []
         self._logged_jaxprs: set[str] = set()
-        self._checked_compiled_memory: set[str] = set()
 
     @cached_property
     def loss_fn(self) -> WrappedLossFunction:
@@ -819,7 +817,6 @@ class Trainer:
 
     def _maybe_save_jaxpr(self, name: str, fn, *args, **kwargs):
         logged = False
-        lowered = None
         if self.config.log_jaxprs and name not in self._logged_jaxprs:
             logger.info("Tracing %s for jaxpr...", name)
             with capture_time() as t:
@@ -832,58 +829,15 @@ class Trainer:
         if self.config.log_xla_hlo and name not in self._logged_jaxprs:
             logger.info("Lowering %s to HLO...", name)
             with capture_time() as t:
-                lowered = fn.lower(*args, **kwargs)
-                hlo = lowered.as_text("stablehlo")
+                hlo = fn.lower(*args, **kwargs).as_text("stablehlo")
             logger.info("Lowered %s in %.1fs", name, t())
             self.write_artifact(f"{name}.hlo.txt", hlo, type="hlo")
             logged = True
-
-        memory_limit = self.config.max_compiled_memory_bytes
-        if memory_limit is not None and name not in self._checked_compiled_memory:
-            if lowered is None:
-                lowered = fn.lower(*args, **kwargs)
-            logger.info("Compiling %s for the device-memory preflight...", name)
-            with capture_time() as t:
-                compiled = lowered.compile()
-            report = _compiled_memory_report(compiled.memory_analysis())
-            logger.info("Compiled %s in %.1fs; per-device memory estimate: %s", name, t(), report)
-            self.write_artifact(
-                f"{name}.compiled_memory.json",
-                json.dumps(report, indent=2, sort_keys=True),
-                type="compiled-memory",
-            )
-            self._checked_compiled_memory.add(name)
-            if report["peak_estimate_bytes"] > memory_limit:
-                raise RuntimeError(
-                    f"compiled {name} requires an estimated {report['peak_estimate_bytes']} bytes per device, "
-                    f"above max_compiled_memory_bytes={memory_limit}"
-                )
 
         if logged:
             self._logged_jaxprs.add(name)
 
         return fn(*args, **kwargs)
-
-
-def _compiled_memory_report(analysis) -> dict[str, int]:
-    fields = {
-        "argument_size_bytes": analysis.argument_size_in_bytes,
-        "temporary_size_bytes": analysis.temp_size_in_bytes,
-        "output_size_bytes": analysis.output_size_in_bytes,
-        "alias_size_bytes": analysis.alias_size_in_bytes,
-    }
-    unavailable = [name for name, value in fields.items() if value is None]
-    if unavailable:
-        raise RuntimeError(f"XLA did not report compiled memory fields: {unavailable}")
-    report = {name: int(value) for name, value in fields.items()}
-    report["peak_estimate_bytes"] = max(
-        0,
-        report["argument_size_bytes"]
-        + report["temporary_size_bytes"]
-        + report["output_size_bytes"]
-        - report["alias_size_bytes"],
-    )
-    return report
 
 
 def _compose_with_telemetry(config: TrackerConfig | Sequence[TrackerConfig]) -> list[TrackerConfig]:
@@ -921,9 +875,6 @@ class TrainerConfig:
     """Whether to log the jaxpr of the training step. This is useful for debugging and understanding the model."""
     log_xla_hlo: bool = True
     """Whether to log the XLA HLO of the training step. This is useful for debugging and understanding the model."""
-
-    max_compiled_memory_bytes: int | None = None
-    """Abort before the first step when XLA's per-device peak estimate exceeds this many bytes."""
 
     # helpful checks
     crash_on_nan: bool = True
