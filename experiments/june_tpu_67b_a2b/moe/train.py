@@ -72,6 +72,8 @@ class GrugTrainerConfig:
     # slice) and expert_axis_size>1 (expert parallelism over the intra-slice devices).
     expert_axis_size: int = 1
     replica_axis_size: int | None = None
+    context_axis_size: int = 1
+    """Partition sequence activations over the context mesh axis."""
     model_axis_size: int = 1
 
     sft_weights_only_init: bool = False
@@ -515,6 +517,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     mesh = compact_grug_mesh(
         expert_axis_size=config.trainer.expert_axis_size,
         replica_axis_size=config.trainer.replica_axis_size,
+        context_axis_size=config.trainer.context_axis_size,
         model_axis_size=config.trainer.model_axis_size,
     )
     with set_mesh(mesh):

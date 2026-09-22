@@ -324,13 +324,6 @@ def grug_trainer_mesh_config(context_axis_size: int) -> MeshConfig:
     return MeshConfig(axes={"data": -1, "replica": 1, "model": 1, "context": context_axis_size})
 
 
-def grug_trainer_mesh_config(context_axis_size: int) -> MeshConfig:
-    """Build a trainer mesh that excludes context shards from the batch device count."""
-    if context_axis_size <= 0:
-        raise ValueError(f"context_axis_size must be positive, got {context_axis_size}")
-    return MeshConfig(axes={"data": -1, "replica": 1, "model": 1, "context": context_axis_size})
-
-
 @dataclass(frozen=True)
 class GrugEvalConfig:
     """Perplexity eval settings for grug training."""
