@@ -212,6 +212,26 @@ def test_snowball_sharded_head_loss_matches_logits_reference():
     np.testing.assert_allclose(np.asarray(actual.array), np.asarray(expected.array), rtol=1e-5, atol=1e-5)
 
 
+def test_snowball_segment_mask_blocks_cross_document_attention():
+    cfg = _tiny_config()
+    Pos = Axis("position", 6)
+    segment_ids = hax.named(jnp.array([0, 0, 0, 1, 1, 1], dtype=jnp.int32), Pos)
+    first = hax.named(jnp.array([1, 2, 3, 4, 5, 6], dtype=jnp.int32), Pos)
+    second = hax.named(jnp.array([7, 8, 9, 4, 5, 6], dtype=jnp.int32), Pos)
+    first_example = LmExample.causal(first, segment_ids=segment_ids)
+    second_example = LmExample.causal(second, segment_ids=segment_ids)
+
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(7))
+        first_hidden = np.asarray(model.activations(first, first_example.attn_mask).array)
+        second_hidden = np.asarray(model.activations(second, second_example.attn_mask).array)
+        first_loss = np.asarray(model.compute_next_token_loss(first_example, reduction=None).array)
+        second_loss = np.asarray(model.compute_next_token_loss(second_example, reduction=None).array)
+
+    np.testing.assert_allclose(first_hidden[3:], second_hidden[3:], rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(first_loss[3:], second_loss[3:], rtol=1e-5, atol=1e-5)
+
+
 def test_snowball_torch_compatible_state_dict_roundtrip():
     """Exercise the exact serialization path load_pretrained uses (to/from_torch_compatible_state_dict)."""
     cfg = _tiny_config()
@@ -305,7 +325,7 @@ def test_snowball_load_path_multidevice_sharding():
         from haliax.partitioning import set_mesh
         from haliax.state_dict import from_torch_compatible_state_dict, to_torch_compatible_state_dict
         from jax.random import PRNGKey
-        from jax.sharding import NamedSharding, PartitionSpec as P
+        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
         from levanter.grug.sharding import compact_grug_mesh
         from levanter.models.lm_model import LmExample
         from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
@@ -319,6 +339,18 @@ def test_snowball_load_path_multidevice_sharding():
             initializer_std=0.02,
         )
         Vocab = Axis("vocab", cfg.vocab_size)
+        fsdp_mesh = Mesh(
+            np.asarray(jax.devices()).reshape(8, 1, 1, 1),
+            ("replica_dcn", "data", "expert", "model"),
+            axis_types=(AxisType.Explicit,) * 4,
+        )
+        with set_mesh(fsdp_mesh):
+            fsdp_model = SnowballLMHeadModel.init(Vocab, cfg, key=PRNGKey(0))
+        assert fsdp_model.transformer.blocks[0].attn.w_q.sharding.spec == P("replica_dcn", "model")
+        assert fsdp_model.transformer.blocks[0].mlp.expert_mlp.w_gate.sharding.spec == P(
+            "expert", "replica_dcn", "model"
+        )
+
         mesh = compact_grug_mesh(expert_axis_size=1)  # (replica_dcn=1, data=8, expert=1, model=1)
         Batch = Axis("batch", jax.device_count())
         Pos = Axis("position", 8)

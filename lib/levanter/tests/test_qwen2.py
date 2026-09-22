@@ -110,7 +110,7 @@ def test_qwen_roundtrip(local_gpt2_tokenizer_path):
         # now we're going to magnify the model parameters enough that differences should actualy show up
         jax_out = compute(model, input).array
 
-        converter.save_pretrained(model, f"{tmpdir}/lev_model", save_reference_code=False, save_tokenizer=False)
+        converter.save_pretrained(model, f"{tmpdir}/lev_model", save_tokenizer=False)
         torch_model2 = Qwen2ForCausalLM.from_pretrained(f"{tmpdir}/lev_model")
         torch_model2.eval()
 

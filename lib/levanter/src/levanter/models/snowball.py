@@ -47,7 +47,7 @@ from levanter.grug.attention import (
     apply_rotary_embedding,
     attention,
 )
-from levanter.grug.grug_moe import MoeImplementation, MoEExpertMlp
+from levanter.grug.grug_moe import MoeImplementation, MoEExpertMlp, MoEExpertMlpPspecs
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import (
     Pembed_vocab,
@@ -156,6 +156,57 @@ def _bspec(*tail: Any) -> P:
 
 def _batch_reshard(x: jax.Array) -> jax.Array:
     return reshard(x, _bspec())
+
+
+def _to_grug_attention_mask(
+    mask: LmHeadAttentionMask | NamedArray | None,
+    batch_size: int,
+    sequence_length: int,
+) -> AttentionMask | None:
+    if mask is None:
+        return None
+    if isinstance(mask, NamedArray):
+        raise ValueError("Snowball requires a structured AttentionMask")
+    if mask.explicit_mask is not None or mask.causal_offset is not None or mask.bidirectional_window is not None:
+        raise ValueError("Snowball supports causal, sliding-window, and segment attention masks only")
+    segment_ids = None
+    if mask.segment_ids is not None:
+        segment_ids = tuple(ids.array.reshape(batch_size, sequence_length) for ids in mask.segment_ids)
+    return AttentionMask(
+        is_causal=mask.is_causal,
+        segment_ids=segment_ids,
+        sliding_window=mask.sliding_window,
+    )
+
+
+def _fsdp_axis() -> str | None:
+    """Select the parameter-sharding axis while keeping ICI and DCN axes distinct."""
+    mesh = _current_mesh()
+    if mesh is None or getattr(mesh, "empty", True):
+        return "data"
+    if mesh.shape.get("data", 1) > 1:
+        return "data"
+    if mesh.shape.get("replica_dcn", 1) > 1:
+        return "replica_dcn"
+    if "data" in mesh.axis_names:
+        return "data"
+    return None
+
+
+def _fsdp_up_spec() -> P:
+    return P(_fsdp_axis(), "model")
+
+
+def _fsdp_down_spec() -> P:
+    return P("model", _fsdp_axis())
+
+
+def _expert_up_spec() -> P:
+    return P("expert", _fsdp_axis(), "model")
+
+
+def _expert_down_spec() -> P:
+    return P("expert", "model", _fsdp_axis())
 
 
 def _hf_attr(config: HfConfig, names: tuple[str, ...], default: Any = None) -> Any:
@@ -416,10 +467,10 @@ class SnowballAttention(eqx.Module):
         k_q, k_k, k_v, k_o = random.split(key, 4)
         d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
         return SnowballAttention(
-            w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), P("data", "model")),
-            w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), P("data", "model")),
-            w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), P("data", "model")),
-            w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", "data")),
+            w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), _fsdp_up_spec()),
+            w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), _fsdp_up_spec()),
+            w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), _fsdp_up_spec()),
+            w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), _fsdp_down_spec()),
             attn_gate=reshard(jnp.zeros((d, n)), P(None, None)),
             cfg=cfg,
         )
@@ -494,9 +545,9 @@ class DenseMLP(eqx.Module):
     def init(hidden_dim: int, intermediate_dim: int, initializer_std: float, *, key: PRNGKeyArray) -> "DenseMLP":
         k_gate, k_up, k_down = random.split(key, 3)
         return DenseMLP(
-            w_gate=reshard(_init_weight(k_gate, (hidden_dim, intermediate_dim), initializer_std), P("data", "model")),
-            w_up=reshard(_init_weight(k_up, (hidden_dim, intermediate_dim), initializer_std), P("data", "model")),
-            w_down=reshard(_init_weight(k_down, (intermediate_dim, hidden_dim), initializer_std), P("model", "data")),
+            w_gate=reshard(_init_weight(k_gate, (hidden_dim, intermediate_dim), initializer_std), _fsdp_up_spec()),
+            w_up=reshard(_init_weight(k_up, (hidden_dim, intermediate_dim), initializer_std), _fsdp_up_spec()),
+            w_down=reshard(_init_weight(k_down, (intermediate_dim, hidden_dim), initializer_std), _fsdp_down_spec()),
         )
 
     @named_call
@@ -541,6 +592,7 @@ class SnowballMoEMLP(eqx.Module):
                 implementation=cfg.moe_implementation,
                 activation=ActivationFunctionEnum.silu,
                 capacity_factor=_EP_CAPACITY_FACTOR,
+                pspecs=MoEExpertMlpPspecs(hidden=_fsdp_axis()),
             ),
             cfg=cfg,
         )
@@ -717,15 +769,13 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         key=None,
         pos_ids: NamedArray | None = None,
     ) -> NamedArray:
-        # attn_mask is ignored: the pinned recipe builds its own per-layer short/long causal masks
-        # inside the transformer core. Snowball training therefore requires unpacked inputs.
         Pos = input_ids.resolve_axis(self.Pos.name)
         raw = input_ids.array
         lead = raw.shape[:-1]
         s = raw.shape[-1]
         b = int(np.prod(lead)) if lead else 1
         tokens = raw.reshape(b, s)
-        hidden = self.transformer(tokens)  # [B, S, D]
+        hidden = self.transformer(tokens, _to_grug_attention_mask(attn_mask, b, s))  # [B, S, D]
         hidden = hidden.reshape(*lead, s, self.Embed.size) if lead else hidden.reshape(s, self.Embed.size)
         out_axes = (*input_ids.axes, self.Embed) if lead else (Pos, self.Embed)
         return hax.named(hidden, out_axes)
@@ -753,7 +803,8 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         sequence_length = raw_tokens.shape[-1]
         batch_size = int(np.prod(raw_tokens.shape[:-1])) if raw_tokens.ndim > 1 else 1
         tokens = raw_tokens.reshape(batch_size, sequence_length)
-        hidden = self.transformer(tokens)
+        mask = _to_grug_attention_mask(example.attn_mask, batch_size, sequence_length)
+        hidden = self.transformer(tokens, mask)
         labels = jnp.concatenate([tokens[:, 1:], jnp.zeros_like(tokens[:, :1])], axis=1)
         dtype = example.loss_weight.dtype if loss_dtype is None else loss_dtype
         raw_loss = fused_linear_softmax_cross_entropy_loss(
@@ -905,16 +956,16 @@ def snowball_from_state_dict(
             _reshard_replicated(_T(g(f"{p}.attn_gated_norm.up_proj.weight"))),
         )
         m = eqx.tree_at(
-            lambda t, i=i: t.blocks[i].attn.w_q, m, _reshard(_T(g(f"{p}.self_attn.q_proj.weight")), P("data", "model"))
+            lambda t, i=i: t.blocks[i].attn.w_q, m, _reshard(_T(g(f"{p}.self_attn.q_proj.weight")), _fsdp_up_spec())
         )
         m = eqx.tree_at(
-            lambda t, i=i: t.blocks[i].attn.w_k, m, _reshard(_T(g(f"{p}.self_attn.k_proj.weight")), P("data", "model"))
+            lambda t, i=i: t.blocks[i].attn.w_k, m, _reshard(_T(g(f"{p}.self_attn.k_proj.weight")), _fsdp_up_spec())
         )
         m = eqx.tree_at(
-            lambda t, i=i: t.blocks[i].attn.w_v, m, _reshard(_T(g(f"{p}.self_attn.v_proj.weight")), P("data", "model"))
+            lambda t, i=i: t.blocks[i].attn.w_v, m, _reshard(_T(g(f"{p}.self_attn.v_proj.weight")), _fsdp_up_spec())
         )
         m = eqx.tree_at(
-            lambda t, i=i: t.blocks[i].attn.w_o, m, _reshard(_T(g(f"{p}.self_attn.o_proj.weight")), P("model", "data"))
+            lambda t, i=i: t.blocks[i].attn.w_o, m, _reshard(_T(g(f"{p}.self_attn.o_proj.weight")), _fsdp_down_spec())
         )
         m = eqx.tree_at(
             lambda t, i=i: t.blocks[i].attn.attn_gate, m, _reshard_replicated(_T(g(f"{p}.self_attn.attn_gate.weight")))
@@ -935,38 +986,34 @@ def snowball_from_state_dict(
         m = eqx.tree_at(
             lambda t, i=i: t.blocks[i].mlp.expert_mlp.w_gate,
             m,
-            _reshard(_T(g(f"{p}.mlp.experts.gate_proj.weight")), _EXPERT_GATE_UP_SPEC),
+            _reshard(_T(g(f"{p}.mlp.experts.gate_proj.weight")), _expert_up_spec()),
         )
         m = eqx.tree_at(
             lambda t, i=i: t.blocks[i].mlp.expert_mlp.w_up,
             m,
-            _reshard(_T(g(f"{p}.mlp.experts.up_proj.weight")), _EXPERT_GATE_UP_SPEC),
+            _reshard(_T(g(f"{p}.mlp.experts.up_proj.weight")), _expert_up_spec()),
         )
         m = eqx.tree_at(
             lambda t, i=i: t.blocks[i].mlp.expert_mlp.w_down,
             m,
-            _reshard(_T(g(f"{p}.mlp.experts.down_proj.weight")), _EXPERT_DOWN_SPEC),
+            _reshard(_T(g(f"{p}.mlp.experts.down_proj.weight")), _expert_down_spec()),
         )
         m = eqx.tree_at(
             lambda t, i=i: t.blocks[i].shared.w_gate,
             m,
-            _reshard(_T(g(f"{p}.shared_expert.gate_proj.weight")), P("data", "model")),
+            _reshard(_T(g(f"{p}.shared_expert.gate_proj.weight")), _fsdp_up_spec()),
         )
         m = eqx.tree_at(
             lambda t, i=i: t.blocks[i].shared.w_up,
             m,
-            _reshard(_T(g(f"{p}.shared_expert.up_proj.weight")), P("data", "model")),
+            _reshard(_T(g(f"{p}.shared_expert.up_proj.weight")), _fsdp_up_spec()),
         )
         m = eqx.tree_at(
             lambda t, i=i: t.blocks[i].shared.w_down,
             m,
-            _reshard(_T(g(f"{p}.shared_expert.down_proj.weight")), P("model", "data")),
+            _reshard(_T(g(f"{p}.shared_expert.down_proj.weight")), _fsdp_down_spec()),
         )
     return m
-
-
-_EXPERT_GATE_UP_SPEC = P("expert", "data", "model")
-_EXPERT_DOWN_SPEC = P("expert", "model", "data")
 
 
 def _reshard_replicated(arr: jax.Array) -> jax.Array:

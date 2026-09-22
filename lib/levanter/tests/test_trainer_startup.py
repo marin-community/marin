@@ -10,7 +10,7 @@ import pytest
 import levanter.tracker.tracker_fns as tracker_fns
 from levanter.distributed import DistributedConfig
 from levanter.tracker.json_file import JsonFileTrackerConfig
-from levanter.trainer import TrainerConfig, _compiled_memory_report
+from levanter.trainer import TrainerConfig
 from levanter.utils.hardware_topology import nvidia_topology_matrix_summary, tpu_topology_shape
 from levanter.utils.mesh import MeshConfig
 
@@ -90,21 +90,4 @@ mlx5_0  SYS     PIX     SYS     SYS      X
     assert nvidia_topology_matrix_summary(topology) == {
         "gpu_gpu_link_counts": {"NV18": 1, "SYS": 2},
         "gpu_nic_link_counts": {"PIX": 2, "PXB": 1, "SYS": 3},
-    }
-
-
-def test_compiled_memory_report_accounts_for_aliases():
-    analysis = SimpleNamespace(
-        argument_size_in_bytes=100,
-        temp_size_in_bytes=40,
-        output_size_in_bytes=30,
-        alias_size_in_bytes=80,
-    )
-
-    assert _compiled_memory_report(analysis) == {
-        "argument_size_bytes": 100,
-        "temporary_size_bytes": 40,
-        "output_size_bytes": 30,
-        "alias_size_bytes": 80,
-        "peak_estimate_bytes": 90,
     }

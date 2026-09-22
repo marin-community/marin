@@ -140,7 +140,6 @@ def test_save_pretrained_with_custom_dtype():
                 wrapped_model,
                 tmpdir,
                 save_tokenizer=False,
-                save_reference_code=False,
                 max_shard_size=int(10e9),
                 dtype=jnp.bfloat16,
             )
@@ -199,7 +198,6 @@ def test_save_pretrained_default_dtype():
                 wrapped_model,
                 tmpdir,
                 save_tokenizer=False,
-                save_reference_code=False,
                 max_shard_size=int(10e9),
             )  # No dtype override
 
@@ -235,7 +233,6 @@ def test_save_pretrained_to_memory_fs():
             path,
             max_shard_size=128,
             save_tokenizer=False,
-            save_reference_code=False,
             save_feature_extractor=False,
         )
 
