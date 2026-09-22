@@ -20,7 +20,7 @@ from levanter.grug.attention import (
     reference_attention,
 )
 from levanter.grug.attention._fa4_cute import _simple_causal_lower_bounds
-from levanter.grug.attention._fa4_cute_config import flash4_cute_kernel_config
+from levanter.grug.attention._fa4_cute_config import flash4_cute_kernel_config, sm100_flash4_cute_kernel_config
 
 
 class _reset_abstract_mesh:
@@ -481,8 +481,8 @@ def test_real_gpu_fa4_cute_configured_backward_matches_reference(native_backward
     pytest.importorskip("cutlass.cute")
     pytest.importorskip("flash_attn.cute.flash_bwd_sm100")
     config = flash4_cute_kernel_config(128, arch=100)
-    if not native_backward:
-        config = dataclasses.replace(config, sm100_backward=None)
+    if native_backward:
+        config = dataclasses.replace(sm100_flash4_cute_kernel_config(), sm100_forward=None)
     keys = jax.random.split(jax.random.key(23), 4)
     shapes = ((1, 257, 8, 128), (1, 257, 2, 128), (1, 257, 2, 128), (1, 257, 8, 128))
     q, k, v, cotangent = (jax.random.normal(key, shape, dtype=jnp.bfloat16) for key, shape in zip(keys, shapes))

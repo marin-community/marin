@@ -66,23 +66,11 @@ def flash4_cute_kernel_config(
 ) -> Flash4CuteKernelConfig:
     arch_family = arch // 10
     if arch_family == 10:
-        # Native packed-mask backward is validated on SM100 (GB200) only.
-        # SM103 retains the segmented port until it has its own correctness gate.
-        native = None
-        if arch == 100 and head_dim == 128:
-            native = Flash4CuteSm100BackwardConfig(
-                tile=(128, 128),
-                zero_fill_threads=512,
-                postprocess_threads=128,
-                cluster_size=1,
-                use_2cta_instrs=False,
-            )
         return Flash4CuteKernelConfig(
             forward_tile=(128, 128 if head_dim <= 64 else 64),
             backward_tile=(64, 64),
             num_threads=128,
-            backward_arch=arch,
-            sm100_backward=native,
+            backward_arch=120,
         )
     if arch_family == 12:
         return Flash4CuteKernelConfig(
@@ -112,6 +100,24 @@ def flash4_cute_kernel_config(
             sm90_backward=sm90_backward,
         )
     raise NotImplementedError(f"FA4/CuTe attention does not support SM{arch}.")
+
+
+def sm100_flash4_cute_kernel_config() -> Flash4CuteKernelConfig:
+    """Return the native SM100 forward and backward configuration for BF16 D128 GQA."""
+    return Flash4CuteKernelConfig(
+        forward_tile=(128, 64),
+        backward_tile=(64, 64),
+        num_threads=128,
+        backward_arch=100,
+        sm100_forward=Flash4CuteSm100ForwardConfig(tile=(128, 128), q_stage=2),
+        sm100_backward=Flash4CuteSm100BackwardConfig(
+            tile=(128, 128),
+            zero_fill_threads=512,
+            postprocess_threads=128,
+            cluster_size=1,
+            use_2cta_instrs=False,
+        ),
+    )
 
 
 def sm90_flash4_cute_backward_config(

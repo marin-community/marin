@@ -1202,6 +1202,7 @@ def segmented_flash_attention_forward_sm100_launcher(
         m_block_size=config.tile[0],
         n_block_size=config.tile[1],
         q_stage=config.q_stage,
+        # Keep the schedule measured in the hero comparison; persistent scheduling is unmeasured here.
         is_static_persistent=False,
         mask_mod=_native_segment_mask_mod(modules),
         has_aux_tensors=True,
@@ -1444,8 +1445,8 @@ def segmented_flash_attention_backward_sm90_launcher(
         softmax_scale: cutlass.Float32,
     ):
         blocksparse_tensors = BlockSparseTensors(mask_block_cnt, mask_block_idx, full_block_cnt, full_block_idx)
+        zero_fill(dq_accum, stream)
         if cutlass.const_expr(qhead_per_kvhead > 1):
-            zero_fill(dq_accum, stream)
             zero_fill(dk_accum, stream)
             zero_fill(dv_accum, stream)
         lse_log2_gmem = _as_gmem_tensor(lse_log2)
@@ -1564,8 +1565,8 @@ def segmented_flash_attention_backward_sm100_launcher(
             _broadcast_heads(full_block_cnt, q.shape[2]),
             _broadcast_heads(full_block_idx, q.shape[2]),
         )
+        zero_fill(dq_accum, stream)
         if cutlass.const_expr(qhead_per_kvhead > 1):
-            zero_fill(dq_accum, stream)
             zero_fill(dk_accum, stream)
             zero_fill(dv_accum, stream)
         lse_log2_gmem = _as_gmem_tensor(lse_log2)

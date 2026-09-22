@@ -13,8 +13,8 @@ records include full configs, package versions, source hashes, and rejected cand
 
 For the current hero shapes, use ``--batch 16 --q-heads 48 --kv-heads 6 --sliding-window 2048``.
 
-With ``--backend port``, ``--sweep forward`` varies the forward tile at the production backward. ``--sweep backward``
-disables native backward, varies the segmented tile, thread count, and path, and lifts the
+With ``--backend port``, ``--sweep forward`` varies the forward tile with port backward. ``--sweep backward``
+varies the segmented tile, thread count, and path, and lifts the
 ``_segmented_backward_arches`` allowlist to do it, since that function is narrower than the
 kernel's own ``can_implement``.
 
@@ -63,6 +63,7 @@ from levanter.grug.attention._fa4_cute_config import (
     Flash4CuteKernelConfig,
     Flash4CuteSm100ForwardConfig,
     flash4_cute_kernel_config,
+    sm100_flash4_cute_kernel_config,
 )
 
 REFERENCE_TILE = (64, 64)
@@ -381,9 +382,9 @@ def _run_sweep(args: argparse.Namespace) -> None:
     if args.backend == "native-sm100":
         if arch != 100 or args.head_dim != 128 or args.q_heads / args.kv_heads not in (4, 8):
             raise ValueError("Native sweep requires SM100, head dimension 128, and GQA ratio 4 or 8.")
-        base = dataclasses.replace(base, sm100_forward=Flash4CuteSm100ForwardConfig((128, 128), 2))
-    elif args.sweep == "backward":
-        base = dataclasses.replace(base, sm100_backward=None)
+        base = sm100_flash4_cute_kernel_config()
+    else:
+        base = dataclasses.replace(base, sm90_backward=None)
     print(f"arch=sm{arch} base_forward_tile={base.forward_tile} base_backward_tile={base.backward_tile}")
     print(f"shape: batch={args.batch} seq={args.seq_len} q_heads={args.q_heads} head_dim={args.head_dim}")
 
@@ -429,6 +430,7 @@ def _run_sweep(args: argparse.Namespace) -> None:
             record = {
                 "candidate_index": args.candidate_index,
                 "config": dataclasses.asdict(candidate.config),
+                "backward_path": candidate.backward_path,
                 "window": window,
                 "window_name": window_name,
                 "backend": args.backend,
@@ -453,6 +455,7 @@ def _run_sweep(args: argparse.Namespace) -> None:
                                 "kind": "timing",
                                 "role": role,
                                 "config": dataclasses.asdict(measured.config),
+                                "backward_path": measured.backward_path,
                                 "round": round_index,
                                 "forward": got.forward,
                                 "backward": got.backward,

@@ -17,8 +17,8 @@ from levanter.grug.attention._core import AttentionMask
 from levanter.grug.attention._fa4_cute_backend import fa4_cute_attention_forward
 from levanter.grug.attention._fa4_cute_config import (
     Flash4CuteKernelConfig,
-    Flash4CuteSm100ForwardConfig,
     flash4_cute_kernel_config,
+    sm100_flash4_cute_kernel_config,
 )
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
@@ -289,9 +289,7 @@ def _segmented_kernel_config(head_dim: int) -> Flash4CuteKernelConfig:
     arch = gpu_compute_capability()
     kernel_config = flash4_cute_kernel_config(head_dim, arch=arch)
 
-    # The segmented forward uses 64x64 tiles for these Grug shapes. Supported
-    # BF16 GQA backward uses the separately configured native SM100 schedule;
-    # the 64x64 backward tile remains the segmented-port fallback.
+    # The segmented forward uses 64x64 tiles for these Grug shapes.
     if arch // 10 == 10 and head_dim == 128:
         return replace(kernel_config, forward_tile=(64, 64), backward_tile=(64, 64), num_threads=128)
     return kernel_config
@@ -381,10 +379,7 @@ def gpu_fa4_cute_sm100_attention(
         raise ValueError("gpu_fa4_cute_sm100 requires SM100 with BF16 and D == Dv == 128.")
     if q.shape[2] // k.shape[2] not in (4, 8):
         raise ValueError("gpu_fa4_cute_sm100 requires a GQA ratio of 4 or 8.")
-    config = replace(
-        flash4_cute_kernel_config(q.shape[-1], arch=arch),
-        sm100_forward=Flash4CuteSm100ForwardConfig(tile=(128, 128), q_stage=2),
-    )
+    config = sm100_flash4_cute_kernel_config()
     return _gpu_fa4_cute_attention(q, k, v, mask, kernel_config=config)
 
 
