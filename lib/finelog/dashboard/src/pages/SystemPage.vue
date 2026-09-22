@@ -139,7 +139,7 @@ const logTailCache = computed<Field[]>(() => {
   const pct = c.budgetBytes ? Math.round((c.bytes / c.budgetBytes) * 100) : 0
   return [
     { label: 'Cached filters', value: formatNumber(c.entries) },
-    { label: 'Cached rows', value: `${formatBytes(c.bytes)} of ${formatBytes(c.budgetBytes)}`, note: `${pct}% full` },
+    { label: 'Cache size', value: `${formatBytes(c.bytes)} of ${formatBytes(c.budgetBytes)}`, note: `${pct}% full` },
     { label: 'Unchanged hits', value: formatNumber(c.hits) },
     { label: 'Delta scans', value: formatNumber(c.deltaScans) },
     { label: 'Cold misses', value: formatNumber(c.misses) },

@@ -356,7 +356,7 @@ impl StatsService for StatsServiceImpl {
         let store = Arc::clone(&self.store);
         let provider_started = Instant::now();
         let providers = run_blocking(move || store.query_providers()).await?;
-        let provider = provider_started.elapsed();
+        let provider_elapsed = provider_started.elapsed();
         // Object-backed tables bound the read themselves; that bound cannot be
         // configured away.
         let table_bound = self.store.object_query_bound();
@@ -407,7 +407,7 @@ impl StatsService for StatsServiceImpl {
             tracing::warn!(
                 total_ms = total.as_millis() as u64,
                 visibility_wait_ms = visibility_wait.as_millis() as u64,
-                provider_ms = provider.as_millis() as u64,
+                provider_ms = provider_elapsed.as_millis() as u64,
                 logical_plan_ms = result.timings.logical_plan.as_millis() as u64,
                 physical_plan_ms = result.timings.physical_plan.as_millis() as u64,
                 execution_ms = result.timings.execution.as_millis() as u64,

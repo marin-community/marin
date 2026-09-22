@@ -36,7 +36,7 @@ use datafusion::error::Result as DFResult;
 use datafusion::execution::memory_pool::GreedyMemoryPool;
 use datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
 use datafusion::execution::session_state::SessionStateBuilder;
-use datafusion::prelude::{SQLOptions, SessionConfig, SessionContext};
+use datafusion::prelude::{DataFrame, SQLOptions, SessionConfig, SessionContext};
 
 use crate::query::provider::NamespaceProvider;
 use crate::query::string_values::StringValues;
@@ -282,6 +282,41 @@ pub(crate) struct QueryTimings {
     pub physical_plan: Duration,
     pub execution: Duration,
     pub normalize: Duration,
+}
+
+struct CollectedQuery {
+    schema: SchemaRef,
+    batches: Vec<RecordBatch>,
+    timings: QueryTimings,
+}
+
+async fn plan_and_collect<F>(ctx: &SessionContext, dataframe: F) -> DFResult<CollectedQuery>
+where
+    F: Future<Output = DFResult<DataFrame>>,
+{
+    let logical_started = Instant::now();
+    let dataframe = dataframe.await?;
+    let logical_plan = logical_started.elapsed();
+    let schema = Arc::new(dataframe.schema().as_arrow().clone());
+
+    let physical_started = Instant::now();
+    let plan = dataframe.create_physical_plan().await?;
+    let physical_plan = physical_started.elapsed();
+
+    let execution_started = Instant::now();
+    let batches = datafusion::physical_plan::collect(plan, ctx.task_ctx()).await?;
+    let execution = execution_started.elapsed();
+
+    Ok(CollectedQuery {
+        schema,
+        batches,
+        timings: QueryTimings {
+            logical_plan,
+            physical_plan,
+            execution,
+            normalize: Duration::ZERO,
+        },
+    })
 }
 
 /// Normalize a result for the wire: every field nullable, and every `Utf8View`
@@ -558,29 +593,19 @@ pub async fn run_query_over(
     )));
     let started = Instant::now();
     let result = async {
-        let logical_started = Instant::now();
-        let df = ctx.sql_with_options(sql, read_only_sql_options()).await?;
-        let logical_plan = logical_started.elapsed();
-        let schema = Arc::new(df.schema().as_arrow().clone());
-        let physical_started = Instant::now();
-        let plan = df.create_physical_plan().await?;
-        let physical_plan = physical_started.elapsed();
-        let execution_started = Instant::now();
-        let batches = datafusion::physical_plan::collect(plan, ctx.task_ctx()).await?;
-        let execution = execution_started.elapsed();
+        let collected =
+            plan_and_collect(ctx, ctx.sql_with_options(sql, read_only_sql_options())).await?;
         // Match DuckDB's all-nullable result schema (the captured plan schema
         // keeps source non-nullability that DuckDB would have dropped).
         let normalize_started = Instant::now();
-        let (schema, batches) = normalize_result(&schema, batches)?;
+        let (schema, batches) = normalize_result(&collected.schema, collected.batches)?;
         let normalize = normalize_started.elapsed();
         Ok(QueryResult {
             schema,
             batches,
             timings: QueryTimings {
-                logical_plan,
-                physical_plan,
-                execution,
                 normalize,
+                ..collected.timings
             },
         })
     }
@@ -644,36 +669,16 @@ pub async fn fetch_log_rows(
         format!("SELECT {select_cols} FROM \"{LOG_TABLE}\" WHERE {where_clause} {order} {limit}");
 
     let started = Instant::now();
-    let collected = async {
-        let logical_started = Instant::now();
-        let df = ctx.sql(&sql).await?;
-        let logical_plan = logical_started.elapsed();
-        let physical_started = Instant::now();
-        let plan = df.create_physical_plan().await?;
-        let physical_plan = physical_started.elapsed();
-        let execution_started = Instant::now();
-        let batches = datafusion::physical_plan::collect(plan, ctx.task_ctx()).await?;
-        let execution = execution_started.elapsed();
-        Ok::<_, datafusion::error::DataFusionError>((
-            batches,
-            QueryTimings {
-                logical_plan,
-                physical_plan,
-                execution,
-                normalize: Duration::ZERO,
-            },
-        ))
-    }
-    .await;
+    let collected = plan_and_collect(ctx, ctx.sql(&sql)).await;
     let elapsed = started.elapsed();
     let _ = ctx.deregister_table(TableReference::bare(LOG_TABLE));
     let rows = collected
         .as_ref()
         .ok()
-        .map(|(batches, _)| batches.iter().map(|batch| batch.num_rows()).sum());
-    let timings = collected.as_ref().ok().map(|(_, timings)| *timings);
+        .map(|result| result.batches.iter().map(|batch| batch.num_rows()).sum());
+    let timings = collected.as_ref().ok().map(|result| result.timings);
     log_slow_query(ctx, elapsed, "FetchLogs", &sql, rows, timings);
-    let (batches, _) = collected?;
+    let batches = collected?.batches;
 
     let mut rows = Vec::new();
     for b in &batches {

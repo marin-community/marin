@@ -44,6 +44,12 @@ struct CacheState {
     loading: HashSet<Key>,
 }
 
+struct Loaded<T> {
+    cached: Cached,
+    bytes: usize,
+    value: Arc<T>,
+}
+
 impl fmt::Debug for IndexCache {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -146,7 +152,11 @@ impl IndexCache {
                     total + section.id.len() + section.coverage.len() + 96
                 });
             let header = Arc::new(header);
-            Some((Cached::Header(Arc::clone(&header)), bytes, header))
+            Some(Loaded {
+                cached: Cached::Header(Arc::clone(&header)),
+                bytes,
+                value: header,
+            })
         })?;
         header.matches(source_id, row_count).then_some(header)
     }
@@ -179,7 +189,11 @@ impl IndexCache {
             };
             let bytes = index.heap_bytes();
             let index = Arc::new(index);
-            Some((Cached::Trigram(Arc::clone(&index)), bytes, index))
+            Some(Loaded {
+                cached: Cached::Trigram(Arc::clone(&index)),
+                bytes,
+                value: index,
+            })
         })?;
         Some((coverage, index))
     }
@@ -206,7 +220,11 @@ impl IndexCache {
             };
             let bytes = index.heap_bytes();
             let index = Arc::new(index);
-            Some((Cached::Exact(Arc::clone(&index)), bytes, index))
+            Some(Loaded {
+                cached: Cached::Exact(Arc::clone(&index)),
+                bytes,
+                value: index,
+            })
         })
     }
 
@@ -232,7 +250,11 @@ impl IndexCache {
             };
             let bytes = index.heap_bytes();
             let index = Arc::new(index);
-            Some((Cached::GroupExtrema(Arc::clone(&index)), bytes, index))
+            Some(Loaded {
+                cached: Cached::GroupExtrema(Arc::clone(&index)),
+                bytes,
+                value: index,
+            })
         })
     }
 
@@ -280,11 +302,7 @@ impl IndexCache {
         }
     }
 
-    fn get_or_load<T>(
-        &self,
-        key: Key,
-        load: impl FnOnce() -> Option<(Cached, usize, Arc<T>)>,
-    ) -> Option<Arc<T>>
+    fn get_or_load<T>(&self, key: Key, load: impl FnOnce() -> Option<Loaded<T>>) -> Option<Arc<T>>
     where
         Cached: CachedValue<T>,
     {
@@ -314,14 +332,14 @@ impl IndexCache {
 
         let mut state = self.state.lock().unwrap();
         state.loading.remove(&key);
-        let value = loaded.map(|(cached, bytes, value)| {
+        let value = loaded.map(|loaded| {
             if let Some(existing) = state.cache.get(&key).and_then(CachedValue::value) {
                 existing
             } else {
-                let evictions = state.cache.insert(key, cached, bytes);
+                let evictions = state.cache.insert(key, loaded.cached, loaded.bytes);
                 self.evictions
                     .fetch_add(evictions as u64, Ordering::Relaxed);
-                value
+                loaded.value
             }
         });
         drop(state);
@@ -646,7 +664,11 @@ mod tests {
                                 total_rows: 7,
                                 columns: BTreeMap::new(),
                             });
-                            Some((Cached::Exact(Arc::clone(&section)), 1, section))
+                            Some(Loaded {
+                                cached: Cached::Exact(Arc::clone(&section)),
+                                bytes: 1,
+                                value: section,
+                            })
                         })
                         .unwrap()
                 })

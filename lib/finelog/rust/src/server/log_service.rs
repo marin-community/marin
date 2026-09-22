@@ -20,9 +20,9 @@ use crate::query::{query_timeout, run_within_query_timeout, slow_query_log_ms};
 use crate::server::auth::{request_identity, AuthIdentity};
 use crate::store::log_read::{
     add_cluster_filter, add_common_filters, add_seq_upper_bound, build_log_predicates,
-    shape_log_read_result, str_to_log_level, LogRow, ShapedEntry,
+    shape_log_read_result, str_to_log_level, LogPredicates, LogRow, ShapedEntry,
 };
-use crate::store::store::LOG_NAMESPACE_NAME;
+use crate::store::store::{NamespaceSnapshot, LOG_NAMESPACE_NAME};
 use crate::store::table::ingest::DEFAULT_PERSIST_TIMEOUT;
 use crate::store::Store;
 
@@ -240,6 +240,74 @@ fn tail_cache_key(request: TailCacheRequest<'_>) -> Option<TailCacheKey> {
     })
 }
 
+struct PreparedFetchLogs {
+    cursor: i64,
+    tail: bool,
+    max_lines: i32,
+    predicates: LogPredicates,
+    cache_key: Option<TailCacheKey>,
+}
+
+fn prepare_fetch_logs(
+    request: OwnedFetchLogsRequestView,
+) -> Result<PreparedFetchLogs, ConnectError> {
+    // Wire UNSPECIFIED (and an unset field) maps to REGEX so clients that
+    // encode a regex pattern in `source` without setting match_scope keep
+    // working. New callers set EXACT/PREFIX explicitly.
+    let scope = match request.match_scope.and_then(|value| value.as_known()) {
+        Some(MatchScope::MATCH_SCOPE_UNSPECIFIED) | None => MatchScope::MATCH_SCOPE_REGEX,
+        Some(scope) => scope,
+    };
+    let source = request.source.unwrap_or("");
+    let cursor = request.cursor.unwrap_or(0);
+    let until_cursor = request.until_cursor.unwrap_or(0);
+    let since_ms = request.since_ms.unwrap_or(0);
+    let substring = request.substring.unwrap_or("");
+    let regex = request.regex.unwrap_or("");
+    let tail = request.tail.unwrap_or(false);
+    let min_level = str_to_log_level(request.min_level.unwrap_or(""));
+    let cluster = request.cluster.unwrap_or("");
+    let raw_max_lines = request.max_lines.unwrap_or(0);
+    let max_lines = if raw_max_lines > 0 {
+        raw_max_lines
+    } else {
+        DEFAULT_MAX_LINES
+    };
+    let cache_key = tail_cache_key(TailCacheRequest {
+        scope,
+        source,
+        cursor,
+        until_cursor,
+        since_ms,
+        substring,
+        regex,
+        min_level,
+        cluster,
+        tail,
+        max_lines,
+    });
+
+    let mut predicates =
+        build_log_predicates(source, cursor, scope).map_err(ConnectError::invalid_argument)?;
+    add_seq_upper_bound(&mut predicates.where_parts, until_cursor);
+    add_common_filters(
+        &mut predicates.where_parts,
+        since_ms,
+        substring,
+        regex,
+        min_level,
+    );
+    add_cluster_filter(&mut predicates.where_parts, cluster);
+
+    Ok(PreparedFetchLogs {
+        cursor,
+        tail,
+        max_lines,
+        predicates,
+        cache_key,
+    })
+}
+
 fn response_from_rows(
     rows: Vec<LogRow>,
     tail: bool,
@@ -273,6 +341,7 @@ fn merge_tail_rows(
     delta_rows_descending
 }
 
+#[derive(Default)]
 struct FetchLogsStageTimings {
     visibility_wait: Duration,
     snapshot: Duration,
@@ -280,6 +349,34 @@ struct FetchLogsStageTimings {
     provider: Duration,
     query: Duration,
     response: Duration,
+}
+
+fn fetch_logs_response(
+    rows: Vec<LogRow>,
+    request: &PreparedFetchLogs,
+    request_started: Instant,
+    mut timings: FetchLogsStageTimings,
+    cache_outcome: &str,
+) -> ServiceResult<FetchLogsResponse> {
+    let row_count = rows.len();
+    let response_started = Instant::now();
+    let response = response_from_rows(
+        rows,
+        request.tail,
+        request.max_lines,
+        request.cursor,
+        request.predicates.include_key,
+        request.predicates.exact_key.as_deref(),
+    );
+    timings.response = response_started.elapsed();
+    log_fetch_logs_stages(request_started.elapsed(), timings, cache_outcome, row_count);
+    response
+}
+
+struct QueriedLogRows {
+    rows: Vec<LogRow>,
+    provider_elapsed: Duration,
+    query_elapsed: Duration,
 }
 
 fn log_fetch_logs_stages(
@@ -358,6 +455,49 @@ pub struct LogServiceImpl {
 impl LogServiceImpl {
     pub fn new(store: Arc<Store>, tail_cache: Arc<LogTailCache>) -> Self {
         Self { store, tail_cache }
+    }
+
+    async fn query_log_rows(
+        &self,
+        ctx: &RequestContext,
+        snapshot: NamespaceSnapshot,
+        request: &PreparedFetchLogs,
+    ) -> Result<QueriedLogRows, ConnectError> {
+        let table_bound = self.store.object_query_bound();
+        let provider_started = Instant::now();
+        let provider = self
+            .store
+            .namespace_provider(LOG_NAMESPACE_NAME, snapshot)
+            .map_err(|error| ConnectError::internal(format!("build log provider: {error}")))?;
+        let provider_elapsed = provider_started.elapsed();
+
+        let query_ctx = make_ctx();
+        let read = fetch_log_rows(
+            &query_ctx,
+            provider,
+            &request.predicates.where_parts,
+            request.predicates.include_key,
+            request.tail,
+            request.max_lines,
+        );
+        let query_started = Instant::now();
+        let rows = run_within_query_timeout(
+            query_timeout(ctx.time_remaining(), table_bound),
+            read,
+            |timeout| {
+                ConnectError::deadline_exceeded(format!(
+                    "log read exceeded deadline of {} ms",
+                    timeout.as_millis()
+                ))
+            },
+            |error| ConnectError::internal(format!("log read failed: {error}")),
+        )
+        .await?;
+        Ok(QueriedLogRows {
+            rows,
+            provider_elapsed,
+            query_elapsed: query_started.elapsed(),
+        })
     }
 
     /// Append the prepared columns and return once they are durable, so a push
@@ -488,60 +628,7 @@ impl LogService for LogServiceImpl {
         request: OwnedFetchLogsRequestView,
     ) -> ServiceResult<FetchLogsResponse> {
         let request_started = Instant::now();
-        // Wire UNSPECIFIED (and an unset field) maps to REGEX so clients that
-        // encode a regex pattern in `source` without setting match_scope keep
-        // working. New callers set EXACT/PREFIX explicitly.
-        let scope = match request.match_scope.and_then(|ev| ev.as_known()) {
-            Some(MatchScope::MATCH_SCOPE_UNSPECIFIED) | None => MatchScope::MATCH_SCOPE_REGEX,
-            Some(s) => s,
-        };
-        let source = request.source.unwrap_or("");
-        let cursor = request.cursor.unwrap_or(0);
-        let until_cursor = request.until_cursor.unwrap_or(0);
-        let since_ms = request.since_ms.unwrap_or(0);
-        let substring = request.substring.unwrap_or("");
-        let regex = request.regex.unwrap_or("");
-        let tail = request.tail.unwrap_or(false);
-        let min_level: LogLevel = str_to_log_level(request.min_level.unwrap_or(""));
-        let cluster = request.cluster.unwrap_or("");
-        // max_lines <= 0 -> server default 1000.
-        let raw_max_lines = request.max_lines.unwrap_or(0);
-        let max_lines = if raw_max_lines > 0 {
-            raw_max_lines
-        } else {
-            DEFAULT_MAX_LINES
-        };
-        let cache_key = tail_cache_key(TailCacheRequest {
-            scope,
-            source,
-            cursor,
-            until_cursor,
-            since_ms,
-            substring,
-            regex,
-            min_level,
-            cluster,
-            tail,
-            max_lines,
-        });
-
-        // Build predicates (pure). Empty PREFIX source -> invalid_argument.
-        let mut predicates =
-            build_log_predicates(source, cursor, scope).map_err(ConnectError::invalid_argument)?;
-        // Bracket the scope's `seq > cursor` from above so a reader can page
-        // backwards from a row it names (`until_cursor` + `tail`).
-        add_seq_upper_bound(&mut predicates.where_parts, until_cursor);
-        add_common_filters(
-            &mut predicates.where_parts,
-            since_ms,
-            substring,
-            regex,
-            min_level,
-        );
-        // Restrict to one origin cluster when the caller asks (the federated read
-        // path filters `cluster = <peer>`); empty = unfiltered, so a local
-        // single-cluster read behaves exactly as before.
-        add_cluster_filter(&mut predicates.where_parts, cluster);
+        let mut request = prepare_fetch_logs(request)?;
 
         // Hold the query-visibility READ guard across the whole scan: like
         // Query, DataFusion opens the snapshotted `log` parquet files lazily
@@ -570,119 +657,61 @@ impl LogService for LogServiceImpl {
             .max()
             .unwrap_or(0);
         let cache_lookup_started = Instant::now();
-        let cache_lookup = cache_key
+        let cache_lookup = request
+            .cache_key
             .as_ref()
             .map(|key| self.tail_cache.lookup(key, minimum_seq, maximum_seq));
         let cache_lookup_elapsed = cache_lookup_started.elapsed();
-        let cached_rows = match cache_lookup {
+        let (cached_rows, cache_outcome) = match cache_lookup {
             Some(TailCacheLookup::Hit(rows)) => {
-                let response_started = Instant::now();
-                let row_count = rows.len();
-                let response = response_from_rows(
+                return fetch_logs_response(
                     rows,
-                    tail,
-                    max_lines,
-                    cursor,
-                    predicates.include_key,
-                    predicates.exact_key.as_deref(),
-                );
-                let response_elapsed = response_started.elapsed();
-                log_fetch_logs_stages(
-                    request_started.elapsed(),
+                    &request,
+                    request_started,
                     FetchLogsStageTimings {
                         visibility_wait,
                         snapshot: snapshot_elapsed,
                         cache_lookup: cache_lookup_elapsed,
-                        provider: Duration::ZERO,
-                        query: Duration::ZERO,
-                        response: response_elapsed,
+                        ..Default::default()
                     },
                     "hit",
-                    row_count,
                 );
-                return response;
             }
             Some(TailCacheLookup::Delta {
                 scanned_through,
                 rows_descending,
             }) => {
-                predicates
+                request
+                    .predicates
                     .where_parts
                     .push(format!("seq > {scanned_through}"));
-                Some(rows_descending)
+                (Some(rows_descending), "delta")
             }
-            Some(TailCacheLookup::Miss) | None => None,
+            Some(TailCacheLookup::Miss) => (None, "miss"),
+            None => (None, "bypass"),
         };
-        let table_bound = self.store.object_query_bound();
-        let provider_started = Instant::now();
-        let provider = self
-            .store
-            .namespace_provider(LOG_NAMESPACE_NAME, snapshot)
-            .map_err(|e| ConnectError::internal(format!("build log provider: {e}")))?;
-        let provider_elapsed = provider_started.elapsed();
-
-        // Run the read (DataFusion schedules its own CPU tasks; await directly),
-        // under the same effective deadline the Query RPC uses. An object-backed
-        // `log` table bounds the read itself.
-        let query_ctx = make_ctx();
-        let read = fetch_log_rows(
-            &query_ctx,
-            provider,
-            &predicates.where_parts,
-            predicates.include_key,
-            tail,
-            max_lines,
-        );
-        let query_started = Instant::now();
-        let mut rows = run_within_query_timeout(
-            query_timeout(ctx.time_remaining(), table_bound),
-            read,
-            |timeout| {
-                ConnectError::deadline_exceeded(format!(
-                    "log read exceeded deadline of {} ms",
-                    timeout.as_millis()
-                ))
-            },
-            |e| ConnectError::internal(format!("log read failed: {e}")),
-        )
-        .await?;
-        let query_elapsed = query_started.elapsed();
-        let cache_outcome = match (cache_key.is_some(), cached_rows.is_some()) {
-            (true, true) => "delta",
-            (true, false) => "miss",
-            (false, _) => "bypass",
-        };
+        let queried = self.query_log_rows(&ctx, snapshot, &request).await?;
+        let mut rows = queried.rows;
         if let Some(cached_rows) = cached_rows {
-            rows = merge_tail_rows(rows, cached_rows, max_lines);
+            rows = merge_tail_rows(rows, cached_rows, request.max_lines);
         }
-        if let Some(key) = cache_key {
+        if let Some(key) = request.cache_key.take() {
             self.tail_cache.insert(key, maximum_seq, rows.clone());
         }
-        let row_count = rows.len();
-        let response_started = Instant::now();
-        let response = response_from_rows(
+        fetch_logs_response(
             rows,
-            tail,
-            max_lines,
-            cursor,
-            predicates.include_key,
-            predicates.exact_key.as_deref(),
-        );
-        let response_elapsed = response_started.elapsed();
-        log_fetch_logs_stages(
-            request_started.elapsed(),
+            &request,
+            request_started,
             FetchLogsStageTimings {
                 visibility_wait,
                 snapshot: snapshot_elapsed,
                 cache_lookup: cache_lookup_elapsed,
-                provider: provider_elapsed,
-                query: query_elapsed,
-                response: response_elapsed,
+                provider: queried.provider_elapsed,
+                query: queried.query_elapsed,
+                ..Default::default()
             },
             cache_outcome,
-            row_count,
-        );
-        response
+        )
     }
 }
 
