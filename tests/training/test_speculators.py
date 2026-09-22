@@ -11,15 +11,16 @@ import pytest
 import torch
 from finestore.eval import ParticipantType
 from marin.training.speculators import (
+    DraftTrainingConfig,
     HiddenStateCaptureConfig,
     _make_checkpoint_portable,
-    _preferred_checkpoint,
     _publish_directory,
     _restore_directory,
     _validate_draft_checkpoint,
     capture_hidden_states,
     interleave_conversation_streams,
     rollout_conversations,
+    train_draft,
     verifier_config_for_transformers,
 )
 from safetensors.torch import save_file
@@ -157,18 +158,59 @@ def test_verifier_config_keeps_architecture_when_rewriting_model_type():
     assert source["model_type"] == "grug_moe"
 
 
-def test_checkpoint_selection_and_portable_verifier_reference(tmp_path: Path):
-    checkpoint = tmp_path / "checkpoints" / "3"
-    checkpoint.mkdir(parents=True)
+def test_portable_checkpoint_removes_verifier_reference(tmp_path: Path):
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
     (checkpoint / "config.json").write_text(
         json.dumps({"speculators_config": {"verifier": {"name_or_path": "/tmp/verifier"}}})
     )
 
-    assert _preferred_checkpoint(checkpoint.parent) == checkpoint
     _make_checkpoint_portable(checkpoint)
 
     saved = json.loads((checkpoint / "config.json").read_text())
     assert saved["speculators_config"]["verifier"]["name_or_path"] is None
+
+
+def test_train_draft_publishes_latest_checkpoint_when_best_selection_is_disabled(monkeypatch, tmp_path: Path):
+    def fake_command(command, *, environment=None):
+        del environment
+        checkpoints = Path(command[command.index("--save-path") + 1])
+        for step in (3, 31):
+            checkpoint = checkpoints / str(step)
+            checkpoint.mkdir(parents=True)
+            (checkpoint / "config.json").write_text(
+                json.dumps(
+                    {
+                        "embed_requires_grad": False,
+                        "speculators_config": {"verifier": {"name_or_path": "/tmp/verifier"}},
+                    }
+                )
+            )
+            (checkpoint / "training_state.json").write_text(json.dumps({"global_step": step}))
+        (checkpoints / "checkpoint_best").symlink_to(checkpoints / "3", target_is_directory=True)
+
+    monkeypatch.setattr(speculators, "StoragePath", _CaptureStoragePath)
+    monkeypatch.setattr(speculators, "_run_command", fake_command)
+    output_path = tmp_path / "published"
+
+    train_draft(
+        DraftTrainingConfig(
+            captured_data_path="captured",
+            verifier_path="verifier",
+            initial_draft_path="initial-draft",
+            output_path=str(output_path),
+            target_layer_ids=(2, 13, 23),
+            sequence_length=32768,
+            epochs=32,
+            learning_rate=1e-5,
+            muon_learning_rate=0.02,
+            num_processes=8,
+            train_data_ratio=0.9,
+            save_best=False,
+        )
+    )
+
+    assert json.loads((output_path / "training_state.json").read_text()) == {"global_step": 31}
 
 
 def test_validate_draft_checkpoint_rejects_serialized_target_owned_embedding(tmp_path: Path):

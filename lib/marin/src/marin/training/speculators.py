@@ -415,10 +415,7 @@ def capture_hidden_states(config: HiddenStateCaptureConfig) -> None:
                 _publish_directory(prepared_data, config.output_path)
 
 
-def _preferred_checkpoint(checkpoints: Path) -> Path:
-    best = checkpoints / "checkpoint_best"
-    if best.exists():
-        return best.resolve()
+def _latest_checkpoint(checkpoints: Path) -> Path:
     candidates = sorted(
         (path for path in checkpoints.iterdir() if path.is_dir() and path.name.isdigit()),
         key=lambda path: int(path.name),
@@ -513,7 +510,15 @@ def train_draft(config: DraftTrainingConfig) -> None:
             command.append("--save-best")
         _run_command(command, environment=os.environ | {"TOKENIZERS_PARALLELISM": "false"})
 
-        shutil.copytree(_preferred_checkpoint(checkpoints), published)
+        if config.save_best:
+            checkpoint = checkpoints / "checkpoint_best"
+            if not checkpoint.exists():
+                raise ValueError(f"Speculators training wrote no best checkpoint under {checkpoints}")
+            checkpoint = checkpoint.resolve()
+        else:
+            checkpoint = _latest_checkpoint(checkpoints)
+
+        shutil.copytree(checkpoint, published)
         _make_checkpoint_portable(published)
         _validate_draft_checkpoint(published)
         _publish_directory(published, config.output_path)
