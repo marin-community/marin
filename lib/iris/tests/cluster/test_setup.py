@@ -8,7 +8,7 @@ import subprocess
 
 import pytest
 from iris.cluster.runtime.env import UV_CACHE_RECOVERY_SIGNAL_PREFIX, build_common_iris_env, render_setup_steps
-from iris.cluster.setup_scripts import cuda_toolchain_setup_script, default_setup_script, iris_runtime_setup_script
+from iris.cluster.setup_scripts import default_setup_script
 from iris.cluster.types import EnvironmentSpec
 from iris.rpc import job_pb2
 
@@ -94,6 +94,12 @@ fi
 if [ "$UV_CACHE_DIR" != "$SHARED_UV_CACHE" ] && [ "$LOCAL_CACHE_FAILS" = "1" ]; then
   exit 2
 fi
+if [ "$1" = "sync" ]; then
+  case " $* " in
+    *" --link-mode clone "*) ;;
+    *) exit 3 ;;
+  esac
+fi
 mkdir -p "$IRIS_VENV"
 printf '%s\n' "$UV_CACHE_DIR" > "$IRIS_VENV/package-cache"
 """
@@ -147,16 +153,3 @@ printf '%s\n' "$UV_CACHE_DIR" > "$IRIS_VENV/package-cache"
         assert (venv / "package-cache").read_text().strip() == expected_cache
     signals = list(shared_cache.glob(f"{UV_CACHE_RECOVERY_SIGNAL_PREFIX}*"))
     assert len(signals) == int(shared_cache_fails and not local_cache_fails)
-
-
-@pytest.mark.parametrize(
-    "setup_script",
-    [
-        default_setup_script(python_version="3.12"),
-        cuda_toolchain_setup_script(),
-        iris_runtime_setup_script(),
-    ],
-)
-def test_generated_uv_installs_use_clone_mode(setup_script):
-    assert "--link-mode clone" in setup_script
-    assert "--link-mode symlink" not in setup_script

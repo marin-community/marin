@@ -57,7 +57,7 @@ def reconcile_uv_cache_recovery(
     now: Timestamp,
     uv_executable: str = "uv",
 ) -> None:
-    """Clear the cache when enough distinct tasks needed local recovery."""
+    """Clear the cache when enough distinct attempts needed local recovery."""
     recovery_count = _prune_and_count_recovery_signals(cache_dir, now)
     if recovery_count < UV_CACHE_RECOVERY_THRESHOLD:
         return
