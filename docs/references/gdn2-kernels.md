@@ -22,7 +22,7 @@ products centered on the cumulative log-decay at the last token of the
 earlier block. Diagonal score blocks mask before exponentiation and feature
 reduction. These score constructions keep exponent arguments nonpositive
 for finite log-decays `g <= 0`, without clipping valid decay values.
-The benchmark chooses a feature-last score layout on v5e/v5p and a
+The benchmark chooses a feature-last score layout on v5e/v5p/v6e and a
 feature-first layout on v4. The v4 compiler rejects trailing-feature
 reductions of rank-three tiles with an unsupported sublane gather.
 Transposing the full intermediate avoids that error but exceeds v4 VMEM;
@@ -75,7 +75,9 @@ JAX_PLATFORMS=tpu,cpu uv run --package marin-levanter --extra tpu \
 
 For v5e and v5p, set
 `LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=50000` before starting
-the process. Do not set this override on v4.
+the process. For v6e, use
+`LIBTPU_INIT_ARGS=--xla_tpu_scoped_vmem_limit_kib=98304`.
+Do not set this override on v4.
 On v4, replace the two `--bt` options above with
 `--implementation candidate --bt 128`; the upstream path and candidate
 BT256 backward do not compile.
@@ -107,8 +109,9 @@ retain representative-shape samples and numerical error summaries.
 `gdn2.tuned_block_sizes.select_kernel_config` selects candidate
 BT128/BC64/MB16 for JAX device kinds `TPU v4`, `TPU v5 lite`, and
 `TPU v5`, FP32/BF16, and local shapes `[B,4096,6,128]` with
-`4 <= B <= 8`. The returned configuration uses `ScoreLayout.FEATURE_FIRST`
-on v4 and `ScoreLayout.FEATURE_LAST` on v5e/v5p.
+`4 <= B <= 8`. For `TPU v6 lite` (v6e), it selects BT128/BC64/MB32
+in the same dtype/shape bucket. The returned configuration uses
+`ScoreLayout.FEATURE_FIRST` on v4 and `ScoreLayout.FEATURE_LAST` on v5e/v5p/v6e.
 Batches 4 and 8 passed hardware correctness gates and
 repeated timing comparisons; batches 5–7 interpolate between those
 endpoints and remain unmeasured. Pass an explicit
@@ -118,6 +121,18 @@ change backends, or configure the runtime. The measured environment used
 JAX 0.11.1. The v5e/v5p runs set both `--xla_tpu_scoped_vmem_limit_kib=50000` and
 `--xla_tpu_use_enhanced_launch_barrier=true` in `LIBTPU_INIT_ARGS`.
 The v4 runs did not use the VMEM override.
+The v6e runs used a 98304 KiB scoped-VMEM limit and the enhanced launch barrier.
+
+On v6e, BT128/MB32 wins both timing modes at both measured batch endpoints
+and dtypes in the full sweep and reversed-order, second-seed confirmation.
+Confirmation forward+backward medians are 11.652/11.649 ms at batch 4
+(FP32/BF16) and 22.510/22.444 ms at batch 8, or 3.12–3.22x faster than
+upstream's fastest tested tile (also BT128/MB32). Selected-tile medians
+differ by at most 0.22% between runs. All forward, final-state, and
+seven-input-gradient CPU gates pass, including separate strong-forgetting
+checks at `[1,512,1,128]`, both dtypes, all four tiles, and decays 0.5/5.
+The [row-level report](../reports/data/gdn2-tpu-20260922/README.md) retains
+outliers in other tiles; the static selection does not guarantee tail latency.
 
 In the v4 representative sweep, MB16 has approximately 3% lower median
 forward+backward latency than MB32 for every batch-4/8, FP32/BF16,

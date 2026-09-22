@@ -14,7 +14,7 @@ TPU boolean reshape. Both causal and strict-diagonal masks are applied
 before feature reduction, avoiding a post-reduction mask relayout.
 The benchmark selects a feature-first diagonal score layout on v4 to
 avoid its unsupported sublane gather on trailing-feature reduction.
-It retains the feature-last layout on v5e/v5p.
+It retains the feature-last layout on v5e/v5p/v6e.
 The v4 backward path transposes the state-decay reduction to preserve lane
 layout and processes diagonal pair gradients in 16-query-row tiles.
 Micro-solver rows are statically unrolled to avoid

@@ -14,19 +14,24 @@ the measured source hash.
 | `v5p-forgetting.jsonl` | `/dlwh/gdn2-kernels-v5p-0922-forgetting` | 0 |
 | `v4-full1.jsonl` | `/dlwh/gdn2-kernels-v4-0922-full1` | 0, 1 |
 | `v5e-cachecheck.jsonl` | `/dlwh/gdn2-kernels-v5e-0922-cachecheck` | 0 |
+| `v6e-full1.jsonl` | `/dlwh/gdn2-kernels-v6e-0922-full1` | 0 |
+| `v6e-confirm.jsonl` | `/dlwh/gdn2-kernels-v6e-0922-confirm` | 1 |
+| `v6e-forgetting.jsonl` | `/dlwh/gdn2-kernels-v6e-0922-forgetting` | 0 |
 
-The full sweeps contain 64 rows each: upstream/candidate, batches 4/8, length 4096,
+The v5 full sweeps contain 64 rows each: upstream/candidate, batches 4/8, length 4096,
 six heads, dimension 128, FP32/BF16, BT128/256, MB16/32, and
 forward/forward+backward. Each timing has 20 synchronized samples on one
 TPU device. Forward outputs, final state, and gradients for six token
 inputs plus the initial state
-passed against the CPU oracle before timing was enabled. Confirmation files
+passed against the CPU oracle before timing was enabled. The v5 confirmation files
 contain 32 rows each, restricted to BT128 and MB16/32, for 192 preserved rows
 overall. Confirmation runs execute the candidate first and use the other seed.
 The v5 forgetting checks below add 64 rows. The v4 small-shape sweep adds
 16 rows, including eight rejected rows. The v4 forgetting checks add 16
 accepted rows. The v4 representative-shape check adds 32 accepted rows, and
-the cache check adds six, bringing the preserved total to 326.
+the cache check adds six, bringing the v4/v5 total to 326. The v6e full,
+confirmation, and stress runs add 64, 32, and 32 rows respectively, for
+454 preserved rows across all four hardware types.
 
 The full-sweep source SHA256 is
 `15b57d022c5c5ba614e40b0697a16c6e81d4e4d025f609afcb7c64df7febfe22`.
@@ -192,3 +197,78 @@ For confirmation, restrict to `--bt 128` and specify
 For the v4 representative sweep, use both shapes and dtypes,
 `--implementation candidate --bt 128 --mb 16 --mb 32 --seed 0 --seed 1`,
 and `--repetitions 20`, without a scoped-VMEM override.
+
+## v6e confirmation
+
+The v6e full sweep and confirmation use one local device of a v6e-4 allocation
+(JAX device kind `TPU v6 lite`, four devices available), JAX 0.11.1,
+`JAX_PLATFORMS=tpu,cpu`, and `LIBTPU_INIT_ARGS` containing
+`--xla_tpu_scoped_vmem_limit_kib=98304 --xla_tpu_use_enhanced_launch_barrier=true`.
+Both use the CPU oracle and unchanged FP32/BF16 tolerances. All 96 rows pass
+the paired output, final-state, and seven-input-gradient gates before timing.
+Each row retains 20 synchronized samples without filtering.
+
+The initial sweep runs upstream before candidate at seed 0 across all four
+BT128/256 and MB16/32 tiles. Confirmation reverses implementation order,
+uses seed 1, and compares BT128/MB16 and BT128/MB32. Both implementations'
+fastest tested tile is BT128/BC64/MB32 in every batch/dtype/mode bucket,
+so the following best-versus-best comparison also matches tile sizes.
+The table reports confirmation-run medians of 20 samples.
+
+| Batch | Dtype | Candidate forward ms | Candidate forward+backward ms | Upstream forward+backward ms | Forward+backward speedup |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 4 | FP32 | 4.986 | 11.652 | 36.626 | 3.143x |
+| 4 | BF16 | 4.921 | 11.649 | 36.378 | 3.123x |
+| 8 | FP32 | 9.506 | 22.510 | 72.592 | 3.225x |
+| 8 | BF16 | 9.391 | 22.444 | 72.028 | 3.209x |
+
+Forward-only speedups are 5.36–5.62x. For the selected candidate tile,
+forward compilation takes 1.322–1.467 seconds and forward+backward
+compilation takes 11.689–19.478 seconds in confirmation. These costs are
+separate from the warmed timings above; per-row first-execution and
+time-to-first-result measurements remain in the JSONL.
+
+These confirmation measurements use length 4096, six heads, and dimension
+128. Candidate MB32 wins both modes in both runs. Its per-row
+forward+backward CV is at most 0.151% in confirmation; medians across both
+modes shift by +0.066% to +0.215% from the initial sweep. This supports the
+v6e BT128/MB32 static choice at measured batches 4 and 8; batches 5–7 remain
+unmeasured interpolation. The full sweep ran in europe-west4 and confirmation
+in us-east5-b, so the repeat checks portability across those allocations,
+not an isolated seed/order effect.
+
+The full sweep's candidate BT128/MB16 batch-4 BF16 rows have two forward
+and four forward+backward samples exceeding twice their median, reaching
+72.233 and 82.965 ms. Those spikes do not recur in confirmation. Confirmation
+upstream BT128/MB16 batch-8 BF16 forward has 17.3% CV and a maximum near
+78.8 ms. Neither affected tile is the selected winner. All outliers remain
+in the artifacts; median selection is not a tail-latency guarantee.
+
+The v6e candidate strong-forgetting run adds 32 passing rows at
+`[1,512,1,128]`, FP32/BF16, seed 0, all four tiles, and log-decays sampled
+uniformly from [-0.5,0] or [-5,0]. It uses the same CPU gates and only three
+timing samples per row. These are numerical stress checks, not comparative
+performance evidence.
+
+All three v6e runs have source SHA256
+`d58ad3867b68464c92912fdf3ad8b1ba1048c26a84cef19a85d046dbf89c4dbe`.
+[source-d58ad3.json](source-d58ad3.json) preserves the exact kernel Python
+files, benchmark, and notices from the full-sweep launch bundle. The
+12,545,904-byte bundle's SHA256 is
+`f9fc8a290c1fef89ec31e2edf765cf7c73f82f9e49f06556785eb5df335437e2`
+(generation `1790115698577086`). Its hash and the source digest reconstructed
+from the snapshot were verified. The full sweep records Git revision
+`10947b087e48eeffcc792128bc6bb3d2c0b08849`; confirmation and stress record
+`10ab9d523dd3360bbe261aa7e21be345285875cf`, whose only intervening change
+moved the unit-test oracle to CPU. Measured kernel and harness contents
+are identical. The subsequent static-table update does not change arithmetic.
+
+To reproduce the v6e sweep, use the hardware environment above, both
+`--shape 4,4096,6,128 --shape 8,4096,6,128`, both dtypes,
+`--implementation upstream --implementation candidate`,
+`--bt 128 --bt 256 --mb 16 --mb 32 --seed 0 --repetitions 20`, and
+`--reference-device cpu`. Confirmation uses
+`--implementation candidate --implementation upstream --bt 128 --mb 16 --mb 32`
+and `--seed 1`. Stress uses only `--implementation candidate`,
+`--shape 1,512,1,128`, both dtypes and all four tiles,
+`--decay 0.5 --decay 5 --seed 0 --repetitions 3`.
