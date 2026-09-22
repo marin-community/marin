@@ -43,7 +43,6 @@ VENV_PATH = f"{WORKDIR_PATH}/.venv"
 # bring its own image: build_common_iris_env points each tool here explicitly, so
 # nothing depends on that image's HOME.
 UV_CACHE_PATH = "/uv/cache"
-UV_RETRY_CACHE_PATH = f"{WORKDIR_PATH}/.uv-cache"
 HF_HUB_CACHE_PATH = "/hf/cache"
 CARGO_HOME_PATH = "/cargo"
 # Unclaimed node-local scratch, for anything that needs a real directory on the
@@ -83,6 +82,32 @@ def cache_host_dirname(container_path: str) -> str:
 # Heredoc delimiter for materializing a setup script to disk. Distinctive enough
 # that a real setup script will not contain it as a standalone line.
 _SETUP_STEP_DELIMITER = "__IRIS_SETUP_STEP__"
+_UV_WRAPPER_DELIMITER = "__IRIS_UV_WRAPPER__"
+_UV_WRAPPER_DIR = "/tmp/iris-uv-wrapper"
+_UV_WRAPPER_PATH = f"{_UV_WRAPPER_DIR}/uv"
+
+_UV_WRAPPER_SCRIPT = r"""#!/bin/bash
+set -u
+recovery_cache="$IRIS_WORKDIR/.uv-recovery-cache"
+recovery_marker="$IRIS_WORKDIR/.iris-uv-cache-recovery"
+
+case "${1:-} ${2:-}" in
+  "sync "*|"pip install") ;;
+  *) exec "$IRIS_UV_EXECUTABLE" "$@" ;;
+esac
+
+if [ -f "$recovery_marker" ]; then
+  exec env UV_CACHE_DIR="$recovery_cache" "$IRIS_UV_EXECUTABLE" "$@"
+fi
+
+if "$IRIS_UV_EXECUTABLE" "$@"; then
+  exit 0
+fi
+
+printf '%s\n' "${UV_CACHE_DIR:-}" > "$recovery_marker"
+echo 'uv install failed; retrying with task-local cache' >&2
+  exec env UV_CACHE_DIR="$recovery_cache" "$IRIS_UV_EXECUTABLE" "$@" --reinstall
+"""
 
 
 def render_setup_steps(scripts: Sequence[str]) -> list[str]:
@@ -92,7 +117,18 @@ def render_setup_steps(scripts: Sequence[str]) -> list[str]:
     banner, rather than concatenated, so a failure points at the exact step. The
     caller's ``set -e`` stops the sequence on the first non-zero step.
     """
-    lines: list[str] = []
+    if not scripts:
+        return []
+
+    lines = [
+        'export IRIS_UV_EXECUTABLE="$(command -v uv)"',
+        f'mkdir -p "{_UV_WRAPPER_DIR}"',
+        f"cat > {_UV_WRAPPER_PATH} <<'{_UV_WRAPPER_DELIMITER}'",
+        _UV_WRAPPER_SCRIPT.rstrip("\n"),
+        _UV_WRAPPER_DELIMITER,
+        f'chmod +x "{_UV_WRAPPER_PATH}"',
+        f'export PATH="{_UV_WRAPPER_DIR}:$PATH"',
+    ]
     total = len(scripts)
     for index, script in enumerate(scripts, start=1):
         step_file = f"/tmp/iris-setup-step-{index}.sh"
@@ -223,10 +259,7 @@ def build_common_iris_env(
     # HF_HOME is left alone on purpose: it holds the submitter's HF_TOKEN, which
     # must not land on a node directory every other task can read. HF_HUB_CACHE
     # covers the part worth sharing -- the content-addressed model/dataset blobs.
-    # A failed attempt may have read a malformed entry from the persistent
-    # node cache. Retrying from the attempt-local workdir avoids repeating that
-    # failure while keeping uv's symlink targets alive for the run phase.
-    env["UV_CACHE_DIR"] = UV_CACHE_PATH if attempt_id == 0 else UV_RETRY_CACHE_PATH
+    env["UV_CACHE_DIR"] = UV_CACHE_PATH
     env["UV_PYTHON_INSTALL_DIR"] = f"{UV_CACHE_PATH}/python"
     env["HF_HUB_CACHE"] = HF_HUB_CACHE_PATH
     # CARGO_HOME moves the crate registry onto the mount; a rustup toolchain

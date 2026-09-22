@@ -7,8 +7,10 @@ import os
 import subprocess
 
 import pytest
+from iris.cluster.runtime.env import UV_CACHE_PATH, build_common_iris_env, render_setup_steps
 from iris.cluster.setup_scripts import default_setup_script
 from iris.cluster.types import EnvironmentSpec
+from iris.rpc import job_pb2
 
 
 @pytest.mark.parametrize(
@@ -67,3 +69,65 @@ package = false
     )
 
     assert (venv / "bin" / "python").is_file()
+
+
+@pytest.mark.parametrize("shared_cache_fails", [False, True])
+def test_retry_attempt_switches_uv_installs_to_local_cache_only_after_shared_failure(tmp_path, shared_cache_fails):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    (workdir / "pyproject.toml").write_text("[tool.uv]\npackage = false\n")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    uv = bin_dir / "uv"
+    uv.write_text(
+        """\
+#!/bin/sh
+set -e
+if [ "$UV_CACHE_DIR" = "$SHARED_UV_CACHE" ] && [ "$SHARED_CACHE_FAILS" = "1" ] && [ "$1 $2" = "pip install" ]; then
+  exit 1
+fi
+mkdir -p "$IRIS_VENV"
+ln -sf "$UV_CACHE_DIR/wheels/package.whl" "$IRIS_VENV/package.whl"
+"""
+    )
+    uv.chmod(0o755)
+    venv = tmp_path / "venv"
+    iris_env = build_common_iris_env(
+        task_id="/setup-test/0",
+        attempt_id=1,
+        attempt_uid="attempt-uid",
+        num_tasks=1,
+        bundle_id="bundle-id",
+        controller_address=None,
+        environment=job_pb2.EnvironmentConfig(),
+        constraints=(),
+        ports=(),
+        resources=None,
+    )
+    env = {
+        **os.environ,
+        **iris_env,
+        "IRIS_VENV": str(venv),
+        "IRIS_WORKDIR": str(workdir),
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "SHARED_CACHE_FAILS": str(int(shared_cache_fails)),
+        "SHARED_UV_CACHE": UV_CACHE_PATH,
+        "UV_PROJECT_ENVIRONMENT": str(venv),
+    }
+
+    setup = "\n".join(
+        [
+            "set -e",
+            *render_setup_steps(["uv pip install package", default_setup_script(python_version="3.12")]),
+        ]
+    )
+    subprocess.run(
+        ["bash", "-c", setup],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    expected_cache = str(workdir / ".uv-recovery-cache") if shared_cache_fails else UV_CACHE_PATH
+    assert os.readlink(venv / "package.whl") == f"{expected_cache}/wheels/package.whl"
