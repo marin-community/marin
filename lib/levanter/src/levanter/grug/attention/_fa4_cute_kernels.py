@@ -1445,8 +1445,8 @@ def segmented_flash_attention_backward_sm90_launcher(
         softmax_scale: cutlass.Float32,
     ):
         blocksparse_tensors = BlockSparseTensors(mask_block_cnt, mask_block_idx, full_block_cnt, full_block_idx)
-        zero_fill(dq_accum, stream)
         if cutlass.const_expr(qhead_per_kvhead > 1):
+            zero_fill(dq_accum, stream)
             zero_fill(dk_accum, stream)
             zero_fill(dv_accum, stream)
         lse_log2_gmem = _as_gmem_tensor(lse_log2)

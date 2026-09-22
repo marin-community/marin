@@ -3,7 +3,6 @@
 
 import asyncio
 import threading
-from collections.abc import AsyncGenerator
 from concurrent.futures import ThreadPoolExecutor
 from typing import Iterator
 
@@ -72,15 +71,7 @@ class AsyncIteratorWrapper(Iterator):
 
     def close(self):
         """Close the event loop and thread gracefully."""
-        try:
-            if self.loop.is_running():
-                asyncio.run_coroutine_threadsafe(self._close_generator(), self.loop).result()
-        finally:
-            if self.loop.is_running():
-                self.loop.call_soon_threadsafe(self.loop.stop)
-            self.thread.join()
-            self.loop.close()
-
-    async def _close_generator(self):
-        if isinstance(self.async_iter, AsyncGenerator):
-            await self.async_iter.aclose()
+        if self.loop.is_running():
+            self.loop.call_soon_threadsafe(self.loop.stop)
+        self.thread.join()
+        self.loop.close()

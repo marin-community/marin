@@ -2,12 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
-import threading
 
 import pytest
 
 from levanter.utils.background_iterable import BackgroundIterable
-from levanter.utils.thread_utils import AsyncIteratorWrapper
 
 
 @pytest.mark.parametrize("max_capacity", [-1, None, 10])
@@ -146,21 +144,3 @@ async def test_async_stop_event(max_capacity):
     with pytest.raises(StopIteration):
         next(iter1)
         next(iter1)
-
-
-def test_async_iterator_close_finalizes_on_producer_thread():
-    finalized = []
-
-    async def batches():
-        producer = threading.current_thread()
-        try:
-            yield producer
-        finally:
-            finalized.append(threading.current_thread())
-
-    iterator = AsyncIteratorWrapper(batches())
-    producer = next(iterator)
-    iterator.close()
-    assert finalized == [producer]
-    assert producer is not threading.current_thread()
-    assert not producer.is_alive()

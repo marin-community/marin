@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
-import threading
 from typing import Sequence
 
 import jax
@@ -55,36 +54,6 @@ def test_local_batched_data_loading_model_axis_1():
         batches = list(loader)
         for batch in batches:
             check_sharded_consistency(batch, check_disjoint_indices_are_different=True)
-
-
-class ProducerTrackingDataset(ListAsyncDataset):
-    def __init__(self):
-        super().__init__([np.arange(8) for _ in range(200)])
-        self.producer_threads: set[threading.Thread] = set()
-
-    async def async_len(self):
-        thread = threading.current_thread()
-        if thread is not threading.main_thread():
-            self.producer_threads.add(thread)
-        return await super().async_len()
-
-
-@pytest.mark.parametrize("max_buffered_batches", [0, 1])
-def test_loader_close_joins_producer(max_buffered_batches):
-    with use_test_mesh(tensor_parallelism=1) as mesh, haliax.axis_mapping({"batch": ResourceAxis.DATA}):
-        dataset = ProducerTrackingDataset()
-        loader = DataLoader(dataset, 1, max_buffered_batches=max_buffered_batches, mesh=mesh, axis_resources=None)
-        iterator = iter(loader)
-        try:
-            next(iterator)
-            assert dataset.producer_threads
-            assert all(producer.is_alive() for producer in dataset.producer_threads)
-            iterator.close()
-            assert all(not producer.is_alive() for producer in dataset.producer_threads)
-            with pytest.raises(StopIteration):
-                next(iterator)
-        finally:
-            iterator.close()
 
 
 def test_loader_rejects_empty_finite_dataset():

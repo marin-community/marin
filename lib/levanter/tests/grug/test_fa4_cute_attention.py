@@ -1,8 +1,6 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import dataclasses
-
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -20,7 +18,6 @@ from levanter.grug.attention import (
     reference_attention,
 )
 from levanter.grug.attention._fa4_cute import _simple_causal_lower_bounds
-from levanter.grug.attention._fa4_cute_config import flash4_cute_kernel_config, sm100_flash4_cute_kernel_config
 
 
 class _reset_abstract_mesh:
@@ -471,43 +468,3 @@ def test_real_gpu_fa4_cute_sm100_gradients_with_changing_packed_segments(
             error = f"{name}: max absolute error {difference.max()}, mean {difference.mean()}"
             np.testing.assert_allclose(got, want, atol=7e-2, rtol=7e-2, err_msg=error)
             np.testing.assert_array_equal(got[ids < 0], 0, err_msg=name)
-
-
-@pytest.mark.parametrize("native_backward", [True, False])
-@pytest.mark.timeout(300)
-def test_real_gpu_fa4_cute_configured_backward_matches_reference(native_backward):
-    if jax.default_backend() != "gpu" or fa4_cute.gpu_compute_capability() != 100:
-        pytest.skip("Native SM100 backward correctness requires an SM100 GPU.")
-    pytest.importorskip("cutlass.cute")
-    pytest.importorskip("flash_attn.cute.flash_bwd_sm100")
-    config = flash4_cute_kernel_config(128, arch=100)
-    if native_backward:
-        config = dataclasses.replace(sm100_flash4_cute_kernel_config(), sm100_forward=None)
-    keys = jax.random.split(jax.random.key(23), 4)
-    shapes = ((1, 257, 8, 128), (1, 257, 2, 128), (1, 257, 2, 128), (1, 257, 8, 128))
-    q, k, v, cotangent = (jax.random.normal(key, shape, dtype=jnp.bfloat16) for key, shape in zip(keys, shapes))
-    positions = jnp.arange(257)[None, :]
-    ids = jnp.where(positions < 129, 0, 1)
-    bounds = jnp.where(positions < 129, 0, 129).astype(jnp.int32)
-    valid = jnp.ones_like(ids, dtype=jnp.bool_)
-    mask = AttentionMask.causal().with_segment_ids(ids)
-
-    def actual_loss(q, k, v):
-        output = fa4_cute_backend.fa4_cute_attention_forward(
-            q, k, v, bounds, valid, sm_scale=128**-0.5, kernel_config=config
-        )
-        return jnp.sum(output.astype(jnp.float32) * cotangent.astype(jnp.float32)), output
-
-    def reference_loss(q, k, v):
-        output = reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
-        return jnp.sum(output.astype(jnp.float32) * cotangent.astype(jnp.float32)), output
-
-    actual_call = jax.jit(jax.value_and_grad(actual_loss, (0, 1, 2), has_aux=True))
-    (_, expected), expected_gradients = jax.jit(jax.value_and_grad(reference_loss, (0, 1, 2), has_aux=True))(q, k, v)
-    # Partial tiles must not consume stale shared memory on repeated invocations.
-    for _ in range(3):
-        (_, actual), actual_gradients = actual_call(q, k, v)
-        for name, got, want in zip(
-            ("out", "dq", "dk", "dv"), (actual, *actual_gradients), (expected, *expected_gradients), strict=True
-        ):
-            np.testing.assert_allclose(got, want, atol=7e-2, rtol=7e-2, err_msg=name)

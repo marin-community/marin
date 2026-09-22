@@ -289,6 +289,11 @@ def _segmented_kernel_config(head_dim: int) -> Flash4CuteKernelConfig:
     arch = gpu_compute_capability()
     kernel_config = flash4_cute_kernel_config(head_dim, arch=arch)
 
+    # Upstream flash-attn-4 4.0.0b15 dense SM100 FA4 uses 128x128 tiles in
+    # flash_attn/cute/interface.py. This Grug port is not that native SM100
+    # kernel: it carries dynamic lower-bound metadata through the SM80/SM120
+    # segmented fork. On B200 d5120 Grug shapes, 64x64 fwd/bwd is consistently
+    # faster than both the prior 128x64/64x64 config and dense-upstream 128x128.
     if arch // 10 == 10 and head_dim == 128:
         return replace(kernel_config, forward_tile=(64, 64), backward_tile=(64, 64), num_threads=128)
     return kernel_config
