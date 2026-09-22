@@ -4,9 +4,17 @@
 """Private semantics for one deterministic, single-turn answer task."""
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 
-SCHEMA_VERSION = "0.2"
+SCHEMA_VERSION = "0.3"
+
+
+class AnswerFormat(StrEnum):
+    """A model-visible envelope for the semantic answer."""
+
+    PLAIN = "plain"
+    JSON = "json"
 
 
 @dataclass(frozen=True)
@@ -53,6 +61,7 @@ class TaskSpec:
     verifier: VerifierSpec
     source: Source
     requirements: TaskRequirements
+    permitted_answer_formats: tuple[AnswerFormat, ...] = (AnswerFormat.PLAIN,)
     schema_version: str = SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -60,3 +69,7 @@ class TaskSpec:
             raise ValueError(f"Unsupported TaskSpec schema: {self.schema_version}")
         if not self.id or not self.instructions.strip():
             raise ValueError("A task id and instructions are required")
+        if not self.permitted_answer_formats:
+            raise ValueError("At least one answer format must be permitted")
+        if len(set(self.permitted_answer_formats)) != len(self.permitted_answer_formats):
+            raise ValueError("Permitted answer formats must be unique")
