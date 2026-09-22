@@ -56,7 +56,7 @@ class VllmGpuRelease:
 CUDA_TOOLCHAIN_VERSION_BY_BACKEND = MappingProxyType(
     {
         "cu130": "13.0.88",
-        "cu132": "13.2.86",
+        "cu132": "13.2.78",
     }
 )
 

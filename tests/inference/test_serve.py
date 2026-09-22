@@ -308,6 +308,7 @@ def test_isolated_cuda_vllm_marin_fork_uses_verified_wheel(monkeypatch, machine)
     assert {toolchain[package] for package in toolchain_packages} == {
         CUDA_TOOLCHAIN_VERSION_BY_BACKEND[VLLM_GPU_RELEASE.torch_backend]
     }
+    assert CUDA_TOOLCHAIN_VERSION_BY_BACKEND["cu132"] == "13.2.78"
     bootstrap_index = cmd.index("-c")
     wrapped_command = cmd[bootstrap_index + 2 :]
     assert wrapped_command[0] == "python"
