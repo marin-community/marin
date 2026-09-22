@@ -179,6 +179,8 @@ The selected E384 model runs at expert width 3072 and receiver capacity factor 1
 | `--save-checkpoints` | writes periodic and final checkpoints |
 | `--checkpoint-minutes` | sets the wall-clock checkpoint interval |
 | `--checkpoint-path` | places checkpoints at an explicit storage prefix |
+| `--initialize-from-checkpoint` | requires a checkpoint restore, even with checkpoint writes disabled |
+| `--attention-implementation` | selects an attention backend, such as `gpu_fa4_cute_sm100` |
 | `--checkpoint-debug` | publishes checkpoint phase and memory telemetry |
 | `--training-data synthetic` | reuses a deterministic batch without opening TensorStore |
 | `--watch-interval`, `--watch-mode` | select inline or diagnostic norm collection |
@@ -243,6 +245,11 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra
     --profile-start-step 5 --profile-steps 2 --training-data synthetic \
     --version dev --run
 ```
+
+For a checkpoint-restored comparison, pass `--initialize-from-checkpoint <permanent-checkpoint>`
+and set `--num-steps` to the checkpoint step plus the desired number of updates. Keep
+`--schedule-steps`, batch, data, attention backend, and GC policy identical between arms.
+Checkpoint writes remain disabled unless `--save-checkpoints` is set.
 
 Batch 1024 keeps the production local batch of 16 sequences per GPU. The trace does not include
 the 11-rack `replica_dcn` collectives or their global histogram reduction.
