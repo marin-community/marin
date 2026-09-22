@@ -114,14 +114,36 @@ const indexCache = computed<Field[]>(() => {
   if (!c) return []
   const corrupt = c.corruptBundles + c.corruptSections
   const fallbacks = c.exactAggregateFallbacks
+  const pct = c.budgetBytes ? Math.round((c.bytes / c.budgetBytes) * 100) : 0
   return [
     { label: 'Corrupt bundles', value: formatNumber(c.corruptBundles) },
     { label: 'Corrupt sections', value: formatNumber(c.corruptSections) },
+    { label: 'Index loads', value: formatNumber(c.loadAttempts) },
+    { label: 'Header loads', value: formatNumber(c.headerLoadAttempts) },
+    { label: 'Section loads', value: formatNumber(c.sectionLoadAttempts) },
+    { label: 'Coalesced waits', value: formatNumber(c.coalescedWaits) },
+    { label: 'Resident entries', value: formatNumber(c.entries) },
+    { label: 'Resident bytes', value: `${formatBytes(c.bytes)} of ${formatBytes(c.budgetBytes)}`, note: `${pct}% full` },
+    { label: 'Evictions', value: formatNumber(c.evictions) },
     { label: 'Indexed aggregates', value: formatNumber(c.exactAggregateFull) },
     { label: 'Partial aggregates', value: formatNumber(c.exactAggregatePartial) },
     { label: 'Declined aggregates', value: formatNumber(c.exactAggregateDeclined) },
     { label: 'Aggregate fallbacks', value: formatNumber(c.exactAggregateFallbacks) },
     { label: 'Fallback status', value: corrupt || fallbacks ? 'source fallback observed' : 'healthy' },
+  ]
+})
+
+const logTailCache = computed<Field[]>(() => {
+  const c = info.value?.logTailCache
+  if (!c) return []
+  const pct = c.budgetBytes ? Math.round((c.bytes / c.budgetBytes) * 100) : 0
+  return [
+    { label: 'Cached filters', value: formatNumber(c.entries) },
+    { label: 'Cached rows', value: `${formatBytes(c.bytes)} of ${formatBytes(c.budgetBytes)}`, note: `${pct}% full` },
+    { label: 'Unchanged hits', value: formatNumber(c.hits) },
+    { label: 'Delta scans', value: formatNumber(c.deltaScans) },
+    { label: 'Cold misses', value: formatNumber(c.misses) },
+    { label: 'Evictions', value: formatNumber(c.evictions) },
   ]
 })
 
@@ -169,6 +191,7 @@ onMounted(load)
           { title: 'Ingest', fields: ingest },
           { title: 'Query cache', fields: cache },
           { title: 'Index cache', fields: indexCache },
+          { title: 'Log tail cache', fields: logTailCache },
           { title: 'Storage format', fields: format },
         ]"
         :key="card.title"

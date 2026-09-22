@@ -5,11 +5,11 @@
 //! filename; [`IndexRegistry`](crate::indices::IndexRegistry) owns that
 //! resolution.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use uuid::Uuid;
 
 use crate::indices::exact::ExactSection;
@@ -24,13 +24,24 @@ use crate::indices::{
 pub const DEFAULT_INDEX_CACHE_MB: usize = 256;
 
 pub struct IndexCache {
-    cache: Mutex<Lru>,
+    state: Mutex<CacheState>,
+    loaded: Condvar,
     corrupt_bundles: AtomicU64,
     corrupt_sections: AtomicU64,
+    load_attempts: AtomicU64,
+    header_load_attempts: AtomicU64,
+    section_load_attempts: AtomicU64,
+    coalesced_waits: AtomicU64,
+    evictions: AtomicU64,
     aggregate_full: AtomicU64,
     aggregate_partial: AtomicU64,
     aggregate_declined: AtomicU64,
     aggregate_fallbacks: AtomicU64,
+}
+
+struct CacheState {
+    cache: Lru,
+    loading: HashSet<Key>,
 }
 
 impl fmt::Debug for IndexCache {
@@ -64,6 +75,18 @@ pub(crate) struct AggregateStats {
     pub fallbacks: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LoadStats {
+    pub attempts: u64,
+    pub header_attempts: u64,
+    pub section_attempts: u64,
+    pub coalesced_waits: u64,
+    pub entries: usize,
+    pub used_bytes: usize,
+    pub budget_bytes: usize,
+    pub evictions: u64,
+}
+
 impl IndexCache {
     pub fn new(budget_mb: usize) -> Self {
         Self::with_budget_bytes(budget_mb.saturating_mul(1024 * 1024))
@@ -71,9 +94,18 @@ impl IndexCache {
 
     fn with_budget_bytes(budget_bytes: usize) -> Self {
         Self {
-            cache: Mutex::new(Lru::new(budget_bytes)),
+            state: Mutex::new(CacheState {
+                cache: Lru::new(budget_bytes),
+                loading: HashSet::new(),
+            }),
+            loaded: Condvar::new(),
             corrupt_bundles: AtomicU64::new(0),
             corrupt_sections: AtomicU64::new(0),
+            load_attempts: AtomicU64::new(0),
+            header_load_attempts: AtomicU64::new(0),
+            section_load_attempts: AtomicU64::new(0),
+            coalesced_waits: AtomicU64::new(0),
+            evictions: AtomicU64::new(0),
             aggregate_full: AtomicU64::new(0),
             aggregate_partial: AtomicU64::new(0),
             aggregate_declined: AtomicU64::new(0),
@@ -89,34 +121,34 @@ impl IndexCache {
         row_count: u64,
     ) -> Option<Arc<BundleHeader>> {
         let key = Key::Header(bundle_path.to_path_buf(), source_id);
-        if let Some(Cached::Header(header)) = self.lookup(&key) {
-            return header.matches(source_id, row_count).then_some(header);
-        }
-        let Some(header) = format::read_header(bundle_path) else {
-            if bundle_path.exists() {
-                self.corrupt_bundles.fetch_add(1, Ordering::Relaxed);
+        let header = self.get_or_load(key, || {
+            let Some(header) = format::read_header(bundle_path) else {
+                if bundle_path.exists() {
+                    self.corrupt_bundles.fetch_add(1, Ordering::Relaxed);
+                }
+                return None;
+            };
+            if !header.matches(source_id, row_count) {
+                tracing::debug!(
+                    path = %bundle_path.display(),
+                    expected_segment_identity = %source_id,
+                    bundle_segment_identity = %header.binding.segment_id,
+                    expected_rows = row_count,
+                    bundle_rows = header.binding.row_count,
+                    "stale index bundle does not match source segment"
+                );
+                return None;
             }
-            return None;
-        };
-        if !header.matches(source_id, row_count) {
-            tracing::debug!(
-                path = %bundle_path.display(),
-                expected_segment_identity = %source_id,
-                bundle_segment_identity = %header.binding.segment_id,
-                expected_rows = row_count,
-                bundle_rows = header.binding.row_count,
-                "stale index bundle does not match source segment"
-            );
-            return None;
-        }
-        let bytes = header
-            .sections
-            .iter()
-            .fold(std::mem::size_of::<BundleHeader>(), |total, section| {
-                total + section.id.len() + section.coverage.len() + 96
-            });
-        let header = Arc::new(header);
-        Some(self.insert(key, Cached::Header(Arc::clone(&header)), bytes, || header))
+            let bytes = header
+                .sections
+                .iter()
+                .fold(std::mem::size_of::<BundleHeader>(), |total, section| {
+                    total + section.id.len() + section.coverage.len() + 96
+                });
+            let header = Arc::new(header);
+            Some((Cached::Header(Arc::clone(&header)), bytes, header))
+        })?;
+        header.matches(source_id, row_count).then_some(header)
     }
 
     pub fn get_trigram(
@@ -136,20 +168,19 @@ impl IndexCache {
             header.binding.segment_id,
             id.clone(),
         );
-        if let Some(Cached::Trigram(index)) = self.lookup(&key) {
-            return Some((coverage, index));
-        }
-        let Some(payload) = format::read_section(bundle_path, header, &id) else {
-            self.corrupt_sections.fetch_add(1, Ordering::Relaxed);
-            return None;
-        };
-        let Some(index) = trigram::parse_column(&payload, coverage.span_count) else {
-            self.corrupt_sections.fetch_add(1, Ordering::Relaxed);
-            return None;
-        };
-        let bytes = index.heap_bytes();
-        let index = Arc::new(index);
-        let index = self.insert(key, Cached::Trigram(Arc::clone(&index)), bytes, || index);
+        let index = self.get_or_load(key, || {
+            let Some(payload) = format::read_section(bundle_path, header, &id) else {
+                self.corrupt_sections.fetch_add(1, Ordering::Relaxed);
+                return None;
+            };
+            let Some(index) = trigram::parse_column(&payload, coverage.span_count) else {
+                self.corrupt_sections.fetch_add(1, Ordering::Relaxed);
+                return None;
+            };
+            let bytes = index.heap_bytes();
+            let index = Arc::new(index);
+            Some((Cached::Trigram(Arc::clone(&index)), bytes, index))
+        })?;
         Some((coverage, index))
     }
 
@@ -168,16 +199,15 @@ impl IndexCache {
             header.binding.segment_id,
             section.id.clone(),
         );
-        if let Some(Cached::Exact(index)) = self.lookup(&key) {
-            return Some(index);
-        }
-        let Some(index) = read_exact_section(bundle_path, header, kind) else {
-            self.corrupt_sections.fetch_add(1, Ordering::Relaxed);
-            return None;
-        };
-        let bytes = index.heap_bytes();
-        let index = Arc::new(index);
-        Some(self.insert(key, Cached::Exact(Arc::clone(&index)), bytes, || index))
+        self.get_or_load(key, || {
+            let Some(index) = read_exact_section(bundle_path, header, kind) else {
+                self.corrupt_sections.fetch_add(1, Ordering::Relaxed);
+                return None;
+            };
+            let bytes = index.heap_bytes();
+            let index = Arc::new(index);
+            Some((Cached::Exact(Arc::clone(&index)), bytes, index))
+        })
     }
 
     pub fn get_group_extrema(
@@ -195,24 +225,19 @@ impl IndexCache {
             header.binding.segment_id,
             section.id.clone(),
         );
-        if let Some(Cached::GroupExtrema(index)) = self.lookup(&key) {
-            return Some(index);
-        }
-        let Some(index) = read_group_extrema_section(bundle_path, header, config) else {
-            self.corrupt_sections.fetch_add(1, Ordering::Relaxed);
-            return None;
-        };
-        let bytes = index.heap_bytes();
-        let index = Arc::new(index);
-        Some(
-            self.insert(key, Cached::GroupExtrema(Arc::clone(&index)), bytes, || {
-                index
-            }),
-        )
+        self.get_or_load(key, || {
+            let Some(index) = read_group_extrema_section(bundle_path, header, config) else {
+                self.corrupt_sections.fetch_add(1, Ordering::Relaxed);
+                return None;
+            };
+            let bytes = index.heap_bytes();
+            let index = Arc::new(index);
+            Some((Cached::GroupExtrema(Arc::clone(&index)), bytes, index))
+        })
     }
 
     pub fn invalidate(&self, bundle_path: &Path) {
-        self.cache.lock().unwrap().remove_path(bundle_path);
+        self.state.lock().unwrap().cache.remove_path(bundle_path);
     }
 
     pub fn corruption_counts(&self) -> CorruptionCounts {
@@ -241,26 +266,66 @@ impl IndexCache {
         }
     }
 
-    fn lookup(&self, key: &Key) -> Option<Cached> {
-        self.cache.lock().unwrap().get(key)
+    pub(crate) fn load_stats(&self) -> LoadStats {
+        let state = self.state.lock().unwrap();
+        LoadStats {
+            attempts: self.load_attempts.load(Ordering::Relaxed),
+            header_attempts: self.header_load_attempts.load(Ordering::Relaxed),
+            section_attempts: self.section_load_attempts.load(Ordering::Relaxed),
+            coalesced_waits: self.coalesced_waits.load(Ordering::Relaxed),
+            entries: state.cache.map.len(),
+            used_bytes: state.cache.used_bytes,
+            budget_bytes: state.cache.budget_bytes,
+            evictions: self.evictions.load(Ordering::Relaxed),
+        }
     }
 
-    fn insert<T>(
+    fn get_or_load<T>(
         &self,
         key: Key,
-        cached: Cached,
-        bytes: usize,
-        value: impl FnOnce() -> Arc<T>,
-    ) -> Arc<T>
+        load: impl FnOnce() -> Option<(Cached, usize, Arc<T>)>,
+    ) -> Option<Arc<T>>
     where
         Cached: CachedValue<T>,
     {
-        let mut cache = self.cache.lock().unwrap();
-        if let Some(existing) = cache.get(&key).and_then(CachedValue::value) {
-            return existing;
+        let mut waited = false;
+        {
+            let mut state = self.state.lock().unwrap();
+            loop {
+                if let Some(existing) = state.cache.get(&key).and_then(CachedValue::value) {
+                    return Some(existing);
+                }
+                if state.loading.insert(key.clone()) {
+                    break;
+                }
+                if !waited {
+                    self.coalesced_waits.fetch_add(1, Ordering::Relaxed);
+                    waited = true;
+                }
+                state = self.loaded.wait(state).unwrap();
+            }
         }
-        let value = value();
-        cache.insert(key, cached, bytes);
+        self.load_attempts.fetch_add(1, Ordering::Relaxed);
+        match &key {
+            Key::Header(..) => self.header_load_attempts.fetch_add(1, Ordering::Relaxed),
+            Key::Section(..) => self.section_load_attempts.fetch_add(1, Ordering::Relaxed),
+        };
+        let loaded = load();
+
+        let mut state = self.state.lock().unwrap();
+        state.loading.remove(&key);
+        let value = loaded.map(|(cached, bytes, value)| {
+            if let Some(existing) = state.cache.get(&key).and_then(CachedValue::value) {
+                existing
+            } else {
+                let evictions = state.cache.insert(key, cached, bytes);
+                self.evictions
+                    .fetch_add(evictions as u64, Ordering::Relaxed);
+                value
+            }
+        });
+        drop(state);
+        self.loaded.notify_all();
         value
     }
 }
@@ -370,8 +435,9 @@ impl Lru {
         self.used_bytes -= freed;
     }
 
-    fn insert(&mut self, key: Key, value: Cached, bytes: usize) {
+    fn insert(&mut self, key: Key, value: Cached, bytes: usize) -> usize {
         self.tick += 1;
+        let mut evictions = 0;
         while self.used_bytes.saturating_add(bytes) > self.budget_bytes {
             let Some(victim) = self
                 .map
@@ -384,6 +450,7 @@ impl Lru {
             };
             if let Some(entry) = self.map.remove(&victim) {
                 self.used_bytes -= entry.bytes;
+                evictions += 1;
             }
         }
         if let Some(old) = self.map.insert(
@@ -397,6 +464,7 @@ impl Lru {
             self.used_bytes -= old.bytes;
         }
         self.used_bytes += bytes;
+        evictions
     }
 }
 
@@ -405,6 +473,10 @@ mod tests {
     use std::collections::BTreeMap;
     use std::fs::File;
     use std::os::unix::fs::FileExt;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::Barrier;
+    use std::thread;
+    use std::time::{Duration, Instant};
 
     use crate::indices::format::{Exactness, SectionInput, SegmentBinding};
 
@@ -536,6 +608,83 @@ mod tests {
                 partial: 0,
                 declined: 0,
                 fallbacks: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn concurrent_misses_share_one_load() {
+        const READERS: usize = 8;
+
+        let cache = Arc::new(IndexCache::with_budget_bytes(1024));
+        let key = Key::Section(
+            PathBuf::from("shared.fidx"),
+            Uuid::from_u128(4),
+            "exact-postings".to_string(),
+        );
+        let start = Arc::new(Barrier::new(READERS + 1));
+        let release = Arc::new((Mutex::new(false), Condvar::new()));
+        let loads = Arc::new(AtomicUsize::new(0));
+        let handles = (0..READERS)
+            .map(|_| {
+                let cache = Arc::clone(&cache);
+                let key = key.clone();
+                let start = Arc::clone(&start);
+                let release = Arc::clone(&release);
+                let loads = Arc::clone(&loads);
+                thread::spawn(move || {
+                    start.wait();
+                    cache
+                        .get_or_load(key, || {
+                            loads.fetch_add(1, Ordering::Relaxed);
+                            let (lock, loaded) = &*release;
+                            let mut can_finish = lock.lock().unwrap();
+                            while !*can_finish {
+                                can_finish = loaded.wait(can_finish).unwrap();
+                            }
+                            let section = Arc::new(ExactSection {
+                                total_rows: 7,
+                                columns: BTreeMap::new(),
+                            });
+                            Some((Cached::Exact(Arc::clone(&section)), 1, section))
+                        })
+                        .unwrap()
+                })
+            })
+            .collect::<Vec<_>>();
+
+        start.wait();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while cache.load_stats().coalesced_waits != (READERS - 1) as u64 {
+            assert!(
+                Instant::now() < deadline,
+                "readers did not coalesce in time"
+            );
+            thread::yield_now();
+        }
+        let (lock, loaded) = &*release;
+        *lock.lock().unwrap() = true;
+        loaded.notify_one();
+
+        let sections = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect::<Vec<_>>();
+        assert!(sections
+            .iter()
+            .all(|section| Arc::ptr_eq(section, &sections[0])));
+        assert_eq!(loads.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            cache.load_stats(),
+            LoadStats {
+                attempts: 1,
+                header_attempts: 0,
+                section_attempts: 1,
+                coalesced_waits: (READERS - 1) as u64,
+                entries: 1,
+                used_bytes: 1,
+                budget_bytes: 1024,
+                evictions: 0,
             }
         );
     }

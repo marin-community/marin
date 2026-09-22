@@ -7,6 +7,7 @@
 
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use buffa::MessageField;
 use connectrpc::{ConnectError, RequestContext, ServiceResult};
@@ -25,7 +26,8 @@ use crate::proto::finelog::stats::{
     ReportRelayStatusResponse, StatsService, WriteRowsResponse,
 };
 use crate::query::{
-    make_ctx, query_timeout, run_query_over, run_within_query_timeout, truncate_sql_for_log,
+    make_ctx, query_timeout, run_query_over, run_within_query_timeout, slow_query_log_ms,
+    truncate_sql_for_log,
 };
 use crate::server::auth::{request_identity, AuthIdentity};
 use crate::server::relay_status::RelayStatusRegistry;
@@ -337,19 +339,24 @@ impl StatsService for StatsServiceImpl {
         ctx: RequestContext,
         request: OwnedQueryRequestView,
     ) -> ServiceResult<QueryResponse> {
+        let request_started = Instant::now();
         let sql = request.sql.unwrap_or("").to_string();
 
         // Hold the query-visibility READ guard across the WHOLE scan. DataFusion
         // opens the snapshotted parquet files LAZILY during collect(), so the
         // guard must outlive run_query_over (not just query_providers) to keep a
         // concurrent drop_table / compaction from unlinking a file mid-scan.
+        let visibility_started = Instant::now();
         let _read_guard = self.store.query_visibility().read().await;
+        let visibility_wait = visibility_started.elapsed();
 
         // Plan every live namespace from its pinned state (schema, bounds,
         // partitions, exact object references) on the blocking pool. Objects are
         // localized later, and only for the segments the scan selects.
         let store = Arc::clone(&self.store);
+        let provider_started = Instant::now();
         let providers = run_blocking(move || store.query_providers()).await?;
+        let provider = provider_started.elapsed();
         // Object-backed tables bound the read themselves; that bound cannot be
         // configured away.
         let table_bound = self.store.object_query_bound();
@@ -384,14 +391,33 @@ impl StatsService for StatsServiceImpl {
         let row_count: i64 = result.batches.iter().map(|b| b.num_rows() as i64).sum();
         // The schema is captured from the planned DataFrame, so an empty result
         // still emits the correct typed schema (the typed-empty contract).
+        let encode_started = Instant::now();
         let buf = encode_ipc(&result.schema, &result.batches)
             .map_err(|e| ConnectError::internal(format!("encode query result: {e}")))?;
+        let encode = encode_started.elapsed();
         // No server-side row cap; the result-size limit maps to resource_exhausted.
         if buf.len() > MAX_QUERY_RESULT_BYTES {
             return Err(ConnectError::resource_exhausted(format!(
                 "query result {} bytes exceeds {MAX_QUERY_RESULT_BYTES} message limit",
                 buf.len()
             )));
+        }
+        let total = request_started.elapsed();
+        if total.as_millis() >= slow_query_log_ms() {
+            tracing::warn!(
+                total_ms = total.as_millis() as u64,
+                visibility_wait_ms = visibility_wait.as_millis() as u64,
+                provider_ms = provider.as_millis() as u64,
+                logical_plan_ms = result.timings.logical_plan.as_millis() as u64,
+                physical_plan_ms = result.timings.physical_plan.as_millis() as u64,
+                execution_ms = result.timings.execution.as_millis() as u64,
+                normalize_ms = result.timings.normalize.as_millis() as u64,
+                encode_ms = encode.as_millis() as u64,
+                rows = row_count,
+                response_bytes = buf.len(),
+                sql = %truncate_sql_for_log(&sql),
+                "slow Query RPC stage breakdown",
+            );
         }
         connectrpc::Response::ok(
             QueryResponse::default()
