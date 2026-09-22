@@ -245,6 +245,7 @@ def build_h100_ladder_run(
     no_eval: bool = False,
     dense: bool = False,
     omni_mlp: bool = False,
+    omni_component_norm: bool = False,
     save_checkpoints: bool = False,
 ) -> ArtifactStep[ThroughputResult]:
     """Build one H100 scaling-ladder rung.
@@ -260,10 +261,17 @@ def build_h100_ladder_run(
         raise ValueError("wandb_project must not be empty")
 
     rung = _h100_ladder_rung(size)
+    if omni_component_norm:
+        omni_mlp = True
     if omni_mlp:
         # Omni-neurons is a dense variant: force the dense recipe and enable the wide per-layer MLP input.
         dense = True
-    model = dataclasses.replace(_h100_ladder_model(rung, dense=dense), vocab_size=vocab_size, omni_mlp=omni_mlp)
+    model = dataclasses.replace(
+        _h100_ladder_model(rung, dense=dense),
+        vocab_size=vocab_size,
+        omni_mlp=omni_mlp,
+        omni_component_norm=omni_component_norm,
+    )
     mp_policy = "params=float32,compute=bfloat16,output=bfloat16"
     expert_axis_size = 1 if dense else rung.gpus_per_task
     replica_axis_size = 1
@@ -442,6 +450,11 @@ def build_h100_ladder_run(
     "snapshots (embed + per-layer attn_out/resid_post_attn/mlp_out/resid_post_mlp).",
 )
 @click.option(
+    "--omni-component-norm",
+    is_flag=True,
+    help="Omni: give each concatenated component its own learnable RMS gain (implies --omni-mlp).",
+)
+@click.option(
     "--save-checkpoints",
     is_flag=True,
     default=False,
@@ -457,6 +470,7 @@ def main(
     no_eval: bool,
     dense: bool,
     omni_mlp: bool,
+    omni_component_norm: bool,
     save_checkpoints: bool,
 ) -> ArtifactStep[ThroughputResult]:
     return build_h100_ladder_run(
@@ -468,6 +482,7 @@ def main(
         no_eval=no_eval,
         dense=dense,
         omni_mlp=omni_mlp,
+        omni_component_norm=omni_component_norm,
         save_checkpoints=save_checkpoints,
     )
 

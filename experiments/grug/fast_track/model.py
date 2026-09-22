@@ -136,10 +136,16 @@ class GrugModelConfig:
     # (embed, and per prior layer: attn_out / resid_post_attn / mlp_out / resid_post_mlp) plus this layer's
     # attn_out / resid_post_attn, so its input width grows with depth (d*(3+4*layer)). Attention is unchanged.
     omni_mlp: bool = False
+    # Omni per-component norm: give each concatenated component its OWN learnable RMS gain (a (C, d) matrix
+    # per layer) instead of one shared width-d gain, so the model can up/down-weight whole components. The
+    # rsqrt normalization is per-component either way; this only splits the learnable gain.
+    omni_component_norm: bool = False
 
     def __post_init__(self) -> None:
         if self.omni_mlp and not self.dense_mlp:
             raise ValueError("omni_mlp requires dense_mlp=True (omni-neurons is a dense-model variant)")
+        if self.omni_component_norm and not self.omni_mlp:
+            raise ValueError("omni_component_norm requires omni_mlp=True")
         if not self.dense_mlp and self.num_experts_per_token >= self.num_experts:
             # QB routing takes top-(k+1) and keeps the last entry as the threshold alpha, so a
             # full-bank top-k asks `jax.lax.top_k` for more entries than the router has experts.
@@ -642,6 +648,9 @@ class Block(eqx.Module):
     shared: tuple[DenseMLP, ...] | None
     sconv_attn: "ShortConv | None"
     sconv_mlp: "ShortConv | None"
+    # Omni per-component RMS gain (C, d): one learnable gain row per concatenated component. None unless
+    # omni_mlp + omni_component_norm (then the shared rms_mlp gain is bypassed for the MLP input).
+    omni_component_gain: jax.Array | None
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray, mlp_in_dim: int | None = None) -> "Block":
@@ -651,6 +660,12 @@ class Block(eqx.Module):
             # Omni-neurons widens only the MLP input: mlp_in_dim (the concatenated snapshot width) sizes the
             # MLP GatedNorm and the DenseMLP; rms_mlp stays width d (applied to each d-dim snapshot before concat).
             mlp_dim = mlp_in_dim if mlp_in_dim is not None else cfg.hidden_dim
+            # One learnable RMS gain row per concatenated component (C = mlp_dim // d), when requested.
+            omni_component_gain = None
+            if mlp_in_dim is not None and cfg.omni_component_norm:
+                omni_component_gain = reshard(
+                    jnp.ones((mlp_dim // cfg.hidden_dim, cfg.hidden_dim), dtype=jnp.float32), P(None, None)
+                )
             return Block(
                 rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
                 attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
@@ -667,6 +682,7 @@ class Block(eqx.Module):
                 sconv_mlp=(
                     ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel) if cfg.sconv and "mlp" in cfg.sconv_sites else None
                 ),
+                omni_component_gain=omni_component_gain,
             )
         shared = None
         if cfg.shared_expert_intermediate_dim > 0:
@@ -693,6 +709,7 @@ class Block(eqx.Module):
             sconv_mlp=(
                 ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel) if cfg.sconv and "mlp" in cfg.sconv_sites else None
             ),
+            omni_component_gain=None,
         )
 
     @named_call
@@ -864,11 +881,18 @@ class Transformer(eqx.Module):
                     if blk.sconv_attn is not None:
                         attn_out = blk.sconv_attn(attn_out, sconv_seg)
                     x_post_attn = x_in + attn_out
-                    # Per-snapshot RMSNorm (shared width-d gain) keeps snapshots magnitude-comparable, then concat;
-                    # the wider mlp_gated_norm / DenseMLP then read every snapshot at once.
-                    mlp_in = blk.mlp_gated_norm(
-                        jnp.concatenate([blk.rms_mlp(s) for s in (*snaps, attn_out, x_post_attn)], axis=-1)
-                    )
+                    # Per-snapshot RMSNorm keeps snapshots magnitude-comparable, then concat; the wider
+                    # mlp_gated_norm / DenseMLP then read every snapshot at once. With omni_component_gain,
+                    # each component gets its own learnable gain row (rsqrt norm then per-component gain);
+                    # otherwise the shared rms_mlp gain applies to every component.
+                    components = (*snaps, attn_out, x_post_attn)
+                    if blk.omni_component_gain is not None:
+                        normed = [
+                            rms_norm(s, blk.rms_mlp.eps) * blk.omni_component_gain[c] for c, s in enumerate(components)
+                        ]
+                    else:
+                        normed = [blk.rms_mlp(s) for s in components]
+                    mlp_in = blk.mlp_gated_norm(jnp.concatenate(normed, axis=-1))
                     assert isinstance(blk.mlp, DenseMLP)  # omni is dense-only
                     mlp_out = blk.mlp(mlp_in, moe_output_reshard=False)
                     if blk.sconv_mlp is not None:

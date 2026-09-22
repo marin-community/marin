@@ -253,6 +253,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             # GatedNorms route to muonh (NS + Frobenius hyperball), same as matrices.
             if "gated_norm" in path_lower:
                 return "muonh"
+            # Omni per-component RMS gain is a (C, d) norm gain (2-D), not a mixing matrix -> route to
+            # Adam so it does not fall into the ndim->muonh catch-all below.
+            if path_lower.endswith("omni_component_gain"):
+                return "adam"
             # Scanning prepends a layer axis, so norm gains / SConv kernels stay named ``.weight``
             # (route to Adam) while expert matrices become 4D and other matmuls 3D (route to MuonH).
             if path_lower.endswith(".weight"):
