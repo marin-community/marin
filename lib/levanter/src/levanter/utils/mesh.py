@@ -25,6 +25,7 @@ class MeshConfig:
     Defines mesh axes and logical-to-physical mappings.
     axes: ICI sizes per axis (within a slice). -1 means absorb remaining ICI.
     dcn_axes: DCN sizes per axis (across slices). -1 means absorb remaining DCN.
+    An axis may appear in both mappings; its global size is the product of its ICI and DCN sizes.
     shared_mapping: common logical-axis defaults shared by both compute and parameter sharding.
     compute_mapping: logical -> physical axis (or axes) for compute (e.g., batch -> [replica_dcn, replica, data]).
     param_mapping: logical -> physical axis (or axes) for parameters and opt states
@@ -95,10 +96,6 @@ class MeshConfig:
         ):
             dcn_axes["replica_dcn"] = 1
 
-        overlap = set(axes) & set(dcn_axes)
-        if overlap:
-            raise ValueError(f"Axis names cannot appear in both axes and dcn_axes: {sorted(overlap)}")
-
         unknown_ici = [n for n, v in axes.items() if v == -1]
         unknown_dcn = [n for n, v in dcn_axes.items() if v == -1]
 
@@ -140,12 +137,11 @@ def create_mesh_from_axis_specs(
     """
     Create a JAX mesh from ICI and DCN axis sizes. Supports both single-slice and multi-slice layouts.
     """
-    axis_names = list(ici_axes.keys()) + [k for k in dcn_axes.keys() if k not in ici_axes]
+    shared_axes = [name for name in ici_axes if name in dcn_axes]
+    axis_names = shared_axes + [name for name in ici_axes if name not in dcn_axes]
+    axis_names += [name for name in dcn_axes if name not in ici_axes]
     if not axis_names:
         raise ValueError("At least one axis is required to build a mesh.")
-    overlapping = set(ici_axes.keys()) & set(dcn_axes.keys())
-    if overlapping:
-        raise ValueError(f"Axis names cannot appear in both ICI and DCN: {sorted(overlapping)}")
 
     if devices is None:
         devices = jax.devices()

@@ -32,10 +32,14 @@ def test_axis_shapes_force_replica_dcn_when_other_absorber():
     assert dcn["other_dcn"] == 2
 
 
-def test_axis_shapes_overlap_error():
-    cfg = MeshConfig(axes={"data": 1}, dcn_axes={"data": 1})
-    with pytest.raises(ValueError):
-        cfg.axis_shapes(num_devices=4, num_slices=1)
+def test_axis_shapes_allow_hybrid_axis():
+    cfg = MeshConfig(
+        axes={"data": 1, "expert": 8, "replica": 1, "model": 1},
+        dcn_axes={"data": 8, "replica_dcn": 1},
+    )
+    ici, dcn = cfg.axis_shapes(num_devices=64, num_slices=8)
+    assert ici == {"expert": 8, "replica": 1, "model": 1, "data": 1}
+    assert dcn == {"replica_dcn": 1, "data": 8}
 
 
 def test_axis_shapes_multiple_absorbers_error():

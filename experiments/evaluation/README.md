@@ -160,6 +160,11 @@ to the launcher's shared `evals` root; its artifact path contains the pipeline c
 override is a runtime arg, so changing it does not change the artifact identity. Produced-model
 adapters such as `SkyRLEvaluationModel` use the same `eval_step` entry point.
 
+For a checked-in portable Evalchemy config that is not in the named registry, use
+`evalchemy_config_step(model, Path("experiments/evaluation/configs/evalchemy/financebench.yaml"), ...)`.
+It preserves the config path in the artifact fingerprint and otherwise uses the same launcher and
+typed `EvaluationResult` as `eval_step`.
+
 ## Evalchemy config files
 
 Use repeatable `--evalchemy-config` options to launch portable Evalchemy YAML or JSON without adding

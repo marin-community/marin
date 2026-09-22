@@ -25,7 +25,8 @@ from haliax import Axis
 from haliax.state_dict import from_torch_compatible_state_dict, to_torch_compatible_state_dict
 
 from levanter.grug.sharding import compact_grug_mesh
-from levanter.models.lm_model import LmConfig
+from levanter.models.lm_model import LmConfig, LmExample
+from levanter.models.loss import next_token_loss
 from levanter.models.snowball import (
     GRUG_MOE_ARCHITECTURE,
     GRUG_MOE_MODEL_TYPE,
@@ -197,6 +198,21 @@ def test_snowball_state_dict_roundtrip_is_exact():
     assert np.array_equal(src_logits, dst_logits), "state-dict round-trip changed logits"
 
 
+def test_snowball_sharded_head_loss_matches_logits_reference():
+    cfg = _tiny_config()
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(6))
+        ids = _device_batched_ids(cfg.vocab_size, 10)
+        Pos = ids.resolve_axis("position")
+        loss_weight = hax.ones(ids.axes, dtype=jnp.float32).at[Pos, -1].set(0.0)
+        example = LmExample(tokens=ids, loss_weight=loss_weight)
+        actual = model.compute_next_token_loss(example)
+        logits = model(ids)
+        expected = next_token_loss(model.Pos, model.Vocab, logits, ids, loss_weight=loss_weight)
+
+    np.testing.assert_allclose(np.asarray(actual.array), np.asarray(expected.array), rtol=1e-5, atol=1e-5)
+
+
 def test_snowball_torch_compatible_state_dict_roundtrip():
     """Exercise the exact serialization path load_pretrained uses (to/from_torch_compatible_state_dict)."""
     cfg = _tiny_config()
@@ -292,6 +308,7 @@ def test_snowball_load_path_multidevice_sharding():
         from jax.random import PRNGKey
         from jax.sharding import NamedSharding, PartitionSpec as P
         from levanter.grug.sharding import compact_grug_mesh
+        from levanter.models.lm_model import LmExample
         from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 
         assert jax.device_count() == 8
@@ -325,7 +342,10 @@ def test_snowball_load_path_multidevice_sharding():
             template = eqx.filter_eval_shape(SnowballLMHeadModel.init, Vocab, cfg, key=PRNGKey(0))
             loaded = hax.named_jit(lambda t, s: from_torch_compatible_state_dict(t, s))(template, sd)
             got = np.asarray(hax.named_jit(lambda m, x: m(x))(loaded, ids).array)
+            example = LmExample(tokens=ids, loss_weight=hax.ones(ids.axes, dtype=jnp.float32))
+            loss = hax.named_jit(lambda m, e: m.compute_next_token_loss(e))(loaded, example)
         assert np.array_equal(ref, got), "data-sharded load-path logits differ from the reference"
+        assert np.isfinite(np.asarray(loss.array)).all(), "data-sharded Snowball loss is not finite"
         print("OK")
         """
     )

@@ -1360,9 +1360,11 @@ def save_hf_checkpoint_callback(
     :return:
     """
 
-    def cb(step: StepInfo):
+    def cb(step: StepInfo, force: bool = False):
         nonlocal hf_upload_kwargs
-        if step.step == 0:
+        # StepInfo is zero-indexed: a one-update run finishes at step 0. Suppress ordinary
+        # periodic step-0 callbacks, but allow Trainer.train's forced final flush to export it.
+        if step.step == 0 and not force:
             return
         if upload_to_hf is not None and "commit_message" not in hf_upload_kwargs:
             my_upload_kwargs = hf_upload_kwargs.copy()

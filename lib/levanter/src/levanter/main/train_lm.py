@@ -69,6 +69,7 @@ class TrainLmConfig:
     hf_upload: Optional[str] = None
     hf_save_steps: int = 10000
     hf_save_dtype: Optional[str] = None
+    hf_save_reference_code: bool | None = None
     hf_generation_eos_token_ids: Optional[list[int]] = None
 
     adapter: AdaptorConfig = field(default_factory=NoAdaptorConfig)
@@ -185,6 +186,7 @@ def main(config: TrainLmConfig):
 
         if config.pad_tokenizer_to_match_model:
             converter = converter.with_tokenizer_padded_to_match_model()
+            tokenizer = converter.tokenizer
 
         if config.use_hf_model_config:
             # TODO: log diff of old and new config
@@ -195,6 +197,7 @@ def main(config: TrainLmConfig):
         converter = converter.replaced(tokenizer=tokenizer)
         if config.pad_tokenizer_to_match_model:
             converter = converter.with_tokenizer_padded_to_match_model()
+            tokenizer = converter.tokenizer
     else:
         converter = None
 
@@ -411,6 +414,7 @@ def main(config: TrainLmConfig):
                 hf_upload=config.hf_upload,
                 hf_save_steps=config.hf_save_steps,
                 hf_save_dtype=config.hf_save_dtype,
+                hf_save_reference_code=config.hf_save_reference_code,
                 generation_config=build_generation_config(tokenizer, config.hf_generation_eos_token_ids),
                 peft_save_path=config.peft_save_path,
                 peft_hf_upload=config.peft_hf_upload,

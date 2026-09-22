@@ -143,6 +143,20 @@ def test_save_hf_checkpoint_callback_passes_generation_config():
     assert saved_kwargs["generation_config"] == generation_config
 
 
+def test_save_hf_checkpoint_callback_exports_forced_one_step_run():
+    converter = _CapturingConverter()
+    callback = save_hf_checkpoint_callback("/tmp/export", converter)
+    model = object()
+    step = SimpleNamespace(step=0, eval_model=model)
+
+    callback(step)
+    assert converter.calls == []
+
+    callback(step, force=True)
+    assert converter.calls[0][0] is model
+    assert converter.calls[0][1] == "/tmp/export/step-0"
+
+
 class _FakeChatTemplateTokenizer:
     def __init__(self, chat_template: str):
         self.chat_template = chat_template

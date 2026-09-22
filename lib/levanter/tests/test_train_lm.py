@@ -13,6 +13,10 @@ import jax.numpy as jnp
 import jax.random as jrandom
 import pytest
 from chex import assert_trees_all_close
+from tokenizers import Tokenizer as TokenizerBackend
+from tokenizers.models import WordLevel
+from tokenizers.pre_tokenizers import Whitespace
+from transformers import PreTrainedTokenizerFast
 
 from haliax import Axis
 from haliax.quantization import QuantizationConfig
@@ -25,10 +29,11 @@ from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.datasets import DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
+from levanter.models.qwen import Qwen3Config, Qwen3LMHeadModel
 from levanter.optim.config import AdamConfig
+from levanter.testing.helpers import arrays_only, use_test_mesh
 from levanter.tracker.json_file import JsonFileTrackerConfig
 from levanter.trainer_state import trainables_only
-from levanter.testing.helpers import arrays_only
 
 
 def _array_leaves(tree):
@@ -73,6 +78,82 @@ def test_train_lm():
                 distributed=DistributedConfig(initialize_jax_distributed=False),
             ),
         )
+        train_lm.main(config)
+        _assert_training_recorded(tmpdir)
+
+
+def test_train_lm_from_hf_with_model_padded_vocab():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tokenizer_path = os.path.join(tmpdir, "tokenizer")
+        tokenizer_backend = TokenizerBackend(
+            WordLevel({"<unk>": 0, "<eos>": 1, "<pad>": 2, "hello": 3, "world": 4}, unk_token="<unk>")
+        )
+        tokenizer_backend.pre_tokenizer = Whitespace()
+        tokenizer = PreTrainedTokenizerFast(
+            tokenizer_object=tokenizer_backend,
+            unk_token="<unk>",
+            eos_token="<eos>",
+            pad_token="<pad>",
+        )
+        tokenizer.save_pretrained(tokenizer_path)
+
+        tokenizer_vocab_size = len(tokenizer)
+        model_vocab_size = tokenizer_vocab_size + 3
+        model_path = os.path.join(tmpdir, "hf_model")
+        model_config = Qwen3Config(
+            reference_checkpoint=model_path,
+            tokenizer=tokenizer_path,
+            hidden_dim=8,
+            intermediate_dim=16,
+            num_layers=1,
+            num_heads=2,
+            num_kv_heads=1,
+            head_dim=4,
+            max_seq_len=16,
+            use_sliding_window=False,
+            attn_backend=None,
+        )
+        with use_test_mesh():
+            model = Qwen3LMHeadModel.init(Axis("vocab", model_vocab_size), model_config, key=jrandom.PRNGKey(0))
+            model_config.hf_checkpoint_converter().save_pretrained(model, model_path, save_tokenizer=False)
+
+        data_config, _ = tiny_corpus.construct_small_data_cache(
+            tmpdir,
+            num_shards=1,
+            chunk_size=8,
+            doc_len=16,
+            vocab_size=tokenizer_vocab_size,
+            tokenizer=tokenizer_path,
+        )
+        config = train_lm.TrainLmConfig(
+            data=data_config,
+            model=Qwen3Config(
+                reference_checkpoint=model_path,
+                tokenizer=tokenizer_path,
+                max_seq_len=16,
+                hidden_dim=8,
+                intermediate_dim=16,
+                num_layers=1,
+                num_heads=2,
+                num_kv_heads=1,
+                head_dim=4,
+                use_sliding_window=False,
+                attn_backend=None,
+            ),
+            initialize_from_hf=model_path,
+            use_hf_model_config=True,
+            pad_tokenizer_to_match_model=True,
+            trainer=train_lm.TrainerConfig(
+                num_train_steps=1,
+                train_batch_size=len(jax.devices()),
+                max_eval_batches=1,
+                tracker=JsonFileTrackerConfig(output_path=tmpdir),
+                checkpointer=CheckpointerConfig(base_path=os.path.join(tmpdir, "checkpoints")),
+                require_accelerator=False,
+                distributed=DistributedConfig(initialize_jax_distributed=False),
+            ),
+        )
+
         train_lm.main(config)
         _assert_training_recorded(tmpdir)
 

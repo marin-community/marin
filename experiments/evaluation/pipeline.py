@@ -23,17 +23,19 @@ The demo pipeline below runs the smoke suite for one small model.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol
 
 from iris.client.client import iris_ctx
 from iris.rpc import job_pb2
+from marin.evaluation.harbor.runner import canonical_served_name
 from marin.evaluation.hardware import default_platform
 from marin.evaluation.model_config import ModelConfig
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.step_runner import StepRunner
 
-from experiments.evaluation.evals import resolve_eval_keys
+from experiments.evaluation.evals import EvalchemyDefinition, resolve_eval_keys
 from experiments.evaluation.launch import (
     EVALUATION_CONTROLLER_CLUSTER,
     LaunchSpec,
@@ -52,7 +54,8 @@ class EvalStepConfig:
     """One pipeline eval's model, eval selection, version, and runtime overrides."""
 
     model: ModelConfig
-    evals: str
+    evals: str | None
+    evalchemy_config_path: str | None
     limit: int | None
     artifact_path: str
     accelerator: str | None
@@ -91,11 +94,15 @@ class CatalogEvaluationModel:
 
 
 def run_eval_pipeline_step(config: EvalStepConfig) -> EvaluationResult:
-    keys = resolve_eval_keys(config.evals)
+    keys = resolve_eval_keys(config.evals) if config.evals is not None else ()
+    evalchemy_definitions = ()
+    if config.evalchemy_config_path is not None:
+        path = Path(config.evalchemy_config_path)
+        evalchemy_definitions = (EvalchemyDefinition(name=canonical_served_name(path.stem), config_path=path),)
     spec = LaunchSpec(
         model=config.model,
         evals=keys,
-        evalchemy_definitions=(),
+        evalchemy_definitions=evalchemy_definitions,
         harbor_definitions=(),
         platform=default_platform(config.model),
         accelerator=config.accelerator,
@@ -116,18 +123,18 @@ def run_eval_pipeline_step(config: EvalStepConfig) -> EvaluationResult:
     )
 
 
-def eval_step(
+def _eval_step(
     model: EvaluationModelSource,
-    evals: str,
     *,
+    selection_name: str,
+    evals: str | None,
+    evalchemy_config_path: str | None,
     version: str,
-    limit: int | None = None,
-    accelerator: str | None = None,
-    submission_cluster: str = EVALUATION_CONTROLLER_CLUSTER,
-    federated_cluster: str | None = None,
+    limit: int | None,
+    accelerator: str | None,
+    submission_cluster: str,
+    federated_cluster: str | None,
 ) -> ArtifactStep[EvaluationResult]:
-    """Evaluate a static or upstream-produced model with Evalchemy and Harbor."""
-
     deps = model.deps()
 
     def build_config(ctx: StepContext) -> EvalStepConfig:
@@ -135,6 +142,7 @@ def eval_step(
         return EvalStepConfig(
             model=resolved_model,
             evals=evals,
+            evalchemy_config_path=evalchemy_config_path,
             limit=limit,
             artifact_path=ctx.output_path,
             accelerator=ctx.runtime_arg(_ACCELERATOR_RUNTIME_ARG),
@@ -145,7 +153,7 @@ def eval_step(
 
     model_name = model.resolve(StepContext.for_fingerprint(deps=deps)).name
     return ArtifactStep(
-        name=f"evals/{model_name}/{evals}",
+        name=f"evals/{model_name}/{selection_name}",
         version=version,
         artifact_type=EvaluationResult,
         run=run_eval_pipeline_step,
@@ -156,6 +164,59 @@ def eval_step(
             _SUBMISSION_CLUSTER_RUNTIME_ARG: submission_cluster,
             _FEDERATED_CLUSTER_RUNTIME_ARG: federated_cluster,
         },
+    )
+
+
+def eval_step(
+    model: EvaluationModelSource,
+    evals: str,
+    *,
+    version: str,
+    limit: int | None = None,
+    accelerator: str | None = None,
+    submission_cluster: str = EVALUATION_CONTROLLER_CLUSTER,
+    federated_cluster: str | None = None,
+) -> ArtifactStep[EvaluationResult]:
+    """Evaluate a static or upstream-produced model with registered evaluations."""
+
+    return _eval_step(
+        model,
+        selection_name=evals,
+        evals=evals,
+        evalchemy_config_path=None,
+        version=version,
+        limit=limit,
+        accelerator=accelerator,
+        submission_cluster=submission_cluster,
+        federated_cluster=federated_cluster,
+    )
+
+
+def evalchemy_config_step(
+    model: EvaluationModelSource,
+    config_path: Path,
+    *,
+    version: str,
+    limit: int | None = None,
+    accelerator: str | None = None,
+    submission_cluster: str = EVALUATION_CONTROLLER_CLUSTER,
+    federated_cluster: str | None = None,
+) -> ArtifactStep[EvaluationResult]:
+    """Evaluate a model with one checked-in portable Evalchemy configuration."""
+
+    if not config_path.is_file():
+        raise ValueError(f"Evalchemy config does not exist: {config_path}")
+    selection_name = canonical_served_name(config_path.stem)
+    return _eval_step(
+        model,
+        selection_name=selection_name,
+        evals=None,
+        evalchemy_config_path=str(config_path),
+        version=version,
+        limit=limit,
+        accelerator=accelerator,
+        submission_cluster=submission_cluster,
+        federated_cluster=federated_cluster,
     )
 
 

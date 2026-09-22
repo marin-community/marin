@@ -21,15 +21,14 @@ guards against drift.
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Any, Optional, Type
+from typing import Any, Optional, Type, cast
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
 from einops import rearrange
-from jax import core, random
-from jax.sharding import NamedSharding
+from jax import random
 from jax.sharding import PartitionSpec as P
 from jax.sharding import get_abstract_mesh, reshard
 from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
@@ -49,6 +48,7 @@ from levanter.grug.attention import (
     attention,
 )
 from levanter.grug.grug_moe import MoeImplementation, MoEExpertMlp
+from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import (
     Pembed_vocab,
     Plm_head,
@@ -59,7 +59,7 @@ from levanter.grug.sharding import (
     unshard,
 )
 from levanter.layers.attention import AttentionMask as LmHeadAttentionMask
-from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.logging import silence_transformer_nag
 
@@ -433,9 +433,23 @@ class SnowballAttention(eqx.Module):
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
 
-        q = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_q), "... (n d) -> ... n d", d=head_dim)
-        k = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_k), "... (m d) -> ... m d", d=head_dim)
-        v = rearrange(jnp.einsum("bsh,hd->bsd", x, self.w_v), "... (m d) -> ... m d", d=head_dim)
+        # Parameters stay FSDP-sharded at rest. Gather one layer's attention weights for the
+        # contraction so XLA does not instead move the much larger sequence activation onto the
+        # parameter's hidden/data sharding.
+        qkv_flat_spec = _bspec(None, "model")
+        qkv_spec = _bspec(None, "model", None)
+        w_q = reshard(self.w_q, P(None, "model"))
+        w_k = reshard(self.w_k, P(None, "model"))
+        w_v = reshard(self.w_v, P(None, "model"))
+        q = jnp.einsum("bsh,hd->bsd", x, w_q, out_sharding=qkv_flat_spec).reshape(
+            (x.shape[0], seq_len, -1, head_dim), out_sharding=qkv_spec
+        )
+        k = jnp.einsum("bsh,hd->bsd", x, w_k, out_sharding=qkv_flat_spec).reshape(
+            (x.shape[0], seq_len, -1, head_dim), out_sharding=qkv_spec
+        )
+        v = jnp.einsum("bsh,hd->bsd", x, w_v, out_sharding=qkv_flat_spec).reshape(
+            (x.shape[0], seq_len, -1, head_dim), out_sharding=qkv_spec
+        )
 
         q = rms_norm(q)
         k = rms_norm(k)
@@ -449,8 +463,9 @@ class SnowballAttention(eqx.Module):
             k = jnp.concatenate([k_rot, k[..., half:]], axis=-1)
         q = q * self.cfg.qk_mult
         attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
+        attn_out = reshard(attn_out, qkv_spec)
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
-        aligned_v = _partition_match(aligned_v, attn_out)
+        aligned_v = reshard(aligned_v, qkv_spec)
         # Exclusive Self-Attention: subtract the component of y parallel to v, per head.
         dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)
         v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
@@ -463,15 +478,8 @@ class SnowballAttention(eqx.Module):
             (*attn_out.shape[:-2], attn_out.shape[-2] * attn_out.shape[-1]),
             out_sharding=_bspec(None, "model"),
         )
-        return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=_bspec())
-
-
-def _partition_match(aligned_v: jax.Array, attn_out: jax.Array) -> jax.Array:
-    """Match aligned_v's sharding to attn_out (backend attention can pick its own head sharding)."""
-    sharding = jax.typeof(attn_out).sharding if isinstance(attn_out, core.Tracer) else attn_out.sharding
-    if isinstance(sharding, NamedSharding):
-        return reshard(aligned_v, sharding.spec)
-    return reshard(aligned_v, _bspec(None, "model"))
+        w_o = reshard(self.w_o, P("model", None))
+        return jnp.einsum("bsh,hd->bsd", attn_out, w_o, out_sharding=_bspec())
 
 
 class DenseMLP(eqx.Module):
@@ -544,7 +552,7 @@ class SnowballMoEMLP(eqx.Module):
         # router_bias is [E]; replicate it (like the norm weights) so the add keeps the expert axis
         # unsharded. A safetensors load auto-shards [E] over `data` when E % data == 0, which would
         # otherwise make router_logits + router_bias illegally sharded on multi-device meshes.
-        biased_logits = router_logits + unshard(self.router_bias)
+        biased_logits = router_logits + jax.lax.stop_gradient(unshard(self.router_bias))
         # Select top-(K+1) on biased logits; the (K+1)-th is only the QB threshold (unused at inference).
         _topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token + 1)
         selected_experts = selected_experts[:, :-1]
@@ -657,10 +665,9 @@ class SnowballTransformer(eqx.Module):
         hidden = self.token_embed.at[token_ids].get(out_sharding=_bspec())
         hidden = self.embed_gated_norm(self.embed_norm(hidden))
 
-        # Scan the layers instead of a Python loop so XLA plans HBM for ONE layer's MoE expert
-        # buffers at a time. Unrolling keeps every layer's buffers live simultaneously (temp scales
-        # linearly with depth), which OOMs the 67B on 8xH100. The stacked blocks + per-layer long
-        # schedule feed a single uniform scan body (June recipe: long layers = every 4th + the last).
+        # Scan the layers instead of a Python loop so XLA plans one layer's MoE buffers at a time.
+        # Rematerializing the scan body keeps the backward pass from retaining all 26 layers'
+        # activations. The stacked parameters and long-layer schedule form one uniform scan body.
         num_blocks = len(self.blocks)
         stacked = jax.tree_util.tree_map(lambda *layers: jnp.stack(layers), *self.blocks)
         idx = jnp.arange(num_blocks)
@@ -668,7 +675,8 @@ class SnowballTransformer(eqx.Module):
 
         def _scan_layer(carry: Float[Array, "B S D"], layer_and_flag) -> tuple[Float[Array, "B S D"], None]:
             layer, use_long = layer_and_flag
-            return layer(carry, short_mask, long_mask, use_long), None
+            hidden = eqx.filter_checkpoint(layer)(carry, short_mask, long_mask, use_long)
+            return hidden, None
 
         hidden, _ = jax.lax.scan(_scan_layer, hidden, (stacked, long_schedule))
         return self.final_gated_norm(self.final_norm(hidden))
@@ -723,6 +731,46 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
 
     def get_lm_head(self) -> NamedArray:
         return hax.named(self.transformer.output_proj, (self.Embed, self.Vocab))
+
+    def compute_next_token_loss(
+        self,
+        example: LmExample,
+        *,
+        key=None,
+        reduction: Optional[hax.ReductionFunction] = cast(Optional[hax.ReductionFunction], hax.mean),
+        reduction_axis: Optional[hax.AxisSelection] = None,
+        logsumexp_weight: Optional[float] = None,
+        loss_dtype: Optional[jnp.dtype] = jnp.float32,
+        logit_soft_cap: Optional[float] = None,
+    ) -> jnp.ndarray | NamedArray:
+        """Compute loss without forcing Snowball's FSDP-sharded LM head through a named shard map."""
+        del key
+        if logit_soft_cap is not None:
+            raise ValueError("Snowball does not support logit_soft_cap")
+
+        raw_tokens = example.tokens.array
+        sequence_length = raw_tokens.shape[-1]
+        batch_size = int(np.prod(raw_tokens.shape[:-1])) if raw_tokens.ndim > 1 else 1
+        tokens = raw_tokens.reshape(batch_size, sequence_length)
+        hidden = self.transformer(tokens)
+        labels = jnp.concatenate([tokens[:, 1:], jnp.zeros_like(tokens[:, :1])], axis=1)
+        dtype = example.loss_weight.dtype if loss_dtype is None else loss_dtype
+        raw_loss = fused_linear_softmax_cross_entropy_loss(
+            hidden,
+            self.transformer.output_proj,
+            labels,
+            reduction="none",
+            logsumexp_weight=logsumexp_weight,
+            dtype=dtype,
+        )
+        loss = hax.named(raw_loss.reshape(raw_tokens.shape), example.tokens.axes)
+        return hax.nn.loss.maybe_reduce_loss(
+            loss,
+            reduction,
+            reduction_axis,
+            where=None,
+            weight=example.loss_weight,
+        )
 
     def resize_vocab(self, new_size: int, key: Optional[PRNGKeyArray] = None) -> "SnowballLMHeadModel":
         old = self._config.vocab_size
