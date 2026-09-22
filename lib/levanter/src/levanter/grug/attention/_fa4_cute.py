@@ -388,7 +388,7 @@ def gpu_fa4_cute_sm100_attention(
     v: Float[Array, "B K Hkv D"],
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
 ) -> Float[Array, "B Q Hq D"]:
-    """Run the 128x64 port forward and native SM100 one-block backward for BF16 D128 GQA.
+    """Run native SM100 forward and one-block backward for BF16 D128 GQA.
 
     Select with ``implementation="gpu_fa4_cute_sm100"``. Supports GQA ratios
     4, 6, and 8 and the same packed causal/window masks as ``gpu_fa4_cute``.

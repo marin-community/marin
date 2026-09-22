@@ -29,6 +29,7 @@ from levanter.grug.attention._fa4_cute_kernels import (
     segmented_flash_attention_backward_sm90_launcher,
     segmented_flash_attention_backward_sm90_preprocess_launcher,
     segmented_flash_attention_forward_launcher,
+    segmented_flash_attention_forward_sm100_launcher,
 )
 from levanter.grug.attention._fa4_cute_config import (
     SM100_GQA_RATIOS,
@@ -126,6 +127,51 @@ def segmented_flash_attention_forward(
         modules = _import_cutlass_cute()
     except Exception as exc:
         raise _optional_dependency_error() from exc
+
+    if kernel_config.sm100_forward is not None:
+        config = kernel_config.sm100_forward
+        # One sparse query block spans every Q stage in the upstream schedule.
+        sparse = _packed_segment_forward_block_sparse_indices_with_full(
+            lower_bounds,
+            valid,
+            key_sequence_length=k.shape[1],
+            q_offset=q_offset,
+            tile_m=config.tile[0] * config.q_stage,
+            tile_n=config.tile[1],
+        )
+        launcher = segmented_flash_attention_forward_sm100_launcher(
+            modules,
+            head_dim=q.shape[-1],
+            head_dim_v=v.shape[-1],
+            qhead_per_kvhead=q.shape[2] // k.shape[2],
+            config=config,
+        )
+        input_spec, output_spec = _cutlass_attention_forward_specs(modules, vector_elems=8)
+        metadata_spec = modules.cjax.TensorSpec(static=True)
+        input_spec = (*input_spec, metadata_spec, metadata_spec, metadata_spec, metadata_spec)
+        call = cutlass_call(
+            launcher,
+            output_shape_dtype=(
+                jax.ShapeDtypeStruct((*q.shape[:3], v.shape[-1]), q.dtype),
+                jax.ShapeDtypeStruct((q.shape[0], q.shape[2], q.shape[1]), jnp.float32),
+            ),
+            input_spec=input_spec,
+            output_spec=output_spec,
+            use_static_tensors=True,
+            softmax_scale=softmax_scale,
+        )
+        return call(
+            q,
+            k,
+            v,
+            lower_bounds,
+            valid.astype(jnp.int32),
+            q_offset,
+            sparse.partial_block_cnt,
+            sparse.partial_block_idx,
+            sparse.full_block_cnt,
+            sparse.full_block_idx,
+        )
 
     forward_tile = kernel_config.forward_tile
     num_threads = kernel_config.num_threads
@@ -609,6 +655,21 @@ def _packed_segment_backward_block_sparse_indices_with_full(
         lower_bounds, valid, key_sequence_length=key_sequence_length, q_offset=q_offset, tile_m=tile_m, tile_n=tile_n
     )
     return _block_sparse_indices(partial, full)
+
+
+def _packed_segment_forward_block_sparse_indices_with_full(
+    lower_bounds: jax.Array,
+    valid: jax.Array,
+    *,
+    key_sequence_length: int,
+    q_offset: jax.Array,
+    tile_m: int,
+    tile_n: int,
+) -> _BlockSparseMetadata:
+    partial, full = _packed_segment_block_masks(
+        lower_bounds, valid, key_sequence_length=key_sequence_length, q_offset=q_offset, tile_m=tile_m, tile_n=tile_n
+    )
+    return _block_sparse_indices(jnp.swapaxes(partial, 1, 2), jnp.swapaxes(full, 1, 2))
 
 
 def _packed_segment_block_masks(

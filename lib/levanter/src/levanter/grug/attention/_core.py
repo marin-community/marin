@@ -31,7 +31,7 @@ GrugAttentionImplementation = Literal[
     "tpu_splash",
     "gpu_fa4_cute",
     "gpu_fa4_cute_wide",  # 128x64 forward tile. Measured faster only at the hero shape.
-    "gpu_fa4_cute_sm100",  # Port forward, native one-block backward; opt-in SM100 D128 GQA.
+    "gpu_fa4_cute_sm100",  # Native forward, one-block backward; opt-in SM100 D128 GQA.
 ]
 
 

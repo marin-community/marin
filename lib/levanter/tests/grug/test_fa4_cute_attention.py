@@ -74,7 +74,7 @@ def test_packed_segment_backward_block_sparse_indices_split_full_blocks():
     )
 
 
-@pytest.mark.parametrize("direction", ["backward"])
+@pytest.mark.parametrize("direction", ["forward", "backward"])
 @pytest.mark.parametrize("tile", [(2, 4), (4, 2), (4, 4)])
 @pytest.mark.parametrize("window", [None, 3])
 @pytest.mark.parametrize("query_slice", [(0, 11), (0, 5), (3, 8), (7, 11)])

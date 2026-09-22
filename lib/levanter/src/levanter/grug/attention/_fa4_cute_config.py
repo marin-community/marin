@@ -4,10 +4,18 @@
 from dataclasses import dataclass
 from enum import StrEnum
 
-# Query heads per KV head validated for the native SM100 backward kernel.
+# Query heads per KV head validated for the native SM100 forward and backward kernels.
 SM100_GQA_RATIOS = (4, 6, 8)
 # Q/K and V head dimension supported by the native SM100 kernels.
 SM100_HEAD_DIM = 128
+
+
+@dataclass(frozen=True)
+class Flash4CuteSm100ForwardConfig:
+    """Upstream Blackwell tile and number of pipelined query stages."""
+
+    tile: tuple[int, int]
+    q_stage: int
 
 
 @dataclass(frozen=True)
@@ -51,6 +59,7 @@ class Flash4CuteKernelConfig:
     backward_arch: int | None = None
     sm90_backward: Flash4CuteSm90BackwardConfig | None = None
     sm100_backward: Flash4CuteSm100BackwardConfig | None = None
+    sm100_forward: Flash4CuteSm100ForwardConfig | None = None
 
 
 def flash4_cute_kernel_config(
@@ -97,12 +106,13 @@ def flash4_cute_kernel_config(
 
 
 def sm100_flash4_cute_kernel_config() -> Flash4CuteKernelConfig:
-    """Return the port forward and native SM100 backward configuration for BF16 D128 GQA."""
+    """Return the native SM100 forward and backward configuration for BF16 D128 GQA."""
     return Flash4CuteKernelConfig(
         forward_tile=(128, 64),
         backward_tile=(64, 64),
         num_threads=128,
         backward_arch=100,
+        sm100_forward=Flash4CuteSm100ForwardConfig(tile=(128, 128), q_stage=2),
         sm100_backward=Flash4CuteSm100BackwardConfig(
             tile=(128, 128),
             zero_fill_threads=512,
