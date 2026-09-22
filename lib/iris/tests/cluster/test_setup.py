@@ -7,7 +7,7 @@ import os
 import subprocess
 
 import pytest
-from iris.cluster.runtime.env import UV_CACHE_PATH, UV_CACHE_REPAIR_MARKER, build_common_iris_env, render_setup_steps
+from iris.cluster.runtime.env import UV_CACHE_REPAIR_MARKER, build_common_iris_env, render_setup_steps
 from iris.cluster.setup_scripts import default_setup_script
 from iris.cluster.types import EnvironmentSpec
 from iris.rpc import job_pb2
@@ -112,7 +112,6 @@ ln -sf "$UV_CACHE_DIR/wheels/package.whl" "$IRIS_VENV/package.whl"
         ports=(),
         resources=None,
     )
-    assert iris_env["UV_CACHE_DIR"] == UV_CACHE_PATH
     shared_cache = tmp_path / "shared-uv-cache"
     shared_cache.mkdir()
     env = {

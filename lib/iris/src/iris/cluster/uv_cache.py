@@ -10,7 +10,7 @@ import shutil
 import threading
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 from rigging import telemetry
@@ -41,6 +41,14 @@ class UvCacheMaintenanceResult:
     rotated: Path | None = None
     reclaimed: tuple[Path, ...] = ()
     rotation_rate_limited: bool = False
+
+
+@dataclass(frozen=True)
+class _QuarantineMetadata:
+    consumers: tuple[str, ...]
+    rotation_complete: bool
+    rotated_at_ms: int
+    unused_since_ms: int | None
 
 
 def _generation_path(cache_dir: Path) -> Path:
@@ -97,13 +105,32 @@ def current_uv_cache_generation(cache_dir: Path) -> Path:
     return ensure_uv_cache_layout(cache_dir)
 
 
+def cache_mount_path(cache_dir: Path, container_path: str) -> Path:
+    """Resolve a cache mount, pinning uv mounts to their current generation."""
+    if container_path == UV_CACHE_PATH:
+        return current_uv_cache_generation(cache_dir)
+    host_dir = cache_dir / cache_host_dirname(container_path)
+    host_dir.mkdir(parents=True, exist_ok=True)
+    return host_dir
+
+
 def is_uv_cache_namespace(path: Path) -> bool:
-    """Return whether ``path`` is managed by the uv generation lifecycle."""
+    """Identify namespaces that must bypass generic age-based reclamation."""
     return path.name == cache_host_dirname(UV_CACHE_PATH) or path.name.startswith(_GENERATION_PREFIX)
 
 
 def _quarantine_metadata(generation: Path) -> Path:
     return generation / _QUARANTINE_METADATA
+
+
+def _write_quarantine(path: Path, metadata: _QuarantineMetadata) -> None:
+    _write_json(path, asdict(metadata))
+
+
+def _read_quarantine(path: Path) -> _QuarantineMetadata:
+    value = json.loads(path.read_text())
+    value["consumers"] = tuple(value["consumers"])
+    return _QuarantineMetadata(**value)
 
 
 def _last_rotation_ms(cache_dir: Path) -> int | None:
@@ -129,14 +156,14 @@ def _rotate_uv_cache(
     old_generation = _resolved_generation(cache_dir, current)
     consumers_before = active_consumers()
     metadata_path = _quarantine_metadata(old_generation)
-    _write_json(
+    _write_quarantine(
         metadata_path,
-        {
-            "consumers": sorted(consumers_before),
-            "rotation_complete": False,
-            "rotated_at_ms": now.epoch_ms(),
-            "unused_since_ms": None,
-        },
+        _QuarantineMetadata(
+            consumers=tuple(sorted(consumers_before)),
+            rotation_complete=False,
+            rotated_at_ms=now.epoch_ms(),
+            unused_since_ms=None,
+        ),
     )
 
     new_generation = _generation_path(cache_dir)
@@ -144,14 +171,14 @@ def _rotate_uv_cache(
     _replace_current_link(current, new_generation)
 
     consumers_after = active_consumers()
-    _write_json(
+    _write_quarantine(
         metadata_path,
-        {
-            "consumers": sorted(consumers_before | consumers_after),
-            "rotation_complete": True,
-            "rotated_at_ms": now.epoch_ms(),
-            "unused_since_ms": None,
-        },
+        _QuarantineMetadata(
+            consumers=tuple(sorted(consumers_before | consumers_after)),
+            rotation_complete=True,
+            rotated_at_ms=now.epoch_ms(),
+            unused_since_ms=None,
+        ),
     )
     _write_json(cache_dir / _LAST_ROTATION, {"rotated_at_ms": now.epoch_ms()})
     logger.warning("quarantined suspect uv cache %s; new tasks use %s", old_generation, new_generation)
@@ -168,21 +195,19 @@ def _reclaim_unused_generations(cache_dir: Path, active_consumers: set[str], now
         metadata_path = _quarantine_metadata(generation)
         if not metadata_path.exists():
             continue
-        metadata = json.loads(metadata_path.read_text())
-        if not metadata.get("rotation_complete", False):
+        metadata = _read_quarantine(metadata_path)
+        if not metadata.rotation_complete:
             continue
 
-        consumers = set(metadata["consumers"])
+        consumers = set(metadata.consumers)
         if consumers & active_consumers:
-            if metadata.get("unused_since_ms") is not None:
-                metadata["unused_since_ms"] = None
-                _write_json(metadata_path, metadata)
+            if metadata.unused_since_ms is not None:
+                _write_quarantine(metadata_path, replace(metadata, unused_since_ms=None))
             continue
 
-        unused_since_ms = metadata.get("unused_since_ms")
+        unused_since_ms = metadata.unused_since_ms
         if unused_since_ms is None:
-            metadata["unused_since_ms"] = now.epoch_ms()
-            _write_json(metadata_path, metadata)
+            _write_quarantine(metadata_path, replace(metadata, unused_since_ms=now.epoch_ms()))
             continue
         if now.epoch_ms() - int(unused_since_ms) < UV_CACHE_RECLAIM_GRACE.to_ms():
             continue

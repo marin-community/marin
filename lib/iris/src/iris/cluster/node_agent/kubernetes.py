@@ -52,6 +52,7 @@ DEFAULT_COLLECTION_INTERVAL = 60.0
 # load, does not fail a collection cycle; collection runs once per interval, so a
 # slow call delays one sample rather than overlapping the next.
 K8S_API_TIMEOUT = 15.0
+_THREAD_SHUTDOWN_TIMEOUT = 10.0
 NODE_EXPORTER_ADDRESS = "127.0.0.1"
 KUBELET_RESOURCE_METRICS_URL = "https://127.0.0.1:10250/metrics/resource"
 SERVICE_ACCOUNT_TOKEN_PATH = Path("/var/run/secrets/kubernetes.io/serviceaccount/token")
@@ -936,6 +937,6 @@ def run(config_path: Path, node_name: str, namespace: str, stop: threading.Event
             stop.wait()
     finally:
         stop.set()
-        uv_cache_maintenance.join(timeout=10.0)
+        uv_cache_maintenance.join(timeout=_THREAD_SHUTDOWN_TIMEOUT)
         if cache_reclaimer is not None:
-            cache_reclaimer.join(timeout=10.0)
+            cache_reclaimer.join(timeout=_THREAD_SHUTDOWN_TIMEOUT)
