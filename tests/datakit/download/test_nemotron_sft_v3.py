@@ -3,12 +3,18 @@
 
 import hashlib
 import json
+from itertools import pairwise
 
 import msgspec
 import pytest
 from marin.datakit.download import nemotron_chat_prompts
 from marin.datakit.download.nemotron_chat_prompts import restore_chat_row
-from marin.datakit.download.nemotron_sft_v3 import load_jsonl_with_skips, row_to_chat_doc
+from marin.datakit.download.nemotron_sft_v3 import (
+    _JsonlByteRange,
+    _load_jsonl_byte_range,
+    load_jsonl_with_skips,
+    row_to_chat_doc,
+)
 
 
 def test_v3_chat_reconstruction_preserves_the_original_seed_prompt():
@@ -81,6 +87,77 @@ def test_v3_chat_enrichment_joins_seed_conversations(tmp_path, monkeypatch):
 
     restored = json.loads((tmp_path / "output" / "data" / "chat.jsonl").read_text())
     assert [message["content"] for message in restored["messages"]] == ["Help with coding.", prompt]
+
+
+def test_v3_chat_enrichment_skips_null_source_user_turn(tmp_path, monkeypatch):
+    prompt = "First prompt with content"
+    digest = hashlib.sha256(prompt.encode()).hexdigest()
+    source = tmp_path / "input" / "data" / "chat.jsonl"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        json.dumps(
+            {
+                "uuid": "seeded-chat",
+                "metadata": {"seed_dataset": "allenai/WildChat-1M", "seed_prompt_sha256": digest},
+                "messages": [{"role": "user", "content": None}],
+            }
+        )
+        + "\n"
+    )
+    monkeypatch.setattr(
+        nemotron_chat_prompts,
+        "load_dataset",
+        lambda _dataset, **_kwargs: [
+            {
+                "conversation": [
+                    {"role": "user", "content": None},
+                    {"role": "assistant", "content": "Answer"},
+                    {"role": "user", "content": prompt},
+                ]
+            }
+        ],
+    )
+
+    nemotron_chat_prompts.restore_chat_prompts(str(tmp_path / "input"), str(tmp_path / "output"))
+
+    restored = json.loads((tmp_path / "output" / "data" / "chat.jsonl").read_text())
+    assert restored["messages"][0]["content"] == prompt
+
+
+def test_v3_chat_enrichment_excludes_unrecoverable_prompts(tmp_path, monkeypatch):
+    prompt = "Available prompt"
+    found_digest = hashlib.sha256(prompt.encode()).hexdigest()
+    missing_digest = hashlib.sha256(b"Withheld from public source").hexdigest()
+    rows = [
+        {
+            "uuid": uuid,
+            "metadata": {"seed_dataset": "allenai/WildChat-1M", "seed_prompt_sha256": digest},
+            "messages": [{"role": "user", "content": None}],
+        }
+        for uuid, digest in [("found", found_digest), ("missing-1", missing_digest), ("missing-2", missing_digest)]
+    ]
+    rows.append({"uuid": "unprotected", "messages": [{"role": "user", "content": "Keep this"}]})
+    source = tmp_path / "input" / "data" / "chat.jsonl"
+    source.parent.mkdir(parents=True)
+    source.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    monkeypatch.setattr(
+        nemotron_chat_prompts,
+        "load_dataset",
+        lambda _dataset, **_kwargs: [{"conversation": [{"role": "user", "content": prompt}]}],
+    )
+
+    nemotron_chat_prompts.restore_chat_prompts(str(tmp_path / "input"), str(tmp_path / "output"))
+
+    output = tmp_path / "output"
+    restored = [json.loads(line) for line in (output / "data" / "chat.jsonl").read_text().splitlines()]
+    assert [row["uuid"] for row in restored] == ["found", "unprotected"]
+    assert restored[0]["messages"][0]["content"] == prompt
+    assert json.loads((output / "restoration_report.json").read_text()) == {
+        "source_rows": 4,
+        "written_rows": 2,
+        "excluded_rows": {"allenai/WildChat-1M": 2, "lmsys/lmsys-chat-1m": 0},
+        "missing_prompt_hashes": {"allenai/WildChat-1M": 1, "lmsys/lmsys-chat-1m": 0},
+    }
 
 
 def test_v3_chat_retains_source_training_turn_annotation():
@@ -197,6 +274,23 @@ def test_opencode_tool_schema_is_available_to_chat_template():
     assert kwargs["tools"][0]["function"]["parameters"]["properties"]["command"]["type"] == "string"
 
 
+@pytest.mark.parametrize("tools", ["", "   "])
+def test_science_vendor_empty_tools_string_keeps_valid_chat(tools):
+    row = {
+        "messages": [
+            {"role": "user", "content": "What is the answer?"},
+            {"role": "assistant", "content": "42"},
+        ],
+        "tools": tools,
+    }
+
+    documents = row_to_chat_doc(row, family="science_v2", partition_name="vendor")
+
+    assert len(documents) == 1
+    assert [message["role"] for message in documents[0]["messages"]] == ["user", "assistant"]
+    assert "tools" not in json.loads(documents[0]["chat_template_kwargs"])
+
+
 def test_load_jsonl_with_skips_only_ignores_pinned_bad_lines(tmp_path):
     path = tmp_path / "data.jsonl"
     path.write_text('{"id": 1}\n{bad json}\n{"id": 2}\n')
@@ -204,3 +298,24 @@ def test_load_jsonl_with_skips_only_ignores_pinned_bad_lines(tmp_path):
     assert list(load_jsonl_with_skips(str(path), frozenset({2}))) == [{"id": 1}, {"id": 2}]
     with pytest.raises(msgspec.DecodeError):
         list(load_jsonl_with_skips(str(path), frozenset()))
+
+
+def test_jsonl_byte_ranges_read_each_row_once_across_line_boundaries(tmp_path):
+    rows = [{"id": index, "text": "λ" * index + ("x" * 100 if index == 5 else "")} for index in range(12)]
+    path = tmp_path / "math.jsonl"
+    data = b"".join(msgspec.json.encode(row) + b"\n" for row in rows)
+    path.write_bytes(data)
+    bounds = [len(data) * index // 17 for index in range(18)]
+    actual = [
+        row
+        for start, stop in pairwise(bounds)
+        for row in _load_jsonl_byte_range(_JsonlByteRange(str(path), start, stop))
+    ]
+    assert actual == rows
+
+    first_line_end = data.index(b"\n") + 1
+    boundary_rows = [
+        *_load_jsonl_byte_range(_JsonlByteRange(str(path), 0, first_line_end)),
+        *_load_jsonl_byte_range(_JsonlByteRange(str(path), first_line_end, len(data))),
+    ]
+    assert boundary_rows == rows

@@ -5,6 +5,7 @@
 
 import hashlib
 import json
+import logging
 from collections.abc import Mapping
 from types import MappingProxyType
 
@@ -20,6 +21,7 @@ SEED_DATASET_REVISIONS: Mapping[str, str] = MappingProxyType(
         "lmsys/lmsys-chat-1m": "200748d9d3cddcc9d782887541057aca0b18c5da",
     }
 )
+logger = logging.getLogger(__name__)
 
 
 def _source_seed_prompts(row: dict) -> tuple[str | None, str | None]:
@@ -27,13 +29,20 @@ def _source_seed_prompts(row: dict) -> tuple[str | None, str | None]:
     first_user = None
     conversation = row.get("conversation") or []
     for message in conversation:
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if content is None:
+            continue
         if message.get("role") == "system" and system is None:
-            system = message.get("content")
+            system = content
         if message.get("role") == "user":
-            first_user = message.get("content")
+            first_user = content
             break
-    if first_user is None and conversation:
-        first_user = conversation[0].get("content")
+    if first_user is None and conversation and isinstance(conversation[0], dict):
+        first_content = conversation[0].get("content")
+        if isinstance(first_content, str):
+            first_user = first_content
     return system, first_user
 
 
@@ -89,8 +98,6 @@ def _replacement_prompts(needed: Mapping[str, set[str]]) -> dict[tuple[str, str]
                 remaining.remove(digest)
             if not remaining:
                 break
-        if remaining:
-            raise ValueError(f"Could not restore {len(remaining)} prompts from {dataset}")
     return replacements
 
 
@@ -124,12 +131,40 @@ def restore_chat_row(row: dict, replacements: Mapping[tuple[str, str], tuple[str
 
 
 def restore_chat_prompts(input_path: str, output_path: str) -> None:
-    """Write a prompt-complete chat JSONL from the pinned source datasets."""
+    """Write chat JSONL, excluding withheld prompts absent from the pinned sources."""
     source = prefix_join(input_path, "data/chat.jsonl")
     destination = prefix_join(output_path, "data/chat.jsonl")
-    replacements = _replacement_prompts(_needed_hashes(source))
+    needed = _needed_hashes(source)
+    replacements = _replacement_prompts(needed)
+    missing = {
+        dataset: digests - {digest for source, digest in replacements if source == dataset}
+        for dataset, digests in needed.items()
+    }
+    excluded_rows = {dataset: 0 for dataset in needed}
+    source_rows = 0
+    written_rows = 0
     with atomic_rename(destination) as temporary_path, open_url(temporary_path, "wt") as output:
         for row in load_jsonl(source):
+            source_rows += 1
+            metadata = row.get("metadata") or {}
+            dataset = _protected_dataset(metadata)
+            digest = metadata.get("seed_prompt_sha256")
+            if dataset in missing and isinstance(digest, str) and digest in missing[dataset]:
+                first_user = next((message for message in row["messages"] if message.get("role") == "user"), None)
+                if first_user is None or first_user.get("content") is None:
+                    excluded_rows[dataset] += 1
+                    continue
             restored = restore_chat_row(row, replacements)
             output.write(json.dumps(restored, ensure_ascii=False, separators=(",", ":")))
             output.write("\n")
+            written_rows += 1
+    report = {
+        "source_rows": source_rows,
+        "written_rows": written_rows,
+        "excluded_rows": excluded_rows,
+        "missing_prompt_hashes": {dataset: len(digests) for dataset, digests in missing.items()},
+    }
+    report_path = prefix_join(output_path, "restoration_report.json")
+    with atomic_rename(report_path) as temporary_path, open_url(temporary_path, "wt") as output:
+        json.dump(report, output, sort_keys=True)
+    logger.info("Nemotron chat prompt restoration: %s", report)
