@@ -420,7 +420,7 @@ def build_small_run(
     bank_shards = expert_axis_size * context_axis_size
     if model.num_experts % bank_shards != 0:
         raise ValueError(
-            f"num_experts={model.num_experts} must divide expert ({expert_axis_size}) * "
+            f"num_experts={model.num_experts} must be divisible by expert ({expert_axis_size}) * "
             f"context ({context_axis_size}) = {bank_shards}"
         )
     # Fail fast here (before the fleet is allocated) on the same divisibility the pooled-wave transport

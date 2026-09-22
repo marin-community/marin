@@ -395,7 +395,7 @@ def build_diagnostic_run(
     default=HERO_MODEL_CONFIG.num_experts,
     show_default=True,
     help=(
-        "Override the routed expert count. The count must be divisible by --expert-axis-size, "
+        "Override the routed expert count. The count must be divisible by --expert-axis-size * --context-axis-size, "
         f"and the local expert count must support {HERO_MODEL_CONFIG.num_expert_waves} waves."
     ),
 )
@@ -524,10 +524,26 @@ def build_diagnostic_run(
     show_default=True,
     help="Override the pooled receiver capacity factor.",
 )
-@click.option("--seq-len", type=click.IntRange(min=1), default=None)
-@click.option("--context-axis-size", type=click.IntRange(min=1), default=1, show_default=True)
+@click.option(
+    "--seq-len",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Sequence length. Must be divisible by --context-axis-size; defaults to the hero configuration.",
+)
+@click.option(
+    "--context-axis-size",
+    type=click.IntRange(min=1),
+    default=1,
+    show_default=True,
+    help="Context-parallel axis width. Partitions sequence positions across devices.",
+)
 @click.option("--expert-axis-size", type=click.IntRange(min=1), default=HERO_EP_EXPERT_AXIS_SIZE, show_default=True)
-@click.option("--qk-mult", type=click.FloatRange(min=0, min_open=True), default=None)
+@click.option(
+    "--qk-mult",
+    type=click.FloatRange(min=0, min_open=True),
+    default=None,
+    help="Query/key attention scale multiplier. Defaults to the hero configuration.",
+)
 @click.option("--restore-from", default=None, help="Checkpoint to restore; outputs use this run's own path.")
 @build_options
 def main(
