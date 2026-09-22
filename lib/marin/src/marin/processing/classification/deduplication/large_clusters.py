@@ -167,11 +167,10 @@ def plan_large_clusters(
         merged = pa.concat_tables([merged, table]).group_by("dup_cluster_id").aggregate([("n", "sum")])
         merged = merged.rename_columns(["dup_cluster_id", "n"])
     logger.info("Aggregated %d sampled count rows", sampled_rows)
-    grouped = merged
-    sizes = pc.multiply(grouped.column("n"), pa.scalar(params.stride, type=pa.int64()))
+    sizes = pc.multiply(merged.column("n"), pa.scalar(params.stride, type=pa.int64()))
     keep = pc.greater_equal(sizes, pa.scalar(params.minimum_size, type=pa.int64()))
     large = pa.table(
-        {"dup_cluster_id": grouped.column("dup_cluster_id").filter(keep), "size": sizes.filter(keep)}
+        {"dup_cluster_id": merged.column("dup_cluster_id").filter(keep), "size": sizes.filter(keep)}
     ).sort_by([("size", "descending")])
 
     counts_path = prefix_join(output_path, "large_clusters.parquet")
@@ -182,7 +181,7 @@ def plan_large_clusters(
         "stride": params.stride,
         "minimum_size": params.minimum_size,
         "sampled_rows": sampled_rows,
-        "distinct_sampled_clusters": grouped.num_rows,
+        "distinct_sampled_clusters": merged.num_rows,
         "large_clusters": large.num_rows,
         "large_cluster_members": int(pc.sum(large.column("size")).as_py() or 0),
         "largest": large.column("size").slice(0, 20).to_pylist(),
