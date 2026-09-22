@@ -105,7 +105,6 @@ _BENCHMARK_PROMPTS = 64
 _BENCHMARK_SAMPLES_PER_PROMPT = 1
 _BENCHMARK_MEMORY = "512GB"
 _BENCHMARK_DISK = "2TB"
-_BENCHMARK_DISTRIBUTED_TIMEOUT = 60
 _MAX_NUM_SEQS = 16
 _MAX_NUM_BATCHED_TOKENS = 16_384
 # The 512-example packed corpus yields one optimizer update per epoch.
@@ -215,7 +214,6 @@ def _rl_benchmark_config_yaml(role_plan: SkyRLRolePlan) -> str:
             "batched": False,
             "engine_init_kwargs": {
                 "async_scheduling": False,
-                "cpu_distributed_timeout_seconds": _BENCHMARK_DISTRIBUTED_TIMEOUT,
                 "enable_mfu_metrics": True,
             },
             "sampling_params": {"temperature": 1.0, "top_p": 1.0},
