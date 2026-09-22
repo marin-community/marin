@@ -34,7 +34,7 @@ from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from levanter.checkpoint_manifest import read_manifest
 from levanter.data.dataset import AsyncDataset
-from levanter.data.loader import DataLoader
+from levanter.data.loader import DataLoader, DataLoaderIterator
 from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_batch_schedule
 from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named
@@ -1103,7 +1103,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         else:
             assert train_loader is not None
             batch_source = train_loader.iter_from_step(int(state.step))
-            gc_resources.callback(batch_source.close)
         iterator = LoadingTimeTrackerIterator(batch_source)
 
         state_callbacks = StateCallbackRunner[GrugTrainState](
@@ -1304,6 +1303,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 ):
                     checkpointer.on_step(tree=state, step=int(state.step), force=True)
                     checkpointer.wait_until_finished()
+            # Join only on success, while the progress watchdog can still detect a stalled producer.
+            if isinstance(batch_source, DataLoaderIterator):
+                batch_source.close()
         finally:
             state_callbacks.emit_event(callbacks.ProgressEvent.TRAINING_FINISHED)
 
