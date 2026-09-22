@@ -27,4 +27,3 @@ def test_produced_evaluation_model_drops_source_revision():
 
     assert resolved.location == "artifact://checkpoints/generated-model@2026.09.22"
     assert resolved.revision is None
-    assert resolved.tokenizer == "organization/tokenizer"

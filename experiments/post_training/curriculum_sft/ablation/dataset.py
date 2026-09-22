@@ -32,6 +32,8 @@ GENERATION_FILENAME = "generation.json"
 RAW_CHAT_FILENAME = "chat/part-00000-of-00001.parquet"
 MANIFEST_FILENAME = "manifest.json"
 DATA_SOURCE = "curriculum-sft"
+NORMALIZED_MAIN_RELATIVE_PATH = "normalized/outputs/main"
+STORE_RELATIVE_PATH = "store"
 
 
 class AblationDataset(Artifact):
@@ -116,7 +118,7 @@ def materialize_dataset(config: MaterializeDatasetConfig) -> AblationDataset:
             )
         },
         "generation_batch_id": ledger["batch_id"],
-        "training_data": "normalized/outputs/main/*.parquet",
+        "training_data": f"{NORMALIZED_MAIN_RELATIVE_PATH}/*.parquet",
     }
     (output / MANIFEST_FILENAME).write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     return AblationDataset(path=config.output_path, main_output_dir=normalized.main_output_dir)
@@ -143,7 +145,7 @@ def build_store(config: BuildStoreConfig) -> AblationStore:
     store = build_levanter_store(
         BuildLevanterStoreConfig(
             sources=[tokenized],
-            cache_path=prefix_join(config.output_path, "store"),
+            cache_path=prefix_join(config.output_path, STORE_RELATIVE_PATH),
             max_workers=1,
         )
     )
@@ -193,7 +195,7 @@ def store_step(
 
     def build_config(ctx: StepContext) -> BuildStoreConfig:
         return BuildStoreConfig(
-            normalized_path=prefix_join(ctx.artifact_path(dataset), "normalized", "outputs", "main"),
+            normalized_path=prefix_join(ctx.artifact_path(dataset), NORMALIZED_MAIN_RELATIVE_PATH),
             output_path=ctx.output_path,
             tokenizer=ctx.artifact_path(tokenizer),
         )

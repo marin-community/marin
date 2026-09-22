@@ -26,7 +26,6 @@ class SyntheticFinanceTask:
     """A fictional disclosure and its exact expected calculations."""
 
     task_id: str
-    issuer: str
     revenue: int
     operating_cost: int
 
@@ -56,7 +55,6 @@ def task_from_payload(payload: dict[str, Any]) -> SyntheticFinanceTask:
     facts = payload["facts"]
     return SyntheticFinanceTask(
         task_id=payload["task_id"],
-        issuer=payload["issuer"],
         revenue=facts["revenue"],
         operating_cost=facts["operating_cost"],
     )

@@ -42,6 +42,7 @@ from experiments.models import ModelConfig as DownloadModelConfig
 from experiments.models import download_model
 from experiments.post_training.curriculum_sft.ablation.dataset import (
     DEFAULT_GENERATION_URI,
+    STORE_RELATIVE_PATH,
     AblationDataset,
     AblationStore,
     dataset_step,
@@ -54,8 +55,6 @@ from experiments.post_training.curriculum_sft.ablation.matrix import (
 )
 from experiments.sft.launcher import ModelSource, PreparedModel, SFTSpec
 
-SNOWBALL_REPO = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.20"
-SNOWBALL_REVISION = "9f2ee50f3d4a12c79b0808bb2414ddba2cdf0098"
 SNOWBALL_TOKENIZER = "marin-community/marin-tokenizer"
 SNOWBALL_EOT_TOKEN_ID = 128001
 SNOWBALL_END_OF_MESSAGE_TOKEN_ID = 128009
@@ -141,11 +140,18 @@ class SnowballModelSource(ModelSource):
 
 def _evaluation_model(name: str) -> ModelConfig:
     return dataclasses.replace(
-        models()[SNOWBALL_EVALUATION_MODEL],
+        _base_model(),
         name=name,
         location="artifact://pending",
         tokenizer=SNOWBALL_TOKENIZER,
     )
+
+
+def _base_model() -> ModelConfig:
+    model = models()[SNOWBALL_EVALUATION_MODEL]
+    if model.revision is None:
+        raise ValueError(f"{SNOWBALL_EVALUATION_MODEL} must pin an immutable revision")
+    return model
 
 
 def _training_resources() -> ResourceConfig:
@@ -161,10 +167,11 @@ def _training_resources() -> ResourceConfig:
 
 
 def _staged_model() -> ArtifactStep[LevanterCheckpoint]:
-    step = download_model(DownloadModelConfig(hf_repo_id=SNOWBALL_REPO, hf_revision=SNOWBALL_REVISION))
+    model = _base_model()
+    step = download_model(DownloadModelConfig(hf_repo_id=model.location, hf_revision=model.revision))
     output = marin_temp_bucket(
         TEMP_TTL_DAYS,
-        prefix=f"curriculum-sft/snowball/base-hf/{SNOWBALL_REVISION}",
+        prefix=f"curriculum-sft/snowball/base-hf/{model.revision}",
         source_prefix=COREWEAVE_PREFIX,
     )
     return dataclasses.replace(step, override_path=output)
@@ -253,7 +260,7 @@ def _sft_step(
 
     def build_config(ctx: StepContext) -> TrainLmOnPodConfig:
         tokenizer = source.resolve_tokenizer(ctx)
-        data = _training_data(prefix_join(ctx.artifact_path(store), "store"), tokenizer, arm)
+        data = _training_data(prefix_join(ctx.artifact_path(store), STORE_RELATIVE_PATH), tokenizer, arm)
         return source.build_train_config(ctx, spec, data, ctx.runtime_arg(_TRAIN_RESOURCES), TRAIN_STEPS)
 
     output = marin_temp_bucket(
