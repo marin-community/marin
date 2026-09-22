@@ -132,8 +132,14 @@ class GrugModelConfig:
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     # Dense (no-MoE) mode: every block is a single DenseMLP(hidden, intermediate_dim) SwiGLU; the MoE fields are ignored.
     dense_mlp: bool = False
+    # Omni-neurons (dense only): each layer's MLP reads the concatenation of every prior sublayer snapshot
+    # (embed, and per prior layer: attn_out / resid_post_attn / mlp_out / resid_post_mlp) plus this layer's
+    # attn_out / resid_post_attn, so its input width grows with depth (d*(3+4*layer)). Attention is unchanged.
+    omni_mlp: bool = False
 
     def __post_init__(self) -> None:
+        if self.omni_mlp and not self.dense_mlp:
+            raise ValueError("omni_mlp requires dense_mlp=True (omni-neurons is a dense-model variant)")
         if not self.dense_mlp and self.num_experts_per_token >= self.num_experts:
             # QB routing takes top-(k+1) and keeps the last entry as the threshold alpha, so a
             # full-bank top-k asks `jax.lax.top_k` for more entries than the router has experts.
@@ -372,16 +378,19 @@ class DenseMLP(eqx.Module):
     w_down: jax.Array
 
     @staticmethod
-    def init(hidden_dim: int, intermediate_dim: int, initializer_std: float, *, key: PRNGKeyArray) -> "DenseMLP":
+    def init(
+        hidden_dim: int, intermediate_dim: int, initializer_std: float, *, key: PRNGKeyArray, out_dim: int | None = None
+    ) -> "DenseMLP":
+        # ``hidden_dim`` is the input width; ``out_dim`` (default ``hidden_dim``) the output width. They differ
+        # only for omni-neurons, where the MLP reads a wide concatenation but still writes a d-wide residual delta.
+        out_dim = hidden_dim if out_dim is None else out_dim
         k_gate, k_up, k_down = random.split(key, 3)
         return DenseMLP(
             w_gate=reshard(
                 _init_weight(k_gate, (hidden_dim, intermediate_dim), initializer_std), P(_FSDP_AXES, "model")
             ),
             w_up=reshard(_init_weight(k_up, (hidden_dim, intermediate_dim), initializer_std), P(_FSDP_AXES, "model")),
-            w_down=reshard(
-                _init_weight(k_down, (intermediate_dim, hidden_dim), initializer_std), P("model", _FSDP_AXES)
-            ),
+            w_down=reshard(_init_weight(k_down, (intermediate_dim, out_dim), initializer_std), P("model", _FSDP_AXES)),
         )
 
     @named_call
@@ -613,6 +622,16 @@ class MoEMLP(eqx.Module):
         return routed, router_stats
 
 
+def _omni_mlp_in_dim(hidden_dim: int, layer_idx: int) -> int:
+    """Concatenated snapshot width feeding layer ``layer_idx``'s MLP under omni-neurons.
+
+    Before layer n's MLP the snapshot list is: embed (1) + {attn_out, resid_post_attn, mlp_out,
+    resid_post_mlp} for each of the n prior layers (4n) + this layer's attn_out and resid_post_attn (2),
+    each ``hidden_dim`` wide -- so ``hidden_dim * (4 * layer_idx + 3)``.
+    """
+    return hidden_dim * (4 * layer_idx + 3)
+
+
 class Block(eqx.Module):
     rms_attn: RMSNorm
     attn_gated_norm: GatedNorm
@@ -625,17 +644,22 @@ class Block(eqx.Module):
     sconv_mlp: "ShortConv | None"
 
     @staticmethod
-    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
+    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray, mlp_in_dim: int | None = None) -> "Block":
         attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key = random.split(key, 5)
         if cfg.dense_mlp:
             # Dense block: one SwiGLU DenseMLP(hidden, intermediate_dim), no MoE and no shared experts.
+            # Omni-neurons widens only the MLP input: mlp_in_dim (the concatenated snapshot width) sizes the
+            # MLP GatedNorm and the DenseMLP; rms_mlp stays width d (applied to each d-dim snapshot before concat).
+            mlp_dim = mlp_in_dim if mlp_in_dim is not None else cfg.hidden_dim
             return Block(
                 rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
                 attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
                 attn=CausalSelfAttention.init(cfg, key=attn_key),
                 rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-                mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
-                mlp=DenseMLP.init(cfg.hidden_dim, cfg.intermediate_dim, cfg.initializer_std, key=mlp_key),
+                mlp_gated_norm=GatedNorm.init(mlp_dim, cfg.initializer_std, key=gn_mlp_key),
+                mlp=DenseMLP.init(
+                    mlp_dim, cfg.intermediate_dim, cfg.initializer_std, key=mlp_key, out_dim=cfg.hidden_dim
+                ),
                 shared=None,
                 sconv_attn=(
                     ShortConv.init(cfg.hidden_dim, cfg.sconv_kernel) if cfg.sconv and "attn" in cfg.sconv_sites else None
@@ -715,7 +739,10 @@ class Transformer(eqx.Module):
     embed_norm: RMSNorm
     embed_gated_norm: GatedNorm
     output_proj: jax.Array
-    stacked_blocks: ArrayStacked[Block]
+    stacked_blocks: ArrayStacked[Block] | None
+    # Omni-neurons: heterogeneous per-layer blocks (MLP input width grows with depth) can't be scanned,
+    # so they are held unrolled here; exactly one of stacked_blocks / omni_blocks is set.
+    omni_blocks: tuple[Block, ...] | None
     final_norm: RMSNorm
     final_gated_norm: GatedNorm
     config: GrugModelConfig = eqx.field(static=True)
@@ -748,13 +775,22 @@ class Transformer(eqx.Module):
         output_proj = reshard(
             _init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), _LM_HEAD_PARTITION_SPEC
         )
-        stacked_blocks = ArrayStacked.init(cfg.num_layers, Block)(cfg, key=jnp.stack(block_keys))
+        if cfg.omni_mlp:
+            # Per-layer MLP input widths differ, so blocks can't be stacked/scanned -- build them unrolled.
+            omni_blocks = tuple(
+                Block.init(cfg, key=k, mlp_in_dim=_omni_mlp_in_dim(cfg.hidden_dim, i)) for i, k in enumerate(block_keys)
+            )
+            stacked_blocks = None
+        else:
+            omni_blocks = None
+            stacked_blocks = ArrayStacked.init(cfg.num_layers, Block)(cfg, key=jnp.stack(block_keys))
         return Transformer(
             token_embed=token_embed,
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             embed_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=embed_gn_key),
             output_proj=output_proj,
             stacked_blocks=stacked_blocks,
+            omni_blocks=omni_blocks,
             final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             final_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key),
             config=cfg,
@@ -801,6 +837,52 @@ class Transformer(eqx.Module):
         short_lower_bounds = _batch_reshard(short_lower_bounds)
         valid = _batch_reshard(valid)
 
+        if cfg.omni_mlp:
+            # Omni-neurons: unrolled layers, each MLP reading the concatenation of every prior snapshot.
+            router_metrics: dict[str, jax.Array] = {}
+            assert self.omni_blocks is not None
+            sconv_seg = segment_ids[0] if segment_ids is not None else None
+            schedule = [
+                bool(((i + 1) % cfg.global_every == 0) or (i == cfg.num_layers - 1)) for i in range(cfg.num_layers)
+            ]
+            x = hidden
+            snapshots: list[jax.Array] = [x]  # "embed": the initial (post-embed-norm) residual stream
+            for layer_idx, block in enumerate(self.omni_blocks):
+                use_long = schedule[layer_idx]
+                lower_bounds = long_lower_bounds if use_long else short_lower_bounds
+                layer_mask = long_mask.with_fa4_bounds(lower_bounds, valid)
+
+                def _omni_layer(
+                    blk: Block,
+                    x_in: jax.Array,
+                    snaps: tuple[jax.Array, ...],
+                    _mask: AttentionMask = layer_mask,
+                    _long: bool = use_long,
+                ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
+                    attn_in = blk.attn_gated_norm(blk.rms_attn(x_in))
+                    attn_out = blk.attn(attn_in, _mask, disable_rope=_long, is_global=_long)
+                    if blk.sconv_attn is not None:
+                        attn_out = blk.sconv_attn(attn_out, sconv_seg)
+                    x_post_attn = x_in + attn_out
+                    # Per-snapshot RMSNorm (shared width-d gain) keeps snapshots magnitude-comparable, then concat;
+                    # the wider mlp_gated_norm / DenseMLP then read every snapshot at once.
+                    mlp_in = blk.mlp_gated_norm(
+                        jnp.concatenate([blk.rms_mlp(s) for s in (*snaps, attn_out, x_post_attn)], axis=-1)
+                    )
+                    assert isinstance(blk.mlp, DenseMLP)  # omni is dense-only
+                    mlp_out = blk.mlp(mlp_in, moe_output_reshard=False)
+                    if blk.sconv_mlp is not None:
+                        mlp_out = blk.sconv_mlp(mlp_out, sconv_seg)
+                    x_post_mlp = x_post_attn + mlp_out
+                    return x_post_mlp, attn_out, x_post_attn, mlp_out
+
+                x, attn_out, x_post_attn, mlp_out = eqx.filter_checkpoint(_omni_layer)(block, x, tuple(snapshots))
+                # Append this layer's four snapshots for the next layers to read.
+                snapshots.extend([attn_out, x_post_attn, mlp_out, x])
+            hidden = x
+            hidden = self.final_gated_norm(self.final_norm(hidden))
+            return hidden, router_metrics
+
         def _scan_layers(
             carry_hidden: Float[Array, "B S D"],
             scan_inputs: tuple[Block, jax.Array],
@@ -816,11 +898,12 @@ class Transformer(eqx.Module):
                 use_long,
             )
 
+        assert self.stacked_blocks is not None
         hidden, stacked_router_stats = jax.lax.scan(
             _scan_layers, hidden, xs=(self.stacked_blocks.stacked, mask_schedule)
         )
         if cfg.dense_mlp:
-            router_metrics: dict[str, jax.Array] = {}
+            router_metrics = {}
         else:
             # One cross-device reduction for the whole layer stack, not one per scan iteration (see router_metrics).
             reduced_router_stats = reduce_router_stats(

@@ -244,6 +244,7 @@ def build_h100_ladder_run(
     vocab_size: int = V16384_VOCAB,
     no_eval: bool = False,
     dense: bool = False,
+    omni_mlp: bool = False,
     save_checkpoints: bool = False,
 ) -> ArtifactStep[ThroughputResult]:
     """Build one H100 scaling-ladder rung.
@@ -259,7 +260,10 @@ def build_h100_ladder_run(
         raise ValueError("wandb_project must not be empty")
 
     rung = _h100_ladder_rung(size)
-    model = dataclasses.replace(_h100_ladder_model(rung, dense=dense), vocab_size=vocab_size)
+    if omni_mlp:
+        # Omni-neurons is a dense variant: force the dense recipe and enable the wide per-layer MLP input.
+        dense = True
+    model = dataclasses.replace(_h100_ladder_model(rung, dense=dense), vocab_size=vocab_size, omni_mlp=omni_mlp)
     mp_policy = "params=float32,compute=bfloat16,output=bfloat16"
     expert_axis_size = 1 if dense else rung.gpus_per_task
     replica_axis_size = 1
@@ -432,6 +436,12 @@ def build_h100_ladder_run(
 @click.option("--no-eval", is_flag=True, help="Disable in-run eval (clean MFU probes).")
 @click.option("--dense", is_flag=True, help="Dense baseline: 3x hidden SwiGLU per block, no MoE.")
 @click.option(
+    "--omni-mlp",
+    is_flag=True,
+    help="Omni-neurons (implies --dense): each layer's MLP reads the concatenation of all prior sublayer "
+    "snapshots (embed + per-layer attn_out/resid_post_attn/mlp_out/resid_post_mlp).",
+)
+@click.option(
     "--save-checkpoints",
     is_flag=True,
     default=False,
@@ -446,6 +456,7 @@ def main(
     num_steps: int | None,
     no_eval: bool,
     dense: bool,
+    omni_mlp: bool,
     save_checkpoints: bool,
 ) -> ArtifactStep[ThroughputResult]:
     return build_h100_ladder_run(
@@ -456,6 +467,7 @@ def main(
         num_steps=num_steps,
         no_eval=no_eval,
         dense=dense,
+        omni_mlp=omni_mlp,
         save_checkpoints=save_checkpoints,
     )
 
