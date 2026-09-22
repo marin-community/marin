@@ -224,12 +224,20 @@ def _resolved_model(model: ServedModelConfig, iris: IrisConfig) -> tuple[ServedM
     num_chips = iris.worker_resources.device.chip_count()
     tensor_parallel_size = model.tensor_parallel_size
     revision = model.revision if weights == model.weights else None
+    tokenizer = model.tokenizer or model.weights
+    tokenizer_revision = model.effective_tokenizer_revision
     if tensor_parallel_size is None:
         num_attention_heads, num_key_value_heads = read_attention_heads(weights, revision)
         tensor_parallel_size = select_tensor_parallel_size(num_attention_heads, num_chips, num_key_value_heads)
     return (
         replace(
-            model, weights=weights, api_model=api_model, revision=revision, tensor_parallel_size=tensor_parallel_size
+            model,
+            weights=weights,
+            api_model=api_model,
+            tokenizer=tokenizer,
+            revision=revision,
+            tokenizer_revision=tokenizer_revision,
+            tensor_parallel_size=tensor_parallel_size,
         ),
         num_chips,
     )
@@ -340,7 +348,7 @@ def _model_tool_chat_template(model: ServedModelConfig) -> str | None:
     # Keep tokenizer and Transformers imports inside the serving worker.
     from marin.inference.model_preparation import read_tool_chat_template  # noqa: PLC0415
 
-    return read_tool_chat_template(model.tokenizer or model.weights, model.revision)
+    return read_tool_chat_template(model.tokenizer or model.weights, model.effective_tokenizer_revision)
 
 
 @contextlib.contextmanager
@@ -473,7 +481,9 @@ def _run_pipeline_service(service: IrisServiceConfig) -> None:
         dtype=model.dtype,
         max_model_len=model.max_model_len,
         chat_template_content=model.chat_template_content,
+        tokenizer=model.tokenizer,
         revision=model.revision,
+        tokenizer_revision=model.effective_tokenizer_revision,
     )
     backend = VllmBackend(service.engine)
     with iris_vllm_launch(

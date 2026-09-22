@@ -16,7 +16,7 @@ from levanter.cutlass_kernel_cache import gpu_compute_capability
 from levanter.grug.attention._core import AttentionMask
 from levanter.grug.attention._fa4_cute_backend import fa4_cute_attention_forward
 from levanter.grug.attention._fa4_cute_config import Flash4CuteKernelConfig, flash4_cute_kernel_config
-from levanter.grug.sharding import partitioning_axes, partition_spec_of
+from levanter.sharding import partitioning_axes, partition_spec_of
 
 
 def _replicate_metadata(x: jax.Array) -> jax.Array:

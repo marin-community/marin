@@ -16,6 +16,7 @@ import tempfile
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from urllib.parse import parse_qs, quote, urlsplit, urlunsplit
 
 ROOT = Path(__file__).parents[1]
@@ -30,6 +31,12 @@ VLLM_GPU_RELEASE_CONFIG = EXTERNAL_ROOT / VLLM_CONFIG_NAME / "gpu.toml"
 TPU_FORKS_CONFIG = EXTERNAL_ROOT / VLLM_CONFIG_NAME / "tpu.toml"
 GPU_RELEASE_REPOSITORY = "marin-community/vllm"
 GPU_RELEASE_MANIFEST_NAME = "marin-vllm-gpu-manifest.json"
+CUDA_TOOLCHAIN_VERSION_BY_BACKEND = MappingProxyType(
+    {
+        "cu130": "13.0.88",
+        "cu132": "13.2.86",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -214,7 +221,7 @@ def load_vllm_gpu_release(path: Path) -> VllmGpuRelease:
 
 
 def render_gpu_release_toml(manifest: dict) -> str:
-    """Return gpu.toml text for a promoted GPU release manifest, or raise if unpromoted.
+    """Return gpu.toml text for a promoted release with a registered CUDA backend.
 
     ``manifest`` is a parsed ``marin-vllm-gpu-manifest.json``. Each wheel URL is rebuilt from
     its filename with ``+`` percent-encoded because the manifest stores the raw ``+`` filename
@@ -229,11 +236,14 @@ def render_gpu_release_toml(manifest: dict) -> str:
     if repository != GPU_RELEASE_REPOSITORY:
         raise ValueError(f"expected a {GPU_RELEASE_REPOSITORY} release, found {repository!r}")
     release_tag = release["tag"]
+    torch_backend = manifest["abi"]["cuda_variant"]
+    if torch_backend not in CUDA_TOOLCHAIN_VERSION_BY_BACKEND:
+        raise ValueError(f"no CUDA toolchain pin registered for {torch_backend}")
     lines = [
         f'release_tag = "{release_tag}"',
         f'source_commit = "{manifest["source"]["fork_commit"]}"',
         f'version = "{manifest["distribution"]["version"]}"',
-        f'torch_backend = "{manifest["abi"]["cuda_variant"]}"',
+        f'torch_backend = "{torch_backend}"',
     ]
     for platform in manifest["platforms"]:
         filename = platform["wheel"]["filename"]
@@ -297,6 +307,9 @@ def render_pins(
         for dependency in dependencies
     )
     constants = "\n".join(f"    {dependency.project.constant_name}," for dependency in dependencies)
+    toolchain_entries = "\n".join(
+        f'        "{backend}": "{version}",' for backend, version in CUDA_TOOLCHAIN_VERSION_BY_BACKEND.items()
+    )
     wheel_entries = "\n".join(
         "        VllmGpuWheel(\n"
         f'            architecture="{wheel.architecture}",\n'
@@ -318,6 +331,7 @@ come from the root ``uv.lock``.
 """
 
 from dataclasses import dataclass
+from types import MappingProxyType
 
 
 @dataclass(frozen=True)
@@ -358,6 +372,13 @@ class VllmGpuRelease:
     version: str
     torch_backend: str
     wheels: tuple[VllmGpuWheel, ...]
+
+
+CUDA_TOOLCHAIN_VERSION_BY_BACKEND = MappingProxyType(
+    {{
+{toolchain_entries}
+    }}
+)
 
 
 {entries}

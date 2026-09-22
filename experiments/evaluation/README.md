@@ -193,7 +193,10 @@ packages, such as `ifeval`. `apply_chat_template` defaults to the model catalog 
 explicit file value overrides it. The model catalog supplies generation overlays, and an explicit
 launcher `--limit` overrides the file limit. `record.json` stores the resulting task
 options and normalized Evalchemy launch configuration under `eval.tasks` and `eval.evalchemy`; the
-record provenance stores the exact Evalchemy requirement, including runtime extras.
+record provenance stores the exact Evalchemy requirement, including runtime extras. FinanceBench
+also requires a `judge` block with a dedicated endpoint, model, and secret reference. Marin forwards
+those values as `JUDGE_*` variables while preserving the local candidate endpoint credentials. The
+record stores the judge endpoint and model, but omits its credential reference and resolved value.
 
 `--evalchemy-config` is additive with registry `--evals` and file-backed `--harbor-config`. The
 launcher preserves argument order by source: registry entries, Evalchemy files, then Harbor files.

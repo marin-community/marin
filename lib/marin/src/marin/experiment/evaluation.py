@@ -127,6 +127,7 @@ class EvalGroup:
         default_factory=lambda: AcceleratorChoice(platform=Platform.TPU, tpu_type="v6e-8")
     )
     tokenizer: str | None = None
+    tokenizer_revision: str | None = None
     discover_latest_checkpoint: bool = True
 
 
@@ -139,6 +140,7 @@ def evaluate_evalchemy(
     accelerator: AcceleratorChoice,
     *,
     tokenizer: str | None = None,
+    tokenizer_revision: str | None = None,
     discover_latest_checkpoint: bool = True,
     version: str | None = None,
 ) -> ArtifactStep[FineStoreEvalchemyResult]:
@@ -155,6 +157,7 @@ def evaluate_evalchemy(
                 name=model_name,
                 location=model_path,
                 tokenizer=tokenizer,
+                tokenizer_revision=tokenizer_revision,
                 resource_hint=resource_hint,
                 serve=serve,
             ),
@@ -191,6 +194,7 @@ def eval_step(
         resource_hint=group.resource_hint,
         accelerator=group.accelerator,
         tokenizer=group.tokenizer,
+        tokenizer_revision=group.tokenizer_revision,
         discover_latest_checkpoint=group.discover_latest_checkpoint,
         version=version,
     )
