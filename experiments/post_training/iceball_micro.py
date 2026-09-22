@@ -199,9 +199,8 @@ generator:
   num_inference_engines: {ICEBALL_RL_ROLE_PLAN.num_inference_engines}
   n_samples_per_prompt: {ICEBALL_RL_ROLE_PLAN.n_samples_per_prompt}
   gpu_memory_utilization: 0.70
-  # SkyRL chose eager rollouts after suspected CUDA-graph train/rollout log-prob drift affected convergence.
-  # See https://github.com/NovaSky-AI/SkyRL/pull/569; this is separate from final evaluation serving.
-  enforce_eager: true
+  # Use compiled rollouts until Iceball shows a model-specific log-prob or convergence regression.
+  enforce_eager: false
   run_engines_locally: true
   weight_sync_backend: nccl
   async_engine: true

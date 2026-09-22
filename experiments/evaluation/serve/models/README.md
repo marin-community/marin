@@ -85,7 +85,8 @@ serve:
 ```
 
 Marin removes the acknowledgement before launching vLLM. `--no-enforce-eager` keeps the vLLM default
-and needs no acknowledgement.
+and needs no acknowledgement. Pass the full flag spelling in `vllm_extra_args`; Marin rejects vLLM
+`--config` files and abbreviated eager flags so eager mode cannot be hidden from this check.
 
 ## Multi-node GPU serving
 

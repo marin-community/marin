@@ -435,9 +435,6 @@ def _wait_until_ready(environment: VllmEnvironment) -> None:
     "args",
     [
         ["--enforce-eager"],
-        ["--enforce_eager"],
-        ["--enforce-e"],
-        ["--enf"],
         ["--no-enforce-eager", "--enforce-eager"],
     ],
 )
@@ -455,9 +452,8 @@ def test_eager_without_acknowledgement_fails_before_spawn(monkeypatch, args):
         ([], False),
         (["--no-enforce-eager"], False),
         (["--enforce-eager", "--no-enforce-eager"], False),
-        (["--enf", "--no-enf"], False),
         (["--enforce-eager", "--i-know-i-am-making-vllm-slow"], True),
-        (["--no-enforce-eager", "--enforce_eager", "--i-know-i-am-making-vllm-slow"], True),
+        (["--no-enforce-eager", "--enforce-eager", "--i-know-i-am-making-vllm-slow"], True),
     ],
 )
 def test_eager_guard_preserves_vllm_args_and_warns_on_acknowledged_eager(tmp_path, caplog, args, expected_eager):
@@ -474,30 +470,20 @@ def test_eager_guard_preserves_vllm_args_and_warns_on_acknowledged_eager(tmp_pat
     )
 
 
-@pytest.mark.parametrize("key", ["enforce_eager", "enf"])
-def test_config_eager_requires_acknowledgement_before_spawn(tmp_path, monkeypatch, key):
-    config = tmp_path / "vllm.yaml"
-    config.write_text(f"{key}: true\n")
+@pytest.mark.parametrize("arg", ["--enforce_eager", "--enf", "--no-enf", "--enforce-eager=true"])
+def test_eager_aliases_rejected_before_spawn(monkeypatch, arg):
     monkeypatch.setattr(vllm_server.subprocess, "Popen", lambda *_args, **_kwargs: pytest.fail("vLLM spawned"))
 
-    with pytest.raises(ValueError, match="--i-know-i-am-making-vllm-slow"):
-        with _environment(_FakeLauncher("exit"), extra_args=["--config", str(config)]):
+    with pytest.raises(ValueError, match="Use the exact"):
+        with _environment(_FakeLauncher("exit"), extra_args=[arg]):
             pass
 
 
-def test_config_eager_can_be_disabled_by_cli(tmp_path, caplog):
-    config = tmp_path / "vllm.yaml"
-    config.write_text("enforce-eager: true\n")
-    argv_path = tmp_path / "argv.json"
-    args = ["--config", str(config), "--no_enforce_eager"]
-
-    with _environment(_FakeLauncher("record-args", str(argv_path)), extra_args=args) as environment:
-        _wait_until_ready(environment)
-
-    assert json.loads(argv_path.read_text())[-len(args) :] == args
-    assert not any(
-        record.name == vllm_server.__name__ and record.levelno == logging.WARNING for record in caplog.records
-    )
+def test_vllm_config_file_rejected_before_spawn(monkeypatch, tmp_path):
+    monkeypatch.setattr(vllm_server.subprocess, "Popen", lambda *_args, **_kwargs: pytest.fail("vLLM spawned"))
+    with pytest.raises(ValueError, match="does not support --config"):
+        with _environment(_FakeLauncher("exit"), extra_args=["--config", str(tmp_path / "vllm.yaml")]):
+            pass
 
 
 def test_environment_starts_without_waiting_for_http_readiness(tmp_path):

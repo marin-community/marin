@@ -21,7 +21,6 @@ from typing import Protocol
 from urllib.parse import urlparse
 
 import requests
-import yaml
 from iris.cluster.log_highlights import extract_failure_highlights
 from iris.runtime import telemetry as runtime_telemetry
 from prometheus_client.core import Metric as PrometheusMetric
@@ -1110,34 +1109,23 @@ def _vllm_serve_command(
 
 
 def _guard_vllm_eager_args(extra_cli_args: list[str] | None) -> list[str]:
-    """Remove Marin's acknowledgement and check vLLM's effective eager flag."""
+    """Require an explicit acknowledgement before starting vLLM in eager mode."""
     args = list(extra_cli_args or ())
     acknowledged = _VLLM_EAGER_ACKNOWLEDGEMENT in args
     args = [arg for arg in args if arg != _VLLM_EAGER_ACKNOWLEDGEMENT]
 
-    # vLLM expands YAML only for the exact --config token, then parses CLI flags in order.
-    config_flags: list[str] = []
     if "--config" in args:
-        index = args.index("--config")
-        if index + 1 == len(args):
-            raise ValueError("vLLM --config requires a file path")
-        config_path = args[index + 1]
-        with open(config_path) as config_file:
-            config = yaml.safe_load(config_file) or {}
-        if not isinstance(config, dict):
-            raise ValueError(f"Invalid vLLM config file: {config_path}")
-        config_flags = [f"--{key}" for key, value in config.items() if value is True]
+        raise ValueError("Pass vLLM options as explicit flags; Marin does not support --config")
 
     eager = False
-    for arg in [*config_flags, *args]:
-        option, separator, _value = arg.partition("=")
-        option = option.replace("_", "-")
-        if option in {"--enforce-eager", "--no-enforce-eager"} and separator:
-            raise ValueError(f"{option} is a boolean switch; use --no-enforce-eager to select false")
-        # argparse accepts unambiguous long-option abbreviations.
-        if option.startswith("--enf") and "--enforce-eager".startswith(option):
+    for arg in args:
+        if arg.startswith("--enf") and arg != "--enforce-eager":
+            raise ValueError("Use the exact --enforce-eager flag with Marin")
+        if arg.startswith("--no-enf") and arg != "--no-enforce-eager":
+            raise ValueError("Use the exact --no-enforce-eager flag with Marin")
+        if arg == "--enforce-eager":
             eager = True
-        elif option.startswith("--no-enf") and "--no-enforce-eager".startswith(option):
+        elif arg == "--no-enforce-eager":
             eager = False
 
     if eager and not acknowledged:
