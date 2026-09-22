@@ -1,4 +1,4 @@
-import type { ServingInfo } from './types'
+import type { ImportedGitCommit, ServingInfo } from './types'
 import type { ToolDefinition } from './python_tools'
 
 /** Resolve a path relative to the page URL. The dashboard is served under the
@@ -51,16 +51,19 @@ export interface ShellCommandResult {
 
 export async function invokeShell(
   files: Record<string, string>,
+  commits: ImportedGitCommit[],
   history: string[],
   command: string,
   signal: AbortSignal,
 ): Promise<ShellCommandResult> {
-  return postJsonResult('shell', { files, history, command }, signal, 'shell command')
+  return postJsonResult('shell', { files, commits, history, command }, signal, 'shell command')
 }
 
 export interface RepositorySnapshot {
   files: Record<string, string>
+  commits: ImportedGitCommit[]
   skipped_files: number
+  truncated_history: boolean
 }
 
 export async function importRepository(url: string, signal: AbortSignal): Promise<RepositorySnapshot> {

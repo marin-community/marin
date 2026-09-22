@@ -4,11 +4,13 @@
 """Tests for dashboard tool schemas, execution, and agent workspaces."""
 
 import asyncio
-import io
-import zipfile
+import os
+import subprocess
 from collections.abc import Iterator
+from dataclasses import asdict
+from pathlib import Path
 
-import httpx
+import marin.inference.repository_snapshot as repository_snapshot
 import pytest
 import requests
 from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
@@ -16,7 +18,7 @@ from marin.inference.chat_template_protocol import ChatTemplateProtocol, ToolCal
 from marin.inference.dashboard_server import ServingInfo, bind_serving_socket, build_dashboard_app, serve_app_background
 from marin.inference.python_tool_routes import TOOL_WORKER_TIMEOUT
 from marin.inference.python_tools import python_tools_from_source
-from marin.inference.repository_snapshot import fetch_repository_snapshot
+from marin.inference.repository_snapshot import RepositorySnapshotTooLarge, clone_repository_snapshot
 
 from experiments.llama import llama3_instruct_trainable_chat_template
 from experiments.sft.delphi_chat_template import DELPHI_V0_CHAT_TEMPLATE
@@ -42,6 +44,55 @@ def spin() -> int:
 """
 
 DASHBOARD_REQUEST_TIMEOUT = TOOL_WORKER_TIMEOUT + 5
+
+
+def _git(repository: Path, *arguments: str) -> str:
+    result = subprocess.run(["git", "-C", str(repository), *arguments], check=True, capture_output=True)
+    return result.stdout.decode()
+
+
+def _repository_with_history(repository: Path) -> None:
+    repository.mkdir()
+    _git(repository, "init", "-b", "main")
+    (repository / "README.md").write_text("first revision\n")
+    _git(repository, "add", ".")
+    _git(
+        repository,
+        "-c",
+        "user.name=Original Author",
+        "-c",
+        "user.email=author@example.com",
+        "commit",
+        "-m",
+        "initial import",
+    )
+    (repository / "README.md").write_text("second revision\n")
+    (repository / "src").mkdir()
+    (repository / "src/main.py").write_text("print('hello')\n")
+    (repository / "image.bin").write_bytes(b"\xff\x00")
+    (repository / "node_modules").mkdir()
+    (repository / "node_modules/dependency.js").write_text("ignored\n")
+    _git(repository, "add", ".")
+    parent_commit = _git(repository, "rev-parse", "HEAD").strip()
+    _git(repository, "update-index", "--add", "--cacheinfo", f"160000,{parent_commit},vendor")
+    _git(
+        repository,
+        "-c",
+        "user.name=Second Author",
+        "-c",
+        "user.email=second@example.com",
+        "commit",
+        "-m",
+        "add program",
+    )
+
+
+def _clone_local_repository(source: Path, destination: Path) -> None:
+    subprocess.run(
+        ["git", "clone", "--quiet", "--no-checkout", "--local", "--", str(source), str(destination)],
+        check=True,
+        capture_output=True,
+    )
 
 
 def test_python_tool_source_requires_typed_functions_and_validates_arguments():
@@ -193,23 +244,36 @@ def test_dashboard_shellsim_enforces_cpu_limit(dashboard_tool_base_url):
     assert "cpu_exhausted" in exhausted.json()["details"]
 
 
-def test_dashboard_shell_workspace_replays_commands_with_simulated_git(dashboard_tool_base_url):
+def test_dashboard_shell_workspace_replays_git_branch_workflow(dashboard_tool_base_url):
     files = {
         "calculator.py": "def add(left: int, right: int) -> int:\n    return left - right\n",
         "test_calculator.py": "from calculator import add\n\nassert add(17, 24) == 41\nprint('test passed')\n",
     }
-    edit = "sed -i 's/left - right/left + right/' calculator.py"
+    edit = (
+        "git switch -c fix; "
+        "sed -i 's/left - right/left + right/' calculator.py; "
+        "git add calculator.py; "
+        "git commit -m 'fix calculator'"
+    )
     edited = requests.post(
         f"{dashboard_tool_base_url}/shell",
-        json={"files": files, "history": [], "command": edit},
+        json={"files": files, "commits": [], "history": [], "command": edit},
         timeout=DASHBOARD_REQUEST_TIMEOUT,
     )
     verified = requests.post(
         f"{dashboard_tool_base_url}/shell",
         json={
             "files": files,
+            "commits": [],
             "history": [edit],
-            "command": "python3.14 test_calculator.py; git diff calculator.py",
+            "command": (
+                "git switch main; "
+                "git merge fix; "
+                "python3.14 test_calculator.py; "
+                "git log --format='%s' --all; "
+                "printf '\\nSTATUS\\n'; "
+                "git status --short"
+            ),
         },
         timeout=DASHBOARD_REQUEST_TIMEOUT,
     )
@@ -219,13 +283,15 @@ def test_dashboard_shell_workspace_replays_commands_with_simulated_git(dashboard
     assert verified.status_code == 200
     assert verified.json()["exit_code"] == 0
     assert "test passed" in verified.json()["stdout"]
-    assert "+    return left + right" in verified.json()["stdout"]
+    assert "fix calculator" in verified.json()["stdout"]
+    assert "baseline" in verified.json()["stdout"]
+    assert verified.json()["stdout"].endswith("STATUS\n")
 
 
 def test_dashboard_shell_workspace_rejects_parent_paths(dashboard_tool_base_url):
     response = requests.post(
         f"{dashboard_tool_base_url}/shell",
-        json={"files": {"../secret": "no"}, "history": [], "command": "ls"},
+        json={"files": {"../secret": "no"}, "commits": [], "history": [], "command": "ls"},
         timeout=DASHBOARD_REQUEST_TIMEOUT,
     )
 
@@ -237,6 +303,7 @@ def test_dashboard_shell_workspace_has_no_network_clone(dashboard_tool_base_url)
         f"{dashboard_tool_base_url}/shell",
         json={
             "files": {},
+            "commits": [],
             "history": [],
             "command": "git clone https://github.com/rjpower/shellsim external",
         },
@@ -257,42 +324,79 @@ def test_dashboard_repository_import_rejects_non_github_urls(dashboard_tool_base
     assert response.status_code == 400
 
 
-def test_repository_import_extracts_bounded_text_snapshot():
-    archive = io.BytesIO()
-    with zipfile.ZipFile(archive, "w") as repository_zip:
-        repository_zip.writestr("owner-repository-ref/README.md", "# Example\n")
-        repository_zip.writestr("owner-repository-ref/src/main.py", "print('hello')\n")
-        repository_zip.writestr("owner-repository-ref/image.bin", b"\xff\x00")
-        repository_zip.writestr("owner-repository-ref/node_modules/dependency.js", "ignored\n")
+def test_repository_import_clones_bounded_text_history(tmp_path):
+    source = tmp_path / "source"
+    _repository_with_history(source)
+    clone_urls: list[str] = []
 
-    def github_archive(request: httpx.Request) -> httpx.Response:
-        assert request.url == "https://api.github.com/repos/owner/repository/zipball"
-        return httpx.Response(200, content=archive.getvalue())
+    def clone_repository(url: str, destination: Path) -> None:
+        clone_urls.append(url)
+        _clone_local_repository(source, destination)
 
     snapshot = asyncio.run(
-        fetch_repository_snapshot(
+        clone_repository_snapshot(
             "https://github.com/owner/repository.git",
-            transport=httpx.MockTransport(github_archive),
+            clone_repository=clone_repository,
         )
     )
 
-    assert snapshot.files == {"README.md": "# Example\n", "src/main.py": "print('hello')\n"}
-    assert snapshot.skipped_files == 2
+    assert clone_urls == ["https://github.com/owner/repository.git"]
+    assert snapshot.files == {"README.md": "second revision\n", "src/main.py": "print('hello')\n"}
+    assert [commit.message for commit in snapshot.commits] == ["initial import", "add program"]
+    assert snapshot.commits[0].changes == {"README.md": "first revision\n"}
+    assert snapshot.commits[1].changes == {
+        "README.md": "second revision\n",
+        "src/main.py": "print('hello')\n",
+    }
+    assert snapshot.skipped_files == 3
+    assert not snapshot.truncated_history
 
 
-def test_repository_import_does_not_follow_redirects_outside_github():
-    requests_seen: list[httpx.Request] = []
+def test_repository_clone_stops_when_temporary_storage_exceeds_limit(tmp_path, monkeypatch):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    marker = tmp_path / "clone-finished"
+    fake_git = fake_bin / "git"
+    fake_git.write_text(
+        "#!/bin/sh\n"
+        'for destination in "$@"; do :; done\n'
+        'mkdir -p "$destination"\n'
+        'head -c 2048 /dev/zero > "$destination/pack"\n'
+        "sleep 1\n"
+        'touch "$MARIN_CLONE_MARKER"\n'
+    )
+    fake_git.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake_bin}:{os.environ['PATH']}")
+    monkeypatch.setenv("MARIN_CLONE_MARKER", str(marker))
+    monkeypatch.setattr(repository_snapshot, "MAX_REPOSITORY_CLONE_BYTES", 1024)
 
-    def redirect(request: httpx.Request) -> httpx.Response:
-        requests_seen.append(request)
-        return httpx.Response(302, headers={"location": "http://127.0.0.1/private"})
+    with pytest.raises(RepositorySnapshotTooLarge):
+        asyncio.run(clone_repository_snapshot("https://github.com/owner/repository"))
 
-    with pytest.raises(ValueError):
-        asyncio.run(
-            fetch_repository_snapshot(
-                "https://github.com/owner/repository",
-                transport=httpx.MockTransport(redirect),
-            )
-        )
+    assert not marker.exists()
 
-    assert len(requests_seen) == 1
+
+def test_dashboard_shell_workspace_recreates_imported_git_history(dashboard_tool_base_url, tmp_path):
+    source = tmp_path / "source"
+    _repository_with_history(source)
+
+    def clone_repository(_url: str, destination: Path) -> None:
+        _clone_local_repository(source, destination)
+
+    snapshot = asyncio.run(
+        clone_repository_snapshot("https://github.com/owner/repository", clone_repository=clone_repository)
+    )
+    response = requests.post(
+        f"{dashboard_tool_base_url}/shell",
+        json={
+            "files": snapshot.files,
+            "commits": [asdict(commit) for commit in snapshot.commits],
+            "history": [],
+            "command": "git log --format='%s'; printf '\\nOLD\\n'; git show HEAD^:README.md",
+        },
+        timeout=DASHBOARD_REQUEST_TIMEOUT,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["exit_code"] == 0
+    assert response.json()["stdout"] == "add program\ninitial import\n\nOLD\nfirst revision\n"

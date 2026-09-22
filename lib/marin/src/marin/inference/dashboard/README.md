@@ -101,31 +101,40 @@ shell calls and results are rendered just like custom Python tools. The three
 agent cards on an empty chat demonstrate repairing code, investigating a log,
 and updating a configuration.
 
-ShellSim starts in `/work` with the initial files committed as a fresh Git
-baseline. The browser stores each executed command with the conversation. For
-the next call, the service reconstructs the filesystem and replays those
-commands before executing the new command, which preserves file edits and Git
-state without keeping a host process or directory alive. Editing the initial
-files or choosing **Reset commands** clears that replay history.
+For manually entered files, ShellSim starts in `/work` with a fresh Git baseline
+commit. Cloned workspaces recreate the imported commits described below. The
+browser stores each executed command with the conversation. For the next call,
+the service reconstructs the filesystem and replays those commands before
+executing the new command, which preserves file edits and Git state without
+keeping a host process or directory alive. Editing the initial
+files JSON in the dashboard clears imported Git history and command replay
+history. Choosing **Reset commands** clears only command replay history. The
+simulated Git supports local agent workflows including status, diffs, branches,
+commits, tags, merges, stashes, cherry-picks, rebases, blame, and reflog.
+Networked Git commands are unavailable inside the workspace.
 
 To start from an existing project, enter a public GitHub repository URL and
-choose **Load public repo**. The dashboard service downloads the default
-branch's archive outside ShellSim, extracts bounded UTF-8 regular files, and
-passes only that file map into the simulation. It does not forward credentials,
-clone remote Git history, load submodules, or support private repositories.
-ShellSim itself has no real network access, and `git clone` is unavailable; the
-simulated repository receives a new baseline commit after import.
+choose **Clone public repo**. That explicit action performs one shallow,
+networked clone on the dashboard server. The service translates up to 32 recent
+first-parent commits into bounded ShellSim-native commits, then deletes the
+temporary clone. The model can use local commands such as `git log`, `git show`,
+`git diff`, and `git blame` against the imported text history without another
+network request. Merge topology, tags, binary and oversized file changes, and
+older commits are not imported. The service does not forward credentials, load
+submodules, retain a remote or `.git` directory, or support private
+repositories.
 
 Workspace inputs are limited to 500 files, 256 KiB per file, and 4 MiB total.
-Repository downloads are limited to 4 MiB compressed and 10,000 archive
-entries. Binary files and common generated directories such as `node_modules`,
-`.venv`, `target`, and `__pycache__` are skipped. A conversation may replay at
-most 32 commands totaling 128 KiB; each command is limited to 16 KiB. Each
-simulation is limited to 50 million CPU ticks, 64 MiB of memory, 16 MiB of disk,
-and 2 MiB of output, with the same 10-second outer worker timeout used for
-custom Python tools.
+Repository clones are limited to 64 MiB and 30 seconds. Imported history is
+limited to 32 commits and approximately 4 MiB of text changes; older commits
+are dropped first when necessary. Binary files and common generated directories
+such as `node_modules`, `.venv`, `target`, and `__pycache__` are skipped. A
+conversation may replay at most 32 commands totaling 128 KiB; each command is
+limited to 16 KiB. Each simulation is limited to 50 million CPU ticks, 64 MiB
+of memory, 16 MiB of disk, and 2 MiB of output, with the same 10-second outer
+worker timeout used for custom Python tools.
 
 After the endpoint becomes ready, `marin-serve iris` prints a capability URL.
 Possession of that URL authorizes inference and simulated Python tool calls.
-It also authorizes ShellSim commands and bounded public GitHub downloads. Share
+It also authorizes ShellSim commands and bounded public GitHub clones. Share
 the URL only with trusted users and treat it as a credential.

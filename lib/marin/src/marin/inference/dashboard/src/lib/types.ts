@@ -58,8 +58,16 @@ export interface ToolMessage {
 
 export type ChatMessage = UserMessage | AssistantMessage | ToolMessage
 
+export interface ImportedGitCommit {
+  message: string
+  author_name: string
+  author_email: string
+  changes: Record<string, string | null>
+}
+
 export interface ShellWorkspace {
   filesJson: string
+  commits: ImportedGitCommit[]
   history: string[]
   repositoryUrl: string
 }
