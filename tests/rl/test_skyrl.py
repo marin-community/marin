@@ -275,6 +275,26 @@ def test_skyrl_smoke_runs_training_data_as_rollout_only_evaluation() -> None:
     assert config.request.export_hf is False
 
 
+def test_skyrl_smoke_preserves_terminal_bench_workload() -> None:
+    spec = dataclasses.replace(
+        _spec(),
+        config_yaml=yaml.safe_dump(
+            {
+                "entrypoint": "terminal_bench",
+                "trainer": {"eval_interval": -1},
+                "generator": {"n_samples_per_prompt": 4, "sampling_params": {}},
+            }
+        ),
+    )
+    step = skyrl_smoke(spec, _execution())
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    smoke_config = yaml.safe_load(config.request.config_yaml)
+    assert smoke_config["entrypoint"] == "terminal_bench_generate"
+    assert config.request.train_data == ()
+    assert len(config.request.validation_data) == 1
+
+
 def test_terminal_policy_composes_into_shared_evaluation_step() -> None:
     rl = skyrl_step(_spec(), _execution(), export_hf=True)
     model = SkyRLEvaluationModel(

@@ -656,7 +656,13 @@ def skyrl_smoke(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[
     if not isinstance(config, dict):
         raise ValueError("SkyRL smoke configuration must be a YAML mapping")
 
-    config["entrypoint"] = "generate"
+    entrypoint = config.get("entrypoint", "standard")
+    if entrypoint == "standard":
+        config["entrypoint"] = "generate"
+    elif entrypoint == "terminal_bench":
+        config["entrypoint"] = "terminal_bench_generate"
+    else:
+        raise ValueError(f"SkyRL smoke does not support the {entrypoint!r} entrypoint")
     trainer = config.setdefault("trainer", {})
     generator = config.setdefault("generator", {})
     context_budget = config.get("context_budget", {})
