@@ -107,13 +107,17 @@ jobs:
           if [[ "${{ matrix.package }}" =~ ^(marin-haliax|marin-levanter|marin-core)$ ]]; then
             export JAX_NUM_CPU_DEVICES=8
           fi
+          pytest_diagnostics=()
+          if [[ "${{ matrix.package }}" == "marin-levanter" ]]; then
+            pytest_diagnostics=(-vv)
+          fi
           status=0
           uv run \
             --python ${{ matrix.python }} \
             --package ${{ matrix.package }} \
             ${{ matrix.extras }} \
             --group test \
-            pytest ${{ matrix.pytest_args }} \
+            pytest ${{ matrix.pytest_args }} "${pytest_diagnostics[@]}" \
             ${{ matrix.test_paths }} || status=$?
           [ "$status" -eq 5 ] && exit 0
           exit "$status"
