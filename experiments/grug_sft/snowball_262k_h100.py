@@ -3,10 +3,11 @@
 
 """Run a full-context Snowball SFT demo from pinned Hugging Face inputs.
 
-The graph downloads and converts the base model, transforms UltraChat's public
-``test_sft`` split, builds the chat cache, and trains on one 8xH100 node. No
-prebuilt Marin checkpoint, tokenizer, token store, or Marin bucket is required.
-All generated artifacts are written beneath the caller's ``MARIN_PREFIX``.
+The graph converts the base model, normalizes OpenThoughts Agent through the
+canonical SFT source registry, builds its token store, and trains on one
+8xH100 node. No prebuilt Marin checkpoint, tokenizer, token store, or Marin
+bucket is required. All generated artifacts are written beneath the caller's
+``MARIN_PREFIX``.
 
 For example, with an S3 bucket available to every worker::
 
@@ -14,9 +15,9 @@ For example, with an S3 bucket available to every worker::
       experiments.grug_sft.snowball_262k_h100 --version dev --run
 """
 
-from dataclasses import dataclass
+import dataclasses
 from datetime import timedelta
-from typing import Any
+from functools import partial
 
 import click
 import jmp
@@ -25,16 +26,21 @@ from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
-from levanter.data.text.datasets import LmDataConfig
+from levanter.data.mixture import StopStrategy
+from levanter.data.text.datasets import DatasetComponent, LmDataConfig
+from levanter.data.text.formats import TextLmDatasetFormat
+from levanter.tokenizers import TokenizerBackend
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
-from marin.execution.build_context import resolve_version
-from marin.execution.lazy import ArtifactStep, StepContext
-from marin.experiment.cli import build_options
-from marin.training.training import LevanterCheckpoint
+from marin.datakit.sft_sources import all_sft_sources
+from marin.execution.artifact import read_artifact, validate_version
+from marin.execution.step_runner import StepRunner
+from marin.execution.step_spec import StepSpec
+from marin.processing.tokenize.attributes import tokenize_attributes_step
+from marin.processing.tokenize.store_builder import LevanterStoreData, build_levanter_store_step
 from rigging.filesystem.storage_path import prefix_join
 
+from experiments.grug.moe.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe_hero_ep.model import GrugModelConfig
 from experiments.grug.moe_hero_ep.train import (
     GrugRunConfig,
@@ -43,16 +49,12 @@ from experiments.grug.moe_hero_ep.train import (
     grug_trainer_mesh_config,
     run_grug,
 )
-from experiments.grug_sft.snowball_hf_import import SnowballHfToGrugCheckpoint, snowball_hf_to_grug
+from experiments.grug_sft.snowball_hf_import import snowball_hf_to_grug
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig as LegacyGrugModelConfig
-from experiments.june_tpu_67b_a2b.moe.optimizer import GrugMoeMuonHConfig
-from experiments.sft.launcher import DatasetSpec, SFTSpec, sft_step
 
 HF_MODEL = "open-athena/snowball-67b-a2b-base-262k-qk175-skew8"
 HF_REVISION = "058ecaf27b9e4f37219df221a51e7d490d58ec3d"
-HF_DATASET = "HuggingFaceH4/ultrachat_200k"
-HF_DATASET_REVISION = "8049631c405ae6576f93f445c6b8166f76f5505a"
-HF_DATASET_SPLIT = "test_sft"
+DATA_SOURCE = "openthoughts-agent-sft-100k"
 CONVERSION_VERSION = "2026.09.21"
 DEFAULT_RUN_ID = "snowball-67b-262k-h100-demo"
 WANDB_PROJECT = "snowball_sft_demo"
@@ -61,15 +63,10 @@ CONTEXT_LENGTH = 262_144
 CONTEXT_SHARDS = 8
 BATCH_SIZE = 1
 DEFAULT_STEPS = 10
+DEFAULT_SAMPLE_COUNT = 256
 TENSORSTORE_CACHE_BYTES = 2 * 1024**3
-
-
-@dataclass(frozen=True)
-class NoThinkChatKwargs:
-    """Render this non-reasoning source with the model's explicit no-think mode."""
-
-    def __call__(self, _row: dict[str, Any]) -> dict[str, Any]:
-        return {"chat_template_kwargs": {"enable_thinking": False}}
+TOKENIZE_WORKERS = 32
+STORE_WORKERS = 32
 
 
 def legacy_model_config() -> LegacyGrugModelConfig:
@@ -138,7 +135,6 @@ def optimizer_config(steps: int) -> GrugMoeMuonHConfig:
         warmup=0,
         decay=max(1, steps // 10),
         lr_schedule="linear",
-        rmsnorm_to_adam=True,
     )
 
 
@@ -171,7 +167,7 @@ def run_config(
             id=run_id,
             mode="disabled",
             resume="allow",
-            tags=["sft", "snowball", "262k", "h100x8", "ultrachat", f"hf-{HF_REVISION[:12]}"],
+            tags=["sft", "snowball", "262k", "h100x8", "openthoughts-agent", f"hf-{HF_REVISION[:12]}"],
         ),
         watch=WatchConfig(interval=0),
         progress_watchdog=ProgressWatchdogConfig(
@@ -220,53 +216,66 @@ def run_config(
     )
 
 
-@dataclass(frozen=True)
-class HuggingFaceSnowballModel:
-    """Pinned HF Snowball export converted for the context-parallel trainer."""
+def _training_data(store_path: str, tokenizer: str) -> LmDataConfig:
+    store = read_artifact(store_path, LevanterStoreData)
+    train = store.splits.get("train")
+    if train is None or train.total_tokens <= 0:
+        raise ValueError(f"{DATA_SOURCE} produced no training tokens")
+    return LmDataConfig(
+        tokenizer=tokenizer,
+        cache_dir=None,
+        components={
+            DATA_SOURCE: DatasetComponent(
+                source=None,
+                cache_dir=store.cache_path,
+                format=TextLmDatasetFormat(),
+                pack=CONTEXT_LENGTH,
+            )
+        },
+        train_weights={DATA_SOURCE: 1.0},
+        auto_build_caches=False,
+        shuffle=True,
+        block_cross_document_attention=True,
+        stop_strategy=StopStrategy.RESTART_STRATEGY,
+    )
 
-    conversion: SnowballHfToGrugCheckpoint
-    run_id: str
 
-    def tokenizer_cache_key(self) -> str:
-        return f"{HF_MODEL}@{HF_REVISION}"
-
-    def resolve_tokenizer(self, ctx: StepContext) -> str:
-        return ctx.artifact_path(self.conversion.step)
-
-    @property
-    def run(self):
-        return run_grug
-
-    def init_deps(self) -> tuple[ArtifactStep, ...]:
-        return (self.conversion.step,)
-
-    def build_train_config(
-        self,
-        ctx: StepContext,
-        spec: SFTSpec,
-        data_config: LmDataConfig,
-        resources: ResourceConfig,
-        num_train_steps: int,
-    ) -> GrugRunConfig:
-        return run_config(
-            run_id=self.run_id,
-            steps=num_train_steps,
-            data=data_config,
-            output_path=ctx.output_path,
-            base_checkpoint=prefix_join(ctx.artifact_path(self.conversion.step), "checkpoints"),
+def _run_training(
+    output_path: str,
+    *,
+    run_id: str,
+    steps: int,
+    store_path: str,
+    tokenizer: str,
+    base_checkpoint: str,
+    resources: ResourceConfig,
+) -> None:
+    run_grug(
+        run_config(
+            run_id=run_id,
+            steps=steps,
+            data=_training_data(store_path, tokenizer),
+            output_path=output_path,
+            base_checkpoint=base_checkpoint,
             resources=resources,
         )
+    )
 
 
 def build_demo(
     *,
     run_id: str = DEFAULT_RUN_ID,
     steps: int = DEFAULT_STEPS,
-    version: str | None = None,
-) -> ArtifactStep[LevanterCheckpoint]:
-    """Build the HF model/data conversion and one-node SFT graph."""
+    version: str,
+    sample_count: int | None = DEFAULT_SAMPLE_COUNT,
+) -> StepSpec:
+    """Build the registered Datakit source, HF conversion, and SFT graph."""
     if steps <= 0:
         raise ValueError("Steps must be positive")
+    if sample_count is not None and sample_count <= 0:
+        raise ValueError("Sample count must be positive")
+    validate_version(version)
+
     conversion = snowball_hf_to_grug(
         HF_MODEL,
         hf_revision=HF_REVISION,
@@ -274,31 +283,24 @@ def build_demo(
         version=CONVERSION_VERSION,
         resources=ResourceConfig.with_cpu(cpu=32, ram="512g", disk="256g"),
     )
-    step_name = f"grug-sft/{run_id}"
-    resolved_version = resolve_version(step_name, version)
-    spec = SFTSpec(
-        name=step_name,
-        version=resolved_version,
-        model=HuggingFaceSnowballModel(conversion, run_id),
-        chat_template=MARIN_CHAT_TEMPLATE,
-        datasets=[
-            DatasetSpec(
-                slug="ultrachat-200k-test-sft",
-                hf_dataset_id=HF_DATASET,
-                revision=HF_DATASET_REVISION,
-                adapter_kwargs={
-                    "conversation_column": "messages",
-                    "extra_metadata_fn": NoThinkChatKwargs(),
-                },
-                weight=1.0,
-                splits=(HF_DATASET_SPLIT,),
-            )
-        ],
-        optimizer=optimizer_config(steps),
-        seq_len=CONTEXT_LENGTH,
-        batch_size=BATCH_SIZE,
-        num_train_steps=steps,
-        wandb_project=WANDB_PROJECT,
+    conversion_step = conversion.step.lower()
+    tokenizer = conversion.step.path()
+    source = all_sft_sources()[DATA_SOURCE]
+    tokenized = tokenize_attributes_step(
+        name=f"datakit/tokenize/sft-demo/{DATA_SOURCE}",
+        train_normalize=source.normalized,
+        tokenizer=tokenizer,
+        tokenizer_backend=TokenizerBackend.HF,
+        sample_count=sample_count,
+        max_workers=TOKENIZE_WORKERS,
+        worker_resources=ResourceConfig(cpu=2, ram="32g", disk="10g"),
+    )
+    tokenized = dataclasses.replace(tokenized, deps=[*tokenized.deps, conversion_step])
+    store = build_levanter_store_step(
+        name=f"datakit/store/sft-demo/{DATA_SOURCE}",
+        tokenize_steps=[tokenized],
+        max_workers=STORE_WORKERS,
+        worker_resources=ResourceConfig(cpu=2, ram="32g", disk="10g"),
     )
     resources = ResourceConfig.with_gpu(
         "H100",
@@ -308,15 +310,42 @@ def build_demo(
         disk="384g",
         preemptible=False,
     )
-    return sft_step(spec, resources)
+    return StepSpec(
+        name=f"grug-sft/{run_id}",
+        deps=[store, conversion_step],
+        fn=partial(
+            _run_training,
+            run_id=run_id,
+            steps=steps,
+            store_path=store.output_path,
+            tokenizer=tokenizer,
+            base_checkpoint=prefix_join(tokenizer, "checkpoints"),
+            resources=resources,
+        ),
+        hash_attrs={
+            "version": version,
+            "steps": steps,
+            "sample_count": sample_count,
+            "model": f"{HF_MODEL}@{HF_REVISION}",
+            "source": DATA_SOURCE,
+        },
+        override_output_path=f"grug-sft/{run_id}/{version}",
+    )
 
 
 @click.command()
 @click.option("--run-id", default=DEFAULT_RUN_ID, show_default=True)
 @click.option("--steps", type=click.IntRange(min=1), default=DEFAULT_STEPS, show_default=True)
-@build_options
-def main(run_id: str, steps: int) -> ArtifactStep[LevanterCheckpoint]:
-    return build_demo(run_id=run_id, steps=steps)
+@click.option("--version", required=True)
+@click.option("--sample-count", type=click.IntRange(min=1), default=DEFAULT_SAMPLE_COUNT, show_default=True)
+@click.option("--run", "do_run", is_flag=True)
+@click.option("--max-concurrent", type=click.IntRange(min=1), default=8, show_default=True)
+def main(run_id: str, steps: int, version: str, sample_count: int, do_run: bool, max_concurrent: int) -> None:
+    step = build_demo(run_id=run_id, steps=steps, version=version, sample_count=sample_count)
+    if do_run:
+        StepRunner().run([step], max_concurrent=max_concurrent)
+    else:
+        click.echo(step)
 
 
 if __name__ == "__main__":

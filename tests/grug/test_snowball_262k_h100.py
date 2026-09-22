@@ -13,7 +13,7 @@ from haliax.partitioning import set_mesh
 from levanter.checkpoint import save_checkpoint
 from levanter.data.text.datasets import LmDataConfig
 from levanter.grug.sharding import compact_grug_mesh
-from marin.execution.lazy import StepContext
+from marin.execution.step_spec import StepSpec
 
 from experiments.grug.moe_hero_ep import train as hero_train
 from experiments.grug.moe_hero_ep.model import GrugModelConfig as CurrentConfig
@@ -53,16 +53,33 @@ def test_snowball_run_uses_one_h100_node_for_one_context_sharded_example():
     assert checkpoint_paths[0] == "s3://test-output/run/checkpoints"
 
 
-def test_demo_builds_both_inputs_from_pinned_huggingface_revisions():
-    step = snowball_262k_h100.build_demo(version="2026.09.21.99")
-    dataset, conversion = step.deps
+def _step_graph(step: StepSpec) -> dict[str, StepSpec]:
+    graph: dict[str, StepSpec] = {}
 
-    dataset_config = dataset.build_config(StepContext.for_fingerprint((), ()))
-    assert dataset_config.source == snowball_262k_h100.HF_DATASET
-    assert dataset_config.revision == snowball_262k_h100.HF_DATASET_REVISION
-    assert dataset_config.splits == [snowball_262k_h100.HF_DATASET_SPLIT]
-    assert dataset_config.adapter.extra_metadata_fn({}) == {"chat_template_kwargs": {"enable_thinking": False}}
-    assert conversion.name.endswith("open-athena--snowball-67b-a2b-base-262k-qk175-skew8")
+    def visit(current: StepSpec) -> None:
+        graph[current.name] = current
+        for dep in current.deps:
+            visit(dep)
+
+    visit(step)
+    return graph
+
+
+def test_demo_routes_registered_openthoughts_source_through_datakit() -> None:
+    step = snowball_262k_h100.build_demo(version="2026.09.22.99", sample_count=3)
+    graph = _step_graph(step)
+
+    assert "raw/openthoughts-agent-sft-100k" in graph
+    assert "processed-chat/openthoughts-agent-sft-100k" in graph
+    assert "normalized-chat/openthoughts-agent-sft-100k" in graph
+    assert "rendered/sft/openthoughts-agent-sft-100k" in graph
+    assert "normalized/sft/openthoughts-agent-sft-100k" in graph
+    assert "datakit/tokenize/sft-demo/openthoughts-agent-sft-100k" in graph
+    assert "datakit/store/sft-demo/openthoughts-agent-sft-100k" in graph
+    conversion_name = "checkpoints/hf-to-stacked-grug/open-athena--snowball-67b-a2b-base-262k-qk175-skew8"
+    assert conversion_name in graph
+    tokenized = graph["datakit/tokenize/sft-demo/openthoughts-agent-sft-100k"]
+    assert graph[conversion_name] in tokenized.deps
 
     source = snowball_262k_h100.__file__
     assert source is not None
