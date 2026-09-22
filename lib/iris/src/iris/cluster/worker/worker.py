@@ -41,7 +41,6 @@ from iris.cluster.stats.tables import (
 )
 from iris.cluster.types import AcceleratorType, AttemptUid, CapacityType, JobName
 from iris.cluster.types import TaskAttempt as TaskAttemptId
-from iris.cluster.uv_cache import run_uv_cache_maintenance
 from iris.cluster.worker.dashboard import WorkerDashboard
 from iris.cluster.worker.env_probe import (
     EnvironmentProvider,
@@ -296,8 +295,6 @@ class Worker:
         if adopted == 0:
             self._cleanup_all_iris_containers()
 
-        self._threads.spawn(target=self._run_uv_cache_maintenance, name="uv-cache-maintenance")
-
         # Bring the HTTP server up last so the worker is ready to serve the
         # controller's Reconcile RPC the moment registration completes.
         # timeout_keep_alive=120: default 5s races with the controller's reconcile
@@ -331,18 +328,6 @@ class Worker:
         removed = self._runtime.remove_all_iris_containers()
         if removed > 0:
             logger.info("Startup cleanup: removed %d iris containers", removed)
-
-    def _active_uv_cache_consumers(self) -> set[str]:
-        with self._lock:
-            return {
-                str(attempt.attempt_uid)
-                for attempt in self._tasks
-                if attempt.status not in self._TERMINAL_STATES
-                or (attempt.thread is not None and attempt.thread.is_alive())
-            }
-
-    def _run_uv_cache_maintenance(self, stop_event: threading.Event) -> None:
-        run_uv_cache_maintenance(self._cache_dir, self._active_uv_cache_consumers, stop_event)
 
     def _register_stats_tables(self, log_client: LogClient) -> None:
         self._worker_stats_table = log_client.get_table(WORKER_STATS_NAMESPACE, IrisWorkerStat)

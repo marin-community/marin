@@ -26,7 +26,7 @@ from iris.cluster.platforms.k8s.coreweave_topology import (
 )
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.platforms.k8s.types import K8sResource, parse_k8s_quantity
-from iris.cluster.runtime.env import STANDARD_MOUNTS, UV_CACHE_PATH
+from iris.cluster.runtime.env import STANDARD_MOUNTS
 from iris.cluster.runtime.types import MountKind
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
@@ -951,8 +951,7 @@ def test_cache_mounts_are_host_backed_and_the_rest_are_not():
         volume = by_name[mount.name]
         if mount.kind is MountKind.CACHE:
             assert volume["hostPath"]["path"].startswith("/my-cache/")
-            expected_type = "Directory" if mount.container_path == UV_CACHE_PATH else "DirectoryOrCreate"
-            assert volume["hostPath"]["type"] == expected_type
+            assert volume["hostPath"]["type"] == "DirectoryOrCreate"
         else:
             assert "emptyDir" in volume
 

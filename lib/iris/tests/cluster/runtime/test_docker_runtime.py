@@ -4,15 +4,12 @@
 """Tests for DockerRuntime mount resolution, staging, and container creation."""
 
 import subprocess
-from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
 from iris.cluster.bundle import BundleStore
 from iris.cluster.runtime.docker import DockerRuntime, _security_flags
-from iris.cluster.runtime.env import UV_CACHE_PATH, UV_CACHE_REPAIR_MARKER
 from iris.cluster.runtime.types import ContainerConfig, MountKind, MountSpec
-from iris.cluster.uv_cache import maintain_uv_cache
 from iris.rpc import job_pb2
 
 
@@ -59,18 +56,6 @@ def test_resolve_mounts_cache_uses_cache_dir(tmp_path, runtime):
     assert resolved[0].host_path.startswith(str(tmp_path / "cache"))
     assert resolved[0].container_path == "/root/.cache/uv"
     assert resolved[0].kind == MountKind.CACHE
-
-
-def test_resolve_mounts_uv_cache_pins_generation_for_container_lifetime(tmp_path, runtime):
-    mounts = [MountSpec("uv-cache", container_path=UV_CACHE_PATH, kind=MountKind.CACHE)]
-    first_generation = Path(runtime.resolve_mounts(mounts)[0].host_path)
-    (first_generation / UV_CACHE_REPAIR_MARKER).touch()
-
-    maintain_uv_cache(tmp_path / "cache", set)
-    second_generation = Path(runtime.resolve_mounts(mounts)[0].host_path)
-
-    assert second_generation != first_generation
-    assert first_generation.is_dir()
 
 
 def test_resolve_mounts_output_uses_attempt_host_path(tmp_path, runtime):

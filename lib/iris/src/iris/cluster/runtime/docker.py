@@ -31,7 +31,7 @@ from rigging.timing import Timestamp
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.log_keys import STDERR_SOURCE, STDOUT_SOURCE
-from iris.cluster.runtime.env import VENV_PATH, render_setup_steps, write_workdir_files
+from iris.cluster.runtime.env import VENV_PATH, cache_host_dirname, render_setup_steps, write_workdir_files
 from iris.cluster.runtime.profile import (
     PROFILER_WATCHDOG_GRACE_SECONDS,
     ExecResult,
@@ -55,7 +55,6 @@ from iris.cluster.runtime.types import (
     MountSpec,
 )
 from iris.cluster.types import CapacityType
-from iris.cluster.uv_cache import cache_mount_path, current_uv_cache_generation
 from iris.cluster.worker.worker_types import LogLine, TaskLogs
 from iris.rpc import job_pb2
 from iris.rpc.proto_display import resolve_container_profile
@@ -908,7 +907,6 @@ class DockerRuntime:
 
     def __init__(self, cache_dir: Path, capacity_type: CapacityType | None = None) -> None:
         self._cache_dir = cache_dir
-        current_uv_cache_generation(cache_dir)
         # Drives whether per-container CPU is a hard cap (`--cpus`) or a soft
         # weight (`--cpu-shares`). On-demand workers use soft weights so small
         # entrypoint/coordinator containers can burst onto otherwise-idle host
@@ -984,7 +982,8 @@ class DockerRuntime:
                 # TMPFS mounts use Docker --tmpfs (per-container isolation); no host dir needed
                 result.append(ResolvedMount("", mount.container_path, mode, mount.kind))
             elif mount.kind == MountKind.CACHE:
-                host_dir = cache_mount_path(self._cache_dir, mount.container_path)
+                host_dir = self._cache_dir / cache_host_dirname(mount.container_path)
+                host_dir.mkdir(parents=True, exist_ok=True)
                 result.append(ResolvedMount(str(host_dir), mount.container_path, mode, mount.kind))
         return result
 

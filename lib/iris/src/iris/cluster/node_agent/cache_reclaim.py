@@ -13,8 +13,6 @@ from pathlib import Path
 from rigging import telemetry
 from rigging.timing import Duration, Timestamp
 
-from iris.cluster.uv_cache import is_uv_cache_namespace
-
 logger = logging.getLogger(__name__)
 
 CACHE_RECLAIM_INTERVAL = Duration.from_minutes(5)
@@ -79,7 +77,7 @@ def reclaim_cache(
     cutoff = (now or Timestamp.now()).add_ms(-max_age.to_ms())
     reclaimed = 0
     for namespace in cache_dir.iterdir():
-        if namespace.is_symlink() or not namespace.is_dir() or is_uv_cache_namespace(namespace):
+        if namespace.is_symlink() or not namespace.is_dir():
             continue
         for entry in namespace.iterdir():
             try:

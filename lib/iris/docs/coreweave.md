@@ -292,7 +292,7 @@ their Kubernetes service account inside the cluster.
 | `kubernetes_provider.service_account` | Optional service account assigned to task Pods. |
 | `kubernetes_provider.host_network` | Enables host networking and RDMA requests for GPU Pods. |
 | `kubernetes_provider.cache_dir` | Node-local cache root. CoreWeave configs use `/mnt/local/iris-cache`. |
-| `kubernetes_provider.cache_max_age` | Maximum time since the last file write or recorded access before the node-agent reclaims a top-level non-uv cache entry. Omit it to disable age-based reclamation. |
+| `kubernetes_provider.cache_max_age` | Maximum time since the last file write or recorded access before the node-agent reclaims a top-level cache entry. Omit it to disable reclamation. |
 | `kubernetes_provider.controller_address` | In-cluster controller address injected into task Pods. |
 | `kubernetes_provider.kueue.cluster_queue` | Pulumi-owned ClusterQueue to which Iris binds its LocalQueue. This is required. |
 | `kubernetes_provider.kueue.topologies` | Optional `group_by` to CoreWeave node-label mappings. |
@@ -365,24 +365,20 @@ Keep `cache_dir` on `/mnt/local`, the node's NVMe storage. The shared Hugging
 Face path is `HF_HUB_CACHE`; Iris deliberately leaves `HF_HOME` private because
 it may contain the submitter's token. The CoreWeave configs set
 `cache_max_age` to seven days. Every five minutes, the node-agent removes
-top-level entries from the Hugging Face, Cargo, and scratch caches whose files
-have not been modified or accessed within that age. The sweep excludes uv
-because task environments contain symlinks into its cache. It ignores directory
-access times because walking a directory updates them. File access times are
-best-effort: `noatime`, `O_NOATIME`, and some memory-mapped reads do not refresh
-them. The node-agent atomically renames an expired entry before recursive
-deletion so another task can refill the original path. Durable outputs belong
-in object storage.
+top-level entries whose files have not been modified or accessed within that age. The
+sweep ignores directory access times because walking a directory updates them. File
+access times are best-effort: `noatime`, `O_NOATIME`, and some memory-mapped reads do
+not refresh them. The node-agent atomically renames an expired entry before recursive
+deletion so another task can refill the original path. Durable outputs belong in
+object storage.
 
-The host path `uv-cache` is a symlink to a generation directory. When a
-setup-time uv install fails against the shared cache and succeeds against its
-task-local recovery cache, the task marks the shared generation for repair.
-The node-agent checks every 30 seconds and switches `uv-cache` to a new empty
-generation. Existing Pods retain their old bind mount, while new Pods use the
-new generation. Iris records the Pods that could reference the quarantined
-generation and removes it five minutes after the last recorded Pod exits.
-Rotation is limited to once per node per hour; a marker left during that hour
-is processed after the limit expires.
+If a uv install fails against the shared cache but succeeds with a task-local
+cache, Iris records that recovery on the node. Three distinct recoveries within
+30 minutes make the node-agent request CoreWeave's safe `production-powerreset`
+lifecycle operation. CoreWeave drains the node before rebooting it. The
+node-agent records the current boot ID before the request and clears the shared
+uv cache only after it starts on a different boot, so a node-agent restart alone
+cannot delete a live cache.
 
 `/cache` is unclaimed node-local scratch: a task that needs a real directory on
 the node instead of a bucket picks its own subdirectory there. The node-agent

@@ -585,6 +585,38 @@ class InMemoryK8sService:
         self._check_failure("get_json")
         return self._resources.get((resource.plural, name))
 
+    def patch_json(
+        self,
+        resource: K8sResource,
+        name: str,
+        patch: list[dict],
+        *,
+        subresource: str | None = None,
+    ) -> None:
+        """Apply the JSON Patch operations used by the production service."""
+        self._check_failure("patch_json")
+        manifest = self._resources.get((resource.plural, name))
+        if manifest is None:
+            raise KubectlError(f"{resource.plural}/{name} not found")
+        for operation in patch:
+            if operation["op"] not in {"add", "replace"}:
+                raise NotImplementedError(f"unsupported JSON Patch operation: {operation['op']}")
+            parts = [part.replace("~1", "/").replace("~0", "~") for part in operation["path"].split("/")[1:]]
+            parent = manifest
+            for part in parts[:-1]:
+                if isinstance(parent, list):
+                    parent = parent[int(part)]
+                else:
+                    parent = parent.setdefault(part, {})
+            final = parts[-1]
+            if isinstance(parent, list):
+                if final == "-":
+                    parent.append(operation["value"])
+                else:
+                    parent[int(final)] = operation["value"]
+            else:
+                parent[final] = operation["value"]
+
     def iter_json(
         self,
         resource: K8sResource,
