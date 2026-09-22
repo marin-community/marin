@@ -321,7 +321,7 @@ of repeating the Kubernetes object name.
 
 Getting a run onto an RL Post-training view is a MarinSkyRL-side question: which launch paths export
 the telemetry environment, what a run id should look like, and which training loop the run stamps on
-its records — each view's run picker offers only its own loop. MarinSkyRL documents it at
+its records. Each view's run picker offers only its own loop. MarinSkyRL documents it at
 `docs/grafana-rl-runs.md`.
 
 RL Post-training (async) (`marin-async-rl`) reads native MarinSkyRL records from
@@ -345,14 +345,11 @@ exporter/nonfinite totals per process), `memory`, `megatron`, `windows`, `overla
 `service`. The last two carry the interval joins of the two table panels, because a
 join over raw rollout calls or engine counter samples is only bounded on the Finelog
 side. Each view keeps its panel's series names, filters, units and empty-state text.
-Two things differ from a per-panel query. Display buckets are aligned to the window
-start rather than the epoch, are at least 30 s wide and number at most 360, so the
-requested interval widens on a long window. Each source has a row cap (100,000 for
-`core` and `metrics`, 50,000 for per-step and span sources, 10,000 for per-process
-ones) and the window is capped at 7 days; a breach is a 400 asking the operator to
-narrow the filters or time range rather than a partial result. The tests in
-`tests/test_async_rl_dashboard.py` hold every view to the per-panel SQL it replaces,
-kept in `tests/async_rl_panel_reference.json`, on two fixture stores.
+Display buckets start at the window start, are at least 30 s wide and number at most
+360, so a long window widens the requested interval. Each source has a row cap
+(100,000 for `core` and `metrics`, 50,000 for per-step and span sources, 10,000 for
+per-process ones) and the window is capped at 7 days. A request past either cap
+returns a 400 that asks the operator to narrow the filters or time range.
 
 Native token counters are summed; queue gauges use their latest observation.
 Concurrent producer waits can exceed elapsed time. Rollout completions are joined
@@ -370,7 +367,7 @@ state, and initialization/checkpoint/export peaks are not covered.
 Inference service rates use reset-safe imported token-counter deltas whose entire
 sample interval falls within a successful driver phase window. The rate divides
 by covered sample time; coverage shows how much of each phase was observed. Missing
-intervals are unknown, not zero service. Collector and unique engine identities
+intervals show as unknown. Collector and unique engine identities
 remain separate. Clock-adjusted windows are excluded; collection delay still limits
 alignment precision. No additional engine polling or vLLM changes are required.
 Core GPU-hours charge both configured roles for core step time, including waiting,

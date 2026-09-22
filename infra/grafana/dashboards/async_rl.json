@@ -1310,7 +1310,7 @@
       "id": 14,
       "type": "timeseries",
       "title": "Weight synchronization and policy offload walls",
-      "description": "Mean phase_duration_seconds for sync_weights, init_weight_sync_state, offload_policy_model_to_cpu and update_ref_with_policy, split by outcome and execution. sync_weights times broadcast_to_inference_engines; the rest time the one-time sync-state setup and the optimizer offload around it. Always on when telemetry is configured; these are elapsed waits, not GPU kernel time.",
+      "description": "Mean phase_duration_seconds for sync_weights, init_weight_sync_state, offload_policy_model_to_cpu and update_ref_with_policy, split by outcome and execution. sync_weights times broadcast_to_inference_engines; the rest time the one-time sync-state setup and the optimizer offload around it. Always on when telemetry is configured; these are elapsed waits and do not measure GPU kernel time.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -2111,7 +2111,7 @@
       "id": 23,
       "type": "timeseries",
       "title": "Evaluation scores",
-      "description": "training_metric_value for every eval/% metric: held-out scores mirrored from the evaluation tracker. Written only at evaluation steps, one point per metric and execution. Empty without trainer.training_metrics; blank between evaluation steps means no evaluation ran, not zero accuracy.",
+      "description": "training_metric_value for every eval/% metric: held-out scores mirrored from the evaluation tracker. Written only at evaluation steps, one point per metric and execution. Empty without trainer.training_metrics; a blank between evaluation steps means no evaluation ran.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -3714,7 +3714,7 @@
       "id": 38,
       "type": "timeseries",
       "title": "Useful tokens per configured role GPU-second",
-      "description": "training_metric_value for async/performance/loss_tokens_per_configured_policy_gpu_second and response_tokens_per_configured_inference_gpu_second. Computed by async_step_metrics from consumed work divided by the configured policy and inference GPU counts, not measured vLLM engine utilization. Empty without trainer.training_metrics.",
+      "description": "training_metric_value for async/performance/loss_tokens_per_configured_policy_gpu_second and response_tokens_per_configured_inference_gpu_second. Computed by async_step_metrics from consumed work divided by the configured policy and inference GPU counts; it does not measure vLLM engine utilization. Empty without trainer.training_metrics.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -4451,7 +4451,7 @@
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
       },
-      "description": "Fraction of consumed loss tokens (async/performance/consumed_loss_tokens) that fall in a batch eligible for the uniform-staleness table above. Computed from the same training_metric_value rows, over the selected runs, jobs, executions and window. Empty without trainer.training_metrics; null means no observed tokens, not zero or full coverage.",
+      "description": "Fraction of consumed loss tokens (async/performance/consumed_loss_tokens) that fall in a batch eligible for the uniform-staleness table above. Computed from the same training_metric_value rows, over the selected runs, jobs, executions and window. Empty without trainer.training_metrics; null means no tokens were observed.",
       "fieldConfig": {
         "defaults": {
           "decimals": 1,
@@ -5643,7 +5643,7 @@
       "id": 58,
       "type": "timeseries",
       "title": "Gradient direction persistence",
-      "description": "training_metric_value for policy/grad_cosine, grad_cosine_min/max and grad_norm_reduced/raw_grad_norm: cosine similarity between successive gradients and their norms. Logged by the policy worker's gradient-direction tracker after each optimizer step. Empty without trainer.training_metrics.",
+      "description": "training_metric_value for policy/grad_cosine, grad_cosine_min/max and grad_norm_reduced/raw_grad_norm: cosine similarity between successive gradients and their norms. Logged by the policy worker after each optimizer step. Empty without trainer.training_metrics; the cosine series also need trainer.algorithm.grad_cosine.enabled.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"

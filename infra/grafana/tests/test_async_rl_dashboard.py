@@ -20,8 +20,6 @@ from starlette.testclient import TestClient
 DASHBOARD = json.loads((Path(__file__).parents[1] / "dashboards/async_rl.json").read_text())
 PANELS = {panel["title"]: panel for panel in DASHBOARD["panels"] if "targets" in panel}
 ENDPOINT = "/v1/async-rl/overview"
-# The per-panel Finelog SQL each view replaces, keyed by panel title. The equivalence test below
-# holds every view to this reference on the fixture store.
 
 # The finelog namespace every async panel reads, quoted the way the dashboards spell it.
 TABLE = '"telemetry_v1.marinskyrl"'
