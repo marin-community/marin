@@ -72,7 +72,7 @@ _NATIVE_STDERR_LOG = "stderr.log"
 _CUDA_NVCC_DISTRIBUTION = "nvidia-cuda-nvcc"
 # CoreWeave task images provide the NVIDIA driver but not nvcc. FlashInfer JIT-compiles SM100
 # attention, MoE, sampling, and all-reduce kernels even when vLLM itself comes from a native wheel.
-_CUDA_TOOLCHAIN_PACKAGES = (_CUDA_NVCC_DISTRIBUTION, "nvidia-cuda-crt", "nvidia-nvvm")
+_CUDA_TOOLCHAIN_PACKAGES = (_CUDA_NVCC_DISTRIBUTION, "nvidia-cuda-crt", "nvidia-cuda-nvrtc", "nvidia-nvvm")
 _CUDA_NVCC_BOOTSTRAP = f"""\
 import importlib.metadata
 import os
@@ -91,6 +91,10 @@ cudart = cuda_lib / "libcudart.so.13"
 cudart_link = cuda_lib / "libcudart.so"
 if cudart.is_file() and not cudart_link.exists():
     cudart_link.symlink_to(cudart.name)
+nvrtc = cuda_lib / "libnvrtc.so.13"
+nvrtc_link = cuda_lib / "libnvrtc.so"
+if nvrtc.is_file() and not nvrtc_link.exists():
+    nvrtc_link.symlink_to(nvrtc.name)
 os.environ["CUDA_HOME"] = str(cuda_home)
 os.environ["PATH"] = os.pathsep.join((str(nvcc.parent), os.environ["PATH"]))
 os.execvp(sys.argv[1], sys.argv[1:])

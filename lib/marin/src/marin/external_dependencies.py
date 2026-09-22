@@ -10,6 +10,7 @@ come from the root ``uv.lock``.
 """
 
 from dataclasses import dataclass
+from types import MappingProxyType
 
 
 @dataclass(frozen=True)
@@ -52,10 +53,12 @@ class VllmGpuRelease:
     wheels: tuple[VllmGpuWheel, ...]
 
 
-CUDA_TOOLCHAIN_VERSION_BY_BACKEND = {
-    "cu130": "13.0.88",
-    "cu132": "13.2.86",
-}
+CUDA_TOOLCHAIN_VERSION_BY_BACKEND = MappingProxyType(
+    {
+        "cu130": "13.0.88",
+        "cu132": "13.2.86",
+    }
+)
 
 
 EVALCHEMY = ExternalDependency(

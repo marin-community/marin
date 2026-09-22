@@ -237,8 +237,9 @@ def test_isolated_cuda_vllm_marin_fork_uses_verified_wheel(monkeypatch, machine)
     assert "--torch-backend" not in cmd
     requirements = [cmd[index + 1] for index, value in enumerate(cmd) if value == "--with"]
     toolchain = {requirement.partition("==")[0]: requirement.partition("==")[2] for requirement in requirements}
-    assert set(toolchain) >= {"nvidia-cuda-nvcc", "nvidia-cuda-crt", "nvidia-nvvm"}
-    assert {toolchain[package] for package in ("nvidia-cuda-nvcc", "nvidia-cuda-crt", "nvidia-nvvm")} == {
+    toolchain_packages = {"nvidia-cuda-nvcc", "nvidia-cuda-crt", "nvidia-cuda-nvrtc", "nvidia-nvvm"}
+    assert set(toolchain) >= toolchain_packages
+    assert {toolchain[package] for package in toolchain_packages} == {
         CUDA_TOOLCHAIN_VERSION_BY_BACKEND[VLLM_GPU_RELEASE.torch_backend]
     }
     bootstrap_index = cmd.index("-c")
@@ -272,6 +273,8 @@ def test_isolated_cuda_vllm_bootstrap_exposes_wheel_nvcc(tmp_path):
     cuda_lib.mkdir()
     cudart = cuda_lib / "libcudart.so.13"
     cudart.touch()
+    nvrtc = cuda_lib / "libnvrtc.so.13"
+    nvrtc.touch()
     dist_info = site_packages / "nvidia_cuda_nvcc-13.0.88.dist-info"
     dist_info.mkdir()
     (dist_info / "METADATA").write_text("Metadata-Version: 2.4\nName: nvidia-cuda-nvcc\nVersion: 13.0.88\n")
@@ -295,6 +298,7 @@ def test_isolated_cuda_vllm_bootstrap_exposes_wheel_nvcc(tmp_path):
     assert set(requirements) >= {
         "nvidia-cuda-nvcc==13.0.88",
         "nvidia-cuda-crt==13.0.88",
+        "nvidia-cuda-nvrtc==13.0.88",
         "nvidia-nvvm==13.0.88",
     }
     assert "addressing_style = virtual" in Path(launcher.env()["AWS_CONFIG_FILE"]).read_text()
@@ -315,6 +319,7 @@ def test_isolated_cuda_vllm_bootstrap_exposes_wheel_nvcc(tmp_path):
     assert observed["path"].split(os.pathsep)[0] == str(nvcc.parent.resolve())
     assert (nvcc.parent.parent / "lib64").resolve() == cuda_lib.resolve()
     assert (cuda_lib / "libcudart.so").resolve() == cudart.resolve()
+    assert (cuda_lib / "libnvrtc.so").resolve() == nvrtc.resolve()
 
 
 def test_isolated_cuda_vllm_upstream_requires_version():
