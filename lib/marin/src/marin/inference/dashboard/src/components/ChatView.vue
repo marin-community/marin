@@ -8,7 +8,7 @@ import {
   isAbortError,
   requestCompletion,
 } from '../lib/api'
-import { chatTemplateRequestFields } from '../lib/chat_template'
+import { chatRequestFields } from '../lib/chat_template'
 import { CHAT_EXAMPLES } from '../lib/examples'
 import type { ChatExample } from '../lib/examples'
 import { modelMessages } from '../lib/python_tools'
@@ -173,7 +173,7 @@ async function runToolExchange(conversation: Conversation, pythonTools: string, 
       }
       tools.push(BASH_TOOL_DEFINITION)
     }
-    const templateFields = chatTemplateRequestFields(
+    const templateFields = chatRequestFields(
       conversation.thinkingMode,
       conversation.customInstructions,
       tools,
@@ -273,7 +273,7 @@ async function complete(
   reply: AssistantMessage,
   messages: ModelMessage[],
   tools: ToolDefinition[],
-  templateFields: ReturnType<typeof chatTemplateRequestFields>,
+  templateFields: ReturnType<typeof chatRequestFields>,
   signal: AbortSignal,
 ) {
   let rawContent = ''
