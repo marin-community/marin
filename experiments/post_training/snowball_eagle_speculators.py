@@ -132,6 +132,9 @@ _AGENTIC_BENCHMARK_SEED = 71
 _BENCHMARK_MEMORY = "512GB"
 _BENCHMARK_DISK = "2TB"
 _BENCHMARK_DISTRIBUTED_TIMEOUT = 60
+_DRAFT_TASK_CPU = 96
+_DRAFT_TASK_MEMORY = "512g"
+_DRAFT_TASK_DISK = "1t"
 # Speculators installs torchaudio through its multimodal dependencies. Pin the
 # CUDA 12.8 wheel used by the Iris H100 PyTorch runtime so Transformers imports.
 _TORCHAUDIO_CU128_REQUIREMENT = (
@@ -579,7 +582,13 @@ def _capture_step(
         artifact_type=Artifact,
         run=remote(
             capture_hidden_states,
-            resources=ResourceConfig.with_gpu(GPU_VARIANT, count=execution.gpu_count, cpu=96, ram="512g", disk="1t"),
+            resources=ResourceConfig.with_gpu(
+                GPU_VARIANT,
+                count=execution.gpu_count,
+                cpu=_DRAFT_TASK_CPU,
+                ram=_DRAFT_TASK_MEMORY,
+                disk=_DRAFT_TASK_DISK,
+            ),
             pip_packages=[SPECULATORS.requirement(), _TORCHAUDIO_CU128_REQUIREMENT],
             max_retries_failure=2,
         ),
@@ -619,7 +628,13 @@ def _draft_step(
         artifact_type=EagleDraftArtifact,
         run=remote(
             train_draft,
-            resources=ResourceConfig.with_gpu(GPU_VARIANT, count=execution.gpu_count, cpu=96, ram="512g", disk="1t"),
+            resources=ResourceConfig.with_gpu(
+                GPU_VARIANT,
+                count=execution.gpu_count,
+                cpu=_DRAFT_TASK_CPU,
+                ram=_DRAFT_TASK_MEMORY,
+                disk=_DRAFT_TASK_DISK,
+            ),
             pip_packages=[SPECULATORS.requirement(), _TORCHAUDIO_CU128_REQUIREMENT],
         ),
         build_config=build_config,
@@ -824,9 +839,10 @@ def build_agentic_rl_benchmark(
 
 
 def build_pipeline() -> SnowballDraftPipeline:
-    """Build the offline capture and draft-training artifact graph."""
+    """Build draft SFT and matched Q/A and agentic rollout benchmarks."""
     sft = snowball_eagle_sft()
     pool = pool_step(POOL_ARTIFACT_NAME, RL_DATA_VERSION)
+    arms = (("control", None), ("starting", sft.initial_draft), ("trained", sft.draft))
     benchmarks = {
         f"{split}-{arm}": build_rl_benchmark(
             pool=pool,
@@ -835,14 +851,9 @@ def build_pipeline() -> SnowballDraftPipeline:
             draft=draft,
         )
         for split, data_file in (("production", TRAIN_FILENAME), ("heldout", VALIDATION_FILENAME))
-        for arm, draft in (("control", None), ("starting", sft.initial_draft), ("trained", sft.draft))
+        for arm, draft in arms
     }
-    benchmarks.update(
-        {
-            f"agentic-{arm}": build_agentic_rl_benchmark(label=arm, draft=draft)
-            for arm, draft in (("control", None), ("starting", sft.initial_draft), ("trained", sft.draft))
-        }
-    )
+    benchmarks.update({f"agentic-{arm}": build_agentic_rl_benchmark(label=arm, draft=draft) for arm, draft in arms})
     return SnowballDraftPipeline(
         conversations=sft.conversations,
         initial_draft=sft.initial_draft,

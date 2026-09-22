@@ -138,10 +138,7 @@ SNOWBALL_POLICY = PolicySpec(
     tokenizer_uri=MARIN_TOKENIZER,
     tokenizer_revision=MARIN_TOKENIZER_REVISION,
     model_relative_path="",
-    overrides=(
-        f"generator.inference_engine_data_parallel_size={GPUS_PER_NODE}",
-        f"generator.inference_engine_expert_parallel_size={GPUS_PER_NODE}",
-    ),
+    overrides=(),
     task_memory="512GB",
     serve_gpus=GPUS_PER_NODE,
     serve_memory="512g",

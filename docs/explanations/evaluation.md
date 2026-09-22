@@ -77,7 +77,7 @@ target-model hidden states, and trains the draft. `sft_draft_model` defines the 
 graph; `snowball_eagle_sft` supplies the Snowball model, tokenizer, layer selection, and artifact
 names.
 
-Hidden-state capture publishes completed files as it runs and restores them on retry. A later
+Hidden-state capture publishes a resumable artifact when each attempt exits and restores it on retry. A later
 training version can reuse the capture artifact when only the optimizer or epoch count changes.
 Changing the target checkpoint produces a new capture because the target model is an explicit
 artifact dependency.

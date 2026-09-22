@@ -78,7 +78,7 @@ class _CaptureEnvironment:
         return None
 
 
-def _capture_config(*, sequence_length: int = 32768, output_path: str = "published") -> HiddenStateCaptureConfig:
+def _capture_config(*, output_path: str = "published") -> HiddenStateCaptureConfig:
     return HiddenStateCaptureConfig(
         dataset_path="dataset.jsonl",
         target_model="target",
@@ -86,7 +86,7 @@ def _capture_config(*, sequence_length: int = 32768, output_path: str = "publish
         output_path=output_path,
         target_layer_ids=(2, 13, 23),
         verifier_num_hidden_layers=26,
-        sequence_length=sequence_length,
+        sequence_length=32768,
         data_parallel_size=8,
         concurrency=64,
         max_samples=None,
