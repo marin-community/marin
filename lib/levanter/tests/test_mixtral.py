@@ -311,7 +311,7 @@ def test_mixtral_dense_router_gradient_disabled_in_inference():
 #     model = MixtralLMHeadModel.init(Vocab=Vocab, config=config, key=random.PRNGKey(0))
 #
 #     with tempfile.TemporaryDirectory() as tmpdir:
-#         converter.save_pretrained(model, f"{tmpdir}/lev_model", save_reference_code=False)
+#         converter.save_pretrained(model, f"{tmpdir}/lev_model")
 #         torch_model = MixtralForCausalLM.from_pretrained(f"{tmpdir}/lev_model")
 #         torch_model.eval()
 #
@@ -400,7 +400,7 @@ def test_mixtral_roundtrip(local_gpt2_tokenizer_path):
         assert torch_out.shape == jax_out.shape, f"{torch_out.shape} != {jax_out.shape}"
         assert np.isclose(torch_out, np.array(jax_out), rtol=1e-4, atol=1e-4).all(), f"{torch_out} != {jax_out}"
 
-        converter.save_pretrained(model, f"{tmpdir}/lev_model", save_reference_code=False, save_tokenizer=False)
+        converter.save_pretrained(model, f"{tmpdir}/lev_model", save_tokenizer=False)
         torch_model2 = AutoModelForCausalLM.from_pretrained(f"{tmpdir}/lev_model")
         torch_model2.eval()
 

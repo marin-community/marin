@@ -422,6 +422,10 @@ You can also use this script to evaluate on other datasets by modifying the conf
 
 ## Huggingface Export
 
+Exports contain model weights, configuration, and tokenizer files. They do not copy Python code
+from the reference repository. Custom architectures such as Snowball require a serving backend
+that implements the architecture.
+
 ### Exporting during Training
 
 You can export to HF during training using the `hf_save_steps` and `hf_save_path` options in your config. You can
