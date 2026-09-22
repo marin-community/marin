@@ -262,7 +262,10 @@ def _fa4_cute_attention_forward_sharded(
         )
 
     sequence_axes = q_dims[1]
-    output_spec = P(*(axes or None for axes in q_dims))
+    # Return Q's own spec, including length-1 axes: explicit sharding compares axis names, so an
+    # output that drops them cannot be combined with the caller's activations.
+    q_spec = tuple(partition_spec_of(q))
+    output_spec = P(*q_spec, *((None,) * (q.ndim - len(q_spec))))
     # Bounds use global key positions but are sliced alongside their query rows.
     metadata_spec = P(*output_spec[:2])
     lower_bounds = reshard(lower_bounds, metadata_spec)

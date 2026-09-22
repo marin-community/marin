@@ -18,6 +18,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jmp
+import levanter.grug.attention._fa4_cute as fa4_cute
 import numpy as np
 import optax
 import pytest
@@ -1031,6 +1032,40 @@ def test_inline_watch_computes_stats_on_every_train_step(monkeypatch):
     assert step_one_stats is not None
     np.testing.assert_allclose(step_zero_stats["grad/norm/total"], 4.0)
     np.testing.assert_allclose(step_one_stats["grad/norm/total"], 3.2)
+
+
+def _fake_fa4_forward(q, k, v, lower_bounds, valid, *, sm_scale, kernel_config, q_offset):
+    del k, v, lower_bounds, valid, sm_scale, kernel_config, q_offset
+    return q
+
+
+# The hero mesh (11 racks x EP64) leaves `data` at length 1; the second shape partitions every batch axis.
+@pytest.mark.parametrize("axis_sizes", [(2, 1, 1, 2, 1), (1, 2, 1, 2, 1)])
+def test_fa4_attention_traces_through_hero_loss_and_gradient(monkeypatch, axis_sizes):
+    monkeypatch.setattr(jax, "default_backend", lambda: "gpu")
+    monkeypatch.setattr(fa4_cute, "_segmented_kernel_config", lambda head_dim: object())
+    monkeypatch.setattr(fa4_cute, "fa4_cute_attention_forward", _fake_fa4_forward)
+    mesh = AbstractMesh(
+        axis_sizes=axis_sizes,
+        axis_names=("replica_dcn", "data", "context", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 5,
+    )
+    config = dataclasses.replace(_latent_config(), attention_implementation="gpu_fa4_cute")
+    batch_sharding = NamedSharding(mesh, P(model._BATCH_AXES, None))
+    tokens = jax.ShapeDtypeStruct((4, config.max_seq_len), jnp.int32, sharding=batch_sharding)
+    loss_weight = jax.ShapeDtypeStruct((4, config.max_seq_len), jnp.float32, sharding=batch_sharding)
+
+    def loss_and_grad(token_ids, weight):
+        transformer = model.Transformer.init(config, key=jax.random.key(0))
+        return eqx.filter_value_and_grad(lambda m: m.next_token_loss(token_ids, weight, mask=AttentionMask.causal()))(
+            transformer
+        )
+
+    with use_abstract_mesh(mesh):
+        loss, grads = eqx.filter_eval_shape(loss_and_grad, tokens, loss_weight)
+
+    assert loss.shape == ()
+    assert grads.output_proj.shape == (config.hidden_dim, config.vocab_size)
 
 
 def test_scalar_state_uses_the_active_mesh():
