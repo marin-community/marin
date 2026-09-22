@@ -107,7 +107,8 @@ _BENCHMARK_MEMORY = "512GB"
 _BENCHMARK_DISK = "2TB"
 _MAX_NUM_SEQS = 16
 _MAX_NUM_BATCHED_TOKENS = 16_384
-# The 512-example packed corpus yields one optimizer update per epoch.
+# Deliberately fit the small exact-target corpus hard enough to test whether
+# target adaptation can move the draft before scaling data collection.
 _SFT_EPOCHS = 32
 _DRAFT_TASK_CPU = 96
 _DRAFT_TASK_MEMORY = "512g"
