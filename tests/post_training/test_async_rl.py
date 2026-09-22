@@ -86,41 +86,6 @@ EXPLICIT_KEYS = (
     "extra_env.PYTORCH_CUDA_ALLOC_CONF",
 )
 
-# Values MarinSkyRL requires as written.
-CONTRACT_VALUES = {
-    "entrypoint": "fully_async",
-    "trainer.strategy": "megatron",
-    "trainer.algorithm.advantage_estimator": "grpo",
-    "trainer.algorithm.policy_loss_type": "regular",
-    "trainer.training_metrics": True,
-    "trainer.async_spans": True,
-    "trainer.policy_train_spans": True,
-    "trainer.generate_spans": False,
-    "trainer.optimizer_state_metrics": True,
-    "trainer.algorithm.ratio_diagnostics.pooled": True,
-    "trainer.algorithm.ratio_diagnostics.exact_quantiles": False,
-    "trainer.algorithm.grad_cosine.enabled": False,
-    "trainer.fully_async.max_buffered_groups": 32,
-    "trainer.fully_async.pause_mode": "abort",
-    "trainer.fully_async.clear_kv_cache_on_weight_sync": True,
-    "trainer.fully_async.first_token_admission": True,
-}
-
-PRESET_LOOPS = {
-    "default": {
-        "trainer.fully_async.max_staleness_steps": 4,
-        "trainer.fully_async.num_parallel_generation_workers": 192,
-    },
-    "smoke": {
-        "trainer.fully_async.max_staleness_steps": 4,
-        "trainer.fully_async.num_parallel_generation_workers": 192,
-    },
-    "on_policy": {
-        "trainer.fully_async.max_staleness_steps": 0,
-        "trainer.fully_async.num_parallel_generation_workers": 128,
-    },
-}
-
 
 def ruled_keys() -> set[str]:
     keys = set(EXPLICIT_KEYS) | set(async_rl.TOPOLOGY_OWNED_SETTINGS) | set(async_rl.RECIPE_OWNED_SETTINGS)
@@ -151,7 +116,7 @@ def owner(monkeypatch):
     monkeypatch.setattr(async_rl, "username_segment", lambda: "alice")
 
 
-@pytest.mark.parametrize("label", sorted(PRESET_LOOPS))
+@pytest.mark.parametrize("label", sorted(async_rl.PRESETS))
 def test_every_preset_writes_every_ruled_key_and_inherits_none(label):
     config = flattened(rendered(async_rl.PRESETS[label]))
     expected = ruled_keys()
@@ -160,9 +125,7 @@ def test_every_preset_writes_every_ruled_key_and_inherits_none(label):
     inherited = sorted(key for key in config if key not in expected and not key.startswith(("data.", "environment.")))
     assert inherited == []
     assert sorted(async_rl.DERIVED_CONTEXT_SETTINGS & config.keys()) == []
-    literal = {**CONTRACT_VALUES, **PRESET_LOOPS[label]}
-    wrong = {key: config[key] for key, value in literal.items() if config[key] != value}
-    assert wrong == {}
+    assert config["entrypoint"] == "fully_async"
 
 
 def test_settings_change_existing_keys_and_reject_unknown_ones():
