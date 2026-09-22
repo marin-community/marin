@@ -81,7 +81,6 @@ from experiments.post_training.curriculum_rl.launch import (
 )
 from experiments.post_training.curriculum_rl.pool import TRAIN_FILENAME, VALIDATION_FILENAME, pool_step
 
-VERSION = "2026.09.21"
 CORPUS_EVALS = (
     "olympiadbench",
     "gsm8k",
@@ -412,7 +411,7 @@ def _qa_rollout_steps() -> tuple[ArtifactStep[FineStoreEvalchemyResult], ...]:
                 ),
                 tokenizer=TARGET_TOKENIZER,
                 discover_latest_checkpoint=False,
-                version=VERSION,
+                version=None,
             )
         )
     return tuple(steps)
@@ -420,11 +419,13 @@ def _qa_rollout_steps() -> tuple[ArtifactStep[FineStoreEvalchemyResult], ...]:
 
 def _agentic_rollout_steps() -> tuple[ArtifactStep[EvaluationResult], ...]:
     model = _target_evaluation_model()
+    artifact_name = f"evals/{model.model.name}/{AGENTIC_CORPUS_EVALS}"
+    base_version = resolve_version(artifact_name, None)
     return tuple(
         evaluation_step(
             model,
             AGENTIC_CORPUS_EVALS,
-            version=f"{VERSION}.{repetition}",
+            version=f"{base_version}.{repetition}",
             limit=AGENTIC_CORPUS_LIMIT_PER_TASK,
             accelerator=f"{GPU_VARIANT}x{GPUS_PER_NODE}",
             submission_cluster=CLUSTER,
