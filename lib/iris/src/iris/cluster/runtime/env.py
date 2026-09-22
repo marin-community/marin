@@ -43,6 +43,7 @@ VENV_PATH = f"{WORKDIR_PATH}/.venv"
 # bring its own image: build_common_iris_env points each tool here explicitly, so
 # nothing depends on that image's HOME.
 UV_CACHE_PATH = "/uv/cache"
+UV_CACHE_REPAIR_MARKER = ".iris-repair-needed"
 HF_HUB_CACHE_PATH = "/hf/cache"
 CARGO_HOME_PATH = "/cargo"
 # Unclaimed node-local scratch, for anything that needs a real directory on the
@@ -90,6 +91,8 @@ _UV_WRAPPER_SCRIPT = r"""#!/bin/bash
 set -u
 recovery_cache="$IRIS_WORKDIR/.uv-recovery-cache"
 recovery_marker="$IRIS_WORKDIR/.iris-uv-cache-recovery"
+repair_signal_name="__IRIS_UV_CACHE_REPAIR_MARKER__"
+shared_cache="${UV_CACHE_DIR:-}"
 
 case "${1:-} ${2:-}" in
   "sync "*|"pip install") ;;
@@ -106,8 +109,17 @@ fi
 
 printf '%s\n' "${UV_CACHE_DIR:-}" > "$recovery_marker"
 echo 'uv install failed; retrying with task-local cache' >&2
-  exec env UV_CACHE_DIR="$recovery_cache" "$IRIS_UV_EXECUTABLE" "$@" --reinstall
-"""
+env UV_CACHE_DIR="$recovery_cache" "$IRIS_UV_EXECUTABLE" "$@" --reinstall
+retry_status=$?
+if [ "$retry_status" -eq 0 ]; then
+  if [ -z "$shared_cache" ] || ! touch "$shared_cache/$repair_signal_name"; then
+    echo "uv recovered locally but could not signal shared-cache repair" >&2
+  fi
+fi
+exit "$retry_status"
+""".replace(
+    "__IRIS_UV_CACHE_REPAIR_MARKER__", UV_CACHE_REPAIR_MARKER
+)
 
 
 def render_setup_steps(scripts: Sequence[str]) -> list[str]:

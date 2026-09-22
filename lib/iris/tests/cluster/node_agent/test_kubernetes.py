@@ -14,6 +14,7 @@ from iris.cluster.node_agent.kubernetes import (
     KubeletScrapeError,
     NodeStatsScraper,
     TaskStatsCollector,
+    active_task_pod_uids,
     kubelet_resource_metrics,
     parse_dcgm,
     parse_kubelet_resource_metrics,
@@ -22,7 +23,7 @@ from iris.cluster.node_agent.kubernetes import (
 )
 from iris.cluster.node_agent.metrics import NodeMetrics, NodeTarget
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
-from iris.cluster.platforms.k8s.types import K8sResource
+from iris.cluster.platforms.k8s.types import IRIS_KUBERNETES_RUNTIME, IRIS_MANAGED_LABEL, IRIS_RUNTIME_LABEL, K8sResource
 from iris.test_util import FakeStatsTable
 
 NODE_EXPORTER_TEXT = """
@@ -75,6 +76,32 @@ DCGM_FI_DEV_POWER_MGMT_LIMIT{{{_DCGM_GPU1}}} 700
 """
 
 _MIB = 1024 * 1024
+
+
+def test_active_task_pod_uids_excludes_terminal_and_other_node_pods():
+    k8s = InMemoryK8sService(namespace="iris")
+    for name, uid, node, phase in (
+        ("running", "uid-running", "node-a", "Running"),
+        ("pending", "uid-pending", "node-a", "Pending"),
+        ("finished", "uid-finished", "node-a", "Succeeded"),
+        ("other-node", "uid-other", "node-b", "Running"),
+    ):
+        k8s.apply_json(
+            {
+                "apiVersion": "v1",
+                "kind": "Pod",
+                "metadata": {
+                    "name": name,
+                    "namespace": "iris",
+                    "uid": uid,
+                    "labels": {IRIS_MANAGED_LABEL: "true", IRIS_RUNTIME_LABEL: IRIS_KUBERNETES_RUNTIME},
+                },
+                "spec": {"nodeName": node},
+                "status": {"phase": phase},
+            }
+        )
+
+    assert active_task_pod_uids(k8s, "node-a") == {"uid-running", "uid-pending"}
 
 
 def test_parse_prometheus_handles_labels_values_and_comments():

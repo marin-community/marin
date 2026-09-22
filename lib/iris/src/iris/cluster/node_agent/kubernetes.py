@@ -42,6 +42,7 @@ from iris.cluster.platforms.k8s.types import (
     KubectlError,
 )
 from iris.cluster.stats.tables import TASK_STATS_NAMESPACE, IrisTaskStat, build_task_stat
+from iris.cluster.uv_cache import ensure_uv_cache_layout, run_uv_cache_maintenance
 from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
@@ -890,13 +891,37 @@ def _collect_telemetry(config: IrisClusterConfig, k8s: CloudK8sService, node_nam
         telemetry.shutdown(5.0)
 
 
+def active_task_pod_uids(k8s: K8sService, node_name: str) -> set[str]:
+    """Return task pods that may still hold this node's current cache mount."""
+    pods = k8s.list_json(
+        K8sResource.PODS,
+        labels={IRIS_MANAGED_LABEL: "true", IRIS_RUNTIME_LABEL: IRIS_KUBERNETES_RUNTIME},
+        field_selector=f"spec.nodeName={node_name}",
+    )
+    terminal_phases = {"Failed", "Succeeded"}
+    return {
+        uid
+        for pod in pods
+        if pod.get("status", {}).get("phase") not in terminal_phases
+        if (uid := pod.get("metadata", {}).get("uid", ""))
+    }
+
+
 def run(config_path: Path, node_name: str, namespace: str, stop: threading.Event) -> None:
     """Run configured node maintenance and telemetry until shutdown."""
     config = load_config(config_path)
     k8s = CloudK8sService(namespace=namespace, timeout=K8S_API_TIMEOUT)
+    cache_dir = Path(config.kubernetes_provider.cache_dir or DEFAULT_TASK_CACHE_DIR)
+    ensure_uv_cache_layout(cache_dir)
+    uv_cache_maintenance = threading.Thread(
+        target=run_uv_cache_maintenance,
+        args=(cache_dir, lambda: active_task_pod_uids(k8s, node_name), stop),
+        name="uv-cache-maintenance",
+        daemon=True,
+    )
+    uv_cache_maintenance.start()
     cache_reclaimer: threading.Thread | None = None
     if config.kubernetes_provider.cache_max_age is not None:
-        cache_dir = Path(config.kubernetes_provider.cache_dir or DEFAULT_TASK_CACHE_DIR)
         cache_reclaimer = threading.Thread(
             target=run_cache_reclaimer,
             args=(cache_dir, config.kubernetes_provider.cache_max_age, stop),
@@ -911,5 +936,6 @@ def run(config_path: Path, node_name: str, namespace: str, stop: threading.Event
             stop.wait()
     finally:
         stop.set()
+        uv_cache_maintenance.join(timeout=10.0)
         if cache_reclaimer is not None:
             cache_reclaimer.join(timeout=10.0)

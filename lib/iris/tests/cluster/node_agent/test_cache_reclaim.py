@@ -4,6 +4,7 @@
 import os
 
 from iris.cluster.node_agent.cache_reclaim import reclaim_cache
+from iris.cluster.uv_cache import current_uv_cache_generation
 from rigging.timing import Duration, Timestamp
 
 
@@ -37,3 +38,26 @@ def test_reclaim_cache_uses_file_writes_and_accesses_for_freshness(tmp_path):
     assert not stale.exists()
     assert (recently_written / "weights").read_bytes() == b"written"
     assert (recently_accessed / "weights").read_bytes() == b"accessed"
+
+
+def test_reclaim_cache_leaves_uv_generations_to_consumer_aware_repair(tmp_path):
+    cache_dir = tmp_path / "iris-cache"
+    uv_generation = current_uv_cache_generation(cache_dir)
+    uv_artifact = uv_generation / "archive-v0" / "package"
+    uv_artifact.mkdir(parents=True)
+    (uv_artifact / "module.py").write_text("cached")
+    ordinary = cache_dir / "hf-cache" / "old-model"
+    ordinary.mkdir(parents=True)
+    (ordinary / "weights").write_bytes(b"stale")
+    for path in (uv_artifact, uv_artifact / "module.py", ordinary, ordinary / "weights"):
+        os.utime(path, (100.0, 100.0))
+
+    reclaimed = reclaim_cache(
+        cache_dir,
+        max_age=Duration.from_seconds(500),
+        now=Timestamp.from_seconds(1_000),
+    )
+
+    assert reclaimed == 1
+    assert (uv_artifact / "module.py").read_text() == "cached"
+    assert not ordinary.exists()

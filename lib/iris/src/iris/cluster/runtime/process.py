@@ -32,7 +32,7 @@ from pathlib import Path
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.log_keys import STDERR_SOURCE, STDOUT_SOURCE
-from iris.cluster.runtime.env import cache_host_dirname, write_workdir_files
+from iris.cluster.runtime.env import UV_CACHE_PATH, cache_host_dirname, write_workdir_files
 from iris.cluster.runtime.profile import (
     LocalProfileDispatch,
     capture_cpu,
@@ -48,6 +48,7 @@ from iris.cluster.runtime.types import (
     MountKind,
     RuntimeLogReader,
 )
+from iris.cluster.uv_cache import current_uv_cache_generation
 from iris.cluster.worker.worker_types import LogLine
 from iris.managed_thread import get_thread_container
 from iris.rpc import job_pb2
@@ -373,8 +374,11 @@ def _resolve_mount_map(config: ContainerConfig, cache_dir: Path | None = None) -
                 result[mount.container_path] = str(config.output_host_path)
         elif mount.kind == MountKind.CACHE:
             if cache_dir:
-                host_dir = cache_dir / cache_host_dirname(mount.container_path)
-                host_dir.mkdir(parents=True, exist_ok=True)
+                if mount.container_path == UV_CACHE_PATH:
+                    host_dir = current_uv_cache_generation(cache_dir)
+                else:
+                    host_dir = cache_dir / cache_host_dirname(mount.container_path)
+                    host_dir.mkdir(parents=True, exist_ok=True)
                 result[mount.container_path] = str(host_dir)
         elif mount.kind == MountKind.TMPFS:
             if cache_dir:

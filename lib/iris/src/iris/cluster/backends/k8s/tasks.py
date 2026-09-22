@@ -101,6 +101,7 @@ from iris.cluster.runtime.env import (
     OUTPUT_MOUNT,
     STANDARD_MOUNTS,
     TASK_OUTPUT_FINALIZING_STATUS,
+    UV_CACHE_PATH,
     VENV_PATH,
     WORKDIR_MOUNT,
     build_common_iris_env,
@@ -477,7 +478,9 @@ def _build_volumes_and_mounts(
                     "name": spec.name,
                     "hostPath": {
                         "path": f"{cache_dir}/{cache_host_dirname(spec.container_path)}",
-                        "type": "DirectoryOrCreate",
+                        # The node agent owns the uv-cache symlink. Kubelet must
+                        # not race it by creating a directory at the same path.
+                        "type": "Directory" if spec.container_path == UV_CACHE_PATH else "DirectoryOrCreate",
                     },
                 }
             )
