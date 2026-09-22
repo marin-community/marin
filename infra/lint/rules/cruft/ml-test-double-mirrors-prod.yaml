@@ -1,0 +1,20 @@
+schema_version: 1
+code: ml-test-double-mirrors-prod
+lane: cruft
+title: Test double re-implements production logic
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** A fixture or `InProcessFooProvider` that mirrors the
+  dispatch/translation logic of the SUT passes when the SUT is wrong in the
+  same way. Test doubles are supposed to isolate, not mirror.
+
+  **When allowed:** Recording adapters that observe inputs/outputs without
+  re-deriving them. Mirroring production logic is never the answer.
+
+  **Bad example:**
+  ```python
+  class InProcessLegacyProvider:
+      def reconcile_workers(self, plans):
+          # 70 lines mirroring worker_provider._reconcile_one
+          ...
+  ```

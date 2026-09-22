@@ -16,7 +16,9 @@ the production stack explicitly.
 The `loom-oa-dev` GitHub App must be installed on the repositories Loom serves.
 Its private key, webhook secret, and client secret belong only in the
 `LOOM_DOTENV` Secret Manager secret. The App callback and webhook URL use
-`https://loom.oa.dev`.
+`https://loom.oa.dev`. Its organization permissions must grant **Members:
+Read-only** so Loom can verify private `Open-Athena` membership during sign-in
+and hourly revalidation.
 
 Authenticate Pulumi's providers and the local Docker client:
 
@@ -86,7 +88,25 @@ so uploading another secret version does not change the running service.
 
 Runtime profiles and workload federation mappings live in
 `Pulumi.marin-loom.yaml` and are applied through Loom's deployment API during
-activation. The `grafana-alerts` federation mapping authorizes the Google
+activation. The deployment setting
+`auth.github_organizations: Open-Athena:188075292` binds admission to the
+organization's immutable GitHub id. An active member receives the `user` role
+at GitHub sign-in and a one-hour authorization lease. Loom revalidates the
+membership before the lease expires with a short-lived GitHub App installation
+token; it does not retain the user's OAuth token.
+
+Only an active result renews access. Removal from the organization, a GitHub
+outage, a timeout, or a permission failure invalidates the user's browser and
+session credentials and closes sessions they own. Signed `@loom` requests use
+the same policy and can revalidate a stale lease. Loom retains the identity row
+for history and later re-admission, but that row is not an approval. An
+administrator can explicitly convert an organization-derived user to manual
+authorization in **People & security**. Enabling organization authorization
+permanently latches this database into shared-deployment mode. Clearing the
+setting, removing users, or completing workloads never restores implicit
+loopback or machine-token administration.
+
+The `grafana-alerts` federation mapping authorizes the Google
 identity of the existing `marin-grafana` Cloud Run service account to select
 only the `ops` profile. The profile names `marin-community/marin` in
 `githubRepositories` because Grafana launches the operator session in that
@@ -114,6 +134,24 @@ ordinary sessions use the deployment-managed `default` profile, while workload
 and future GitHub Actions callers select the automation profile authorized by
 their federation mapping.
 
+The `remoteMcps` declaration registers Marina's authenticated Streamable HTTP
+endpoints as the full `/marina/api` capability and the read-only
+`/marina-read/api` capability. Loom passes them directly to compatible ACP
+agents and mints an IAP ID token for the shared Marin desktop OAuth client from
+the VM workload identity when the agent process starts. No Marina token is
+stored in Pulumi state or a profile environment. Activation requires a Loom
+binary that accepts remote MCP deployment entries and ACP HTTP server
+descriptors; older binaries reject this manifest.
+
+The interactive `marina` profile selects only the `marina-read` capability
+group. Its instructions treat page and API content as untrusted data and forbid
+seeking another route to mutate Marina data. All other production profiles
+enumerate Loom's built-in groups rather than using `mcpAccess: all`, so
+registering another remote endpoint cannot silently widen them. The profile
+archives sessions after 50 idle minutes; an active process that outlives its
+IAP token must recover before its next Marina call because ACP does not refresh
+HTTP MCP headers in place.
+
 A profile's `env` block declares the environment every session of that profile
 receives. Each entry sets either an inline `value` for non-secret configuration
 or a same-project `secretRef` that the host resolves from Secret Manager at launch. Declare
@@ -139,14 +177,14 @@ concrete repositories to mint the cross-repository token its workflow depends
 on.
 
 The Pulumi declaration is authoritative at activation time. An unchanged
-profile keeps its database revision; a changed declaration overwrites the
-current row and advances the revision. UI or API edits persist only until the
-next activation. Deployment pruning is enabled, so a deployment-managed
-setting, profile, or federation removed from `Pulumi.marin-loom.yaml` is removed
-from its deployment layer on the next activation. Stock profiles omitted from
-the declaration remain unmanaged and are not pruned; production intentionally
-manages `default` so interactive instruction and runtime policy are reviewed in
-this repository.
+profile or remote MCP keeps its database revision; a changed declaration
+overwrites the current row and advances the revision. UI or API edits persist
+only until the next activation. Deployment pruning is enabled, so a
+deployment-managed setting, remote MCP, profile, or federation removed from
+`Pulumi.marin-loom.yaml` is removed from its deployment layer on the next
+activation. Stock profiles omitted from the declaration remain unmanaged and
+are not pruned; production intentionally manages `default` so interactive
+instruction and runtime policy are reviewed in this repository.
 
 At runtime, the Grafana bridge gets a Google-signed ID token from the Cloud Run
 metadata server, exchanges it at `/api/auth/federate`, and uses the resulting
@@ -173,15 +211,15 @@ to bind the new service account, then enable Loom alerts and redeploy Grafana.
 The Loom VM service account runs interactive agent sessions. Its project, secret, and KMS
 grants are declared in `infra/pulumi/src/iac/gcp/loom.py` and applied by the `marin`
 infrastructure stack. `Pulumi.marin-loom.yaml` contains runtime configuration only; do not add
-IAM bindings to this application stack or deployment scripts. Cloud SQL database users and
-PostgreSQL table privileges are database resources, so Echo continues to own the `loom-vm`
-principal, login roles, and table grants in `infra/echo`.
+IAM bindings to this application stack or deployment scripts. Loom reaches Echo through its IAP-gated HTTP API on Marina (`infra/marina`), which is
+why the Loom VM account is an IAP accessor there. Its Cloud SQL login and the `context`
+database the codehealth workbench writes to are declared by the `marin-marina` stack.
 
 A stack cannot bootstrap access to its own secrets-provider key. An identity that already has
 key access must apply the central KMS grant before Loom needs it.
 
-Previewing Echo requires read access to its resources, Pulumi state objects, and
-secrets-provider key. Deploying Echo also requires mutation access for Cloud Run,
+Previewing Marina requires read access to its resources, Pulumi state objects, and
+secrets-provider key. Deploying Marina also requires mutation access for Cloud Run,
 Cloud Scheduler, Cloud SQL, Artifact Registry, service accounts, and IAP settings, plus
 payload access to
 `cloudsql-pulumi-admin-password`. Prefer the existing project custom IAP IAM role and

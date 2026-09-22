@@ -134,7 +134,11 @@ PACKAGES: Mapping[str, PackageFamily] = MappingProxyType(
                 }
             ),
             tag_prefix="marin-libs-v",
-            source_patterns=("scripts/python_libs_package.py", "lib/iris/hatch_build.py"),
+            source_patterns=(
+                "scripts/python_libs_package.py",
+                "lib/iris/hatch_build.py",
+                "lib/finestore/src/**",
+            ),
             build_legs=(("ubuntu-latest", BuildOperation.PYTHON),),
             build=PythonBundle(script_path=Path("scripts/python_libs_package.py")),
         ),

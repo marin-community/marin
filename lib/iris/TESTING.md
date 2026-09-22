@@ -196,6 +196,10 @@ Docker tests use a separate `docker_cluster` fixture and are marked `docker`.
 
 ## Running Tests
 
+Run dashboard unit tests with `npm test` from `lib/iris/dashboard/`. These tests
+use the Node.js test runner with native TypeScript support, as in the Finelog
+dashboard. Run `npm run build:check` for Vue and TypeScript checks and the build.
+
 ```bash
 # All unit tests
 uv run --package marin-iris --group test pytest lib/iris/tests/

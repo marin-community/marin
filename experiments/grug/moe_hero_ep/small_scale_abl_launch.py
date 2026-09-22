@@ -99,9 +99,8 @@ class Target:
 # target keeps the all-to-all inside a single NVLink domain instead of crossing InfiniBand.
 #
 # Kernel availability follows the accelerator, in two places. `gpu_fa4_cute` is Blackwell-only: its
-# MMA op accepts sm_100/sm_103/sm_110 and rejects H100's sm_90a outright, and `gpu_fa4_thd` needs
-# fixed-shape THD segment metadata this model does not supply, so Hopper falls back to reference
-# attention. MuonH's `use_syrk` likewise routes the 4D expert-stack Newton-Schulz through QuACK's
+# MMA op accepts sm_100/sm_103/sm_110 and rejects H100's sm_90a outright. MuonH's `use_syrk`
+# likewise routes the 4D expert-stack Newton-Schulz through QuACK's
 # SM100 symmetric GEMM, so Hopper takes the plain vmapped path instead.
 TARGETS: dict[str, Target] = {
     "gb200-rack": Target("GB200", HERO_GPUS_PER_NODE, HERO_EP_NODES, 120, "850g", "1t", "gpu_fa4_cute", True),

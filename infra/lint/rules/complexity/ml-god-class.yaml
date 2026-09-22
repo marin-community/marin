@@ -1,0 +1,27 @@
+schema_version: 1
+code: ml-god-class
+lane: complexity
+title: Class or module owning several unrelated responsibility clusters
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** A class whose methods split into clusters that share no state —
+  RPC dispatch here, DB transactions there, TPU validation, a drain state machine —
+  is several collaborators wearing one name. Every reader pays for the whole surface
+  to understand any part, and unrelated changes collide in one file. The same applies
+  to a module that has become a grab-bag of unrelated top-level members.
+
+  Flag on responsibility-mixing, not method or line count: name the distinct clusters
+  and show they do not share state. A large but cohesive service class — one
+  responsibility, many methods over shared state — is not a violation. The size leads
+  (method count, module length, member count) only point the eye.
+
+  **When allowed:** Framework-mandated god objects, generated code, or a genuinely
+  cohesive large class whose methods share state. When the clusters share state,
+  leave it.
+
+  **Bad example:**
+  ```python
+  class ControllerServiceImpl:  # 45 methods: RPC handlers + DB transactions +
+      # TPU validation + a drain state machine — four collaborators in one class.
+      ...
+  ```

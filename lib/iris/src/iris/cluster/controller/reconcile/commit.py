@@ -256,7 +256,7 @@ def commit_effects(
     Endpoint deletions write within the Tx. Audit log lines and finelog task
     actions are deferred to ``cur``'s post-commit hooks so a rolled-back
     transaction leaves no observable trace. Health is NOT mutated here:
-    ``effects.health.build_failed`` rides back to the controller, which folds it
+    ``effects.health.build_failed`` rides back to the controller, which applies it
     (with the backend's transport-observed events) through the single
     ``WorkerHealthTracker.apply`` site.
 

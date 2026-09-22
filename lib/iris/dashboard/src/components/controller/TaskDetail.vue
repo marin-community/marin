@@ -14,7 +14,7 @@ import {
   type EndpointInfo,
   type ListEndpointsResponse,
 } from '@/types/rpc'
-import { timestampMs, formatBytes, formatCpuMillicores, formatDuration, formatRelativeTime } from '@/utils/formatting'
+import { timestampMs, formatBytes, formatCpuMillicores, formatDuration, formatAttemptDuration, formatRelativeTime } from '@/utils/formatting'
 import { decodeArrowIpc } from '@/utils/arrow'
 import { detailSql } from '@/utils/taskStatus'
 
@@ -642,7 +642,7 @@ watch(() => props.taskId, async () => {
                   {{ attempt.exitCode ?? '-' }}
                 </td>
                 <td class="px-3 py-2 text-[13px] font-mono">
-                  {{ formatDuration(timestampMs(attempt.startedAt), timestampMs(attempt.finishedAt) || undefined) }}
+                  {{ formatAttemptDuration(attempt) }}
                 </td>
                 <!-- The reason can run to 500 chars, so the cell truncates and
                      the full text lives in the tooltip. -->

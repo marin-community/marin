@@ -1,0 +1,17 @@
+schema_version: 1
+code: ml-bare-todo
+lane: prose
+title: '`TODO` without owner or trigger'
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** Bare TODOs accumulate. An actionable TODO names the
+  trigger ("after the migration lands") or the owner; without one it's a
+  note signalling work without enabling it.
+
+  **When allowed:** TODOs in throwaway experiment scripts. Production code:
+  name the trigger.
+
+  **Bad example:**
+  ```python
+  # TODO: clean this up
+  ```

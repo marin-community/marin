@@ -5,10 +5,6 @@ from dataclasses import dataclass, field, fields
 
 from draccus.choice_types import ChoiceRegistry
 
-ASTERISK = "*"
-SPACES = "spaces"
-
-
 DEFAULT_KEEP_INLINE_IMAGES_IN = ["li", "p", "td", "th", "h1", "h2", "h3", "h4", "h5", "h6", "a"]
 
 
@@ -24,24 +20,10 @@ class HtmlToMarkdownConfig(ExtractionConfig):
 
     heading_style: str = "ATX"
     keep_inline_images_in: list = field(default_factory=lambda: DEFAULT_KEEP_INLINE_IMAGES_IN.copy())
-    autolinks = True
-    bullets = "*+-"  # An iterable of bullet types.
-    code_language = ""
-    code_language_callback = None
-    convert = None
-    default_title = False
-    escape_asterisks = True
-    escape_underscores = True
-    newline_style = SPACES
-    strip = None
-    strong_em_symbol = ASTERISK
-    sub_symbol = ""
-    sup_symbol = ""
-    wrap = False
-    wrap_width = 80
 
     @property
     def markdownify_kwargs(self) -> dict:
+        """The markdownify options this config overrides; every other option keeps markdownify's default."""
         exclude = {"include_images", "include_links"}
         return {f.name: getattr(self, f.name) for f in fields(self) if f.name not in exclude}
 
@@ -65,8 +47,3 @@ class ResiliparseConfig(ExtractionConfig):
     def resiliparse_kwargs(self) -> dict:
         exclude = {"markdownify_config", "prepend_title"}
         return {f.name: getattr(self, f.name) for f in fields(self) if f.name not in exclude}
-
-    @property
-    def markdownify_kwargs(self) -> dict:
-        exclude = {*list(self.resiliparse_kwargs.keys()), "prepend_title"}
-        return {f.name: getattr(self, f.name) for f in fields(self.markdownify_config) if f.name not in exclude}

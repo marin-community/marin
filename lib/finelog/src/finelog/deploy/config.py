@@ -257,6 +257,9 @@ class FinelogConfig:
     query_metadata_cache_mb: int | None = None
     # Decoded `.fidx` section cache limit. Unset keeps the server default.
     query_index_cache_mb: int | None = None
+    # Local object-cache capacity. Unset retains every cached object, which
+    # fills the disk on a busy hub; set it on any server with a bounded disk.
+    object_cache_gb: int | None = None
     telemetry_migration_mode: TelemetryMigrationMode = TelemetryMigrationMode.NORMAL
 
     def __post_init__(self) -> None:
@@ -264,6 +267,8 @@ class FinelogConfig:
             raise ValueError("query_metadata_cache_mb must be > 0")
         if self.query_index_cache_mb is not None and self.query_index_cache_mb <= 0:
             raise ValueError("query_index_cache_mb must be > 0")
+        if self.object_cache_gb is not None and self.object_cache_gb <= 0:
+            raise ValueError("object_cache_gb must be > 0")
 
 
 def k8s_env_secret_name(config: FinelogConfig) -> str | None:
@@ -409,6 +414,7 @@ def _load_from_path(path: Path) -> FinelogConfig:
         query_metadata_cache_mb=(
             None if raw.get("query_metadata_cache_mb") is None else int(raw["query_metadata_cache_mb"])
         ),
+        object_cache_gb=(None if raw.get("object_cache_gb") is None else int(raw["object_cache_gb"])),
         telemetry_migration_mode=TelemetryMigrationMode(raw.get("telemetry_migration_mode", "normal")),
     )
 

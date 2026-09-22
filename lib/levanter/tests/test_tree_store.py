@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import tempfile
+from itertools import batched
 from typing import Any, Dict, Iterator, List, Sequence
 
 import numpy as np
@@ -10,7 +11,6 @@ import tensorstore as ts
 
 from levanter.data._preprocessor import BatchProcessor
 from levanter.data.sharded_datasource import ShardedDataSource
-from levanter.data.utils import batched
 from levanter.store.tree_store import TreeStore
 
 

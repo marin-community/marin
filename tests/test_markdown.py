@@ -204,5 +204,23 @@ def test_nested_lists():
     assert to_markdown(html) == expected
 
 
+def test_link_and_image_titles():
+    test_cases = [
+        ('<a href="https://example.com/a">text</a>', "[text](https://example.com/a)"),
+        (
+            '<a href="https://example.com/a" title="a title">text</a>',
+            '[text](https://example.com/a "a title")',
+        ),
+        (
+            '<a href="https://example.com/a" title=\'say "hi"\'>text</a>',
+            '[text](https://example.com/a "say \\"hi\\"")',
+        ),
+        ('<img src="a.png" alt="alt text">', "![alt text](a.png)"),
+        ('<img src="a.png" alt="alt text" title="a title">', '![alt text](a.png "a title")'),
+    ]
+    for html, expected in test_cases:
+        assert to_markdown(html) == expected
+
+
 if __name__ == "__main__":
     pytest.main(["-v", "test_markdown.py"])

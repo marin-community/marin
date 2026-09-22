@@ -4,14 +4,15 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::query::index_cache::IndexCache;
-use crate::store::exact::{coalesce_runs, RowRun};
-use crate::store::index_bundle::SectionKind;
-use crate::store::segment::{segment_id, segment_row_group_rows};
-use crate::store::segment_index::{
-    parse_exact_postings_coverage, parse_projection_reference, projection_path,
-    ProjectionReference, EXACT_POSTINGS_METHOD_VERSION, SOURCE_ROW_OFFSET_IDENTITY,
+use crate::indices::exact::{coalesce_runs, RowRun};
+use crate::indices::format::SectionKind;
+use crate::indices::projection::{
+    parse_projection_reference, ProjectionReference, SOURCE_ROW_OFFSET_IDENTITY,
 };
+use crate::indices::{
+    parse_exact_postings_coverage, IndexRegistry, SegmentArtifacts, EXACT_POSTINGS_METHOD_VERSION,
+};
+use crate::store::segment::{segment_id, segment_row_group_rows};
 use datafusion::logical_expr::{Expr, Operator};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::scalar::ScalarValue;
@@ -117,17 +118,28 @@ pub fn apply(
     segment_paths: &[String],
     constraints: &HashMap<String, Vec<String>>,
     required_columns: &BTreeSet<String>,
-    index_cache: &IndexCache,
+    indices: &IndexRegistry,
+    artifacts: &SegmentArtifacts,
 ) -> Arc<dyn ExecutionPlan> {
     if constraints.is_empty() {
         return plan;
     }
-    let projections =
-        build_projection_files(segment_paths, constraints, required_columns, index_cache);
+    let projections = build_projection_files(
+        segment_paths,
+        constraints,
+        required_columns,
+        indices,
+        artifacts,
+    );
     let projected_segments = projections.keys().cloned().collect();
     let plan = rewrite_projection_files(plan, &projections);
-    let access_plans =
-        build_access_plans(segment_paths, constraints, &projected_segments, index_cache);
+    let access_plans = build_access_plans(
+        segment_paths,
+        constraints,
+        &projected_segments,
+        indices,
+        artifacts,
+    );
     if access_plans.is_empty() {
         return plan;
     }
@@ -145,7 +157,8 @@ fn build_projection_files(
     segment_paths: &[String],
     constraints: &HashMap<String, Vec<String>>,
     required_columns: &BTreeSet<String>,
-    index_cache: &IndexCache,
+    indices: &IndexRegistry,
+    artifacts: &SegmentArtifacts,
 ) -> HashMap<String, ProjectionFile> {
     let mut projections = HashMap::new();
     let mut projected_rows = 0_u64;
@@ -155,7 +168,7 @@ fn build_projection_files(
         let Some(basename) = parquet.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
-        let Some(segment) = index_cache.indexed_segment(parquet) else {
+        let Some(segment) = indices.open_segment(parquet, artifacts) else {
             continue;
         };
         let source_rows = segment.row_group_rows.iter().sum::<usize>() as u64;
@@ -169,7 +182,11 @@ fn build_projection_files(
         else {
             continue;
         };
-        let projection = projection_path(parquet, &reference);
+        let Some(projection) =
+            indices.projection_file(parquet, artifacts, &reference.descriptor.name)
+        else {
+            continue;
+        };
         let Some(projection_groups) = segment_row_group_rows(&projection) else {
             continue;
         };
@@ -236,7 +253,8 @@ fn build_access_plans(
     segment_paths: &[String],
     constraints: &HashMap<String, Vec<String>>,
     projected_segments: &BTreeSet<String>,
-    index_cache: &IndexCache,
+    indices: &IndexRegistry,
+    artifacts: &SegmentArtifacts,
 ) -> HashMap<String, ParquetAccessPlan> {
     let mut plans = HashMap::new();
     let mut selected_rows = 0_u64;
@@ -250,16 +268,14 @@ fn build_access_plans(
         if projected_segments.contains(basename) {
             continue;
         }
-        let Some(segment) = index_cache.indexed_segment(parquet) else {
+        let Some(segment) = indices.open_segment(parquet, artifacts) else {
             continue;
         };
         let total_segment_rows = segment.row_group_rows.iter().sum::<usize>() as u64;
         if !exact_postings_may_cover(&segment.header, constraints) {
             continue;
         }
-        let Some(index) =
-            index_cache.get_exact(parquet, &segment.header, SectionKind::ExactPostings)
-        else {
+        let Some(index) = indices.exact(&segment, SectionKind::ExactPostings) else {
             continue;
         };
         let mut selected: Option<Vec<RowRun>> = None;
@@ -316,7 +332,7 @@ fn build_access_plans(
 }
 
 fn exact_postings_may_cover(
-    header: &crate::store::index_bundle::BundleHeader,
+    header: &crate::indices::format::BundleHeader,
     constraints: &HashMap<String, Vec<String>>,
 ) -> bool {
     let Some(section) = header

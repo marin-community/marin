@@ -3,28 +3,33 @@
 
 import dataclasses
 import datetime
+import io
 import json
 import os
 import pathlib
 import tempfile
+from contextlib import contextmanager
 from datetime import timedelta
 
 import equinox
 import equinox as eqx
+import fsspec
 import haliax as hax
 import jax
 import jax.experimental.array_serialization.serialization as array_ser
 import jax.tree_util as jtu
 import levanter.checkpoint as checkpoint_module
+import levanter.mpmd_checkpoint as mpmd_checkpoint
 import levanter.tensorstore_serialization as tensorstore_serialization
 import numpy as np
 import optax
 import pytest
-from rigging import telemetry
 from chex import assert_trees_all_close, assert_trees_all_equal
+from fsspec.implementations.memory import MemoryFileSystem
 from haliax import Axis
 from jax import ShapeDtypeStruct
 from jax import numpy as jnp
+from rigging import telemetry
 from rigging.filesystem.storage_path import StoragePath
 from rigging.testing import RecordingTelemetryTransport
 from levanter.testing.helpers import MLP, arrays_only, assert_trees_not_close, use_test_mesh
@@ -40,6 +45,7 @@ from levanter.checkpoint import (
     _load_metadata,
     discover_checkpoint_candidates,
     discover_latest_checkpoint,
+    is_checkpoint_path,
     latest_checkpoint_path,
     load_checkpoint,
     load_checkpoint_or_initialize,
@@ -84,6 +90,50 @@ def _write_checkpoint_metadata(path: pathlib.Path, *, step: int, timestamp: str,
     path.mkdir(parents=True)
     with (path / "metadata.json").open("w") as f:
         json.dump({"step": step, "timestamp": timestamp, "is_temporary": is_temporary}, f)
+
+
+class _DeleteDeniedMemoryFileSystem(MemoryFileSystem):
+    protocol = "delete-denied"
+    store: dict[str, bytes] = {}
+    pseudo_dirs = [""]
+
+    def rm(self, path, recursive=False, maxdepth=None):
+        raise PermissionError("deletion denied")
+
+
+def test_checkpoint_metadata_remote_commit_does_not_require_delete():
+    fsspec.register_implementation("delete-denied", _DeleteDeniedMemoryFileSystem, clobber=True)
+    _DeleteDeniedMemoryFileSystem.clear_instance_cache()
+    checkpoint_path = "delete-denied://bucket/checkpoints/step-7"
+
+    checkpoint_module._save_metadata(checkpoint_path, 7, False, {"model": "hero"})
+
+    metadata = json.loads((StoragePath(checkpoint_path) / "metadata.json").read_text())
+    assert metadata["step"] == 7
+    assert metadata["is_temporary"] is False
+    assert metadata["model"] == "hero"
+
+
+def test_checkpoint_metadata_failed_publication_is_not_discoverable(monkeypatch):
+    fsspec.register_implementation("delete-denied", _DeleteDeniedMemoryFileSystem, clobber=True)
+    _DeleteDeniedMemoryFileSystem.clear_instance_cache()
+    checkpoint_path = "delete-denied://bucket/failed-publication/step-8"
+    StoragePath(checkpoint_path).mkdirs()
+
+    @contextmanager
+    def fail_on_close(self, mode="rb", **kwargs):
+        # Buffer the object like a remote upload, then fail before publication at close.
+        with io.StringIO() as buffer:
+            yield buffer
+            raise OSError("object publication failed")
+
+    monkeypatch.setattr(StoragePath, "open", fail_on_close)
+
+    with pytest.raises(OSError, match="object publication failed"):
+        checkpoint_module._save_metadata(checkpoint_path, 8, False)
+
+    assert not (StoragePath(checkpoint_path) / "metadata.json").exists()
+    assert discover_latest_checkpoint("delete-denied://bucket/failed-publication") is None
 
 
 def test_checkpointer_changing_policy():
@@ -354,6 +404,20 @@ def test_checkpoint_candidate_discovery_can_exclude_rejected_lineage_and_max_ste
         assert latest_checkpoint_path(good_dir, rejected_dir, exclude_paths=[rejected_dir], max_step=110) == (
             f"{good_dir}/step-100"
         )
+
+
+def test_is_checkpoint_path_accepts_roots_and_leaves_but_not_incomplete_dirs():
+    with tempfile.TemporaryDirectory() as tempdir:
+        root = pathlib.Path(tempdir)
+        _write_checkpoint_metadata(root / "run" / "step-10", step=10, timestamp="2021-01-01T00:00:00")
+        (root / "run" / "step-10" / "model").mkdir()
+        (root / "run" / "step-10" / "model" / "chunk.0").write_text("x")
+        (root / "not-a-run" / "leftovers").mkdir(parents=True)
+
+        assert is_checkpoint_path(f"{tempdir}/run")
+        assert is_checkpoint_path(f"{tempdir}/run/step-10")
+        assert not is_checkpoint_path(f"{tempdir}/not-a-run")
+        assert not is_checkpoint_path(f"{tempdir}/never-written")
 
 
 def test_checkpointer_temporary_base_path_routes_temp_checkpoints():
@@ -1098,3 +1162,48 @@ def test_backward_compatibility_with_ocdbt():
         )
         assert all(np.isclose(restored_state.training_key, initial_state.training_key))
         assert restored_state.step == initial_state.step
+
+
+def test_mpmd_checkpoint_uses_standard_format_across_destination_shardings(tmp_path):
+    devices = np.array(jax.devices())
+    mesh = jax.sharding.Mesh(devices, ("data",))
+    source_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec("data"))
+    target_mesh = jax.sharding.Mesh(devices[:1], ("stage",))
+    target_sharding = jax.sharding.NamedSharding(target_mesh, jax.sharding.PartitionSpec())
+    weights = np.arange(8 * len(devices), dtype=np.float32)
+    state = {
+        "weights": jax.device_put(weights, source_sharding),
+        "progress": {"step": jax.device_put(np.array(7, dtype=np.int32), target_sharding)},
+        "unused": None,
+    }
+    path = str(tmp_path / "step-7")
+    save_checkpoint(mpmd_checkpoint.checkpoint_arrays(state), 7, path)
+    assert discover_latest_checkpoint(tmp_path) == path
+
+    templates = {
+        "weights": jax.ShapeDtypeStruct(weights.shape, weights.dtype, sharding=target_sharding),
+        "progress": {"step": jax.ShapeDtypeStruct((), np.int32, sharding=target_sharding)},
+        "unused": None,
+    }
+    restored = mpmd_checkpoint.restore_checkpoint(
+        templates, path, jax.tree.map(lambda value: value.sharding, templates)
+    )
+    np.testing.assert_array_equal(restored["weights"], weights)
+    assert restored["weights"].sharding == target_sharding
+    # A canonical scalar can feed every destination stage, even when its
+    # exemplar initially resides on only one stage's devices.
+    assert restored["progress"]["step"].sharding.device_set == set(jax.devices())
+    for shard in restored["progress"]["step"].addressable_shards:
+        np.testing.assert_array_equal(shard.data, 7)
+    assert restored["unused"] is None
+
+    # Save the stage-local result and read it with the ordinary loader on the
+    # original data mesh: the checkpoint format carries no source-topology gate.
+    reverse_path = str(tmp_path / "step-8")
+    save_checkpoint(mpmd_checkpoint.checkpoint_arrays(restored), 8, reverse_path)
+    source_templates = jax.tree.map(lambda x: jax.ShapeDtypeStruct(x.shape, x.dtype, sharding=x.sharding), state)
+    loaded = load_checkpoint(source_templates, reverse_path)
+    np.testing.assert_array_equal(loaded["weights"], weights)
+    assert loaded["weights"].sharding == source_sharding
+    np.testing.assert_array_equal(loaded["progress"]["step"], 7)
+    assert loaded["unused"] is None

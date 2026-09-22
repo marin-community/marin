@@ -155,6 +155,7 @@ def _row(
     healthy: bool,
     duration_state: NightlyDurationState,
     duration_seconds: int | None,
+    status: str | None,
     conclusion: str | None,
     url: str | None,
 ) -> dict:
@@ -175,6 +176,7 @@ def _row(
         "due": due,
         "duration_state": duration_state,
         "duration_seconds": duration_seconds,
+        "status": status,
         "conclusion": conclusion,
         "url": url,
         "source_error": None,
@@ -213,6 +215,7 @@ def _empty_row(
         healthy=False,
         duration_state=NightlyDurationState.NOT_APPLICABLE,
         duration_seconds=None,
+        status=None,
         conclusion=None,
         url=None,
     )
@@ -236,6 +239,7 @@ def _run_row(lane: NightlyLane, date: str, ts: int, candidates: Sequence[Nightly
         healthy=healthy,
         duration_state=duration_state,
         duration_seconds=duration_seconds,
+        status=run.status,
         conclusion=run.conclusion,
         url=run.url,
     )

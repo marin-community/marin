@@ -289,8 +289,6 @@ class GcpSliceConfig(_Config):
 class CoreweaveSliceConfig(_Config):
     region: str = ""
     instance_type: str = ""  # e.g. "gd-8xh100ib-i128"
-    gpu_class: str = ""  # e.g. "H100"
-    infiniband: bool = False
 
 
 class ManualSliceConfig(_Config):
@@ -657,7 +655,6 @@ class KubernetesProviderConfig(_Config):
     cache_max_age: DurationField | None = None  # enables cache reclamation
     controller_address: str = ""  # injected into task pods
     kueue: KueueConfig = Field(default_factory=KueueConfig)
-    preempt_namespaces: list[str] = Field(default_factory=list)
     priority_classes: dict[str, str] = Field(default_factory=dict)  # band -> PriorityClass
 
     @field_validator("cache_max_age")

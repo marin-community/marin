@@ -152,7 +152,7 @@ Marin's research is made possible by the generous support of our partners.
 <table>
   <tr>
     <td align="center" width="240"><a href="https://sites.research.google/trc/about/"><img alt="Google TPU Research Cloud" src="docs/design/google-trc.png" height="44"></a></td>
-    <td align="center" width="240"><img alt="TBA" src="docs/design/supporter-tba.svg" height="44"></td>
+    <td align="center" width="240">The Jen-Hsun and Lori Huang Foundation</td>
   </tr>
   <tr>
     <td align="center"><sub>for TRC accelerators</sub></td>

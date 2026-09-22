@@ -1,0 +1,21 @@
+schema_version: 1
+code: ml-cross-sibling-import
+lane: interfaces
+title: Cross-sibling middle-tier import
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** Not strictly a layering violation, but `lib/levanter/`
+  importing from `lib/zephyr/` (or vice versa) means a helper both libraries
+  need has been homed in the wrong place. The right home is the leaf tier
+  (`iris`/`haliax`) or `marin`, with the dependency pointing one direction.
+
+  **When allowed:** Where the cross-import is a deliberate, documented
+  architectural choice and moving the helper would cost more than it saves.
+
+  **Bad example:**
+  ```python
+  # in lib/levanter/src/levanter/data/foo.py
+  from zephyr.coordinator import Coordinator  # shared helper, wrong home
+  ```
+
+  ## API shape

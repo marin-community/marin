@@ -7,8 +7,9 @@ import json
 import logging
 import os
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from functools import cached_property
-from typing import Any, Callable, Generic, Iterable, Iterator, List, Sequence, Sized, Tuple, TypeVar
+from typing import Any, Callable, Generic, Iterable, Iterator, List, Sequence, Tuple, TypeVar
 
 import datasets
 import numpy as np
@@ -16,15 +17,11 @@ import pyarrow.parquet as pq
 from rigging.filesystem.factory import open_url
 from rigging.filesystem.storage_path import StoragePath
 
-from ._preprocessor import (
-    BatchResult,
-    _BatchMapTransform,
-    _MapTransform,
-    _TransformedDataset,
-)
-from .utils import batched
-
 logger = logging.getLogger(__name__)
+
+# Threads used to probe shard existence. Each probe is a single object-store round trip,
+# so the useful width is set by latency, not CPU.
+SHARD_EXISTENCE_WORKERS = 32
 
 T = TypeVar("T")
 T_contra = TypeVar("T_contra", contravariant=True)
@@ -66,36 +63,6 @@ class ShardedDataSource(Generic[T_co]):
 
     def map(self, fn: Callable[[T_co], U]) -> "ShardedDataSource[U]":
         return _MappedShardedDataSource(self, fn)
-
-    def map_batches(
-        self,
-        fn: Callable[[list[T_co]], BatchResult],
-        batch_size,
-        *,
-        num_cpus=1,
-        num_gpus=0,
-        output_exemplar=None,
-        **resources,
-    ) -> "ShardedDataSource[dict]":
-        """
-        **Lazily** map a function over batches of data. This is useful for doing things like batching data for a model,
-        or for batched preprocessing.
-
-        This function is **lazy**.
-
-        Args:
-            fn:  A function that takes a list of data and returns an iterable of results
-            batch_size: The batch size to use
-            num_cpus: CPU resources to request for each batch-map worker
-            num_gpus: GPU resources to request for each batch-map worker
-            **resources: Extra resource hints forwarded to the preprocessing executor
-
-        Returns:
-            A new ShardedDataset.
-        """
-        return _BatchMappedShardedDataSource(
-            self, fn, batch_size, num_cpus=num_cpus, num_gpus=num_gpus, output_exemplar=output_exemplar, **resources
-        )
 
 
 class FirstRowsShardedDataSource(ShardedDataSource[T]):
@@ -320,7 +287,7 @@ class AudioTextUrlDataSource(UrlBackedShardedDataSource[Tuple[np.ndarray, int, s
         import librosa  # noqa F401
 
         def _load_audio_file(file_name, sampling_rate):
-            with open_url(audio_pointer, "rb", compression="infer") as f:
+            with open_url(file_name, "rb", compression="infer") as f:
                 array, sr = librosa.load(f, sr=sampling_rate)
             return {"array": array, "sampling_rate": sr}
 
@@ -476,6 +443,8 @@ def _mk_shard_name_mapping(urls):
         return expanded if expanded else [url]
 
     urls = [globbed for url in urls for globbed in _expand_or_placeholder(url)]
+    if not urls:
+        return {}
 
     _shard_name_to_url_mapping = {}
 
@@ -485,8 +454,14 @@ def _mk_shard_name_mapping(urls):
     else:
         common_prefix = os.path.commonprefix(urls)
 
-    for url in urls:
-        exists = StoragePath(url).exists()
+    # A component can name thousands of object-store shards, and each probe is a full
+    # round trip, so probe them concurrently instead of once per shard in series.
+    with ThreadPoolExecutor(
+        max_workers=min(SHARD_EXISTENCE_WORKERS, len(urls)), thread_name_prefix="shard_exists"
+    ) as pool:
+        url_exists = list(pool.map(lambda u: StoragePath(u).exists(), urls))
+
+    for url, exists in zip(urls, url_exists):
         # escape the url for the shard name
         shard_name = url
         if common_prefix:
@@ -509,11 +484,12 @@ def _mk_shard_name_mapping(urls):
     return _shard_name_to_url_mapping
 
 
-class _MappedShardedDataSource(ShardedDataSource[T], _TransformedDataset):
+class _MappedShardedDataSource(ShardedDataSource[T]):
+    source: "ShardedDataSource"
+
     def __init__(self, source: ShardedDataSource[T_co], fn: Callable[[T_co], T]):
         self.source = source
         self.fn: Callable[..., T] = fn
-        self._transform = _MapTransform(fn)
 
     @property
     def shard_names(self) -> Sequence[str]:
@@ -522,41 +498,3 @@ class _MappedShardedDataSource(ShardedDataSource[T], _TransformedDataset):
     def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[T]:
         for doc in self.source.open_shard_at_row(shard_name, row):
             yield self.fn(doc)
-
-
-class _BatchMappedShardedDataSource(ShardedDataSource[T], _TransformedDataset):
-    def __init__(
-        self,
-        source: ShardedDataSource[T_co],
-        fn: Callable[[list[T_co]], Iterable[U]],
-        batch_size,
-        num_cpus=1,
-        num_gpus=0,
-        output_exemplar=None,
-        **resources,
-    ):
-        self.source = source
-        self._transform = _BatchMapTransform(
-            fn, batch_size, num_cpus, num_gpus, resources, output_exemplar=output_exemplar
-        )
-
-    @property
-    def shard_names(self) -> Sequence[str]:
-        return self.source.shard_names
-
-    def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[T]:
-        warnings.warn("This is not the best way to use batched preprocessing. Use build_cache instead.")
-        # this one is tricky because we have to do batching ourselves and there's no guarantee that input and output
-        # batch sizes are the same
-        i = 0
-        shard_iter = self.source.open_shard_at_row(shard_name, row)
-        for batch in batched(shard_iter, self._transform.batch_size):  # type: ignore
-            result = self._transform.fn(batch)  # type: ignore
-            if isinstance(result, Sized) and len(result) + i < row:
-                i += len(result)
-                continue
-
-            for doc in result:
-                if i >= row:
-                    yield doc
-                i += 1

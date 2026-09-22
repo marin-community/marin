@@ -11,8 +11,6 @@ CLUSTER_ROLE_RULES = [
         "verbs": ["get", "list", "watch", "create", "update", "patch", "delete"],
     },
     {
-        # Bound via ClusterRoleBinding, so this grants pod access in ALL namespaces —
-        # required for blocker eviction in kubernetes_provider.preempt_namespaces.
         "apiGroups": [""],
         "resources": ["pods", "pods/exec", "pods/log"],
         "verbs": ["get", "list", "watch", "create", "update", "patch", "delete"],

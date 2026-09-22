@@ -151,6 +151,9 @@ def export_xplane_tables(
             continue
         target = output_dir / f"{tool}.json"
         encoded = _tool_data_to_bytes(data)
+        if not encoded.strip():
+            target.unlink(missing_ok=True)
+            continue
         target.write_bytes(encoded)
         sizes[tool] = len(encoded)
 

@@ -1,9 +1,10 @@
-//! Build + storage introspection routes (`/api/server`, `/api/segments`).
+//! Build, storage, and forwarding introspection routes under `/api/*`.
 //!
-//! These answer the two questions an operator asks of a running finelog that
-//! neither the RPC contract nor a SQL query can: *which source revision is this
-//! binary*, and *what does this namespace's storage physically look like right
-//! now*. The dashboard's System page and per-namespace Segments panel read them.
+//! These answer questions an operator asks of a running finelog that neither
+//! the RPC contract nor a SQL query can: *which source revision is this
+//! binary*, *what does this table's storage physically look like right now*,
+//! and *how far has its durable state progressed toward the hub*. The dashboard's
+//! System page and per-table operator panels read them.
 //!
 //! Plain axum JSON rather than proto: the payloads describe this process and its
 //! files, so they track the implementation rather than the wire contract, and
@@ -22,19 +23,20 @@ use axum::routing::get;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
+use crate::indices::format::SectionKind;
+use crate::indices::projection::parse_projection_reference;
+use crate::indices::trigram::SIDECAR_SPAN_ROWS;
+use crate::indices::{
+    parse_group_extrema_config, parse_trigram_coverage, IndexRegistry, SegmentArtifacts,
+};
 use crate::query::metadata_cache_stats;
 use crate::server::diagnostics::read_proc_self_status_kb;
+use crate::server::forwarding::ForwardingConfig;
 use crate::server::ingest_health::{IngestHealth, NamespaceRegistration};
-use crate::store::index_bundle::SectionKind;
 use crate::store::segment::{
     segment_id_and_row_group_rows, segment_physical, LAYOUT_VERSION, MAX_ROW_GROUP_ROWS,
     TARGET_ROW_GROUP_BYTES,
 };
-use crate::store::segment_index::parse_trigram_coverage;
-use crate::store::segment_index::{
-    parse_group_extrema_config, parse_projection_reference, projection_path,
-};
-use crate::store::trigram::SIDECAR_SPAN_ROWS;
 use crate::store::types::{basename, SegmentRow};
 use crate::store::Store;
 
@@ -42,6 +44,7 @@ use crate::store::Store;
 struct IntrospectionState {
     store: Arc<Store>,
     health: Arc<IngestHealth>,
+    forwarding: Option<ForwardingConfig>,
 }
 
 /// When this process started, stamped at router-build time so uptime counts
@@ -249,6 +252,40 @@ struct SegmentsResponse {
     segments: Vec<SegmentInfo>,
 }
 
+/// Durable progress for one configured downstream target. The cursor records
+/// settled sequence positions, including positions skipped after a permanent
+/// rejection. A missing cursor means forwarding has not seeded this table.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ForwardingTargetInfo {
+    target: String,
+    settled_cursor: Option<i64>,
+    forwarding_lag_seq_positions: Option<i64>,
+}
+
+/// Per-table forwarding state. `configured=false` and no target is distinct
+/// from a configured target whose cursor equals the high-water mark.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ForwardingResponse {
+    namespace: String,
+    configured: bool,
+    cluster: Option<String>,
+    visible_high_water: i64,
+    published_high_water: i64,
+    publication_lag_seq_positions: i64,
+    target: Option<ForwardingTargetInfo>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ForwardingQuery {
+    namespace: String,
+}
+
+fn nonnegative_lag(high_water: i64, settled: i64) -> i64 {
+    high_water.saturating_sub(settled).max(0)
+}
+
 /// Host name from `/proc`, or an empty string off Linux.
 fn hostname() -> String {
     std::fs::read_to_string("/proc/sys/kernel/hostname")
@@ -267,8 +304,8 @@ async fn get_server(State(state): State<IntrospectionState>) -> impl IntoRespons
     let started = process_started();
     let memory = store.memory_summary();
     let cache = metadata_cache_stats();
-    let corruption = store.index_cache().corruption_counts();
-    let aggregate = store.index_cache().aggregate_stats();
+    let corruption = store.indices().cache().corruption_counts();
+    let aggregate = store.indices().cache().aggregate_stats();
     Json(ServerInfoResponse {
         build: build_info(),
         process: ProcessInfo {
@@ -317,13 +354,15 @@ async fn get_server(State(state): State<IntrospectionState>) -> impl IntoRespons
 /// which is the normal state of a `REMOTE` segment after eviction.
 fn physical_info(
     path: &str,
-    index_cache: &crate::query::index_cache::IndexCache,
+    indices: &IndexRegistry,
+    artifacts: &SegmentArtifacts,
 ) -> Option<PhysicalInfo> {
     let path = Path::new(path);
     let physical = segment_physical(path).ok()?;
-    let (source_id, rows) = segment_id_and_row_group_rows(path)?;
-    let index_bundle = index_cache
-        .get_header(path, source_id, rows.iter().sum::<usize>() as u64)
+    let (source_id, _) = segment_id_and_row_group_rows(path)?;
+    let index_bundle = indices
+        .open_segment(path, artifacts)
+        .map(|opened| opened.header)
         .map(|header| {
             let sections = header
                 .sections
@@ -364,9 +403,9 @@ fn physical_info(
                     };
                     let available = if section.kind == SectionKind::CoveringProjection {
                         reference.as_ref().is_some_and(|reference| {
-                            let projection = projection_path(path, reference);
-                            std::fs::metadata(&projection)
-                                .ok()
+                            indices
+                                .projection_file(path, artifacts, &reference.descriptor.name)
+                                .and_then(|projection| std::fs::metadata(projection).ok())
                                 .is_some_and(|metadata| metadata.len() == reference.file_bytes)
                         })
                     } else {
@@ -411,11 +450,12 @@ fn physical_info(
 fn to_segment_info(
     row: SegmentRow,
     physical: bool,
-    index_cache: &crate::query::index_cache::IndexCache,
+    indices: &IndexRegistry,
+    artifacts: &SegmentArtifacts,
 ) -> SegmentInfo {
     SegmentInfo {
         physical: physical
-            .then(|| physical_info(&row.path, index_cache))
+            .then(|| physical_info(&row.path, indices, artifacts))
             .flatten(),
         path: basename(&row.path),
         level: row.level,
@@ -436,13 +476,27 @@ async fn get_segments(
 ) -> impl IntoResponse {
     let store = Arc::clone(&state.store);
     let namespace = q.namespace.clone();
-    let index_cache = Arc::clone(store.index_cache());
+    let indices = Arc::clone(store.indices());
     // Footer reads are blocking file I/O, and a large namespace has hundreds of
     // them, so the whole listing runs off the async runtime.
     let listed = tokio::task::spawn_blocking(move || {
+        // A segment's artifacts come from the query snapshot that advertises
+        // them, so the admin view reports exactly what a scan would open. A
+        // snapshot failure still lists segments, with every artifact absent.
+        let artifacts = match store.query_snapshot(&q.namespace) {
+            Ok(snapshot) => snapshot.artifacts,
+            Err(error) => {
+                tracing::warn!(
+                    namespace = %q.namespace,
+                    %error,
+                    "query snapshot failed; reporting segments without artifacts"
+                );
+                Default::default()
+            }
+        };
         store.list_segments(&q.namespace).map(|rows| {
             rows.into_iter()
-                .map(|row| to_segment_info(row, q.physical, &index_cache))
+                .map(|row| to_segment_info(row, q.physical, &indices, &artifacts))
                 .collect::<Vec<_>>()
         })
     })
@@ -462,11 +516,69 @@ async fn get_segments(
     }
 }
 
+async fn get_forwarding(
+    State(state): State<IntrospectionState>,
+    Query(q): Query<ForwardingQuery>,
+) -> impl IntoResponse {
+    let namespace = q.namespace;
+    let response_namespace = namespace.clone();
+    let store = Arc::clone(&state.store);
+    let forwarding = state.forwarding.clone();
+    let loaded = tokio::task::spawn_blocking(move || {
+        let visible_high_water = store.namespace_visible_seq(&namespace)?;
+        let published_high_water = store.namespace_published_seq(&namespace)?;
+        let target = forwarding
+            .as_ref()
+            .map(|config| {
+                let cursor = store.forward_cursor(&config.target, &namespace)?;
+                Ok::<_, crate::errors::StatsError>(ForwardingTargetInfo {
+                    target: config.target.clone(),
+                    settled_cursor: cursor,
+                    forwarding_lag_seq_positions: cursor
+                        .map(|value| nonnegative_lag(published_high_water, value)),
+                })
+            })
+            .transpose()?;
+        let cluster = forwarding.as_ref().map(|config| config.cluster.clone());
+        Ok::<_, crate::errors::StatsError>(ForwardingResponse {
+            namespace: response_namespace,
+            configured: forwarding.is_some(),
+            cluster,
+            visible_high_water,
+            published_high_water,
+            publication_lag_seq_positions: nonnegative_lag(
+                visible_high_water,
+                published_high_water,
+            ),
+            target,
+        })
+    })
+    .await;
+    match loaded {
+        Ok(Ok(response)) => Json(response).into_response(),
+        Ok(Err(error)) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+        Err(join) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("forwarding task panicked: {join}"),
+        )
+            .into_response(),
+    }
+}
+
 /// The `/api/*` introspection routes, for merging into the app router.
-pub fn introspection_router(store: Arc<Store>, health: Arc<IngestHealth>) -> Router {
+pub fn introspection_router(
+    store: Arc<Store>,
+    health: Arc<IngestHealth>,
+    forwarding: Option<ForwardingConfig>,
+) -> Router {
     process_started();
     Router::new()
         .route("/api/server", get(get_server))
         .route("/api/segments", get(get_segments))
-        .with_state(IntrospectionState { store, health })
+        .route("/api/forwarding", get(get_forwarding))
+        .with_state(IntrospectionState {
+            store,
+            health,
+            forwarding,
+        })
 }

@@ -46,9 +46,8 @@ CLOUDFLARE_API_TOKEN = SecretEnvironment(
 
 PULUMI_SERVICES = (
     PulumiService(name="ducky", stack="ducky-marin"),
-    PulumiService(name="echo", stack="marin-echo", secret_environment=(CLOUDFLARE_API_TOKEN,)),
-    PulumiService(name="evaldash", stack="marin-evaldash", secret_environment=(CLOUDFLARE_API_TOKEN,)),
     PulumiService(name="grafana", stack="marin-grafana", secret_environment=(CLOUDFLARE_API_TOKEN,)),
+    PulumiService(name="marina", stack="marin-marina", secret_environment=(CLOUDFLARE_API_TOKEN,)),
     PulumiService(name="loom", stack="marin-loom", secret_environment=(CLOUDFLARE_API_TOKEN,)),
     PulumiService(name="xprof", stack="xprof-marin"),
 )

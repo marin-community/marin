@@ -1,0 +1,4 @@
+interface:
+  display_name: "Marina Applets"
+  short_description: "Build and operate dynamic Marina applets"
+  default_prompt: "Use $marina-applet to build and validate a Marina applet, then publish it when authorized."

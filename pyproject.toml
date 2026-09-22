@@ -20,6 +20,7 @@ dependencies = [
     # cloud credentials and reads the key from a projected Secret instead.
     "marin-rigging[secrets]",
     "marin-zephyr",
+    "tasktrove-verify[answer,reasoning-gym,schema]",
     # marin-finelog is the pure-Python finelog client + deploy/CLI tooling, a
     # workspace member (editable source) so deploy/CLI fixes land without a wheel
     # republish. Its native companion marin-finelog-server (the in-process
@@ -32,8 +33,15 @@ dependencies = [
     # marin-ducky is the ad-hoc DuckDB SQL service (dashboard + runner + deploy),
     # a workspace member so service fixes land without a wheel republish.
     "marin-ducky",
+    # marin-marina is the multi-app web kernel (infra/marina), a workspace member so
+    # `uv run marina dev` serves the apps from this checkout.
+    "marin-marina",
     # top level deps. try to keep these small.
     "watchdog",
+    # Codehealth's weekly review workbench persists into the shared metadata database.
+    "cloud-sql-python-connector[pg8000]>=1.9",
+    "sqlalchemy>=2",
+    "seaborn>=0.13",
     # marin-dupekit is the pure-Python text-dedup surface, a workspace member
     # (editable source). Its native companion marin-dupekit-native (the Rust
     # kernels, module `dupekit_native`, maturin lib/dupekit/rust) is NOT a
@@ -41,6 +49,26 @@ dependencies = [
     # as marin-dupekit's runtime dependency. `scripts/rust_mode.py dev` swaps
     # marin-dupekit-native to a local source build.
     "marin-dupekit",
+]
+
+[project.optional-dependencies]
+# Keep this CUDA stack separate from marin-levanter[gpu] while JaxPP requires
+# JAX <=0.11.0 and Levanter GPU pins 0.11.1. Once those versions align, make
+# this extra depend on marin-levanter[gpu] instead of listing its GPU packages.
+pipeline = [
+    "jaxpp",
+    "marin-levanter",
+    "jax[cuda13]==0.11.0",
+    "nvidia-cublas>=13.2.0.9; sys_platform == 'linux'",
+    "nvidia-nccl-cu13>=2.31.2; sys_platform == 'linux'",
+    "nvidia-cutlass-dsl[cu13]==4.6.0; sys_platform == 'linux'",
+    "flash-attn-4[cu13]>=4.0.0b16,<4.1; sys_platform == 'linux'",
+    "quack-kernels[cu13]==0.6.1; sys_platform == 'linux'",
+    "jax-triton==0.3.1; sys_platform == 'linux'",
+    "triton>=3.6.0,<3.7; sys_platform == 'linux'",
+    # Flash Attention's Python helpers import Torch, but the Grug kernels execute
+    # through JAX/CuTe. Keep the pipeline environment on one CUDA runtime.
+    "torch==2.11.0+cpu; sys_platform == 'linux'",
 ]
 
 [tool.uv]
@@ -85,7 +113,7 @@ override-dependencies = [
     "lxml>=6.1.0",
     "mistune>=3.2.1",
     "multipart>=1.3.1",
-    "nltk>=3.9.4",
+    "nltk>=3.10.3",
     "notebook>=7.5.6",
     "orjson>=3.11.9",
     "pillow>=12.2.0",
@@ -95,7 +123,7 @@ override-dependencies = [
     "rich>=14.1.0",
     "setuptools>=82.0.1",
     "tiktoken>=0.12.0",
-    "tornado>=6.5.5",
+    "tornado>=6.5.8",
 ]
 conflicts = [
     # GPU extras still carry CUDA/Linux-only solver constraints. Keep them out
@@ -108,6 +136,38 @@ conflicts = [
     [
         { package = "marin-levanter", extra = "gpu" },
         { package = "marin-core", extra = "tpu" },
+    ],
+    [
+        { package = "marin-root", extra = "pipeline" },
+        { package = "marin-core", extra = "gpu" },
+    ],
+    [
+        { package = "marin-root", extra = "pipeline" },
+        { package = "marin-core", extra = "cpu" },
+    ],
+    [
+        { package = "marin-root", extra = "pipeline" },
+        { package = "marin-core", extra = "tpu" },
+    ],
+    [
+        { package = "marin-root", extra = "pipeline" },
+        { package = "marin-levanter", extra = "gpu" },
+    ],
+    [
+        { package = "marin-root", extra = "pipeline" },
+        { package = "marin-levanter", extra = "tpu" },
+    ],
+    [
+        { package = "marin-root", extra = "pipeline" },
+        { package = "marin-fray", group = "fray_tpu_test" },
+    ],
+    [
+        { package = "marin-root", extra = "pipeline" },
+        { package = "marin-iris", group = "dev" },
+    ],
+    [
+        { package = "marin-root", extra = "pipeline" },
+        { package = "marin-iris", group = "test" },
     ],
     [
         { package = "marin-core", extra = "gpu" },
@@ -135,10 +195,12 @@ members = [
     "lib/marin",
     "lib/rigging",
     "lib/zephyr",
+    "lib/tasktrove-verify",
     "lib/finestore",
     "infra/pulumi",
     "infra/buckets",
     "infra/deploy",
+    "infra/marina",
 ]
 # Native maturin packages are excluded from uv workspace discovery because each
 # owns its own build backend and package metadata. The path sources below build
@@ -156,13 +218,17 @@ marin-finelog = { workspace = true }
 marin-deploy = { workspace = true }
 marin-dupekit = { workspace = true }
 marin-ducky = { workspace = true }
+marin-marina = { workspace = true }
 marin-haliax = { workspace = true }
 marin-levanter = { workspace = true }
 marin-core = { workspace = true }
 marin-rigging = { workspace = true }
 marin-zephyr = { workspace = true }
+tasktrove-verify = { workspace = true }
 marin-finestore = { workspace = true }
 marin-iac = { workspace = true }
+jaxpp = { git = "https://github.com/NVIDIA/jaxpp.git", rev = "46b8443eed01f54688dd24ae451203a504b1cff8" }
+torch = [{ index = "pytorch-cpu", extra = "pipeline", marker = "sys_platform == 'linux'" }]
 nvidia-cutlass-dsl = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-base = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-cu13 = { index = "nvidia" }
@@ -174,6 +240,10 @@ name = "nvidia"
 url = "https://pypi.nvidia.com"
 explicit = true
 
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [tool.black]
 line-length = 121
@@ -243,7 +313,7 @@ known-first-party = ["experiments"]
 # "config" is the local module in infra/tpu-ci/{setup,vm_manager}.py. The repo-root
 # config/ directory (cluster YAMLs) would otherwise make isort treat ``import config``
 # as first-party and reorder it, so pin it to the third-party group it already sits in.
-known-third-party = ["wandb", "config"]
+known-third-party = ["wandb", "config", "marin"]
 
 
 # Pyrefly type checker configuration
@@ -264,9 +334,12 @@ project-includes = [
     "lib/ducky/src/**/*.py",
     "lib/rigging/src/**/*.py",
     "lib/zephyr/src/**/*.py",
+    "lib/tasktrove-verify/src/**/*.py",
     "lib/finestore/src/**/*.py",
-    "infra/evaldash/src/**/*.py",
+    "infra/marina/src/**/*.py",
+    "infra/marina/apps/**/*.py",
     "infra/deploy/src/**/*.py",
+    "experiments/grug/moe_hero_ep/ops/**/*.py",
     "scripts/ci",
     "scripts/cost_manager",
 ]
@@ -280,11 +353,15 @@ search-path = [
     "lib/haliax/src",
     "lib/rigging/src",
     "lib/zephyr/src",
+    "lib/tasktrove-verify/src",
     "lib/finestore/src",
     "lib/fray/src",
     "lib/iris/src",
     "lib/ducky/src",
     "infra/deploy/src",
+    "infra/marina/src",
+    "infra/marina/apps",
+    ".",
 ]
 disable-search-path-heuristics = true
 
@@ -358,7 +435,6 @@ ignore-missing-imports = [
 
 # Exclude non-production code from type checking
 project-excludes = [
-    "experiments/**",
     "scripts/debug/**",
     "scripts/ferries/**",
     "scripts/gpu_eval/**",

@@ -2,6 +2,8 @@ name: finelog-marin-dev
 port: 10001
 image: ghcr.io/marin-community/finelog:latest
 query_index_cache_mb: 1024
+# 200G boot disk.
+object_cache_gb: 100
 remote_log_dir: gs://marin-us-central2/finelog/marin-dev
 deployment:
   gcp:

@@ -55,7 +55,11 @@ from iris.cluster.backends.rpc.backend import (
     RpcWorkerStubFactory,
 )
 from iris.cluster.controller import ops, reads
-from iris.cluster.controller.backend_store import BackendWorkerStore
+from iris.cluster.controller.backend import (
+    WorkerFleetReconcileRequest,
+    WorkerReconcileTarget,
+    plans_from_snapshot,
+)
 from iris.cluster.controller.checkpoint import download_checkpoint_to_local
 from iris.cluster.controller.controller import (
     _CONTROLLER_KEEPALIVE,
@@ -64,8 +68,7 @@ from iris.cluster.controller.controller import (
 )
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.log_stack import build_log_stack
-from iris.cluster.controller.ops.task import Assignment
-from iris.cluster.controller.ops.worker import apply_reconcile
+from iris.cluster.controller.ops.task import Assignment, apply_reconcile_updates
 from iris.cluster.controller.projections.endpoints import EndpointQuery, EndpointRow, EndpointsProjection
 from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.reads import (  # noqa: F401
@@ -80,6 +83,7 @@ from iris.cluster.controller.reconcile.worker import (
     WorkerReconcilePlan,
     WorkerReconcileResult,
     build_reconcile_plans,
+    task_updates_from_result,
 )
 from iris.cluster.controller.scheduling.policy import (
     build_scheduling_context,
@@ -95,14 +99,11 @@ from iris.cluster.controller.schema import (
     worker_attributes_table,
     workers_table,
 )
-from iris.cluster.controller.service import (
-    USER_JOB_STATES,
-    _tasks_for_listing,
-    _worker_roster,
-)
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
+from iris.cluster.controller.tasks import tasks_for_listing
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.types import AttemptUid, JobName, UserBudgetDefaults, WorkerId
+from iris.cluster.controller.workers import worker_roster
+from iris.cluster.types import USER_JOB_STATES, AttemptUid, JobName, UserBudgetDefaults, WorkerId
 from iris.managed_thread import ThreadContainer
 from iris.rpc import controller_pb2, job_pb2, query_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
@@ -490,47 +491,36 @@ def clone_db(source: ControllerDB) -> ControllerDB:
 # ---------------------------------------------------------------------------
 
 
+def _apply_worker_results(
+    source: CursorTransitionReader,
+    plan_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]],
+    *,
+    now: Timestamp,
+):
+    updates = [
+        update for plan, result in plan_results for update in task_updates_from_result(plan, result, observed_at=now)
+    ]
+    return apply_reconcile_updates(source, updates, now=now)
+
+
 def _build_reconcile_inputs(
     db: ControllerDB,
 ) -> list[tuple[WorkerReconcilePlan, WorkerReconcileResult]]:
     """Per active worker: a (plan, result) pair where the plan lists the worker's
     attempts as desired and the result reports each RUNNING. Drives the
-    production reconcile-observation verb (``ops.worker.apply_reconcile``).
+    production reconcile-observation verb (``ops.task.apply_reconcile_updates``).
     """
     health = WorkerHealthTracker()
     _seed_health(db, health)
     with db.read_snapshot() as tx:
-        workers = reads.healthy_active_workers_with_attributes(tx, health, _NoAttrs())
-    active_states = list(ACTIVE_TASK_STATES)
+        plans = plans_from_snapshot(reads.load_control_snapshot(tx, health, scan_timeouts=False))
     plan_results: list[tuple[WorkerReconcilePlan, WorkerReconcileResult]] = []
-    for w in workers:
-        with db.read_snapshot() as tx:
-            rows = tx.execute(
-                select(task_attempts_table.c.attempt_uid)
-                .select_from(
-                    task_attempts_table.join(
-                        tasks_table,
-                        (tasks_table.c.task_id == task_attempts_table.c.task_id)
-                        & (tasks_table.c.current_attempt_id == task_attempts_table.c.attempt_id),
-                    )
-                )
-                .where(
-                    tasks_table.c.current_worker_id == w.worker_id,
-                    tasks_table.c.state.in_(active_states),
-                )
-            ).all()
-        uids = [row.attempt_uid for row in rows]
-        desired = [
-            worker_pb2.Worker.DesiredAttempt(attempt_uid=uid, run=worker_pb2.Worker.AttemptSpec()) for uid in uids
-        ]
+    for plan in plans:
         observations = [
-            worker_pb2.Worker.AttemptObservation(attempt_uid=uid, state=job_pb2.TASK_STATE_RUNNING) for uid in uids
+            worker_pb2.Worker.AttemptObservation(attempt_uid=row.attempt_uid, state=job_pb2.TASK_STATE_RUNNING)
+            for row in plan.attempts
         ]
-        plan = WorkerReconcilePlan(
-            worker_id=w.worker_id,
-            request=worker_pb2.Worker.ReconcileRequest(worker_id=str(w.worker_id), desired=desired),
-        )
-        result = WorkerReconcileResult(worker_id=w.worker_id, observations=observations, error=None)
+        result = WorkerReconcileResult(worker_id=plan.worker_id, observations=observations, error=None)
         plan_results.append((plan, result))
     return plan_results
 
@@ -830,7 +820,7 @@ def load_get_autoscaler_status(harness: RpcHarness, db: ControllerDB, rps: float
 
 
 def load_get_process_status(harness: RpcHarness, db: ControllerDB, rps: float) -> RpcLoad | None:
-    roster = _worker_roster(db)
+    roster = worker_roster(db)
     if not roster:
         return None
     worker_id = str(next(iter(roster)))
@@ -1423,12 +1413,12 @@ def benchmark_dashboard(db: ControllerDB) -> None:
 
     # Worker roster + running map drives ListWorkers.
     def _list_workers():
-        roster = _worker_roster(db)
+        roster = worker_roster(db)
         if roster:
             with db.read_snapshot() as tx:
                 reads.running_tasks_by_worker(tx, {w[0].worker_id for w in roster})
 
-    bench(f"RPC: ListWorkers (n={len(_worker_roster(db))})", _list_workers)
+    bench(f"RPC: ListWorkers (n={len(worker_roster(db))})", _list_workers)
 
     # Sample job for ListTasks.
     with db.read_snapshot() as _tx:
@@ -1444,7 +1434,7 @@ def benchmark_dashboard(db: ControllerDB) -> None:
 
         def _list_tasks():
             with db.read_snapshot() as snap:
-                tasks = _tasks_for_listing(snap, job_id=sample_job)
+                tasks = tasks_for_listing(snap, job_id=sample_job)
             _worker_addresses_for_tasks(db, tasks)
 
         bench("RPC: ListTasks (one job)", _list_tasks)
@@ -1668,7 +1658,7 @@ def _run_apply_under_contention(
     endpoint_threads: int = 0,
     duration_s: float = 6.0,
 ) -> None:
-    """Run apply_reconcile on a victim thread while configurable
+    """Run task-observation apply on a victim thread while configurable
     write storms hammer the same DB. Reports p50/p95/p99/max of the victim.
     """
     _active_states_contend = list(ACTIVE_TASK_STATES)
@@ -1693,7 +1683,7 @@ def _run_apply_under_contention(
                 t0 = time.perf_counter()
                 with write_txns._db.transaction() as cur:
                     now = Timestamp.now()
-                    effects = apply_reconcile(CursorTransitionReader(cur), plan_results, now=now)
+                    effects = _apply_worker_results(CursorTransitionReader(cur), plan_results, now=now)
                     commit_effects(cur, effects)
                 victim_latencies.append((time.perf_counter() - t0) * 1000)
         except BaseException as e:
@@ -1770,7 +1760,7 @@ def _run_apply_under_contention(
 
 
 def benchmark_apply_contention(db: ControllerDB) -> None:
-    """Reproduce the production tail when apply_reconcile contends
+    """Reproduce the production tail when apply_reconcile_updates contends
     with provider-sync failure storms and other write RPCs.
     """
     plan_results = _build_reconcile_inputs(db)
@@ -2306,13 +2296,11 @@ def serve_cmd(db_path: Path, state_dir: Path) -> None:
 #
 #     1. ``_snapshot_reconcile_inputs`` (DB read + per-job RunTaskRequest
 #        template build).
-#     2. building the ``ControlSnapshot`` the backend reconciles against
-#        (flattening per-worker rows + job specs).
-#     3. ``RpcTaskBackend.reconcile(ControlSnapshot)`` (builds the per-worker
-#        plans via ``plans_from_snapshot``, then async fanout over Connect RPC
-#        to a single in-process fake worker that echoes observations back).
-#     4. ``apply_reconcile`` (one DB transaction fanning all per-worker
-#        results in as a single batched apply).
+#     2. building the controller-owned ``ControlSnapshot`` intermediary.
+#     3. building the per-worker plans and ``WorkerFleetReconcileRequest``, then
+#        ``RpcTaskBackend.reconcile`` fanout over Connect RPC to a single
+#        in-process fake worker that echoes observations back.
+#     4. ``apply_reconcile_updates`` plus effect commit in one DB transaction.
 #
 # A single uvicorn-backed fake worker is mounted on localhost; every
 # ``worker_id`` in the DB resolves to that address, isolating the cost of the
@@ -2642,33 +2630,6 @@ def _snapshot_reconcile_inputs(state: SyntheticReconcileState) -> tuple[Reconcil
     return inputs, addresses
 
 
-@dataclasses.dataclass
-class _PrebuiltWorkerSource:
-    """Hands the backend a reconcile snapshot the benchmark built itself.
-
-    The synthetic reconcile benchmark times snapshot assembly separately, then
-    drives ``RpcTaskBackend.reconcile`` against the prebuilt snapshot; the backend
-    sources its snapshot through this O(1) stub so only the RPC fan-out is timed.
-    """
-
-    snapshot: ControlSnapshot
-    # The benchmark times only the RPC fan-out (``_observe_fleet``), which never
-    # folds liveness; the tracker is present solely to satisfy ``BackendWorkerStore``.
-    health: WorkerHealthTracker = dataclasses.field(default_factory=WorkerHealthTracker)
-
-    def reconcile_snapshot(self) -> ControlSnapshot:
-        return self.snapshot
-
-    def worker_snapshots(self):
-        raise NotImplementedError
-
-    def worker_status(self):
-        raise NotImplementedError
-
-    def transition_snapshot(self, **kwargs):
-        raise NotImplementedError
-
-
 def _one_reconcile_tick(state: SyntheticReconcileState, provider: RpcTaskBackend) -> tuple[float, float, float, float]:
     """Run one full reconcile tick. Returns (snapshot, compute, rpc, apply) ms."""
     t0 = time.perf_counter()
@@ -2681,16 +2642,17 @@ def _one_reconcile_tick(state: SyntheticReconcileState, provider: RpcTaskBackend
         job_specs=inputs.job_specs,
     )
     t2 = time.perf_counter()
-    # The backend sources its own reconcile snapshot; the benchmark prebuilds it
-    # (measured above) and hands it back through a stub store so the RPC fan-out
-    # is what t2..t3 times. The stub implements only the fan-out read surface (it
-    # never folds liveness or tears down), so it is cast to the full BackendWorkerStore.
-    provider._store = cast(BackendWorkerStore, _PrebuiltWorkerSource(snapshot))
-    worker_results = provider._observe_fleet().worker_results
+    request = WorkerFleetReconcileRequest(
+        targets=[
+            WorkerReconcileTarget(plan=plan, address=snapshot.worker_addresses[plan.worker_id])
+            for plan in plans_from_snapshot(snapshot)
+        ]
+    )
+    observation = provider.reconcile(request)
     t3 = time.perf_counter()
     now = Timestamp.now()
     with state.txns._db.transaction() as cur:
-        effects = apply_reconcile(CursorTransitionReader(cur), worker_results, now=now)
+        effects = apply_reconcile_updates(CursorTransitionReader(cur), observation.task_updates, now=now)
         commit_effects(cur, effects)
     t4 = time.perf_counter()
     return (t1 - t0) * 1000, (t2 - t1) * 1000, (t3 - t2) * 1000, (t4 - t3) * 1000

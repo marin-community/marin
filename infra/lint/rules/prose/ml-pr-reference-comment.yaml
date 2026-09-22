@@ -1,0 +1,19 @@
+schema_version: 1
+code: ml-pr-reference-comment
+lane: prose
+title: Comment names a task / PR / kata / phase
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** "Added for the canary ferry flow (see PR #5712)" belongs
+  in the PR description and git blame. In source it rots — a reader six
+  months later cannot recover the context and the reference becomes
+  misleading.
+
+  **When allowed:** A permanent URL or ADR path that the comment is *linking
+  to*, not a transient kata short-code or sprint name.
+
+  **Bad example:**
+  ```python
+  # Added for the canary ferry flow (see PR #5712)
+  retry_attempts = 3
+  ```

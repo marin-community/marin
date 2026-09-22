@@ -14,7 +14,6 @@ pub mod exact_aggregate;
 pub mod exact_prune;
 pub(crate) mod file_scan;
 pub mod group_extrema;
-pub mod index_cache;
 pub mod optimizer;
 pub(crate) mod predicate;
 pub mod provider;
@@ -23,6 +22,7 @@ pub mod trigram_prune;
 pub mod udf;
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -65,6 +65,15 @@ const MEBIBYTE: usize = 1024 * 1024;
 /// narrow covering projections used by dashboard queries, even when they
 /// represented hundreds of thousands of rows across several files.
 const PARQUET_REPARTITION_FILE_MIN_BYTES: usize = MEBIBYTE;
+
+/// Floor for the session's scan/exec parallelism. DataFusion defaults
+/// `target_partitions` to the CPU count, which also caps how many files a scan
+/// reads concurrently — the right bound for CPU work, but a remote cold scan
+/// is round-trip bound, and on a small host it serializes into
+/// `files / cpus` sequential footer+page fetches. Measured on a 4-CPU host:
+/// a 36-object, 3 MB table cost ~10 s cold at 4-way. The floor buys I/O
+/// overlap; extra partitions cost only smaller per-partition work locally.
+const MIN_TARGET_PARTITIONS: usize = 16;
 
 /// Best-effort detect the process memory ceiling: the cgroup v2 limit
 /// (`memory.max`, i.e. the container's `--memory`) if set, else `/proc/meminfo`
@@ -162,6 +171,20 @@ fn shared_runtime_env() -> Arc<RuntimeEnv> {
         .clone()
 }
 
+/// Register a remote object store so scans can read `base_url` objects
+/// directly. Called once at store construction for a bucket-backed provider;
+/// local-directory providers scan through the default file store.
+pub fn register_scan_object_store(
+    base_url: &str,
+    store: Arc<dyn object_store::ObjectStore>,
+) -> Result<(), crate::errors::StatsError> {
+    let url = url::Url::parse(base_url).map_err(|error| {
+        crate::errors::StatsError::Internal(format!("parse scan store URL {base_url:?}: {error}"))
+    })?;
+    shared_runtime_env().register_object_store(&url, store);
+    Ok(())
+}
+
 /// Occupancy of the process-wide parquet metadata cache.
 ///
 /// The cache holds decoded footers, so it is what stands between a query and a
@@ -231,6 +254,8 @@ pub fn make_ctx() -> SessionContext {
     cfg.options_mut().execution.parquet.pushdown_filters = true;
     cfg.options_mut().execution.parquet.reorder_filters = true;
     cfg.options_mut().optimizer.repartition_file_min_size = PARQUET_REPARTITION_FILE_MIN_BYTES;
+    let default_partitions = cfg.options().execution.target_partitions;
+    cfg = cfg.with_target_partitions(default_partitions.max(MIN_TARGET_PARTITIONS));
     let state = SessionStateBuilder::new_with_default_features()
         .with_config(cfg)
         .with_runtime_env(shared_runtime_env())
@@ -349,17 +374,64 @@ fn earliest_timeout(
     }
 }
 
-/// The earlier of the server Query deadline and the caller's remaining budget.
+/// The wall-clock bound one server read runs under.
 ///
-/// `FINELOG_QUERY_TIMEOUT_MS` configures the server deadline (see
-/// [`parse_query_timeout`]); `0` disables only that ceiling, so a caller's
-/// shorter deadline still cancels its scan.
-pub(crate) fn query_timeout(request_timeout: Option<Duration>) -> Option<Duration> {
+/// Three budgets fold into one: the configured server ceiling
+/// (`FINELOG_QUERY_TIMEOUT_MS`, see [`parse_query_timeout`]), the caller's
+/// remaining deadline, and `table_bound` — the tightest `max_query_time` among
+/// the object-backed tables this read plans over.
+///
+/// `table_bound` is not disableable. A table promises that a retired object
+/// stays readable for `max_query_time` after the last state that referenced it,
+/// so a read allowed to outlive that window could scan bytes the table no
+/// longer promises. `FINELOG_QUERY_TIMEOUT_MS=0` therefore removes only the
+/// environment ceiling; a read over an object-backed table is still bounded.
+pub(crate) fn query_timeout(
+    request_timeout: Option<Duration>,
+    table_bound: Option<Duration>,
+) -> Option<Duration> {
     static TIMEOUT: OnceLock<Option<Duration>> = OnceLock::new();
     let server_timeout = *TIMEOUT.get_or_init(|| {
         parse_query_timeout(std::env::var("FINELOG_QUERY_TIMEOUT_MS").ok().as_deref())
     });
-    earliest_timeout(server_timeout, request_timeout)
+    effective_query_timeout(server_timeout, request_timeout, table_bound)
+}
+
+fn effective_query_timeout(
+    server_timeout: Option<Duration>,
+    request_timeout: Option<Duration>,
+    table_bound: Option<Duration>,
+) -> Option<Duration> {
+    match (
+        table_bound,
+        earliest_timeout(server_timeout, request_timeout),
+    ) {
+        (Some(bound), Some(configured)) => Some(bound.min(configured)),
+        (Some(bound), None) => Some(bound),
+        (None, configured) => configured,
+    }
+}
+
+/// Await one server read under `timeout`, folding both failure modes into the
+/// caller's error type.
+///
+/// `timeout` is the budget from [`query_timeout`]; `None` runs the read
+/// unbounded. On elapse the read future is dropped, aborting its scan, and
+/// `on_elapsed` builds the error from the budget that was exceeded. A read that
+/// finishes but fails goes through `on_error`.
+pub(crate) async fn run_within_query_timeout<T, ReadError, Error>(
+    timeout: Option<Duration>,
+    read: impl Future<Output = Result<T, ReadError>>,
+    on_elapsed: impl FnOnce(Duration) -> Error,
+    on_error: impl FnOnce(ReadError) -> Error,
+) -> Result<T, Error> {
+    let Some(timeout) = timeout else {
+        return read.await.map_err(on_error);
+    };
+    match tokio::time::timeout(timeout, read).await {
+        Ok(result) => result.map_err(on_error),
+        Err(_elapsed) => Err(on_elapsed(timeout)),
+    }
 }
 
 /// Cap arbitrary (possibly user-supplied) SQL for a single log line. Truncates on
@@ -449,7 +521,8 @@ pub async fn run_query_over(
                 provider.name.clone(),
                 exact_aggregate::AggregateSource {
                     segment_paths: provider.provider.segment_paths().to_vec(),
-                    index_cache: Arc::clone(provider.provider.index_cache()),
+                    indices: Arc::clone(provider.provider.indices()),
+                    artifacts: Arc::clone(provider.provider.segment_artifacts()),
                     schema: provider.provider.schema(),
                 },
             )
@@ -635,6 +708,35 @@ mod tests {
         );
         // Zero is the explicit disable escape hatch.
         assert_eq!(parse_query_timeout(Some("0")), None);
+    }
+
+    /// A table's maximum query time is a contract about how long retired
+    /// objects stay readable, so neither a disabled server ceiling nor a longer
+    /// caller deadline may lift it.
+    #[test]
+    fn a_table_bound_survives_a_disabled_server_ceiling() {
+        let bound = Some(Duration::from_secs(30));
+        assert_eq!(effective_query_timeout(None, None, bound), bound);
+        assert_eq!(
+            effective_query_timeout(None, Some(Duration::from_secs(600)), bound),
+            bound,
+            "a longer caller deadline cannot lift the table bound"
+        );
+        assert_eq!(
+            effective_query_timeout(None, Some(Duration::from_secs(5)), bound),
+            Some(Duration::from_secs(5)),
+            "a shorter caller deadline still applies"
+        );
+        assert_eq!(
+            effective_query_timeout(Some(Duration::from_secs(10)), None, bound),
+            Some(Duration::from_secs(10)),
+            "the server ceiling still applies when it is tighter"
+        );
+        assert_eq!(
+            effective_query_timeout(None, None, None),
+            None,
+            "a read over no object-backed table keeps the configured ceiling"
+        );
     }
 
     #[test]
@@ -826,12 +928,7 @@ mod tests {
             .map(|p| p.to_string_lossy().into_owned())
             .collect();
 
-        let provider = NamespaceProvider::build(
-            schema,
-            &paths,
-            crate::query::index_cache::test_index_cache(),
-        )
-        .unwrap();
+        let provider = NamespaceProvider::build_with_local_artifacts(schema, &paths).unwrap();
         let preds = build_log_predicates("/a/", 0, MatchScope::MATCH_SCOPE_PREFIX).unwrap();
         let ctx = make_ctx();
         let rows = fetch_log_rows(
@@ -931,13 +1028,9 @@ mod tests {
             let mut preds =
                 build_log_predicates("/job/", 0, MatchScope::MATCH_SCOPE_PREFIX).unwrap();
             add_cluster_filter(&mut preds.where_parts, cluster);
-            NamespaceProvider::build(
-                Arc::clone(&full),
-                &paths,
-                crate::query::index_cache::test_index_cache(),
-            )
-            .map(|provider| (provider, preds))
-            .unwrap()
+            NamespaceProvider::build_with_local_artifacts(Arc::clone(&full), &paths)
+                .map(|provider| (provider, preds))
+                .unwrap()
         };
         let sorted_keys = |mut rows: Vec<crate::store::log_read::LogRow>| {
             rows.sort_by(|a, b| a.key.cmp(&b.key));

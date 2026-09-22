@@ -15,7 +15,11 @@ from enum import StrEnum
 
 import yaml
 
-from iris.cluster.platforms.k8s.constants import NVIDIA_GPU_RESOURCE, RDMA_RESOURCE
+from iris.cluster.platforms.k8s.constants import (
+    CW_REPO_NAME,
+    NVIDIA_GPU_RESOURCE,
+    RDMA_RESOURCE,
+)
 from iris.cluster.platforms.k8s.coreweave_topology import (
     CW_INFINIBAND_TOPOLOGY_LABELS,
     CW_MULTINODE_TOPOLOGY_LABELS,
@@ -34,8 +38,6 @@ VARIANT_COREWEAVE = "coreweave"
 VARIANT_UPSTREAM = "upstream"
 
 # CoreWeave cks-kueue chart (wraps upstream kueue as a subchart).
-CW_REPO_NAME = "coreweave"
-CW_REPO_URL = "https://charts.core-services.ingress.coreweave.com"
 CW_CHART = f"{CW_REPO_NAME}/cks-kueue"
 
 RELEASE_DEFAULT = "kueue"

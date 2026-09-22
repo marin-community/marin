@@ -1,14 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import math
 import os
 import subprocess
 import sys
 import textwrap
+import tomllib
 from datetime import timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+from urllib.parse import unquote
 
 import equinox as eqx
 import jax
@@ -17,16 +21,29 @@ import jmp
 import numpy as np
 import optax
 import pytest
+from fray.cluster import ResourceConfig
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, set_mesh, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
+from levanter.checkpoint import save_checkpoint
+from levanter.grug.attention import AttentionMask
+from levanter.grug.grug_moe import (
+    MOE_DROPPED_ASSIGNMENTS_METRIC,
+    MOE_RECEIVER_DROPPED_ASSIGNMENTS_METRIC,
+    MOE_SENDER_DROPPED_ASSIGNMENTS_METRIC,
+    MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC,
+    MOE_VALID_ASSIGNMENTS_METRIC,
+)
 from marin.execution.lazy import StepContext
 from marin.testing.moe import ragged_ep
 
+from experiments.grug.checkpointing import LEGACY_STATE_KEY, restore_grug_state_from_checkpoint
 from experiments.grug.moe_hero_ep import grugmuon_hero, model, train
 from experiments.grug.moe_hero_ep import launch_diagnostics as launch
 from experiments.grug.moe_hero_ep import small_scale_abl_launch as abl
+
+GPU_EXTRA_PYPROJECT = Path(__file__).resolve().parents[1] / "lib/marin/pyproject.toml"
 
 
 def test_diagnostic_run_without_shape_overrides_uses_the_selected_model():
@@ -64,7 +81,7 @@ def test_diagnostic_run_without_shape_overrides_uses_the_selected_model():
         1.15,
         1.15,
         3,
-        "fixed_pooled_wave_all_to_all",
+        "ragged_all_to_all",
         model.QbEstimator.HIST,
         10_000,
         1024,
@@ -72,9 +89,9 @@ def test_diagnostic_run_without_shape_overrides_uses_the_selected_model():
         4,
         10,
         1_000_000_000,
+        jnp.float32,
         jnp.bfloat16,
-        jnp.bfloat16,
-        train.MasterParamMode.FP32_PINNED_HOST,
+        train.MasterParamMode.DEVICE,
     )
 
 
@@ -206,6 +223,7 @@ def _runtime_env_config(
     watch_mode=train.WatchMode.INLINE,
     watch_interval=1,
     moe_implementation="fixed_pooled_wave_all_to_all",
+    remat_mode="recompute_all",
 ):
     """A stand-in for GrugRunConfig holding only the fields ``run_grug``'s env setup and dispatch read."""
     return SimpleNamespace(
@@ -213,8 +231,8 @@ def _runtime_env_config(
             trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=watch_interval)),
             watch_mode=watch_mode,
         ),
-        model=SimpleNamespace(moe_implementation=moe_implementation),
-        resources=object(),
+        model=SimpleNamespace(moe_implementation=moe_implementation, remat_mode=remat_mode),
+        resources=ResourceConfig.with_gpu("GB200", count=4),
         processes_per_task=processes_per_task,
         max_retries_failure=0,
         max_task_failures=10,
@@ -300,6 +318,179 @@ def test_run_grug_reduces_collective_overlap_only_for_inline_watch(
 
     flags = os.environ["XLA_FLAGS"].split()
     assert f"{train.XLA_COLLECTIVE_OVERLAP_FLAG}={expected_overlap_limit}" in flags
+
+
+def test_the_stock_pjrt_plugin_fails_a_ragged_run_rather_than_running_it_slowly(monkeypatch):
+    """jax reports the stock generation either way, so nothing else catches a stock runtime."""
+    monkeypatch.setattr("importlib.metadata.version", lambda name: jax.__version__)
+    with pytest.raises(RuntimeError, match=r"\+marin\."):
+        train.verify_ragged_pjrt()
+
+    monkeypatch.setattr("importlib.metadata.version", lambda name: f"{jax.__version__}+marin.abc123def456")
+    train.verify_ragged_pjrt()
+
+
+def test_the_patched_pjrt_wheel_pairs_with_the_pinned_jax():
+    """The patched wheel swaps in for the stock plugin, whose ABI follows the jax pin; a jax bump
+    without a fork rebuild would otherwise be caught only on a GB200, at the first collective."""
+    project = tomllib.loads(GPU_EXTRA_PYPROJECT.read_text())
+    gpu_extra = project["project"]["optional-dependencies"]["gpu"]
+    jax_pins = [requirement for requirement in gpu_extra if requirement.startswith("jax[cuda13]==")]
+    assert len(jax_pins) == 1
+    jax_version = jax_pins[0].removeprefix("jax[cuda13]==")
+
+    source = project["tool"]["uv"]["sources"]["jax-cuda13-pjrt"]
+    assert source["extra"] == "gpu"
+    assert source["marker"] == "platform_machine == 'aarch64'"
+    filename = unquote(source["url"].rsplit("/", 1)[-1])
+    assert filename.startswith(f"jax_cuda13_pjrt-{jax_version}+marin.")
+    assert filename.endswith("aarch64.whl")
+
+
+def _tiny_state(params, master_params):
+    return train.GrugTrainState(
+        step=jnp.array(0, dtype=jnp.int32),
+        params=params,
+        master_params=master_params,
+        opt_state=(),
+        ema_params=None,
+        pending_qb_betas=jnp.zeros((1, 2)),
+    )
+
+
+def test_master_layout_detection_and_the_synthesize_refusal(tmp_path):
+    """A run wanting a master cannot synthesize one from a master-less checkpoint; refuse loudly.
+
+    The same-layout cases pass the template through unchanged.
+    """
+    state = _tiny_state(jnp.zeros(4), None)
+    master_less = str(tmp_path / "step-1")
+    save_checkpoint({"params": jnp.zeros(4)}, step=1, checkpoint_path=master_less)
+    assert not train.checkpoint_stores_master(master_less)
+    assert train.template_for_candidate_layout(state, master_less, train.MasterParamMode.DEVICE) is state
+    with pytest.raises(ValueError, match="Synthesizing a master"):
+        train.template_for_candidate_layout(state, master_less, train.MasterParamMode.FP32_PINNED_HOST)
+
+    master_bearing = str(tmp_path / "step-2")
+    save_checkpoint(
+        {"params": jnp.zeros(4, jnp.bfloat16), "master_params": jnp.zeros(4)}, step=2, checkpoint_path=master_bearing
+    )
+    assert train.checkpoint_stores_master(master_bearing)
+    assert train.template_for_candidate_layout(state, master_bearing, train.MasterParamMode.FP32_PINNED_HOST) is state
+    migrating = train.template_for_candidate_layout(state, master_bearing, train.MasterParamMode.DEVICE)
+    assert migrating.params is None and migrating.master_params is state.params
+
+
+def test_a_master_is_detected_through_the_legacy_wrapped_checkpoint_layout(tmp_path):
+    """Old runs saved `{"train_state": state}`, and those are the checkpoints most likely to hold
+    a master; missing the prefix would let exactly them restore silently from the bf16 copy."""
+    checkpoint = str(tmp_path / "step-1")
+    save_checkpoint(
+        {LEGACY_STATE_KEY: {"params": jnp.zeros(4, jnp.bfloat16), "master_params": jnp.zeros(4)}},
+        step=1,
+        checkpoint_path=checkpoint,
+    )
+
+    assert train.checkpoint_stores_master(checkpoint)
+
+
+def test_a_master_bearing_checkpoint_migrates_in_process_into_a_master_less_restore(tmp_path, monkeypatch):
+    """Restore reads the stored fp32 master directly into the run's fp32 params template.
+
+    Reading with the run's own exemplar instead succeeds and returns bf16 weights, so a test that
+    only checked the restore did not raise would pass against the bug this migration exists for.
+    """
+    cfg = _latent_config()
+    mesh = _explicit_mesh(1, 1, 1, 1)
+    monkeypatch.setattr(train, "_tree_to_memory_kind", lambda tree, memory_kind: tree)
+
+    def build(mp, key, master_param_mode):
+        with set_mesh(mesh):
+            return train.initial_state(
+                cfg,
+                optimizer=optax.sgd(0.1),
+                mp=mp,
+                key=jax.random.key(key),
+                ema_beta=None,
+                master_param_mode=master_param_mode,
+            )
+
+    written = build(
+        jmp.get_policy("params=bfloat16,compute=bfloat16,output=bfloat16"), 17, train.MasterParamMode.FP32_PINNED_HOST
+    )
+    checkpoint_root = tmp_path / "checkpoints"
+    save_checkpoint(written, step=1, checkpoint_path=str(checkpoint_root / "step-1"))
+
+    template = build(jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16"), 23, train.MasterParamMode.DEVICE)
+    with set_mesh(mesh):
+        restored = train.take_master_as_params(
+            restore_grug_state_from_checkpoint(
+                template,
+                checkpoint_search_paths=[str(checkpoint_root)],
+                load_checkpoint_setting=True,
+                mesh=None,
+                allow_partial=False,
+                template_for_candidate=lambda candidate: train.template_for_candidate_layout(
+                    template, candidate, train.MasterParamMode.DEVICE
+                ),
+            )
+        )
+
+    assert restored.master_params is None
+    got = jax.tree.leaves(restored.params)
+    assert all(leaf.dtype == jnp.float32 for leaf in got)
+    for want, have in zip(jax.tree.leaves(written.master_params), got, strict=True):
+        np.testing.assert_array_equal(np.asarray(want), np.asarray(have))
+
+
+def test_the_carry_offload_overrides_an_inherited_collective_overlap_limit(monkeypatch):
+    inherited = f"{train.XLA_COLLECTIVE_OVERLAP_FLAG}={train.DEFAULT_COLLECTIVE_OVERLAP_LIMIT}"
+    monkeypatch.setenv("XLA_FLAGS", inherited)
+    config = _runtime_env_config(
+        moe_implementation=train.RAGGED_MOE_IMPLEMENTATION,
+        remat_mode=model.OFFLOAD_CARRY_REMAT_MODE,
+    )
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+
+    flags = os.environ["XLA_FLAGS"].split()
+    assert inherited not in flags
+    assert f"{train.XLA_COLLECTIVE_OVERLAP_FLAG}=1" in flags
+    assert "--xla_gpu_enable_latency_hiding_scheduler=true" in flags
+
+
+def test_a_ragged_run_without_the_offload_keeps_the_scheduler_off(monkeypatch):
+    # The scheduler's longer live ranges do not fit until the carry leaves HBM, so an arm that
+    # skips the offload has to keep the posture it was measured under.
+    monkeypatch.delenv("XLA_FLAGS", raising=False)
+    config = _runtime_env_config(moe_implementation=train.RAGGED_MOE_IMPLEMENTATION)
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+
+    assert "--xla_gpu_enable_latency_hiding_scheduler=false" in os.environ["XLA_FLAGS"].split()
+
+
+@pytest.mark.parametrize(
+    ("moe_implementation", "expected_remat_mode"),
+    [
+        (train.RAGGED_MOE_IMPLEMENTATION, model.OFFLOAD_CARRY_REMAT_MODE),
+        ("fixed_pooled_wave_all_to_all", "recompute_all"),
+    ],
+)
+def test_only_the_ragged_transport_offloads_the_layer_carry(moe_implementation, expected_remat_mode):
+    step = launch.build_diagnostic_run(
+        run_id="carry-offload",
+        dp_racks=1,
+        num_steps=1,
+        version="dev",
+        moe_implementation=moe_implementation,
+        processes_per_task=4,
+    )
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.model.remat_mode == expected_remat_mode
 
 
 def test_ep_newton_schulz_returns_to_expert_sharding():
@@ -620,6 +811,45 @@ def _latent_config(latent_dim=None):
     )
 
 
+def test_block_threads_attention_padding_into_moe_metrics():
+    mesh = _explicit_mesh(1, 1, 1, 1)
+    cfg = _latent_config()
+    hidden = jax.random.normal(jax.random.key(57), (1, 8, cfg.hidden_dim))
+    segment_ids = jnp.array([[0, 0, 1, 1, -1, -1, -1, -1]], dtype=jnp.int32)
+    mask = (
+        AttentionMask.causal()
+        .with_segment_ids(segment_ids)
+        .with_fa4_bounds(jnp.zeros_like(segment_ids), segment_ids >= 0)
+    )
+
+    with set_mesh(mesh):
+        block = model.Block.init(cfg, key=jax.random.key(58))
+        _, metrics = jax.jit(lambda x: block(x, mask))(hidden)
+
+    np.testing.assert_array_equal(jnp.sum(metrics["routing_counts_local"]), jnp.array(4.0))
+    np.testing.assert_array_equal(metrics["skipped_assignments"], jnp.array(4, dtype=jnp.int32))
+
+
+@pytest.mark.parametrize("qb_estimator", [model.QbEstimator.HIST, model.QbEstimator.TOPK])
+def test_moe_qb_estimator_ignores_padding(qb_estimator: model.QbEstimator):
+    mesh = _explicit_mesh(1, 1, 1, 1)
+    cfg = dataclasses.replace(_latent_config(), qb_estimator=qb_estimator)
+    hidden = jax.random.normal(jax.random.key(59), (1, 8, cfg.hidden_dim))
+    token_valid = jnp.array([[True, False, True, True, False, False, True, False]])
+    valid_indices = jnp.array([0, 2, 3, 6], dtype=jnp.int32)
+
+    with set_mesh(mesh):
+        mlp = model.MoEMLP.init(cfg, key=jax.random.key(60))
+        _, padded_stats = mlp(hidden, token_valid)
+        _, compact_stats = mlp(
+            hidden[:, valid_indices],
+            jnp.ones((1, valid_indices.shape[0]), dtype=jnp.bool_),
+        )
+
+    beta_key = "qb_beta" if qb_estimator == model.QbEstimator.HIST else "qb_beta_local"
+    np.testing.assert_allclose(padded_stats[beta_key], compact_stats[beta_key], rtol=1e-5, atol=1e-5)
+
+
 def test_latent_moe_shrinks_the_dispatched_width_but_not_the_token():
     # The point of LatentMoE is that the all-to-all payload narrows while the residual stream does
     # not, so the expert weights must be latent-wide and the layer output hidden-wide.
@@ -803,7 +1033,7 @@ def test_inline_watch_computes_stats_on_every_train_step(monkeypatch):
     np.testing.assert_allclose(step_one_stats["grad/norm/total"], 3.2)
 
 
-def test_offloaded_optimizer_scalar_state_uses_the_active_mesh():
+def test_scalar_state_uses_the_active_mesh():
     mesh = AbstractMesh(
         axis_sizes=(1, 1, 1, 1),
         axis_names=("replica_dcn", "data", "expert", "model"),
@@ -821,6 +1051,11 @@ def test_offloaded_optimizer_scalar_state_uses_the_active_mesh():
                 offload_opt_state=True,
             )
         )
+
+    step_sharding = state.step.sharding
+    assert isinstance(step_sharding, NamedSharding)
+    assert step_sharding.mesh == mesh
+    assert step_sharding.spec == P()
 
     count_sharding = state.opt_state[0].count.sharding
     assert isinstance(count_sharding, NamedSharding)
@@ -904,6 +1139,8 @@ def test_drop_metrics_reports_sender_and_receiver_fractions():
         jnp.array(5, dtype=jnp.int32),
         jnp.array(2, dtype=jnp.int32),
         jnp.array(3, dtype=jnp.int32),
+        jnp.array(4, dtype=jnp.int32),
+        jnp.array(12, dtype=jnp.int32),
         batch_size=2,
         sequence_length=4,
         top_k=2,
@@ -911,13 +1148,16 @@ def test_drop_metrics_reports_sender_and_receiver_fractions():
     )
 
     assert metrics == {
-        "moe/dropped_assignments": 5,
-        "moe/drop_fraction": 5 / 16,
-        "moe/sender_dropped_assignments": 2,
-        "moe/sender_drop_fraction": 2 / 16,
-        "moe/receiver_dropped_assignments": 3,
-        "moe/receiver_drop_fraction": 3 / 16,
-        "moe/receiver_drop_fraction_of_received": 3 / 14,
+        MOE_DROPPED_ASSIGNMENTS_METRIC: 5,
+        "moe/drop_fraction": 5 / 12,
+        MOE_SENDER_DROPPED_ASSIGNMENTS_METRIC: 2,
+        "moe/sender_drop_fraction": 2 / 12,
+        MOE_RECEIVER_DROPPED_ASSIGNMENTS_METRIC: 3,
+        "moe/receiver_drop_fraction": 3 / 12,
+        "moe/receiver_drop_fraction_of_received": 3 / 10,
+        MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC: 4,
+        "moe/skipped_padding_fraction": 4 / 16,
+        MOE_VALID_ASSIGNMENTS_METRIC: 12,
     }
 
 
@@ -928,6 +1168,8 @@ def test_drop_metrics_sums_per_layer_counts_in_int64_without_overflow():
     per_layer_sender = jnp.full((num_layers,), 40_000_000, dtype=jnp.int32)  # 48 * 40M = 1.92e9
     per_layer_receiver = jnp.full((num_layers,), 60_000_000, dtype=jnp.int32)  # 48 * 60M = 2.88e9 > int32
     per_layer_total = per_layer_sender + per_layer_receiver
+    per_layer_valid = jnp.full((num_layers,), 4096 * 4096 * 8, dtype=jnp.int32)
+    per_layer_skipped = jnp.zeros((num_layers,), dtype=jnp.int32)
     sender_total = 48 * 40_000_000
     receiver_total = 48 * 60_000_000
 
@@ -935,15 +1177,17 @@ def test_drop_metrics_sums_per_layer_counts_in_int64_without_overflow():
         per_layer_total,
         per_layer_sender,
         per_layer_receiver,
+        per_layer_skipped,
+        per_layer_valid,
         batch_size=4096,
         sequence_length=4096,
         top_k=8,
         num_layers=num_layers,
     )
 
-    assert metrics["moe/dropped_assignments"] == sender_total + receiver_total  # no int32 wrap
-    assert metrics["moe/sender_dropped_assignments"] == sender_total
-    assert metrics["moe/receiver_dropped_assignments"] == receiver_total
+    assert metrics[MOE_DROPPED_ASSIGNMENTS_METRIC] == sender_total + receiver_total  # no int32 wrap
+    assert metrics[MOE_SENDER_DROPPED_ASSIGNMENTS_METRIC] == sender_total
+    assert metrics[MOE_RECEIVER_DROPPED_ASSIGNMENTS_METRIC] == receiver_total
 
 
 def test_baseline_eval_hook_runs_once_after_the_first_step():

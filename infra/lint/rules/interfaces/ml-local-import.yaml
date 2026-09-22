@@ -1,0 +1,35 @@
+schema_version: 1
+code: ml-local-import
+lane: interfaces
+title: Use of local imports
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** A local import is a sign the author didn't properly inspect
+  the file and introduces maintenance burden — readers can no longer see a
+  module's dependencies at a glance, and the same import tends to get repeated
+  inside every function that needs it. Re-inspect the file and lift the import;
+  refactor if you need to.
+
+  **When allowed:** Only to handle external-dependency conditions (a package
+  only available with a certain extra). The optional-dep case is canonical
+  and *correct*, not a nit — a `try/except ImportError` or a docstring
+  noting the extra makes the intent obvious. Mark such an import with
+  `# noqa: PLC0415` on the `import` line to record the exception explicitly;
+  see "Suppression markers" under "Detector usage".
+
+  Import-cycle workarounds are *not* a stable exception. In well-factored
+  Python the structural fix always exists: extract a `Protocol` / ABC / shared
+  dataclass into a third module that both sides depend on, use
+  `from __future__ import annotations` for type-hint-only references, or use
+  string forward references in ORM-style declarations. A local import to
+  break a cycle is *transition debt* — acceptable only mid-refactor, paired
+  with a comment naming the follow-up issue.
+
+  **Bad example:**
+  ```python
+  def write_chunk(path: str, data: bytes) -> None:
+      import zstandard  # zstandard is a hard dep; belongs at module scope
+
+      cctx = zstandard.ZstdCompressor()
+      ...
+  ```

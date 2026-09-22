@@ -11,10 +11,14 @@ import pyarrow as pa
 import pytest
 from config import ClusterTarget
 from conftest import bridge_config
-from errors import UpstreamError
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
+from errors import FinelogUnavailableError, UpstreamError
+from finelog.errors import StatsError
 from finelog_health import FinelogRole
 from finelog_source import FinelogSource
 from github_source import GithubSource
+from google.api_core.exceptions import Forbidden, ServiceUnavailable
 from iris_source import IrisSource
 from k8s_source import K8sFleet
 from nightly_config import NIGHTLY_LANES
@@ -23,6 +27,7 @@ from starlette.testclient import TestClient
 from wandb_source import WandbSource
 
 TARGET = ClusterTarget(name="marin", project="p", zone="z", instance_filter="f", controller_filter="c")
+HEALTH_QUERY = 'SELECT * FROM "log" LIMIT 1'
 
 
 def _iris(handler) -> IrisSource:
@@ -49,7 +54,7 @@ class _FakeLogClient:
         self._raises = raises
 
     def query(self, sql: str, *, max_rows: int) -> pa.Table:
-        assert sql == 'SELECT * FROM "log" LIMIT 1'
+        assert sql == HEALTH_QUERY
         assert max_rows == 1
         if self._raises is not None:
             raise self._raises
@@ -80,6 +85,56 @@ def test_finelog_health_reports_query_failures_without_raising():
 def test_finelog_health_does_not_mask_programming_errors():
     with pytest.raises(ValueError, match="bug"):
         _finelog(ValueError("bug")).health()
+
+
+def test_finelog_query_classifies_only_retryable_rpc_failures_as_unavailable():
+    unavailable = StatsError("query failed")
+    unavailable.__cause__ = ConnectError(Code.UNAVAILABLE, "down")
+    with pytest.raises(FinelogUnavailableError):
+        _finelog(unavailable).query(HEALTH_QUERY, max_rows=1)
+
+    invalid = StatsError("invalid query")
+    invalid.__cause__ = ConnectError(Code.INVALID_ARGUMENT, "syntax error")
+    with pytest.raises(StatsError) as raised:
+        _finelog(invalid).query(HEALTH_QUERY, max_rows=1)
+    assert raised.value is invalid
+
+
+def test_finelog_query_classifies_only_retryable_discovery_failures_as_unavailable():
+    with pytest.raises(FinelogUnavailableError):
+        _finelog(ServiceUnavailable("temporarily unavailable")).query(HEALTH_QUERY, max_rows=1)
+
+    forbidden = Forbidden("permission denied")
+    with pytest.raises(Forbidden) as raised:
+        _finelog(forbidden).query(HEALTH_QUERY, max_rows=1)
+    assert raised.value is forbidden
+
+
+def test_finelog_relay_status_calls_connect_json_without_a_new_client_release():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url == "http://finelog:10001/finelog.stats.StatsService/ListRelayStatus"
+        assert request.headers["connect-protocol-version"] == "1"
+        assert request.read() == b"{}"
+        return httpx.Response(
+            200,
+            json={
+                "senders": [
+                    {
+                        "cluster": "cw-a",
+                        "bootId": "boot",
+                        "reportSequence": "1",
+                        "target": "https://hub",
+                        "receivedAtMs": "1000",
+                        "namespaces": [],
+                    }
+                ]
+            },
+        )
+
+    source = FinelogSource(TARGET, timeout_ms=5_000)
+    source._relay_address = "http://finelog:10001"
+    source._relay_http = httpx.Client(transport=httpx.MockTransport(handler))
+    assert source.relay_status()[0].cluster == "cw-a"
 
 
 # --- IrisSource ------------------------------------------------------------
@@ -295,37 +350,31 @@ def test_wandb_points_follow_report_runset_and_drop_null_metric_rows():
                 200,
                 json={"data": {"view": {"displayName": "Hero report", "spec": json.dumps(spec)}}},
             )
-        return httpx.Response(
-            200,
-            json={
-                "data": {
-                    "project": {
-                        "run": {
-                            "state": "running",
-                            "sampledHistory": [
-                                [
-                                    {"throughput/total_tokens": 10, "throughput/mfu": 0.42},
-                                    {"throughput/total_tokens": 20, "throughput/mfu": None},
-                                ]
-                            ],
-                        }
-                    }
-                }
-            },
-        )
+        spec = json.loads(body["variables"]["specs"][0])
+        points = [
+            {"_step": 99, "throughput/total_tokens": 10, "throughput/mfu": 0.42},
+            {"_step": 100, "throughput/total_tokens": 20, "throughput/mfu": None},
+            {"_step": 101, "throughput/total_tokens": 30, "throughput/mfu": 0.44},
+        ]
+        if "minStep" not in spec:
+            points = points[:2]  # Whole-run sampling misses the child metric.
+        points = [point for point in points if point["_step"] >= spec.get("minStep", 0)]
+        run = {"branchPoint": {"step": 99}, "sampledHistory": [points]}
+        return httpx.Response(200, json={"data": {"project": {"run": run}}})
 
     assert _wandb(handler).points("mfu") == [
         {
             "chart": "MFU (%)",
             "run": "hero",
-            "tokens": 10,
-            "value": 0.42,
+            "tokens": tokens,
+            "value": value,
             "report_title": "Hero report",
             "report_url": (
                 "https://wandb.ai/marin-community/marin_moe/reports/"
                 "535B-A23B-18T-Token-Hero-Run-Scaling-Ladder--VmlldzoxNzc2MDM5Ng"
             ),
         }
+        for tokens, value in [(10, 0.42), (30, 0.44)]
     ]
 
 
@@ -380,6 +429,23 @@ def test_wandb_run_history_pins_an_explicit_project_without_searching():
     assert [row["step"] for row in rows] == [7]
 
 
+def test_wandb_run_history_preserves_parent_and_samples_child_separately():
+    parent = {"_step": 99, "train/loss": 1.25}
+    child = [{"_step": 100, "train/loss": 1.20}, {"_step": 101, "train/loss": 1.22}]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        spec = json.loads(json.loads(request.content)["variables"]["specs"][0])
+        # Whole-run sampling loses the first child point; the bounded query recovers it.
+        points = [parent, child[-1]] if "minStep" not in spec else [parent, *child]
+        points = [point for point in points if point["_step"] >= spec.get("minStep", 0)]
+        run = {"branchPoint": {"step": 99}, "sampledHistory": [points]}
+        return httpx.Response(200, json={"data": {"project": {"run": run}}})
+
+    rows = _wandb(handler).run_history("fork", metric="train/loss", project="marin_moe")
+
+    assert [(row["step"], row["value"]) for row in rows] == [(99, 1.25), (100, 1.20), (101, 1.22)]
+
+
 def _activity_handler(found_in: str, run: dict, asked: list[str], tps_points: list[dict] = ()):
     """Serve `run` for the activity query and `tps_points` for the reference-rate history.
 
@@ -393,7 +459,9 @@ def _activity_handler(found_in: str, run: dict, asked: list[str], tps_points: li
         if "specs" in variables:  # the reference-tps history read, not the activity search
             if variables["project"] != found_in:
                 return httpx.Response(200, json={"data": {"project": None}})
-            history = {"state": "running", "sampledHistory": [list(tps_points)]}
+            spec = json.loads(variables["specs"][0])
+            points = [point for point in tps_points if point["_step"] >= spec.get("minStep", 0)]
+            history = {"state": "running", "sampledHistory": [points]}
             return httpx.Response(200, json={"data": {"project": {"run": history}}})
         asked.append(variables["project"])
         if variables["project"] != found_in:
@@ -423,8 +491,18 @@ def test_wandb_run_activity_separates_active_time_from_downtime():
         "summaryMetrics": json.dumps({"_runtime": 90 * 3_600, "throughput/total_tokens": 1_038_000_000_000}),
     }
     tps_points = [
-        {"_step": 39_000, "throughput/total_tokens": 390_010_000_000, "throughput/tokens_per_second": 2_000_000},
-        {"_step": 78_001, "throughput/total_tokens": 780_020_000_000, "throughput/tokens_per_second": 3_000_000},
+        {
+            "_step": 39_000,
+            "_timestamp": 1_787_364_000,
+            "throughput/total_tokens": 390_010_000_000,
+            "throughput/tokens_per_second": 2_000_000,
+        },
+        {
+            "_step": 78_001,
+            "_timestamp": 1_787_700_000,
+            "throughput/total_tokens": 780_020_000_000,
+            "throughput/tokens_per_second": 3_000_000,
+        },
     ]
 
     (row,) = _wandb(_activity_handler("marin_moe", run, asked, tps_points)).run_activity("hero-run")
@@ -441,7 +519,50 @@ def test_wandb_run_activity_separates_active_time_from_downtime():
         "active_share": 0.9375,
         "reference_tps": 2_500_000.0,
         "progress_efficiency": pytest.approx(0.75),
+        "projected_finish_ms": None,  # no `_step` or `run_progress` in this summary
     }
+
+
+@pytest.mark.parametrize("has_child_history", [False, True])
+def test_wandb_run_activity_excludes_inherited_fork_history(has_child_history):
+    created = datetime(2026, 9, 18, tzinfo=UTC)
+    heartbeat = created + timedelta(seconds=200)
+    run = {
+        "state": "running",
+        "createdAt": created.isoformat(),
+        "heartbeatAt": heartbeat.isoformat(),
+        "branchPoint": {"step": 99},
+        "summaryMetrics": json.dumps(
+            {
+                "_step": 109 if has_child_history else 99,
+                "run_progress": 0.545 if has_child_history else 0.495,
+                "throughput/total_tokens": 110_000 if has_child_history else 100_000,
+            }
+        ),
+    }
+    points = [
+        {
+            "_step": step,
+            "_timestamp": created.timestamp() + elapsed,
+            "throughput/total_tokens": tokens,
+            "throughput/tokens_per_second": tps,
+        }
+        for step, elapsed, tokens, tps in [(99, -1000, 100_000, 1000), (100, 20, 101_000, 100), (109, 200, 110_000, 100)]
+        if has_child_history or step == 99
+    ]
+
+    (row,) = _wandb(_activity_handler("marin_moe", run, [], points)).run_activity("fork")
+
+    if has_child_history:
+        # Only the child's 10,000 tokens count over its 200-second lifetime.
+        assert row["reference_tps"] == 100
+        assert row["progress_efficiency"] == pytest.approx(0.5)
+        # Nine steps in 180 seconds: 91 remaining steps take another 1820 seconds.
+        assert row["projected_finish_ms"] == round((heartbeat.timestamp() + 1820) * 1000)
+    else:
+        assert row["reference_tps"] is None
+        assert row["progress_efficiency"] is None
+        assert row["projected_finish_ms"] is None
 
 
 def test_wandb_run_activity_credits_a_from_scratch_run_its_first_step():
@@ -457,7 +578,14 @@ def test_wandb_run_activity_credits_a_from_scratch_run_its_first_step():
         "heartbeatAt": "2026-08-21T05:46:40Z",
         "summaryMetrics": json.dumps({"_runtime": 90_000, "throughput/total_tokens": 100_000_000_000}),
     }
-    tps_points = [{"_step": 0, "throughput/total_tokens": 100_000_000_000, "throughput/tokens_per_second": 2_000_000}]
+    tps_points = [
+        {
+            "_step": 0,
+            "_timestamp": 1_787_364_000,
+            "throughput/total_tokens": 100_000_000_000,
+            "throughput/tokens_per_second": 2_000_000,
+        }
+    ]
 
     (row,) = _wandb(_activity_handler("marin_moe", run, asked, tps_points)).run_activity("hero-run")
 
@@ -483,7 +611,48 @@ def test_wandb_run_activity_reports_no_active_time_before_the_first_log():
     assert asked == ["marin_moe", "marin"]
     assert (row["active_seconds"], row["downtime_seconds"], row["active_share"]) == (None, None, None)
     assert row["wall_seconds"] == 600.0
-    assert (row["reference_tps"], row["progress_efficiency"]) == (None, None)
+    assert (row["reference_tps"], row["progress_efficiency"], row["projected_finish_ms"]) == (None, None, None)
+
+
+def test_wandb_run_activity_projects_the_finish_from_this_runs_own_steps():
+    # A completion date extrapolates this run's own step rate, measured from its first
+    # sampled step to the summary's last over the wall clock between them, to the stop step
+    # that `_step / run_progress` recovers. This run is a fresh id resumed at step 81,000 that
+    # has done 4,320 steps in the 24 hours since its first sample: 20 s a step, and 304,680
+    # steps to go on a 390,000-step schedule is another 70.5 days. Crediting it with the
+    # 85,320 steps of the global counter over the same day would put the finish 3.6 days
+    # out. The half hour between creation and the first sample is startup, and does not
+    # count against the rate.
+    asked: list[str] = []
+    first_sample = datetime(2026, 9, 9, 22, 30, tzinfo=UTC)
+    heartbeat = datetime(2026, 9, 10, 22, 30, tzinfo=UTC)
+    run = {
+        "state": "running",
+        "createdAt": "2026-09-09T22:00:00Z",
+        "heartbeatAt": "2026-09-10T22:30:00Z",
+        "summaryMetrics": json.dumps(
+            {"_runtime": 86_000, "_step": 85_320, "run_progress": 85_320 / 390_000, "throughput/total_tokens": 1.0}
+        ),
+    }
+    tps_points = [
+        {
+            "_step": 81_000,
+            "_timestamp": first_sample.timestamp(),
+            "throughput/total_tokens": 1.0,
+            "throughput/tokens_per_second": 1.0,
+        }
+    ]
+
+    (row,) = _wandb(_activity_handler("marin_moe", run, asked, tps_points)).run_activity("hero-run")
+
+    projected = datetime.fromtimestamp(row["projected_finish_ms"] / 1000, UTC)
+    assert projected == heartbeat + timedelta(seconds=304_680 * 20)
+    assert projected == datetime(2026, 11, 20, 11, 10, tzinfo=UTC)
+
+    # Before the run advances past its first sample there is no rate, and so no date.
+    run["summaryMetrics"] = json.dumps({"_step": 81_000, "run_progress": 81_000 / 390_000})
+    (row,) = _wandb(_activity_handler("marin_moe", run, asked, tps_points)).run_activity("hero-run")
+    assert row["projected_finish_ms"] is None
 
 
 def test_wandb_run_activity_fails_loud_when_no_project_has_the_run():

@@ -48,13 +48,7 @@ def iam_grants(project: str, principals: Mapping[str, GcpEncryptedMember]) -> Gc
             GcpArtifactRepositoryIam(
                 location=_REGION,
                 repository=_SERVICE,
-                grants=(
-                    GcpRoleGrant(
-                        role=f"projects/{project}/roles/marinArtifactRegistryIamManager",
-                        members=(principals["human-070"],),
-                    ),
-                    GcpRoleGrant(role="roles/artifactregistry.writer", members=(deploy_account,)),
-                ),
+                grants=(GcpRoleGrant(role="roles/artifactregistry.writer", members=(deploy_account,)),),
             ),
         ),
         cloud_run_iap=(
@@ -77,7 +71,6 @@ def iam_grants(project: str, principals: Mapping[str, GcpEncryptedMember]) -> Gc
                             "domain:openathena.ai",
                             loom_account,
                             principals["human-064"],
-                            principals["human-070"],
                             principals["human-071"],
                         ),
                     ),

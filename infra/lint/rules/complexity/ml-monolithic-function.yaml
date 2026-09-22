@@ -1,0 +1,25 @@
+schema_version: 1
+code: ml-monolithic-function
+lane: complexity
+title: Multi-mode function that should be split
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** One function with three boolean knobs encodes 2³ behaviors
+  the caller has to reason about. Separate functions compose better and let
+  callers pick exactly what they need.
+
+  **When allowed:** Pre-existing public APIs where splitting would break
+  callers. New entry points should be narrow.
+
+  **Overlap:** when the split is driven by boolean *knobs* in the signature, this is
+  the rule; when the signature is ordinary but the body does too many distinct
+  things, use `ml-overloaded-function`.
+
+  **Bad example:**
+  ```python
+  def compute_loss_mask(
+      tokens, *, mask_eot: bool, mask_user_turns: bool, mask_assistant_turns: bool
+  ) -> Mask:
+      # three orthogonal masks → three functions, composed by the caller.
+      ...
+  ```

@@ -90,6 +90,12 @@ row-group pruning worked and file metadata is the remaining cost. The
 tasks, not CPU time, so they overlap and do not sum to wall clock — treat a large
 one as a place to look, not as a measured cost.
 
+`EXPLAIN` itself can be slow when planning reads large trigram sections. If
+`EXPLAIN ANALYZE` reports little scan time and few scanned bytes, compare its
+wall time with plain `EXPLAIN` before tuning Parquet reads. For predicates on
+several indexed columns, Finelog checks range-constrained columns first and
+stops reading a segment's other index sections once its span mask is empty.
+
 An unbounded substring query (`col LIKE '%…%'`) prunes only when that column
 carries a trigram index; otherwise it decodes the column for every row in the
 namespace. `ListNamespaces` reports which columns are indexed. How much it prunes
@@ -144,6 +150,17 @@ coverage), and the backfill rebuilds them a few per tick and deletes the
 superseded Parquet files. A widened copy under a second name leaves both being
 built for every new segment forever.
 
+The `session-discovery` projection contains `num_requests_running` telemetry
+with the structured `job_id`, `run_id`, and `execution_uid` columns plus the
+metric attributes and timestamp. Standalone vLLM and embedded SkyRL scrapes
+emit this current-snapshot gauge while they are observable. Inference dashboard
+selectors filter by this exact name and, for SkyRL, by
+`json_get(attributes_json, 'metric_source') = 'vllm'`. Keeping the time bound on
+these rows makes the picker mean “observed in the selected window,” including
+long-lived sessions whose start predates that window. The exact name posting
+accelerates uncovered segments while the projection backfills through normal
+index maintenance.
+
 For broad low-cardinality summaries, set `ColumnIndex.value_counts`.
 Unfiltered `SELECT col, count(*) FROM table GROUP BY col` and `count(col)` then
 rewrite to a `FinelogIndexAggregate` node that combines exact per-segment
@@ -176,42 +193,30 @@ server-maintained list or a separate SQL schema. Legacy Levanter gauge rows sent
 through `/v1/telemetry` are recognized from their complete record and converted
 to the same typed metric table while clients roll out.
 
-`levanter.metrics` uses exact hidden `run_id` partitions (spec 1). Partitions are
-segment metadata, not SQL namespaces: queries name `levanter.metrics` and use an
-exact `run_id` predicate. The planner prunes other current-spec run partitions.
-It retains unpartitioned, malformed, or older-spec files, so a rolling
-conversion cannot hide rows. A partition transform change requires a new spec
-id rather than reinterpreting existing metadata.
+`levanter.metrics` version 1 is unpartitioned. Its Parquet order is
+`(run_id, name, step, timestamp_ms, seq)`, which clusters the deployed exact
+`run_id` and metric-name filters without rewriting the active object set to add
+partition metadata. The static exact-`run_id` policy remains relevant only to
+legacy-local compaction. Adding an object-native partition requires a later
+table-spec version and a separately justified migration.
 
-L0 remains flat and unpartitioned so a busy run cannot strand a separate stream
-of tiny files. Compaction writes L1 and higher segments under the bounded
-physical layout `levanter.metrics/run_id/00..31/`, while each footer and catalog
-row retains the full run id for exact pruning and future run deletion. The
-bucket only limits directory fanout; it does not replace the logical partition.
+`levanter.metrics` intentionally has no secondary indexes. Its run-first
+Parquet order and row-group statistics serve deployed selectors without
+telemetry's `name` trigram, `kind` postings, or adaptive string value counts.
+Server-owned registration removes the old declarations, queries ignore old
+`.fidx` bundles, and bounded maintenance deletes those derived files online.
+Source Parquet remains authoritative throughout cleanup.
 
-`levanter.metrics` intentionally has no secondary indexes. Exact `run_id`
-partition pruning and the `(run_id, name, step, timestamp_ms)` Parquet order
-serve its deployed exact-match queries without telemetry's `name` trigram,
-`kind` postings, or adaptive string value counts. Server-owned registration
-removes the old declarations, queries ignore old `.fidx` bundles, and bounded
-maintenance deletes those derived files online. Source Parquet remains
-authoritative throughout cleanup.
-
-Maintenance converges older layouts online. It merges migration-produced or
-partition-stamped L0s into partitioned L1, rebuilds stale local partition
-metadata, and moves current local L1 files into their bucket directory under the
-query-visibility lock. Evicted objects move with an in-bucket copy, atomic
-catalog swap, then old-key deletion, so the server does not download archived
-bytes. Startup reconciliation resolves a crash between those phases by keeping
-the key named by the catalog. One store-wide L0 rebuild wave runs two
-independent workers; each coalesces about 32 MiB of compressed inputs, sorts and
-partitions that bounded stream, then publishes its source span atomically. The
-global permit prevents several namespaces from multiplying that memory
-envelope and leaves half of the four-core hub available for queries. A cycle starts work for at most three seconds, flushes and syncs live
-writes, and resumes after 100 ms while local migration remains. Remote copies retain their separate
-three-second budget. An individual job already in flight may exceed its budget.
-Watch `physical layout migration advanced` and `remote physical layout migration
-advanced` until their remaining counts reach zero.
+Object-backed maintenance treats all unpartitioned files at one nonterminal
+level as a sparse stream. Sequence gaps and overlapping footer ranges therefore
+cannot split a level into sub-threshold runs and strand aggregate debt. The
+planner promotes the shortest prefix reaching either the level's compressed-byte
+target or its 32-segment cap; L3 is terminal. Partitioned table specs still form
+one independent stream per exact partition. Each cycle executes at most one
+object compaction and resumes after 100 ms while progress remains, returning to
+the 30-second cadence at quiescence. Publication atomically replaces exact input
+paths under the table's writer fence, so concurrent flushes can rebase and a
+failed commit leaves all inputs live.
 
 `telemetry_v1` exposes stable resource dimensions as nullable columns:
 `run_id`, `job_id`, `execution_uid`, `region`, `node_name`, and `process_index`.
@@ -227,7 +232,7 @@ retirement; a retired or fresh store does not recreate that table.
 Semantic namespaces have independent limits: typed Levanter metrics and
 Levanter automated telemetry each have 32 GiB, node-agent telemetry has 15 GiB,
 Iris RPC has 1 GiB, vLLM has 2 GiB, and other telemetry services have 2 GiB.
-Hidden run partitions share the `levanter.metrics` retention budget.
+All `levanter.metrics` objects share its retention budget.
 
 ### Migrate the root telemetry hot set
 
@@ -498,6 +503,25 @@ uv run finelog query marin --format table \
 
 ### Distinguishing missing regional logs from delayed hub forwarding
 
+`FinelogRelayStalled` is the primary fleet alert for this distinction. Each
+regional process sends a complete status snapshot directly to the hub every 30
+seconds; the report does not pass through `WriteRows` or a telemetry table. Its
+states mean:
+
+- `heartbeat_missing` or `heartbeat_stale`: the hub has no current direct report
+  from the cluster.
+- `namespace_missing`: the required `telemetry_v1.node_agent` table is absent
+  from an otherwise current complete snapshot.
+- `publication_stalled`: locally visible sequence positions have not reached
+  the published R2 catalog for ten minutes.
+- `forwarding_stalled`: published positions have not advanced the hub-settled
+  cursor for ten minutes.
+
+The Grafana rule holds a classified failure for two more minutes before paging.
+NoData and bridge/RPC errors alert rather than appearing healthy. On the
+regional Finelog UI, the table's Forwarding card shows the same visible,
+published, and settled boundaries for local diagnosis.
+
 The regional Finelog is the record; the `marin` hub is an asynchronous copy. If
 logs for a federated Iris task are absent from the hub, query the exact task key
 on both stores before diagnosing the pod-side shipper. Iris task keys include the
@@ -564,8 +588,11 @@ kubectl --kubeconfig <kubeconfig> --context <context> -n iris \
 Warnings name the affected namespace. `backlog exceeds the warning threshold`
 reports pressure but does not change the forwarding cursor; the sender continues
 processing retained rows without moving the cursor merely because of backlog pressure.
-`rows evicted before they were forwarded`
-means that local retention has already made source sequence positions unreadable.
+`object-native cursor precedes the live spool; refusing to skip rows` means the
+cursor and live segment state disagree. The sender fails closed for that namespace;
+inspect its selected HEAD and local projection instead of advancing the cursor.
+`rows evicted before they were forwarded` applies only to a legacy relay whose
+local retention already made source sequence positions unreadable.
 `batch conflicts with the hub schema; preserving the cursor` means the sender will
 re-register the namespace's current schema on the next sweep and retry the same rows.
 `hub permanently rejected the batch; dropping it` means the hub classified the content
@@ -575,6 +602,29 @@ routed from the legacy `telemetry_v1` root. A `namespace ... is not registered`
 rejection for such a destination means the hub predates that behavior or its managed
 registration failed. The cumulative, process-lifetime `skipped_seqs` log field includes
 permanent rejections and local-retention gaps and resets after restart.
+
+Slow forwarding lines include the live and selected segment counts, rows,
+visibility-lock wait, snapshot, planning, scan, encoding, hub acknowledgement,
+settlement, and total milliseconds. A settlement line also reports removed
+segment, row, and byte counts. Maintenance lines report resource class, queue
+wait, run time, and the requested follow-up class. Object-backed relays use the
+`RelayIo` class; `SpecMigration` and `QueryServing` have independent limits.
+
+The forwarding cursor and fully covered object-segment removals share one
+catalog transaction and one HEAD publication. Covered segments stop appearing
+in relay queries immediately after settlement. Their objects remain through the
+query and rollback retention window, then exact-release GC removes both the
+remote object and local cache copy. The generic 24-hour orphan grace applies to
+unselected uploads whose owning transaction is unknown, not to settled relay
+segments.
+
+State collection uses the selected catalog and its checkpoint-folded release
+set. It lists historical catalog keys for age and selected-chain membership but
+does not download them. CoreWeave S3 deletes up to 1,000 eligible keys per
+request. The `collected object table state` event reports listed catalog keys,
+selected-chain size, pending and deleted releases, deleted catalog keys, orphan
+counts, and milliseconds for each stage. `historical_nodes_opened` must remain
+zero.
 
 Sequence positions measure cursor distance, not decoded row count. Gaps and rows
 filtered because they already carry a foreign origin can make both `skipped_seqs` and

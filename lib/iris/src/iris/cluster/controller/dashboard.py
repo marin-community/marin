@@ -80,12 +80,10 @@ from iris.cluster.dashboard_common import (
 )
 from iris.cluster.types import JobName
 from iris.rpc.async_adapter import AsyncServiceAdapter
-from iris.rpc.auth import SESSION_COOKIE, authorize_method, authorize_resource_method
+from iris.rpc.auth import SESSION_COOKIE, authorize_method
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceASGIApplication, EndpointServiceASGIApplication
 from iris.rpc.interceptors import RequestTimingInterceptor
-from iris.rpc.resource_connect import ResourceServiceASGIApplication
-from iris.rpc.resource_service import ResourceServiceImpl
 
 logger = logging.getLogger(__name__)
 
@@ -202,7 +200,6 @@ class ControllerDashboard:
         proxy_decision_secret: str | None = None,
     ):
         self._service = service
-        self._resource_service = ResourceServiceImpl(service.resource_registry)
         # Defaults to the service's own backend; the two must share one instance
         # so a system endpoint registered on one is resolvable through the other.
         self._endpoint_service = endpoint_service or service.endpoint_service
@@ -241,23 +238,13 @@ class ControllerDashboard:
     def _create_app(self) -> ASGIApp:
         include_tb = bool(os.environ.get("IRIS_DEBUG"))
         controller_timing = RequestTimingInterceptor(include_traceback=include_tb)
-        draining_interceptor = _ControllerDrainingInterceptor(self._draining)
         auth_interceptor = PolicyAuthInterceptor(
             self._auth_policy,
             cookie_name=SESSION_COOKIE,
             unauthenticated_methods=_UNAUTHENTICATED_RPCS,
             authorize=authorize_method,
         )
-        controller_interceptors = [draining_interceptor, auth_interceptor, controller_timing]
-        resource_interceptors = [
-            draining_interceptor,
-            PolicyAuthInterceptor(
-                self._auth_policy,
-                cookie_name=SESSION_COOKIE,
-                authorize=authorize_resource_method,
-            ),
-            controller_timing,
-        ]
+        controller_interceptors = [_ControllerDrainingInterceptor(self._draining), auth_interceptor, controller_timing]
         # @on_loop handlers run inline on the event loop; everything else
         # is dispatched to a thread by AsyncServiceAdapter.
         rpc_asgi_app = ControllerServiceASGIApplication(
@@ -270,11 +257,6 @@ class ControllerDashboard:
         endpoint_rpc_app = EndpointServiceASGIApplication(
             service=AsyncServiceAdapter(self._endpoint_service),
             interceptors=controller_interceptors,
-            compressions=IRIS_RPC_COMPRESSIONS,
-        )
-        resource_rpc_app = ResourceServiceASGIApplication(
-            service=AsyncServiceAdapter(self._resource_service),
-            interceptors=resource_interceptors,
             compressions=IRIS_RPC_COMPRESSIONS,
         )
 
@@ -358,7 +340,6 @@ class ControllerDashboard:
             Mount(rpc_asgi_app.path, app=rpc_asgi_app),
             Mount(endpoint_rpc_app.path, app=endpoint_rpc_app),
         ]
-        routes.append(Mount(resource_rpc_app.path, app=resource_rpc_app))
         routes.append(static_files_mount())
 
         app = Starlette(routes=routes)
@@ -584,11 +565,6 @@ class ProxyControllerDashboard:
             Route(
                 "/iris.cluster.EndpointService/{method}",
                 functools.partial(self._proxy_rpc_post, service="iris.cluster.EndpointService"),
-                methods=["POST"],
-            ),
-            Route(
-                "/iris.resource.ResourceService/{method}",
-                functools.partial(self._proxy_rpc_post, service="iris.resource.ResourceService"),
                 methods=["POST"],
             ),
             Route("/proxy/{path:path}", self._proxy_endpoint, methods=list(PROXY_METHODS)),

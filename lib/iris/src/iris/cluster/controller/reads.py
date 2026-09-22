@@ -61,7 +61,9 @@ from iris.cluster.controller.schema import (
 from iris.cluster.controller.task_state import (
     ACTIVE_TASK_STATES,
     DISPATCHED_TASK_STATES,
+    EXECUTING_TASK_STATES,
     ActiveTaskRow,
+    AttemptDetailRow,
     RunningTaskEntry,
     TaskDetailRow,
     task_row_can_be_scheduled,
@@ -784,20 +786,10 @@ def resource_usage_by_worker(tx: Tx) -> dict[WorkerId, WorkerResourceUsage]:
     }
 
 
-_SCHEDULER_ACTIVE_TASK_STATES = (
-    int(job_pb2.TASK_STATE_ASSIGNED),
-    int(job_pb2.TASK_STATE_BUILDING),
-    int(job_pb2.TASK_STATE_RUNNING),
-)
-
-
 _RUNNING_TASKS_BY_WORKER_STMT = select(tasks_table.c.current_worker_id.label("worker_id"), tasks_table.c.task_id).where(
     tasks_table.c.current_worker_id.in_(bindparam("worker_ids", expanding=True)),
     tasks_table.c.state.in_(bindparam("states", expanding=True)),
 )
-
-
-_BUILDING_COUNTS_STATES = (job_pb2.TASK_STATE_BUILDING, job_pb2.TASK_STATE_ASSIGNED)
 
 
 _BUILDING_COUNTS_STMT = (
@@ -819,7 +811,7 @@ def building_counts(tx: Tx, worker_ids: Sequence[WorkerId]) -> dict[WorkerId, in
         return {}
     rows = tx.execute(
         _BUILDING_COUNTS_STMT,
-        {"worker_ids": list(worker_ids), "states": list(_BUILDING_COUNTS_STATES)},
+        {"worker_ids": list(worker_ids), "states": sorted(DISPATCHED_TASK_STATES)},
     ).all()
     return {row.worker_id: int(row.cnt) for row in rows}
 
@@ -830,7 +822,7 @@ def running_tasks_by_worker(tx: Tx, worker_ids: set[WorkerId]) -> dict[WorkerId,
         return {}
     rows = tx.execute(
         _RUNNING_TASKS_BY_WORKER_STMT,
-        {"worker_ids": list(worker_ids), "states": list(_SCHEDULER_ACTIVE_TASK_STATES)},
+        {"worker_ids": list(worker_ids), "states": sorted(ACTIVE_TASK_STATES)},
     ).all()
     running: dict[WorkerId, set[JobName]] = {wid: set() for wid in worker_ids}
     for row in rows:
@@ -1106,7 +1098,7 @@ def attempt_counts_for_jobs(tx: Tx, job_ids: Sequence[JobName]) -> dict[JobName,
     }
 
 
-def all_attempts_for_tasks(tx: Tx, task_ids: Sequence[JobName]) -> dict[JobName, tuple[object, ...]]:
+def all_attempts_for_tasks(tx: Tx, task_ids: Sequence[JobName]) -> dict[JobName, tuple[AttemptDetailRow, ...]]:
     """Return ``{task_id: (attempt_row, ...)}`` with every attempt per task, ascending by attempt id.
 
     Returns the complete attempt history per task, with no per-task cap.
@@ -1119,9 +1111,10 @@ def all_attempts_for_tasks(tx: Tx, task_ids: Sequence[JobName]) -> dict[JobName,
         .order_by(task_attempts_table.c.task_id.asc(), task_attempts_table.c.attempt_id.asc()),
         {"task_ids": list(task_ids)},
     ).all()
-    grouped: dict[JobName, list[object]] = {}
+    grouped: dict[JobName, list[AttemptDetailRow]] = {}
     for row in rows:
-        grouped.setdefault(row.task_id, []).append(row)
+        attempt = AttemptDetailRow.from_row(row)
+        grouped.setdefault(attempt.task_id, []).append(attempt)
     return {task_id: tuple(attempts) for task_id, attempts in grouped.items()}
 
 
@@ -1763,8 +1756,6 @@ def row_counts(tx: Tx) -> RowCounts:
     )
 
 
-_EXECUTING_TASK_STATES = (int(job_pb2.TASK_STATE_BUILDING), int(job_pb2.TASK_STATE_RUNNING))
-
 _EXECUTION_TIMEOUT_STMT = (
     select(
         local_tasks.c.task_id,
@@ -1794,7 +1785,7 @@ def scan_execution_timeout_rows(tx: Tx) -> Sequence[Row]:
     Whether a task has actually exceeded its deadline is left to the caller,
     which holds the tick clock; this only returns the candidates.
     """
-    return tx.execute(_EXECUTION_TIMEOUT_STMT, {"executing_states": list(_EXECUTING_TASK_STATES)}).all()
+    return tx.execute(_EXECUTION_TIMEOUT_STMT, {"executing_states": sorted(EXECUTING_TASK_STATES)}).all()
 
 
 _RECONCILE_ROWS_STMT = (
@@ -1856,12 +1847,11 @@ def load_reconcile_rows(tx: Tx, worker_ids: Iterable[WorkerId]) -> list[Reconcil
 
 @dataclass(frozen=True, slots=True)
 class ControlSnapshot:
-    """The DB-less per-tick input the controller hands to a :class:`TaskBackend`.
+    """Controller-owned intermediate rows for reconcile and timeout phases.
 
-    One snapshot type feeds all three uniform backend methods; each control loop
-    populates the section its phase needs and leaves the rest empty (the
-    ``scan_timeouts`` flag is the pattern). The backend reads its section and
-    never touches the database.
+    Backends never receive this aggregate. The controller converts worker rows
+    into ``WorkerFleetReconcileRequest``, direct-dispatch rows into
+    ``DirectReconcileRequest``, and timeout rows into controller decisions.
 
     * ``worker_addresses`` — ``{worker_id: address}`` for active + healthy workers.
     * ``reconcile_rows`` — live ``(task, attempt, worker)`` tuples across those
@@ -1869,12 +1859,12 @@ class ControlSnapshot:
     * ``timeout_rows`` — executing tasks past their declared deadline; empty
       unless the caller requested the timeout sweep this tick.
     * ``job_specs`` — per-job ``RunTaskRequest`` templates for ASSIGNED reconcile
-      rows, so a worker-daemon backend can build its per-worker reconcile plans.
+      rows used to build per-worker reconcile plans.
     * ``tasks_to_run`` / ``running_tasks`` — the dispatch drain for a cluster
       backend that owns placement (built only when that backend reconciles).
 
     Worker liveness is never persisted and never read off the snapshot: the
-    controller owns its in-memory :class:`WorkerHealthTracker` directly and folds
+    controller owns its in-memory :class:`WorkerHealthTracker` directly and applies
     backend-observed health events into it. The tracker is passed to
     :func:`load_control_snapshot` only to select the live worker set.
     """

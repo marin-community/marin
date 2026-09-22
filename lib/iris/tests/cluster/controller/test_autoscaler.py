@@ -682,46 +682,6 @@ class TestAutoscalerStatusReporting:
         assert "test-group" in status.last_routing_decision.routed_entries
 
 
-class TestAutoscalerBootstrapLogs:
-    """Tests for bootstrap log reporting."""
-
-    def test_get_init_log_returns_bootstrap_output(self, scale_group_config: ScaleGroupConfig):
-        """Worker bootstrap logs are captured in autoscaler worker tracking."""
-        bootstrap_log = "line1\nline2\nline3"
-        mock_handle = make_mock_slice_handle("slice-001", all_ready=True, bootstrap_logs=[bootstrap_log])
-        platform = make_mock_platform(slices_to_discover=[mock_handle])
-        group = ScalingGroup(scale_group_config, platform)
-        autoscaler = make_autoscaler({"test-group": group})
-
-        group.reconcile()
-        autoscaler.run_once([], {}, timestamp=Timestamp.from_ms(1_000))
-
-        vm_id = mock_handle.describe().workers[0].worker_id
-        assert autoscaler.get_init_log(vm_id) == bootstrap_log
-        assert autoscaler.get_init_log(vm_id, tail=2) == "line2\nline3"
-
-    def test_get_vm_by_worker_id(self, scale_group_config: ScaleGroupConfig):
-        """get_vm() uses platform worker_id as the only lookup key."""
-        mock_handle = make_mock_slice_handle("slice-001", all_ready=True)
-        platform = make_mock_platform(slices_to_discover=[mock_handle])
-        group = ScalingGroup(scale_group_config, platform)
-        autoscaler = make_autoscaler({"test-group": group})
-
-        group.reconcile()
-        autoscaler.run_once([], {}, timestamp=Timestamp.from_ms(1_000))
-        workers = mock_handle.describe().workers
-
-        worker = workers[0]
-        # Lookup by platform worker_id
-        info = autoscaler.get_vm(worker.worker_id)
-        assert info is not None
-        assert info.scale_group == "test-group"
-
-        # Unknown keys return None -- no address fallback
-        assert autoscaler.get_vm(worker.internal_address) is None
-        assert autoscaler.get_vm("192.168.0.99") is None
-
-
 class TestAutoscalerQuotaHandling:
     """Tests for quota exceeded error handling."""
 

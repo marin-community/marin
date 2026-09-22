@@ -84,6 +84,7 @@ def test_weekly_lane_shows_one_missing_occurrence_and_six_quiet_non_occurrences(
     assert missing["healthy"] is False
     assert missing["status_code"] == 4
     assert missing["duration_state"] == "not-applicable"
+    assert missing["status"] is None
 
     not_scheduled = _cell(rows, weekly, "2026-07-17")
     assert not_scheduled["due"] is False
@@ -140,6 +141,34 @@ def test_too_short_success_is_excluded_from_health_but_baseline_pending_is_healt
     today_rows = [row for row in rows if row["date"] == "2026-07-17"]
     assert sum(row["due"] for row in today_rows) == 2
     assert sum(row["healthy"] for row in today_rows) == 1
+
+
+def test_projection_exposes_active_run_lifecycle_and_elapsed_duration():
+    active = _lane(id="active", short_label="Active")
+    now = datetime(2026, 7, 17, 15, 0, 0, tzinfo=UTC)
+
+    rows = project_nightlies(
+        [active],
+        [
+            _snapshot(
+                active.id,
+                [
+                    _run(
+                        status="in_progress",
+                        conclusion=None,
+                        run_started_at="2026-07-17T14:50:00.000Z",
+                        updated_at="2026-07-17T14:55:00.000Z",
+                    )
+                ],
+            )
+        ],
+        now,
+    )
+
+    today = _cell(rows, active, "2026-07-17")
+    assert today["status"] == "in_progress"
+    assert today["conclusion"] is None
+    assert today["duration_seconds"] == 600
 
 
 def test_projection_exposes_stable_lane_order_and_workflow_link():

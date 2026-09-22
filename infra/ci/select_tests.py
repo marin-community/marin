@@ -63,7 +63,8 @@ SOURCE_ROOTS: tuple[SourceRoot, ...] = (
     SourceRoot("infra/pulumi/src/iac", "infra/pulumi/src"),
     SourceRoot("experiments", "."),
     SourceRoot("infra/ci", "."),
-    SourceRoot("infra/evaldash/src", "."),
+    SourceRoot("infra/marina/src/marina", "infra/marina/src"),
+    SourceRoot("infra/marina/apps", "infra/marina/apps"),
 )
 
 # Dependency and native-build changes can affect every local test environment.
@@ -111,11 +112,11 @@ RUN_ALL_REASON = "run-all-tests"
 BROAD_TRIGGER_REASON = "broad-trigger"
 DIFF_DRIVEN_REASON = "diff-driven"
 
-TEST_DIR: dict[str, str] = {
-    **{scope: f"lib/{scope}/tests" for scope in UV_PACKAGE if scope not in {"deploy", "iac", "marin"}},
-    "deploy": "infra/deploy/tests",
-    "iac": "infra/pulumi/tests",
-    "marin": "tests",
+TEST_DIRS: dict[str, tuple[str, ...]] = {
+    **{scope: (f"lib/{scope}/tests",) for scope in UV_PACKAGE if scope not in {"deploy", "iac", "marin"}},
+    "deploy": ("infra/deploy/tests",),
+    "iac": ("infra/pulumi/tests",),
+    "marin": ("tests", "experiments"),
 }
 
 # Levanter's suite is the only unit leg that runs long enough to be worth spreading over
@@ -325,20 +326,18 @@ def has_static_test_items(path: Path) -> bool:
 
 
 def _test_tree(scope: str, repo_root: Path) -> dict[str, Path]:
-    """Every .py under a scope's test directory, keyed by its repo-root module name.
+    """Python files in a scope's test directories, keyed by repository-root module name.
 
     Package test trees need distinct internal names so dependency analysis does
     not conflate same-named helpers in different packages. Relative imports
     resolve against the same canonical name.
     """
-    test_dir = repo_root / TEST_DIR[scope]
-    if not test_dir.exists():
-        return {}
     tree: dict[str, Path] = {}
-    for py in test_dir.rglob("*.py"):
-        module = path_to_module(py, repo_root)
-        if module:
-            tree[module] = py
+    for directory in TEST_DIRS[scope]:
+        for py in (repo_root / directory).rglob("*.py"):
+            module = path_to_module(py, repo_root)
+            if module:
+                tree[module] = py
     return tree
 
 
@@ -454,15 +453,27 @@ def classify(
                 module = path_to_module(repo_root / filepath, repo_root / source_root.import_root)
                 if module:
                     src_modules.add(module)
-            continue
 
         for scope in SCOPES:
-            if filepath.startswith(f"{TEST_DIR[scope]}/"):
+            if any(filepath.startswith(f"{directory}/") for directory in TEST_DIRS[scope]):
+                # Experiments contain source and tests. Ordinary source changes select
+                # dependent tests through the import graph.
+                filename = PurePosixPath(filepath).name
+                if (
+                    source_root is not None
+                    and filepath.endswith(".py")
+                    and filename != "conftest.py"
+                    and not is_test_module(filename)
+                ):
+                    # Deleted modules have no edges in the current import graph.
+                    if not (repo_root / filepath).exists():
+                        forced.add(scope)
+                    break
                 # conftest.py, helper modules (stubs, workload scripts, generators), and
                 # non-Python assets (snapshots, fixtures, data files) can all change test
                 # behavior without being directly collectable: run the full scope so the
                 # tests that own this file are not missed.
-                if not is_test_module(PurePosixPath(filepath).name):
+                if not is_test_module(filename):
                     forced.add(scope)
                 elif (repo_root / filepath).exists() and has_static_test_items(repo_root / filepath):
                     direct_tests[scope].append(filepath)
@@ -589,7 +600,7 @@ def matrix_leg(
         python=PYTHON_VERSION,
         extras=" ".join(f"--extra {extra}" for extra in UV_EXTRAS.get(scope, [])),
         pytest_args=" ".join(PYTEST_ARGS),
-        test_paths=" ".join(tests) if tests else TEST_DIR[scope],
+        test_paths=" ".join(tests or TEST_DIRS[scope]),
         setup=RUST_SETUP_TAG if source_build else "",
         timeout=SOURCE_BUILD_TIMEOUT if source_build else DEFAULT_LEG_TIMEOUT,
     )
@@ -723,7 +734,7 @@ def accelerator_suite_test_paths(
     torch_paths: list[str] = []
     tpu_paths: list[str] = []
     for test_path in selected:
-        if test_path == TEST_DIR["levanter"]:
+        if test_path in TEST_DIRS["levanter"]:
             torch_paths.append(test_path)
             tpu_paths.append(test_path)
             continue

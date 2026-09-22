@@ -358,13 +358,35 @@ def test_merge_sorted_chunks_skips_empty_target_shard(tmp_path):
     scatter_paths = _build_shard(tmp_path, [{"k": key, "v": 1}], num_output_shards=2)
     reader = ScatterReader.from_sidecars(scatter_paths, empty_shard)
 
-    assert reader.total_chunks > 0
+    assert reader.total_chunks == 0
     assert reader.shard_payload_bytes == 0
     with patch(
         "zephyr.shuffle.memory_budget.read_merge_fan_in",
         side_effect=AssertionError("empty target shards do not need memory planning"),
     ):
         assert list(reader.merge_sorted_chunks(external_sort_dir=str(tmp_path / "sort"))) == []
+
+
+def test_scatter_reader_skips_mappers_with_no_rows_for_target(tmp_path):
+    """A reducer opens only the chunk files of mappers that routed rows to it."""
+    keys = [next(k for k in range(100) if _target(k, 2) == target) for target in (0, 1)]
+
+    # Each mapper writes one item, and the two items route to different targets.
+    scatter_paths = []
+    for source_shard, key in enumerate(keys):
+        scatter_paths.extend(
+            _build_shard(
+                tmp_path,
+                [{"k": key, "v": source_shard}],
+                num_output_shards=2,
+                source_shard=source_shard,
+            )
+        )
+
+    reader = ScatterReader.from_sidecars(scatter_paths, 0)
+
+    assert reader.total_chunks == 1, "reducer kept a chunk file from the mapper that wrote nothing for it"
+    assert list(reader.merge_sorted_chunks(external_sort_dir=str(tmp_path / "sort"))) == [{"k": keys[0], "v": 0}]
 
 
 def test_scatter_null_keys(tmp_path):
@@ -671,6 +693,33 @@ def test_merge_sorted_frames_cleans_up(tmp_path):
     assert list(tmp_path.iterdir()) == [], "run files should be deleted after merge"
 
 
+def test_merge_sorted_frames_cleanup_survives_one_failed_delete(tmp_path, monkeypatch):
+    """One spill run that cannot be deleted must not strand the rest of the run files."""
+    fan_in = 4
+    frames = [_make_sorted_frame([i]) for i in range(fan_in + 1)]
+    doomed_name = "pass-0000-run-0000.spill"
+    real_rm = StoragePath.rm
+
+    def rm(self: StoragePath) -> None:
+        if self.name == doomed_name:
+            raise OSError("transient delete failure")
+        real_rm(self)
+
+    monkeypatch.setattr(StoragePath, "rm", rm)
+
+    list(
+        _merge_sorted_frames(
+            frames,
+            sort_key=_SORT_KEY_COL,
+            external_sort_dir=str(tmp_path),
+            fan_in=fan_in,
+            shard=0,
+        )
+    )
+
+    assert [path.name for path in tmp_path.iterdir()] == [doomed_name]
+
+
 def test_fan_in_groups_bounds_every_group():
     """No group exceeds fan_in, and every item survives across a size that forces multiple groups."""
     fan_in = 3
@@ -830,3 +879,25 @@ def test_sidecar_reads_build_one_client(tmp_path):
 
     assert [sidecar.path for sidecar in sidecars] == paths
     assert _CountingFileSystem.clients_built == 1
+
+
+def test_scatter_reader_reports_input_totals_including_empty_targets(tmp_path):
+    rows = [{"k": 1, "v": value} for value in range(9)] + [{"k": 3, "v": 100}]
+    paths = [str(tmp_path / f"mapper-{index}") + "/" for index in range(3)]
+    for index, chunk in enumerate((rows[:5], rows[5:], [])):
+        _write_scatter(iter(chunk), index, paths[index], key_fn=lambda row: row["k"], num_output_shards=8)
+
+    expected_rows = [0] * 8
+    for row in rows:
+        expected_rows[deterministic_hash(row["k"]) % 8] += 1
+    for target, count in enumerate(expected_rows):
+        reader = ScatterReader.from_sidecars(paths, target)
+        assert reader.shard_payload_rows == count == len(_read_shard(reader))
+        assert reader.shard_payload_bytes == sum(
+            len(cloudpickle.dumps(row)) for row in rows if deterministic_hash(row["k"]) % 8 == target
+        )
+        assert reader.contributing_sidecars == sum(
+            any(deterministic_hash(row["k"]) % 8 == target for row in chunk) for chunk in (rows[:5], rows[5:], [])
+        )
+    empty_reader = ScatterReader.from_sidecars([], 0)
+    assert empty_reader.shard_payload_rows == empty_reader.shard_payload_bytes == empty_reader.contributing_sidecars == 0

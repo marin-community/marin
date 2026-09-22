@@ -224,6 +224,8 @@ gha-creds-*.json
 
 *.jsonl
 **/*.jsonl
+# Echo's judged search corpus is source, not a run artifact.
+!infra/marina/apps/echo/benchmarks/*.jsonl
 scr/*
 .weaver/
 

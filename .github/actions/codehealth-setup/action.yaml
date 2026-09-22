@@ -1,0 +1,30 @@
+name: Set up code-health environment
+description: Install Python dependencies and authenticate to Finelog.
+
+inputs:
+  gcp-credentials-json:
+    description: Google Cloud service-account credentials.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.12"
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+      with:
+        enable-cache: true
+        cache-dependency-glob: uv.lock
+
+    - name: Sync environment
+      shell: bash
+      run: uv sync --all-packages --extra=cpu --no-default-groups
+
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v3
+      with:
+        credentials_json: ${{ inputs.gcp-credentials-json }}

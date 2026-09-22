@@ -189,6 +189,11 @@
               "type": "string"
             },
             {
+              "selector": "status",
+              "text": "status",
+              "type": "string"
+            },
+            {
               "selector": "duration_state",
               "text": "duration_state",
               "type": "string"

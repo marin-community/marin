@@ -7,8 +7,10 @@ description: Diagnose a stated code, JAX, Marin, Iris, Zephyr, or TPU fault or s
 
 Keep working notes in the active task. Do not add repository debug-log files.
 Use `consult-echo` when repository policy requires prior-work search. After
-every incident handled by this workflow, use `write-ops-log` to publish its
-standalone Echo record and link it from the associated PR or issue.
+diagnosing a live infrastructure incident, use `write-ops-log` to publish its
+standalone Echo record and link it from the associated PR or issue. A code bug
+or local debugging session is not an incident unless it caused a service,
+production run, or shared operational system to fail or degrade.
 
 ## Infrastructure faults
 

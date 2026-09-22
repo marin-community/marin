@@ -119,3 +119,19 @@ export interface SegmentsResponse {
   namespace: string
   segments: SegmentInfo[]
 }
+
+export interface ForwardingTargetInfo {
+  target: string
+  settledCursor: number | null
+  forwardingLagSeqPositions: number | null
+}
+
+export interface ForwardingResponse {
+  namespace: string
+  configured: boolean
+  cluster: string | null
+  visibleHighWater: number
+  publishedHighWater: number
+  publicationLagSeqPositions: number
+  target: ForwardingTargetInfo | null
+}

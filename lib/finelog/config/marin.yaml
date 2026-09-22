@@ -5,6 +5,9 @@ remote_log_dir: gs://marin-us-central2/finelog/marin
 client_url: iap+https://iris.oa.dev/proxy/system.log-server
 query_metadata_cache_mb: 3072
 query_index_cache_mb: 1024
+# 492G boot disk; leaves room for legacy-layout tables still on local parquet
+# (shrinks as they migrate) plus staging headroom.
+object_cache_gb: 250
 telemetry_migration_mode: normal
 deployment:
   gcp:

@@ -88,13 +88,6 @@ def test_resolve_mounts_workdir_requires_host_path(tmp_path):
         runtime.resolve_mounts(mounts)
 
 
-def test_prepare_workdir_is_noop(tmp_path, runtime):
-    """prepare_workdir is a no-op since cache_dir is already on /dev/shm."""
-    workdir = tmp_path / "task-workdir"
-    workdir.mkdir()
-    runtime.prepare_workdir(workdir, disk_bytes=1024 * 1024 * 512)
-
-
 @pytest.mark.parametrize(
     ("device", "memory_bytes", "expected_shm_mb"),
     [

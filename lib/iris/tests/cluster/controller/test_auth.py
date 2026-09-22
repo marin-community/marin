@@ -84,7 +84,6 @@ def _make_service(db, log_client, auth=None):
     controller_mock.wake = Mock()
     controller_mock.get_job_scheduling_diagnostics = Mock(return_value="")
     controller_mock.backend = Mock()
-    controller_mock.backend.autoscaler = None
     controller_mock.backend.descriptor = worker_backend_descriptor()
     return ControllerServiceImpl(
         controller=controller_mock,
@@ -117,7 +116,6 @@ def service(state, tmp_path, log_client):
     controller_mock = Mock()
     controller_mock.wake = Mock()
     controller_mock.backend = Mock()
-    controller_mock.backend.autoscaler = None
     controller_mock.backend.descriptor = worker_backend_descriptor()
     return ControllerServiceImpl(
         controller=controller_mock,
@@ -639,26 +637,6 @@ def test_dashboard_interceptor_allows_read_for_iap_browser():
     result = interceptor.intercept_unary_sync(handler, "req", _assertion_ctx("ListJobs"))
     assert result == "ok"
     assert seen == [VerifiedIdentity(user_id="alice@example.com", role=DASHBOARD_ROLE)]
-
-
-def test_dashboard_role_can_list_registered_job_resources(service):
-    policy = RequestAuthPolicy.enforcing(
-        verifier=MockVerifier({}),
-        iap_assertion_verifier=_StubAssertionVerifier(),
-    )
-    dashboard = ControllerDashboard(service, auth_provider="iap", auth_policy=policy)
-
-    response = TestClient(dashboard.app).post(
-        "/iris.resource.ResourceService/List",
-        json={
-            "resourceType": "job",
-            "input": {"@type": "type.googleapis.com/iris.cluster.Controller.ListJobsRequest"},
-        },
-        headers={"x-goog-iap-jwt-assertion": "signed.assertion.jwt"},
-    )
-
-    assert response.status_code == 200
-    assert response.json() == {"page": {"totalCount": "0", "hasMore": False}}
 
 
 def test_dashboard_interceptor_denies_mutation_for_iap_browser():

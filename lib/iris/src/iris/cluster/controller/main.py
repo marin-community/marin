@@ -279,12 +279,10 @@ def run_controller_serve(
 
     backend = make_backend(
         cluster_config,
-        db=db,
         auth=auth,
         remote_state_dir=remote_state_dir,
         dry_run=dry_run,
         log_stack=log_stack,
-        unreachable_grace=config.worker_unreachable_grace,
     )
 
     logger.info("Configuration: host=%s port=%d remote_state_dir=%s", host, port, remote_state_dir)

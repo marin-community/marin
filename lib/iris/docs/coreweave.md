@@ -190,9 +190,11 @@ Choose the Iris band for operational importance; Iris derives the tier from the
 request shape.
 
 The lowest batch Workload priority is `0`. CoreWeave node-health-check Pods use
-Kubernetes priority `-1`, and Iris batch Pods retain Kubernetes priority `0`.
-Kueue Workload priority and Kubernetes Pod priority are separate scheduling
-domains, but neither representation places Iris work below the health checker.
+Kubernetes priority `-1`, bypass Kueue, and carry Kueue's unconstrained-topology
+annotation so they do not consume TAS capacity. Iris batch Pods use priority `0`
+with `PreemptLowerPriority`. Kueue can therefore admit Iris work against that
+capacity, after which kube-scheduler preempts only the lower-priority health-check
+Pods needed for placement. Iris does not delete verification Pods directly.
 
 ```mermaid
 flowchart TD
@@ -294,7 +296,6 @@ their Kubernetes service account inside the cluster.
 | `kubernetes_provider.controller_address` | In-cluster controller address injected into task Pods. |
 | `kubernetes_provider.kueue.cluster_queue` | Pulumi-owned ClusterQueue to which Iris binds its LocalQueue. This is required. |
 | `kubernetes_provider.kueue.topologies` | Optional `group_by` to CoreWeave node-label mappings. |
-| `kubernetes_provider.preempt_namespaces` | Namespaces containing provider health-check Pods that Iris may clear when they block an admitted GPU job. |
 
 An empty `kubernetes_provider.kubeconfig` means in-cluster authentication. That
 is the normal CoreWeave controller configuration.

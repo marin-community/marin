@@ -12,13 +12,13 @@ from time import monotonic
 from typing import Any, Callable
 
 from levanter.callbacks._core import Callback, ProgressEvent, StepInfo
+from levanter.recovery.types import EXIT_STALL
 
 
 logger = logging.getLogger(__name__)
 
 _WATCHDOG_POLL_INTERVAL = 60.0
 _DEFAULT_STARTUP_GRACE_PERIOD = timedelta(hours=1)
-STALLED_TRAINING_EXIT_CODE = 124
 
 
 @dataclass(frozen=True)
@@ -153,7 +153,7 @@ class ProgressWatchdog(Callback[Any]):
                 event.value,
                 elapsed,
                 timeout,
-                STALLED_TRAINING_EXIT_CODE,
+                EXIT_STALL,
             )
             if self._diagnostic is not None:
                 assert self._diagnostic_timeout is not None
@@ -168,7 +168,7 @@ class ProgressWatchdog(Callback[Any]):
                 if diagnostic.is_alive():
                     logger.error("Progress diagnostic exceeded its %.1f second budget", self._diagnostic_timeout)
         finally:
-            os._exit(STALLED_TRAINING_EXIT_CODE)
+            os._exit(EXIT_STALL)
 
     def _run_diagnostic(self, timeout: ProgressTimeout) -> None:
         try:

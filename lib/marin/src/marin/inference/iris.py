@@ -3,6 +3,7 @@
 
 """Start inference workers through Iris."""
 
+import argparse
 import contextlib
 import logging
 import time
@@ -24,17 +25,30 @@ from rigging.connect import capability_path, proxy_path
 from rigging.log_setup import configure_logging
 from rigging.timing import Deadline, Duration
 
-from marin.inference.backend import OPENAI_API_SUFFIX
+from marin.inference.backend import OPENAI_API_SUFFIX, ModelSpec
 from marin.inference.broker import InferenceBroker
+from marin.inference.chat_template_protocol import protocol_for_chat_template
 from marin.inference.config import (
     BrokerConfig,
+    EffectiveServing,
     IrisConfig,
     LevanterEngineConfig,
     RemoteInferenceConfig,
     ServedModelConfig,
     VllmEngineConfig,
 )
-from marin.inference.dashboard_server import ServingInfo, bind_serving_socket, build_dashboard_app, serve_app_background
+from marin.inference.dashboard_server import (
+    ServingInfo,
+    bind_serving_socket,
+    build_dashboard_app,
+    serve_app_background,
+)
+from marin.inference.iris_vllm import (
+    iris_vllm_followers,
+    iris_vllm_launch,
+    notify_iris_vllm_stopped,
+    wait_for_iris_vllm_shutdown,
+)
 from marin.inference.proxy import serve_inference_proxy
 from marin.inference.serve import LocalInferenceSession, local_inference
 from marin.inference.types import (
@@ -50,11 +64,19 @@ logger = logging.getLogger(__name__)
 
 _TIMEOUT_POLL_SECONDS = 30
 _ENDPOINT_READY_POLL_SECONDS = 2.0
+# Bound on time spent queued (pending/building) before the server job is placed.
+# Distinct from the readiness timeout, which budgets server startup and only
+# counts while the job is actually running.
+_ENDPOINT_PLACEMENT_TIMEOUT_SECONDS = 4 * 3600.0
 _ENDPOINT_PROBE_TIMEOUT_SECONDS = 5.0
 _METADATA_MODEL = "model"
 _METADATA_KIND = "kind"
 _METADATA_BACKEND = "backend"
 _METADATA_TENSOR_PARALLEL_SIZE = "tensor_parallel_size"
+_METADATA_DATA_PARALLEL_SIZE = "data_parallel_size"
+_METADATA_PIPELINE_PARALLEL_SIZE = "pipeline_parallel_size"
+_METADATA_TASK_COUNT = "task_count"
+_METADATA_MAX_MODEL_LEN = "max_model_len"
 _METADATA_STREAMING = "streaming"
 _MARIN_SERVE_KIND = "marin-serve"
 _CAPABILITY_TTL = Duration.from_hours(24 * 7)
@@ -85,6 +107,7 @@ class RemoteInferenceSession:
     streaming: bool
     tensor_parallel_size: int
     backend_name: str
+    effective_serving: EffectiveServing | None = None
 
     def check_alive(self) -> None:
         """Raise when any inference worker has reached a terminal state."""
@@ -161,12 +184,18 @@ class IrisServiceConfig:
     instances: int = 1
     broker: BrokerConfig | None = None
     timeout_hours: float = 24.0
-    controller_proxy_timeout_seconds: float = 2100.0
+    # Covers both the Iris proxy and dashboard upstream client for long generations.
+    controller_proxy_timeout_seconds: float = 12 * 60 * 60
     port_name: str | None = "http"
 
     def __post_init__(self) -> None:
-        if self.instances <= 0:
-            raise ValueError("instances must be positive")
+        RemoteInferenceConfig(
+            model=self.model,
+            engine=self.engine,
+            iris=self.iris,
+            instances=self.instances,
+            broker=self.broker,
+        )
 
 
 def _broker_config(instances: int, broker: BrokerConfig | None) -> BrokerConfig | None:
@@ -228,8 +257,9 @@ def _endpoint_metadata(
     tensor_parallel_size: int,
     streaming: bool,
     proxy_timeout_seconds: float,
+    effective_serving: EffectiveServing | None = None,
 ) -> dict[str, str]:
-    return {
+    metadata = {
         _METADATA_MODEL: model,
         _METADATA_KIND: _MARIN_SERVE_KIND,
         _METADATA_BACKEND: backend,
@@ -237,6 +267,41 @@ def _endpoint_metadata(
         _METADATA_STREAMING: str(streaming).lower(),
         PROXY_TIMEOUT_METADATA_KEY: str(proxy_timeout_seconds),
     }
+    if effective_serving is not None:
+        metadata.update(
+            {
+                _METADATA_PIPELINE_PARALLEL_SIZE: str(effective_serving.pipeline_parallel_size),
+                _METADATA_DATA_PARALLEL_SIZE: str(effective_serving.data_parallel_size or 1),
+                _METADATA_TASK_COUNT: str(effective_serving.task_count),
+                _METADATA_MAX_MODEL_LEN: (
+                    str(effective_serving.max_model_len) if effective_serving.max_model_len is not None else ""
+                ),
+            }
+        )
+        metadata[_METADATA_TENSOR_PARALLEL_SIZE] = str(effective_serving.tensor_parallel_size)
+    return metadata
+
+
+def _effective_serving(
+    model: ServedModelConfig,
+    engine: VllmEngineConfig | LevanterEngineConfig,
+    iris: IrisConfig,
+    tensor_parallel_size: int,
+) -> EffectiveServing:
+    geometry = iris.serving_geometry
+    parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    parser.add_argument("--tensor-parallel-size", type=int, default=tensor_parallel_size)
+    parser.add_argument("--data-parallel-size", type=int, default=geometry.data_parallel_size if geometry else 1)
+    parser.add_argument("--max-model-len", default=model.max_model_len)
+    options, _ = parser.parse_known_args(engine.extra_args if isinstance(engine, VllmEngineConfig) else ())
+    context = options.max_model_len
+    return EffectiveServing(
+        tensor_parallel_size=options.tensor_parallel_size,
+        data_parallel_size=options.data_parallel_size,
+        pipeline_parallel_size=geometry.pipeline_parallel_size if geometry else 1,
+        task_count=iris.worker_resources.replicas,
+        max_model_len=int(context) if context is not None and str(context).isdigit() else None,
+    )
 
 
 def _new_endpoint_identity() -> tuple[str, str]:
@@ -269,6 +334,15 @@ def _detect_chat_support(model: RunningModel) -> bool:
     return response.status_code == 200
 
 
+def _model_tool_chat_template(model: ServedModelConfig) -> str | None:
+    if model.chat_template_content is not None:
+        return model.chat_template_content
+    # Keep tokenizer and Transformers imports inside the serving worker.
+    from marin.inference.model_preparation import read_tool_chat_template  # noqa: PLC0415
+
+    return read_tool_chat_template(model.tokenizer or model.weights, model.revision)
+
+
 @contextlib.contextmanager
 def _register_dashboard(
     service: IrisServiceConfig,
@@ -277,6 +351,7 @@ def _register_dashboard(
     tensor_parallel_size: int,
     backend_name: str,
     streaming: bool,
+    chat_template_content: str | None,
 ) -> Iterator[None]:
     job_info = get_job_info()
     if job_info is None:
@@ -295,6 +370,7 @@ def _register_dashboard(
         has_chat_template=has_chat_template,
         endpoint=service.endpoint_name,
         streaming=streaming,
+        chat_template_protocol=protocol_for_chat_template(chat_template_content),
     )
     app = build_dashboard_app(
         upstream_base_url=_server_root(model),
@@ -310,6 +386,7 @@ def _register_dashboard(
             tensor_parallel_size=tensor_parallel_size,
             streaming=streaming,
             proxy_timeout_seconds=service.controller_proxy_timeout_seconds,
+            effective_serving=_effective_serving(service.model, service.engine, service.iris, tensor_parallel_size),
         )
         with ctx.registry.registered(
             service.endpoint_name,
@@ -337,6 +414,15 @@ def run_iris_service(service: IrisServiceConfig) -> None:
     """Run a long-lived direct or brokered Iris endpoint."""
 
     configure_logging()
+    job_info = get_job_info()
+    if job_info is None:
+        raise RuntimeError("Iris service must run inside an Iris job")
+    if job_info.num_tasks != service.iris.worker_resources.replicas:
+        raise ValueError("Iris task count must match the serving resource replicas")
+    geometry = service.iris.serving_geometry
+    if geometry is not None and geometry.task_count > 1:
+        _run_pipeline_service(service)
+        return
     broker = _broker_config(service.instances, service.broker)
     if broker is None:
         with _prepared_local_inference(service.model, service.engine, service.iris) as local_session:
@@ -347,6 +433,7 @@ def run_iris_service(service: IrisServiceConfig) -> None:
                 tensor_parallel_size=tensor_parallel_size,
                 backend_name=local_session.backend_name,
                 streaming=True,
+                chat_template_content=local_session.chat_template_content,
             ):
                 _block_until_timeout(local_session.check_alive, service.timeout_hours)
         return
@@ -366,21 +453,93 @@ def run_iris_service(service: IrisServiceConfig) -> None:
             tensor_parallel_size=session.tensor_parallel_size,
             backend_name=session.backend_name,
             streaming=session.streaming,
+            chat_template_content=_model_tool_chat_template(service.model),
         ):
             _block_until_timeout(session.check_alive, service.timeout_hours)
 
 
+def _run_pipeline_service(service: IrisServiceConfig) -> None:
+    from marin.inference.vllm_backend import VllmBackend  # noqa: PLC0415
+
+    geometry = service.iris.serving_geometry
+    assert geometry is not None
+    assert isinstance(service.engine, VllmEngineConfig)
+    model, num_chips = _resolved_model(service.model, service.iris)
+    spec = ModelSpec(
+        weights=model.weights,
+        api_model=model.model_id,
+        num_chips=num_chips,
+        tensor_parallel_size=None,
+        dtype=model.dtype,
+        max_model_len=model.max_model_len,
+        chat_template_content=model.chat_template_content,
+        revision=model.revision,
+    )
+    backend = VllmBackend(service.engine)
+    with iris_vllm_launch(
+        pipeline_parallel_size=geometry.pipeline_parallel_size,
+        tensor_parallel_size=geometry.tensor_parallel_size,
+        data_parallel_size=geometry.data_parallel_size,
+    ) as launch:
+        with backend.start(spec, extra_args=launch.extra_cli_args, subprocess_env=launch.subprocess_env) as environment:
+            if launch.is_leader:
+                with iris_vllm_followers(launch):
+                    environment.wait_until_ready()
+                    running_model = RunningModel(
+                        endpoint=OpenAIEndpoint(base_url=environment.server_url, model=model.model_id),
+                        tokenizer=model.tokenizer,
+                    )
+                    with _register_dashboard(
+                        service,
+                        running_model,
+                        tensor_parallel_size=geometry.tensor_parallel_size,
+                        backend_name=backend.name,
+                        streaming=True,
+                        chat_template_content=_model_tool_chat_template(service.model),
+                    ):
+                        _block_until_timeout(environment.check_alive, service.timeout_hours)
+            else:
+                wait_for_iris_vllm_shutdown(launch, environment.check_alive)
+        if not launch.is_leader:
+            notify_iris_vllm_stopped(launch)
+
+
+_PLACED_TASK_STATES = frozenset({TaskState.ASSIGNED, TaskState.BUILDING, TaskState.RUNNING})
+
+
 def _wait_for_endpoint(job: JobHandle, endpoint_name: str, timeout_seconds: float) -> tuple[str, dict[str, str]]:
+    """Wait for the serving job to register its endpoint.
+
+    ``timeout_seconds`` budgets server startup and counts only while a task of
+    the serving job is placed (assigned, building, or running); queue time is
+    bounded separately so a long scheduling wait cannot consume the startup
+    budget, and a preemption requeue resets the startup clock. Placement is
+    read from task state because Iris keeps a started job RUNNING while a
+    preempted task requeues.
+    """
     ctx = iris_ctx()
-    deadline = time.monotonic() + timeout_seconds
-    while time.monotonic() < deadline:
+    job_name = JobName.from_string(str(job.job_id))
+    placement_deadline = Deadline.from_seconds(_ENDPOINT_PLACEMENT_TIMEOUT_SECONDS)
+    ready_deadline: Deadline | None = None
+    while True:
         endpoints = ctx.client.list_endpoint_instances(endpoint_name)
         if endpoints:
             return endpoints[0].address, dict(endpoints[0].metadata)
         if job.status().value in {"succeeded", "failed", "stopped"}:
             raise RuntimeError(f"Inference job {job.job_id} finished before registering {endpoint_name!r}")
+        if any(task.state in _PLACED_TASK_STATES for task in ctx.client.list_tasks(job_name)):
+            if ready_deadline is None:
+                ready_deadline = Deadline.from_seconds(timeout_seconds)
+            if ready_deadline.expired():
+                raise TimeoutError(f"Timed out waiting for inference endpoint {endpoint_name!r}")
+        else:
+            ready_deadline = None
+            if placement_deadline.expired():
+                raise TimeoutError(
+                    f"Timed out waiting for inference job {job.job_id} to be placed "
+                    f"(queued for {_ENDPOINT_PLACEMENT_TIMEOUT_SECONDS:.0f}s)"
+                )
         time.sleep(_ENDPOINT_READY_POLL_SECONDS)
-    raise TimeoutError(f"Timed out waiting for inference endpoint {endpoint_name!r}")
 
 
 @contextlib.contextmanager
@@ -423,6 +582,7 @@ def _start_direct_inference(
             environment=iris.worker_environment,
             max_retries_failure=iris.max_retries_failure,
             max_retries_preemption=iris.max_retries_preemption,
+            max_task_failures=iris.max_retries_failure,
             priority=iris.priority,
         )
     )
@@ -435,6 +595,13 @@ def _start_direct_inference(
             )
             tensor_parallel_size = int(metadata[_METADATA_TENSOR_PARALLEL_SIZE])
             backend_name = metadata[_METADATA_BACKEND]
+            effective_serving = EffectiveServing(
+                tensor_parallel_size=tensor_parallel_size,
+                data_parallel_size=int(metadata[_METADATA_DATA_PARALLEL_SIZE]),
+                pipeline_parallel_size=int(metadata[_METADATA_PIPELINE_PARALLEL_SIZE]),
+                task_count=int(metadata[_METADATA_TASK_COUNT]),
+                max_model_len=int(metadata[_METADATA_MAX_MODEL_LEN]) if metadata[_METADATA_MAX_MODEL_LEN] else None,
+            )
         except Exception as exc:
             raise RemoteInferenceStartupError(
                 f"Inference job {job.job_id} failed to register a usable endpoint: {exc}",
@@ -456,6 +623,7 @@ def _start_direct_inference(
             streaming=True,
             tensor_parallel_size=tensor_parallel_size,
             backend_name=backend_name,
+            effective_serving=effective_serving,
         )
     finally:
         _terminate_job(job)
@@ -513,6 +681,7 @@ def _submit_broker_workers(
                     environment=iris.worker_environment,
                     max_retries_failure=broker.max_retries_failure,
                     max_retries_preemption=broker.max_retries_preemption,
+                    max_task_failures=broker.max_retries_failure,
                     priority=iris.priority,
                 )
             )
@@ -581,6 +750,7 @@ def _expose_brokered_inference(
                 streaming=False,
                 tensor_parallel_size=worker_metadata.tensor_parallel_size,
                 backend_name=worker_metadata.backend_name,
+                effective_serving=_effective_serving(model, config.engine, iris, worker_metadata.tensor_parallel_size),
             )
 
 

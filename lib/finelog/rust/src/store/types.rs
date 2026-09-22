@@ -1,8 +1,6 @@
-//! Leaf vocabulary for the store layer.
-//!
-//! Metadata types (`SegmentRow` / `SegmentLocation` / `LocalSegment`) plus the
-//! segment-filename helpers (`seg_filename` / `parse_seg_filename`) used by the
-//! flush path and the rebuild-from-disk catalog scan.
+//! Leaf vocabulary for the store layer: segment metadata types, per-namespace
+//! aggregate stats, and the segment filename/key helpers shared by the flush
+//! path and the rebuild-from-disk catalog scan.
 
 use std::sync::OnceLock;
 
@@ -58,9 +56,9 @@ pub struct SegmentRow {
 ///
 /// The deque only ever holds `Local` or `Both` entries; eviction flips to
 /// `Remote` and removes the entry. Segments are created `Local` at flush time.
-/// `min_key_value` / `max_key_value` are the Int64 key bounds when the
-/// namespace's key column is an Int64/timestamp column carrying parquet
-/// statistics.
+/// `min_key_value` / `max_key_value` are the key bounds encoded in the key
+/// column's logical representation. Query planning interprets them using the
+/// table schema, so both Int64/timestamp and UTF-8 keys retain native ordering.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalSegment {
     pub path: String,
@@ -70,32 +68,42 @@ pub struct LocalSegment {
     pub max_seq: i64,
     pub row_count: i64,
     pub created_at_ms: i64,
-    pub min_key_value: Option<i64>,
-    pub max_key_value: Option<i64>,
+    pub min_key_value: Option<String>,
+    pub max_key_value: Option<String>,
     pub partition: Option<SegmentPartition>,
     pub location: SegmentLocation,
+    /// The local files this segment's advertised artifacts resolve to. Empty
+    /// until an index build commits them.
+    pub artifacts: crate::store::table_state::LocalArtifacts,
+}
+
+/// The catalog row mirroring `segment` (key bounds stringified at the catalog
+/// boundary).
+pub fn segment_to_row(namespace: &str, segment: &LocalSegment) -> SegmentRow {
+    SegmentRow {
+        namespace: namespace.to_string(),
+        path: segment.path.clone(),
+        level: segment.level,
+        min_seq: segment.min_seq,
+        max_seq: segment.max_seq,
+        row_count: segment.row_count,
+        byte_size: segment.size_bytes,
+        created_at_ms: segment.created_at_ms,
+        min_key_value: segment.min_key_value.clone(),
+        max_key_value: segment.max_key_value.clone(),
+        partition: segment.partition.clone(),
+        location: segment.location,
+    }
 }
 
 /// Aggregate counters for one namespace's persisted segments.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct NamespaceStats {
     pub row_count: i64,
     pub byte_size: i64,
     pub min_seq: i64,
     pub max_seq: i64,
     pub segment_count: i32,
-}
-
-impl NamespaceStats {
-    pub fn empty() -> NamespaceStats {
-        NamespaceStats {
-            row_count: 0,
-            byte_size: 0,
-            min_seq: 0,
-            max_seq: 0,
-            segment_count: 0,
-        }
-    }
 }
 
 /// Aggregate in-RAM accounting across live namespaces for the diagnostics line:

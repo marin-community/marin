@@ -1,0 +1,88 @@
+{
+  "type": "stat",
+  "title": "Preemptions",
+  "description": "Reset-aware counter total. Preemption can indicate KV-cache pressure; it is not a failed request. Missing records stay unknown, not zero.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "unit": "short",
+      "decimals": 0,
+      "noValue": "See query status above",
+      "color": {
+        "mode": "fixed",
+        "fixedColor": "blue"
+      }
+    },
+    "overrides": []
+  },
+  "options": {
+    "reduceOptions": {
+      "values": false,
+      "calcs": [
+        "lastNotNull"
+      ],
+      "fields": ""
+    },
+    "colorMode": "none",
+    "graphMode": "none"
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "type": "json",
+      "source": "url",
+      "format": "table",
+      "parser": "backend",
+      "url": "/v1/vllm/overview",
+      "url_options": {
+        "method": "GET",
+        "params": [
+          {
+            "key": "identity_kind",
+            "value": "${identity_kind}"
+          },
+          {
+            "key": "identity",
+            "value": "${identity}"
+          },
+          {
+            "key": "identity_override",
+            "value": "${identity_override}"
+          },
+          {
+            "key": "from",
+            "value": "${__from}"
+          },
+          {
+            "key": "to",
+            "value": "${__to}"
+          },
+          {
+            "key": "bucket_ms",
+            "value": "15000"
+          },
+          {
+            "key": "view",
+            "value": "counter_total"
+          }
+        ]
+      },
+      "columns": [
+        {
+          "selector": "value",
+          "text": "preemptions",
+          "type": "number"
+        },
+        {
+          "selector": "metric",
+          "text": "metric",
+          "type": "string"
+        }
+      ],
+      "filterExpression": "metric == 'preemptions'"
+    }
+  ]
+}

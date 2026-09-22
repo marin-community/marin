@@ -65,6 +65,7 @@ nav:
   - Tutorials:
       - Installation: tutorials/installation.md
       - First Experiment: tutorials/first-experiment.md
+      - Add a Chat Dataset: tutorials/add-chat-dataset.md
       - Setting up a Local GPU Environment: tutorials/local-gpu.md
       - Training on Cloud GPUs: tutorials/cloud-gpu.md
       - Prepare a Storage Bucket: tutorials/storage-bucket.md
@@ -84,6 +85,8 @@ nav:
       - Marin 8B Retro: reports/marin-8b-retro.md
       - Marin 32B Retro: reports/marin-32b-retro.md
       - Markdownified Datasets: reports/markdownified-datasets.md
+  - Reproducibility:
+      - Pretraining source pool: reproducibility/pretraining-source-pool.md
   - Developer Guide:
       - Contributing: dev-guide/contributing.md
       - Tutorial Guidelines: dev-guide/tutorial-guidelines.md

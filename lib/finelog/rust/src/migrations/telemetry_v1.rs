@@ -1929,8 +1929,8 @@ mod tests {
                 row_count: footer.row_count,
                 byte_size,
                 created_at_ms: now_ms().unwrap(),
-                min_key_value: footer.min_key_value.map(|value| value.to_string()),
-                max_key_value: footer.max_key_value.map(|value| value.to_string()),
+                min_key_value: footer.min_key_value,
+                max_key_value: footer.max_key_value,
                 partition: footer.partition,
                 location: SegmentLocation::Both,
             })

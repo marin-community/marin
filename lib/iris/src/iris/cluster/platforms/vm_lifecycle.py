@@ -31,6 +31,7 @@ from rigging.timing import Deadline, Duration, ExponentialBackoff, Timer
 from iris.cluster.config import GcpVmConfig, IrisClusterConfig, ManualVmConfig, VmConfig
 from iris.cluster.inject_env import with_injected_task_env
 from iris.cluster.platforms.gcp.controller_bootstrap import (
+    CONTROLLER_CONTAINER_NAME,
     build_controller_bootstrap_script_from_config,
 )
 from iris.cluster.platforms.gcp.ssh import OS_LOGIN_METADATA
@@ -54,7 +55,6 @@ def _identity_resolve_image(image: str, zone: str | None = None) -> str:
 
 
 # Constants
-CONTROLLER_CONTAINER_NAME = "iris-controller"
 DEFAULT_CONTROLLER_PORT = 10000
 HEALTH_CHECK_TIMEOUT_SECONDS = 120
 RESTART_LOOP_THRESHOLD = 3

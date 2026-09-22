@@ -12,8 +12,18 @@ import pyarrow as pa
 import pytest
 from cache import TtlCache
 from config import ClusterTarget
-from conftest import FINELOG_DEPLOYMENTS_PATH, bridge_config, deployment, healthy_k8s_routes, k8s_api, make_k8s_source
-from finelog.errors import QueryResultTooLargeError
+from conftest import (
+    FINELOG_DEPLOYMENTS_PATH,
+    absent_namespace_error,
+    bridge_config,
+    deployment,
+    healthy_k8s_routes,
+    k8s_api,
+    make_k8s_source,
+    queried_namespace,
+)
+from errors import FinelogUnavailableError
+from finelog.errors import QueryResultTooLargeError, StatsError
 from finelog_health import FinelogHealth, FinelogRole
 from github_source import GithubSource
 from hero_health import (
@@ -27,7 +37,7 @@ from hero_health import (
     telemetry_alert_rows,
     watched_runs,
 )
-from hero_runs import HeroRun, active_hero_runs, task_state_query
+from hero_runs import HeroRun, active_hero_runs, phase_execution_query, recent_phase_query, task_state_query
 from k8s_source import K8sFleet
 from loom_alerts import (
     LoomAlertClient,
@@ -37,6 +47,8 @@ from loom_alerts import (
     SlackThread,
 )
 from loss_spikes import loss_spike_alert_rows, loss_window_query
+from relay_health import RelayNamespaceStatus, RelaySenderStatus
+from rl_producers import RL_PRODUCER_NAMESPACES
 from server import create_app, workload_overview
 from starlette.testclient import TestClient
 from training_stalls import telemetry_query, training_stall_alert_rows
@@ -67,6 +79,7 @@ class FakeSource:
         table: pa.Table | None = None,
         raises: Exception | None = None,
         health: FinelogHealth | None = None,
+        relay_status: tuple[RelaySenderStatus, ...] = (),
     ) -> None:
         self._table = table if table is not None else pa.table({})
         self._raises = raises
@@ -81,6 +94,7 @@ class FakeSource:
             error_class="",
             error="",
         )
+        self._relay_status = relay_status
         self.queries: list[str] = []
 
     @property
@@ -93,8 +107,14 @@ class FakeSource:
             raise self._raises
         return self._table
 
+    def namespaces(self) -> frozenset[str]:
+        return frozenset(RL_PRODUCER_NAMESPACES)
+
     def health(self) -> FinelogHealth:
         return self._health
+
+    def relay_status(self) -> tuple[RelaySenderStatus, ...]:
+        return self._relay_status
 
 
 def _client(
@@ -103,6 +123,7 @@ def _client(
     k8s_fleet: K8sFleet | None = None,
     loom_alerts: LoomAlertClient | None = None,
     slack_alerts: SlackAlertClient | None = None,
+    raise_server_exceptions: bool = True,
 ) -> TestClient:
     github = GithubSource(auth=None, timeout=5.0)
     return TestClient(
@@ -115,12 +136,79 @@ def _client(
             WandbSource(timeout=5.0),
             loom_alerts,
             slack_alerts,
-        )
+        ),
+        raise_server_exceptions=raise_server_exceptions,
     )
 
 
 def _get(client: TestClient, sql: str, **params):
     return client.get("/finelog/marin/query", params={"sql": sql, "from": FROM_MS, "to": TO_MS, **params})
+
+
+class NamespaceSource(FakeSource):
+    """A finelog holding only some namespaces, and failing any query naming another."""
+
+    def __init__(self, present: set[str], rows: pa.Table) -> None:
+        super().__init__(rows)
+        self._present = frozenset(present)
+
+    def namespaces(self) -> frozenset[str]:
+        return self._present
+
+    def query(self, sql: str, *, max_rows: int) -> pa.Table:
+        self.queries.append(sql)
+        if queried_namespace(sql) not in self._present:
+            raise absent_namespace_error(sql)
+        return self._table
+
+
+def _producers(client: TestClient, **params):
+    return client.get(
+        "/finelog/marin/v1/rl/producers",
+        params={"run": "run-1", "clusters": "cw-rno2a", "from": FROM_MS, "to": TO_MS, **params},
+    )
+
+
+_PRODUCER_ROW = finelog_result(
+    producer=["marinskyrl"],
+    role=["trainer"],
+    attempt=["a"],
+    metric_source=[""],
+    signals=[4],
+    records=[540],
+    last_record_ms=[1_784_257_200_000],
+)
+
+
+def test_the_producer_census_never_queries_a_namespace_the_deployment_lacks():
+    """Naming an absent namespace fails the statement at plan time, so the census leaves it out."""
+    source = NamespaceSource({"telemetry_v1.marinskyrl", "telemetry_v1.vllm"}, _PRODUCER_ROW)
+
+    resp = _producers(_client(source))
+
+    assert resp.status_code == 200
+    assert len(resp.json()) == 2
+    assert not any("telemetry_v1.harbor" in sql for sql in source.queries)
+
+
+def test_the_producer_census_reports_a_real_query_failure_rather_than_an_empty_table():
+    """A deployment that is down must not be indistinguishable from one with no producers.
+
+    The route lets it out, as `/query` does, and Starlette answers 500; what matters is that a
+    failure which is not an absent table is never mistaken for "this run has no producers".
+    """
+    source = FakeSource(
+        _ONE_ROW, raises=StatsError("Error during planning: column 'resource_attributes_json' not found")
+    )
+
+    with pytest.raises(StatsError):
+        _producers(_client(source))
+
+
+def test_the_producer_census_rejects_a_request_naming_no_cluster():
+    resp = _producers(_client(FakeSource(_PRODUCER_ROW)), clusters="")
+
+    assert resp.status_code == 400
 
 
 def test_query_returns_json_rows_with_millis_timestamps():
@@ -169,6 +257,29 @@ def test_oversized_result_is_a_400_with_guidance():
     resp = _get(_client(FakeSource(raises=QueryResultTooLargeError("query returned 500000 rows"))), "SELECT 1")
     assert resp.status_code == 400
     assert "narrow the time range" in resp.json()["error"]
+
+
+def test_alert_endpoints_return_non_firing_results_when_finelog_is_unavailable():
+    source = FakeSource(raises=FinelogUnavailableError("unavailable"))
+    client = _client(source)
+
+    assert client.get("/finelog/marin/alerts/query", params={"sql": "SELECT 1"}).json() == []
+    assert client.get("/finelog/marin/alerts/training_stalls").json() == [
+        {"cluster": "fleet", "job": "", "run": "", "phase": "idle", "reason": "healthy", "value": 0}
+    ]
+
+
+@pytest.mark.parametrize(
+    "path, params",
+    [
+        ("/finelog/marin/alerts/query", {"sql": "SELECT 1"}),
+        ("/finelog/marin/alerts/training_stalls", {}),
+    ],
+)
+def test_alert_endpoints_surface_invalid_finelog_results(path, params):
+    client = _client(FakeSource(raises=pa.ArrowInvalid("invalid result")), raise_server_exceptions=False)
+
+    assert client.get(path, params=params).status_code == 500
 
 
 def test_repeated_identical_panels_hit_finelog_once():
@@ -517,6 +628,76 @@ def _hero_run(run_id: str) -> HeroRun:
     return HeroRun("cw-a", f"/u/{run_id}-coord", run_id, datetime(2026, 7, 28, 11, tzinfo=UTC))
 
 
+def test_phase_enrollment_discovers_recent_runs_then_probes_stale_active_runs_exactly():
+    now = datetime(2026, 8, 21, 12, tzinfo=UTC)
+    database = duckdb.connect()
+    database.execute(
+        """
+        CREATE TABLE "levanter.metrics"(
+            cluster VARCHAR,
+            run_id VARCHAR,
+            job_id VARCHAR,
+            execution_uid VARCHAR,
+            process_index BIGINT,
+            name VARCHAR,
+            timestamp_ms BIGINT,
+            seq BIGINT
+        )
+        """
+    )
+    database.execute("CREATE MACRO to_timestamp_millis(value) AS to_timestamp(value / 1000.0)")
+    database.executemany(
+        "INSERT INTO \"levanter.metrics\" VALUES (?, ?, ?, ?, 0, 'phase', ?, ?)",
+        [
+            (
+                "cw-a",
+                "hero-active",
+                "/u/hero-active-coord/train",
+                "attempt-active",
+                int((now - timedelta(hours=2)).timestamp() * 1000),
+                1,
+            ),
+            (
+                "cw-a",
+                "hero-recent",
+                "/u/hero-recent-coord/train",
+                "attempt-recent",
+                int((now - timedelta(minutes=5)).timestamp() * 1000),
+                2,
+            ),
+            (
+                "cw-a",
+                "hero-old",
+                "/u/hero-old-coord/train",
+                "attempt-old",
+                int((now - timedelta(hours=2)).timestamp() * 1000),
+                3,
+            ),
+        ],
+    )
+
+    recent_phase = database.execute(recent_phase_query(now)).fetch_arrow_table()
+    assert recent_phase.column("run_id").to_pylist() == ["hero-recent"]
+
+    active = (_hero_run("hero-active"),)
+    phase_history = database.execute(phase_execution_query(now, active)).fetch_arrow_table()
+    assert phase_history.column("run_id").to_pylist() == ["hero-active"]
+
+    task_states = finelog_result(
+        cluster=["cw-a"],
+        job=["/u/hero-active-coord"],
+        state_at=[now],
+        running_since=[now - timedelta(hours=3)],
+        running=[64],
+    )
+    runs = watched_runs(task_states, pa.concat_tables((recent_phase, phase_history)), now)
+
+    assert {(run.run_id, run.execution_uid) for run in runs} == {
+        ("hero-active", "attempt-active"),
+        ("hero-recent", "attempt-recent"),
+    }
+
+
 def _loss_windows(now: datetime, runs: tuple[HeroRun, ...], samples: list[tuple[str, datetime, float]]) -> pa.Table:
     """Run the alert's own SQL over (run_id, observed_at, loss) rows."""
     database = duckdb.connect()
@@ -663,6 +844,7 @@ def _signals(now: datetime, metrics: dict[str, dict], run_id: str = "hero-a") ->
             latest=values["latest"],
             observed_at=values.get("observed_at", now - timedelta(seconds=30)),
             previous=values.get("previous"),
+            two_samples_ago=values.get("two_samples_ago"),
             recent_samples=values.get("recent_samples", 0),
             recent_total=values.get("recent_total", 0.0),
             recent_below_floor=values.get("recent_below_floor", 0),
@@ -877,7 +1059,7 @@ def test_health_alert_reads_routing_throughput_and_evaluation():
             "train_router_bias_max": {"latest": 120.0},
             "throughput_tokens_per_second": {"latest": 1.4e6, "recent_samples": 100, "recent_below_floor": 62},
             "throughput_mfu": {"latest": 31.0, "recent_samples": 100, "recent_below_floor": 4},
-            "eval_paloma_macro_loss": {"latest": 2.31, "previous": 2.17},
+            "eval_dropless_paloma_macro_loss": {"latest": 2.31, "previous": 2.17},
         },
     )
 
@@ -888,6 +1070,30 @@ def test_health_alert_reads_routing_throughput_and_evaluation():
         "throughput_low",
         "eval_regressed",
     }
+
+
+@pytest.mark.parametrize(
+    ("latest", "previous", "two_samples_ago", "should_alert"),
+    [
+        pytest.param(2.01, 2.00, 1.99, True, id="higher-than-two-evals-ago"),
+        pytest.param(2.05, 2.00, 2.10, True, id="one-step-rise-over-two-percent"),
+        pytest.param(2.01, 2.00, 2.02, False, id="small-one-step-rise"),
+        pytest.param(2.04, 2.00, 2.05, False, id="exactly-two-percent-one-step-rise"),
+    ],
+)
+def test_eval_regression_uses_two_eval_history_and_two_percent_jump(
+    latest: float, previous: float, two_samples_ago: float, should_alert: bool
+):
+    now = datetime(2026, 8, 21, 12, tzinfo=UTC)
+    evaluation = {
+        "latest": latest,
+        "previous": previous,
+        "two_samples_ago": two_samples_ago,
+    }
+    signals = _signals(now, {"eval_dropless_paloma_macro_loss": evaluation})
+
+    reasons = _reasons(health_alert_rows((_watched(),), signals, pa.table({}), now))
+    assert ("eval_regressed" in reasons) is should_alert
 
 
 def test_throughput_floor_needs_most_of_the_window_below_it():
@@ -988,9 +1194,10 @@ def test_signal_query_reduces_the_newest_sample_and_the_health_window():
             ("attempt-1", "throughput_tokens_per_second", 0.1e6, now - timedelta(minutes=40), 0),
             ("attempt-1", "optim_skipped_step", 1.0, now - timedelta(minutes=9), 4),
             ("attempt-1", "optim_skipped_step", 1.0, now - timedelta(minutes=2), 5),
-            # Hours apart, so only the eval lookback keeps the previous value.
-            ("attempt-1", "eval_paloma_macro_loss", 2.17, now - timedelta(hours=6), 6),
-            ("attempt-1", "eval_paloma_macro_loss", 2.31, now - timedelta(minutes=12), 7),
+            # Hours apart, so only the eval lookback keeps the comparison history.
+            ("attempt-1", "eval_dropless_paloma_macro_loss", 2.19, now - timedelta(hours=12), 9),
+            ("attempt-1", "eval_dropless_paloma_macro_loss", 2.17, now - timedelta(hours=6), 6),
+            ("attempt-1", "eval_dropless_paloma_macro_loss", 2.31, now - timedelta(minutes=12), 7),
         ]
     )
 
@@ -1001,8 +1208,8 @@ def test_signal_query_reduces_the_newest_sample_and_the_health_window():
     throughput = signals["throughput_tokens_per_second"]
     assert (throughput.latest, throughput.recent_samples, throughput.recent_below_floor) == (2.6e6, 3, 2)
     assert signals["optim_skipped_step"].recent_total == 2.0
-    evaluation = signals["eval_paloma_macro_loss"]
-    assert (evaluation.latest, evaluation.previous) == (2.31, 2.17)
+    evaluation = signals["eval_dropless_paloma_macro_loss"]
+    assert (evaluation.latest, evaluation.previous, evaluation.two_samples_ago) == (2.31, 2.17, 2.19)
 
 
 def test_signal_query_reduces_one_task_attempt_at_a_time():
@@ -1261,6 +1468,37 @@ def test_finelog_fleet_alert_marks_slow_and_unresponsive_servers():
     ]
 
 
+def test_relay_status_routes_expose_the_snapshot_and_an_explicit_healthy_value():
+    now_ms = round(datetime.now(UTC).timestamp() * 1000)
+    relay = RelaySenderStatus(
+        cluster="cw-a",
+        boot_id="boot",
+        report_sequence=2,
+        target="https://hub",
+        received_at_ms=now_ms,
+        namespaces=(
+            RelayNamespaceStatus(
+                namespace="telemetry_v1.node_agent",
+                visible_high_water=12,
+                published_high_water=11,
+                settled_cursor=10,
+                publication_progress_at_ms=now_ms,
+                cursor_progress_at_ms=now_ms,
+            ),
+        ),
+    )
+    client = _client(FakeSource(relay_status=(relay,)))
+
+    assert client.get("/finelog/marin/relay_status").json()[0]["cluster"] == "cw-a"
+    row = next(row for row in client.get("/finelog/marin/alerts/relay_status").json() if row["cluster"] == "cw-a")
+    assert row == {
+        "cluster": "cw-a",
+        "namespace": "telemetry_v1.node_agent",
+        "state": "healthy",
+        "value": 0,
+    }
+
+
 def test_workload_overview_counts_issue_rows_and_keeps_explicit_zeros():
     assert workload_overview([], []) == [{"pending_pods": 0, "crashlooping_containers": 0}]
     assert workload_overview(
@@ -1323,3 +1561,15 @@ def test_cache_prunes_expired_entries_on_write():
     for i in range(50):
         cache.get_or_compute(f"bucket-{i}", lambda i=i: i)
     assert len(cache) == 0
+
+
+def test_the_producer_census_refuses_a_window_wider_than_it_will_scan():
+    # max_rows bounds the answer, not the scan, so an unbounded window is a request to read the
+    # whole retained table.
+    resp = _producers(
+        _client(FakeSource(_PRODUCER_ROW)),
+        **{"from": str(int(FROM_MS) - 30 * 24 * 60 * 60 * 1000), "to": TO_MS},
+    )
+
+    assert resp.status_code == 400
+    assert "maximum" in resp.json()["error"]

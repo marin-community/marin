@@ -30,7 +30,6 @@ inputs:
     description: Optional stable Loom conversation channel
     required: false
     default: ""
-
 runs:
   using: composite
   steps:
@@ -52,16 +51,22 @@ runs:
           exit 1
         fi
 
+        request_file=$(mktemp "$RUNNER_TEMP/loom-run-request.XXXXXX.json")
+        trap 'rm -f -- "$request_file"' EXIT
+
         audience=$(jq -rn --arg value "$LOOM_URL" '$value|@uri')
         oidc=$(curl --fail-with-body --silent --show-error \
           -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
           "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$audience" | jq -r .value)
-        loom_token=$(curl --fail-with-body --silent --show-error \
-          -X POST "$LOOM_URL/api/auth/federate" \
-          -H 'Content-Type: application/json' \
-          -d "$(jq -n --arg token "$oidc" '{token: $token}')" | jq -r .token)
+        echo "::add-mask::$oidc"
+        loom_token=$(jq -n --arg token "$oidc" '{token: $token}' | \
+          curl --fail-with-body --silent --show-error \
+            -X POST "$LOOM_URL/api/auth/federate" \
+            -H 'Content-Type: application/json' \
+            --data-binary @- | jq -r .token)
+        echo "::add-mask::$loom_token"
 
-        request=$(jq -n \
+        jq -n \
           --arg profile "$LOOM_PROFILE" \
           --arg key "$IDEMPOTENCY_KEY" \
           --arg channel "$CHANNEL" \
@@ -74,12 +79,12 @@ runs:
             session: {repo: $repo, title: $title, goal: $goal}}
           | if $channel == "" then . else .channel = $channel end
           | if $base == "" then . else .session.base = $base end
-          | if $issue == "" then . else .session.github_issue = ($issue | tonumber) end')
+          | if $issue == "" then . else .session.github_issue = ($issue | tonumber) end' > "$request_file"
         # Workload federation and runs.create are API-only operations in Loom's
         # command registry, so automation uses their canonical REST endpoints.
         curl --fail-with-body --silent --show-error \
           -X POST \
           -H "Authorization: Bearer $loom_token" \
           -H 'Content-Type: application/json' \
-          -d "$request" \
+          --data-binary @"$request_file" \
           "$LOOM_URL/api/runs/create"

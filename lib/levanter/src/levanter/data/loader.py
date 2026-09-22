@@ -11,6 +11,7 @@ from collections import defaultdict
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator
 from dataclasses import dataclass
 from functools import lru_cache
+from itertools import batched
 from typing import Generic, TypeVar
 
 import haliax.partitioning
@@ -31,7 +32,6 @@ from haliax._src.util import index_where
 from haliax.partitioning import ResourceMapping
 
 from levanter.data.dataset import AsyncDataset
-from levanter.data.utils import batched
 from levanter.layers.attention import AttentionMask
 from levanter.models.lm_model import LmExample
 from levanter.schedule import BatchSchedule, IntSchedule
@@ -528,7 +528,8 @@ def stack_batches(example_iterator, Pos, Batch):
     """
     # add timer here as well and profile
     with local_cpu_mesh():
-        for batch in batched(example_iterator, Batch.size):
+        for chunk in batched(example_iterator, Batch.size):
+            batch = list(chunk)
             if len(batch) < Batch.size:
                 dummy_instance = _make_dummy_instance(batch, Pos)
                 batch.extend([dummy_instance] * (Batch.size - len(batch)))

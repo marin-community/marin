@@ -116,7 +116,7 @@ uv run python -m experiments.evaluation.migrations.cli upgrade-format --prefix g
 ```
 
 `backfill-samples` rewrites every run's per-sample parquets from its kept `samples_*.jsonl` sources --
-useful after a change to the contract in `marin.evaluation.archive` (the parquet files are
+useful after a change to the contract in `finestore.eval` (the parquet files are
 regenerated in place; the source jsonl is untouched):
 
 ```bash
@@ -140,16 +140,16 @@ and on failure, so a failed run is still accounted for -- and a failure carries 
 last 100 log lines (`log_tails`), so most failures are diagnosable straight from the record (or the
 dashboard) without cluster access.
 
-Alongside the results tree, each task's individually-scored questions are exported as parquet:
-lm-eval runs with `--log_samples`, and the orchestrator converts every `samples_*.jsonl` into a
-parquet sibling (`marin.evaluation.lm_eval_samples` normalizes lm-eval's native row shape into
-`EvalSample`, the per-sample contract in `marin.evaluation.archive`, with the parquet schema *being* the
-Pydantic model) -- load them with pandas/duckdb, or read them back with `EvalSample.model_validate`,
-to zoom into any run.
+Within its FineStore archive, each evaluator writes individually scored questions to the `samples`
+table using `EvalSample`, the shared schema in `finestore.eval`. Evalchemy writes its native
+aggregate JSON and `--log_samples` JSONL directly as FineStore source artifacts. Harbor preserves
+its native results and trajectories and writes flattened trajectory steps to the `steps` table; its
+ordinary job tree remains resume state. Load the normalized tables with
+pandas/duckdb, or read rows back with `EvalSample.model_validate`, to zoom into any run.
 
 Evaldash treats these records as the source of truth. Its background ingestor scans every configured
 object-store prefix and upserts the `eval_runs` and `eval_metrics` tables implemented in
-`infra/evaldash/src/results_db.py`. Evaluation launchers do not read DB config or connect to Postgres.
+`infra/marina/apps/evaldash/results_db.py`. Evaluation launchers do not read DB config or connect to Postgres.
 
 ## Evals in pipelines
 
@@ -172,6 +172,12 @@ uv run python -m experiments.evaluation.cli launch \
   --evalchemy-config experiments/evaluation/configs/evalchemy/ifeval.yaml \
   --dry-run
 ```
+
+The checked-in `mmlu-pro`, `gpqa-diamond`, `cruxeval`, `financebench`, `ifbench`, and
+`mrcr` files preserve Marin's publication-policy defaults. Select them individually with repeatable
+`--evalchemy-config` options on a compatible backend; the `chat` suite remains the shorter
+general-purpose selection. The policies were validated on H100. GPQA Diamond's seeded requests are
+not compatible with the TPU vLLM backend.
 
 Marin decodes the `evalchemy_config.EvaluationConfig`-compatible fields without importing Evalchemy.
 The evaluation child then invokes the `evalchemy` console script from the pinned external runtime.
@@ -198,7 +204,7 @@ default.
 
 The `agentic` suite (`tb2`, `swebench`, `gaia`, `bfcl`, `aider`, `medagentbench`, `financeagent`) runs
 in-sandbox agentic benchmarks through the same launcher. Each preset names an `hf://` repository whose
-root contains Harbor task directories. The runner materializes that repository at its configured
+root contains Harbor task directories. Harbor resolves that repository at its configured
 revision, the launcher serves the model once and mints a capability URL for the served endpoint, and
 an in-sandbox terminal agent (Daytona) reaches the model through that URL. Harbor's verifier scores
 each trial, which normalizes into one agentic `EvalSample` (reward ->
@@ -230,10 +236,10 @@ explicit `tasks` are rejected.
 
 The pinned subprocess returns deterministic policy JSON, a SHA-256 digest, and dataset/agent/environment
 metadata. Marin treats the JSON as opaque. At execution it supplies a separate overlay for `job_name`,
-`jobs_dir`, the served model, endpoint, materialized dataset path, model-catalog kwargs, and `--limit`.
+`jobs_dir`, the served model, endpoint, local dataset path, model-catalog kwargs, and `--limit`.
 The isolated driver applies that overlay to typed Harbor models and validates the complete effective job
 before calling Harbor. Policy agent kwargs override model-catalog kwargs; endpoint, model, output path,
-materialized source, and an explicit `--limit` are reserved runtime values.
+local source, and an explicit `--limit` are reserved runtime values.
 
 Write Hugging Face sources as `datasets[].name: hf://org/repository` with an optional `ref`; do not put
 an `hf://` URI in `datasets[].path`. Local `path` values must be relative to the config file, must name
@@ -241,6 +247,13 @@ an existing directory inside the Marin workspace, and must be included in the Ir
 The launcher records the workspace-relative path so the submitted worker resolves the same directory
 under its unpacked workspace. Absolute paths, unknown fields, malformed provider kwargs, and unsupported
 file extensions fail before Iris submission.
+
+The checked-in `swebench-recovery`, `ot-tblite-recovery`, `tb2-recovery`,
+`simpleqa-recovery`, and `ds-1000-local` files preserve retry and resume policies for longer agentic runs.
+They are file-backed policies rather than registry entries. A `recovery` name denotes an exact-identity
+resume policy; each benchmark retains its own retry count and exception taxonomy. `ds-1000-local`
+expects the generated Harbor task tree at `experiments/evaluation/local_datasets/ds1000`; create that
+tree with Harbor's DS-1000 adapter before launching it.
 
 Harbor and `harbor_config` are absent from Marin's environment and root lock. Both preflight and execution
 install the exact `marin.external_dependencies.HARBOR` revision in an isolated uv environment. Every
@@ -257,17 +270,17 @@ subprocess receives that key without inheriting the orchestrator's other credent
 
 Every Harbor catalog policy is YAML under `experiments/evaluation/configs/harbor/`, named after its
 `EVALS` key. Python retains the catalog and suite membership, Evalchemy definitions, model and hardware
-selection, runtime task caps, and secret source declarations. The Grug OpenCode profile runs its YAML
+selection, runtime task caps, and secret source declarations. The OT-TBLite profile runs its YAML
 policy through the same path:
 
 ```bash
-# One OpenCode trial with the step-1903 Grug SFT on H100x8.
+# One OT-TBLite trial with the step-1903 Grug SFT and OpenCode on H100x8.
 uv run python -m experiments.evaluation.cli launch \
-  --model grug-agentic-s3-step1903 --evals grug-opencode-id --limit 1
+  --model grug-agentic-s3-step1903 --evals ot-tblite --limit 1
 ```
 
-The profile materializes `DCAgent/dev_set_v2` from a pinned Hugging Face commit before passing its
-task directories to Harbor.
+Harbor downloads the `DCAgent/dev_set_v2` snapshot at the pinned Hugging Face commit and loads its
+task directories.
 
 Mechanism code lives under `marin.evaluation.evalchemy` and `marin.evaluation.harbor`; the common
 runner depends only on the callable executor protocol and the shared record types.

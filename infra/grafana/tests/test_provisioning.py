@@ -19,12 +19,14 @@ import yaml
 from config import CLUSTERS, K8S_CLUSTERS, ClusterTarget
 from conftest import bridge_config, healthy_k8s_routes, k8s_api, make_k8s_source
 from dashboard_stitch import stitch_all
+from errors import FinelogUnavailableError
 from finelog_health import FinelogHealth, FinelogRole
 from github_source import GithubSource
-from hero_health import DROP_FRACTION_MAX, ROUTER_BIAS_MAX, ROUTER_ENTROPY_MIN
 from k8s_source import K8sFleet
+from relay_health import RelaySenderStatus
 from server import create_app
 from starlette.testclient import TestClient
+from training_observability import training_overview_dataset
 from wandb_source import WandbSource
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -189,22 +191,33 @@ class _FakeFinelog:
             )
         return pa.table({})
 
+    def relay_status(self) -> tuple[RelaySenderStatus, ...]:
+        return ()
 
-def test_every_rule_query_url_answers_on_the_bridge():
-    """Join each rule's datasource base path with its query URL and GET it for real."""
+
+class _UnavailableFinelog(_FakeFinelog):
+    def query(self, sql: str, *, max_rows: int) -> pa.Table:
+        raise FinelogUnavailableError("unavailable")
+
+
+def _bridge_client(finelog_source: _FakeFinelog) -> TestClient:
     iris_sources = {name: _FakeIris(name) for name in ("marin", "marin-dev")}
-    finelog_sources = {"marin": _FakeFinelog("marin")}
     fleet = K8sFleet([make_k8s_source(k8s_api(healthy_k8s_routes()))])
-    client = TestClient(
+    return TestClient(
         create_app(
             bridge_config(),
-            finelog_sources,
+            {"marin": finelog_source},
             iris_sources,
             GithubSource(auth=None, timeout=5.0),
             fleet,
             WandbSource(timeout=5.0),
         )
     )
+
+
+def test_every_rule_query_url_answers_on_the_bridge():
+    """Join each rule's datasource base path with its query URL and GET it for real."""
+    client = _bridge_client(_FakeFinelog("marin"))
     base_paths = _datasources()
     for rule in _rules():
         for node in rule["data"]:
@@ -216,6 +229,26 @@ def test_every_rule_query_url_answers_on_the_bridge():
             response = client.get(url, params=params)
             assert response.status_code == 200, f"{rule['uid']}: GET {url} -> {response.status_code}"
             assert response.json(), f"{rule['uid']}: GET {url} returned no rows"
+
+
+def test_configured_finelog_query_dependent_alerts_stay_normal_when_query_path_is_unavailable():
+    client = _bridge_client(_UnavailableFinelog("marin"))
+    base_path = _datasources()["finelog-marin"]
+
+    for rule in _rules():
+        if rule["uid"] in {"finelog-fleet-unhealthy", "finelog-relay-stalled"}:
+            continue
+        for node in rule["data"]:
+            if node["datasourceUid"] != "finelog-marin":
+                continue
+            model = node["model"]
+            params = {param["key"]: param["value"] for param in model.get("url_options", {}).get("params", [])}
+            url = base_path + model["url"]
+
+            response = client.get(url, params=params)
+
+            assert response.status_code == 200, f"{rule['uid']}: GET {url} -> {response.status_code}"
+            assert all(row["value"] == 0 for row in response.json()), rule["uid"]
 
 
 def test_alert_queries_select_exactly_one_numeric_column():
@@ -392,6 +425,14 @@ def test_finelog_health_alert_pages_critical_after_five_minutes():
     assert rule["data"][0]["model"]["url"] == "/alerts/fleet_health"
 
 
+def test_finelog_relay_alert_pages_stalled_or_missing_namespaces():
+    (rule,) = [rule for rule in _rules() if rule["uid"] == "finelog-relay-stalled"]
+    assert rule["for"] == "2m"
+    assert rule["labels"]["severity"] == "critical"
+    assert rule["noDataState"] == "Alerting"
+    assert rule["data"][0]["model"]["url"] == "/alerts/relay_status"
+
+
 def test_node_deadlock_alert_pages_critical_after_five_minutes():
     (rule,) = [rule for rule in _rules() if rule["uid"] == "k8s-node-kernel-deadlock"]
     assert rule["for"] == "5m"
@@ -466,19 +507,6 @@ def test_announcing_run_health_reaches_slack_without_a_triage_session():
     assert "mute_time_intervals" not in route
 
 
-def test_run_health_dashboard_bands_match_the_alert_thresholds():
-    # The alert links the operator to these panels, so a limit tuned in one place
-    # and not the other would draw a band the rule does not fire on.
-    dashboard = _stitched_dashboards()["training.json"]
-    panels = {panel["title"]: panel for panel in _all_panels(dashboard)}
-    bands = " ".join(_panel_sql({**dashboard, "panels": [panels["Token drops"], panels["Router health"]]}))
-
-    assert f"CAST({DROP_FRACTION_MAX} AS DOUBLE) AS alert_threshold" in bands
-    assert f"CAST({ROUTER_ENTROPY_MIN} AS DOUBLE) AS entropy_minimum" in bands
-    assert f"CAST({ROUTER_BIAS_MAX} AS DOUBLE) AS bias_upper_limit" in bands
-    assert f"CAST({-ROUTER_BIAS_MAX} AS DOUBLE) AS bias_lower_limit" in bands
-
-
 def test_clusters_dashboard_shows_finelog_fleet_health():
     (panel,) = [
         panel
@@ -545,15 +573,6 @@ def test_node_details_dashboard_combines_live_state_and_hardware_history():
         "ib_speed",
     } <= selectors
 
-    sql = "\n".join(_panel_sql(dashboard))
-    assert "gpu_sm_active_ratio" in sql
-    assert "gpu_memory_total_bytes" in sql
-    assert "gpu_nvlink_receive_bytes_per_second" in sql
-    assert "gpu_pcie_transmit_bytes_per_second" in sql
-    assert "node_cpu_utilization_percent" in sql
-    assert "node_network_receive_bytes" in sql
-    assert "node_name IN (${node:sqlstring})" in sql
-
 
 def test_node_pools_dashboard_reads_live_node_pool_state():
     dashboard = _stitched_dashboards()["node_pools.json"]
@@ -597,12 +616,18 @@ def test_accelerators_dashboard_shows_per_gpu_sm_raster_and_temperature_distribu
         "gpu",
         "sm_utilization",
     }
-    sm_sql = _panel_sql({**dashboard, "panels": [sm_panel]})
-    temperature_sql = _panel_sql({**dashboard, "panels": [temperature_panel]})
-    assert len(sm_sql) == len(temperature_sql) == 1
-    assert "name = 'gpu_sm_active_ratio'" in sm_sql[0]
-    assert "GROUP BY 1, 2, 3, 4" in sm_sql[0]
-    assert "name = 'gpu_temperature_celsius'" in temperature_sql[0]
+    assert (
+        next(param["value"] for param in sm_panel["targets"][0]["url_options"]["params"] if param["key"] == "view")
+        == "sm"
+    )
+    assert (
+        next(
+            param["value"]
+            for param in temperature_panel["targets"][0]["url_options"]["params"]
+            if param["key"] == "view"
+        )
+        == "temperature_distribution"
+    )
 
 
 def test_storage_dashboard_shows_latest_coreweave_bucket_bytes():
@@ -792,12 +817,17 @@ def test_training_run_selector_uses_a_fixed_discovery_window():
     )
     at = datetime(2026, 8, 26, 12, tzinfo=UTC)
     database = duckdb.connect()
-    database.execute('CREATE TABLE "levanter.metrics"(run_id VARCHAR, step BIGINT, timestamp_ms BIGINT)')
+    database.execute(
+        'CREATE TABLE "levanter.metrics"('
+        "run_id VARCHAR, step BIGINT, name VARCHAR, process_index BIGINT, timestamp_ms BIGINT)"
+    )
     database.executemany(
-        'INSERT INTO "levanter.metrics" VALUES (?, ?, ?)',
+        'INSERT INTO "levanter.metrics" VALUES (?, ?, ?, ?, ?)',
         [
-            ("recent-run", 100, int((at.timestamp() - 3_600) * 1_000)),
-            ("old-run", 200, int((at.timestamp() - 3 * 86_400) * 1_000)),
+            ("recent-run", 100, "phase", 0, int((at.timestamp() - 3_600) * 1_000)),
+            ("old-run", 200, "phase", 0, int((at.timestamp() - 3 * 86_400) * 1_000)),
+            ("other-metric-only", 300, "train_loss", 0, int((at.timestamp() - 1_800) * 1_000)),
+            ("other-process-only", 400, "phase", 1, int((at.timestamp() - 1_800) * 1_000)),
         ],
     )
     sql = sql.replace("now()", "TIMESTAMP '2026-08-26 12:00:00+00:00'")
@@ -823,43 +853,31 @@ def test_cluster_series_keep_one_colour_across_dashboards():
 
 
 def test_training_loss_by_attempt_separates_process_incarnations():
-    dashboard = _stitched_dashboards()["training.json"]
-    panel = next(panel for panel in _all_panels(dashboard) if panel["title"] == "Training loss by attempt")
-    sql = _panel_sql({**dashboard, "panels": [panel]})[0]
-    sql = sql.replace("${__interval_ms}", "60000")
-    sql = sql.replace("${run:sqlstring}", "'hero-run'")
-    sql = sql.replace("{{from}}", "TIMESTAMP '2026-08-20 00:00:00'")
-    sql = sql.replace("{{to}}", "TIMESTAMP '2026-08-21 00:00:00'")
-
     database = duckdb.connect()
-    database.execute("CREATE MACRO to_timestamp_millis(value) AS epoch_ms(value)")
-    database.execute("CREATE MACRO date_bin(bucket, value) AS time_bucket(bucket, value)")
     database.execute(
         """
-        CREATE TABLE telemetry_v1(
-            service VARCHAR,
-            run_id VARCHAR,
-            execution_uid VARCHAR,
-            name VARCHAR,
-            value DOUBLE,
-            timestamp_ms BIGINT
+        CREATE TABLE "levanter.metrics"(
+            run_id VARCHAR, cluster VARCHAR, job_id VARCHAR, execution_uid VARCHAR,
+            process_index VARCHAR, name VARCHAR, value DOUBLE, step BIGINT,
+            timestamp_ms BIGINT, seq BIGINT
         )
         """
     )
-    _create_levanter_stream_view(database)
     at = int(datetime(2026, 8, 20, 12, tzinfo=UTC).timestamp() * 1000)
     database.executemany(
-        "INSERT INTO telemetry_v1 VALUES ('levanter', 'hero-run', ?, 'train_loss', ?, ?)",
+        "INSERT INTO \"levanter.metrics\" VALUES ('hero-run', 'cw-a', NULL, ?, '0', 'train_loss', ?, 1, ?, ?)",
         [
-            ("iris:controller-attempt-first", 2.0, at),
-            ("iris:controller-attempt-first", 1.8, at + 10_000),
-            ("iris:controller-attempt-second", 2.4, at + 20_000),
+            ("iris:controller-attempt-first", 2.0, at, 1),
+            ("iris:controller-attempt-first", 1.8, at + 10_000, 2),
+            ("iris:controller-attempt-second", 2.4, at + 20_000, 3),
         ],
     )
+    dataset = training_overview_dataset("hero-run", at, at + 60_000, 60_000)
+    sql = f"WITH training_rows AS ({dataset.sources[0].sql}) {dataset.views['loss']}"
 
     assert database.execute(sql).fetchall() == [
-        (datetime(2026, 8, 20, 12), "iris:controller-attempt-first", 1.9),
-        (datetime(2026, 8, 20, 12), "iris:controller-attempt-second", 2.4),
+        (at, "iris:controller-attempt-first", 1.9),
+        (at, "iris:controller-attempt-second", 2.4),
     ]
 
 
@@ -904,22 +922,8 @@ def test_training_execution_health_uses_the_current_attempt_and_iris_state():
     )
     thresholds = next(field for field in initialization_age["properties"] if field["id"] == "thresholds")
     assert [step["value"] for step in thresholds["value"]["steps"]] == [None, 2700, 3600]
-    sql_by_ref = {
-        target["refId"]: next(param["value"] for param in target["url_options"]["params"] if param["key"] == "sql")
-        for target in panel["targets"]
-    }
-    fixed_now = "TIMESTAMP '2026-08-21 12:00:00+00:00'"
-    sql_by_ref = {
-        ref: (
-            sql.replace("${run:sqlstring}", "'hero-run'")
-            .replace("{{from}}", "TIMESTAMP '2026-08-21 10:30:00+00:00'")
-            .replace("{{to}}", fixed_now)
-            .replace("now()", fixed_now)
-        )
-        for ref, sql in sql_by_ref.items()
-    }
-
     database = duckdb.connect()
+    database.execute("CREATE MACRO to_timestamp_millis(value) AS to_timestamp(value / 1000.0)")
     database.execute(
         """
         CREATE TABLE telemetry_v1(
@@ -931,6 +935,7 @@ def test_training_execution_health_uses_the_current_attempt_and_iris_state():
             process_index VARCHAR,
             name VARCHAR,
             value DOUBLE,
+            step BIGINT,
             timestamp_ms BIGINT,
             seq BIGINT
         )
@@ -939,7 +944,7 @@ def test_training_execution_health_uses_the_current_attempt_and_iris_state():
     _create_levanter_stream_view(database)
     fixed_now_ms = int(datetime(2026, 8, 21, 12, tzinfo=UTC).timestamp() * 1000)
     database.executemany(
-        "INSERT INTO telemetry_v1 VALUES ('levanter', ?, 'cw-a', ?, ?, ?, 'phase', ?, ?, ?)",
+        "INSERT INTO telemetry_v1 VALUES ('levanter', ?, 'cw-a', ?, ?, ?, 'phase', ?, NULL, ?, ?)",
         [
             ("hero-run", "/u/hero-run-coord/train", "attempt-old", "0", 1, fixed_now_ms - 80 * 60_000, 1),
             ("hero-run", "/u/hero-run-coord/train", "attempt-old", "0", 1, fixed_now_ms - 2 * 60_000, 2),
@@ -979,6 +984,13 @@ def test_training_execution_health_uses_the_current_attempt_and_iris_state():
             ("cw-a", "/u/other-run-coord", datetime(2026, 8, 21, 11, 59, 45, tzinfo=UTC), 0, 0, 0, 176),
         ],
     )
+
+    dataset = training_overview_dataset("hero-run", fixed_now_ms - 90 * 60_000, fixed_now_ms, 60_000)
+    sql_by_ref = {
+        "A": f"WITH training_rows AS ({dataset.sources[0].sql}) {dataset.views['execution_attempt']}",
+        "B": dataset.sources[1].sql,
+        "C": dataset.sources[2].sql,
+    }
     database.execute(
         """
         CREATE TABLE "iris.task_event"(
@@ -1072,6 +1084,14 @@ def test_training_status_reads_whole_run_active_time_from_wandb():
     # Four days of wall clock, ninety hours of them running.
     assert (row["active_seconds"], row["active_share"]) == (324_000.0, 0.9375)
     assert {column["selector"] for column in target["columns"]} <= set(row)
+    # The projected finish rides on the same target as epoch milliseconds, which only the
+    # date unit makes readable in a stat tile.
+    finish = next(
+        override
+        for override in panel["fieldConfig"]["overrides"]
+        if override["matcher"]["options"] == "projected finish"
+    )
+    assert {field["id"]: field["value"] for field in finish["properties"]} == {"unit": "dateTimeAsIso"}
 
 
 def test_training_attempts_table_links_the_newest_attempt_to_iris():
@@ -1104,28 +1124,30 @@ def test_training_attempts_table_links_the_newest_attempt_to_iris():
             process_index VARCHAR,
             name VARCHAR,
             value DOUBLE,
-            timestamp_ms BIGINT
+            step BIGINT,
+            timestamp_ms BIGINT,
+            seq BIGINT
         )
         """
     )
     hour = 3_600_000
     at = int(datetime(2026, 8, 21, 12, tzinfo=UTC).timestamp() * 1000)
     database.executemany(
-        "INSERT INTO \"levanter.metrics\" VALUES ('levanter', ?, ?, ?, ?, ?, 'phase', 1, ?)",
+        "INSERT INTO \"levanter.metrics\" VALUES ('levanter', ?, ?, ?, ?, ?, 'phase', 1, NULL, ?, ?)",
         [
             # An attempt that ran two hours on a CoreWeave cluster and then failed.
-            ("hero-run", "cw-a", "/u/hero-run-coord/train", "attempt-one", "0", at - 6 * hour),
-            ("hero-run", "cw-a", "/u/hero-run-coord/train", "attempt-one", "0", at - 4 * hour),
+            ("hero-run", "cw-a", "/u/hero-run-coord/train", "attempt-one", "0", at - 6 * hour, 1),
+            ("hero-run", "cw-a", "/u/hero-run-coord/train", "attempt-one", "0", at - 4 * hour, 2),
             # Its successor, a fresh job on the hub, whose rows carry no origin cluster.
-            ("hero-run", "", "/u/hero-run-coord-2/train", "attempt-two", "0", at - 2 * hour),
-            ("hero-run", "", "/u/hero-run-coord-2/train", "attempt-two", "0", at - hour),
+            ("hero-run", "", "/u/hero-run-coord-2/train", "attempt-two", "0", at - 2 * hour, 3),
+            ("hero-run", "", "/u/hero-run-coord-2/train", "attempt-two", "0", at - hour, 4),
             # A replica of that attempt, and another run: neither is a row of this table.
-            ("hero-run", "", "/u/hero-run-coord-2/train", "attempt-two-replica", "1", at - hour),
-            ("other-run", "cw-a", "/u/other-run-coord/train", "other-attempt", "0", at - hour),
+            ("hero-run", "", "/u/hero-run-coord-2/train", "attempt-two-replica", "1", at - hour, 5),
+            ("other-run", "cw-a", "/u/other-run-coord/train", "other-attempt", "0", at - hour, 6),
         ],
     )
-    sql = next(param["value"] for param in target["url_options"]["params"] if param["key"] == "sql")
-    sql = sql.replace("${run:sqlstring}", "'hero-run'").replace("now()", "TIMESTAMP '2026-08-21 12:00:00+00:00'")
+    dataset = training_overview_dataset("hero-run", at - 3 * hour, at, 60_000)
+    sql = f"WITH training_rows AS ({dataset.sources[0].sql}) {dataset.views['attempts']}"
 
     # Newest first, so the top row is the last attempt whether or not it still runs. The
     # Iris dashboard filters backends by peer id and reserves `local` for its own, which
@@ -1137,26 +1159,19 @@ def test_training_attempts_table_links_the_newest_attempt_to_iris():
 
 
 def test_training_moe_health_queries_show_routing_signals():
-    dashboard = _stitched_dashboards()["training.json"]
-    panels = {panel["title"]: panel for panel in _all_panels(dashboard)}
     database = duckdb.connect()
-    database.execute("CREATE MACRO to_timestamp_millis(value) AS epoch_ms(value)")
-    database.execute("CREATE MACRO date_bin(bucket, value) AS time_bucket(bucket, value)")
     database.execute(
         """
-        CREATE TABLE telemetry_v1(
-            service VARCHAR,
-            run_id VARCHAR,
-            name VARCHAR,
-            value DOUBLE,
-            timestamp_ms BIGINT
+        CREATE TABLE "levanter.metrics"(
+            run_id VARCHAR, cluster VARCHAR, job_id VARCHAR, execution_uid VARCHAR,
+            process_index VARCHAR, name VARCHAR, value DOUBLE, step BIGINT,
+            timestamp_ms BIGINT, seq BIGINT
         )
         """
     )
-    _create_levanter_stream_view(database)
     at = int(datetime(2026, 8, 21, 12, tzinfo=UTC).timestamp() * 1000)
     database.executemany(
-        "INSERT INTO telemetry_v1 VALUES ('levanter', 'hero-run', ?, ?, ?)",
+        "INSERT INTO \"levanter.metrics\" VALUES ('hero-run', 'cw-a', NULL, 'attempt', '0', ?, ?, 1, ?, 1)",
         [
             ("moe_drop_fraction", 0.04, at),
             ("moe_sender_drop_fraction", 0.03, at),
@@ -1170,15 +1185,12 @@ def test_training_moe_health_queries_show_routing_signals():
             ("params_norm_stacked_blocks_stacked_mlp_router_bias", 200.0, at),
         ],
     )
+    dataset = training_overview_dataset("hero-run", at - 3_600_000, at + 3_600_000, 60_000)
 
-    def query(title: str) -> list[tuple]:
-        sql = _panel_sql({**dashboard, "panels": [panels[title]]})[0]
-        sql = sql.replace("${__interval_ms}", "60000")
-        sql = sql.replace("${run:sqlstring}", "'hero-run'")
-        sql = sql.replace("{{from}}", "TIMESTAMP '2026-08-21 11:00:00+00:00'")
-        sql = sql.replace("{{to}}", "TIMESTAMP '2026-08-21 13:00:00+00:00'")
+    def query(view: str) -> list[tuple]:
+        sql = f"WITH training_rows AS ({dataset.sources[0].sql}) {dataset.views[view]}"
         return database.execute(sql).fetchall()
 
-    assert query("Token drops") == [(datetime(2026, 8, 21, 12), 0.04, 0.03, 0.02, 0.07)]
-    assert query("Router health") == [(datetime(2026, 8, 21, 12), 5.93, 390.0, -380.0, 25.0, -31.0, 5.92, 400.0, -400.0)]
-    assert query("Parameter norms") == [(datetime(2026, 8, 21, 12), 4800.0, 200.0)]
+    assert query("token_drops") == [(at, 0.04, 0.03, 0.02, 0.07)]
+    assert query("router_health") == [(at, 5.93, 390.0, -380.0, 25.0, -31.0, 5.92, 400.0, -400.0)]
+    assert query("parameter_norms") == [(at, 4800.0, 200.0)]
