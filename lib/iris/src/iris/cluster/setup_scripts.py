@@ -58,9 +58,7 @@ def default_setup_script(
 
     uv runs at its default verbosity so its progress (``Resolved``,
     ``Downloading <pkg>``, ``Installed``) streams into the task logs; this is the
-    only signal a live setup gives, so it is never suppressed. If the shared
-    node cache fails, sync retries once from a task-local cache so a corrupt
-    cache entry cannot poison every retry scheduled on that worker.
+    only signal a live setup gives, so it is never suppressed.
 
     Args:
         extras: uv extras to enable (``extra`` or ``package:extra``).

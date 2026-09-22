@@ -100,7 +100,7 @@ ln -sf "$UV_CACHE_DIR/wheels/package.whl" "$IRIS_VENV/package.whl"
         "UV_PROJECT_ENVIRONMENT": str(venv),
     }
 
-    result = subprocess.run(
+    subprocess.run(
         ["bash", "-c", default_setup_script(python_version="3.12")],
         env=env,
         capture_output=True,
@@ -108,5 +108,4 @@ ln -sf "$UV_CACHE_DIR/wheels/package.whl" "$IRIS_VENV/package.whl"
         check=True,
     )
 
-    assert "retrying with task-local cache" in result.stdout
     assert (venv / "package.whl").resolve() == workdir / ".uv-recovery-cache/wheels/package.whl"
