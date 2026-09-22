@@ -14,7 +14,8 @@ from types import SimpleNamespace
 import click
 import pytest
 from click.testing import CliRunner
-from finestore.eval import EvaluationStore
+from finestore.eval import ARCHIVE_ROLLOUTS_TABLE, EvalSample, EvaluationStore, Grading, SampleKind
+from finestore.reader import ReadView
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.rpc import job_pb2
 from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyRunConfig, _run_evalchemy_child
@@ -469,6 +470,62 @@ def test_evalchemy_executor_excludes_infrastructure_failures(tmp_path, monkeypat
             errors={EVALCHEMY_INFRASTRUCTURE_ERROR: 1},
         ),
     }
+
+
+def test_evalchemy_executor_rebuilds_native_prompts_before_normalizing_rollouts(tmp_path, monkeypatch):
+    output_dir = f"file://{tmp_path / 'native-prompt'}"
+    prompt = json.dumps([{"role": "user", "content": "Question: 2+2?"}])
+    raw = _lm_eval_generation(0, "exact_match", 1.0, "4")
+    raw["arguments"] = [[[prompt], {"temperature": 1.0}]]
+    _write_evalchemy_output(
+        output_dir,
+        "gsm8k_5shot",
+        {"gsm8k": {"exact_match,none": 1.0}},
+        {"gsm8k": [raw]},
+    )
+
+    store = EvaluationStore.open(output_dir, writer_id="evalchemy-without-prompt")
+    try:
+        store.add_sample(
+            EvalSample(
+                task="gsm8k_5shot",
+                doc_id="0",
+                kind=SampleKind.GENERATION,
+                output="4",
+                grading=Grading(
+                    method="lm-eval:exact_match",
+                    metric="exact_match",
+                    filter="none",
+                    score=1.0,
+                    passed=True,
+                ),
+                metrics={"exact_match": 1.0},
+                correct=True,
+            )
+        )
+        store.seal()
+    finally:
+        store.close()
+
+    monkeypatch.setattr(
+        "marin.evaluation.evalchemy.runner._run_evalchemy_child",
+        lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
+    )
+    executor = EvalchemyExecutor(
+        EvalchemyRunConfig(
+            name="gsm8k",
+            tasks=(EvalTaskConfig(name="gsm8k", num_fewshot=5, generation=True),),
+            apply_chat_template=True,
+        )
+    )
+
+    executor(_remote_session(), output_dir, {})
+
+    rows = list(ReadView(output_dir).iter_rows(ARCHIVE_ROLLOUTS_TABLE))
+    assert [(row["participant_type"], row["content"]) for row in rows] == [
+        ("user", "Question: 2+2?"),
+        ("assistant", "4"),
+    ]
 
 
 def test_submit_evaluation_batch_resolves_declared_secrets_outside_the_pickled_batch(tmp_path, monkeypatch):

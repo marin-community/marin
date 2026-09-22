@@ -815,7 +815,12 @@ def _task_from_filename(name: str, suffix: str) -> str:
 
 
 def _add_lm_eval_rows(
-    store: EvaluationStore, filename: str, payload: bytes, *, primary_metric_name: str | None = None
+    store: EvaluationStore,
+    filename: str,
+    payload: bytes,
+    *,
+    primary_metric_name: str | None = None,
+    task_name: str | None = None,
 ) -> list[EvalSample]:
     """Normalize one ``samples_*.jsonl`` payload into ``store``; return the samples added.
 
@@ -825,7 +830,7 @@ def _add_lm_eval_rows(
     if not rows:
         logger.warning("samples file %s is empty; skipping archive export", filename)
         return []
-    task = _task_from_filename(filename, ".jsonl")
+    task = task_name or _task_from_filename(filename, ".jsonl")
     samples = [sample for raw in rows for sample in samples_from_lm_eval(task, raw, primary_metric_name)]
     for sample in samples:
         store.add_sample(sample)
@@ -866,6 +871,8 @@ def rebuild_lm_eval_samples(out_path: str, *, tasks: Sequence[EvalTaskRef] = (),
     require_current_samples(out_path)
     store = EvaluationStore.open(out_path, writer_id=writer_id)
     task_configs = {eval_task_directory(task.name, task.num_fewshot, task.task_alias): task for task in tasks}
+    native_names = tuple(name for name in names if _is_native_evalchemy_source(name))
+    native_task_keys = _task_keys(native_names)
     count = 0
     try:
         for name in names:
@@ -898,6 +905,7 @@ def rebuild_lm_eval_samples(out_path: str, *, tasks: Sequence[EvalTaskRef] = (),
                     name.rsplit("/", 1)[-1],
                     payload,
                     primary_metric_name=primary_source,
+                    task_name=native_task_keys.get(name),
                 )
             )
         store.seal()

@@ -25,7 +25,7 @@ from marin.evaluation.evalchemy.runtime import (
     EVALCHEMY_REQUIREMENT,
 )
 from marin.evaluation.evaluation_config import EvalTaskConfig, eval_task_directory
-from marin.evaluation.lm_eval_samples import summarize_native_eval_samples
+from marin.evaluation.lm_eval_samples import rebuild_lm_eval_samples, summarize_native_eval_samples
 from marin.evaluation.metric_selection import declared_metric
 from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, EvalTaskRef, RunStatus, TaskCoverage
 from marin.evaluation.rollouts import normalize_rollouts
@@ -281,9 +281,18 @@ def run_evalchemy(
         raise ValueError(f"Evalchemy output_dir {output_dir!r} is not an object-store path")
     eval_job = _run_evalchemy_child(model, config, output_dir, env_vars)
     try:
-        normalize_rollouts(output_dir, writer_id=f"marin-evalchemy-rollouts-{uuid.uuid4().hex}")
         result = FineStoreEvalchemyResult(path=output_dir)
         result.task_metrics()
+        summary = summarize_native_eval_samples(
+            output_dir,
+            tasks=config.tasks,
+        )
+        rebuild_lm_eval_samples(
+            output_dir,
+            tasks=summary.tasks,
+            writer_id=f"marin-evalchemy-samples-{uuid.uuid4().hex}",
+        )
+        normalize_rollouts(output_dir, writer_id=f"marin-evalchemy-rollouts-{uuid.uuid4().hex}")
         summary = summarize_native_eval_samples(
             output_dir,
             tasks=config.tasks,
