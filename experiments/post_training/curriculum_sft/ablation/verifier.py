@@ -63,7 +63,7 @@ def task_payload_has_schema(payload: object) -> bool:
 
 
 def verify_task_payload(payload: object) -> TaskVerification:
-    """Validate schema, arithmetic, and evidence; SFT reconstructs the question from facts."""
+    """Validate a task's schema, arithmetic, and evidence IDs."""
 
     task = _strict_object(payload, TASK_PAYLOAD_FIELDS)
     if task is None:

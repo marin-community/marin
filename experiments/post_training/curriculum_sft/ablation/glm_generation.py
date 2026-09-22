@@ -48,6 +48,9 @@ from experiments.post_training.task_curriculum.models import StrictModel
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_TASKS_PER_REPLICATE = 16
+DEFAULT_REPLICATE_COUNT = 4
+DEFAULT_SEED = 17
 CURRICULUM_PACKET = "\n".join(
     (
         "Curriculum catalog: 2026.09.20-cross-domain-v3",
@@ -127,26 +130,14 @@ def _request_id(cell: AblationCell, replicate: int) -> str:
     return f"ablation-{cell.name}-replicate-{replicate}"
 
 
-def run_matrix(
-    output: str,
-    *,
-    tasks_per_replicate: int = 16,
-    replicate_count: int = 4,
-    seed: int = 17,
-    relay_job: str = DEFAULT_GLM_RELAY_JOB,
-) -> None:
-    """Run paired generation replicates and write task Parquet plus an audit manifest."""
-
-    cells = tuple(
-        AblationCell(curriculum, generation_spec)
-        for curriculum in CurriculumCondition
-        for generation_spec in GenerationSpec
-    )
-    base_url = resolve_glm_base_url(relay_job)
-    token = os.environ[GLM_BULK_TOKEN_ENV]
-    batch_client = OpenAIBatchClient(base_url, token)
+def _generation_requests(
+    cells: tuple[AblationCell, ...],
+    tasks_per_replicate: int,
+    replicate_count: int,
+    seed: int,
+) -> tuple[list[dict[str, Any]], dict[str, tuple[AblationCell, int]]]:
     lines = []
-    cell_by_request: dict[str, tuple[AblationCell, int]] = {}
+    cell_by_request = {}
     for replicate in range(replicate_count):
         replicate_seed = seed + replicate
         for cell in cells:
@@ -160,15 +151,15 @@ def run_matrix(
                     "body": generation_body(cell, tasks_per_replicate, replicate_seed),
                 }
             )
-    submission = batch_client.submit(lines, "curriculum-sft-ablation-paired-replicates.jsonl")
-    batch_id = submission.batch_id
-    batch = batch_client.wait(batch_id, 5.0)
-    batch_output = batch_client.output(batch)
-    raw_output, raw_errors = batch_output.output, batch_output.errors
-    if raw_errors:
-        raise RuntimeError("GLM returned batch errors for paired ablation generation")
+    return lines, cell_by_request
 
-    results: dict[str, list[dict[str, Any]]] = {}
+
+def _parse_generation_output(
+    raw_output: str,
+    cell_by_request: dict[str, tuple[AblationCell, int]],
+    tasks_per_replicate: int,
+) -> dict[str, list[dict[str, Any]]]:
+    results = {}
     for line in raw_output.splitlines():
         if not line.strip():
             continue
@@ -188,7 +179,25 @@ def run_matrix(
     missing = set(cell_by_request) - set(results)
     if missing:
         raise RuntimeError(f"GLM batch omitted requests: {sorted(missing)}")
+    return results
 
+
+def _quality_metrics(tasks: list[dict[str, Any]]) -> dict[str, int | float]:
+    checks = [verify_task_payload(task) for task in tasks]
+    return {
+        "accepted": sum(check.accepted for check in checks),
+        "format_rate": sum(check.format_valid for check in checks) / len(checks),
+        "arithmetic_rate": sum(check.arithmetic_valid for check in checks) / len(checks),
+        "evidence_rate": sum(check.evidence_valid for check in checks) / len(checks),
+    }
+
+
+def _generation_artifacts(
+    cells: tuple[AblationCell, ...],
+    results: dict[str, list[dict[str, Any]]],
+    cell_by_request: dict[str, tuple[AblationCell, int]],
+    replicate_count: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     rows = []
     task_records = []
     for cell in cells:
@@ -197,7 +206,6 @@ def run_matrix(
         for replicate in range(replicate_count):
             custom_id = _request_id(cell, replicate)
             payload = results[custom_id]
-            checks = [verify_task_payload(task) for task in payload]
             tasks.extend(payload)
             task_records.extend(
                 generated_task_record(
@@ -213,14 +221,9 @@ def run_matrix(
                     "replicate": replicate,
                     "seed": cell_by_request[custom_id][1],
                     "requested": len(payload),
-                    "accepted": sum(check.accepted for check in checks),
-                    "format_rate": sum(check.format_valid for check in checks) / len(checks),
-                    "arithmetic_rate": sum(check.arithmetic_valid for check in checks) / len(checks),
-                    "evidence_rate": sum(check.evidence_valid for check in checks) / len(checks),
+                    **_quality_metrics(payload),
                 }
             )
-        checks = [verify_task_payload(task) for task in tasks]
-        unique_accepted = unique_accepted_payloads(tasks)
         curriculum_packet = None
         if cell.curriculum is CurriculumCondition.CURRICULUM_CONDITIONED:
             curriculum_packet = CURRICULUM_PACKET
@@ -232,14 +235,24 @@ def run_matrix(
                 "curriculum_packet": curriculum_packet,
                 "replicates": replicates,
                 "requested": len(tasks),
-                "accepted": sum(check.accepted for check in checks),
-                "unique_accepted": len(unique_accepted),
-                "format_rate": sum(check.format_valid for check in checks) / len(checks),
-                "arithmetic_rate": sum(check.arithmetic_valid for check in checks) / len(checks),
-                "evidence_rate": sum(check.evidence_valid for check in checks) / len(checks),
+                "unique_accepted": len(unique_accepted_payloads(tasks)),
+                **_quality_metrics(tasks),
             }
         )
+    return rows, task_records
 
+
+def _write_generation_artifact(
+    output: str,
+    *,
+    raw_output: str,
+    batch_id: str,
+    seed: int,
+    replicate_count: int,
+    tasks_per_replicate: int,
+    rows: list[dict[str, Any]],
+    task_records: list[dict[str, Any]],
+) -> None:
     output_path = StoragePath(output)
     output_path.mkdirs()
     task_data_path = output_path / GENERATED_TASKS_FILENAME
@@ -258,12 +271,53 @@ def run_matrix(
     (output_path / GENERATION_FILENAME).write_text(json.dumps(ledger, indent=2, ensure_ascii=False) + "\n")
 
 
+def run_matrix(
+    output: str,
+    *,
+    tasks_per_replicate: int = DEFAULT_TASKS_PER_REPLICATE,
+    replicate_count: int = DEFAULT_REPLICATE_COUNT,
+    seed: int = DEFAULT_SEED,
+    relay_job: str = DEFAULT_GLM_RELAY_JOB,
+) -> None:
+    """Run paired generation replicates and write task Parquet plus an audit manifest."""
+
+    cells = tuple(
+        AblationCell(curriculum, generation_spec)
+        for curriculum in CurriculumCondition
+        for generation_spec in GenerationSpec
+    )
+    base_url = resolve_glm_base_url(relay_job)
+    token = os.environ[GLM_BULK_TOKEN_ENV]
+    batch_client = OpenAIBatchClient(base_url, token)
+    lines, cell_by_request = _generation_requests(cells, tasks_per_replicate, replicate_count, seed)
+    submission = batch_client.submit(lines, "curriculum-sft-ablation-paired-replicates.jsonl")
+    batch_id = submission.batch_id
+    batch = batch_client.wait(batch_id, 5.0)
+    batch_output = batch_client.output(batch)
+    raw_output, raw_errors = batch_output.output, batch_output.errors
+    if raw_errors:
+        raise RuntimeError("GLM returned batch errors for paired ablation generation")
+
+    results = _parse_generation_output(raw_output, cell_by_request, tasks_per_replicate)
+    rows, task_records = _generation_artifacts(cells, results, cell_by_request, replicate_count)
+    _write_generation_artifact(
+        output,
+        raw_output=raw_output,
+        batch_id=batch_id,
+        seed=seed,
+        replicate_count=replicate_count,
+        tasks_per_replicate=tasks_per_replicate,
+        rows=rows,
+        task_records=task_records,
+    )
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", required=True)
-    parser.add_argument("--tasks-per-replicate", type=int, default=16)
-    parser.add_argument("--replicate-count", type=int, default=4)
-    parser.add_argument("--seed", type=int, default=17)
+    parser.add_argument("--tasks-per-replicate", type=int, default=DEFAULT_TASKS_PER_REPLICATE)
+    parser.add_argument("--replicate-count", type=int, default=DEFAULT_REPLICATE_COUNT)
+    parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     args = parser.parse_args()
     run_matrix(
         args.output,

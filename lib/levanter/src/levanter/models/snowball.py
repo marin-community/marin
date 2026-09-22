@@ -511,11 +511,10 @@ class DenseMLP(eqx.Module):
 
 
 class SnowballMoEMLP(eqx.Module):
-    """QB-routed MoE with sigmoid combine weights (inference forward only).
+    """QB-routed MoE with sigmoid combine weights.
 
-    Drops the training-only QB-beta statistics, router metrics, and capacity-overflow reporting;
-    only the routed output is needed for scoring/serving. The loaded ``router_bias`` already has the
-    QB betas baked in (from the export), so we add it directly and never re-apply the update.
+    The loaded ``router_bias`` contains the exported QB betas and remains fixed during training.
+    This path omits QB-beta updates, router metrics, and capacity-overflow reporting.
     """
 
     router: jax.Array
@@ -555,7 +554,7 @@ class SnowballMoEMLP(eqx.Module):
         # unsharded. A safetensors load auto-shards [E] over `data` when E % data == 0, which would
         # otherwise make router_logits + router_bias illegally sharded on multi-device meshes.
         biased_logits = router_logits + jax.lax.stop_gradient(unshard(self.router_bias))
-        # Select top-(K+1) on biased logits; the (K+1)-th is only the QB threshold (unused at inference).
+        # Select top-(K+1) on biased logits; this implementation does not use the (K+1)-th QB threshold.
         _topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token + 1)
         selected_experts = selected_experts[:, :-1]
         # Sigmoid combine weights on UNbiased logits for the selected experts, renormed to sum to 2.5.

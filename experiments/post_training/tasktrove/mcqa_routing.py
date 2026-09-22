@@ -26,10 +26,11 @@ from typing import Any
 
 import pyarrow.parquet as pq
 from iris.cluster.client.job_info import get_job_info
-from marin.inference.openai_batch import OpenAIBatchClient, jsonl_text
+from marin.inference.openai_batch import CHAT_COMPLETIONS_ENDPOINT, OpenAIBatchClient, jsonl_text
+from marin.inference.structured_output import sole_tool_arguments
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, resolve_glm_base_url
+from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, GLM_MODEL, resolve_glm_base_url
 from experiments.post_training.tasktrove.taskbinary import INSTRUCTION, read_task_binary
 
 logger = logging.getLogger(__name__)
@@ -365,7 +366,7 @@ def completion_body(tasks: list[RoutingTask], batch_id: int) -> dict[str, Any]:
         + "\n".join(json.dumps(row, ensure_ascii=False, separators=(",", ":")) for row in visible)
     )
     return {
-        "model": "glm-5.3",
+        "model": GLM_MODEL,
         "messages": [
             {"role": "system", "content": "Apply the routing rubric conservatively and call submit_routes once."},
             {"role": "user", "content": prompt},
@@ -401,20 +402,12 @@ def batch_lines(
             {
                 "custom_id": custom_id,
                 "method": "POST",
-                "url": "/v1/chat/completions",
+                "url": CHAT_COMPLETIONS_ENDPOINT,
                 "body": completion_body(batch, start // batch_size),
             }
         )
         by_custom_id[custom_id] = batch
     return lines, by_custom_id
-
-
-def _tool_arguments(response_body: dict[str, Any]) -> dict[str, Any]:
-    message = response_body["choices"][0]["message"]
-    calls = message.get("tool_calls") or []
-    if len(calls) != 1 or calls[0]["function"]["name"] != "submit_routes":
-        raise ValueError("expected exactly one submit_routes tool call")
-    return json.loads(calls[0]["function"]["arguments"])
 
 
 def parse_decision(row: dict[str, Any]) -> GlmDecision:
@@ -466,7 +459,7 @@ def decision_row(task: RoutingTask, decision: GlmDecision) -> dict[str, Any]:
         "task_id": task.task_id,
         "route": route.value,
         "model_route": decision.route.value,
-        "route_source": "glm-5.3",
+        "route_source": GLM_MODEL,
         "policy_version": POLICY_VERSION,
         "reason_codes": [
             f"model_route:{decision.route.value}",
@@ -536,7 +529,7 @@ def parse_batch_output(
             routed.extend(fallback_row(task, "request_error") for task in tasks)
             continue
         try:
-            raw_results = _tool_arguments(response["body"])["results"]
+            raw_results = json.loads(sole_tool_arguments(response["body"], "submit_routes"))["results"]
             if not isinstance(raw_results, list):
                 raise TypeError("results must be an array")
         except (KeyError, TypeError, ValueError, json.JSONDecodeError):

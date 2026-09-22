@@ -13,6 +13,16 @@ from pydantic import BaseModel
 OutputT = TypeVar("OutputT", bound=BaseModel)
 
 
+def sole_tool_arguments(response_body: dict[str, Any], tool_name: str) -> str:
+    """Return the JSON arguments from the sole matching function call."""
+
+    message = response_body["choices"][0]["message"]
+    calls = message.get("tool_calls") or []
+    if len(calls) != 1 or calls[0]["function"]["name"] != tool_name:
+        raise ValueError(f"expected exactly one {tool_name} tool call")
+    return calls[0]["function"]["arguments"]
+
+
 @dataclass(frozen=True)
 class StructuredTool(Generic[OutputT]):
     """A strict function tool whose arguments are validated by a Pydantic model."""
@@ -46,8 +56,4 @@ class StructuredTool(Generic[OutputT]):
     def parse(self, response_body: dict[str, Any]) -> OutputT:
         """Parse the sole matching function call from a chat-completion response."""
 
-        message = response_body["choices"][0]["message"]
-        calls = message.get("tool_calls") or []
-        if len(calls) != 1 or calls[0]["function"]["name"] != self.name:
-            raise ValueError(f"expected exactly one {self.name} tool call")
-        return self.output_type.model_validate_json(calls[0]["function"]["arguments"])
+        return self.output_type.model_validate_json(sole_tool_arguments(response_body, self.name))

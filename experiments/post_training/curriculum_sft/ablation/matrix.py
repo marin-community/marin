@@ -13,6 +13,7 @@ from typing import Any
 
 from experiments.post_training.curriculum_sft.ablation.tasks import (
     BASIS_POINTS_SCALE,
+    EVIDENCE_IDS,
     SyntheticFinanceTask,
     task_from_payload,
 )
@@ -65,13 +66,14 @@ def build_generation_prompt(
             f"{curriculum_packet}\n"
         )
     if cell.generation_spec is GenerationSpec.STRICT:
+        evidence_ids = " and ".join(EVIDENCE_IDS)
         specification = (
             "Every task must ask for gross profit (revenue minus operating cost) and gross margin in basis points "
             f"(gross profit divided by revenue times {BASIS_POINTS_SCALE}). Use positive integer revenue and "
             "operating_cost with "
             "operating_cost below revenue. Choose values whose basis-point answer is integral, make the exact answer "
             "consistent with the facts, include both figures in the question, and use exactly the evidence IDs "
-            "disclosure.revenue and disclosure.operating_cost."
+            f"{evidence_ids}."
         )
     else:
         specification = (
@@ -162,13 +164,7 @@ def generated_payloads_to_rows(
     cell: AblationCell,
     payloads: Sequence[object],
 ) -> list[dict[str, Any]]:
-    """Convert accepted GLM payloads into canonical SFT messages.
-
-    Every generation arm uses one structured payload contract so output format
-    cannot masquerade as a prompt-specification effect. The local oracle filters
-    every arm before training. SFT questions are constructed from the verified facts;
-    generated question wording is retained only in the generation ledger.
-    """
+    """Convert unique, oracle-accepted GLM payloads into canonical SFT messages."""
 
     accepted = unique_accepted_payloads(payloads)[: cell.accepted_examples]
     if len(accepted) != cell.accepted_examples:
