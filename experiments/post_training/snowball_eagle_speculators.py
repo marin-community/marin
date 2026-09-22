@@ -256,6 +256,7 @@ def _agentic_benchmark_config_yaml(role_plan: SkyRLRolePlan, *, speculative: boo
     config = yaml.safe_load(_rl_benchmark_config_yaml(role_plan, speculative=speculative))
     config["entrypoint"] = "terminal_bench"
     config["config_groups"] = {"terminal_bench_config": "terminal_bench"}
+    config["trainer"]["policy_mini_batch_size"] = config["trainer"]["train_batch_size"]
     config["context_budget"] = {
         "request_window_tokens": 32_768,
         "max_new_tokens_per_turn": 4096,
