@@ -236,8 +236,9 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra
 ```
 
 For a checkpoint-restored comparison, pass `--initialize-from-checkpoint <permanent-checkpoint>`
-and set `--num-steps` to the checkpoint step plus the desired number of updates. Keep
-`--schedule-steps`, batch, data, attention backend, and GC policy identical between arms.
+and set `--num-steps` to the checkpoint’s completed update count plus the desired number
+of new updates. Restore the same checkpoint in the baseline and treatment runs. Keep
+`--schedule-steps`, batch size, training data mode, seed, attention backend, and GC policy identical.
 Checkpoint writes remain disabled unless `--save-checkpoints` is set.
 
 Batch 1024 keeps the production local batch of 16 sequences per GPU. The trace does not include
