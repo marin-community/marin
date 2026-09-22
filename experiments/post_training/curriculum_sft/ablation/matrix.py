@@ -143,18 +143,8 @@ def _sft_row(cell: AblationCell, payload: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def generated_payloads_to_rows(
-    cell: AblationCell,
-    payloads: Sequence[object],
-) -> list[dict[str, Any]]:
-    """Convert accepted GLM payloads into canonical SFT messages.
-
-    Every generation arm uses one structured payload contract so output format
-    cannot masquerade as a prompt-specification effect. The local oracle filters
-    every arm before training. Curriculum and specification affect only what GLM
-    generates; all accepted rows receive the same SFT wrapper.
-    """
-
+def unique_accepted_payloads(payloads: Sequence[object]) -> list[Mapping[str, Any]]:
+    """Return oracle-accepted payloads with unique IDs, questions, and fact tuples."""
     accepted: list[Mapping[str, Any]] = []
     task_ids: set[str] = set()
     questions: set[str] = set()
@@ -175,8 +165,22 @@ def generated_payloads_to_rows(
         questions.add(question)
         fact_tuples.add(fact_tuple)
         accepted.append(payload)
-        if len(accepted) == cell.accepted_examples:
-            break
+    return accepted
+
+
+def generated_payloads_to_rows(
+    cell: AblationCell,
+    payloads: Sequence[object],
+) -> list[dict[str, Any]]:
+    """Convert accepted GLM payloads into canonical SFT messages.
+
+    Every generation arm uses one structured payload contract so output format
+    cannot masquerade as a prompt-specification effect. The local oracle filters
+    every arm before training. Curriculum and specification affect only what GLM
+    generates; all accepted rows receive the same SFT wrapper.
+    """
+
+    accepted = unique_accepted_payloads(payloads)[: cell.accepted_examples]
     if len(accepted) != cell.accepted_examples:
         raise ValueError(
             f"found {len(accepted)} unique oracle-accepted {cell.generation_spec} payloads, "

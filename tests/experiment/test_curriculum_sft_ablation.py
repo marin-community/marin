@@ -18,6 +18,7 @@ from experiments.post_training.curriculum_sft.ablation.matrix import (
     build_generation_prompt,
     build_held_out_tasks,
     generated_payloads_to_rows,
+    unique_accepted_payloads,
 )
 from experiments.post_training.curriculum_sft.ablation.tasks import synthetic_task, task_payload
 from experiments.post_training.curriculum_sft.ablation.verifier import (
@@ -202,6 +203,20 @@ def test_strict_conversion_requires_exactly_the_accepted_example_budget() -> Non
 
     with pytest.raises(ValueError, match="needed 2"):
         generated_payloads_to_rows(cell, [invalid, valid])
+
+
+def test_generation_ledger_uses_training_deduplication_criteria() -> None:
+    first = task_payload(synthetic_task(0))
+    repeated_facts = task_payload(synthetic_task(1))
+    repeated_facts["facts"] = dict(first["facts"])
+    repeated_facts["answer"] = dict(first["answer"])
+    repeated_facts["question"] = (
+        f"Given sales of {first['facts']['revenue']} and costs of {first['facts']['operating_cost']}, "
+        "calculate gross profit and gross margin in basis points."
+    )
+
+    assert verify_task_payload(repeated_facts).accepted
+    assert unique_accepted_payloads([first, repeated_facts]) == [first]
 
 
 def test_task_verifier_accepts_comma_formatted_figures() -> None:

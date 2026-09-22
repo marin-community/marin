@@ -203,8 +203,7 @@ def test_snowball_sharded_head_loss_matches_logits_reference():
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
         model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(6))
         ids = _device_batched_ids(cfg.vocab_size, 10)
-        Pos = ids.resolve_axis("position")
-        loss_weight = hax.ones(ids.axes, dtype=jnp.float32).at[Pos, -1].set(0.0)
+        loss_weight = hax.ones(ids.axes, dtype=jnp.float32)
         example = LmExample(tokens=ids, loss_weight=loss_weight)
         actual = model.compute_next_token_loss(example)
         logits = model(ids)

@@ -60,6 +60,7 @@ from levanter.grug.sharding import (
 )
 from levanter.layers.attention import AttentionMask as LmHeadAttentionMask
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
+from levanter.models.loss import next_token_loss_weight
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.logging import silence_transformer_nag
 
@@ -764,12 +765,13 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             dtype=dtype,
         )
         loss = hax.named(raw_loss.reshape(raw_tokens.shape), example.tokens.axes)
+        loss_weight = next_token_loss_weight(example.tokens.resolve_axis(self.Pos.name), example.loss_weight)
         return hax.nn.loss.maybe_reduce_loss(
             loss,
             reduction,
             reduction_axis,
             where=None,
-            weight=example.loss_weight,
+            weight=loss_weight,
         )
 
     def resize_vocab(self, new_size: int, key: Optional[PRNGKeyArray] = None) -> "SnowballLMHeadModel":

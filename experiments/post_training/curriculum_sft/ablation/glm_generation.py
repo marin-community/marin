@@ -25,6 +25,7 @@ from experiments.post_training.curriculum_sft.ablation.matrix import (
     GenerationSpec,
     SftDose,
     build_generation_prompt,
+    unique_accepted_payloads,
 )
 from experiments.post_training.curriculum_sft.ablation.tasks import (
     EVIDENCE_IDS,
@@ -224,16 +225,7 @@ def run_matrix(
                 }
             )
         checks = [verify_task_payload(task) for task in tasks]
-        unique_accepted = {
-            (
-                task["task_id"],
-                " ".join(task["question"].lower().split()),
-                task["facts"]["revenue"],
-                task["facts"]["operating_cost"],
-            )
-            for task, check in zip(tasks, checks, strict=True)
-            if check.accepted
-        }
+        unique_accepted = unique_accepted_payloads(tasks)
         curriculum_packet = None
         if cell.curriculum is CurriculumCondition.CURRICULUM_CONDITIONED:
             curriculum_packet = CURRICULUM_PACKET
