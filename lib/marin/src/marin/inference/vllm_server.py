@@ -1115,19 +1115,13 @@ def _guard_vllm_eager_args(extra_cli_args: list[str] | None) -> list[str]:
     acknowledged = _VLLM_EAGER_ACKNOWLEDGEMENT in args
     args = [arg for arg in args if arg != _VLLM_EAGER_ACKNOWLEDGEMENT]
 
-    # vLLM expands --config first, then parses command-line flags in order.
+    # vLLM expands YAML only for the exact --config token, then parses CLI flags in order.
     config_flags: list[str] = []
-    config_path: str | None = None
-    for index, arg in enumerate(args):
-        option, separator, value = arg.partition("=")
-        if option == "--config" or (option.startswith("--conf") and "--config".startswith(option)):
-            if separator:
-                config_path = value
-            elif index + 1 < len(args):
-                config_path = args[index + 1]
-            else:
-                raise ValueError(f"{option} requires a config file path")
-    if config_path is not None:
+    if "--config" in args:
+        index = args.index("--config")
+        if index + 1 == len(args):
+            raise ValueError("vLLM --config requires a file path")
+        config_path = args[index + 1]
         with open(config_path) as config_file:
             config = yaml.safe_load(config_file) or {}
         if not isinstance(config, dict):

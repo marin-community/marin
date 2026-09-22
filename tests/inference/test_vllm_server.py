@@ -475,15 +475,13 @@ def test_eager_guard_preserves_vllm_args_and_warns_on_acknowledged_eager(tmp_pat
 
 
 @pytest.mark.parametrize("key", ["enforce_eager", "enf"])
-@pytest.mark.parametrize("config_arg", ["--config", "--config=", "--conf="])
-def test_config_eager_requires_acknowledgement_before_spawn(tmp_path, monkeypatch, key, config_arg):
+def test_config_eager_requires_acknowledgement_before_spawn(tmp_path, monkeypatch, key):
     config = tmp_path / "vllm.yaml"
     config.write_text(f"{key}: true\n")
     monkeypatch.setattr(vllm_server.subprocess, "Popen", lambda *_args, **_kwargs: pytest.fail("vLLM spawned"))
-    args = [config_arg, str(config)] if "=" not in config_arg else [f"{config_arg}{config}"]
 
     with pytest.raises(ValueError, match="--i-know-i-am-making-vllm-slow"):
-        with _environment(_FakeLauncher("exit"), extra_args=args):
+        with _environment(_FakeLauncher("exit"), extra_args=["--config", str(config)]):
             pass
 
 
