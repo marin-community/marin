@@ -302,8 +302,9 @@ def test_isolated_cuda_vllm_marin_fork_uses_verified_wheel(monkeypatch, machine)
     assert "--torch-backend" not in cmd
     requirements = [cmd[index + 1] for index, value in enumerate(cmd) if value == "--with"]
     toolchain = {requirement.partition("==")[0]: requirement.partition("==")[2] for requirement in requirements}
-    toolchain_packages = {"nvidia-cuda-nvcc", "nvidia-cuda-crt", "nvidia-cuda-nvrtc", "nvidia-nvvm"}
+    toolchain_packages = {"nvidia-cuda-nvcc", "nvidia-cuda-crt", "nvidia-nvvm"}
     assert set(toolchain) >= toolchain_packages
+    assert "nvidia-cuda-nvrtc" not in toolchain
     assert {toolchain[package] for package in toolchain_packages} == {
         CUDA_TOOLCHAIN_VERSION_BY_BACKEND[VLLM_GPU_RELEASE.torch_backend]
     }

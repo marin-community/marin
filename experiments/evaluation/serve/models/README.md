@@ -66,6 +66,27 @@ agent:                          # AgentConfig -> the Harbor/agentic agent
 `max_model_len` to the model's native limit. `resource_hint.hbm_gb` is portable across TPU and GPU;
 `resource_hint.gpu` declares that the model requires one of the listed exact GPU shapes.
 
+## vLLM eager execution
+
+vLLM defaults `enforce_eager` to false. `--enforce-eager` disables both `torch.compile` and CUDA
+graphs. In a controlled Snowball Grug-67B run on eight H100s, eager execution took 44.025 ms per
+decode token, versus 6.523 ms with the vLLM default (6.75x faster). See [issue #9339](https://github.com/marin-community/marin/issues/9339)
+for the setup, startup costs, and limits of that measurement.
+
+Use eager execution when a specific model needs it for compatibility or correctness, or during
+development when shorter startup matters more than steady-state throughput. Record that reason next
+to the model configuration. Marin requires a separate acknowledgement in `vllm_extra_args`:
+
+```yaml
+serve:
+  vllm_extra_args:
+    - --enforce-eager
+    - --i-know-i-am-making-vllm-slow
+```
+
+Marin removes the acknowledgement before launching vLLM. `--no-enforce-eager` keeps the vLLM default
+and needs no acknowledgement.
+
 ## Multi-node GPU serving
 
 Set `serve.pipeline_parallel_size` to the number of Iris tasks in one vLLM serving gang.

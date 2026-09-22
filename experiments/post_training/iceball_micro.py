@@ -199,6 +199,8 @@ generator:
   num_inference_engines: {ICEBALL_RL_ROLE_PLAN.num_inference_engines}
   n_samples_per_prompt: {ICEBALL_RL_ROLE_PLAN.n_samples_per_prompt}
   gpu_memory_utilization: 0.70
+  # SkyRL chose eager rollouts after suspected CUDA-graph train/rollout log-prob drift affected convergence.
+  # See https://github.com/NovaSky-AI/SkyRL/pull/569; this is separate from final evaluation serving.
   enforce_eager: true
   run_engines_locally: true
   weight_sync_backend: nccl
@@ -478,7 +480,6 @@ def build_workflow(*, version: str | None = None) -> IceballMicroWorkflow:
                     max_model_len=ICEBALL_EVAL_CONTEXT_LENGTH,
                     hf_overrides=json.dumps({"max_position_embeddings": ICEBALL_EVAL_CONTEXT_LENGTH}),
                     max_num_seqs=32,
-                    vllm_extra_args=("--enforce-eager",),
                 ),
                 generation=GenerationConfig(max_gen_toks=256),
             ),

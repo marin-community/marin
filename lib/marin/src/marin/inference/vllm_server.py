@@ -21,6 +21,7 @@ from typing import Protocol
 from urllib.parse import urlparse
 
 import requests
+import yaml
 from iris.cluster.log_highlights import extract_failure_highlights
 from iris.runtime import telemetry as runtime_telemetry
 from prometheus_client.core import Metric as PrometheusMetric
@@ -56,6 +57,8 @@ logger = logging.getLogger(__name__)
 # this is only a convenience snapshot, capped because vLLM logs can be large.
 _NATIVE_LOG_TAIL_LINES = 1000
 _DEFAULT_VLLM_PORT = 8000
+_VLLM_EAGER_ACKNOWLEDGEMENT = "--i-know-i-am-making-vllm-slow"
+_VLLM_EAGER_GUIDE = "experiments/evaluation/serve/models/README.md"
 _REMOVED_VLLM_MODE_MESSAGE = (
     "MARIN_VLLM_MODE no longer selects a vLLM backend; the Docker sidecar implementation was removed. "
     "Unset MARIN_VLLM_MODE or set it to 'native'."
@@ -261,6 +264,10 @@ class IsolatedCudaVllm:
             _RUNAI_STREAMER_REQUIREMENT,
         ]
         for package in _CUDA_TOOLCHAIN_PACKAGES:
+            # The promoted wheel's CUDA torch pins NVRTC through cuda-toolkit. A separate NVRTC
+            # patch-version pin conflicts with that requirement and makes uv select CPU torch.
+            if self.source is VllmType.MARIN_FORK and package == "nvidia-cuda-nvrtc":
+                continue
             requirement = f"{package}=={install.toolchain_version}"
             command.extend(("--with", requirement))
         command.extend(("--python", self.python_version))
@@ -1101,6 +1108,56 @@ def _vllm_serve_command(
     ]
 
 
+def _guard_vllm_eager_args(extra_cli_args: list[str] | None) -> list[str]:
+    """Remove Marin's acknowledgement and check vLLM's effective eager flag."""
+    args = list(extra_cli_args or ())
+    acknowledged = _VLLM_EAGER_ACKNOWLEDGEMENT in args
+    args = [arg for arg in args if arg != _VLLM_EAGER_ACKNOWLEDGEMENT]
+
+    # vLLM expands --config first, then parses command-line flags in order.
+    config_flags: list[str] = []
+    config_path: str | None = None
+    for index, arg in enumerate(args):
+        option, separator, value = arg.partition("=")
+        if option == "--config" or (option.startswith("--conf") and "--config".startswith(option)):
+            if separator:
+                config_path = value
+            elif index + 1 < len(args):
+                config_path = args[index + 1]
+            else:
+                raise ValueError(f"{option} requires a config file path")
+    if config_path is not None:
+        with open(config_path) as config_file:
+            config = yaml.safe_load(config_file) or {}
+        if not isinstance(config, dict):
+            raise ValueError(f"Invalid vLLM config file: {config_path}")
+        config_flags = [f"--{key}" for key, value in config.items() if value is True]
+
+    eager = False
+    for arg in [*config_flags, *args]:
+        option, separator, _value = arg.partition("=")
+        option = option.replace("_", "-")
+        if option in {"--enforce-eager", "--no-enforce-eager"} and separator:
+            raise ValueError(f"{option} is a boolean switch; use --no-enforce-eager to select false")
+        # argparse accepts unambiguous long-option abbreviations.
+        if option.startswith("--enf") and "--enforce-eager".startswith(option):
+            eager = True
+        elif option.startswith("--no-enf") and "--no-enforce-eager".startswith(option):
+            eager = False
+
+    if eager and not acknowledged:
+        raise ValueError(
+            "vLLM eager execution requires the separate Marin flag "
+            f"{_VLLM_EAGER_ACKNOWLEDGEMENT}. See {_VLLM_EAGER_GUIDE}."
+        )
+    if eager:
+        logger.warning(
+            "vLLM eager execution disables torch.compile and CUDA graphs and can materially reduce "
+            "steady-state throughput. See https://github.com/marin-community/marin/issues/9339."
+        )
+    return args
+
+
 def _start_vllm_native_process(
     *,
     model_name_or_path: str,
@@ -1112,6 +1169,7 @@ def _start_vllm_native_process(
     log_prefix: str,
 ) -> tuple[VllmServerHandle, list[str]]:
     """Start ``vllm serve`` without imposing an HTTP readiness policy."""
+    extra_cli_args = _guard_vllm_eager_args(extra_cli_args)
     command = _vllm_serve_command(
         launcher=launcher,
         model_name_or_path=model_name_or_path,
