@@ -157,6 +157,13 @@ def _rl_benchmark_role_plan() -> SkyRLRolePlan:
     )
 
 
+def _agentic_benchmark_role_plan() -> SkyRLRolePlan:
+    return replace(
+        _rl_benchmark_role_plan(),
+        policy_mini_batch_size=_BENCHMARK_PROMPTS,
+    )
+
+
 def _rl_benchmark_config_yaml(role_plan: SkyRLRolePlan, *, speculative: bool) -> str:
     config = {
         "entrypoint": "standard",
@@ -253,10 +260,11 @@ def _rl_benchmark_config_yaml(role_plan: SkyRLRolePlan, *, speculative: bool) ->
 
 
 def _agentic_benchmark_config_yaml(role_plan: SkyRLRolePlan, *, speculative: bool) -> str:
+    if role_plan.policy_mini_batch_size != role_plan.train_batch_size:
+        raise ValueError("Fully asynchronous agentic benchmarks require one policy mini-batch per rollout batch")
     config = yaml.safe_load(_rl_benchmark_config_yaml(role_plan, speculative=speculative))
     config["entrypoint"] = "terminal_bench"
     config["config_groups"] = {"terminal_bench_config": "terminal_bench"}
-    config["trainer"]["policy_mini_batch_size"] = config["trainer"]["train_batch_size"]
     config["context_budget"] = {
         "request_window_tokens": 32_768,
         "max_new_tokens_per_turn": 4096,
@@ -796,7 +804,7 @@ def build_agentic_rl_benchmark(
     draft: ArtifactStep[EagleDraftArtifact] | None,
 ) -> ArtifactStep[SkyRLRun]:
     """Build a matched acceptance benchmark on disjoint multi-turn terminal tasks."""
-    role_plan = _rl_benchmark_role_plan()
+    role_plan = _agentic_benchmark_role_plan()
     name = f"{RL_ARTIFACT_NAME}-agentic-{label}"
     return _benchmark_step(
         name=name,
