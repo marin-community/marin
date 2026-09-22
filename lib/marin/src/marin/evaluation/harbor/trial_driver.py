@@ -215,7 +215,10 @@ def _opencode_config(config: object, endpoint_url: str) -> dict[str, Any]:
     }
 
 
-def _terminus_llm_call_kwargs(config: object, max_output_tokens: object) -> dict[str, Any]:
+def _terminus_llm_call_kwargs(
+    config: Mapping[str, Any] | None,
+    max_output_tokens: int,
+) -> dict[str, Any]:
     if config is None:
         call_kwargs: Mapping[str, Any] = {}
     elif isinstance(config, Mapping):
