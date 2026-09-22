@@ -145,11 +145,6 @@ def _strip_direct_url_deps(text: str) -> str:
     return _DIRECT_URL_DEP_RE.sub("", text)
 
 
-def published_pyproject(text: str, version: str) -> str:
-    """Return pyproject text after applying the release metadata rewrites."""
-    return _strip_direct_url_deps(_rewrite_sibling_pins(text, version))
-
-
 @contextmanager
 def patched_tree(version: str):
     """Patch every package's version file and sibling pins; revert on exit.
@@ -181,7 +176,8 @@ def patched_tree(version: str):
             # removing entries like `lm-eval @ git+https://...` from optional
             # extras; those extras become empty in the published artifacts.
             current_pyproject = pyproject_path.read_text()
-            new_pyproject = published_pyproject(current_pyproject, version)
+            new_pyproject = _rewrite_sibling_pins(current_pyproject, version)
+            new_pyproject = _strip_direct_url_deps(new_pyproject)
             if new_pyproject != current_pyproject:
                 pyproject_path.write_text(new_pyproject)
 

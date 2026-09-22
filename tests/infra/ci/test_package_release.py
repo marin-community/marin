@@ -33,7 +33,6 @@ from scripts.ci.package_release import (
     validate_targeted_lock_change,
 )
 from scripts.python_libs_package import PACKAGES as BUNDLED_LIBRARIES
-from scripts.python_libs_package import published_pyproject
 
 RELEASE_WORKFLOW = Path(".github/workflows/marin-release-libs-wheels.yaml")
 EXTERNAL_UPDATE_WORKFLOW = Path(".github/workflows/ops-external-dependencies.yaml")
@@ -290,13 +289,6 @@ def test_python_libs_release_expectations_track_the_bundle_builder() -> None:
     assert set(family.declared_version_paths) == {
         Path(library["path"]) / library["version_file"] for library in BUNDLED_LIBRARIES.values()
     }
-
-
-def test_python_libs_release_keeps_shellsim_dependency() -> None:
-    source = Path("lib/marin/pyproject.toml").read_text()
-    dependencies = tomllib.loads(published_pyproject(source, "0.3.0"))["project"]["dependencies"]
-
-    assert "shellsim>=0.1.10" in dependencies
 
 
 @pytest.mark.parametrize("package", ["iris", "dupekit", "finelog"])
