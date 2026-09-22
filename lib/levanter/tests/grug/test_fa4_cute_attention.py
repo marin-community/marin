@@ -55,6 +55,8 @@ def test_packed_segment_backward_block_sparse_indices_split_full_blocks():
     sparse_metadata = fa4_cute_backend._packed_segment_backward_block_sparse_indices_with_full(
         lower_bounds,
         valid,
+        kv_len=8,
+        q_offset=jnp.zeros((1,), dtype=jnp.int32),
         tile_m=2,
         tile_n=2,
     )
@@ -69,6 +71,20 @@ def test_packed_segment_backward_block_sparse_indices_split_full_blocks():
         sparse_metadata.full_block_idx,
         jnp.array([[[[1, 2, 3, 0], [2, 3, 0, 0], [3, 0, 0, 0], [0, 0, 0, 0]]]], dtype=jnp.int32),
     )
+
+
+def test_packed_segment_backward_block_sparse_indices_use_global_query_positions():
+    sparse_metadata = fa4_cute_backend._packed_segment_backward_block_sparse_indices_with_full(
+        jnp.zeros((1, 4), dtype=jnp.int32),
+        jnp.ones((1, 4), dtype=jnp.bool_),
+        kv_len=8,
+        q_offset=jnp.array([4], dtype=jnp.int32),
+        tile_m=2,
+        tile_n=2,
+    )
+
+    np.testing.assert_array_equal(sparse_metadata.partial_block_cnt, jnp.array([[[0, 0, 1, 1]]], dtype=jnp.int32))
+    np.testing.assert_array_equal(sparse_metadata.full_block_cnt, jnp.array([[[2, 2, 1, 0]]], dtype=jnp.int32))
 
 
 def test_packed_segment_causal_lower_bounds_carry_next_valid_bound_through_padding():
