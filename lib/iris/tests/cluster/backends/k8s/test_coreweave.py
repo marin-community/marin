@@ -407,13 +407,6 @@ def test_start_controller_runs_cache_recovery_agent_without_external_finelog():
     provider.shutdown()
 
 
-def test_controller_role_can_request_coreweave_node_lifecycle_operation():
-    rules = cluster_role_manifest("iris-controller-iris")["rules"]
-
-    assert {"apiGroups": [""], "resources": ["nodes"], "verbs": ["get", "list", "watch", "patch"]} in rules
-    assert {"apiGroups": [""], "resources": ["nodes/status"], "verbs": ["patch"]} in rules
-
-
 def test_start_controller_local_state_dir_uses_hostpath_not_pvc():
     """Setting storage.local_state_dir mounts it via hostPath and creates no PVC."""
     provider, k8s = _make_provider()

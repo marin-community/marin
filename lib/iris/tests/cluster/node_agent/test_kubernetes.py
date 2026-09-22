@@ -10,7 +10,6 @@ network, and DCGM's ``hostname``/``gpu``/``modelName`` labels).
 """
 
 import os
-from datetime import UTC, datetime
 
 import pytest
 from iris.cluster.node_agent.kubernetes import (
@@ -25,21 +24,16 @@ from iris.cluster.node_agent.kubernetes import (
 )
 from iris.cluster.node_agent.metrics import NodeMetrics, NodeTarget
 from iris.cluster.node_agent.uv_cache_recovery import (
-    COREWEAVE_PENDING_STATE_CONDITION,
-    COREWEAVE_PENDING_STATE_LABEL,
-    COREWEAVE_POWER_RESET_STATE,
-    UV_CACHE_REBOOT_REQUESTED_EVENT,
+    UV_CACHE_CLEARED_EVENT,
     UV_CACHE_RECOVERY_OBSERVED_EVENT,
     UV_CACHE_RECOVERY_THRESHOLD,
-    UV_CACHE_RESET_COMPLETED_EVENT,
-    UV_CACHE_RESET_MARKER,
-    complete_uv_cache_reset,
     reconcile_uv_cache_recovery,
 )
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.runtime.env import UV_CACHE_RECOVERY_SIGNAL_PREFIX
 from iris.test_util import FakeStatsTable
+from rigging.timing import Timestamp
 
 NODE_EXPORTER_TEXT = """
 # HELP node_memory_MemTotal_bytes Memory information field MemTotal_bytes.
@@ -93,100 +87,60 @@ DCGM_FI_DEV_POWER_MGMT_LIMIT{{{_DCGM_GPU1}}} 700
 _MIB = 1024 * 1024
 
 
-def test_complete_uv_cache_reset_waits_for_machine_reboot(tmp_path, monkeypatch):
+def test_uv_cache_recovery_clears_cache_after_threshold(tmp_path, monkeypatch):
     events = []
     monkeypatch.setattr(
         "iris.cluster.node_agent.uv_cache_recovery.telemetry.event",
         lambda name, body: events.append((name, dict(body.fields))),
     )
+    now = Timestamp.from_seconds(1_795_910_400)
     uv_cache = tmp_path / "uv-cache"
     uv_cache.mkdir()
     cached_file = uv_cache / "archive.whl"
     cached_file.write_text("suspect")
-    marker = tmp_path / UV_CACHE_RESET_MARKER
-    marker.write_text("current-boot\n")
-
-    complete_uv_cache_reset(tmp_path, "current-boot")
-    assert cached_file.exists()
-    assert events == []
-
-    complete_uv_cache_reset(tmp_path, "next-boot")
-    assert uv_cache.is_dir()
-    assert list(uv_cache.iterdir()) == []
-    assert not marker.exists()
-    assert events == [
-        (
-            UV_CACHE_RESET_COMPLETED_EVENT,
-            {
-                "requested_boot_id": "current-boot",
-                "current_boot_id": "next-boot",
-                "cache_path": str(uv_cache),
-            },
-        )
-    ]
-
-
-def test_uv_cache_recovery_threshold_requests_coreweave_safe_reboot(tmp_path, monkeypatch):
-    events = []
-    monkeypatch.setattr(
-        "iris.cluster.node_agent.uv_cache_recovery.telemetry.event",
-        lambda name, body: events.append((name, dict(body.fields))),
-    )
-    now = datetime(2026, 9, 22, tzinfo=UTC).timestamp()
-    uv_cache = tmp_path / "uv-cache"
-    uv_cache.mkdir()
     for index in range(UV_CACHE_RECOVERY_THRESHOLD):
         signal = uv_cache / f"{UV_CACHE_RECOVERY_SIGNAL_PREFIX}{index}"
         signal.touch()
-        os.utime(signal, (now, now))
+        os.utime(signal, (now.epoch_seconds(), now.epoch_seconds()))
 
-    k8s = InMemoryK8sService(namespace="iris")
-    k8s.seed_resource(
-        K8sResource.NODES,
-        "node-a",
-        {"metadata": {"name": "node-a", "labels": {}}, "status": {"conditions": []}},
+    uv = tmp_path / "uv"
+    uv.write_text(
+        """\
+#!/bin/sh
+set -eu
+[ "$1 $2 $3" = "cache clean --cache-dir" ]
+find "$4" -mindepth 1 -delete
+"""
     )
+    uv.chmod(0o755)
 
-    reconcile_uv_cache_recovery(k8s, "node-a", tmp_path, "boot-a", now=now)
-    node = k8s.get_json(K8sResource.NODES, "node-a")
-    assert node["metadata"]["labels"][COREWEAVE_PENDING_STATE_LABEL] == COREWEAVE_POWER_RESET_STATE
-    condition = node["status"]["conditions"][-1]
-    assert condition["type"] == COREWEAVE_PENDING_STATE_CONDITION
-    assert condition["status"] == "True"
-    assert condition["reason"] == COREWEAVE_POWER_RESET_STATE
-    assert condition["lastHeartbeatTime"] == "2026-09-22T00:00:00Z"
-    assert condition["lastTransitionTime"] == "2026-09-22T00:00:00Z"
-    assert (tmp_path / UV_CACHE_RESET_MARKER).read_text() == "boot-a\n"
+    reconcile_uv_cache_recovery(tmp_path, now=now, uv_executable=str(uv))
+    assert uv_cache.is_dir()
+    assert list(uv_cache.iterdir()) == []
+    assert not cached_file.exists()
+
     observed_events = [body for name, body in events if name == UV_CACHE_RECOVERY_OBSERVED_EVENT]
     assert {body["attempt_uid"] for body in observed_events} == {"0", "1", "2"}
-    assert [body for name, body in events if name == UV_CACHE_REBOOT_REQUESTED_EVENT] == [
+    assert [body for name, body in events if name == UV_CACHE_CLEARED_EVENT] == [
         {
+            "cache_path": str(uv_cache),
             "recovery_count": UV_CACHE_RECOVERY_THRESHOLD,
             "recovery_window_seconds": 1800.0,
-            "lifecycle_state": COREWEAVE_POWER_RESET_STATE,
         }
     ]
 
-    event_count = len(events)
-    reconcile_uv_cache_recovery(k8s, "node-a", tmp_path, "boot-a", now=now)
-    assert len(node["status"]["conditions"]) == 1
-    assert len(events) == event_count
-
 
 def test_uv_cache_recovery_ignores_stale_and_subthreshold_signals(tmp_path):
-    now = datetime(2026, 9, 22, tzinfo=UTC).timestamp()
+    now = Timestamp.from_seconds(1_795_910_400)
     uv_cache = tmp_path / "uv-cache"
     uv_cache.mkdir()
-    for index, modified_at in enumerate((now, now, 0.0)):
+    for index, modified_at in enumerate((now.epoch_seconds(), now.epoch_seconds(), 0.0)):
         signal = uv_cache / f"{UV_CACHE_RECOVERY_SIGNAL_PREFIX}{index}"
         signal.touch()
         os.utime(signal, (modified_at, modified_at))
 
-    k8s = InMemoryK8sService(namespace="iris")
-
-    reconcile_uv_cache_recovery(k8s, "node-a", tmp_path, "boot-a", now=now)
+    reconcile_uv_cache_recovery(tmp_path, now=now, uv_executable="must-not-run")
     assert not (uv_cache / f"{UV_CACHE_RECOVERY_SIGNAL_PREFIX}2").exists()
-    assert not (tmp_path / UV_CACHE_RESET_MARKER).exists()
 
 
 def test_parse_prometheus_handles_labels_values_and_comments():

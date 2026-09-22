@@ -109,15 +109,6 @@ class K8sService(Protocol):
 
     def get_json(self, resource: K8sResource, name: str) -> dict | None: ...
 
-    def patch_json(
-        self,
-        resource: K8sResource,
-        name: str,
-        patch: list[dict],
-        *,
-        subresource: str | None = None,
-    ) -> None: ...
-
     def iter_json(
         self,
         resource: K8sResource,
@@ -382,34 +373,6 @@ class CloudK8sService:
                 return None
             except ApiException as e:
                 raise KubectlError(f"get {resource.plural}/{name} failed ({e.status}): {e.reason}") from e
-
-    def patch_json(
-        self,
-        resource: K8sResource,
-        name: str,
-        patch: list[dict],
-        *,
-        subresource: str | None = None,
-    ) -> None:
-        """Apply an RFC 6902 JSON patch to a resource or subresource."""
-        target = self._resource_api(resource)
-        if subresource is not None:
-            target = getattr(target, subresource)
-        suffix = f"/{subresource}" if subresource is not None else ""
-        logger.info("k8s: PATCH %s/%s%s", resource.plural, name, suffix)
-        with _k8s_call(f"patch {resource.plural}/{name}{suffix}"):
-            try:
-                target.patch(
-                    body=patch,
-                    name=name,
-                    content_type="application/json-patch+json",
-                    **self._request_timeout_kwargs(),
-                    **self._ns_kwargs(resource),
-                )
-            except ApiException as error:
-                raise KubectlError(
-                    f"patch {resource.plural}/{name}{suffix} failed ({error.status}): {error.reason}"
-                ) from error
 
     # -- list ----------------------------------------------------------------
 

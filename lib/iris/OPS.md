@@ -943,10 +943,6 @@ Do not uncordon a node that CoreWeave cordoned. If `PendingPhaseState` names
 approval before changing workloads. Record each owner's original replica count
 and pod template, then choose an action by workload semantics:
 
-The Iris node-agent may set the related `production-powerreset` state after
-three uv cache recoveries in 30 minutes. It clears the shared uv cache only
-after the machine boot ID changes; do not remove its reset marker by hand.
-
 | Blocker | Reboot-unblocking action |
 | --- | --- |
 | Stateless or leader-elected Deployment | Add one replica, wait for it to become Ready on a healthy node, then delete only the pod bound to the deadlocked node. The current cert-manager and Kueue controllers are in this class. |

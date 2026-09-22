@@ -363,24 +363,30 @@ Task working directories and caches are node-local:
 
 Keep `cache_dir` on `/mnt/local`, the node's NVMe storage. The shared Hugging
 Face path is `HF_HUB_CACHE`; Iris deliberately leaves `HF_HOME` private because
-it may contain the submitter's token. The CoreWeave configs set
-`cache_max_age` to seven days. Every five minutes, the node-agent removes
-top-level entries whose files have not been modified or accessed within that age. The
-sweep ignores directory access times because walking a directory updates them. File
-access times are best-effort: `noatime`, `O_NOATIME`, and some memory-mapped reads do
-not refresh them. The node-agent atomically renames an expired entry before recursive
-deletion so another task can refill the original path. Durable outputs belong in
-object storage.
+it may contain the submitter's token. The CoreWeave configs set `cache_max_age`
+to seven days. Every five minutes, the node-agent removes top-level entries
+outside the uv namespace whose files have not been modified or accessed within
+that age. The sweep ignores directory access times because walking a directory
+updates them. File access times are best-effort: `noatime`, `O_NOATIME`, and
+some memory-mapped reads do not refresh them. The node-agent atomically renames
+an expired entry before recursive deletion so another task can refill the
+original path. Durable outputs belong in object storage.
+
+Iris installs cached packages into task environments with uv's `clone` link
+mode. CoreWeave's task workdirs and shared cache use the same node-local XFS
+filesystem, where clone mode uses copy-on-write reflinks. uv falls back to a
+full copy when reflinks are unavailable. Unlike symlink mode, either result
+keeps an environment usable after its cache entries are removed.
 
 If a uv install fails against the shared cache but succeeds with a task-local
 cache, Iris records that recovery on the node. Three distinct recoveries within
-30 minutes make the node-agent request CoreWeave's safe `production-powerreset`
-lifecycle operation. CoreWeave drains the node before rebooting it. The
-node-agent records the current boot ID before the request and clears the shared
-uv cache only after it starts on a different boot, so a node-agent restart alone
-cannot delete a live cache. The node agent emits `uv_cache_recovery_observed`,
-`uv_cache_reboot_requested`, and `uv_cache_reset_completed` telemetry events for
-these transitions; repair-loop errors increment
+30 minutes make the node-agent run `uv cache clean` against the shared cache.
+uv serializes that operation with installs using its cache lock. The generic
+age-based cache reclaimer leaves the uv namespace alone rather than deleting uv
+internals directly.
+
+The node-agent emits `uv_cache_recovery_observed` and `uv_cache_cleared`
+telemetry events for these transitions. Repair-loop errors increment
 `iris_uv_cache_recovery_failures`.
 
 `/cache` is unclaimed node-local scratch: a task that needs a real directory on

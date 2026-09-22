@@ -29,7 +29,7 @@ from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, TELEMETRY_ENDPOINT_
 from iris.cluster.node_agent import SERVICE_NAME
 from iris.cluster.node_agent.cache_reclaim import run_cache_reclaimer
 from iris.cluster.node_agent.metrics import DeviceMetric, NodeMetrics, NodeTarget, publish_node_telemetry
-from iris.cluster.node_agent.uv_cache_recovery import complete_uv_cache_reset, run_uv_cache_recovery
+from iris.cluster.node_agent.uv_cache_recovery import run_uv_cache_recovery
 from iris.cluster.platforms.k8s.constants import DEFAULT_TASK_CACHE_DIR
 from iris.cluster.platforms.k8s.service import CloudK8sService, K8sService
 from iris.cluster.platforms.k8s.types import (
@@ -49,7 +49,6 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_COLLECTION_INTERVAL = 60.0
 NODE_AGENT_SHUTDOWN_TIMEOUT = 10.0
-BOOT_ID_PATH = Path("/proc/sys/kernel/random/boot_id")
 # Generous enough that ordinary apiserver latency, including a control plane under
 # load, does not fail a collection cycle; collection runs once per interval, so a
 # slow call delays one sample rather than overlapping the next.
@@ -916,11 +915,9 @@ def run(config_path: Path, node_name: str, namespace: str, stop: threading.Event
         else None
     )
     cache_dir = Path(config.kubernetes_provider.cache_dir or DEFAULT_TASK_CACHE_DIR)
-    boot_id = BOOT_ID_PATH.read_text().strip()
-    complete_uv_cache_reset(cache_dir, boot_id)
     cache_recovery = threading.Thread(
         target=run_uv_cache_recovery,
-        args=(k8s, node_name, cache_dir, boot_id, stop),
+        args=(cache_dir, stop),
         name="uv-cache-recovery",
         daemon=True,
     )

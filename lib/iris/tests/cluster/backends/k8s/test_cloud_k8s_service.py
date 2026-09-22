@@ -201,27 +201,6 @@ def test_delete_by_labels_deletes_each_match_by_name():
     assert all(d.get("label_selector") is None for d in api.deletes)
 
 
-def test_patch_json_targets_node_status_subresource():
-    calls = []
-    status_api = SimpleNamespace(patch=lambda **kwargs: calls.append(kwargs))
-    svc = CloudK8sService(namespace="iris", timeout=15.0)
-    svc.__dict__["_dyn"] = SimpleNamespace(
-        resources=SimpleNamespace(get=lambda **kwargs: SimpleNamespace(status=status_api))
-    )
-    patch = [{"op": "add", "path": "/status/conditions/-", "value": {"type": "PendingPhaseState"}}]
-
-    svc.patch_json(K8sResource.NODES, "node-a", patch, subresource="status")
-
-    assert calls == [
-        {
-            "body": patch,
-            "name": "node-a",
-            "content_type": "application/json-patch+json",
-            "_request_timeout": 15.0,
-        }
-    ]
-
-
 # Test from_kind mapping
 @pytest.mark.parametrize(
     "kind,expected_resource",
