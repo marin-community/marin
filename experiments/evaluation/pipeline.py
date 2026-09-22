@@ -112,7 +112,7 @@ class ProducedEvaluationModel:
             if not checkpoints:
                 raise FileNotFoundError(f"no HF checkpoint found under {ctx.artifact_path(self.step)}")
             location = checkpoints[-1]
-        return replace(self.model, location=location)
+        return replace(self.model, location=location, revision=None)
 
 
 def run_eval_pipeline_step(config: EvalStepConfig) -> EvaluationResult:

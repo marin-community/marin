@@ -108,7 +108,15 @@ def _sft_row(cell: AblationCell, payload: Mapping[str, Any]) -> dict[str, Any]:
                 "role": "system",
                 "content": SFT_SYSTEM_PROMPT,
             },
-            {"role": "user", "content": payload["question"]},
+            {
+                "role": "user",
+                "content": (
+                    f"A fictional issuer reports revenue of {task.revenue} "
+                    f"(evidence: {task.evidence_ids[0]}) and operating cost of {task.operating_cost} "
+                    f"(evidence: {task.evidence_ids[1]}). Calculate gross profit as revenue minus operating cost "
+                    f"and gross margin in basis points as gross profit divided by revenue times {BASIS_POINTS_SCALE}."
+                ),
+            },
             {"role": "assistant", "content": _assistant_target(task)},
         ],
         "metadata": {
@@ -120,6 +128,7 @@ def _sft_row(cell: AblationCell, payload: Mapping[str, Any]) -> dict[str, Any]:
             "arithmetic_valid": verification.arithmetic_valid,
             "evidence_valid": verification.evidence_valid,
             "deterministic_task_verification": "accepted",
+            "question_source": "verified-facts",
         },
     }
 
@@ -157,8 +166,8 @@ def generated_payloads_to_rows(
 
     Every generation arm uses one structured payload contract so output format
     cannot masquerade as a prompt-specification effect. The local oracle filters
-    every arm before training. Curriculum and specification affect only what GLM
-    generates; all accepted rows receive the same SFT wrapper.
+    every arm before training. SFT questions are constructed from the verified facts;
+    generated question wording is retained only in the generation ledger.
     """
 
     accepted = unique_accepted_payloads(payloads)[: cell.accepted_examples]

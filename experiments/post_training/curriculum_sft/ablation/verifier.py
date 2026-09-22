@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -38,13 +37,6 @@ def _strict_object(value: object, required: set[str]) -> Mapping[str, Any] | Non
     return value
 
 
-def _question_contains_integer(question: str, value: object) -> bool:
-    if not isinstance(value, int) or isinstance(value, bool):
-        return False
-    normalized = question.replace(",", "")
-    return re.search(rf"(?<!\d){re.escape(str(value))}(?!\d)", normalized) is not None
-
-
 def task_payload_has_schema(payload: object) -> bool:
     """Return whether GLM honored the shared task-object wire schema."""
 
@@ -71,7 +63,7 @@ def task_payload_has_schema(payload: object) -> bool:
 
 
 def verify_task_payload(payload: object) -> TaskVerification:
-    """Validate a generated task against its supplied facts and answer."""
+    """Validate schema, arithmetic, and evidence; SFT reconstructs the question from facts."""
 
     task = _strict_object(payload, TASK_PAYLOAD_FIELDS)
     if task is None:
@@ -82,11 +74,6 @@ def verify_task_payload(payload: object) -> TaskVerification:
     format_valid = task_payload_has_schema(task)
     if not format_valid or facts is None or answer is None or not isinstance(evidence, list):
         return TaskVerification(False, False, False)
-    format_valid = (
-        format_valid
-        and _question_contains_integer(task["question"], facts["revenue"])
-        and _question_contains_integer(task["question"], facts["operating_cost"])
-    )
     try:
         revenue = facts["revenue"]
         operating_cost = facts["operating_cost"]
