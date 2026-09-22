@@ -131,6 +131,7 @@ _AGENTIC_BENCHMARK_PROMPTS = 128
 _AGENTIC_BENCHMARK_SEED = 71
 _BENCHMARK_MEMORY = "512GB"
 _BENCHMARK_DISK = "2TB"
+_BENCHMARK_DISTRIBUTED_TIMEOUT = 60
 # Speculators installs torchaudio through its multimodal dependencies. Pin the
 # CUDA 12.8 wheel used by the Iris H100 PyTorch runtime so Transformers imports.
 _TORCHAUDIO_CU128_REQUIREMENT = (
@@ -231,7 +232,11 @@ def _rl_benchmark_config_yaml(role_plan: SkyRLRolePlan, *, speculative: bool) ->
             "weight_sync_backend": "nccl",
             "async_engine": True,
             "batched": False,
-            "engine_init_kwargs": {"async_scheduling": False, "enable_mfu_metrics": True},
+            "engine_init_kwargs": {
+                "async_scheduling": False,
+                "cpu_distributed_timeout_seconds": _BENCHMARK_DISTRIBUTED_TIMEOUT,
+                "enable_mfu_metrics": True,
+            },
             "sampling_params": {"temperature": 1.0, "top_p": 1.0},
         },
         "data": {"kind": "parquet", "train_data": [], "val_data": [], "shuffle": False},
