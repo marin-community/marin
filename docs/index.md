@@ -10,6 +10,7 @@ end="<!--marin-intro-end-->"
 
 - [Installation](tutorials/installation.md)
 - [First Experiment](tutorials/first-experiment.md)
+- [Internal Onboarding](dev-guide/guidelines-internal.md)
 - [Local GPU Setup](tutorials/local-gpu.md)
 - [The Language Modeling Pipeline](explanations/lm-pipeline.md)
 - [Experiment Reports](reports/index.md)

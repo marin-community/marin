@@ -54,6 +54,39 @@ receive timings. The panel explains when the server does not return them; token
 counts still appear when the response includes usage. A single-token response
 can have no mean inter-token latency.
 
+## Rendered output and shared chats
+
+Assistant messages render Markdown. Unfenced HTML and XML from the model are
+displayed as literal text instead of DOM elements. The Markdown parser places a
+raw markup region in a code block when it classifies the region as a block;
+tags embedded in prose remain inline. This preserves custom tags such as
+`<ticket_analysis>` and prevents model output from adding active HTML to the
+dashboard.
+
+Choose **Share chat** to store a snapshot in the dashboard process and copy a
+link whose URL fragment contains its 16-character ID. The link length does not
+grow with the transcript. The snapshot includes the title, model name, user and
+assistant message text, and assistant errors. It excludes reasoning, tool calls,
+tool results, the system prompt, custom template instructions, Python tool
+source, shell workspace, and unparsed raw protocol fields. The share operation
+does not redact excluded data that was copied into included message text or an
+error.
+
+The UTF-8 JSON request body for each snapshot is limited to 512 KiB. An
+oversized snapshot is rejected, and the share button reports **Copy failed**.
+The dashboard process retains the newest 128 snapshots in memory. A snapshot is
+unavailable after it is evicted or the serving process restarts. Opening a valid
+link fetches the snapshot from the same dashboard process, saves it in that
+browser's conversation history, and removes the ID fragment from the address
+bar. A missing or invalid ID opens an empty chat and displays an import error.
+
+The snapshot ID is not a credential. Retrieval requires the dashboard URL that
+contains the Iris capability token. That token authorizes the routes for one
+`marin-serve iris` serving endpoint, including inference, tool, and shared-chat
+requests. The command that mints the URL prints its expiration time. Share chat
+links only with trusted users. The share operation grants the same access as the
+current dashboard URL; it does not narrow or revoke that access.
+
 ## Custom Python tools
 
 Open **Python tools** above the Chat composer to define functions for the active
@@ -100,9 +133,19 @@ and source is limited to 64 KiB. ShellSim implements a source-compatible subset
 of Python rather than full CPython, so unsupported modules and language features
 fail the tool call.
 
-One model response counts as one round, including a response with multiple
-calls. The UI executes calls from the eighth round, stops before another model
-request, and displays a limit error.
+Within one user turn, each model response that contains one or more calls counts
+as one tool round. **Max tool rounds** in **More settings** controls the number
+of rounds in that turn. The default value, `0`, allows unlimited rounds. For a
+positive value, the UI executes calls from the final allowed round, stops before
+another model request, and displays a limit error.
+
+The UI also stops before executing the third identical tool call in a row. A
+call is identical when its function name and arguments match; object key order
+does not affect the comparison. Multiple calls in one response are checked in
+execution order. A call with another function name or different arguments
+resets the repetition count. The count resets at the start of each user turn.
+Calls that return tool errors still count because the UI records the call before
+execution.
 
 ## ShellSim agent workspaces
 
