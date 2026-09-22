@@ -67,11 +67,9 @@ HERO_MODEL_AXIS_SIZE = 1
 def validated_batch_axis_size(
     *, device_count: int, dp_racks: int, batch_size: int, context_axis_size: int, expert_axis_size: int
 ) -> int:
-    """Run the compact-mesh divisibility checks before allocation; return the batch-axes product.
+    """Validate mesh and batch divisibility; return the replica * data * expert product.
 
-    The mesh shape comes from the same function ``compact_grug_mesh`` uses on the gang, so the
-    launcher cannot accept a layout the run would reject. The batch spans the replica, data and
-    expert axes; context and model do not partition it.
+    Context and model axes do not partition the batch.
     """
     replica, data, _context, expert, _model = _compact_grug_mesh_shape(
         process_count=device_count,
@@ -131,7 +129,7 @@ def build_diagnostic_run(
     comparable across a sweep. ``None`` keeps the hero value.
 
     ``batch_size`` is the global batch across all data-parallel racks. It does not scale with
-    ``dp_racks``. ``batch_size`` and ``schedule_steps`` change the token budget for the heuristic.
+    ``dp_racks``. ``batch_size``, ``max_seq_len``, and ``schedule_steps`` determine the heuristic token budget.
     """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")

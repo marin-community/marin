@@ -8,9 +8,8 @@ latent, two shared experts, and the pooled-wave all-to-all transport at receiver
 Each run uses the small sweep width and 750 tokens per active parameter. The runs use the Harrier
 2026.08.17.1 mixture.
 
-Each ``--size`` submits one job on the fleet ``--target`` names: a GB200 rack (EP64), 8 H100 nodes
-(EP64), or 2 H100 nodes (EP16). The expert axis spans the fleet, and it sets cell size, so the
-target is not just a hardware choice -- see the ``TARGETS`` comments.
+Each ``--size`` submits one job on the fleet named by ``--target``. The target sets default
+expert-axis and cell sizes; ``--expert-axis-size`` overrides the expert axis. See ``TARGETS``.
 """
 
 import dataclasses
@@ -389,7 +388,6 @@ def build_small_run(
         qb_use_histogram,
         qb_hist_bins,
     )
-    # Train to `tokens_per_active_param` tokens per active parameter, at the global tokens per step.
     if num_train_steps_override is not None:
         num_steps = num_train_steps_override
     else:

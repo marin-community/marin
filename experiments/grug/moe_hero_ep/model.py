@@ -485,7 +485,7 @@ class ShortConv(eqx.Module):
     A kernel of ``W`` taps mixes each channel with its own ``W-1`` causal predecessors,
     ``out[t] = sum_{lag} weight[lag] * x[t-lag]``, independently per channel. Identity-init
     (``weight[0]=1``, later taps 0) makes it a pass-through at step 0. Weights are tiny (``W*C``) and
-    routed to Adam. Shard-local -- no cross-channel or cross-shard dependency, so no collectives.
+    routed to Adam. Context shards exchange a left halo of ``W-1`` sequence positions.
 
     The body dispatches to ``levanter.kernels.pallas.short_conv``, which selects a fused Pallas
     kernel on GPU and the pad-and-shift weighted sum everywhere else; see that module's docstring.

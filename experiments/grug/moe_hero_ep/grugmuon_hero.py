@@ -9,9 +9,9 @@ array-stacked. The transform orthogonalizes each Muon leaf:
 - 2D matrices: replicated Newton-Schulz.
 - 3D matrix stacks (stacked non-expert layers): distributed over the intra-rack batch mesh axes,
   zero-padding the leading axis so it divides the shard count.
-- 4D expert stacks ``[layers, experts, fan_in, fan_out]``: reshaped to a matrix stack and
-  distributed over the intra-rack batch axes without gathering the matrix dimensions, optionally
-  using QuACK's symmetric GEMM for ``X @ X.T``.
+- 4D expert stacks ``[layers, experts, fan_in, fan_out]``: preserve expert/context bank
+  sharding without gathering the matrix dimensions, optionally using QuACK's symmetric GEMM
+  for ``X @ X.T``.
 
 The optimizer config (routing, LR groups, the MuonH hyperball step) lives in ``optimizer.py``.
 """
