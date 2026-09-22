@@ -43,6 +43,7 @@ VENV_PATH = f"{WORKDIR_PATH}/.venv"
 # bring its own image: build_common_iris_env points each tool here explicitly, so
 # nothing depends on that image's HOME.
 UV_CACHE_PATH = "/uv/cache"
+UV_CACHE_RECOVERY_SIGNAL_PREFIX = ".iris-recovery-"
 HF_HUB_CACHE_PATH = "/hf/cache"
 CARGO_HOME_PATH = "/cargo"
 # Unclaimed node-local scratch, for anything that needs a real directory on the
@@ -90,6 +91,7 @@ _UV_WRAPPER_SCRIPT = r"""#!/bin/bash
 set -u
 recovery_cache="$IRIS_WORKDIR/.uv-recovery-cache"
 recovery_marker="$IRIS_WORKDIR/.iris-uv-cache-recovery"
+shared_cache="${UV_CACHE_DIR:-}"
 
 case "${1:-} ${2:-}" in
   "sync "*|"pip install") ;;
@@ -106,7 +108,13 @@ fi
 
 printf '%s\n' "${UV_CACHE_DIR:-}" > "$recovery_marker"
 echo 'uv install failed; retrying with task-local cache' >&2
-  exec env UV_CACHE_DIR="$recovery_cache" "$IRIS_UV_EXECUTABLE" "$@" --reinstall
+env UV_CACHE_DIR="$recovery_cache" "$IRIS_UV_EXECUTABLE" "$@" --reinstall
+retry_status=$?
+if [ "$retry_status" -eq 0 ] && [ -n "${IRIS_ATTEMPT_UID:-}" ]; then
+  touch "$shared_cache/__UV_CACHE_RECOVERY_SIGNAL_PREFIX__${IRIS_ATTEMPT_UID}" || \
+    echo 'uv cache recovery succeeded, but Iris could not record it' >&2
+fi
+exit "$retry_status"
 """
 
 
@@ -124,7 +132,7 @@ def render_setup_steps(scripts: Sequence[str]) -> list[str]:
         'export IRIS_UV_EXECUTABLE="$(command -v uv)"',
         f'mkdir -p "{_UV_WRAPPER_DIR}"',
         f"cat > {_UV_WRAPPER_PATH} <<'{_UV_WRAPPER_DELIMITER}'",
-        _UV_WRAPPER_SCRIPT.rstrip("\n"),
+        _UV_WRAPPER_SCRIPT.replace("__UV_CACHE_RECOVERY_SIGNAL_PREFIX__", UV_CACHE_RECOVERY_SIGNAL_PREFIX).rstrip("\n"),
         _UV_WRAPPER_DELIMITER,
         f'chmod +x "{_UV_WRAPPER_PATH}"',
         f'export PATH="{_UV_WRAPPER_DIR}:$PATH"',
