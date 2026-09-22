@@ -21,6 +21,31 @@ def partition_spec_of(array: jax.Array) -> PartitionSpec | None:
     return getattr(sharding, "spec", None)
 
 
+def full_partition_spec(array: jax.Array) -> PartitionSpec | None:
+    """Return ``array``'s partition spec with one entry per dimension, or None if unavailable.
+
+    Omitted trailing entries become ``None``. Length-1 mesh axes are kept: explicit sharding
+    compares axis names, so a spec built for an output that must combine with ``array`` needs them.
+    """
+    spec = partition_spec_of(array)
+    if spec is None:
+        return None
+    return PartitionSpec(*spec, *((None,) * (array.ndim - len(spec))))
+
+
+def partitioned_dims(array: jax.Array, mesh: Mesh | AbstractMesh | None) -> tuple[tuple[str, ...], ...]:
+    """Return, for each dimension of ``array``, the mesh axes that actually split it.
+
+    Length-1 axes split nothing and are dropped, so this answers placement questions such as
+    "is the sequence dimension sharded?". The result is lossy: do not rebuild a spec from it for
+    an array that must combine with ``array``; use :func:`full_partition_spec` instead.
+    """
+    spec = full_partition_spec(array)
+    if spec is None:
+        return ((),) * array.ndim
+    return tuple(partitioning_axes(entry, mesh) for entry in spec)
+
+
 def partitioning_axes(entry: str | tuple[str, ...] | None, mesh: Mesh | AbstractMesh | None) -> tuple[str, ...]:
     """Return the named mesh axes of size greater than one in a spec entry.
 

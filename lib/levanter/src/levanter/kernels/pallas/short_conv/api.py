@@ -16,7 +16,7 @@ from jax.sharding import PartitionSpec as P
 from jax.sharding import get_abstract_mesh, reshard
 from jaxtyping import Array, Float, Int
 
-from levanter.sharding import partitioning_axes, partition_spec_of
+from levanter.sharding import partition_spec_of, partitioned_dims
 
 from .config import OOB_SEGMENT, ShortConvBlockSizes
 from .pallas_gpu import (
@@ -57,19 +57,9 @@ def _active_batch_axes(mesh, batch_axes: Sequence[str]) -> tuple[str, ...]:
     return tuple(axis for axis in batch_axes if axis in mesh.shape)
 
 
-def _partitioned_dims(array: jax.Array, mesh) -> tuple[tuple[str, ...], ...] | None:
-    """Per-dimension partitioning mesh axes of ``array``, or None when it carries no spec."""
-    spec = partition_spec_of(array)
-    if spec is None:
-        return None
-    return tuple(partitioning_axes(entry, mesh) for entry in spec)
-
-
 def _assert_local_axes(name: str, array: jax.Array, axes: Sequence[int], mesh) -> None:
     """Reject partitioned sequence/channel dimensions to prevent implicit all-gathers."""
-    dims = _partitioned_dims(array, mesh)
-    if dims is None:
-        return
+    dims = partitioned_dims(array, mesh)
     for axis in (a for a in axes if a < len(dims)):
         if dims[axis]:
             raise ValueError(
@@ -137,8 +127,8 @@ _short_conv_pallas_local.defvjp(_short_conv_pallas_local_fwd, _short_conv_pallas
 
 def _sequence_shard_axis(array: jax.Array, mesh) -> str | None:
     """The one mesh axis partitioning the sequence across devices, or None when it is whole."""
-    dims = _partitioned_dims(array, mesh)
-    if dims is None or len(dims) < 2:
+    dims = partitioned_dims(array, mesh)
+    if len(dims) < 2:
         return None
     axes = dims[1]
     if len(axes) > 1:
@@ -194,8 +184,7 @@ def _short_conv_sharded(
     # The sequence axis is sharded by design on the halo path; any other sharded axis would
     # be a hidden all-gather, including a batch axis the caller did not name.
     _assert_local_axes("x", x, axes=(2,) if seq_axis else (1, 2), mesh=mesh)
-    dims = _partitioned_dims(x, mesh)
-    unnamed = tuple(axis for axis in (dims[0] if dims else ()) if axis not in active)
+    unnamed = tuple(axis for axis in partitioned_dims(x, mesh)[0] if axis not in active)
     if unnamed:
         raise ValueError(
             f"short_conv would all-gather x's batch axis over {unnamed}, which is not in "

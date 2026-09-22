@@ -17,15 +17,14 @@ from levanter.kernels.pallas.fused_cross_entropy_loss import (
     BlockSizes,
     fused_cross_entropy_loss_and_logsumexp_penalty,
 )
-from levanter.sharding import partition_spec_of
+from levanter.sharding import full_partition_spec
 
 
 def _token_dim_specs(x: jax.Array) -> tuple:
     """Preserve all token dimensions so sequence shards need no activation all-gather."""
-    spec = partition_spec_of(x)
+    spec = full_partition_spec(x)
     if spec is not None:
-        padded = tuple(spec) + (None,) * (x.ndim - len(spec))
-        token_dims = padded[: x.ndim - 1]
+        token_dims = tuple(spec)[: x.ndim - 1]
         if any(entry is not None for entry in token_dims):
             return token_dims
     return ("data",) + (None,) * (x.ndim - 2)

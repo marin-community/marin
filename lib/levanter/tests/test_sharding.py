@@ -1,7 +1,31 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import jax
+import jax.numpy as jnp
+from jax.sharding import AbstractMesh, AxisType, NamedSharding, PartitionSpec as P, use_abstract_mesh
+
+from levanter.sharding import full_partition_spec, partitioned_dims
 from levanter.testing.cpu_devices import run_on_cpu_devices
+
+
+def test_full_spec_keeps_length_one_axes_that_partitioned_dims_drops():
+    mesh = AbstractMesh(axis_sizes=(2, 1), axis_names=("expert", "data"), axis_types=(AxisType.Explicit,) * 2)
+    x = jax.ShapeDtypeStruct((4, 8, 2), jnp.float32, sharding=NamedSharding(mesh, P(("data", "expert"))))
+
+    seen = {}
+
+    def inspect(value):
+        seen["full"] = full_partition_spec(value)
+        seen["dims"] = partitioned_dims(value, mesh)
+        # An array laid out by the full spec combines with `value`; one without `data` would not.
+        return jnp.zeros(value.shape, value.dtype, out_sharding=seen["full"]) * value
+
+    with use_abstract_mesh(mesh):
+        jax.eval_shape(inspect, x)
+
+    assert seen["full"] == P(("data", "expert"), None, None)
+    assert seen["dims"] == (("expert",), (), ())
 
 
 def test_partition_inspection_preserves_concrete_auto_and_explicit_tracer_placement():
