@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
-import { useVllmDebug } from '../composables/useVllmDebug'
 import {
   fetchToolDefinitions,
   invokeShell,
@@ -58,7 +57,7 @@ const busy = ref(false)
 const showTools = ref(false)
 const showWorkspace = ref(false)
 const showRawChat = ref(false)
-const { enabled: showVllmDebug, lastRequest: lastRequestDebug } = useVllmDebug()
+const showVllmDebug = ref(false)
 const rawChat = computed(() => plainTextChat(props.conversation))
 const scroller = ref<HTMLElement | null>(null)
 const composer = ref<HTMLTextAreaElement | null>(null)
@@ -71,7 +70,6 @@ watch(
     draft.value = ''
     showTools.value = Boolean(props.conversation.pythonTools)
     showWorkspace.value = Boolean(props.conversation.shellWorkspace)
-    lastRequestDebug.value = null
   },
 )
 onUnmounted(stopStreaming)
@@ -86,10 +84,6 @@ function resizeComposer() {
   if (!el) return
   el.style.height = 'auto'
   el.style.height = `${Math.min(el.scrollHeight, 200)}px`
-}
-
-function formatMetric(value: number | null | undefined, unit: string): string {
-  return value == null ? '—' : `${value.toFixed(1)} ${unit}`
 }
 
 function onKeydown(event: KeyboardEvent) {
@@ -326,7 +320,7 @@ async function complete(
       reply.thinkingSeconds = (performance.now() - thinkingStartedAt) / 1000
     }
   })
-  if (debugEnabled && !signal.aborted) lastRequestDebug.value = requestDebug ?? { metrics: null, usage: null }
+  if (debugEnabled && !signal.aborted) reply.requestDebug = requestDebug ?? { metrics: null, usage: null }
 
   if (thinkingStartedAt !== null && reply.thinkingSeconds === null) {
     reply.thinkingSeconds = (performance.now() - thinkingStartedAt) / 1000
@@ -381,6 +375,7 @@ async function complete(
           :key="index"
           :message="message"
           :streaming="busy && index === conversation.messages.length - 1"
+          :show-vllm-debug="showVllmDebug"
         />
       </div>
     </div>
@@ -413,7 +408,7 @@ async function complete(
             </button>
           </div>
           <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
-            <label class="flex cursor-pointer items-center gap-2 text-xs font-medium text-text-muted" title="Show vLLM timings for the last completed model request">
+            <label class="flex cursor-pointer items-center gap-2 text-xs font-medium text-text-muted" title="Record and show vLLM timings on each reply">
               <input v-model="showVllmDebug" type="checkbox" class="accent-accent" />
               vLLM debug
             </label>
@@ -425,24 +420,6 @@ async function complete(
               Raw chat
             </label>
           </div>
-        </div>
-        <div v-if="showVllmDebug" class="mb-3 rounded-lg border border-surface-border bg-surface-sunken px-3 py-2 text-xs text-text-secondary">
-          <div class="mb-1 font-medium text-text">Last completed vLLM request</div>
-          <p v-if="!lastRequestDebug" class="text-text-muted">Send a message to see per-request timings.</p>
-          <template v-else>
-            <p v-if="!lastRequestDebug.metrics" class="mb-1 text-text-muted">
-              The server did not return per-request timings. Start vLLM with --enable-per-request-metrics to show them.
-            </p>
-            <div class="flex flex-wrap gap-x-4 gap-y-1 font-mono">
-              <span title="Time to first token">TTFT {{ formatMetric(lastRequestDebug.metrics?.time_to_first_token_ms, 'ms') }}</span>
-              <span>Queue {{ formatMetric(lastRequestDebug.metrics?.queue_time_ms, 'ms') }}</span>
-              <span>Generation {{ formatMetric(lastRequestDebug.metrics?.generation_time_ms, 'ms') }}</span>
-              <span>Mean inter-token {{ formatMetric(lastRequestDebug.metrics?.mean_itl_ms, 'ms') }}</span>
-              <span>Output {{ formatMetric(lastRequestDebug.metrics?.tokens_per_second, 'tokens/s') }}</span>
-              <span>Prompt tokens {{ lastRequestDebug.usage?.prompt_tokens.toLocaleString() ?? '—' }}</span>
-              <span>Output tokens {{ lastRequestDebug.usage?.completion_tokens.toLocaleString() ?? '—' }}</span>
-            </div>
-          </template>
         </div>
         <div v-if="showTools" class="mb-3">
           <textarea
