@@ -44,14 +44,26 @@ def _batched_segment_ids(segment_ids: jax.Array, *, batch_size: int, seq_len: in
 def _replicate_sequence_axis(x: jax.Array) -> jax.Array:
     """Replicate a ``[B, S]`` metadata array over sequence, preserving batch sharding."""
     spec = partition_spec_of(x)
-    if spec is None or len(spec) < 2 or spec[1] is None:
+    mesh = get_abstract_mesh()
+    if spec is None or len(spec) < 2 or mesh is None or mesh.empty:
         return x
-    return reshard(x, P(spec[0], None))
+    batch_axes = partitioning_axes(spec[0], mesh)
+    target = P(batch_axes or None, None)
+    if spec == target:
+        return x
+    return reshard(x, target)
 
 
 def _segment_starts(segment_ids: jax.Array) -> jax.Array:
     valid = segment_ids >= 0
-    previous = jnp.concatenate([segment_ids[:, :1], segment_ids[:, :-1]], axis=1)
+    first_id = segment_ids[:, :1]
+    preceding_ids = segment_ids[:, :-1]
+    spec = partition_spec_of(segment_ids)
+    mesh = get_abstract_mesh()
+    if spec is not None and mesh is not None and not mesh.empty:
+        first_id = reshard(first_id, spec)
+        preceding_ids = reshard(preceding_ids, spec)
+    previous = jnp.concatenate([first_id, preceding_ids], axis=1)
     first = jnp.zeros_like(valid).at[:, 0].set(True)
     return valid & (first | (segment_ids != previous))
 

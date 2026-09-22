@@ -270,8 +270,45 @@ _CONTEXT_METADATA_SCRIPT = """
 """
 
 
+_EXPLICIT_BATCH_METADATA_SCRIPT = """
+    import jax
+    import jax.numpy as jnp
+    import numpy as np
+    from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+
+    from levanter.grug.attention import AttentionMask
+    from levanter.grug.attention._fa4_cute import fa4_cute_segment_bounds
+
+    segment_ids = jnp.asarray([[3] * 7 + [4] * 13 + [5] * 9 + [-1] * 3], dtype=jnp.int32)
+    mesh = Mesh(
+        np.asarray(jax.devices()).reshape(1, 1, 8, 1),
+        ("replica_dcn", "data", "context", "expert"),
+        axis_types=(AxisType.Explicit,) * 4,
+    )
+    sharding = NamedSharding(mesh, P(("replica_dcn", "data", "expert"), None))
+
+    def bounds(ids):
+        return fa4_cute_segment_bounds(
+            AttentionMask.causal().with_segment_ids(ids),
+            batch_size=1,
+            seq_len=32,
+            sliding_window=None,
+        )
+
+    expected = bounds(segment_ids)
+    with jax.set_mesh(mesh):
+        actual = jax.jit(bounds)(jax.device_put(segment_ids, sharding))
+    for actual_array, expected_array in zip(actual, expected, strict=True):
+        np.testing.assert_array_equal(np.asarray(actual_array), np.asarray(expected_array))
+"""
+
+
 def test_context_sharded_segment_ids_preserve_global_bounds():
     run_on_cpu_devices(_CONTEXT_METADATA_SCRIPT, device_count=8)
+
+
+def test_explicit_unit_batch_sharding_preserves_global_bounds():
+    run_on_cpu_devices(_EXPLICIT_BATCH_METADATA_SCRIPT, device_count=8)
 
 
 def test_fa4_wide_attention_rejects_unsupported_hardware(monkeypatch):
