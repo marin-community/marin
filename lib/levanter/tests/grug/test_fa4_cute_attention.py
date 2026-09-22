@@ -8,7 +8,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from jax._src import config as jax_config
-from jax.sharding import AbstractMesh, AxisType, NamedSharding, PartitionSpec as P, use_abstract_mesh
+from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, PartitionSpec as P, use_abstract_mesh
 
 import levanter.grug.attention._fa4_cute as fa4_cute
 import levanter.grug.attention._fa4_cute_backend as fa4_cute_backend
@@ -177,7 +177,7 @@ def test_fa4_frontend_shards_metadata_with_qkv_batch_axis(monkeypatch):
         )
 
     assert out.shape == q.shape
-    assert out.sharding.spec == qkv_sharding.spec
+    assert out.sharding.spec == P(("data", "expert"), None, None, None)
 
 
 def _fake_unsharded_forward(q, k, v, lower_bounds, valid, *, sm_scale, kernel_config, q_offset):
@@ -185,7 +185,7 @@ def _fake_unsharded_forward(q, k, v, lower_bounds, valid, *, sm_scale, kernel_co
     return q
 
 
-def test_fa4_rejects_non_context_sequence_sharding(monkeypatch):
+def test_fa4_rejects_kv_batch_sharded_over_query_sequence_axis(monkeypatch):
     monkeypatch.setattr(jax, "default_backend", lambda: "gpu")
     monkeypatch.setattr(fa4_cute, "_segmented_kernel_config", lambda head_dim: object())
     monkeypatch.setattr(fa4_cute, "fa4_cute_attention_forward", _fake_unsharded_forward)
@@ -202,7 +202,7 @@ def test_fa4_rejects_non_context_sequence_sharding(monkeypatch):
     v = jax.ShapeDtypeStruct((16, 4, 1, 8), jnp.bfloat16, sharding=kv_sharding)
 
     with _reset_abstract_mesh(), use_abstract_mesh(mesh):
-        with pytest.raises(ValueError, match="q sequence axis sharded only over 'context'"):
+        with pytest.raises(ValueError, match="match q's batch/head sharding"):
             jax.eval_shape(
                 lambda q_arg, k_arg, v_arg: gpu_fa4_cute_attention(q_arg, k_arg, v_arg, AttentionMask.causal()),
                 q,
@@ -238,7 +238,7 @@ def test_fa4_accepts_unit_context_axis(monkeypatch, context_entry):
         )
 
     assert out.shape == q.shape
-    assert out.sharding.spec == P(batch_axes, None, "model", None)
+    assert out.sharding.spec == P(("data", "expert"), None, None, None)
 
 
 def test_fa4_precomputed_bounds_reject_mismatched_context_lengths(monkeypatch):
@@ -415,10 +415,20 @@ def test_real_gpu_fa4_cute_attention_matches_reference_with_leading_padding(slid
 
 
 @pytest.mark.parametrize("implementation", ["gpu_fa4_cute", "gpu_fa4_cute_wide"])
-@pytest.mark.parametrize("context_size", [1, 2, 4])
+@pytest.mark.parametrize(
+    ("context_size", "sequence_axes"),
+    [
+        (1, ("context",)),
+        (2, ("context",)),
+        (4, ("context",)),
+        (2, ("data",)),
+        (4, ("context", "data")),
+        (4, ("data", "context")),
+    ],
+)
 @pytest.mark.parametrize(("q_heads", "kv_heads", "head_dim"), [(4, 1, 64), (8, 2, 128), (4, 4, 128)])
-def test_real_gpu_fa4_cute_attention_matches_reference_with_context_sharded_queries(
-    q_heads, kv_heads, head_dim, context_size, implementation
+def test_real_gpu_fa4_cute_attention_matches_reference_with_sequence_sharded_queries(
+    q_heads, kv_heads, head_dim, context_size, sequence_axes, implementation
 ):
     if jax.default_backend() != "gpu":
         pytest.skip("FA4/CuTe correctness requires a GPU backend.")
@@ -438,8 +448,21 @@ def test_real_gpu_fa4_cute_attention_matches_reference_with_context_sharded_quer
         pytest.skip("The native SM90 GQA backward carries no context-parallel query offset.")
     # Multiple query tiles exercise offset bounds in both forward and backward kernels.
     seq_len = 512
-    mesh = compact_grug_mesh(replica_axis_size=1, context_axis_size=context_size)
-    batch_axes = ("replica_dcn", "data", "expert")
+    if sequence_axes == ("context",):
+        mesh = compact_grug_mesh(replica_axis_size=1, context_axis_size=context_size)
+        batch_axes = ("replica_dcn", "data", "expert")
+        head_axis = "model"
+    else:
+        sequence_shape = (context_size,) if len(sequence_axes) == 1 else (2, 2)
+        # Fix mesh order so reversing sequence_axes tests PartitionSpec ordering.
+        axis_names = ("batch", *sorted(sequence_axes))
+        mesh = Mesh(
+            np.asarray(jax.devices()).reshape(-1, *sequence_shape),
+            axis_names,
+            axis_types=(AxisType.Explicit,) * len(axis_names),
+        )
+        batch_axes = ("batch",)
+        head_axis = None
     # Use one sequence per batch coordinate.
     batch = math.prod(mesh.shape[axis] for axis in batch_axes)
     key = jax.random.PRNGKey(7)
@@ -453,8 +476,8 @@ def test_real_gpu_fa4_cute_attention_matches_reference_with_context_sharded_quer
     cotangent = jax.random.normal(cotangent_key, q.shape, dtype=jnp.bfloat16)
     cotangent = cotangent * valid[..., None, None].astype(jnp.bfloat16)
 
-    q_sharding = NamedSharding(mesh, P(batch_axes, "context", "model", None))
-    kv_sharding = NamedSharding(mesh, P(batch_axes, None, "model", None))
+    q_sharding = NamedSharding(mesh, P(batch_axes, sequence_axes, head_axis, None))
+    kv_sharding = NamedSharding(mesh, P(batch_axes, None, head_axis, None))
     with jax.set_mesh(mesh):
         _assert_real_gpu_fa4_cute_matches_reference(
             jax.device_put(q, q_sharding),
