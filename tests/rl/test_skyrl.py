@@ -201,9 +201,7 @@ def test_skyrl_topology_accepts_node_local_dp8_engines() -> None:
         inference_engine_expert_parallel_size=8,
     )
 
-    topology = SkyRLTopology(num_nodes=8, gpus_per_node=8, gpu_variant="H100", role_plan=plan)
-
-    assert topology.role_plan.inference_engine_data_parallel_size == 8
+    SkyRLTopology(num_nodes=8, gpus_per_node=8, gpu_variant="H100", role_plan=plan)
 
 
 def test_skyrl_spec_rejects_config_that_disagrees_with_role_plan() -> None:

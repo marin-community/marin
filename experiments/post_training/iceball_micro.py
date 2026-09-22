@@ -15,8 +15,9 @@ Print or run the complete graph from the same entry point::
 
 Programmatic callers use :func:`build_workflow` and select any stage handle.
 
-With ``--run``, the entry point validates the complete graph and submits a CPU coordinator to
-Iris. Set ``DAYTONA_API_KEY`` on the submit host when the selected stages include Harbor.
+When the selected stage includes RL, ``--run`` validates the complete graph and submits a CPU
+coordinator to Iris. Earlier stages can be planned from this entry point but do not define an RL
+submission route. Set ``DAYTONA_API_KEY`` on the submit host when the selected stages include Harbor.
 """
 
 from __future__ import annotations

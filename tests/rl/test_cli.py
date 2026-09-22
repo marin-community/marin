@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 from fray.types import CpuConfig
+from iris.cluster.client.job_info import JobInfo, set_job_info
+from iris.cluster.types import JobName
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep
 from marin.rl.cli import _coordinator_request, _submit_or_run
@@ -42,15 +44,14 @@ def _execution() -> IrisSkyRLExecution:
     )
 
 
-def test_coordinator_request_replays_the_experiment_main(monkeypatch) -> None:
-    monkeypatch.setenv("DAYTONA_API_KEY", "secret")
-
+def test_coordinator_request_replays_the_experiment_main() -> None:
     cluster_config, request = _coordinator_request(
         [_step(_execution())],
         "experiments.test_rl",
         ("--version", "2026.09.21", "--run"),
         3,
         Path("/workspace/marin"),
+        {"DAYTONA_API_KEY": "secret"},
     )
 
     assert cluster_config == "lib/iris/config/marin.yaml"
@@ -76,18 +77,21 @@ def test_coordinator_request_replays_the_experiment_main(monkeypatch) -> None:
 
 def test_submit_or_run_executes_the_graph_inside_iris(monkeypatch) -> None:
     observed = []
-    monkeypatch.setattr("marin.rl.cli.get_job_info", lambda: object())
     monkeypatch.setattr("marin.rl.cli.run", lambda *handles, max_concurrent: observed.append((handles, max_concurrent)))
     step = _step(_execution())
 
-    _submit_or_run("experiments.test_rl", [step], 5)
+    set_job_info(JobInfo(task_id=JobName.from_wire("/alice/rl-coordinator/0")))
+    try:
+        _submit_or_run("experiments.test_rl", [step], 5, {})
+    finally:
+        set_job_info(None)
 
     assert observed == [((step,), 5)]
 
 
 def test_coordinator_request_requires_a_skyrl_step() -> None:
     with pytest.raises(ValueError, match="did not construct a SkyRL artifact step"):
-        _coordinator_request([_step()], "experiments.test_rl", ("--run",), 8, Path("/workspace/marin"))
+        _coordinator_request([_step()], "experiments.test_rl", ("--run",), 8, Path("/workspace/marin"), {})
 
 
 def test_execution_requires_a_complete_federated_route() -> None:
