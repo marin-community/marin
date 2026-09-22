@@ -199,7 +199,6 @@ generator:
   num_inference_engines: {ICEBALL_RL_ROLE_PLAN.num_inference_engines}
   n_samples_per_prompt: {ICEBALL_RL_ROLE_PLAN.n_samples_per_prompt}
   gpu_memory_utilization: 0.70
-  # Use compiled rollouts until Iceball shows a model-specific log-prob or convergence regression.
   enforce_eager: false
   run_engines_locally: true
   weight_sync_backend: nccl

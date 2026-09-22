@@ -301,6 +301,7 @@ def test_isolated_cuda_vllm_marin_fork_uses_verified_wheel(monkeypatch, machine)
     assert cmd[cmd.index("--index-strategy") + 1] == "unsafe-best-match"
     assert "--torch-backend" not in cmd
     requirements = [cmd[index + 1] for index, value in enumerate(cmd) if value == "--with"]
+    assert "torch==2.13.0+cu132" in requirements
     toolchain = {requirement.partition("==")[0]: requirement.partition("==")[2] for requirement in requirements}
     toolchain_packages = {"nvidia-cuda-nvcc", "nvidia-cuda-crt", "nvidia-nvvm"}
     assert set(toolchain) >= toolchain_packages

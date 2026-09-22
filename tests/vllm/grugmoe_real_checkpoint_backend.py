@@ -555,9 +555,6 @@ def _vllm_backend(args: argparse.Namespace) -> None:
         VLLM_DTYPE,
         "--served-model-name",
         SERVED_MODEL_NAME,
-        # The real-checkpoint parity oracle was established with eager TPU execution.
-        "--enforce-eager",
-        "--i-know-i-am-making-vllm-slow",
         "--max-num-seqs",
         "1",
     ]

@@ -67,6 +67,9 @@ _REMOVED_VLLM_MODE_MESSAGE = (
 _RUNAI_STREAMER_REQUIREMENT = "runai-model-streamer[s3]==0.16.1"
 _UPSTREAM_CUDA_TORCH_BACKEND = "cu130"
 _PYTORCH_WHEEL_INDEX_BASE = "https://download.pytorch.org/whl"
+# The promoted GPU wheel requires torch 2.13.0. Pin its CUDA build so dependency
+# resolution fails instead of selecting CPU torch when a CUDA dependency conflicts.
+_MARIN_VLLM_CUDA_TORCH_REQUIREMENT = "torch==2.13.0+cu132"
 _NO_NATIVE_LOG_DIRECTORY = "<no log directory available for native vLLM server>"
 _NATIVE_ERROR_SUMMARY_LINES = 40
 _NATIVE_STDOUT_LOG = "stdout.log"
@@ -263,9 +266,10 @@ class IsolatedCudaVllm:
             "--with",
             _RUNAI_STREAMER_REQUIREMENT,
         ]
+        if self.source is VllmType.MARIN_FORK:
+            command.extend(("--with", _MARIN_VLLM_CUDA_TORCH_REQUIREMENT))
         for package in _CUDA_TOOLCHAIN_PACKAGES:
-            # The promoted wheel's CUDA torch pins NVRTC through cuda-toolkit. A separate NVRTC
-            # patch-version pin conflicts with that requirement and makes uv select CPU torch.
+            # CUDA torch's cuda-toolkit dependency selects the compatible NVRTC patch version.
             if self.source is VllmType.MARIN_FORK and package == _CUDA_NVRTC_DISTRIBUTION:
                 continue
             requirement = f"{package}=={install.toolchain_version}"
