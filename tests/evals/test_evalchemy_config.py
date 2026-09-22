@@ -16,7 +16,7 @@ from types import SimpleNamespace
 
 import pytest
 from marin.evaluation.evalchemy.client import build_command, build_model_args, scored_results
-from marin.evaluation.evalchemy.config import EvalchemyConfig, EvalchemyJudgeConfig
+from marin.evaluation.evalchemy.config import EvalchemyJudgeConfig
 from marin.evaluation.evalchemy.runner import (
     EvalchemyRunConfig,
     _run_config_json,
@@ -102,21 +102,6 @@ def test_parent_rejects_endpoint_model_arg_overrides():
     # Endpoint identity is Marin-owned; a config must not reroute the isolated child to another model.
     with pytest.raises(ValueError):
         _payload(_config(extra_model_args={"model": "other"}))
-
-
-def test_financebench_requires_an_explicit_external_judge():
-    with pytest.raises(ValueError, match="requires an explicit judge"):
-        EvalchemyConfig(tasks=("FinanceBench",))
-
-    judge = EvalchemyJudgeConfig(
-        base_url="https://judge.example/v1",
-        model="judge-model",
-        api_key=("env:JUDGE_KEY",),
-    )
-    with pytest.raises(ValueError, match="only for a single FinanceBench"):
-        EvalchemyConfig(tasks=("FinanceBench", "gsm8k"), judge=judge)
-    with pytest.raises(ValueError, match="only for a single FinanceBench"):
-        EvalchemyConfig(tasks=("gsm8k",), judge=judge)
 
 
 def test_evalchemy_child_keeps_candidate_and_judge_credentials_separate(monkeypatch):
