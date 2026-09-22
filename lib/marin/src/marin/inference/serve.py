@@ -47,6 +47,7 @@ def local_inference(
         chat_template_content=model.chat_template_content,
         tokenizer=model.tokenizer,
         revision=model.revision,
+        tokenizer_revision=model.effective_tokenizer_revision,
     )
     if isinstance(engine, VllmEngineConfig):
         # Import only the selected implementation; Levanter pulls in JAX and Transformers.

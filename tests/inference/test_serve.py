@@ -30,7 +30,6 @@ from iris.rpc import controller_pb2
 from iris.time_proto import timestamp_to_proto
 from marin.external_dependencies import CUDA_TOOLCHAIN_VERSION_BY_BACKEND, VLLM_GPU_RELEASE
 from marin.inference import iris_vllm
-from marin.inference.backend import ModelSpec
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
     IrisConfig,
@@ -62,9 +61,10 @@ from marin.inference.levanter_backend import (
     validate_levanter_dtype,
 )
 from marin.inference.model_preparation import resolve_model_path, select_tensor_parallel_size
+from marin.inference.serve import local_inference
 from marin.inference.serve_cli import main as serve_main
 from marin.inference.types import OpenAIEndpoint, RunningModel
-from marin.inference.vllm_backend import VllmBackend, vllm_launcher
+from marin.inference.vllm_backend import vllm_launcher
 from marin.inference.vllm_release import (
     vllm_gpu_wheel_for_architecture,
     vllm_gpu_wheel_provenance,
@@ -139,7 +139,22 @@ def test_resolve_model_path_returns_filesystem_path_for_local_cache(monkeypatch,
     assert resolve_model_path("Qwen/Qwen3-0.6B", 14, revision) == "/models/cached model"
 
 
-def test_vllm_backend_serves_the_pinned_revision(monkeypatch):
+@pytest.mark.parametrize(
+    ("tokenizer", "tokenizer_revision", "expected_tokenizer", "expected_tokenizer_revision"),
+    [
+        ("org/tokenizer", "tokenizer-sha", "org/tokenizer", "tokenizer-sha"),
+        ("org/tokenizer", None, "org/tokenizer", None),
+        (None, None, "org/model", "model-sha"),
+    ],
+    ids=("separate-pinned-tokenizer", "separate-unpinned-tokenizer", "default-tokenizer"),
+)
+def test_mirrored_model_keeps_tokenizer_revision_independent(
+    monkeypatch,
+    tokenizer,
+    tokenizer_revision,
+    expected_tokenizer,
+    expected_tokenizer_revision,
+):
     observed: dict[str, object] = {}
     template_source: list[tuple[str, str | None]] = []
 
@@ -153,34 +168,84 @@ def test_vllm_backend_serves_the_pinned_revision(monkeypatch):
         )
 
     monkeypatch.setattr("marin.inference.vllm_backend.VllmEnvironment", environment)
-    monkeypatch.setattr("marin.inference.vllm_backend.vllm_launcher", lambda config: object())
+    monkeypatch.setattr("marin.inference.vllm_backend.vllm_launcher", lambda _config: object())
 
     def read_template(model: str, revision: str | None) -> str:
         template_source.append((model, revision))
         return "{{ messages }}"
 
     monkeypatch.setattr("marin.inference.vllm_backend.read_tool_chat_template", read_template)
-    spec = ModelSpec(
-        weights="org/model",
-        tokenizer="org/tokenizer",
-        revision="abc123",
-        api_model="public-model",
-        num_chips=1,
-        tensor_parallel_size=1,
-        dtype="bfloat16",
-        max_model_len=1024,
-        chat_template_content=None,
+    monkeypatch.setattr(
+        "marin.inference.model_preparation.resolve_model_path",
+        lambda _model, _cache_ttl_days, _revision=None: "gs://cache/pinned-model",
+    )
+    iris = IrisConfig(
+        worker_resources=ResourceConfig.with_tpu("v6e-4"),
+        worker_environment=create_environment(extras=["tpu"]),
+    )
+    model, num_chips = _resolved_model(
+        ServedModelConfig(
+            weights="org/model",
+            revision="model-sha",
+            tokenizer=tokenizer,
+            tokenizer_revision=tokenizer_revision,
+            tensor_parallel_size=1,
+        ),
+        iris,
     )
 
-    with VllmBackend(VllmEngineConfig()).serve(spec):
+    assert model.weights == "gs://cache/pinned-model"
+    assert model.revision is None
+    assert model.tokenizer == expected_tokenizer
+    assert model.tokenizer_revision == expected_tokenizer_revision
+
+    with local_inference(model, VllmEngineConfig(), num_chips=num_chips):
         pass
 
     extra_args = observed["extra_args"]
     assert isinstance(extra_args, list)
-    assert extra_args[extra_args.index("--revision") + 1] == "abc123"
+    assert "--revision" not in extra_args
+    assert extra_args[extra_args.index("--tokenizer") + 1] == expected_tokenizer
+    if expected_tokenizer_revision is None:
+        assert "--tokenizer-revision" not in extra_args
+    else:
+        assert extra_args[extra_args.index("--tokenizer-revision") + 1] == expected_tokenizer_revision
+    assert template_source == [(expected_tokenizer, expected_tokenizer_revision)]
+
+
+def test_vllm_backend_serves_model_and_tokenizer_revisions_independently(monkeypatch):
+    observed: dict[str, object] = {}
+
+    @contextmanager
+    def environment(**kwargs):
+        observed.update(kwargs)
+        yield SimpleNamespace(
+            model_id="public-model",
+            server_url="http://127.0.0.1:8000/v1",
+            wait_until_ready=lambda: None,
+        )
+
+    monkeypatch.setattr("marin.inference.vllm_backend.VllmEnvironment", environment)
+    monkeypatch.setattr("marin.inference.vllm_backend.vllm_launcher", lambda _config: object())
+    monkeypatch.setattr("marin.inference.vllm_backend.read_tool_chat_template", lambda *_args: "{{ messages }}")
+    model = ServedModelConfig(
+        weights="org/model",
+        tokenizer="org/tokenizer",
+        revision="model-sha",
+        tokenizer_revision="tokenizer-sha",
+        api_model="public-model",
+        tensor_parallel_size=1,
+        max_model_len=1024,
+    )
+
+    with local_inference(model, VllmEngineConfig(), num_chips=1):
+        pass
+
+    extra_args = observed["extra_args"]
+    assert isinstance(extra_args, list)
+    assert extra_args[extra_args.index("--revision") + 1] == "model-sha"
     assert extra_args[extra_args.index("--tokenizer") + 1] == "org/tokenizer"
-    assert extra_args[extra_args.index("--tokenizer-revision") + 1] == "abc123"
-    assert template_source == [("org/tokenizer", "abc123")]
+    assert extra_args[extra_args.index("--tokenizer-revision") + 1] == "tokenizer-sha"
 
 
 def test_resolved_model_keeps_requested_id_as_served_name(monkeypatch):

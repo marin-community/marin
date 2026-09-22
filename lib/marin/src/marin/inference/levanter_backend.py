@@ -146,7 +146,7 @@ class LevanterBackend:
             mesh=inference_mesh(spec.num_chips, spec.tensor_parallel_size),
             use_explicit_mesh_axes=model_config.requires_explicit_mesh_axes,
         )
-        tokenizer = load_tokenizer(spec.tokenizer_source, revision=spec.revision)
+        tokenizer = load_tokenizer(spec.tokenizer_source, revision=spec.tokenizer_revision)
         if spec.chat_template_content is not None:
             tokenizer.chat_template = spec.chat_template_content
 
@@ -184,7 +184,7 @@ class LevanterBackend:
         # class from the HF config is cheap, loading the weights is not. (Forward-only scoring via
         # load_model has no such requirement.)
         checkpoint_ref = RepoRef(spec.weights, spec.revision)
-        tokenizer_ref = str(RepoRef(spec.tokenizer_source, spec.revision))
+        tokenizer_ref = str(RepoRef(spec.tokenizer_source, spec.tokenizer_revision))
         model_type = HFCheckpointConverter.from_hf(checkpoint_ref).default_config.model_type
         if not issubclass(model_type, SupportsPagedGeneration):
             raise NotImplementedError(

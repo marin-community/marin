@@ -12,7 +12,11 @@ CONCAT_CHAT_TEMPLATE = "{%- for message in messages -%}{{ message['content'] }}\
 
 @dataclass(frozen=True)
 class ModelSpec:
-    """Resolved model inputs required by every local backend."""
+    """Resolved model inputs required by every local backend.
+
+    ``revision`` belongs to ``weights``; ``tokenizer_revision`` belongs to
+    ``tokenizer_source`` and stays pinned when Iris mirrors the weights.
+    """
 
     weights: str
     api_model: str
@@ -23,6 +27,7 @@ class ModelSpec:
     chat_template_content: str | None
     tokenizer: str | None = None
     revision: str | None = None
+    tokenizer_revision: str | None = None
 
     @property
     def tokenizer_source(self) -> str:
