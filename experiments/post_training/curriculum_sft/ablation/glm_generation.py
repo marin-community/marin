@@ -17,11 +17,12 @@ import logging
 import os
 from typing import Any
 
-from marin.inference.openai_batch import OpenAIBatchClient
+from marin.inference.openai_batch import CHAT_COMPLETIONS_ENDPOINT, OpenAIBatchClient
 from marin.inference.structured_output import StructuredTool
 from pydantic import Field
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.post_training.curriculum_sft.ablation.dataset import GENERATION_FILENAME
 from experiments.post_training.curriculum_sft.ablation.matrix import (
     AblationCell,
     CurriculumCondition,
@@ -30,12 +31,16 @@ from experiments.post_training.curriculum_sft.ablation.matrix import (
     unique_accepted_payloads,
 )
 from experiments.post_training.curriculum_sft.ablation.verifier import verify_task_payload
-from experiments.post_training.glm import GLM_BULK_TOKEN_ENV, resolve_glm_base_url
+from experiments.post_training.glm import (
+    DEFAULT_GLM_RELAY_JOB,
+    GLM_BULK_TOKEN_ENV,
+    GLM_MODEL,
+    resolve_glm_base_url,
+)
 from experiments.post_training.task_curriculum.models import StrictModel
 
 logger = logging.getLogger(__name__)
 
-RELAY_JOB = "/muchanem/glm53-relay-08a"
 CURRICULUM_PACKET = "\n".join(
     (
         "Curriculum catalog: 2026.09.20-cross-domain-v3",
@@ -97,7 +102,7 @@ def generation_body(cell: AblationCell, expected_tasks: int, seed: int) -> dict[
         task_count=expected_tasks,
     )
     body = {
-        "model": "glm-5.3",
+        "model": GLM_MODEL,
         "messages": [
             {"role": "system", "content": "Generate fictional tasks and call submit_tasks exactly once."},
             {"role": "user", "content": prompt},
@@ -111,13 +116,17 @@ def generation_body(cell: AblationCell, expected_tasks: int, seed: int) -> dict[
     return body
 
 
+def _request_id(cell: AblationCell, replicate: int) -> str:
+    return f"ablation-{cell.name}-replicate-{replicate}"
+
+
 def run_matrix(
     output: str,
     *,
     tasks_per_replicate: int = 16,
     replicate_count: int = 4,
     seed: int = 17,
-    relay_job: str = RELAY_JOB,
+    relay_job: str = DEFAULT_GLM_RELAY_JOB,
 ) -> None:
     """Run paired generation replicates and write raw quality plus all payloads."""
 
@@ -134,13 +143,13 @@ def run_matrix(
     for replicate in range(replicate_count):
         replicate_seed = seed + replicate
         for cell in cells:
-            custom_id = f"ablation-{cell.name}-replicate-{replicate}"
+            custom_id = _request_id(cell, replicate)
             cell_by_request[custom_id] = (cell, replicate_seed)
             lines.append(
                 {
                     "custom_id": custom_id,
                     "method": "POST",
-                    "url": "/v1/chat/completions",
+                    "url": CHAT_COMPLETIONS_ENDPOINT,
                     "body": generation_body(cell, tasks_per_replicate, replicate_seed),
                 }
             )
@@ -158,6 +167,10 @@ def run_matrix(
             continue
         response = json.loads(line)
         custom_id = response["custom_id"]
+        if custom_id not in cell_by_request:
+            raise ValueError(f"GLM batch returned unknown request ID: {custom_id}")
+        if custom_id in results:
+            raise ValueError(f"GLM batch returned duplicate request ID: {custom_id}")
         result = response.get("response") or {}
         if response.get("error") or result.get("status_code") != 200:
             raise RuntimeError(f"GLM request {custom_id} failed")
@@ -174,7 +187,7 @@ def run_matrix(
         tasks: list[dict[str, Any]] = []
         replicates = []
         for replicate in range(replicate_count):
-            custom_id = f"ablation-{cell.name}-replicate-{replicate}"
+            custom_id = _request_id(cell, replicate)
             payload = results[custom_id]
             checks = [verify_task_payload(task) for task in payload]
             tasks.extend(payload)
@@ -220,7 +233,7 @@ def run_matrix(
         "tasks_per_replicate": tasks_per_replicate,
         "cells": rows,
     }
-    (output_path / "generation.json").write_text(json.dumps(ledger, indent=2, ensure_ascii=False) + "\n")
+    (output_path / GENERATION_FILENAME).write_text(json.dumps(ledger, indent=2, ensure_ascii=False) + "\n")
 
 
 if __name__ == "__main__":

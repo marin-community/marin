@@ -7,6 +7,8 @@ from iris.client.client import iris_ctx
 from iris.cluster.types import JobName
 
 GLM_BULK_TOKEN_ENV = "GLM_BULK_TOKEN"
+GLM_MODEL = "glm-5.3"
+DEFAULT_GLM_RELAY_JOB = "/muchanem/glm53-relay-08a"
 
 
 def resolve_glm_base_url(relay_job: str) -> str:
@@ -15,7 +17,7 @@ def resolve_glm_base_url(relay_job: str) -> str:
     client = iris_ctx().client
     if client is None:
         raise RuntimeError("Iris client is unavailable inside the task")
-    endpoints = client.resolver_for_job(JobName.from_string(relay_job)).resolve("glm-5.3").endpoints
+    endpoints = client.resolver_for_job(JobName.from_string(relay_job)).resolve(GLM_MODEL).endpoints
     if not endpoints:
         raise RuntimeError("The GLM relay has no registered endpoint")
     base_url = endpoints[0].url.rstrip("/")

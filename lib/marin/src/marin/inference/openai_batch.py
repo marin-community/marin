@@ -17,11 +17,10 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 TERMINAL_BATCH_STATES = frozenset({"completed", "failed", "expired", "cancelled"})
+CHAT_COMPLETIONS_ENDPOINT = "/v1/chat/completions"
 
 
 def jsonl_text(rows: Sequence[Mapping[str, Any]]) -> str:
-    """Serialize JSON objects as compact newline-delimited text."""
-
     return "".join(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n" for row in rows)
 
 
@@ -69,7 +68,7 @@ class OpenAIBatchClient:
         requests: Sequence[Mapping[str, Any]],
         filename: str,
         *,
-        endpoint: str = "/v1/chat/completions",
+        endpoint: str = CHAT_COMPLETIONS_ENDPOINT,
     ) -> BatchSubmission:
         """Upload request JSONL and create one batch."""
 

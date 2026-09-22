@@ -11,7 +11,11 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
-from experiments.post_training.curriculum_sft.ablation.tasks import SyntheticFinanceTask, task_from_payload
+from experiments.post_training.curriculum_sft.ablation.tasks import (
+    BASIS_POINTS_SCALE,
+    SyntheticFinanceTask,
+    task_from_payload,
+)
 from experiments.post_training.curriculum_sft.ablation.verifier import verify_task_payload
 
 SFT_SYSTEM_PROMPT = (
@@ -40,7 +44,7 @@ class AblationCell:
 
     @property
     def name(self) -> str:
-        # The suffix preserves the names in the completed generation ledger.
+        # Generation ledgers include the SFT dose so future dose studies can reuse the schema.
         return f"{self.curriculum}__{self.generation_spec}__dose-low"
 
 
@@ -63,7 +67,8 @@ def build_generation_prompt(
     if cell.generation_spec is GenerationSpec.STRICT:
         specification = (
             "Every task must ask for gross profit (revenue minus operating cost) and gross margin in basis points "
-            "(gross profit divided by revenue times 10000). Use positive integer revenue and operating_cost with "
+            f"(gross profit divided by revenue times {BASIS_POINTS_SCALE}). Use positive integer revenue and "
+            "operating_cost with "
             "operating_cost below revenue. Choose values whose basis-point answer is integral, make the exact answer "
             "consistent with the facts, include both figures in the question, and use exactly the evidence IDs "
             "disclosure.revenue and disclosure.operating_cost."

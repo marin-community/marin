@@ -24,7 +24,7 @@ from levanter.data.text.datasets import LmDataConfig
 from levanter.optim.config import AdamConfig
 from levanter.utils.mesh import MeshConfig
 from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
-from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint, ServeConfig
+from marin.evaluation.model_config import ModelConfig
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -33,6 +33,7 @@ from marin.experiment.namespacing import user_owned_name
 from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig
 from rigging.filesystem.cluster_config import marin_temp_bucket
 
+from experiments.evaluation.models import models
 from experiments.evaluation.pipeline import EvaluationResult, ProducedEvaluationModel, eval_step
 from experiments.models import ModelConfig as DownloadModelConfig
 from experiments.models import download_model
@@ -61,6 +62,7 @@ FINANCEBENCH_CONFIG = Path("experiments/evaluation/configs/evalchemy/financebenc
 COREWEAVE_CLUSTER = "cw-rno2a"
 COREWEAVE_PREFIX = "s3://marin-us-east-02a/marin"
 TEMP_TTL_DAYS = 7
+SNOWBALL_EVALUATION_MODEL = "snowball-datakit-sft-2026-09-20"
 
 TRAIN_STEPS = 1
 TRAIN_BATCH_SIZE = 64
@@ -138,25 +140,11 @@ class SnowballModelSource(ModelSource):
 
 
 def _evaluation_model(name: str) -> ModelConfig:
-    return ModelConfig(
+    return dataclasses.replace(
+        models()[SNOWBALL_EVALUATION_MODEL],
         name=name,
         location="artifact://pending",
         tokenizer=SNOWBALL_TOKENIZER,
-        apply_chat_template=True,
-        resource_hint=ResourceHint(gpu={"H100": 8}, memory="512g"),
-        serve=ServeConfig(
-            tensor_parallel_size=1,
-            data_parallel_size=8,
-            max_model_len=73728,
-            max_num_seqs=32,
-            auto_overrides=False,
-            vllm_extra_args=(
-                "--enable-expert-parallel",
-                "--model-loader-extra-config",
-                '{"distributed":true}',
-            ),
-        ),
-        generation=GenerationConfig(extra_gen_kwargs={"skip_special_tokens": "false"}),
     )
 
 

@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from experiments.post_training.curriculum_sft.ablation.tasks import (
+    BASIS_POINTS_SCALE,
     EVIDENCE_IDS,
     FACT_FIELDS,
     RESULT_FIELDS,
@@ -90,7 +91,7 @@ def verify_task_payload(payload: object) -> TaskVerification:
         revenue = facts["revenue"]
         operating_cost = facts["operating_cost"]
         gross_profit = revenue - operating_cost
-        margin_bps, remainder = divmod(gross_profit * 10_000, revenue)
+        margin_bps, remainder = divmod(gross_profit * BASIS_POINTS_SCALE, revenue)
         arithmetic_valid = (
             isinstance(revenue, int)
             and not isinstance(revenue, bool)

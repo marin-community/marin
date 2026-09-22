@@ -619,11 +619,11 @@ def _dataset_pattern(dataset: DatasetSpec | ArtifactDatasetSpec) -> str:
 
 
 def build_chat_data_config(spec: SFTSpec, dep_paths: Sequence[str], tokenizer: str) -> LmDataConfig:
-    """Chat caches built on the training pod from the ``transform_dataset_step`` outputs.
+    """Chat caches built on the training pod from canonical-message artifacts.
 
-    ``dep_paths`` are the resolved transform outputs, aligned with ``spec.datasets``; each component
-    reads the transformed ``jsonl.gz`` and Levanter builds (``auto_build_caches``) the chat cache at
-    train time.
+    ``dep_paths`` are aligned with ``spec.datasets``. Hugging Face inputs resolve to conversation
+    transform outputs; artifact inputs already contain canonical messages. Levanter builds the chat
+    cache at train time.
     """
 
     def build_component(
@@ -689,7 +689,7 @@ def _trainer(spec: SFTSpec, *, num_train_steps: int, gpu_allocator: bool) -> Tra
 
 
 def _dataset_deps(spec: SFTSpec) -> tuple[ArtifactStep, ...]:
-    """One native ShareGPT/OpenAI -> canonical transform per source (schema from adapter_kwargs)."""
+    """Resolve each source to an artifact containing canonical messages."""
     deps = []
     for dataset in spec.datasets:
         if isinstance(dataset, ArtifactDatasetSpec):

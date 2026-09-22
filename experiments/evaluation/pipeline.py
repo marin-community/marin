@@ -8,8 +8,8 @@ evals compose into ``StepRunner`` pipelines and can be triggered programmaticall
 after a training pipeline exports a checkpoint, or fanned out over a model sweep. The step runs the
 same orchestration as the CLI (serve the model once, run evalchemy against the served URL, write
 ``record.json`` + results + per-question parquet) to the shared eval output root. The step's artifact
-path holds its cache record and typed launch result: an identical (model, evals, limit, version)
-config is a cache hit.
+path holds its cache record and typed launch result: an identical model, evaluation selection,
+limit, and version is a cache hit.
 
 The step submits an Iris orchestrator job and waits for its records. The launcher chooses the shared
 GCS or CoreWeave ``evals`` output root, while the artifact path stores the pipeline cache record. The

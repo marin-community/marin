@@ -18,6 +18,7 @@ EVIDENCE_IDS = ("disclosure.revenue", "disclosure.operating_cost")
 TASK_PAYLOAD_FIELDS = frozenset({"task_id", "issuer", "facts", "question", "answer", "evidence"})
 FACT_FIELDS = frozenset({"revenue", "operating_cost"})
 RESULT_FIELDS = frozenset({"gross_profit", "margin_bps"})
+BASIS_POINTS_SCALE = 10_000
 
 
 @dataclass(frozen=True)
@@ -35,7 +36,7 @@ class SyntheticFinanceTask:
 
     @property
     def margin_bps(self) -> int:
-        quotient, remainder = divmod(self.gross_profit * 10_000, self.revenue)
+        quotient, remainder = divmod(self.gross_profit * BASIS_POINTS_SCALE, self.revenue)
         if remainder:
             raise ValueError("synthetic task does not have an integral margin in basis points")
         return quotient

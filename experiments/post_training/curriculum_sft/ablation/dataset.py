@@ -18,6 +18,7 @@ from rigging.filesystem.storage_path import StoragePath
 from experiments.post_training.curriculum_sft.ablation.matrix import AblationCell, generated_payloads_to_rows
 
 DEFAULT_GENERATION_URI = "s3://marin-us-east-02a/marin/users/power/documents/curriculum-sft/ablation/2026.09.21.4"
+GENERATION_FILENAME = "generation.json"
 TRAIN_FILENAME = "train/examples.jsonl.gz"
 MANIFEST_FILENAME = "manifest.json"
 
@@ -33,16 +34,12 @@ class MaterializeDatasetConfig:
     cell: AblationCell
 
 
-def _generation_cell_name(cell: AblationCell) -> str:
-    return AblationCell(cell.curriculum, cell.generation_spec).name
-
-
 def materialize_dataset(config: MaterializeDatasetConfig) -> AblationDataset:
     """Filter one GLM cell and write the exact canonical messages consumed by SFT."""
 
-    generation_path = StoragePath(config.generation_root) / "generation.json"
+    generation_path = StoragePath(config.generation_root) / GENERATION_FILENAME
     ledger = json.loads(generation_path.read_text())
-    expected_name = _generation_cell_name(config.cell)
+    expected_name = config.cell.name
     matches = [entry for entry in ledger["cells"] if entry["cell"] == expected_name]
     if len(matches) != 1:
         raise ValueError(f"expected one generation ledger entry for {expected_name}, found {len(matches)}")
