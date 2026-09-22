@@ -593,7 +593,7 @@ class InMemoryK8sService:
         *,
         subresource: str | None = None,
     ) -> None:
-        """Apply the JSON Patch operations used by the production service."""
+        """Apply add and replace JSON Patch operations to one stored resource."""
         self._check_failure("patch_json")
         manifest = self._resources.get((resource.plural, name))
         if manifest is None:

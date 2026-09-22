@@ -8,7 +8,6 @@ from __future__ import annotations
 import http.client
 import logging
 import math
-import shutil
 import ssl
 import threading
 import time
@@ -17,7 +16,6 @@ from collections import defaultdict
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import NamedTuple
 
@@ -31,6 +29,7 @@ from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, TELEMETRY_ENDPOINT_
 from iris.cluster.node_agent import SERVICE_NAME
 from iris.cluster.node_agent.cache_reclaim import run_cache_reclaimer
 from iris.cluster.node_agent.metrics import DeviceMetric, NodeMetrics, NodeTarget, publish_node_telemetry
+from iris.cluster.node_agent.uv_cache_recovery import complete_uv_cache_reset, run_uv_cache_recovery
 from iris.cluster.platforms.k8s.constants import DEFAULT_TASK_CACHE_DIR
 from iris.cluster.platforms.k8s.service import CloudK8sService, K8sService
 from iris.cluster.platforms.k8s.types import (
@@ -43,21 +42,14 @@ from iris.cluster.platforms.k8s.types import (
     K8sResource,
     KubectlError,
 )
-from iris.cluster.runtime.env import UV_CACHE_PATH, UV_CACHE_RECOVERY_SIGNAL_PREFIX, cache_host_dirname
 from iris.cluster.stats.tables import TASK_STATS_NAMESPACE, IrisTaskStat, build_task_stat
 from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_COLLECTION_INTERVAL = 60.0
-UV_CACHE_RECOVERY_THRESHOLD = 3
-UV_CACHE_RECOVERY_WINDOW = 30 * 60.0
-UV_CACHE_RECOVERY_INTERVAL = 30.0
 NODE_AGENT_SHUTDOWN_TIMEOUT = 10.0
 BOOT_ID_PATH = Path("/proc/sys/kernel/random/boot_id")
-UV_CACHE_RESET_MARKER = ".iris-uv-cache-reset-boot-id"
-COREWEAVE_PENDING_STATE_LABEL = "node.coreweave.cloud/pending-state"
-COREWEAVE_POWER_RESET_STATE = "production-powerreset"
 # Generous enough that ordinary apiserver latency, including a control plane under
 # load, does not fail a collection cycle; collection runs once per interval, so a
 # slow call delays one sample rather than overlapping the next.
@@ -836,145 +828,6 @@ def _log_service_endpoint(cluster_config: IrisClusterConfig) -> str:
     else:
         raise ValueError("node telemetry requires an external /system/log-server endpoint")
     return resolve_endpoint_uri(uri, metadata).rstrip("/")
-
-
-def _uv_cache_dir(cache_dir: Path) -> Path:
-    return cache_dir / cache_host_dirname(UV_CACHE_PATH)
-
-
-def complete_uv_cache_reset(cache_dir: Path, boot_id: str) -> bool:
-    """Clear a suspect uv cache after the requested machine reboot completes."""
-    marker = cache_dir / UV_CACHE_RESET_MARKER
-    if not marker.exists() or marker.read_text().strip() == boot_id:
-        return False
-
-    uv_cache_dir = _uv_cache_dir(cache_dir)
-    if uv_cache_dir.exists():
-        shutil.rmtree(uv_cache_dir)
-    uv_cache_dir.mkdir(parents=True)
-    marker.unlink()
-    logger.warning("cleared uv cache %s after node reboot", uv_cache_dir)
-    return True
-
-
-def recent_uv_cache_recoveries(cache_dir: Path, now: float) -> int:
-    """Count distinct task recoveries in the window and discard older signals."""
-    cutoff = now - UV_CACHE_RECOVERY_WINDOW
-    count = 0
-    for signal in _uv_cache_dir(cache_dir).glob(f"{UV_CACHE_RECOVERY_SIGNAL_PREFIX}*"):
-        if signal.stat().st_mtime >= cutoff:
-            count += 1
-        else:
-            signal.unlink()
-    return count
-
-
-def request_coreweave_safe_reboot(k8s: K8sService, node_name: str, now: datetime) -> bool:
-    """Ask CoreWeave to drain and power-reset a node through its lifecycle controller."""
-    node = k8s.get_json(K8sResource.NODES, node_name)
-    if node is None:
-        raise ConnectionError(f"Kubernetes node {node_name!r} is not visible")
-
-    conditions = node.get("status", {}).get("conditions", [])
-    active_pending_state = next(
-        (
-            condition
-            for condition in conditions
-            if condition.get("type") == "PendingPhaseState" and condition.get("status") == "True"
-        ),
-        None,
-    )
-    labels = node.get("metadata", {}).get("labels", {})
-    has_power_reset_label = labels.get(COREWEAVE_PENDING_STATE_LABEL) == COREWEAVE_POWER_RESET_STATE
-    has_power_reset_condition = (
-        active_pending_state is not None and active_pending_state.get("reason") == COREWEAVE_POWER_RESET_STATE
-    )
-    if active_pending_state is not None and not has_power_reset_condition:
-        logger.warning(
-            "node %s already has active CoreWeave lifecycle operation %s",
-            node_name,
-            active_pending_state.get("reason", "unknown"),
-        )
-        return False
-
-    changed = False
-    if not has_power_reset_condition:
-        timestamp = now.astimezone(UTC).isoformat().replace("+00:00", "Z")
-        k8s.patch_json(
-            K8sResource.NODES,
-            node_name,
-            [
-                {
-                    "op": "add",
-                    "path": "/status/conditions/-",
-                    "value": {
-                        "type": "PendingPhaseState",
-                        "status": "True",
-                        "lastHeartbeatTime": timestamp,
-                        "lastTransitionTime": timestamp,
-                        "reason": COREWEAVE_POWER_RESET_STATE,
-                        "message": "Iris uv cache recovery threshold exceeded",
-                    },
-                }
-            ],
-            subresource="status",
-        )
-        changed = True
-    if not has_power_reset_label:
-        k8s.patch_json(
-            K8sResource.NODES,
-            node_name,
-            [
-                {
-                    "op": "add",
-                    "path": "/metadata/labels/node.coreweave.cloud~1pending-state",
-                    "value": COREWEAVE_POWER_RESET_STATE,
-                }
-            ],
-        )
-        changed = True
-    return changed
-
-
-def check_uv_cache_recovery(
-    k8s: K8sService,
-    node_name: str,
-    cache_dir: Path,
-    boot_id: str,
-    *,
-    now: float,
-) -> bool:
-    """Request a safe node reboot after a burst of successful cache fallbacks."""
-    recovery_count = recent_uv_cache_recoveries(cache_dir, now)
-    if recovery_count < UV_CACHE_RECOVERY_THRESHOLD:
-        return False
-
-    marker = cache_dir / UV_CACHE_RESET_MARKER
-    marker.write_text(f"{boot_id}\n")
-    requested = request_coreweave_safe_reboot(k8s, node_name, datetime.fromtimestamp(now, UTC))
-    if requested:
-        logger.error(
-            "requested CoreWeave safe reboot for node %s after %d uv cache recoveries",
-            node_name,
-            recovery_count,
-        )
-    return requested
-
-
-def run_uv_cache_recovery(
-    k8s: K8sService,
-    node_name: str,
-    cache_dir: Path,
-    boot_id: str,
-    stop: threading.Event,
-) -> None:
-    """Watch task recovery signals and request safe node repair when they cluster."""
-    while not stop.is_set():
-        try:
-            check_uv_cache_recovery(k8s, node_name, cache_dir, boot_id, now=time.time())
-        except Exception:
-            logger.exception("uv cache recovery check failed for node %s", node_name)
-        stop.wait(UV_CACHE_RECOVERY_INTERVAL)
 
 
 def _node_target(k8s: CloudK8sService, node_name: str) -> NodeTarget:

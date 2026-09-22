@@ -14,15 +14,9 @@ from datetime import UTC, datetime
 
 import pytest
 from iris.cluster.node_agent.kubernetes import (
-    COREWEAVE_PENDING_STATE_LABEL,
-    COREWEAVE_POWER_RESET_STATE,
-    UV_CACHE_RECOVERY_THRESHOLD,
-    UV_CACHE_RESET_MARKER,
     KubeletScrapeError,
     NodeStatsScraper,
     TaskStatsCollector,
-    check_uv_cache_recovery,
-    complete_uv_cache_reset,
     kubelet_resource_metrics,
     parse_dcgm,
     parse_kubelet_resource_metrics,
@@ -30,6 +24,15 @@ from iris.cluster.node_agent.kubernetes import (
     parse_prometheus,
 )
 from iris.cluster.node_agent.metrics import NodeMetrics, NodeTarget
+from iris.cluster.node_agent.uv_cache_recovery import (
+    COREWEAVE_PENDING_STATE_CONDITION,
+    COREWEAVE_PENDING_STATE_LABEL,
+    COREWEAVE_POWER_RESET_STATE,
+    UV_CACHE_RECOVERY_THRESHOLD,
+    UV_CACHE_RESET_MARKER,
+    complete_uv_cache_reset,
+    reconcile_uv_cache_recovery,
+)
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.runtime.env import UV_CACHE_RECOVERY_SIGNAL_PREFIX
@@ -95,10 +98,10 @@ def test_complete_uv_cache_reset_waits_for_machine_reboot(tmp_path):
     marker = tmp_path / UV_CACHE_RESET_MARKER
     marker.write_text("current-boot\n")
 
-    assert complete_uv_cache_reset(tmp_path, "current-boot") is False
+    complete_uv_cache_reset(tmp_path, "current-boot")
     assert cached_file.exists()
 
-    assert complete_uv_cache_reset(tmp_path, "next-boot") is True
+    complete_uv_cache_reset(tmp_path, "next-boot")
     assert uv_cache.is_dir()
     assert list(uv_cache.iterdir()) == []
     assert not marker.exists()
@@ -120,20 +123,19 @@ def test_uv_cache_recovery_threshold_requests_coreweave_safe_reboot(tmp_path):
         {"metadata": {"name": "node-a", "labels": {}}, "status": {"conditions": []}},
     )
 
-    assert check_uv_cache_recovery(k8s, "node-a", tmp_path, "boot-a", now=now) is True
+    reconcile_uv_cache_recovery(k8s, "node-a", tmp_path, "boot-a", now=now)
     node = k8s.get_json(K8sResource.NODES, "node-a")
     assert node["metadata"]["labels"][COREWEAVE_PENDING_STATE_LABEL] == COREWEAVE_POWER_RESET_STATE
-    assert node["status"]["conditions"][-1] == {
-        "type": "PendingPhaseState",
-        "status": "True",
-        "lastHeartbeatTime": "2026-09-22T00:00:00Z",
-        "lastTransitionTime": "2026-09-22T00:00:00Z",
-        "reason": COREWEAVE_POWER_RESET_STATE,
-        "message": "Iris uv cache recovery threshold exceeded",
-    }
+    condition = node["status"]["conditions"][-1]
+    assert condition["type"] == COREWEAVE_PENDING_STATE_CONDITION
+    assert condition["status"] == "True"
+    assert condition["reason"] == COREWEAVE_POWER_RESET_STATE
+    assert condition["lastHeartbeatTime"] == "2026-09-22T00:00:00Z"
+    assert condition["lastTransitionTime"] == "2026-09-22T00:00:00Z"
     assert (tmp_path / UV_CACHE_RESET_MARKER).read_text() == "boot-a\n"
 
-    assert check_uv_cache_recovery(k8s, "node-a", tmp_path, "boot-a", now=now) is False
+    reconcile_uv_cache_recovery(k8s, "node-a", tmp_path, "boot-a", now=now)
+    assert len(node["status"]["conditions"]) == 1
 
 
 def test_uv_cache_recovery_ignores_stale_and_subthreshold_signals(tmp_path):
@@ -147,7 +149,7 @@ def test_uv_cache_recovery_ignores_stale_and_subthreshold_signals(tmp_path):
 
     k8s = InMemoryK8sService(namespace="iris")
 
-    assert check_uv_cache_recovery(k8s, "node-a", tmp_path, "boot-a", now=now) is False
+    reconcile_uv_cache_recovery(k8s, "node-a", tmp_path, "boot-a", now=now)
     assert not (uv_cache / f"{UV_CACHE_RECOVERY_SIGNAL_PREFIX}2").exists()
     assert not (tmp_path / UV_CACHE_RESET_MARKER).exists()
 
