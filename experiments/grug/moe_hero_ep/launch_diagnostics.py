@@ -74,6 +74,7 @@ def build_diagnostic_run(
     capacity_factor: float | None = None,
     latent_dim: int | None = None,
     moe_implementation: str | None = None,
+    attention_implementation: str | None = None,
     master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
     processes_per_task: int = HERO_PROCESSES_PER_TASK,
     eval_every: int = 0,
@@ -81,6 +82,7 @@ def build_diagnostic_run(
     save_checkpoints: bool = False,
     checkpoint_interval: timedelta = HERO_CHECKPOINT_INTERVAL,
     checkpoint_path: str | None = None,
+    initialize_from_checkpoint: str | None = None,
     checkpoint_debug: CheckpointDebugConfig | None = None,
     watch_interval: int = HERO_WATCH_INTERVAL,
     watch_mode: WatchMode = WatchMode.INLINE,
@@ -139,6 +141,7 @@ def build_diagnostic_run(
             ("capacity_factor", capacity_factor),
             ("latent_dim", latent_dim),
             ("moe_implementation", moe_implementation),
+            ("attention_implementation", attention_implementation),
         )
         if value is not None
     }
@@ -236,6 +239,8 @@ def build_diagnostic_run(
                 replicate_path=ctx.output_path,
             ),
             watch=WatchConfig(interval=watch_interval),
+            load_checkpoint_path=initialize_from_checkpoint,
+            load_checkpoint=True if initialize_from_checkpoint is not None else None,
             # Levanter's default base path is pod-local, so a preempted run would have nothing to
             # resume from. `checkpoint_path` overrides this for runs targeting disposable storage.
             checkpointer=CheckpointerConfig(
@@ -366,6 +371,11 @@ def build_diagnostic_run(
     help="Override the MoE backend, e.g. ragged_all_to_all. Defaults to the hero spec.",
 )
 @click.option(
+    "--attention-implementation",
+    default=None,
+    help="Override the attention backend. Defaults to the hero spec.",
+)
+@click.option(
     "--master-params",
     type=click.Choice([mode.value for mode in MasterParamMode]),
     default=HERO_MASTER_PARAM_MODE.value,
@@ -402,6 +412,11 @@ def build_diagnostic_run(
     "--checkpoint-path",
     default=None,
     help="Checkpoint output path, e.g. a marin_temp_bucket() path. Defaults to the step output path.",
+)
+@click.option(
+    "--initialize-from-checkpoint",
+    default=None,
+    help="Restore training state from this checkpoint; fail if it cannot be loaded.",
 )
 @click.option(
     "--checkpoint-debug/--no-checkpoint-debug",
@@ -478,11 +493,13 @@ def main(
     capacity_factor: float | None,
     latent_dim: int | None,
     moe_implementation: str | None,
+    attention_implementation: str | None,
     master_params: str,
     processes_per_task: int,
     save_checkpoints: bool,
     checkpoint_minutes: float,
     checkpoint_path: str | None,
+    initialize_from_checkpoint: str | None,
     checkpoint_debug: bool,
     eval_every: int,
     gc_interval: int | None,
@@ -505,11 +522,13 @@ def main(
         capacity_factor=capacity_factor,
         latent_dim=latent_dim,
         moe_implementation=moe_implementation,
+        attention_implementation=attention_implementation,
         master_param_mode=MasterParamMode(master_params),
         processes_per_task=processes_per_task,
         save_checkpoints=save_checkpoints,
         checkpoint_interval=timedelta(minutes=checkpoint_minutes),
         checkpoint_path=checkpoint_path,
+        initialize_from_checkpoint=initialize_from_checkpoint,
         checkpoint_debug=(
             CheckpointDebugConfig(
                 enabled=True,
