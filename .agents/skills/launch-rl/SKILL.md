@@ -47,6 +47,12 @@ agreement between the rendered config and role plan. It also requires `train_bat
 policy_mini_batch_size` for the `fully_async` entry point. Treat a preflight failure as a recipe
 error; fix the single source of truth instead of weakening the validator.
 
+Use a fresh RL artifact version whenever `SkyRLRuntime.commit` changes. The temporary checkpoint
+root follows the artifact name and version, so reusing a version can make `resume_mode=latest` load
+private Torch or distributed state written by the old runtime. Reuse an RL version across a repin
+only when checkpoint compatibility has been established explicitly or resume points at a fresh
+checkpoint root.
+
 Before a large launch, also check:
 
 - the runtime commit contains the required backend and CUDA behavior;
