@@ -78,6 +78,13 @@ def test_lightly_edited_copy_survives_a_full_containment_threshold():
     assert _removed_by(documents, ClusterDedupParams(minimum_containment=1.0)) == {}
 
 
+def test_production_threshold_keeps_a_pair_that_passes_at_sixty_percent():
+    documents = _cluster({"original": "a b c d e f g h i j", "copy": "a b c d x f g h i j"})
+
+    assert _removed_by(documents) == {}
+    assert _removed_by(documents, ClusterDedupParams(minimum_containment=0.60)) == {"copy": "original"}
+
+
 def test_unrelated_document_in_the_same_cluster_is_never_removed():
     documents = _cluster({"original": ORIGINAL, "copy": SHORTER_COPY, "excerpt": EXCERPT, "unrelated": UNRELATED})
 
@@ -162,20 +169,20 @@ def test_blank_documents_are_neither_removed_nor_representatives(exact_scan_maxi
     assert removed == {"copy": "original", "excerpt": "original"}
 
 
-def test_inverted_index_skips_ngrams_above_the_posting_limit():
+def test_inverted_index_uses_common_postings_when_all_exceed_the_limit():
     documents = _cluster({"original": ORIGINAL, "copy": ORIGINAL, "unrelated": UNRELATED})
     params = ClusterDedupParams(exact_scan_maximum=2, maximum_posting_length=1)
 
-    assert _removed_by(documents, params) == {}
+    assert _removed_by(documents, params) == {"copy": "original"}
 
 
 @pytest.mark.parametrize("exact_scan_maximum", [2, 256], ids=["inverted_index", "exact_scan"])
-def test_equal_length_ties_use_document_id(exact_scan_maximum):
+def test_equal_length_ties_use_input_order(exact_scan_maximum):
     documents = _cluster({"zeta": ORIGINAL, "alpha": ORIGINAL, "unrelated": UNRELATED})
 
     removed = _removed_by(documents, ClusterDedupParams(exact_scan_maximum=exact_scan_maximum))
 
-    assert removed == {"zeta": "alpha"}
+    assert removed == {"alpha": "zeta"}
 
 
 def test_candidate_cap_keeps_the_strongest_match():
@@ -190,7 +197,7 @@ def test_candidate_cap_keeps_the_strongest_match():
 
 
 @pytest.mark.parametrize("exact_scan_maximum", [256, 300], ids=["inverted_index", "exact_scan"])
-def test_probe_limit_preserves_matches_after_member_only_edits(exact_scan_maximum):
+def test_member_only_probes_can_miss_duplicates_in_the_production_index(exact_scan_maximum):
     shared_text = " ".join(f"word{index:03d}" for index in range(200))
     documents = _cluster(
         {
@@ -201,13 +208,14 @@ def test_probe_limit_preserves_matches_after_member_only_edits(exact_scan_maximu
 
     removed = _removed_by(documents, ClusterDedupParams(exact_scan_maximum=exact_scan_maximum))
 
-    assert removed == {f"doc{index:03d}": "doc000" for index in range(1, 300)}
+    expected = {} if exact_scan_maximum == 256 else {f"doc{index:03d}": "doc000" for index in range(1, 300)}
+    assert removed == expected
 
 
-def test_candidate_cap_excludes_removed_representatives():
+def test_production_candidate_cap_applies_before_removed_representatives_are_excluded():
     documents = _cluster({"representative": LONGER_COPY, "bridge": ORIGINAL, "member": EXCERPT})
     params = ClusterDedupParams(exact_scan_maximum=2, maximum_candidates=1)
 
     removed = _removed_by(documents, params)
 
-    assert removed == {"bridge": "representative", "member": "representative"}
+    assert removed == {"bridge": "representative"}

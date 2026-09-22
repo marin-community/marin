@@ -3,8 +3,8 @@
 
 """Find duplicates within one materialized candidate cluster.
 
-The solver processes documents in descending character count. Document IDs
-determine the order for equal lengths. A surviving representative must meet the
+The solver processes documents in descending character count. Input order
+determines the order for equal lengths. A surviving representative must meet the
 directional word n-gram containment threshold to remove a member.
 
 Small clusters compare each member with earlier survivors. Large clusters use
@@ -29,7 +29,7 @@ class ClusterDedupParams(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     ngram_size: int = Field(default=3, ge=1)
-    minimum_containment: float = Field(default=0.60, ge=0, le=1)
+    minimum_containment: float = Field(default=0.75, ge=0, le=1)
     """Minimum fraction of member n-grams that a representative must contain."""
 
     exact_scan_maximum: int = Field(default=256, ge=2)
@@ -39,10 +39,10 @@ class ClusterDedupParams(BaseModel):
     """How many of a member's rarest n-grams probe the inverted index."""
 
     maximum_posting_length: int = Field(default=512, ge=1)
-    """N-grams held by more documents than this are boilerplate and are skipped."""
+    """Skip longer postings when at least one posting meets this limit."""
 
     maximum_candidates: int = Field(default=32, ge=1)
-    """Maximum representatives checked for one member in the index path."""
+    """Candidate limit before the solver excludes removed representatives."""
 
 
 @dataclass(frozen=True)
@@ -56,7 +56,7 @@ class PreparedDocument:
     index: int
     chars: int
     ngrams: np.ndarray
-    token_hashes: np.ndarray
+    text: str
 
 
 @dataclass(frozen=True)
@@ -96,7 +96,7 @@ def prepare(documents: Sequence[ClusterDocument], params: ClusterDedupParams) ->
                 index=index,
                 chars=len(document.text),
                 ngrams=ngram_hashes(document.text, params.ngram_size),
-                token_hashes=ngram_hashes(document.text, 1),
+                text=document.text,
             )
         )
     return prepared
@@ -105,9 +105,13 @@ def prepare(documents: Sequence[ClusterDocument], params: ClusterDedupParams) ->
 def novel_token_count(
     member: PreparedDocument,
     representative: PreparedDocument,
+    cache: dict[int, frozenset[str]],
 ) -> int:
     """Words of the member that the representative does not hold."""
-    return int(member.token_hashes.size) - _overlap(member.token_hashes, representative.token_hashes)
+    for document in (member, representative):
+        if document.index not in cache:
+            cache[document.index] = frozenset(document.text.casefold().split())
+    return len(cache[member.index] - cache[representative.index])
 
 
 def _overlap(left: np.ndarray, right: np.ndarray) -> int:
@@ -155,20 +159,18 @@ def _index_candidates(
     member: PreparedDocument,
     index: _NgramIndex,
     rank: np.ndarray,
-    removed: np.ndarray,
     params: ClusterDedupParams,
 ) -> np.ndarray:
-    """Find surviving candidates from rare n-grams that multiple documents share."""
+    """Select candidates by shared probe count, as in the production rule."""
     if member.ngrams.size == 0:
         return np.empty(0, dtype=np.int32)
     # The index contains every n-gram from every prepared document.
     position = np.searchsorted(index.values, member.ngrams)
 
     counts = index.counts[position]
-    usable = (counts >= 2) & (counts <= params.maximum_posting_length)
-    position, counts = position[usable], counts[usable]
-    if position.size == 0:
-        return np.empty(0, dtype=np.int32)
+    usable = counts <= params.maximum_posting_length
+    if np.any(usable):
+        position, counts = position[usable], counts[usable]
     if position.size > params.probe_ngrams:
         rarest = np.argpartition(counts, params.probe_ngrams)[: params.probe_ngrams]
         position, counts = position[rarest], counts[rarest]
@@ -181,15 +183,14 @@ def _index_candidates(
     # Count only the probed documents to prevent a cluster-sized allocation
     # for every member.
     distinct, shared = np.unique(owners, return_counts=True)
-    ahead = (rank[distinct] < rank[member.index]) & ~removed[distinct]
+    ahead = rank[distinct] < rank[member.index]
     distinct, shared = distinct[ahead], shared[ahead]
     if distinct.size == 0:
         return np.empty(0, dtype=np.int32)
     if distinct.size > params.maximum_candidates:
-        strongest = np.lexsort((rank[distinct], -shared))[: params.maximum_candidates]
-        distinct = distinct[strongest]
-    ranked = distinct[np.argsort(rank[distinct])]
-    return ranked.astype(np.int32)
+        strongest = np.argpartition(-shared, params.maximum_candidates - 1)[: params.maximum_candidates]
+        distinct, shared = distinct[strongest], shared[strongest]
+    return distinct[np.argsort(-shared)].astype(np.int32)
 
 
 def find_duplicates(
@@ -199,18 +200,18 @@ def find_duplicates(
     """Find members that meet the containment threshold against an earlier survivor.
 
     Representatives have at least as many characters as their members.
-    Document IDs determine the order for equal lengths.
-    For equal lengths and IDs, input order determines the representative.
+    Input order determines the representative for equal lengths.
     Removed documents cannot act as representatives.
     """
     prepared = prepare(documents, params)
-    order = sorted(range(len(prepared)), key=lambda index: (-prepared[index].chars, documents[index].id, index))
+    order = sorted(range(len(prepared)), key=lambda index: (-prepared[index].chars, index))
     rank = np.empty(len(prepared), dtype=np.int64)
     rank[order] = np.arange(len(order))
     ngram_index = _build_index(prepared) if len(prepared) > params.exact_scan_maximum else None
 
     removed = np.zeros(len(prepared), dtype=bool)
     removals: list[Removal] = []
+    token_cache: dict[int, frozenset[str]] = {}
     for position, member in enumerate(order):
         comparisons = 0
         member_prepared = prepared[member]
@@ -219,7 +220,7 @@ def find_duplicates(
         candidates = (
             order[:position]
             if ngram_index is None
-            else _index_candidates(member_prepared, ngram_index, rank, removed, params).tolist()
+            else _index_candidates(member_prepared, ngram_index, rank, params).tolist()
         )
         for representative in candidates:
             if removed[representative]:
@@ -230,7 +231,7 @@ def find_duplicates(
             containment = shared / member_prepared.ngrams.size
             if containment < params.minimum_containment:
                 continue
-            novel_tokens = novel_token_count(member_prepared, other)
+            novel_tokens = novel_token_count(member_prepared, other, token_cache)
             union = member_prepared.ngrams.size + other.ngrams.size - shared
             removed[member] = True
             removals.append(
