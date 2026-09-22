@@ -5,9 +5,9 @@
 
 The two arms reuse the oracle-verified weak-specification datasets from the
 generation diagnostic. They differ only in whether GLM received the pinned finance
-curriculum section while generating those examples. Training uses Snowball's
-own tokenizer and chat template, one fixed optimizer update, and no sequence
-packing. Model staging, checkpoints, and HF exports live in the CoreWeave
+curriculum section while generating those examples. Datakit validates, renders,
+normalizes, tokenizes, and packs each Parquet dataset before one matched Snowball
+optimizer update. Model staging, checkpoints, and HF exports live in the CoreWeave
 region's lifecycle-managed temporary bucket.
 """
 
@@ -20,7 +20,9 @@ from pathlib import Path
 
 import click
 from fray.cluster import ResourceConfig
-from levanter.data.text.datasets import LmDataConfig
+from levanter.data.mixture import StopStrategy
+from levanter.data.text.datasets import DatasetComponent, LmDataConfig
+from levanter.data.text.formats import TextLmDatasetFormat
 from levanter.optim.config import AdamConfig
 from levanter.utils.mesh import MeshConfig
 from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
@@ -32,6 +34,7 @@ from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_owned_name
 from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig
 from rigging.filesystem.cluster_config import marin_temp_bucket
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.evaluation.models import models
 from experiments.evaluation.pipeline import EvaluationResult, ProducedEvaluationModel, eval_step
@@ -39,16 +42,17 @@ from experiments.models import ModelConfig as DownloadModelConfig
 from experiments.models import download_model
 from experiments.post_training.curriculum_sft.ablation.dataset import (
     DEFAULT_GENERATION_URI,
-    TRAIN_FILENAME,
     AblationDataset,
+    AblationStore,
     dataset_step,
+    store_step,
 )
 from experiments.post_training.curriculum_sft.ablation.matrix import (
     AblationCell,
     CurriculumCondition,
     GenerationSpec,
 )
-from experiments.sft.launcher import ArtifactDatasetSpec, ModelSource, PreparedModel, SFTSpec, sft_step
+from experiments.sft.launcher import ModelSource, PreparedModel, SFTSpec
 
 SNOWBALL_REPO = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.20"
 SNOWBALL_REVISION = "9f2ee50f3d4a12c79b0808bb2414ddba2cdf0098"
@@ -57,7 +61,7 @@ SNOWBALL_EOT_TOKEN_ID = 128001
 SNOWBALL_END_OF_MESSAGE_TOKEN_ID = 128009
 SNOWBALL_EOS_TOKEN_IDS = (SNOWBALL_EOT_TOKEN_ID, SNOWBALL_END_OF_MESSAGE_TOKEN_ID)
 
-DATA_VERSION = "2026.09.22.1"
+DATA_VERSION = "2026.09.22.2"
 FINANCEBENCH_CONFIG = Path("experiments/evaluation/configs/evalchemy/financebench.yaml")
 COREWEAVE_CLUSTER = "cw-rno2a"
 COREWEAVE_PREFIX = "s3://marin-us-east-02a/marin"
@@ -69,6 +73,7 @@ TRAIN_BATCH_SIZE = 64
 TRAIN_SEQUENCE_LENGTH = 4096
 DATA_AXIS_SIZE = 8
 EXPERT_AXIS_SIZE = 8
+_TRAIN_RESOURCES = "train_resources"
 
 
 @dataclass(frozen=True)
@@ -176,6 +181,65 @@ def _dataset(condition: CurriculumCondition) -> ArtifactStep[AblationDataset]:
     return dataset_step(generation, cell, version=DATA_VERSION)
 
 
+def _store(
+    condition: CurriculumCondition,
+    staged_model: ArtifactStep[LevanterCheckpoint],
+) -> ArtifactStep[AblationStore]:
+    cell = AblationCell(condition, GenerationSpec.WEAK)
+    return store_step(_dataset(condition), staged_model, cell, version=DATA_VERSION)
+
+
+def _sft_spec(
+    condition: CurriculumCondition,
+    staged_model: ArtifactStep[LevanterCheckpoint],
+    *,
+    version: str,
+) -> SFTSpec:
+    return SFTSpec(
+        name=user_owned_name(f"checkpoints/curriculum-sft/snowball/{condition.value}"),
+        version=version,
+        model=SnowballModelSource(staged_model),
+        chat_template=MARIN_CHAT_TEMPLATE,
+        datasets=(),
+        optimizer=AdamConfig(
+            learning_rate=1e-5,
+            beta1=0.9,
+            beta2=0.95,
+            epsilon=1e-8,
+            max_grad_norm=1.0,
+            weight_decay=0.0,
+            lr_schedule="constant",
+            warmup=0.0,
+            min_lr_ratio=0.0,
+        ),
+        seq_len=TRAIN_SEQUENCE_LENGTH,
+        pack=True,
+        batch_size=TRAIN_BATCH_SIZE,
+        num_train_steps=TRAIN_STEPS,
+        wandb_project="marin-curriculum-sft-snowball",
+    )
+
+
+def _training_data(cache_path: str, tokenizer: str, arm: str) -> LmDataConfig:
+    return LmDataConfig(
+        tokenizer=tokenizer,
+        cache_dir=None,
+        components={
+            arm: DatasetComponent(
+                source=None,
+                cache_dir=cache_path,
+                format=TextLmDatasetFormat(),
+                pack=True,
+            )
+        },
+        train_weights={arm: 1.0},
+        auto_build_caches=False,
+        shuffle=True,
+        block_cross_document_attention=True,
+        stop_strategy=StopStrategy.RESTART_STRATEGY,
+    )
+
+
 def _sft_step(
     condition: CurriculumCondition,
     staged_model: ArtifactStep[LevanterCheckpoint],
@@ -183,45 +247,30 @@ def _sft_step(
     version: str,
 ) -> ArtifactStep[LevanterCheckpoint]:
     arm = condition.value
-    step = sft_step(
-        SFTSpec(
-            name=user_owned_name(f"checkpoints/curriculum-sft/snowball/{arm}"),
-            version=version,
-            model=SnowballModelSource(staged_model),
-            chat_template=MARIN_CHAT_TEMPLATE,
-            datasets=(
-                ArtifactDatasetSpec(
-                    slug=f"snowball-curriculum-{arm}",
-                    artifact=_dataset(condition),
-                    relative_pattern=TRAIN_FILENAME,
-                    weight=1.0,
-                ),
-            ),
-            optimizer=AdamConfig(
-                learning_rate=1e-5,
-                beta1=0.9,
-                beta2=0.95,
-                epsilon=1e-8,
-                max_grad_norm=1.0,
-                weight_decay=0.0,
-                lr_schedule="constant",
-                warmup=0.0,
-                min_lr_ratio=0.0,
-            ),
-            seq_len=TRAIN_SEQUENCE_LENGTH,
-            pack=False,
-            batch_size=TRAIN_BATCH_SIZE,
-            num_train_steps=TRAIN_STEPS,
-            wandb_project="marin-curriculum-sft-snowball",
-        ),
-        _training_resources(),
-    )
+    store = _store(condition, staged_model)
+    spec = _sft_spec(condition, staged_model, version=version)
+    source = spec.model
+
+    def build_config(ctx: StepContext) -> TrainLmOnPodConfig:
+        tokenizer = source.resolve_tokenizer(ctx)
+        data = _training_data(prefix_join(ctx.artifact_path(store), "store"), tokenizer, arm)
+        return source.build_train_config(ctx, spec, data, ctx.runtime_arg(_TRAIN_RESOURCES), TRAIN_STEPS)
+
     output = marin_temp_bucket(
         TEMP_TTL_DAYS,
         prefix=f"curriculum-sft/snowball/{version}/{arm}",
         source_prefix=COREWEAVE_PREFIX,
     )
-    return dataclasses.replace(step, override_path=output)
+    return ArtifactStep(
+        name=spec.name,
+        version=version,
+        artifact_type=LevanterCheckpoint,
+        run=source.run,
+        build_config=build_config,
+        deps=(store, *source.init_deps()),
+        runtime_args={_TRAIN_RESOURCES: _training_resources()},
+        override_path=output,
+    )
 
 
 def build_pipeline(

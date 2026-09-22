@@ -4,14 +4,11 @@
 """Tests for the SFT checkpoint-preparation step and its wiring into ``sft_step``."""
 from __future__ import annotations
 
-import dataclasses
-
 import numpy as np
 import pytest
 from fray.types import ResourceConfig
 from levanter.optim.config import AdamConfig
-from marin.execution.artifact import Artifact
-from marin.execution.lazy import ArtifactStep, materialized_config
+from marin.execution.lazy import materialized_config
 from safetensors.numpy import load, save
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
@@ -20,7 +17,7 @@ from transformers import AutoTokenizer, PreTrainedTokenizerFast
 
 from experiments.marin_tokenizer import inject_special_tokens
 from experiments.sft.delphi_chat_template import DELPHI_RESERVED_TOKEN_RENAMES
-from experiments.sft.launcher import ArtifactDatasetSpec, DatasetSpec, HFModel, PreparedModel, SFTSpec, sft_step
+from experiments.sft.launcher import DatasetSpec, HFModel, PreparedModel, SFTSpec, sft_step
 from experiments.sft.prepare_checkpoint import (
     _reinit_rows,
     _reinit_shard_bytes,
@@ -138,30 +135,6 @@ def test_hf_model_separate_tokenizer_path():
     train_config = materialized_config(step, _PREFIX).train_config
     assert train_config.initialize_from_hf == "org/model"
     assert train_config.data.tokenizer == "org/tokenizer"
-
-
-def test_artifact_dataset_is_consumed_without_hugging_face_transform():
-    generated = ArtifactStep(
-        name="documents/generated-curriculum-sft",
-        version="2026.09.21",
-        artifact_type=Artifact,
-        run=lambda _config: None,
-        build_config=lambda _ctx: {},
-    )
-    dataset = ArtifactDatasetSpec(
-        slug="curriculum",
-        artifact=generated,
-        relative_pattern="train/*.jsonl.gz",
-        weight=1.0,
-    )
-    spec = dataclasses.replace(_spec(HFModel("Qwen/Qwen3-0.6B")), datasets=[dataset])
-
-    step = sft_step(spec, ResourceConfig.with_cpu())
-
-    assert step.deps == (generated,)
-    train_config = materialized_config(step, _PREFIX).train_config
-    component = train_config.data.components["curriculum"]
-    assert component.source.train_urls == [f"{generated.path(_PREFIX)}/train/*.jsonl.gz"]
 
 
 def test_fingerprint_tracks_preparation_inputs():

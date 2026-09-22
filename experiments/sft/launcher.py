@@ -128,21 +128,6 @@ class DatasetSpec:
     weight: float
 
 
-@dataclass(frozen=True)
-class ArtifactDatasetSpec:
-    """One canonical messages dataset produced by an upstream artifact.
-
-    The artifact must contain JSONL or JSONL.GZ rows with a ``messages`` field.
-    This source bypasses the Hugging Face conversation transform because the
-    upstream step already owns normalization and provenance.
-    """
-
-    slug: str
-    artifact: ArtifactStep[Artifact]
-    relative_pattern: str
-    weight: float
-
-
 @runtime_checkable
 class ModelSource(Protocol):
     """A model to fine-tune: its tokenizer, its training backend, and how it is initialised.
@@ -517,7 +502,7 @@ class SFTSpec:
     version: str  # calver "2026.07.15"; a "-dev" suffix opts out of the cache (always rebuild)
     model: ModelSource  # arch + tokenizer + where the initial weights come from + training backend
     chat_template: str  # any jinja carrying a {% generation %} block (completions-only mask)
-    datasets: Sequence[DatasetSpec | ArtifactDatasetSpec]  # the instruction mixture
+    datasets: Sequence[DatasetSpec]  # the instruction mixture
     optimizer: OptimizerConfig  # e.g. AdamConfig for the Levanter backend
     seq_len: int = 4096
     pack: bool = True  # chat packs by default; a step count must count packed examples
@@ -585,7 +570,7 @@ def _chat_mixture_data_config(
     cache_dirs: Sequence[str],
     tokenizer: str,
     *,
-    build_component: Callable[[DatasetSpec | ArtifactDatasetSpec, str, ChatLmDatasetFormat], DatasetComponent],
+    build_component: Callable[[str, ChatLmDatasetFormat], DatasetComponent],
     auto_build_caches: bool,
 ) -> LmDataConfig:
     """The weighted chat mixture ``LmDataConfig`` shared by the auto-build and pre-built cache paths.
@@ -599,7 +584,7 @@ def _chat_mixture_data_config(
     components: dict[str, DatasetComponent] = {}
     weights: dict[str, float] = {}
     for dataset, cache_dir in zip(spec.datasets, cache_dirs, strict=True):
-        components[dataset.slug] = build_component(dataset, cache_dir, fmt)
+        components[dataset.slug] = build_component(cache_dir, fmt)
         weights[dataset.slug] = dataset.weight
     return LmDataConfig(
         tokenizer=tokenizer,
@@ -612,25 +597,17 @@ def _chat_mixture_data_config(
     )
 
 
-def _dataset_pattern(dataset: DatasetSpec | ArtifactDatasetSpec) -> str:
-    if isinstance(dataset, ArtifactDatasetSpec):
-        return dataset.relative_pattern
-    return "**/*.jsonl.gz"
-
-
 def build_chat_data_config(spec: SFTSpec, dep_paths: Sequence[str], tokenizer: str) -> LmDataConfig:
-    """Chat caches built on the training pod from canonical-message artifacts.
+    """Chat caches built on the training pod from the ``transform_dataset_step`` outputs.
 
-    ``dep_paths`` are aligned with ``spec.datasets``. Hugging Face inputs resolve to conversation
-    transform outputs; artifact inputs already contain canonical messages. Levanter builds the chat
-    cache at train time.
+    ``dep_paths`` are the resolved transform outputs, aligned with ``spec.datasets``; each component
+    reads the transformed ``jsonl.gz`` and Levanter builds (``auto_build_caches``) the chat cache at
+    train time.
     """
 
-    def build_component(
-        dataset: DatasetSpec | ArtifactDatasetSpec, cache_dir: str, fmt: ChatLmDatasetFormat
-    ) -> DatasetComponent:
+    def build_component(cache_dir: str, fmt: ChatLmDatasetFormat) -> DatasetComponent:
         return DatasetComponent(
-            source=UrlDatasetSourceConfig(train_urls=[prefix_join(cache_dir, _dataset_pattern(dataset))]),
+            source=UrlDatasetSourceConfig(train_urls=[prefix_join(cache_dir, "**/*.jsonl.gz")]),
             cache_dir=cache_dir,
             format=fmt,
             split="train",
@@ -646,9 +623,7 @@ def _prebuilt_chat_data_config(spec: SFTSpec, cache_paths: Sequence[str], tokeni
     directly instead of rebuilding on the training pod.
     """
 
-    def build_component(
-        _dataset: DatasetSpec | ArtifactDatasetSpec, cache_dir: str, fmt: ChatLmDatasetFormat
-    ) -> DatasetComponent:
+    def build_component(cache_dir: str, fmt: ChatLmDatasetFormat) -> DatasetComponent:
         return DatasetComponent(
             source=UrlDatasetSourceConfig(train_urls=[], cache_dir=cache_dir, format=fmt),
             cache_dir=cache_dir,
@@ -689,29 +664,22 @@ def _trainer(spec: SFTSpec, *, num_train_steps: int, gpu_allocator: bool) -> Tra
 
 
 def _dataset_deps(spec: SFTSpec) -> tuple[ArtifactStep, ...]:
-    """Resolve each source to an artifact containing canonical messages."""
-    deps = []
-    for dataset in spec.datasets:
-        if isinstance(dataset, ArtifactDatasetSpec):
-            deps.append(dataset.artifact)
-        else:
-            deps.append(
-                transform_dataset_step(
-                    InstructionDatasetConfig(
-                        hf_dataset_id=dataset.hf_dataset_id,
-                        revision=dataset.revision,
-                        adapter=multi_turn_adapter(**dict(dataset.adapter_kwargs)),
-                        metadata_columns=[],
-                        name=dataset.slug,
-                    )
-                )
+    """One native ShareGPT/OpenAI -> canonical transform per source (schema from adapter_kwargs)."""
+    return tuple(
+        transform_dataset_step(
+            InstructionDatasetConfig(
+                hf_dataset_id=dataset.hf_dataset_id,
+                revision=dataset.revision,
+                adapter=multi_turn_adapter(**dict(dataset.adapter_kwargs)),
+                metadata_columns=[],
+                name=dataset.slug,
             )
-    return tuple(deps)
+        )
+        for dataset in spec.datasets
+    )
 
 
-def chat_tokenize(
-    spec: SFTSpec, dataset: DatasetSpec | ArtifactDatasetSpec, transform_dep: ArtifactStep
-) -> ArtifactStep[TokenizedCache]:
+def chat_tokenize(spec: SFTSpec, dataset: DatasetSpec, transform_dep: ArtifactStep) -> ArtifactStep[TokenizedCache]:
     """A chat-format ``TokenizedCache`` step: tokenize the canonical messages with the chat template +
     completions-only mask + packing, off the training pod.
 
@@ -726,7 +694,7 @@ def chat_tokenize(
 
     def build_config(ctx: StepContext) -> TokenizeConfig:
         return TokenizeConfig(
-            train_paths=[prefix_join(ctx.artifact_path(transform_dep), _dataset_pattern(dataset))],
+            train_paths=[prefix_join(ctx.artifact_path(transform_dep), "**/*.jsonl.gz")],
             validation_paths=[],
             cache_path=ctx.output_path,
             tokenizer=spec.model.resolve_tokenizer(ctx),
