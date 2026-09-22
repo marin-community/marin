@@ -65,7 +65,11 @@ from types import SimpleNamespace
 from typing import Any, Callable
 
 from levanter.cutlass_kernel_cache import cute_launcher_factory
-from levanter.grug.attention._fa4_cute_config import Flash4CuteSm100BackwardConfig, Flash4CuteSm90BackwardConfig
+from levanter.grug.attention._fa4_cute_config import (
+    Flash4CuteSm100BackwardConfig,
+    Flash4CuteSm100ForwardConfig,
+    Flash4CuteSm90BackwardConfig,
+)
 
 
 @dataclass(frozen=True)
@@ -1172,6 +1176,89 @@ def segmented_flash_attention_backward_launcher(
     return _launch_segmented_flash_attention_backward
 
 
+@cute_launcher_factory
+def segmented_flash_attention_forward_sm100_launcher(
+    modules: Any,
+    *,
+    head_dim: int,
+    head_dim_v: int,
+    qhead_per_kvhead: int,
+    config: Flash4CuteSm100ForwardConfig,
+) -> Any:
+    """Adapt packed masks and JAX layouts to upstream FA4 SM100 forward."""
+    deps = _import_cute_dependencies(modules)
+    cutlass, cute, cuda = deps.cutlass, deps.cute, deps.cuda
+    native = importlib.import_module("flash_attn.cute.flash_fwd_sm100")
+    sparsity = importlib.import_module("flash_attn.cute.block_sparsity")
+    utils = importlib.import_module("flash_attn.cute.utils")
+    _patch_jax_array_list_tvm_ffi_converter()
+    forward = native.FlashAttentionForwardSm100(
+        head_dim,
+        head_dim_v,
+        qhead_per_kvhead=qhead_per_kvhead,
+        is_causal=False,
+        is_local=False,
+        pack_gqa=False,
+        m_block_size=config.tile[0],
+        n_block_size=config.tile[1],
+        q_stage=config.q_stage,
+        is_static_persistent=False,
+        mask_mod=_native_segment_mask_mod(modules),
+        has_aux_tensors=True,
+    )
+
+    @cute.jit
+    def _broadcast_heads(tensor: cute.Tensor, heads: cutlass.Constexpr) -> cute.Tensor:
+        return cute.make_tensor(
+            tensor.iterator,
+            cute.make_layout(
+                (tensor.shape[0], heads, *tensor.shape[2:]),
+                stride=(tensor.stride[0], 0, *tensor.stride[2:]),
+            ),
+        )
+
+    @cute.jit
+    def _launch(
+        stream: cuda.CUstream,
+        q: cute.Tensor,
+        k: cute.Tensor,
+        v: cute.Tensor,
+        lower_bounds: cute.Tensor,
+        valid: cute.Tensor,
+        partial_count: cute.Tensor,
+        partial_index: cute.Tensor,
+        full_count: cute.Tensor,
+        full_index: cute.Tensor,
+        out: cute.Tensor,
+        lse: cute.Tensor,
+        *,
+        softmax_scale: cutlass.Float32,
+    ):
+        q_bshd = cute.make_tensor(q.iterator, cute.select(q.layout, mode=(3, 0, 2, 1)))
+        k_bshd = cute.make_tensor(k.iterator, cute.select(k.layout, mode=(3, 0, 2, 1)))
+        v_bshd = cute.make_tensor(v.iterator, cute.select(v.layout, mode=(3, 0, 2, 1)))
+        out_bshd = cute.make_tensor(out.iterator, cute.select(out.layout, mode=(3, 0, 2, 1)))
+        sparse = sparsity.BlockSparseTensors(
+            _broadcast_heads(partial_count, q_bshd.shape[2]),
+            _broadcast_heads(partial_index, q_bshd.shape[2]),
+            _broadcast_heads(full_count, q_bshd.shape[2]),
+            _broadcast_heads(full_index, q_bshd.shape[2]),
+        )
+        forward(
+            q_bshd,
+            k_bshd,
+            v_bshd,
+            out_bshd,
+            lse,
+            softmax_scale,
+            aux_data=utils.AuxData(tensors=(lower_bounds, valid)),
+            blocksparse_tensors=sparse,
+            stream=stream,
+        )
+
+    return _launch
+
+
 @dataclass(frozen=True)
 class _NativeSegmentedBackwardSupport:
     mask_mod: Any
@@ -1179,10 +1266,10 @@ class _NativeSegmentedBackwardSupport:
     as_gmem_tensor: Any
 
 
-def _native_segmented_backward_support(modules: Any, *, num_threads: int) -> _NativeSegmentedBackwardSupport:
-    """Build the mask, zero-fill kernel, and gmem views shared by native backward."""
+def _native_segment_mask_mod(modules: Any) -> Any:
+    """Build the packed causal mask shared by native FA4 forward and backward."""
     deps = _import_cute_dependencies(modules)
-    cutlass, cute, cuda = deps.cutlass, deps.cute, deps.cuda
+    cutlass, cute = deps.cutlass, deps.cute
     utils_module = importlib.import_module("flash_attn.cute.utils")
 
     @cute.jit
@@ -1207,6 +1294,14 @@ def _native_segmented_backward_support(modules: Any, *, num_threads: int) -> _Na
         key_before_query = cute.elem_less(kv_idx, q_idx + 1)
         mask_value = query_in_bounds and query_valid and key_after_lower_bound and key_before_query
         return utils_module.scalar_to_ssa(mask_value, cutlass.Boolean)
+
+    return _grug_segment_mask_mod
+
+
+def _native_segmented_backward_support(modules: Any, *, num_threads: int) -> _NativeSegmentedBackwardSupport:
+    """Build the mask, zero-fill kernel, and gmem views shared by native backward."""
+    deps = _import_cute_dependencies(modules)
+    cutlass, cute, cuda = deps.cutlass, deps.cute, deps.cuda
 
     class _Float32ZeroFill:
         def __init__(self, num_threads: int):
@@ -1241,7 +1336,7 @@ def _native_segmented_backward_support(modules: Any, *, num_threads: int) -> _Na
         )
         return cute.make_tensor(ptr, tensor.layout)
 
-    return _NativeSegmentedBackwardSupport(_grug_segment_mask_mod, zero_fill, _as_gmem_tensor)
+    return _NativeSegmentedBackwardSupport(_native_segment_mask_mod(modules), zero_fill, _as_gmem_tensor)
 
 
 @cute_launcher_factory
@@ -1703,4 +1798,5 @@ __all__ = [
     "segmented_flash_attention_backward_sm90_launcher",
     "segmented_flash_attention_backward_sm90_preprocess_launcher",
     "segmented_flash_attention_forward_launcher",
+    "segmented_flash_attention_forward_sm100_launcher",
 ]

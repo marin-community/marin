@@ -29,6 +29,7 @@ from levanter.grug.attention._fa4_cute_kernels import (
     segmented_flash_attention_backward_sm90_launcher,
     segmented_flash_attention_backward_sm90_preprocess_launcher,
     segmented_flash_attention_forward_launcher,
+    segmented_flash_attention_forward_sm100_launcher,
 )
 from levanter.grug.attention._fa4_cute_config import Flash4CuteKernelConfig, Flash4CuteSm100BackwardConfig
 
@@ -41,7 +42,7 @@ class _CutlassCuteModules:
 
 
 @dataclass(frozen=True)
-class _BackwardBlockSparseMetadata:
+class _BlockSparseMetadata:
     partial_block_cnt: jax.Array
     partial_block_idx: jax.Array
     full_block_cnt: jax.Array
@@ -115,6 +116,45 @@ def segmented_flash_attention_forward(
         modules = _import_cutlass_cute()
     except Exception as exc:
         raise _optional_dependency_error() from exc
+
+    if kernel_config.sm100_forward is not None:
+        config = kernel_config.sm100_forward
+        # One sparse query block spans every Q stage in the upstream schedule.
+        sparse = _packed_segment_forward_block_sparse_indices_with_full(
+            lower_bounds, valid, tile_m=config.tile[0] * config.q_stage, tile_n=config.tile[1]
+        )
+        launcher = segmented_flash_attention_forward_sm100_launcher(
+            modules,
+            head_dim=q.shape[-1],
+            head_dim_v=v.shape[-1],
+            qhead_per_kvhead=q.shape[2] // k.shape[2],
+            config=config,
+        )
+        input_spec, output_spec = _cutlass_attention_forward_specs(modules, vector_elems=8)
+        metadata_spec = modules.cjax.TensorSpec(static=True)
+        input_spec = (*input_spec, metadata_spec, metadata_spec, metadata_spec, metadata_spec)
+        call = cutlass_call(
+            launcher,
+            output_shape_dtype=(
+                jax.ShapeDtypeStruct((*q.shape[:3], v.shape[-1]), q.dtype),
+                jax.ShapeDtypeStruct((q.shape[0], q.shape[2], q.shape[1]), jnp.float32),
+            ),
+            input_spec=input_spec,
+            output_spec=output_spec,
+            use_static_tensors=True,
+            softmax_scale=softmax_scale,
+        )
+        return call(
+            q,
+            k,
+            v,
+            lower_bounds,
+            valid.astype(jnp.int32),
+            sparse.partial_block_cnt,
+            sparse.partial_block_idx,
+            sparse.full_block_cnt,
+            sparse.full_block_idx,
+        )
 
     forward_tile = kernel_config.forward_tile
     num_threads = kernel_config.num_threads
@@ -602,8 +642,30 @@ def _packed_segment_backward_block_sparse_indices_with_full(
     *,
     tile_m: int,
     tile_n: int,
-) -> _BackwardBlockSparseMetadata:
-    """Build partial and full upstream-style backward Q-block sparse metadata."""
+) -> _BlockSparseMetadata:
+    partial, full = _packed_segment_block_masks(lower_bounds, valid, tile_m=tile_m, tile_n=tile_n)
+    return _block_sparse_indices(partial, full)
+
+
+def _packed_segment_forward_block_sparse_indices_with_full(
+    lower_bounds: jax.Array,
+    valid: jax.Array,
+    *,
+    tile_m: int,
+    tile_n: int,
+) -> _BlockSparseMetadata:
+    partial, full = _packed_segment_block_masks(lower_bounds, valid, tile_m=tile_m, tile_n=tile_n)
+    return _block_sparse_indices(jnp.swapaxes(partial, 1, 2), jnp.swapaxes(full, 1, 2))
+
+
+def _packed_segment_block_masks(
+    lower_bounds: jax.Array,
+    valid: jax.Array,
+    *,
+    tile_m: int,
+    tile_n: int,
+) -> tuple[jax.Array, jax.Array]:
+    """Classify tiles as partial/full in [batch, key block, query block] order."""
     if tile_m <= 0 or tile_n <= 0:
         raise ValueError(f"tile_m and tile_n must be positive, got {tile_m=} {tile_n=}")
     if lower_bounds.ndim != 2 or valid.ndim != 2:
@@ -648,16 +710,22 @@ def _packed_segment_backward_block_sparse_indices_with_full(
     )
     is_partial = has_contributor & ~is_full
 
-    block_indices = jnp.arange(num_m_blocks, dtype=jnp.int32)
-    partial_indices = jnp.where(is_partial, block_indices[None, None, :], num_m_blocks)
-    full_indices = jnp.where(is_full, block_indices[None, None, :], num_m_blocks)
+    return is_partial, is_full
+
+
+def _block_sparse_indices(is_partial: jax.Array, is_full: jax.Array) -> _BlockSparseMetadata:
+    """Compact the last block axis into upstream FA4 sparse lists."""
+    num_blocks = is_partial.shape[-1]
+    block_indices = jnp.arange(num_blocks, dtype=jnp.int32)
+    partial_indices = jnp.where(is_partial, block_indices[None, None, :], num_blocks)
+    full_indices = jnp.where(is_full, block_indices[None, None, :], num_blocks)
     sorted_partial_indices = jnp.sort(partial_indices, axis=-1)
     sorted_full_indices = jnp.sort(full_indices, axis=-1)
     mask_block_cnt = jnp.sum(is_partial.astype(jnp.int32), axis=-1)[:, None, :]
     full_block_cnt = jnp.sum(is_full.astype(jnp.int32), axis=-1)[:, None, :]
-    mask_block_idx = jnp.where(sorted_partial_indices < num_m_blocks, sorted_partial_indices, 0)[:, None, :, :]
-    full_block_idx = jnp.where(sorted_full_indices < num_m_blocks, sorted_full_indices, 0)[:, None, :, :]
-    return _BackwardBlockSparseMetadata(
+    mask_block_idx = jnp.where(sorted_partial_indices < num_blocks, sorted_partial_indices, 0)[:, None, :, :]
+    full_block_idx = jnp.where(sorted_full_indices < num_blocks, sorted_full_indices, 0)[:, None, :, :]
+    return _BlockSparseMetadata(
         partial_block_cnt=mask_block_cnt,
         partial_block_idx=mask_block_idx,
         full_block_cnt=full_block_cnt,
