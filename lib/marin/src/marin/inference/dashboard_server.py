@@ -16,14 +16,18 @@ slice (see :mod:`marin.inference.backend`). Direct sessions preserve server-sent
 events end to end; brokered sessions return buffered JSON and reject streaming.
 ``/tools`` returns model-facing JSON schemas for dashboard-authored Python,
 ``/tools/{name}`` validates and runs one function, and ``/shell`` executes a
-command in a reconstructed ShellSim agent workspace.
+command in a reconstructed ShellSim agent workspace. ``/chat-shares`` stores
+bounded, process-local snapshots for short chat links.
 """
 
 import dataclasses
 import importlib.resources
+import json
 import logging
+import secrets
 import socket
 import threading
+from collections import OrderedDict
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
@@ -46,6 +50,10 @@ from marin.inference.python_tool_routes import (
 from marin.inference.repository_snapshot import repository_snapshot_response
 
 logger = logging.getLogger(__name__)
+
+MAX_SHARED_CHAT_BYTES = 512 * 1024
+MAX_SHARED_CHATS = 128
+SHARED_CHAT_ID_BYTES = 12
 
 
 @dataclass(frozen=True)
@@ -79,6 +87,7 @@ def build_dashboard_app(
         request_timeout_seconds: Per-request timeout for upstream proxying.
     """
     state: dict[str, httpx.AsyncClient] = {}
+    shared_chats: OrderedDict[str, bytes] = OrderedDict()
 
     @asynccontextmanager
     async def lifespan(_app: Starlette) -> AsyncIterator[None]:
@@ -108,6 +117,33 @@ def build_dashboard_app(
             {"status": "ok" if ready else "loading", "model": model_id},
             status_code=200 if ready else 503,
         )
+
+    async def create_chat_share(request: Request) -> Response:
+        body = bytearray()
+        async for chunk in request.stream():
+            body.extend(chunk)
+            if len(body) > MAX_SHARED_CHAT_BYTES:
+                return JSONResponse({"error": "shared chat is too large"}, status_code=413)
+        try:
+            payload = json.loads(body)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return JSONResponse({"error": "shared chat must be valid JSON"}, status_code=400)
+        if not isinstance(payload, dict):
+            return JSONResponse({"error": "shared chat must be a JSON object"}, status_code=400)
+
+        share_id = secrets.token_urlsafe(SHARED_CHAT_ID_BYTES)
+        while share_id in shared_chats:
+            share_id = secrets.token_urlsafe(SHARED_CHAT_ID_BYTES)
+        shared_chats[share_id] = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
+        if len(shared_chats) > MAX_SHARED_CHATS:
+            shared_chats.popitem(last=False)
+        return JSONResponse({"id": share_id}, status_code=201, headers={"cache-control": "no-store"})
+
+    async def get_chat_share(request: Request) -> Response:
+        payload = shared_chats.get(request.path_params["share_id"])
+        if payload is None:
+            return JSONResponse({"error": "shared chat not found"}, status_code=404)
+        return Response(payload, media_type="application/json", headers={"cache-control": "no-store"})
 
     async def proxy(request: Request) -> Response:
         client = state["client"]
@@ -147,6 +183,8 @@ def build_dashboard_app(
             Route("/dashboard", index),
             Route("/info", serving_info),
             Route("/health", health),
+            Route("/chat-shares", create_chat_share, methods=["POST"]),
+            Route("/chat-shares/{share_id}", get_chat_share),
             Route("/tools", python_tool_definitions_response, methods=["POST"]),
             Route("/tools/{name}", invoke_tool_response, methods=["POST"]),
             Route("/shell", shell_workspace_response, methods=["POST"]),
