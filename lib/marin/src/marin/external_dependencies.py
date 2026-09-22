@@ -52,6 +52,12 @@ class VllmGpuRelease:
     wheels: tuple[VllmGpuWheel, ...]
 
 
+CUDA_TOOLCHAIN_VERSION_BY_BACKEND = {
+    "cu130": "13.0.88",
+    "cu132": "13.2.86",
+}
+
+
 EVALCHEMY = ExternalDependency(
     config_name="evalchemy",
     distribution="evalchemy",

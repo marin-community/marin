@@ -473,6 +473,7 @@ def _run_pipeline_service(service: IrisServiceConfig) -> None:
         dtype=model.dtype,
         max_model_len=model.max_model_len,
         chat_template_content=model.chat_template_content,
+        tokenizer=model.tokenizer,
         revision=model.revision,
     )
     backend = VllmBackend(service.engine)

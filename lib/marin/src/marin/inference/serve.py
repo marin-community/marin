@@ -45,6 +45,7 @@ def local_inference(
         dtype=model.dtype,
         max_model_len=model.max_model_len,
         chat_template_content=model.chat_template_content,
+        tokenizer=model.tokenizer,
         revision=model.revision,
     )
     if isinstance(engine, VllmEngineConfig):

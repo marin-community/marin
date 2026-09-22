@@ -99,7 +99,7 @@ class VllmBackend:
         chat_template_content = (
             spec.chat_template_content
             if spec.chat_template_content is not None
-            else read_tool_chat_template(spec.weights, spec.revision)
+            else read_tool_chat_template(spec.tokenizer_source, spec.revision)
         )
         with self.start(spec) as environment:
             environment.wait_until_ready()
@@ -151,6 +151,12 @@ class VllmBackend:
             "--served-model-name",
             spec.api_model,
             *(("--revision", spec.revision) if spec.revision is not None else ()),
+            *(("--tokenizer", spec.tokenizer) if spec.tokenizer is not None else ()),
+            *(
+                ("--tokenizer-revision", spec.revision)
+                if spec.tokenizer is not None and spec.revision is not None
+                else ()
+            ),
             *chat_template_args,
             *self.config.extra_args,
             *extra_args,

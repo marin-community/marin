@@ -21,7 +21,12 @@ class ModelSpec:
     dtype: str
     max_model_len: int | None
     chat_template_content: str | None
+    tokenizer: str | None = None
     revision: str | None = None
+
+    @property
+    def tokenizer_source(self) -> str:
+        return self.tokenizer or self.weights
 
 
 class ServedModel(Protocol):

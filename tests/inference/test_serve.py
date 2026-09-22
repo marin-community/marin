@@ -28,7 +28,7 @@ from iris.cluster.constraints import WellKnownAttribute
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2
 from iris.time_proto import timestamp_to_proto
-from marin.external_dependencies import VLLM_GPU_RELEASE
+from marin.external_dependencies import CUDA_TOOLCHAIN_VERSION_BY_BACKEND, VLLM_GPU_RELEASE
 from marin.inference import iris_vllm
 from marin.inference.backend import ModelSpec
 from marin.inference.config import (
@@ -141,6 +141,7 @@ def test_resolve_model_path_returns_filesystem_path_for_local_cache(monkeypatch,
 
 def test_vllm_backend_serves_the_pinned_revision(monkeypatch):
     observed: dict[str, object] = {}
+    template_source: list[tuple[str, str | None]] = []
 
     @contextmanager
     def environment(**kwargs):
@@ -153,9 +154,15 @@ def test_vllm_backend_serves_the_pinned_revision(monkeypatch):
 
     monkeypatch.setattr("marin.inference.vllm_backend.VllmEnvironment", environment)
     monkeypatch.setattr("marin.inference.vllm_backend.vllm_launcher", lambda config: object())
-    monkeypatch.setattr("marin.inference.vllm_backend.read_tool_chat_template", lambda *_args: "{{ messages }}")
+
+    def read_template(model: str, revision: str | None) -> str:
+        template_source.append((model, revision))
+        return "{{ messages }}"
+
+    monkeypatch.setattr("marin.inference.vllm_backend.read_tool_chat_template", read_template)
     spec = ModelSpec(
         weights="org/model",
+        tokenizer="org/tokenizer",
         revision="abc123",
         api_model="public-model",
         num_chips=1,
@@ -171,6 +178,9 @@ def test_vllm_backend_serves_the_pinned_revision(monkeypatch):
     extra_args = observed["extra_args"]
     assert isinstance(extra_args, list)
     assert extra_args[extra_args.index("--revision") + 1] == "abc123"
+    assert extra_args[extra_args.index("--tokenizer") + 1] == "org/tokenizer"
+    assert extra_args[extra_args.index("--tokenizer-revision") + 1] == "abc123"
+    assert template_source == [("org/tokenizer", "abc123")]
 
 
 def test_resolved_model_keeps_requested_id_as_served_name(monkeypatch):
@@ -226,10 +236,10 @@ def test_isolated_cuda_vllm_marin_fork_uses_verified_wheel(monkeypatch, machine)
     assert cmd[cmd.index("--index-strategy") + 1] == "unsafe-best-match"
     assert "--torch-backend" not in cmd
     requirements = [cmd[index + 1] for index, value in enumerate(cmd) if value == "--with"]
-    assert set(requirements) >= {
-        "nvidia-cuda-nvcc==13.2.86",
-        "nvidia-cuda-crt==13.2.86",
-        "nvidia-nvvm==13.2.86",
+    toolchain = {requirement.partition("==")[0]: requirement.partition("==")[2] for requirement in requirements}
+    assert set(toolchain) >= {"nvidia-cuda-nvcc", "nvidia-cuda-crt", "nvidia-nvvm"}
+    assert {toolchain[package] for package in ("nvidia-cuda-nvcc", "nvidia-cuda-crt", "nvidia-nvvm")} == {
+        CUDA_TOOLCHAIN_VERSION_BY_BACKEND[VLLM_GPU_RELEASE.torch_backend]
     }
     bootstrap_index = cmd.index("-c")
     wrapped_command = cmd[bootstrap_index + 2 :]
