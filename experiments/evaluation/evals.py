@@ -44,7 +44,7 @@ _DAYTONA_SECRET_ENV: Mapping[str, SecretSpec] = MappingProxyType(
 )
 _TOGETHER_API_KEY_SECRET: SecretSpec = (
     "env:TOGETHER_API_KEY",
-    "gcp-secret://projects/hai-gcp-models/secrets/together_api_key/versions/latest",
+    "gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest",
 )
 _VERIFIER_SECRET_ENV: Mapping[str, SecretSpec] = MappingProxyType({"TOGETHER_API_KEY": _TOGETHER_API_KEY_SECRET})
 

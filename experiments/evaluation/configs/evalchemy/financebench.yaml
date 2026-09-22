@@ -14,4 +14,4 @@ judge:
   model: openai/gpt-oss-120b
   api_key:
     - env:TOGETHER_API_KEY
-    - gcp-secret://projects/hai-gcp-models/secrets/together_api_key/versions/latest
+    - gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest
