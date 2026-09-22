@@ -463,15 +463,11 @@ def _declared_config_value(config: dict[str, object], dotted_key: str) -> object
     return value
 
 
-def _effective_config_value(config: dict[str, object], dotted_key: str) -> object:
-    return _declared_config_value(config, dotted_key)
-
-
 def _validate_role_plan_config(config: dict[str, object], role_plan: SkyRLRolePlan) -> None:
     """Ensure the trainer config cannot silently disagree with the identity-bearing role plan."""
     for dotted_key, field_name in _ROLE_PLAN_CONFIG_FIELDS.items():
         expected = getattr(role_plan, field_name)
-        actual = _effective_config_value(config, dotted_key)
+        actual = _declared_config_value(config, dotted_key)
         if actual is _MISSING_CONFIG_VALUE:
             raise ValueError(f"SkyRL config must explicitly set {dotted_key} from role_plan.{field_name}")
         if type(actual) is not type(expected) or actual != expected:
@@ -480,7 +476,7 @@ def _validate_role_plan_config(config: dict[str, object], role_plan: SkyRLRolePl
 
 def _validate_entrypoint_config(config: dict[str, object], role_plan: SkyRLRolePlan) -> None:
     """Reject entrypoint-specific constraints that MarinSkyRL would otherwise discover at startup."""
-    entrypoint = _effective_config_value(config, "entrypoint")
+    entrypoint = _declared_config_value(config, "entrypoint")
     if entrypoint == "fully_async" and role_plan.train_batch_size != role_plan.policy_mini_batch_size:
         raise ValueError(
             "SkyRL fully_async entrypoint requires train_batch_size == policy_mini_batch_size; "
@@ -516,29 +512,29 @@ def _validate_skyrl_backend_constraints(
             f"got {plan.policy_num_gpus_per_node} and {topology.gpus_per_node}"
         )
 
-    run_engines_locally = _effective_config_value(config, "generator.run_engines_locally")
+    run_engines_locally = _declared_config_value(config, "generator.run_engines_locally")
     if run_engines_locally is _MISSING_CONFIG_VALUE:
         raise ValueError("SkyRL config must explicitly set generator.run_engines_locally")
     if run_engines_locally is not True:
         raise ValueError("Marin SkyRL artifact topology requires generator.run_engines_locally=true")
-    if not isinstance(_effective_config_value(config, "generator.backend"), str):
+    if not isinstance(_declared_config_value(config, "generator.backend"), str):
         raise ValueError("SkyRL config must explicitly set a non-empty generator.backend")
 
-    use_kl_loss = _effective_config_value(config, "trainer.algorithm.use_kl_loss")
+    use_kl_loss = _declared_config_value(config, "trainer.algorithm.use_kl_loss")
     if use_kl_loss is _MISSING_CONFIG_VALUE:
         raise ValueError("SkyRL config must explicitly set trainer.algorithm.use_kl_loss")
-    use_kl_in_reward = _effective_config_value(config, "trainer.algorithm.use_kl_in_reward")
+    use_kl_in_reward = _declared_config_value(config, "trainer.algorithm.use_kl_in_reward")
     use_reference = bool(use_kl_loss) or (use_kl_in_reward is not _MISSING_CONFIG_VALUE and bool(use_kl_in_reward))
-    critic_path = _effective_config_value(config, "trainer.critic.model.path")
+    critic_path = _declared_config_value(config, "trainer.critic.model.path")
     if critic_path is not _MISSING_CONFIG_VALUE and critic_path:
         raise ValueError("Marin SkyRL artifact topology does not yet describe a separate critic role")
 
     if use_reference:
-        colocate_policy_ref = _effective_config_value(config, "trainer.placement.colocate_policy_ref")
+        colocate_policy_ref = _declared_config_value(config, "trainer.placement.colocate_policy_ref")
         if colocate_policy_ref is not _MISSING_CONFIG_VALUE and colocate_policy_ref is not True:
             raise ValueError("Marin SkyRL artifact topology requires policy and reference roles to be colocated")
-        ref_num_nodes = _effective_config_value(config, "trainer.placement.ref_num_nodes")
-        ref_num_gpus = _effective_config_value(config, "trainer.placement.ref_num_gpus_per_node")
+        ref_num_nodes = _declared_config_value(config, "trainer.placement.ref_num_nodes")
+        ref_num_gpus = _declared_config_value(config, "trainer.placement.ref_num_gpus_per_node")
         ref_num_nodes = plan.policy_num_nodes if ref_num_nodes in (_MISSING_CONFIG_VALUE, None) else ref_num_nodes
         ref_num_gpus = plan.policy_num_gpus_per_node if ref_num_gpus in (_MISSING_CONFIG_VALUE, None) else ref_num_gpus
         if (ref_num_nodes, ref_num_gpus) != (plan.policy_num_nodes, plan.policy_num_gpus_per_node):
