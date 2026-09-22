@@ -30,6 +30,7 @@ GrugAttentionImplementation = Literal[
     "reference",
     "tpu_splash",
     "gpu_fa4_cute",
+    "gpu_fa4_cute_sm100",  # Native forward, one-block backward; opt-in SM100 D128 GQA.
     "gpu_fa4_cute_wide",  # 128x64 forward tile. Measured faster only at the hero shape.
 ]
 
@@ -446,6 +447,10 @@ def attention(
         from levanter.grug.attention._fa4_cute import gpu_fa4_cute_wide_attention  # noqa: PLC0415
 
         return gpu_fa4_cute_wide_attention(q, k, v, mask)
+    if implementation == "gpu_fa4_cute_sm100":
+        from levanter.grug.attention._fa4_cute import gpu_fa4_cute_sm100_attention  # noqa: PLC0415
+
+        return gpu_fa4_cute_sm100_attention(q, k, v, mask)
     if implementation == "tpu_splash":
         if isinstance(mask, jax.Array):
             raise NotImplementedError("Dense masks are not supported for splash attention.")

@@ -93,6 +93,53 @@ def test_packed_segment_backward_block_sparse_indices_split_full_blocks():
     )
 
 
+@pytest.mark.parametrize("direction", ["forward", "backward"])
+@pytest.mark.parametrize("tile", [(2, 4), (4, 2), (4, 4)])
+@pytest.mark.parametrize("window", [None, 3])
+def test_packed_sparse_blocks_match_dense_mask(direction, tile, window):
+    ids = np.array([[-1, 0, 0, 0, 0, 0, 1, 1, 1, 1, -1], [-1] * 11], dtype=np.int32)
+    lower, valid = fa4_cute._packed_segment_causal_lower_bounds(
+        jnp.asarray(ids), batch_size=2, seq_len=11, sliding_window=window
+    )
+    build = (
+        fa4_cute_backend._packed_segment_forward_block_sparse_indices_with_full
+        if direction == "forward"
+        else fa4_cute_backend._packed_segment_backward_block_sparse_indices_with_full
+    )
+    tile_m, tile_n = tile
+    sparse = build(lower, valid, tile_m=tile_m, tile_n=tile_n)
+    query = np.arange(ids.shape[1])[:, None]
+    key = np.arange(ids.shape[1])[None, :]
+    dense = (ids[:, :, None] == ids[:, None, :]) & (ids[:, :, None] >= 0) & (key <= query)
+    if window is not None:
+        dense &= key >= query - window + 1
+    query_blocks = (ids.shape[1] + tile_m - 1) // tile_m
+    key_blocks = (ids.shape[1] + tile_n - 1) // tile_n
+    partial = np.zeros((2, key_blocks, query_blocks), dtype=bool)
+    full = np.zeros_like(partial)
+    for batch in range(2):
+        for q_block in range(query_blocks):
+            for k_block in range(key_blocks):
+                block = dense[
+                    batch, q_block * tile_m : (q_block + 1) * tile_m, k_block * tile_n : (k_block + 1) * tile_n
+                ]
+                full[batch, k_block, q_block] = block.shape[0] == tile_m and block.all()
+                partial[batch, k_block, q_block] = block.any() and not full[batch, k_block, q_block]
+    if direction == "forward":
+        partial, full = partial.swapaxes(1, 2), full.swapaxes(1, 2)
+    for expected, counts, indices in (
+        (partial, sparse.partial_block_cnt, sparse.partial_block_idx),
+        (full, sparse.full_block_cnt, sparse.full_block_idx),
+    ):
+        counts, indices = np.asarray(counts), np.asarray(indices)
+        for batch in range(2):
+            for block in range(expected.shape[1]):
+                np.testing.assert_array_equal(
+                    indices[batch, 0, block, : counts[batch, 0, block]],
+                    np.flatnonzero(expected[batch, block]),
+                )
+
+
 def test_packed_segment_causal_lower_bounds_carry_next_valid_bound_through_padding():
     segment_ids = jnp.array([[-1, -1, 7, 7, 8, 8, -1]], dtype=jnp.int32)
 
@@ -226,11 +273,12 @@ def _assert_real_gpu_fa4_cute_matches_reference(
         np.testing.assert_allclose(actual_grad, expected_grad, atol=7e-2, rtol=7e-2)
 
 
-def test_real_gpu_fa4_cute_wide_attention_matches_reference():
+@pytest.mark.parametrize("implementation", ["gpu_fa4_cute_wide", "gpu_fa4_cute_sm100"])
+def test_real_gpu_fa4_cute_sm100_attention_matches_reference(implementation):
     if jax.default_backend() != "gpu":
         pytest.skip("FA4/CuTe correctness requires a GPU backend.")
-    if fa4_cute.gpu_compute_capability() // 10 != 10:
-        pytest.skip("The wide FA4 tile requires SM100.")
+    if fa4_cute.gpu_compute_capability() != 100:
+        pytest.skip("These FA4 backends require SM100.")
     pytest.importorskip("cutlass")
     pytest.importorskip("cutlass.cute")
     pytest.importorskip("flash_attn.cute.flash_bwd_preprocess")
@@ -247,7 +295,7 @@ def test_real_gpu_fa4_cute_wide_attention_matches_reference():
         v,
         AttentionMask.causal(),
         cotangent,
-        implementation="gpu_fa4_cute_wide",
+        implementation=implementation,
     )
 
 
@@ -370,7 +418,10 @@ def test_real_gpu_fa4_cute_zeroes_padding_tiles_before_reusing_query_storage(sli
 @pytest.mark.parametrize("kv_heads", [6, 12])
 @pytest.mark.parametrize(("sequence_length", "sliding_window"), [(257, None), (257, 31), (2305, 2048)])
 @pytest.mark.timeout(300)
-def test_real_gpu_fa4_cute_sm100_gradients_with_changing_packed_segments(kv_heads, sequence_length, sliding_window):
+@pytest.mark.parametrize("implementation", ["gpu_fa4_cute", "gpu_fa4_cute_sm100"])
+def test_real_gpu_fa4_cute_sm100_gradients_with_changing_packed_segments(
+    kv_heads, sequence_length, sliding_window, implementation
+):
     if jax.default_backend() != "gpu" or fa4_cute.gpu_compute_capability() != 100:
         pytest.skip("Native SM100 backward correctness requires an SM100 GPU.")
     pytest.importorskip("cutlass.cute")
@@ -390,7 +441,7 @@ def test_real_gpu_fa4_cute_sm100_gradients_with_changing_packed_segments(kv_head
         (_, output), gradients = jax.value_and_grad(loss, argnums=(0, 1, 2), has_aux=True)(q, k, v)
         return (output, *gradients)
 
-    actual_call = jax.jit(lambda *args: output_and_gradients(*args, implementation="gpu_fa4_cute"))
+    actual_call = jax.jit(lambda *args: output_and_gradients(*args, implementation=implementation))
     reference_call = jax.jit(lambda *args: output_and_gradients(*args, implementation="reference"))
     batch = 2 if sequence_length == 257 else 1
     for iteration in range(3):
