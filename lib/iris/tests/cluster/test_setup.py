@@ -67,3 +67,49 @@ package = false
     )
 
     assert (venv / "bin" / "python").is_file()
+
+
+@pytest.mark.parametrize("shared_cache_fails", [False, True])
+def test_default_setup_uses_local_cache_only_after_shared_cache_failure(tmp_path, shared_cache_fails):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    (workdir / "pyproject.toml").write_text("[tool.uv]\npackage = false\n")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    uv = bin_dir / "uv"
+    uv.write_text(
+        """\
+#!/bin/sh
+set -e
+if [ "$UV_CACHE_DIR" = "$SHARED_UV_CACHE" ] && [ "$SHARED_CACHE_FAILS" = "1" ]; then
+  exit 1
+fi
+mkdir -p "$UV_CACHE_DIR/wheels" "$IRIS_VENV"
+touch "$UV_CACHE_DIR/wheels/package.whl"
+ln -sf "$UV_CACHE_DIR/wheels/package.whl" "$IRIS_VENV/package.whl"
+"""
+    )
+    uv.chmod(0o755)
+    shared_cache = tmp_path / "shared-cache"
+    venv = tmp_path / "venv"
+    env = {
+        **os.environ,
+        "IRIS_VENV": str(venv),
+        "IRIS_WORKDIR": str(workdir),
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "SHARED_CACHE_FAILS": str(int(shared_cache_fails)),
+        "SHARED_UV_CACHE": str(shared_cache),
+        "UV_CACHE_DIR": str(shared_cache),
+        "UV_PROJECT_ENVIRONMENT": str(venv),
+    }
+
+    subprocess.run(
+        ["bash", "-c", default_setup_script(python_version="3.12")],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    expected_cache = workdir / ".uv-recovery-cache" if shared_cache_fails else shared_cache
+    assert (venv / "package.whl").resolve() == expected_cache / "wheels/package.whl"
