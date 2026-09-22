@@ -105,7 +105,7 @@ def _cute_expert_mlp(
     """Expert MLP on QuACK's SM100 grouped GEMMs, activation path and weight gradients alike.
 
     The grouped kernels are driven by segment boundaries, so they take the active sizes and
-    mask the receiver buffer's trailing padding rather than charging it to the last expert.
+    leave trailing rows unspecified. The return transport reads only the active rows.
     """
     del activation_fn, physical_group_sizes
 
