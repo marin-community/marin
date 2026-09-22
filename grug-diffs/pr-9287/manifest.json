@@ -3,12 +3,12 @@
     "fast_track"
   ],
   "base_sha": "066ea85f413ccecc564ae45b76ea4812d71abe87",
-  "head_sha": "fca5d0feaf74583399280b0301e865180ba22fc0",
+  "head_sha": "ac68bf4d3bcd8cd215085f51709687202f84f1a6",
   "report_count": 1,
   "reports": [
     {
       "closest_variant": "base",
-      "distance_score": 3676,
+      "distance_score": 3696,
       "report_relpath": "fast_track/index.html",
       "status_counts": {
         "added": 7,
