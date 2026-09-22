@@ -352,7 +352,7 @@ def gpu_fa4_cute_sm100_attention(
     """Run native SM100 forward and one-block backward for BF16 D128 GQA.
 
     Select with ``implementation="gpu_fa4_cute_sm100"``. Supports GQA ratios
-    4 and 8 and the same packed causal/window masks as ``gpu_fa4_cute``.
+    4, 6, and 8 and the same packed causal/window masks as ``gpu_fa4_cute``.
     Use ``gpu_fa4_cute`` on Hopper or for other supported head layouts.
     """
     if jax.default_backend() != "gpu":
@@ -361,8 +361,8 @@ def gpu_fa4_cute_sm100_attention(
     _validate_head_layout(q, k, backend_name="gpu_fa4_cute_sm100")
     if arch != 100 or q.dtype != jnp.bfloat16 or q.shape[-1] != 128 or v.shape[-1] != 128:
         raise ValueError("gpu_fa4_cute_sm100 requires SM100 with BF16 and D == Dv == 128.")
-    if q.shape[2] // k.shape[2] not in (4, 8):
-        raise ValueError("gpu_fa4_cute_sm100 requires a GQA ratio of 4 or 8.")
+    if q.shape[2] // k.shape[2] not in (4, 6, 8):
+        raise ValueError("gpu_fa4_cute_sm100 requires a GQA ratio of 4, 6, or 8.")
     config = sm100_flash4_cute_kernel_config()
     return _gpu_fa4_cute_attention(q, k, v, mask, kernel_config=config)
 

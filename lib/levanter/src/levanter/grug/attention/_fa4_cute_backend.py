@@ -208,7 +208,7 @@ def segmented_flash_attention_backward(
         q.dtype == jnp.bfloat16
         and q.shape[-1] == 128
         and v.shape[-1] == 128
-        and qhead_per_kvhead in (4, 8)
+        and qhead_per_kvhead in (4, 6, 8)
         and kernel_config.sm100_backward is not None
     ):
         return _segmented_flash_attention_backward_sm100(

@@ -399,12 +399,12 @@ def test_real_gpu_fa4_cute_zeroes_padding_tiles_before_reusing_query_storage(sli
         np.testing.assert_allclose(actual[:1, :40], expected, atol=7e-2, rtol=7e-2)
 
 
-@pytest.mark.parametrize("kv_heads", [6, 12])
+@pytest.mark.parametrize(("query_heads", "kv_heads"), [(48, 6), (48, 12), (6, 1)])
 @pytest.mark.parametrize(("sequence_length", "sliding_window"), [(257, None), (257, 31), (2305, 2048)])
 @pytest.mark.timeout(300)
 @pytest.mark.parametrize("implementation", ["gpu_fa4_cute", "gpu_fa4_cute_sm100"])
 def test_real_gpu_fa4_cute_sm100_gradients_with_changing_packed_segments(
-    kv_heads, sequence_length, sliding_window, implementation
+    query_heads, kv_heads, sequence_length, sliding_window, implementation
 ):
     if jax.default_backend() != "gpu" or fa4_cute.gpu_compute_capability() != 100:
         pytest.skip("Native SM100 backward correctness requires an SM100 GPU.")
@@ -436,7 +436,7 @@ def test_real_gpu_fa4_cute_sm100_gradients_with_changing_packed_segments(
         ids[:, -17:] = -1
         if batch == 2 and iteration == 2:
             ids[1, :] = -1
-        query_shape = (batch, sequence_length, 48, 128)
+        query_shape = (batch, sequence_length, query_heads, 128)
         kv_shape = (batch, sequence_length, kv_heads, 128)
         keys = jax.random.split(jax.random.key(20260916 + iteration), 4)
         q, k, v, cotangent = (
