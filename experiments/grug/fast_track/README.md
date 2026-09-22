@@ -78,12 +78,13 @@ Set `$WANDB_API_KEY` in your shell.
 
 Common wrapper:
 
-Usage is `irun <job-name> <launch-args…>`. It targets `$IRIS_CLUSTER` (default `cw-rno2a`); both it
-and `cw-us-east-02a` are 8×H100 clusters: `IRIS_CLUSTER=cw-us-east-02a irun …`.
+Usage is `irun <job-name> <launch-args…>`. It schedules on any available H100 (the ladder's data
+cache and checkpoints are the same S3 backend from every H100 cluster, so cluster choice is just
+capacity — no `--target-cluster` needed).
 
 ```bash
-irun() { uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources \
-  --target-cluster "${IRIS_CLUSTER:-cw-rno2a}" --priority interactive --job-name "$1-coord" \
+irun() { uv run iris --cluster marin job run --no-wait --enable-extra-resources \
+  --priority interactive --job-name "$1-coord" \
   -e WANDB_API_KEY "$WANDB_API_KEY" -e WANDB_PROJECT marin_moe \
   -- python -m experiments.grug.fast_track.launch "${@:2}" --run; }
 ```
@@ -126,4 +127,3 @@ irun probe-d1280 --run-id probe-d1280 --size d1280 --num-steps 20 --no-eval --ve
 
 Results land in W&B `marin-community/marin_moe`; eval bpb keys are `eval/paloma/macro_bpb`,
 `eval/uncheatable_eval/macro_bpb` (MoE dropless eval logs under the normal `eval/` prefix).
-</content>

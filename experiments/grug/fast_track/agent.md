@@ -101,13 +101,13 @@ a shell variable. No `gcloud` / TPU auth is needed; this variant runs on H100.
 
 ## Job Submission
 
-Jobs run on **Iris**, one 8×H100 node per run. Two H100 clusters are available:
-`cw-rno2a` and `cw-us-east-02a`. Use the `irun` wrapper from the README (target it
-with `IRIS_CLUSTER=<cluster>`), or submit directly:
+Jobs run on **Iris**, one 8×H100 node per run. Any H100 cluster works — the data cache and
+checkpoints are the same S3 backend everywhere, so cluster choice is just capacity (no
+`--target-cluster`). Use the `irun` wrapper from the README, or submit directly:
 
 ```bash
-uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources \
-  --target-cluster "${IRIS_CLUSTER:-cw-rno2a}" --priority interactive --job-name "<name>-coord" \
+uv run iris --cluster marin job run --no-wait --enable-extra-resources \
+  --priority interactive --job-name "<name>-coord" \
   -e WANDB_API_KEY "$WANDB_API_KEY" -e WANDB_PROJECT marin_moe \
   -- python -m experiments.grug.fast_track.launch --run-id <name> --size <size> [--dense] --version <v> --run
 ```
@@ -128,12 +128,12 @@ before checking status — do not poll in a tight loop.
 
 List your jobs:
 ```bash
-uv run iris --config lib/iris/config/marin.yaml job list | grep "$(whoami)"
+uv run iris --cluster marin job list --prefix "$(whoami)"
 ```
 
 Reconnect to logs:
 ```bash
-uv run iris --config lib/iris/config/marin.yaml job logs -f JOB_ID
+uv run iris --cluster marin job logs -f JOB_ID
 ```
 
 Check runs in wandb (match `<PREFIX>` to the `--run-id` pattern, e.g. `fasttrack-`):
@@ -170,6 +170,6 @@ issue; for baselines, also the README table). Capture:
 - MFU, throughput (`throughput/tokens_per_second`), wall-clock runtime
 
 **Provenance**
-- git commit SHA the run executed at, and a link to `launch.py` on that branch @ that commit
+- git commit SHA the run executed at, and a permalink to `launch.py` pinned at that commit
 - W&B run URL
 - permanent (final) checkpoint S3 path, when checkpoints were saved
