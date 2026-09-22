@@ -32,9 +32,6 @@ _CORE_NAMES = (
     "ray_object_store_available_memory",
     "ray_object_store_used_memory",
     "ray_spill_manager_objects_bytes",
-    "rollout_capacity",
-    "rollout_queue_depth",
-    "rollout_staleness_steps",
     "work_completed",
 )
 
@@ -66,7 +63,6 @@ WITH selected AS (
            json_get(attributes_json, 'phase') AS phase,
            json_get(attributes_json, 'outcome') AS outcome,
            json_get(attributes_json, 'clock_domain') AS clock_domain,
-           json_get(attributes_json, 'queue') AS queue,
            json_get(attributes_json, 'metric_source') AS metric_source,
            json_get(attributes_json, 'source_temporality') AS source_temporality,
            json_get(attributes_json, 'state') AS state,
@@ -80,7 +76,7 @@ WITH selected AS (
 ), aggregates AS (
     SELECT 'aggregate' AS statistic,
        t, name, execution_uid, work_kind, phase, outcome, clock_domain,
-       queue, metric_source, source_temporality, state,
+       metric_source, source_temporality, state,
        MAX(weights_step) AS weights_step,
        SUM(value) AS sum_value,
        COUNT(value) AS sample_count,
@@ -88,8 +84,7 @@ WITH selected AS (
        CAST(NULL AS DOUBLE) AS p50,
        CAST(NULL AS DOUBLE) AS p99
     FROM selected
-    WHERE name <> 'rollout_staleness_steps'
-    GROUP BY 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12
+    GROUP BY 2, 3, 4, 5, 6, 7, 8, 9, 10, 11
 ), phase_percentiles AS (
     SELECT 'percentile' AS statistic,
        t, name,
@@ -98,7 +93,6 @@ WITH selected AS (
        phase,
        CAST(NULL AS VARCHAR) AS outcome,
        clock_domain,
-       CAST(NULL AS VARCHAR) AS queue,
        CAST(NULL AS VARCHAR) AS metric_source,
        CAST(NULL AS VARCHAR) AS source_temporality,
        CAST(NULL AS VARCHAR) AS state,
@@ -113,31 +107,9 @@ WITH selected AS (
       AND clock_domain = 'critical_path'
       AND phase = 'rollout_or_inference_wait'
     GROUP BY 2, 3, 6, 8
-), staleness_percentiles AS (
-    SELECT 'percentile' AS statistic,
-       t, name,
-       CAST(NULL AS VARCHAR) AS execution_uid,
-       CAST(NULL AS VARCHAR) AS work_kind,
-       CAST(NULL AS VARCHAR) AS phase,
-       CAST(NULL AS VARCHAR) AS outcome,
-       CAST(NULL AS VARCHAR) AS clock_domain,
-       CAST(NULL AS VARCHAR) AS queue,
-       CAST(NULL AS VARCHAR) AS metric_source,
-       CAST(NULL AS VARCHAR) AS source_temporality,
-       CAST(NULL AS VARCHAR) AS state,
-       CAST(NULL AS DOUBLE) AS weights_step,
-       SUM(value) AS sum_value,
-       COUNT(value) AS sample_count,
-       MAX(value) AS max_value,
-       approx_percentile_cont(value, 0.5) AS p50,
-       approx_percentile_cont(value, 0.99) AS p99
-    FROM selected
-    WHERE name = 'rollout_staleness_steps'
-    GROUP BY 2, 3
 )
 SELECT * FROM aggregates
 UNION ALL SELECT * FROM phase_percentiles
-UNION ALL SELECT * FROM staleness_percentiles
 ORDER BY t, name, execution_uid
 LIMIT {RL_MAX_CORE_ROWS + 1}
 """.strip()
@@ -242,16 +214,6 @@ WHERE statistic = 'aggregate'
 GROUP BY 1, 2 ORDER BY 1
 """.strip()
         ),
-        "buffer": (
-            """
-SELECT t,
-       SUM(CASE WHEN name = 'rollout_queue_depth' THEN sum_value END)
-           / NULLIF(SUM(CASE WHEN name = 'rollout_queue_depth' THEN sample_count END), 0) AS depth,
-       SUM(CASE WHEN name = 'rollout_capacity' THEN sum_value END)
-           / NULLIF(SUM(CASE WHEN name = 'rollout_capacity' THEN sample_count END), 0) AS capacity
-FROM core WHERE queue = 'rollout_buffer' GROUP BY 1 ORDER BY 1
-""".strip()
-        ),
         "gpu_utilization": "SELECT * FROM gpu ORDER BY t",
         "engine_tokens": (
             f"""
@@ -298,16 +260,6 @@ FROM engine WHERE delta_sum IS NOT NULL GROUP BY 1, 2 ORDER BY 1
             "SELECT t, 'p99 / p50' AS series, p99 / NULLIF(p50, 0) AS value FROM core "
             "WHERE statistic = 'percentile' AND name = 'phase_duration_seconds' "
             "AND clock_domain = 'critical_path' AND phase = 'rollout_or_inference_wait' ORDER BY 1"
-        ),
-        "staleness": (
-            """
-SELECT t, 'p50' AS series, p50 AS value FROM core
-WHERE statistic = 'percentile' AND name = 'rollout_staleness_steps'
-UNION ALL
-SELECT t, 'p99' AS series, p99 AS value FROM core
-WHERE statistic = 'percentile' AND name = 'rollout_staleness_steps'
-ORDER BY 1
-""".strip()
         ),
         "engine_finish": (
             "SELECT t, finished_reason AS series, SUM(delta_sum) AS value FROM engine "
