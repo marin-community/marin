@@ -9,6 +9,7 @@ process without HTTP readiness and waiting once for an ordinary server.
 """
 
 import json
+import logging
 import os
 import socket
 import subprocess
@@ -467,7 +468,10 @@ def test_eager_guard_preserves_vllm_args_and_warns_on_acknowledged_eager(tmp_pat
 
     assert argv[argv.index("--port") + 2 :] == [arg for arg in args if arg != "--i-know-i-am-making-vllm-slow"]
     assert "--i-know-i-am-making-vllm-slow" not in argv
-    assert ("disables torch.compile and CUDA graphs" in caplog.text) is expected_eager
+    assert (
+        any(record.name == vllm_server.__name__ and record.levelno == logging.WARNING for record in caplog.records)
+        is expected_eager
+    )
 
 
 @pytest.mark.parametrize("key", ["enforce_eager", "enf"])
@@ -493,7 +497,9 @@ def test_config_eager_can_be_disabled_by_cli(tmp_path, caplog):
         _wait_until_ready(environment)
 
     assert json.loads(argv_path.read_text())[-len(args) :] == args
-    assert "disables torch.compile and CUDA graphs" not in caplog.text
+    assert not any(
+        record.name == vllm_server.__name__ and record.levelno == logging.WARNING for record in caplog.records
+    )
 
 
 def test_environment_starts_without_waiting_for_http_readiness(tmp_path):
