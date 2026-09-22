@@ -20,6 +20,7 @@ from levanter.grug.attention import (
     reference_attention,
 )
 from levanter.grug.attention._fa4_cute import _segmented_kernel_config, _simple_causal_lower_bounds
+from levanter.grug.attention._fa4_cute_config import SM100_GQA_RATIOS, SM100_HEAD_DIM
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.testing.cpu_devices import run_on_cpu_devices
 
@@ -345,6 +346,27 @@ def test_fa4_wide_attention_rejects_unsupported_hardware(monkeypatch):
         attention(q, k, v, AttentionMask.causal(), implementation="gpu_fa4_cute_wide")
 
 
+@pytest.mark.parametrize(
+    ("arch", "q_heads", "head_dim", "dtype"),
+    [
+        (90, 8, 128, jnp.bfloat16),
+        (103, 8, 128, jnp.bfloat16),
+        (100, 2, 128, jnp.bfloat16),
+        (100, 8, 64, jnp.bfloat16),
+        (100, 8, 128, jnp.float16),
+    ],
+)
+def test_fa4_sm100_attention_rejects_unsupported_layouts(monkeypatch, arch, q_heads, head_dim, dtype):
+    q = jnp.zeros((1, 1, q_heads, head_dim), dtype=dtype)
+    kv = jnp.zeros((1, 1, 1, head_dim), dtype=dtype)
+    monkeypatch.setattr(jax, "default_backend", lambda: "gpu")
+    monkeypatch.setattr(fa4_cute, "gpu_compute_capability", lambda: arch)
+    monkeypatch.setattr(fa4_cute, "fa4_cute_attention_forward", lambda q, *_args, **_kwargs: q)
+
+    with pytest.raises(ValueError, match="gpu_fa4_cute_sm100"):
+        attention(q, kv, kv, AttentionMask.causal(), implementation="gpu_fa4_cute_sm100")
+
+
 def _assert_real_gpu_fa4_cute_matches_reference(
     q,
     k,
@@ -405,6 +427,31 @@ def test_real_gpu_fa4_cute_wide_attention_matches_reference():
     )
 
 
+def test_real_gpu_fa4_cute_sm100_attention_matches_reference():
+    if jax.default_backend() != "gpu":
+        pytest.skip("FA4/CuTe correctness requires a GPU backend.")
+    if fa4_cute.gpu_compute_capability() != 100:
+        pytest.skip("This FA4 backend requires SM100.")
+    pytest.importorskip("cutlass")
+    pytest.importorskip("cutlass.cute")
+    pytest.importorskip("flash_attn.cute.flash_bwd_preprocess")
+    key = jax.random.PRNGKey(7)
+    q_key, k_key, v_key, cotangent_key = jax.random.split(key, 4)
+    q = jax.random.normal(q_key, (1, 128, 4, 128), dtype=jnp.bfloat16)
+    k = jax.random.normal(k_key, (1, 128, 1, 128), dtype=jnp.bfloat16)
+    v = jax.random.normal(v_key, (1, 128, 1, 128), dtype=jnp.bfloat16)
+    cotangent = jax.random.normal(cotangent_key, q.shape, dtype=jnp.bfloat16)
+
+    _assert_real_gpu_fa4_cute_matches_reference(
+        q,
+        k,
+        v,
+        AttentionMask.causal(),
+        cotangent,
+        implementation="gpu_fa4_cute_sm100",
+    )
+
+
 @pytest.mark.parametrize(("q_heads", "kv_heads", "head_dim"), [(4, 1, 64), (2, 2, 64), (4, 1, 128)])
 def test_real_gpu_fa4_cute_attention_matches_reference_for_valid_dynamic_packed_segments(q_heads, kv_heads, head_dim):
     if jax.default_backend() != "gpu":
@@ -450,7 +497,7 @@ def test_real_gpu_fa4_cute_attention_matches_reference_with_leading_padding(slid
     _assert_real_gpu_fa4_cute_matches_reference(q, k, v, mask, cotangent, valid_tokens=valid)
 
 
-@pytest.mark.parametrize("implementation", ["gpu_fa4_cute", "gpu_fa4_cute_wide"])
+@pytest.mark.parametrize("implementation", ["gpu_fa4_cute", "gpu_fa4_cute_wide", "gpu_fa4_cute_sm100"])
 @pytest.mark.parametrize(
     ("context_size", "sequence_axes"),
     [
@@ -462,14 +509,23 @@ def test_real_gpu_fa4_cute_attention_matches_reference_with_leading_padding(slid
         (4, ("data", "context")),
     ],
 )
-@pytest.mark.parametrize(("q_heads", "kv_heads", "head_dim"), [(4, 1, 64), (8, 2, 128), (4, 4, 128)])
+@pytest.mark.parametrize(
+    ("q_heads", "kv_heads", "head_dim"), [(4, 1, 64), (8, 2, 128), (4, 4, 128), (6, 1, 128), (8, 1, 128)]
+)
+@pytest.mark.parametrize("mask_kind", ["causal", "window", "packed"])
 def test_real_gpu_fa4_cute_attention_matches_reference_with_sequence_sharded_queries(
-    q_heads, kv_heads, head_dim, context_size, sequence_axes, implementation
+    q_heads, kv_heads, head_dim, context_size, sequence_axes, implementation, mask_kind
 ):
     if jax.default_backend() != "gpu":
         pytest.skip("FA4/CuTe correctness requires a GPU backend.")
     if implementation == "gpu_fa4_cute_wide" and (head_dim != 128 or fa4_cute.gpu_compute_capability() != 100):
         pytest.skip("Wide tiles require sm100 and head_dim=128.")
+    if implementation == "gpu_fa4_cute_sm100" and (
+        head_dim != SM100_HEAD_DIM
+        or q_heads // kv_heads not in SM100_GQA_RATIOS
+        or fa4_cute.gpu_compute_capability() != 100
+    ):
+        pytest.skip("Native SM100 requires SM100, D128, and a supported GQA ratio.")
     if jax.device_count() < context_size:
         pytest.skip(f"Context-parallel FA4/CuTe needs at least {context_size} devices.")
     pytest.importorskip("cutlass")
@@ -507,8 +563,10 @@ def test_real_gpu_fa4_cute_attention_matches_reference_with_sequence_sharded_que
     k = jax.random.normal(k_key, (batch, seq_len, kv_heads, head_dim), dtype=jnp.bfloat16)
     v = jax.random.normal(v_key, (batch, seq_len, kv_heads, head_dim), dtype=jnp.bfloat16)
     segment_ids = jnp.broadcast_to(jnp.array([[11] * 213 + [12] * 291 + [-1] * 8], dtype=jnp.int32), (batch, seq_len))
-    mask = AttentionMask.causal(sliding_window=129).with_segment_ids(segment_ids)
-    valid = segment_ids >= 0
+    mask = AttentionMask.causal(sliding_window=129 if mask_kind != "causal" else None)
+    if mask_kind == "packed":
+        mask = mask.with_segment_ids(segment_ids)
+    valid = segment_ids >= 0 if mask_kind == "packed" else jnp.ones_like(segment_ids, dtype=jnp.bool_)
     cotangent = jax.random.normal(cotangent_key, q.shape, dtype=jnp.bfloat16)
     cotangent = cotangent * valid[..., None, None].astype(jnp.bfloat16)
 
@@ -595,3 +653,61 @@ def test_real_gpu_fa4_cute_zeroes_padding_tiles_before_reusing_query_storage(sli
     expected_gradients = jax.jit(jax.grad(reference_loss, argnums=(0, 1, 2)))(*short_qkv)
     for actual, expected in zip(gradients, expected_gradients, strict=True):
         np.testing.assert_allclose(actual[:1, :40], expected, atol=7e-2, rtol=7e-2)
+
+
+@pytest.mark.parametrize(("query_heads", "kv_heads"), [(48, 6), (48, 12), (6, 1)])
+@pytest.mark.parametrize(("sequence_length", "sliding_window"), [(257, None), (257, 31), (2305, 2048)])
+@pytest.mark.timeout(300)
+@pytest.mark.parametrize("implementation", ["gpu_fa4_cute", "gpu_fa4_cute_sm100"])
+def test_real_gpu_fa4_cute_sm100_gradients_with_changing_packed_segments(
+    query_heads, kv_heads, sequence_length, sliding_window, implementation
+):
+    if jax.default_backend() != "gpu" or fa4_cute.gpu_compute_capability() != 100:
+        pytest.skip("Native SM100 backward correctness requires an SM100 GPU.")
+    pytest.importorskip("cutlass.cute")
+    pytest.importorskip("flash_attn.cute.flash_bwd_sm100")
+
+    def output_and_gradients(q, k, v, cotangent, ids, *, implementation):
+        mask = AttentionMask.causal(sliding_window=sliding_window).with_segment_ids(ids)
+
+        def loss(q, k, v):
+            output = attention(q, k, v, mask, implementation=implementation)
+            # Reference attention uses a finite softmax sentinel for fully masked
+            # rows. Zero those outputs to match the packed attention contract.
+            if implementation == "reference":
+                output = jnp.where((ids >= 0)[..., None, None], output, 0)
+            return jnp.sum(output.astype(jnp.float32) * cotangent.astype(jnp.float32)), output
+
+        (_, output), gradients = jax.value_and_grad(loss, argnums=(0, 1, 2), has_aux=True)(q, k, v)
+        return (output, *gradients)
+
+    actual_call = jax.jit(lambda *args: output_and_gradients(*args, implementation=implementation))
+    reference_call = jax.jit(lambda *args: output_and_gradients(*args, implementation="reference"))
+    batch = 2 if sequence_length == 257 else 1
+    for iteration in range(3):
+        positions = np.arange(sequence_length)
+        boundaries = np.array([101] if sequence_length > 2048 else [31, 129, 193])
+        ids = np.stack([np.searchsorted(boundaries + iteration + row * 7, positions) for row in range(batch)])
+        ids[:, : 19 + iteration] = -1
+        ids[:, -17:] = -1
+        if batch == 2 and iteration == 2:
+            ids[1, :] = -1
+        query_shape = (batch, sequence_length, query_heads, 128)
+        kv_shape = (batch, sequence_length, kv_heads, 128)
+        keys = jax.random.split(jax.random.key(20260916 + iteration), 4)
+        q, k, v, cotangent = (
+            jax.random.normal(key, shape, dtype=jnp.bfloat16)
+            for key, shape in zip(keys, (query_shape, kv_shape, kv_shape, query_shape), strict=True)
+        )
+        # Reuse each executable with changed masks and nonzero padded cotangents
+        # to expose stale accumulator contents between invocations.
+        args = (q, k, v, cotangent, jnp.asarray(ids, dtype=jnp.int32))
+        actual = actual_call(*args)
+        expected = reference_call(*args)
+        for name, got, want in zip(("out", "dq", "dk", "dv"), actual, expected, strict=True):
+            got = np.asarray(got, dtype=np.float32)
+            want = np.asarray(want, dtype=np.float32)
+            difference = np.abs(got - want)
+            error = f"{name}: max absolute error {difference.max()}, mean {difference.mean()}"
+            np.testing.assert_allclose(got, want, atol=7e-2, rtol=7e-2, err_msg=error)
+            np.testing.assert_array_equal(got[ids < 0], 0, err_msg=name)

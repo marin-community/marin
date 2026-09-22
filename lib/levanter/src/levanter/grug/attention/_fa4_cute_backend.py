@@ -25,11 +25,17 @@ from levanter.cutlass_kernel_cache import cutlass_call
 from levanter.grug.attention._fa4_cute_kernels import (
     flash_attention_backward_postprocess_launcher,
     segmented_flash_attention_backward_launcher,
+    segmented_flash_attention_backward_sm100_launcher,
     segmented_flash_attention_backward_sm90_launcher,
     segmented_flash_attention_backward_sm90_preprocess_launcher,
     segmented_flash_attention_forward_launcher,
 )
-from levanter.grug.attention._fa4_cute_config import Flash4CuteKernelConfig
+from levanter.grug.attention._fa4_cute_config import (
+    SM100_GQA_RATIOS,
+    SM100_HEAD_DIM,
+    Flash4CuteKernelConfig,
+    Flash4CuteSm100BackwardConfig,
+)
 
 
 @dataclass(frozen=True)
@@ -172,6 +178,28 @@ def segmented_flash_attention_backward(
         raise _optional_dependency_error() from exc
 
     qhead_per_kvhead = q.shape[2] // k.shape[2]
+    # Keep the native path within the BF16 D128 GQA shapes validated on GB200.
+    if (
+        q.dtype == jnp.bfloat16
+        and q.shape[-1] == SM100_HEAD_DIM
+        and v.shape[-1] == SM100_HEAD_DIM
+        and qhead_per_kvhead in SM100_GQA_RATIOS
+        and kernel_config.sm100_backward is not None
+    ):
+        return _segmented_flash_attention_backward_sm100(
+            q,
+            k,
+            v,
+            out,
+            dout,
+            lse,
+            lower_bounds,
+            valid,
+            softmax_scale=softmax_scale,
+            config=kernel_config.sm100_backward,
+            q_offset=q_offset,
+        )
+
     if kernel_config.sm90_backward is not None and qhead_per_kvhead > 1 and q.shape[-1] == 128:
         # Equal lengths imply offset zero for a query slice contained in the key sequence.
         if q.shape[1] != k.shape[1]:
@@ -235,6 +263,70 @@ def segmented_flash_attention_backward(
     )
     dq, dk, dv, *_scratch = call(q, k, v, out, dout, lse, lower_bounds, valid.astype(jnp.int32), q_offset)
     return dq, dk, dv
+
+
+def _segmented_flash_attention_backward_sm100(
+    q: jax.Array,
+    k: jax.Array,
+    v: jax.Array,
+    out: jax.Array,
+    dout: jax.Array,
+    lse: jax.Array,
+    lower_bounds: jax.Array,
+    valid: jax.Array,
+    *,
+    softmax_scale: float,
+    config: Flash4CuteSm100BackwardConfig,
+    q_offset: jax.Array,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """Match the segmented backend contract using native one-CTA SM100."""
+    ratio = q.shape[2] // k.shape[2]
+    modules = _import_cutlass_cute()
+    tile = config.tile
+    sparse = _packed_segment_backward_block_sparse_indices_with_full(
+        lower_bounds,
+        valid,
+        key_sequence_length=k.shape[1],
+        q_offset=q_offset,
+        tile_m=tile[0],
+        tile_n=tile[1],
+    )
+    dpsum, lse_log2 = _native_backward_preprocess(modules, q, out, dout, lse, tile=tile, softmax_scale=softmax_scale)
+    accum_inputs, accum_outputs = _cutlass_attention_backward_sm90_accum_specs(modules, vector_elems=8)
+    backward = cutlass_call(
+        segmented_flash_attention_backward_sm100_launcher(
+            modules, head_dim=q.shape[-1], head_dim_v=v.shape[-1], qhead_per_kvhead=ratio, config=config
+        ),
+        output_shape_dtype=_cutlass_attention_backward_sm90_backward_output_shapes(q, k, v, tile),
+        input_spec=accum_inputs,
+        output_spec=accum_outputs,
+        use_static_tensors=True,
+        softmax_scale=softmax_scale,
+    )
+    accumulators = backward(
+        q,
+        k,
+        v,
+        dout,
+        lse_log2,
+        dpsum,
+        lower_bounds,
+        valid.astype(jnp.int32),
+        q_offset,
+        sparse.partial_block_cnt,
+        sparse.partial_block_idx,
+        sparse.full_block_cnt,
+        sparse.full_block_idx,
+    )
+    return _native_backward_gradients(
+        modules,
+        (q, k, v),
+        accumulators,
+        tile_rows=(tile[0], tile[1], tile[1]),
+        arch=100,
+        num_threads=config.postprocess_threads,
+        softmax_scale=softmax_scale,
+    )
 
 
 def segmented_flash_attention_backward_sm90_native(

@@ -15,7 +15,13 @@ from jaxtyping import Array, Bool, Float, Int
 from levanter.cutlass_kernel_cache import gpu_compute_capability
 from levanter.grug.attention._core import AttentionMask
 from levanter.grug.attention._fa4_cute_backend import fa4_cute_attention_forward
-from levanter.grug.attention._fa4_cute_config import Flash4CuteKernelConfig, flash4_cute_kernel_config
+from levanter.grug.attention._fa4_cute_config import (
+    SM100_GQA_RATIOS,
+    SM100_HEAD_DIM,
+    Flash4CuteKernelConfig,
+    flash4_cute_kernel_config,
+    sm100_flash4_cute_kernel_config,
+)
 from levanter.sharding import partitioning_axes, partition_spec_of
 
 
@@ -376,6 +382,30 @@ def gpu_fa4_cute_wide_attention(
     return _gpu_fa4_cute_attention(q, k, v, mask, kernel_config=_wide_segmented_kernel_config(q.shape[-1]))
 
 
+def gpu_fa4_cute_sm100_attention(
+    q: Float[Array, "B Q Hq D"],
+    k: Float[Array, "B K Hkv D"],
+    v: Float[Array, "B K Hkv D"],
+    mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+) -> Float[Array, "B Q Hq D"]:
+    """Run the 128x64 port forward and native SM100 one-block backward for BF16 D128 GQA.
+
+    Select with ``implementation="gpu_fa4_cute_sm100"``. Supports GQA ratios
+    4, 6, and 8 and the same packed causal/window masks as ``gpu_fa4_cute``.
+    Use ``gpu_fa4_cute`` on Hopper or for other supported head layouts.
+    """
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("gpu_fa4_cute_sm100_attention requires the JAX GPU backend.")
+    arch = gpu_compute_capability()
+    _validate_head_layout(q, k, backend_name="gpu_fa4_cute_sm100")
+    if arch != 100 or q.dtype != jnp.bfloat16 or q.shape[-1] != SM100_HEAD_DIM or v.shape[-1] != SM100_HEAD_DIM:
+        raise ValueError(f"gpu_fa4_cute_sm100 requires SM100 with BF16 and D == Dv == {SM100_HEAD_DIM}.")
+    if q.shape[2] // k.shape[2] not in SM100_GQA_RATIOS:
+        raise ValueError(f"gpu_fa4_cute_sm100 requires a GQA ratio in {SM100_GQA_RATIOS}.")
+    config = sm100_flash4_cute_kernel_config()
+    return _gpu_fa4_cute_attention(q, k, v, mask, kernel_config=config)
+
+
 def fa4_cute_segment_bounds(
     mask: AttentionMask,
     *,
@@ -421,4 +451,5 @@ def fa4_cute_segment_bounds(
 __all__ = [
     "fa4_cute_segment_bounds",
     "gpu_fa4_cute_attention",
+    "gpu_fa4_cute_sm100_attention",
 ]

@@ -56,8 +56,8 @@ Nontrivial differences from upstream FA4/CuTe:
   softmax exponentiation.
 - ``q_offset`` (context parallelism) gives the global position of local query 0, so a
   sequence-sharded Q block keeps the causal frontier of its own rows.
-- The backward launcher reuses upstream preprocess/postprocess, but the main
-  backward kernel is the segmented port in ``_fa4_cute_segmented_bwd``.
+- Backward uses native upstream SM90/SM100 kernels for supported GQA shapes
+  and the segmented port in ``_fa4_cute_segmented_bwd`` for other configurations.
 """
 
 import importlib
@@ -67,7 +67,10 @@ from types import SimpleNamespace
 from typing import Any, Callable
 
 from levanter.cutlass_kernel_cache import cute_launcher_factory
-from levanter.grug.attention._fa4_cute_config import Flash4CuteSm90BackwardConfig
+from levanter.grug.attention._fa4_cute_config import (
+    Flash4CuteSm100BackwardConfig,
+    Flash4CuteSm90BackwardConfig,
+)
 
 
 @dataclass(frozen=True)
@@ -1195,6 +1198,21 @@ class _NativeSegmentedBackwardSupport:
     as_gmem_tensor: Any
 
 
+def _native_broadcast_heads(modules: Any) -> Any:
+    """Share sparse metadata across heads without materializing copies."""
+    deps = _import_cute_dependencies(modules)
+    cutlass, cute = deps.cutlass, deps.cute
+
+    @cute.jit
+    def _broadcast_heads(tensor: cute.Tensor, heads: cutlass.Constexpr) -> cute.Tensor:
+        # Each head reads the same packed mask; keep the physical head dimension at one.
+        shape = (tensor.shape[0], heads, *tensor.shape[2:])
+        stride = (tensor.stride[0], 0, *tensor.stride[2:])
+        return cute.make_tensor(tensor.iterator, cute.make_layout(shape, stride=stride))
+
+    return _broadcast_heads
+
+
 def _native_segment_mask_mod(modules: Any) -> Any:
     """Build the packed causal mask used by native FA4 backward."""
     deps = _import_cute_dependencies(modules)
@@ -1419,6 +1437,107 @@ def segmented_flash_attention_backward_sm90_launcher(
             )
 
     return _launch_segmented_flash_attention_backward_sm90
+
+
+def _validate_sm100_backward_config(config: Flash4CuteSm100BackwardConfig) -> None:
+    if config.tile != (128, 128):
+        # FA4 b28 fails CuTe copy-layout verification for the 128x64 packed path.
+        raise NotImplementedError("Packed SM100 backward currently supports 128x128 tiles.")
+
+
+@cute_launcher_factory
+def segmented_flash_attention_backward_sm100_launcher(
+    modules: Any, *, head_dim: int, head_dim_v: int, qhead_per_kvhead: int, config: Flash4CuteSm100BackwardConfig
+) -> Any:
+    """Build the native SM100 packed backward launcher with one CTA per cluster."""
+    _validate_sm100_backward_config(config)
+    deps = _import_cute_dependencies(modules)
+    cutlass, cute, cuda = deps.cutlass, deps.cute, deps.cuda
+    native_module = importlib.import_module("flash_attn.cute.flash_bwd_sm100")
+    sparsity_module = importlib.import_module("flash_attn.cute.block_sparsity")
+    utils_module = importlib.import_module("flash_attn.cute.utils")
+    FlashAttentionBackwardSm100 = native_module.FlashAttentionBackwardSm100
+    BlockSparseTensors = sparsity_module.BlockSparseTensors
+    _patch_jax_array_list_tvm_ffi_converter()
+    AuxData = utils_module.AuxData
+
+    support = _native_segmented_backward_support(modules, num_threads=config.zero_fill_threads)
+    _grug_segment_mask_mod = support.mask_mod
+    zero_fill = support.zero_fill
+    _as_gmem_tensor = support.as_gmem_tensor
+
+    backward = FlashAttentionBackwardSm100(
+        head_dim,
+        head_dim_v,
+        is_causal=False,
+        is_local=False,
+        qhead_per_kvhead=qhead_per_kvhead,
+        tile_m=config.tile[0],
+        tile_n=config.tile[1],
+        cluster_size=1,
+        use_2cta_instrs=False,
+        deterministic=False,
+        mask_mod=_grug_segment_mask_mod,
+        has_aux_tensors=True,
+        kv_subtile_factor=1,
+    )
+
+    _broadcast_heads = _native_broadcast_heads(modules)
+
+    @cute.jit
+    def _launch_native_sm100(
+        stream: cuda.CUstream,
+        q: cute.Tensor,
+        k: cute.Tensor,
+        v: cute.Tensor,
+        dout: cute.Tensor,
+        lse_log2: cute.Tensor,
+        dpsum: cute.Tensor,
+        lower_bounds: cute.Tensor,
+        valid: cute.Tensor,
+        q_offset: cute.Tensor,
+        mask_block_cnt: cute.Tensor,
+        mask_block_idx: cute.Tensor,
+        full_block_cnt: cute.Tensor,
+        full_block_idx: cute.Tensor,
+        dq_accum: cute.Tensor,
+        dk_accum: cute.Tensor,
+        dv_accum: cute.Tensor,
+        *,
+        softmax_scale: cutlass.Float32,
+    ):
+        blocksparse_tensors = BlockSparseTensors(
+            _broadcast_heads(mask_block_cnt, q.shape[2]),
+            _broadcast_heads(mask_block_idx, q.shape[2]),
+            _broadcast_heads(full_block_cnt, q.shape[2]),
+            _broadcast_heads(full_block_idx, q.shape[2]),
+        )
+        zero_fill(dq_accum, stream)
+        if cutlass.const_expr(qhead_per_kvhead > 1):
+            zero_fill(dk_accum, stream)
+            zero_fill(dv_accum, stream)
+        lse_log2_gmem = _as_gmem_tensor(lse_log2)
+        dpsum_gmem = _as_gmem_tensor(dpsum)
+        dq_accum_gmem = _as_gmem_tensor(dq_accum)
+        dk_accum_gmem = _as_gmem_tensor(dk_accum)
+        dv_accum_gmem = _as_gmem_tensor(dv_accum)
+        backward(
+            q,
+            k,
+            v,
+            dout,
+            lse_log2_gmem,
+            dpsum_gmem,
+            dq_accum_gmem,
+            dk_accum_gmem,
+            dv_accum_gmem,
+            softmax_scale,
+            aux_data=AuxData(tensors=(lower_bounds, valid, q_offset)),
+            blocksparse_tensors=blocksparse_tensors,
+            stream=stream,
+        )
+
+    return _launch_native_sm100
 
 
 @cute_launcher_factory
