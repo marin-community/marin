@@ -152,6 +152,7 @@ def test_remote_inference_uses_controller_minted_federated_capability_url(monkey
         worker_resources=ResourceConfig.with_gpu("H100", count=8, replicas=pipeline_size),
         worker_environment=create_environment(docker_image="test"),
         serving_geometry=ServingGeometry(8, 1, pipeline_size, 8),
+        max_retries_failure=2,
     )
 
     with remote_inference(
@@ -171,6 +172,8 @@ def test_remote_inference_uses_controller_minted_federated_capability_url(monkey
 
     (request,) = submitted
     assert request.replicas == pipeline_size
+    assert request.max_retries_failure == 2
+    assert request.max_task_failures == 2
     assert session.effective_serving is not None
     assert session.effective_serving.task_count == pipeline_size
     assert session.effective_serving.max_model_len == 4096
@@ -612,6 +615,8 @@ def test_remote_inference_automatically_brokers_multiple_instances(monkeypatch) 
     assert events[-1] == ("unregister", "endpoint-id")
     assert len(client.submissions) == 2
     for worker_request in client.submissions:
+        assert worker_request.max_retries_failure == 1
+        assert worker_request.max_task_failures == 1
         assert worker_request.environment.extras == ["tpu"]
         assert worker_request.environment.env_vars["VLLM_ENABLE_V1_MULTIPROCESSING"] == "0"
         assert worker_request.resources.regions == ["us-east5"]
