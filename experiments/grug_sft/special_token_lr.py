@@ -154,16 +154,13 @@ def _sft_components(
     return components, weights
 
 
-def data_config(steps: int, stores_manifest: str) -> tuple[LmDataConfig, int]:
+def mixture_data_config(stores_manifest: str) -> LmDataConfig:
+    """Build the fixed SFT and replay mixture without imposing a trainer batch size."""
     raw = json.loads(StoragePath(stores_manifest).read_text())
     if not isinstance(raw, dict):
         raise ValueError("SFT stores manifest must be an object")
     stores = {name: _store_info(name, record) for name, record in raw.items()}
     plan = json.loads(MIX_PATH.read_text())
-    if steps != plan["steps"]:
-        raise ValueError(f"Step count must match the fixed {plan['steps']}-step allocation")
-    if plan["batch_size"] != BATCH or plan["context_length"] != CONTEXT:
-        raise ValueError("SFT allocation was prepared for a different batch size or context length")
     allocations = {name: int(tokens) for name, tokens in plan["allocations_tokens"].items()}
     if any(tokens <= 0 for tokens in allocations.values()):
         raise ValueError("Every selected SFT source must have a positive token allocation")
@@ -172,9 +169,6 @@ def data_config(steps: int, stores_manifest: str) -> tuple[LmDataConfig, int]:
     sft_fraction = float(plan["sft_fraction"])
     if not 0.0 < sft_fraction < 1.0:
         raise ValueError("SFT fraction must be between zero and one")
-    expected_sft_tokens = int(steps * BATCH * CONTEXT * sft_fraction)
-    if plan["sft_token_budget"] != expected_sft_tokens:
-        raise ValueError(f"SFT allocation has {plan['sft_token_budget']} tokens, expected {expected_sft_tokens}")
     components, weights = _sft_components(stores, allocations, sft_fraction=sft_fraction)
 
     replay = json.loads(Path(__file__).with_name("replay_skew8.json").read_text())
@@ -205,31 +199,41 @@ def data_config(steps: int, stores_manifest: str) -> tuple[LmDataConfig, int]:
         weights[PRETRAIN_COMPONENT_PREFIX + "pooled"] = replay_tail_weight
     assert math.isclose(sum(weights.values()), 1.0)
     assert math.isclose(
-        sum(v for k, v in weights.items() if k.startswith(PRETRAIN_COMPONENT_PREFIX)), 1.0 - sft_fraction
+        sum(value for name, value in weights.items() if name.startswith(PRETRAIN_COMPONENT_PREFIX)),
+        1.0 - sft_fraction,
     )
     if any(int(weight * MIXTURE_BLOCK_SIZE) == 0 for weight in weights.values()):
         raise ValueError("Mixture contains a component that rounds to zero")
     logger.info(
-        "%d-step mixture: %d SFT sources, %d top-level SFT components, %.3fB allocated SFT tokens",
-        steps,
+        "SFT mixture: %d sources, %d top-level SFT components, %.3fB allocated SFT tokens",
         len(allocations),
         sum(name.startswith("sft/") for name in components),
         sum(allocations.values()) / 1e9,
     )
-    return (
-        LmDataConfig(
-            tokenizer=TOKENIZER,
-            cache_dir=None,
-            components=components,
-            train_weights=weights,
-            auto_build_caches=False,
-            shuffle=True,
-            block_cross_document_attention=True,
-            mixture_block_size=MIXTURE_BLOCK_SIZE,
-            stop_strategy=StopStrategy.RESTART_STRATEGY,
-        ),
-        steps,
+    return LmDataConfig(
+        tokenizer=TOKENIZER,
+        cache_dir=None,
+        components=components,
+        train_weights=weights,
+        auto_build_caches=False,
+        shuffle=True,
+        block_cross_document_attention=True,
+        mixture_block_size=MIXTURE_BLOCK_SIZE,
+        stop_strategy=StopStrategy.RESTART_STRATEGY,
     )
+
+
+def data_config(steps: int, stores_manifest: str) -> tuple[LmDataConfig, int]:
+    config = mixture_data_config(stores_manifest)
+    plan = json.loads(MIX_PATH.read_text())
+    if steps != plan["steps"]:
+        raise ValueError(f"Step count must match the fixed {plan['steps']}-step allocation")
+    if plan["batch_size"] != BATCH or plan["context_length"] != CONTEXT:
+        raise ValueError("SFT allocation was prepared for a different batch size or context length")
+    expected_sft_tokens = int(steps * BATCH * CONTEXT * float(plan["sft_fraction"]))
+    if plan["sft_token_budget"] != expected_sft_tokens:
+        raise ValueError(f"SFT allocation has {plan['sft_token_budget']} tokens, expected {expected_sft_tokens}")
+    return config, steps
 
 
 def train(steps: int, stores_manifest: str) -> None:

@@ -32,6 +32,7 @@ from jax.tree_util import register_dataclass
 from jaxtyping import PRNGKeyArray
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
+from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 from levanter.checkpoint_manifest import read_manifest
 from levanter.data.dataset import AsyncDataset
 from levanter.data.loader import DataLoader
@@ -63,6 +64,7 @@ from levanter.utils.mesh import MeshConfig
 from experiments.grug.checkpointing import (
     LEGACY_STATE_KEY,
     MASTER_PARAMS_KEY,
+    init_weights_only_from_checkpoint,
     restore_grug_state_from_checkpoint,
 )
 from experiments.grug.dispatch import dispatch_grug_training_run
@@ -134,6 +136,13 @@ class TrainingDataMode(StrEnum):
 
     MIXTURE = "mixture"
     SYNTHETIC = "synthetic"
+
+
+class WeightInitialization(StrEnum):
+    """External checkpoint layouts supported for fresh optimizer initialization."""
+
+    NATIVE = "native"
+    LEGACY_SINGLE_SHARED_EXPERT = "legacy_single_shared_expert"
 
 
 def restore_template_from(state):
@@ -298,6 +307,12 @@ class GrugTrainerConfig:
     # restores from the latest committed checkpoint, so without a writer an interrupted run
     # restarts at step 0.
     save_checkpoints: bool = False
+    weight_initialization: WeightInitialization | None = None
+    """Load model weights from ``TrainerConfig.initialize_from`` after own-run resume."""
+    reinitialize_token_ids: tuple[int, ...] = ()
+    reinitialize_token_anchors: tuple[tuple[int, ...], ...] = ()
+    special_token_lr_ids: tuple[int, ...] = ()
+    special_token_lr_multiplier: float = 1.0
 
     # Grug builds its own compact (replica_dcn, data, context, expert, model) mesh instead of using
     # the Trainer's logical axis mapping; `data` absorbs whatever these leave free.
@@ -315,6 +330,10 @@ class GrugTrainerConfig:
     def __post_init__(self):
         if self.gc_interval is not None and self.gc_interval <= 0:
             raise ValueError("GC interval must be positive")
+        if self.special_token_lr_multiplier <= 0:
+            raise ValueError("Special-token LR multiplier must be positive")
+        if self.reinitialize_token_ids and len(self.reinitialize_token_ids) != len(self.reinitialize_token_anchors):
+            raise ValueError("Each reinitialized token must have one anchor")
 
 
 def grug_trainer_mesh_config(context_axis_size: int) -> MeshConfig:
@@ -747,6 +766,70 @@ def initial_state(
     )
 
 
+def initialize_legacy_single_shared_expert_weights(
+    state: GrugTrainState,
+    checkpoint_path: str,
+    *,
+    mesh: Mesh,
+) -> GrugTrainState:
+    """Load a pre tuple shared-expert checkpoint into the current model layout."""
+    state = init_weights_only_from_checkpoint(
+        state,
+        checkpoint_path,
+        mesh=mesh,
+        allow_partial=True,
+        additional_weight_fields=("pending_qb_betas",),
+    )
+    concrete_path = latest_checkpoint_path(checkpoint_path)
+    shared = state.params.stacked_blocks.stacked.shared
+    if shared is None or len(shared) != 1:
+        raise ValueError("Legacy single shared-expert initialization requires exactly one shared expert")
+    exemplar = {"params": {"stacked_blocks": {"stacked": {"shared": shared[0]}}}}
+    loaded = load_checkpoint(exemplar, concrete_path, mesh=mesh, allow_partial=True)
+    legacy_shared = loaded["params"]["stacked_blocks"]["stacked"]["shared"]
+    params = eqx.tree_at(lambda model: model.stacked_blocks.stacked.shared[0], state.params, legacy_shared)
+    ema_params = state.ema_params
+    if ema_params is not None:
+        ema_params = eqx.tree_at(lambda model: model.stacked_blocks.stacked.shared[0], ema_params, legacy_shared)
+    return dataclasses.replace(state, params=params, ema_params=ema_params)
+
+
+def reinitialize_token_rows(
+    state: GrugTrainState,
+    token_ids: tuple[int, ...],
+    anchors: tuple[tuple[int, ...], ...],
+) -> GrugTrainState:
+    """Initialize selected output rows from ordinary-token anchors."""
+    if not token_ids or len(set(token_ids)) != len(token_ids):
+        raise ValueError("Token IDs must be nonempty and unique")
+    if min(token_ids) < 0 or max(token_ids) >= state.params.token_embed.shape[0]:
+        raise ValueError("Token ID is outside the vocabulary")
+    if len(anchors) != len(token_ids) or any(len(row) != 1 for row in anchors):
+        raise ValueError("Each reset token needs exactly one source token")
+    if any(
+        index < 0 or index >= state.params.token_embed.shape[0] or index in token_ids for row in anchors for index in row
+    ):
+        raise ValueError("Anchor IDs must refer to preserved vocabulary rows")
+
+    ids = jnp.asarray(token_ids)
+    sources = jnp.asarray([row[0] for row in anchors])
+
+    def reseed(matrix):
+        values = matrix.at[sources].get(out_sharding=P(None, jax.typeof(matrix).sharding.spec[1]))
+        return matrix.at[ids].set(values, out_sharding=jax.typeof(matrix).sharding)
+
+    @eqx.filter_jit
+    def reset(current_state):
+        params = eqx.tree_at(
+            lambda model: model.output_proj,
+            current_state.params,
+            reseed(current_state.params.output_proj.T).T,
+        )
+        return dataclasses.replace(current_state, params=params)
+
+    return reset(state)
+
+
 def _drop_metrics(
     dropped_assignments: jax.Array,
     sender_dropped_assignments: jax.Array,
@@ -847,6 +930,8 @@ def _make_train_step(
     watch_config: WatchConfig | None = None,
     offload_opt_state: bool = False,
     master_param_mode: MasterParamMode = MasterParamMode.DEVICE,
+    special_token_lr_ids: tuple[int, ...] = (),
+    special_token_lr_multiplier: float = 1.0,
 ):
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
@@ -857,6 +942,17 @@ def _make_train_step(
             watch_targets = tuple(watch_config.watch_targets)
     else:
         watch_targets = ()
+
+    def scale_special_token_updates(updates):
+        if not special_token_lr_ids:
+            return updates
+        scales = jnp.ones(updates.token_embed.shape[0], dtype=updates.token_embed.dtype)
+        scales = scales.at[jnp.asarray(special_token_lr_ids)].set(special_token_lr_multiplier)
+        return eqx.tree_at(
+            lambda model: (model.token_embed, model.output_proj),
+            updates,
+            (updates.token_embed * scales[:, None], updates.output_proj * scales[None, :]),
+        )
 
     @functools.partial(jax.jit, donate_argnums=(0,))
     def train_step(state: GrugTrainState, batch):
@@ -878,11 +974,13 @@ def _make_train_step(
             master_params_in = _apply_qb_betas(master_params_in, state.pending_qb_betas)
             master_grads = _FP32_POLICY.cast_to_param(grads)
             updates, opt_state = optimizer.update(master_grads, opt_state_in, master_params_in)
+            updates = scale_special_token_updates(updates)
             master_params = optax.apply_updates(master_params_in, updates)
             params = mp.cast_to_param(master_params)
             master_params = _tree_to_memory_kind(master_params, "pinned_host")
         else:
             updates, opt_state = optimizer.update(grads, opt_state_in, qb_params)
+            updates = scale_special_token_updates(updates)
             params = optax.apply_updates(qb_params, updates)
             master_params = None
 
@@ -964,6 +1062,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         watch_config=inline_watch_config,
         offload_opt_state=config.trainer.offload_opt_state,
         master_param_mode=config.trainer.master_param_mode,
+        special_token_lr_ids=config.trainer.special_token_lr_ids,
+        special_token_lr_multiplier=config.trainer.special_token_lr_multiplier,
     )
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
@@ -1022,6 +1122,44 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             state = take_master_as_params(state)
         if released_initial_state and any(isinstance(leaf, jax.ShapeDtypeStruct) for leaf in jax.tree.leaves(state)):
             state = _init_state(model_key)
+        initialization = config.trainer.weight_initialization
+        if initialization is not None:
+            if trainer.initialize_from is None:
+                raise ValueError("Weight initialization requires TrainerConfig.initialize_from")
+            if config.trainer.master_param_mode != MasterParamMode.DEVICE:
+                raise ValueError("External weight initialization currently requires device parameters")
+            if int(state.step) == 0:
+                if initialization == WeightInitialization.NATIVE:
+                    state = init_weights_only_from_checkpoint(
+                        state,
+                        trainer.initialize_from,
+                        mesh=mesh,
+                        allow_partial=False,
+                        additional_weight_fields=("pending_qb_betas",),
+                    )
+                elif initialization == WeightInitialization.LEGACY_SINGLE_SHARED_EXPERT:
+                    state = initialize_legacy_single_shared_expert_weights(
+                        state,
+                        trainer.initialize_from,
+                        mesh=mesh,
+                    )
+                else:
+                    raise ValueError(f"Unsupported weight initialization: {initialization}")
+                params = trainer.mp.cast_to_param(state.params)
+                ema_params = None if state.ema_params is None else trainer.mp.cast_to_param(state.ema_params)
+                state = dataclasses.replace(state, params=params, ema_params=ema_params)
+                if config.trainer.reinitialize_token_ids:
+                    state = reinitialize_token_rows(
+                        state,
+                        config.trainer.reinitialize_token_ids,
+                        config.trainer.reinitialize_token_anchors,
+                    )
+                    logger.info(
+                        "Reinitialized %d LM-head special-token rows",
+                        len(config.trainer.reinitialize_token_ids),
+                    )
+        elif config.trainer.reinitialize_token_ids:
+            raise ValueError("Token reinitialization requires external weight initialization")
         dump_grug_state_sharding_run_artifact(
             state,
             log_dir=trainer.log_dir,
@@ -1352,6 +1490,9 @@ __all__ = [
     "GrugTrainState",
     "GrugTrainerConfig",
     "MasterParamMode",
+    "WeightInitialization",
     "initial_state",
+    "initialize_legacy_single_shared_expert_weights",
+    "reinitialize_token_rows",
     "run_grug",
 ]
