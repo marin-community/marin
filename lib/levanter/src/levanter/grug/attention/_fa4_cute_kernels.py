@@ -1207,15 +1207,7 @@ def segmented_flash_attention_forward_sm100_launcher(
         has_aux_tensors=True,
     )
 
-    @cute.jit
-    def _broadcast_heads(tensor: cute.Tensor, heads: cutlass.Constexpr) -> cute.Tensor:
-        return cute.make_tensor(
-            tensor.iterator,
-            cute.make_layout(
-                (tensor.shape[0], heads, *tensor.shape[2:]),
-                stride=(tensor.stride[0], 0, *tensor.stride[2:]),
-            ),
-        )
+    _broadcast_heads = _native_broadcast_heads(modules)
 
     @cute.jit
     def _launch(
@@ -1264,6 +1256,21 @@ class _NativeSegmentedBackwardSupport:
     mask_mod: Any
     zero_fill: Any
     as_gmem_tensor: Any
+
+
+def _native_broadcast_heads(modules: Any) -> Any:
+    """Share sparse metadata across heads without materializing copies."""
+    deps = _import_cute_dependencies(modules)
+    cutlass, cute = deps.cutlass, deps.cute
+
+    @cute.jit
+    def _broadcast_heads(tensor: cute.Tensor, heads: cutlass.Constexpr) -> cute.Tensor:
+        # Each head reads the same packed mask; keep the physical head dimension at one.
+        shape = (tensor.shape[0], heads, *tensor.shape[2:])
+        stride = (tensor.stride[0], 0, *tensor.stride[2:])
+        return cute.make_tensor(tensor.iterator, cute.make_layout(shape, stride=stride))
+
+    return _broadcast_heads
 
 
 def _native_segment_mask_mod(modules: Any) -> Any:
@@ -1523,12 +1530,7 @@ def segmented_flash_attention_backward_sm100_launcher(
         has_aux_tensors=True,
     )
 
-    @cute.jit
-    def _broadcast_heads(tensor: cute.Tensor, heads: cutlass.Constexpr) -> cute.Tensor:
-        # Each head reads the same packed mask; keep the physical head dimension at one.
-        shape = (tensor.shape[0], heads, *tensor.shape[2:])
-        stride = (tensor.stride[0], 0, *tensor.stride[2:])
-        return cute.make_tensor(tensor.iterator, cute.make_layout(shape, stride=stride))
+    _broadcast_heads = _native_broadcast_heads(modules)
 
     @cute.jit
     def _launch_native_sm100(
