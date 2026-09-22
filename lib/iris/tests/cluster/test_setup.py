@@ -7,6 +7,7 @@ import os
 import subprocess
 
 import pytest
+from iris.cluster.runtime.env import render_setup_steps
 from iris.cluster.setup_scripts import default_setup_script
 from iris.cluster.types import EnvironmentSpec
 
@@ -70,7 +71,7 @@ package = false
 
 
 @pytest.mark.parametrize("shared_cache_fails", [False, True])
-def test_default_setup_uses_local_cache_only_after_shared_cache_failure(tmp_path, shared_cache_fails):
+def test_setup_steps_switch_uv_installs_to_local_cache_after_shared_failure(tmp_path, shared_cache_fails):
     workdir = tmp_path / "workdir"
     workdir.mkdir()
     (workdir / "pyproject.toml").write_text("[tool.uv]\npackage = false\n")
@@ -81,7 +82,7 @@ def test_default_setup_uses_local_cache_only_after_shared_cache_failure(tmp_path
         """\
 #!/bin/sh
 set -e
-if [ "$UV_CACHE_DIR" = "$SHARED_UV_CACHE" ] && [ "$SHARED_CACHE_FAILS" = "1" ]; then
+if [ "$UV_CACHE_DIR" = "$SHARED_UV_CACHE" ] && [ "$SHARED_CACHE_FAILS" = "1" ] && [ "$1 $2" = "pip install" ]; then
   exit 1
 fi
 mkdir -p "$UV_CACHE_DIR/wheels" "$IRIS_VENV"
@@ -103,8 +104,14 @@ ln -sf "$UV_CACHE_DIR/wheels/package.whl" "$IRIS_VENV/package.whl"
         "UV_PROJECT_ENVIRONMENT": str(venv),
     }
 
+    setup = "\n".join(
+        [
+            "set -e",
+            *render_setup_steps(["uv pip install package", default_setup_script(python_version="3.12")]),
+        ]
+    )
     subprocess.run(
-        ["bash", "-c", default_setup_script(python_version="3.12")],
+        ["bash", "-c", setup],
         env=env,
         capture_output=True,
         text=True,
