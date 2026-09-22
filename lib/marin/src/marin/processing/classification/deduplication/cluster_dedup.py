@@ -1,10 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Find duplicates within one materialized candidate cluster.
+"""Reproduce the hero duplicate rule from PR 8405, run v11-c075-restored.
 
 The solver processes documents in descending character count. Input order
-determines the order for equal lengths. A surviving representative must meet the
+resolves equal lengths in that processing order. A surviving representative must meet the
 directional word n-gram containment threshold to remove a member.
 
 Small clusters compare each member with earlier survivors. Large clusters use
@@ -13,10 +13,13 @@ limits can miss duplicates within a cluster. The materializer can also split
 large components with a MinHash key, which can separate containment pairs.
 The production index includes member-only probes and applies its candidate cap
 before it excludes removed documents. These limits are part of its output rule.
+Common postings remain eligible when every posting exceeds the limit. Indexed
+candidate ties use NumPy selection order, which can change across NumPy versions.
 """
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Literal
 
 import dupekit
 import numpy as np
@@ -30,6 +33,7 @@ class ClusterDedupParams(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
+    rule_version: Literal["containment_ngram3_v2"] = "containment_ngram3_v2"
     ngram_size: int = Field(default=3, ge=1)
     minimum_containment: float = Field(default=0.75, ge=0, le=1)
     """Minimum fraction of member n-grams that a representative must contain."""
@@ -41,20 +45,14 @@ class ClusterDedupParams(BaseModel):
     """How many of a member's rarest n-grams probe the inverted index."""
 
     maximum_posting_length: int = Field(default=512, ge=1)
-    """Skip longer postings when at least one posting meets this limit."""
+    """Preferred maximum posting size. If all exceed it, use all postings."""
 
     maximum_candidates: int = Field(default=32, ge=1)
     """Candidate limit before the solver excludes removed representatives."""
 
 
 @dataclass(frozen=True)
-class ClusterDocument:
-    id: str
-    text: str
-
-
-@dataclass(frozen=True)
-class PreparedDocument:
+class _PreparedDocument:
     index: int
     chars: int
     ngrams: np.ndarray
@@ -91,23 +89,23 @@ def ngram_hashes(text: str, ngram_size: int) -> np.ndarray:
     return np.unique(np.asarray(dupekit.hash_xxh3_64_batch(shingles), dtype=np.uint64))
 
 
-def prepare(documents: Sequence[ClusterDocument], params: ClusterDedupParams) -> list[PreparedDocument]:
+def _prepare(documents: Sequence[str], params: ClusterDedupParams) -> list[_PreparedDocument]:
     prepared = []
     for index, document in enumerate(documents):
         prepared.append(
-            PreparedDocument(
+            _PreparedDocument(
                 index=index,
-                chars=len(document.text),
-                ngrams=ngram_hashes(document.text, params.ngram_size),
-                text=document.text,
+                chars=len(document),
+                ngrams=ngram_hashes(document, params.ngram_size),
+                text=document,
             )
         )
     return prepared
 
 
-def novel_token_count(
-    member: PreparedDocument,
-    representative: PreparedDocument,
+def _novel_token_count(
+    member: _PreparedDocument,
+    representative: _PreparedDocument,
     cache: dict[int, frozenset[str]],
 ) -> int:
     """Words of the member that the representative does not hold."""
@@ -138,7 +136,7 @@ class _NgramIndex:
     owners: np.ndarray
 
 
-def _build_index(prepared: list[PreparedDocument]) -> _NgramIndex:
+def _build_index(prepared: list[_PreparedDocument]) -> _NgramIndex:
     sizes = np.fromiter((document.ngrams.size for document in prepared), dtype=np.int64, count=len(prepared))
     values = np.concatenate([document.ngrams for document in prepared]) if sizes.sum() else _EMPTY
     owners = np.repeat(np.arange(len(prepared), dtype=np.int32), sizes)
@@ -159,7 +157,7 @@ def _build_index(prepared: list[PreparedDocument]) -> _NgramIndex:
 
 
 def _index_candidates(
-    member: PreparedDocument,
+    member: _PreparedDocument,
     index: _NgramIndex,
     rank: np.ndarray,
     params: ClusterDedupParams,
@@ -167,7 +165,6 @@ def _index_candidates(
     """Select candidates by shared probe count, as in the production rule."""
     if member.ngrams.size == 0:
         return np.empty(0, dtype=np.int32)
-    # The index contains every n-gram from every prepared document.
     position = np.searchsorted(index.values, member.ngrams)
 
     counts = index.counts[position]
@@ -197,16 +194,17 @@ def _index_candidates(
 
 
 def find_duplicates(
-    documents: Sequence[ClusterDocument],
+    documents: Sequence[str],
     params: ClusterDedupParams,
 ) -> list[Removal]:
-    """Find members that meet the containment threshold against an earlier survivor.
+    """Find a subset of duplicate members against earlier surviving documents.
 
     Representatives have at least as many characters as their members.
-    Input order determines the representative for equal lengths.
+    Input order resolves equal-length processing ties. Indexed candidates use
+    shared probe counts, including NumPy tie order, to select a representative.
     Removed documents cannot act as representatives.
     """
-    prepared = prepare(documents, params)
+    prepared = _prepare(documents, params)
     order = sorted(range(len(prepared)), key=lambda index: (-prepared[index].chars, index))
     rank = np.empty(len(prepared), dtype=np.int64)
     rank[order] = np.arange(len(order))
@@ -234,7 +232,7 @@ def find_duplicates(
             containment = shared / member_prepared.ngrams.size
             if containment < params.minimum_containment:
                 continue
-            novel_tokens = novel_token_count(member_prepared, other, token_cache)
+            novel_tokens = _novel_token_count(member_prepared, other, token_cache)
             union = member_prepared.ngrams.size + other.ngrams.size - shared
             removed[member] = True
             removals.append(

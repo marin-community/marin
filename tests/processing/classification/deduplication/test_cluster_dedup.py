@@ -8,7 +8,6 @@ from itertools import permutations
 import pytest
 from marin.processing.classification.deduplication.cluster_dedup import (
     ClusterDedupParams,
-    ClusterDocument,
     find_duplicates,
 )
 
@@ -39,14 +38,10 @@ BLANK = " \n\t" * 100
 no n-gram."""
 
 
-def _cluster(named_texts: dict[str, str]) -> list[ClusterDocument]:
-    return [ClusterDocument(id=name, text=text) for name, text in named_texts.items()]
-
-
-def _removed_by(documents: list[ClusterDocument], params: ClusterDedupParams | None = None) -> dict[str, str]:
+def _removed_by(documents: dict[str, str], params: ClusterDedupParams | None = None) -> dict[str, str]:
     """Map the id of each removed document to the id of the survivor that holds it."""
-    removals = find_duplicates(documents, params or ClusterDedupParams())
-    return {documents[removal.member_index].id: documents[removal.representative_index].id for removal in removals}
+    removals = find_duplicates(list(documents.values()), params or ClusterDedupParams())
+    return {list(documents)[removal.member_index]: list(documents)[removal.representative_index] for removal in removals}
 
 
 NESTED_EXCERPTS = {
@@ -60,24 +55,26 @@ NESTED_EXCERPTS = {
 
 
 def test_lightly_edited_copy_is_removed_at_the_default_threshold():
-    documents = _cluster({"original": ORIGINAL, "copy": SHORTER_COPY})
+    documents = {"original": ORIGINAL, "copy": SHORTER_COPY}
 
-    (removal,) = find_duplicates(documents, ClusterDedupParams())
+    (removal,) = find_duplicates(list(documents.values()), ClusterDedupParams())
 
-    assert documents[removal.member_index].id == "copy"
-    assert documents[removal.representative_index].id == "original"
+    assert list(documents)[removal.member_index] == "copy"
+    assert list(documents)[removal.representative_index] == "original"
     assert removal.containment == pytest.approx(26 / 29)
     assert removal.novel_tokens == 1
+    assert removal.jaccard == pytest.approx(26 / 32)
+    assert removal.comparisons == 1
 
 
 def test_lightly_edited_copy_survives_a_full_containment_threshold():
-    documents = _cluster({"original": ORIGINAL, "copy": SHORTER_COPY})
+    documents = {"original": ORIGINAL, "copy": SHORTER_COPY}
 
     assert _removed_by(documents, ClusterDedupParams(minimum_containment=1.0)) == {}
 
 
 def test_production_threshold_keeps_a_pair_that_passes_at_sixty_percent():
-    documents = _cluster({"original": "a b c d e f g h i j", "copy": "a b c d x f g h i j"})
+    documents = {"original": "a b c d e f g h i j", "copy": "a b c d x f g h i j"}
 
     assert _removed_by(documents) == {}
     assert _removed_by(documents, ClusterDedupParams(minimum_containment=0.60)) == {"copy": "original"}
@@ -95,24 +92,24 @@ def test_near_duplicate_pair_removes_only_the_shorter_document(copy_text, expect
     # The two variants hold the same single-word edit, thus containment is
     # identical (26/29) in each direction and in each case. Only the character
     # count differs, and it alone decides which document the rule removes.
-    documents = _cluster({"original": ORIGINAL, "copy": copy_text})
+    documents = {"original": ORIGINAL, "copy": copy_text}
 
     assert _removed_by(documents) == expected_removals
 
 
 def test_strict_excerpt_is_removed_with_no_novel_tokens():
-    documents = _cluster({"original": ORIGINAL, "excerpt": EXCERPT})
+    documents = {"original": ORIGINAL, "excerpt": EXCERPT}
 
-    (removal,) = find_duplicates(documents, ClusterDedupParams())
+    (removal,) = find_duplicates(list(documents.values()), ClusterDedupParams())
 
-    assert documents[removal.member_index].id == "excerpt"
-    assert documents[removal.representative_index].id == "original"
+    assert list(documents)[removal.member_index] == "excerpt"
+    assert list(documents)[removal.representative_index] == "original"
     assert removal.containment == 1.0
     assert removal.novel_tokens == 0
 
 
 @pytest.mark.parametrize("exact_scan_maximum", [2, 256], ids=["inverted_index", "exact_scan"])
-def test_removals_are_independent_of_input_order(exact_scan_maximum):
+def test_distinct_length_matches_are_independent_of_input_order(exact_scan_maximum):
     named_texts = {
         "original": ORIGINAL,
         "copy": SHORTER_COPY,
@@ -123,16 +120,14 @@ def test_removals_are_independent_of_input_order(exact_scan_maximum):
     expected = {"copy": "original", "excerpt": "original"}
 
     for permutation in permutations(named_texts):
-        documents = _cluster({name: named_texts[name] for name in permutation})
+        documents = {name: named_texts[name] for name in permutation}
 
         assert _removed_by(documents, ClusterDedupParams(exact_scan_maximum=exact_scan_maximum)) == expected, permutation
 
 
 @pytest.mark.parametrize("exact_scan_maximum", [2, 256], ids=["inverted_index", "exact_scan"])
-def test_the_two_candidate_paths_find_the_same_duplicates(exact_scan_maximum):
-    # Six members select the rare-n-gram index at a limit of 2 and the exact
-    # scan at a limit of 256.
-    documents = _cluster(NESTED_EXCERPTS)
+def test_each_candidate_path_removes_nested_excerpts(exact_scan_maximum):
+    documents = NESTED_EXCERPTS
 
     removed = _removed_by(documents, ClusterDedupParams(exact_scan_maximum=exact_scan_maximum))
 
@@ -146,15 +141,13 @@ def test_the_two_candidate_paths_find_the_same_duplicates(exact_scan_maximum):
 
 @pytest.mark.parametrize("exact_scan_maximum", [2, 256], ids=["inverted_index", "exact_scan"])
 def test_blank_documents_are_neither_removed_nor_representatives(exact_scan_maximum):
-    documents = _cluster(
-        {
-            "blank": BLANK,
-            "empty": "",
-            "original": ORIGINAL,
-            "copy": SHORTER_COPY,
-            "excerpt": EXCERPT,
-        }
-    )
+    documents = {
+        "blank": BLANK,
+        "empty": "",
+        "original": ORIGINAL,
+        "copy": SHORTER_COPY,
+        "excerpt": EXCERPT,
+    }
 
     removed = _removed_by(documents, ClusterDedupParams(exact_scan_maximum=exact_scan_maximum))
 
@@ -162,7 +155,7 @@ def test_blank_documents_are_neither_removed_nor_representatives(exact_scan_maxi
 
 
 def test_inverted_index_uses_common_postings_when_all_exceed_the_limit():
-    documents = _cluster({"original": ORIGINAL, "copy": ORIGINAL, "unrelated": UNRELATED})
+    documents = {"original": ORIGINAL, "copy": ORIGINAL, "unrelated": UNRELATED}
     params = ClusterDedupParams(exact_scan_maximum=2, maximum_posting_length=1)
 
     assert _removed_by(documents, params) == {"copy": "original"}
@@ -170,7 +163,7 @@ def test_inverted_index_uses_common_postings_when_all_exceed_the_limit():
 
 @pytest.mark.parametrize("exact_scan_maximum", [2, 256], ids=["inverted_index", "exact_scan"])
 def test_equal_length_ties_use_input_order(exact_scan_maximum):
-    documents = _cluster({"zeta": ORIGINAL, "alpha": ORIGINAL, "unrelated": UNRELATED})
+    documents = {"zeta": ORIGINAL, "alpha": ORIGINAL, "unrelated": UNRELATED}
 
     removed = _removed_by(documents, ClusterDedupParams(exact_scan_maximum=exact_scan_maximum))
 
@@ -180,7 +173,7 @@ def test_equal_length_ties_use_input_order(exact_scan_maximum):
 def test_candidate_cap_keeps_the_strongest_match():
     weak_longest = "the reference implementation " + (UNRELATED + " ") * 3
     strong = ORIGINAL + " retained context"
-    documents = _cluster({"weak": weak_longest, "strong": strong, "member": ORIGINAL})
+    documents = {"weak": weak_longest, "strong": strong, "member": ORIGINAL}
     params = ClusterDedupParams(exact_scan_maximum=2, maximum_candidates=1)
 
     removed = _removed_by(documents, params)
@@ -191,12 +184,10 @@ def test_candidate_cap_keeps_the_strongest_match():
 @pytest.mark.parametrize("exact_scan_maximum", [256, 300], ids=["inverted_index", "exact_scan"])
 def test_member_only_probes_can_miss_duplicates_in_the_production_index(exact_scan_maximum):
     shared_text = " ".join(f"word{index:03d}" for index in range(200))
-    documents = _cluster(
-        {
-            f"doc{index:03d}": shared_text + " " + " ".join(f"edit{index:03d}_{word:02d}" for word in range(40))
-            for index in range(300)
-        }
-    )
+    documents = {
+        f"doc{index:03d}": shared_text + " " + " ".join(f"edit{index:03d}_{word:02d}" for word in range(40))
+        for index in range(300)
+    }
 
     removed = _removed_by(documents, ClusterDedupParams(exact_scan_maximum=exact_scan_maximum))
 
@@ -205,9 +196,16 @@ def test_member_only_probes_can_miss_duplicates_in_the_production_index(exact_sc
 
 
 def test_production_candidate_cap_applies_before_removed_representatives_are_excluded():
-    documents = _cluster({"representative": LONGER_COPY, "bridge": ORIGINAL, "member": EXCERPT})
+    documents = {"representative": LONGER_COPY, "bridge": ORIGINAL, "member": EXCERPT}
     params = ClusterDedupParams(exact_scan_maximum=2, maximum_candidates=1)
 
     removed = _removed_by(documents, params)
 
     assert removed == {"bridge": "representative"}
+
+
+@pytest.mark.parametrize("ngram_size", [3, 5])
+def test_short_text_is_one_whole_shingle(ngram_size):
+    documents = {"first": "alpha beta", "copy": "ALPHA BETA", "different": "alpha gamma"}
+
+    assert _removed_by(documents, ClusterDedupParams(ngram_size=ngram_size)) == {"copy": "first"}
