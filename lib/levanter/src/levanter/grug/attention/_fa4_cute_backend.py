@@ -493,7 +493,7 @@ def _native_backward_gradients(
 ) -> tuple[jax.Array, jax.Array, jax.Array]:
     inputs, outputs = _cutlass_attention_backward_sm90_postprocess_specs(modules, vector_elems=8)
     gradients = []
-    # dQ uses two-CTA instructions; dK/dV postprocess the cluster-wide KV tiles.
+    # Only dQ uses two-CTA instructions when enabled; dK/dV use the cluster-wide KV tiles.
     for tensor, accum, scale, rows, cluster, two_cta in zip(
         qkv,
         accumulators,

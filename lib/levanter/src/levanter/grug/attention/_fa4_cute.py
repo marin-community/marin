@@ -289,7 +289,6 @@ def _segmented_kernel_config(head_dim: int) -> Flash4CuteKernelConfig:
     arch = gpu_compute_capability()
     kernel_config = flash4_cute_kernel_config(head_dim, arch=arch)
 
-    # The segmented forward uses 64x64 tiles for these Grug shapes.
     if arch // 10 == 10 and head_dim == 128:
         return replace(kernel_config, forward_tile=(64, 64), backward_tile=(64, 64), num_threads=128)
     return kernel_config
