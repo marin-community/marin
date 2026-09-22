@@ -295,42 +295,6 @@ def _qa_rollout_steps() -> tuple[ArtifactStep[FineStoreEvalchemyResult], ...]:
     return tuple(steps)
 
 
-@dataclass(frozen=True)
-class DraftSftArtifactNames:
-    """Artifact names for each reusable draft-SFT stage."""
-
-    conversations: str
-    initial_draft: str
-    verifier: str
-    captured_data: str
-    draft: str
-
-
-@dataclass(frozen=True)
-class DraftSftExecutionConfig:
-    """Model-specific hidden-state capture and training settings."""
-
-    processor_model: str
-    transformers_model_type: str
-    target_layer_ids: tuple[int, ...]
-    verifier_num_hidden_layers: int
-    sequence_length: int
-    gpu_count: int
-    max_samples: int | None
-    minimum_valid_tokens: int | None
-
-
-@dataclass(frozen=True)
-class DraftSftTrainingConfig:
-    """Optimizer and validation settings for one draft fit."""
-
-    epochs: int
-    learning_rate: float
-    muon_learning_rate: float
-    train_data_ratio: float
-    save_best: bool
-
-
 def _conversation_step(*, name: str, rollouts: tuple[ArtifactStep, ...]) -> ArtifactStep[Artifact]:
     def build_config(ctx: StepContext) -> RolloutConversationConfig:
         return RolloutConversationConfig(
@@ -402,21 +366,20 @@ def _capture_step(
     name: str,
     dataset: ArtifactStep,
     target_model: ArtifactStep,
-    execution: DraftSftExecutionConfig,
 ) -> ArtifactStep[Artifact]:
     def build_config(ctx: StepContext) -> HiddenStateCaptureConfig:
         return HiddenStateCaptureConfig(
             dataset_path=prefix_join(ctx.artifact_path(dataset), SPECULATORS_DATA_FILENAME),
             target_model=ctx.artifact_path(target_model),
-            processor_model=execution.processor_model,
+            processor_model=TARGET_TOKENIZER,
             output_path=ctx.output_path,
-            target_layer_ids=execution.target_layer_ids,
-            verifier_num_hidden_layers=execution.verifier_num_hidden_layers,
-            sequence_length=execution.sequence_length,
-            data_parallel_size=execution.gpu_count,
+            target_layer_ids=TARGET_LAYER_IDS,
+            verifier_num_hidden_layers=VERIFIER_NUM_HIDDEN_LAYERS,
+            sequence_length=SEQUENCE_LENGTH,
+            data_parallel_size=_DRAFT_GPU_COUNT,
             concurrency=64,
-            max_samples=execution.max_samples,
-            minimum_valid_tokens=execution.minimum_valid_tokens,
+            max_samples=CORPUS_MAX_SAMPLES,
+            minimum_valid_tokens=CORPUS_MINIMUM_VALID_TOKENS,
             gpu_memory_utilization=0.9,
         )
 
@@ -428,7 +391,7 @@ def _capture_step(
             capture_hidden_states,
             resources=ResourceConfig.with_gpu(
                 GPU_VARIANT,
-                count=execution.gpu_count,
+                count=_DRAFT_GPU_COUNT,
                 cpu=_DRAFT_TASK_CPU,
                 ram=_DRAFT_TASK_MEMORY,
                 disk=_DRAFT_TASK_DISK,
@@ -447,8 +410,6 @@ def _draft_step(
     captured_data: ArtifactStep,
     verifier: ArtifactStep,
     initial_draft: ArtifactStep,
-    execution: DraftSftExecutionConfig,
-    training: DraftSftTrainingConfig,
 ) -> ArtifactStep[EagleDraftArtifact]:
     def build_config(ctx: StepContext) -> DraftTrainingConfig:
         return DraftTrainingConfig(
@@ -456,14 +417,14 @@ def _draft_step(
             verifier_path=ctx.artifact_path(verifier),
             initial_draft_path=ctx.artifact_path(initial_draft),
             output_path=ctx.output_path,
-            target_layer_ids=execution.target_layer_ids,
-            sequence_length=execution.sequence_length,
-            epochs=training.epochs,
-            learning_rate=training.learning_rate,
-            muon_learning_rate=training.muon_learning_rate,
-            num_processes=execution.gpu_count,
-            train_data_ratio=training.train_data_ratio,
-            save_best=training.save_best,
+            target_layer_ids=TARGET_LAYER_IDS,
+            sequence_length=SEQUENCE_LENGTH,
+            epochs=_SFT_EPOCHS,
+            learning_rate=1e-5,
+            muon_learning_rate=0.02,
+            num_processes=_DRAFT_GPU_COUNT,
+            train_data_ratio=0.9,
+            save_best=False,
         )
 
     return ArtifactStep(
@@ -474,7 +435,7 @@ def _draft_step(
             train_draft,
             resources=ResourceConfig.with_gpu(
                 GPU_VARIANT,
-                count=execution.gpu_count,
+                count=_DRAFT_GPU_COUNT,
                 cpu=_DRAFT_TASK_CPU,
                 ram=_DRAFT_TASK_MEMORY,
                 disk=_DRAFT_TASK_DISK,
@@ -497,41 +458,31 @@ class DraftSftPipeline:
     draft: ArtifactStep[EagleDraftArtifact]
 
 
-def sft_draft_model(
-    *,
-    names: DraftSftArtifactNames,
-    rollouts: tuple[ArtifactStep, ...],
-    target_model: ArtifactStep,
-    initial_draft_repo: str,
-    initial_draft_revision: str,
-    execution: DraftSftExecutionConfig,
-    training: DraftSftTrainingConfig,
-) -> DraftSftPipeline:
-    """Build reusable Speculators SFT artifacts for a target model."""
-    conversations = _conversation_step(name=names.conversations, rollouts=rollouts)
+def snowball_eagle_sft() -> DraftSftPipeline:
+    conversations = _conversation_step(
+        name="data/snowball-eagle-mixed-conversations",
+        rollouts=_qa_rollout_steps(),
+    )
     initial_draft = _initial_draft_step(
-        name=names.initial_draft,
-        repo_id=initial_draft_repo,
-        revision=initial_draft_revision,
+        name="models/snowball-eagle3-initial-draft",
+        repo_id=INITIAL_DRAFT_REPO,
+        revision=INITIAL_DRAFT_REVISION,
     )
     verifier = _verifier_step(
-        name=names.verifier,
-        target_model=target_model,
-        transformers_model_type=execution.transformers_model_type,
+        name="models/snowball-eagle3-verifier-view",
+        target_model=TARGET_MODEL,
+        transformers_model_type="llama",
     )
     captured_data = _capture_step(
-        name=names.captured_data,
+        name="data/snowball-eagle3-hidden-states",
         dataset=conversations,
-        target_model=target_model,
-        execution=execution,
+        target_model=TARGET_MODEL,
     )
     draft = _draft_step(
-        name=names.draft,
+        name="models/snowball-eagle3-speculators",
         captured_data=captured_data,
         verifier=verifier,
         initial_draft=initial_draft,
-        execution=execution,
-        training=training,
     )
     return DraftSftPipeline(
         conversations=conversations,
@@ -539,40 +490,6 @@ def sft_draft_model(
         verifier=verifier,
         captured_data=captured_data,
         draft=draft,
-    )
-
-
-def snowball_eagle_sft() -> DraftSftPipeline:
-    """Build the Snowball-specific EAGLE-3 SFT pipeline."""
-    return sft_draft_model(
-        names=DraftSftArtifactNames(
-            conversations="data/snowball-eagle-mixed-conversations",
-            initial_draft="models/snowball-eagle3-initial-draft",
-            verifier="models/snowball-eagle3-verifier-view",
-            captured_data="data/snowball-eagle3-hidden-states",
-            draft="models/snowball-eagle3-speculators",
-        ),
-        rollouts=_qa_rollout_steps(),
-        target_model=TARGET_MODEL,
-        initial_draft_repo=INITIAL_DRAFT_REPO,
-        initial_draft_revision=INITIAL_DRAFT_REVISION,
-        execution=DraftSftExecutionConfig(
-            processor_model=TARGET_TOKENIZER,
-            transformers_model_type="llama",
-            target_layer_ids=TARGET_LAYER_IDS,
-            verifier_num_hidden_layers=VERIFIER_NUM_HIDDEN_LAYERS,
-            sequence_length=SEQUENCE_LENGTH,
-            gpu_count=_DRAFT_GPU_COUNT,
-            max_samples=CORPUS_MAX_SAMPLES,
-            minimum_valid_tokens=CORPUS_MINIMUM_VALID_TOKENS,
-        ),
-        training=DraftSftTrainingConfig(
-            epochs=_SFT_EPOCHS,
-            learning_rate=1e-5,
-            muon_learning_rate=0.02,
-            train_data_ratio=0.9,
-            save_best=False,
-        ),
     )
 
 
