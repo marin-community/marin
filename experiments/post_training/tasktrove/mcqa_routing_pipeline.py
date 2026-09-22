@@ -21,9 +21,9 @@ from marin.execution.remote import remote
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import launch_provenance
 
+from experiments.post_training.glm import GLM_BULK_TOKEN_ENV
 from experiments.post_training.tasktrove.mcqa_routing import (
     DECISIONS_FILENAME,
-    GLM_BULK_TOKEN_ENV,
     MCQA_SOURCE,
     POLICY_VERSION,
     ROUTE_MAPPINGS_FILENAME,

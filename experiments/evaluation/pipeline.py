@@ -22,18 +22,21 @@ The demo pipeline below runs the smoke suite for one small model.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Protocol
 
 from iris.client.client import iris_ctx
 from iris.rpc import job_pb2
+from marin.evaluation.harbor.runner import canonical_served_name
 from marin.evaluation.hardware import default_platform
 from marin.evaluation.model_config import ModelConfig
+from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.step_runner import StepRunner
 
-from experiments.evaluation.evals import resolve_eval_keys
+from experiments.evaluation.evals import EvalchemyDefinition, resolve_eval_keys
 from experiments.evaluation.launch import (
     EVALUATION_CONTROLLER_CLUSTER,
     LaunchSpec,
@@ -52,7 +55,8 @@ class EvalStepConfig:
     """One pipeline eval's model, eval selection, version, and runtime overrides."""
 
     model: ModelConfig
-    evals: str
+    evals: str | None
+    evalchemy_config_path: str | None
     limit: int | None
     artifact_path: str
     accelerator: str | None
@@ -90,12 +94,37 @@ class CatalogEvaluationModel:
         return models()[self.name]
 
 
+@dataclass(frozen=True)
+class ProducedEvaluationModel:
+    """Evaluate the newest Hugging Face checkpoint produced by an upstream step."""
+
+    step: ArtifactStep[Artifact]
+    model: ModelConfig
+
+    def deps(self) -> tuple[ArtifactStep, ...]:
+        return (self.step,)
+
+    def resolve(self, ctx: StepContext) -> ModelConfig:
+        if ctx.is_fingerprint:
+            location = f"artifact://{self.step.name}@{self.step.version}"
+        else:
+            checkpoints = discover_hf_checkpoints(ctx.artifact_path(self.step))
+            if not checkpoints:
+                raise FileNotFoundError(f"no HF checkpoint found under {ctx.artifact_path(self.step)}")
+            location = checkpoints[-1]
+        return replace(self.model, location=location)
+
+
 def run_eval_pipeline_step(config: EvalStepConfig) -> EvaluationResult:
-    keys = resolve_eval_keys(config.evals)
+    keys = resolve_eval_keys(config.evals) if config.evals is not None else ()
+    evalchemy_definitions = ()
+    if config.evalchemy_config_path is not None:
+        path = Path(config.evalchemy_config_path)
+        evalchemy_definitions = (EvalchemyDefinition(name=canonical_served_name(path.stem), config_path=path),)
     spec = LaunchSpec(
         model=config.model,
         evals=keys,
-        evalchemy_definitions=(),
+        evalchemy_definitions=evalchemy_definitions,
         harbor_definitions=(),
         platform=default_platform(config.model),
         accelerator=config.accelerator,
@@ -118,23 +147,33 @@ def run_eval_pipeline_step(config: EvalStepConfig) -> EvaluationResult:
 
 def eval_step(
     model: EvaluationModelSource,
-    evals: str,
+    evals: str | None = None,
     *,
+    evalchemy_config_path: Path | None = None,
     version: str,
     limit: int | None = None,
     accelerator: str | None = None,
     submission_cluster: str = EVALUATION_CONTROLLER_CLUSTER,
     federated_cluster: str | None = None,
 ) -> ArtifactStep[EvaluationResult]:
-    """Evaluate a static or upstream-produced model with Evalchemy and Harbor."""
+    """Evaluate a model with a registered selection or one checked-in Evalchemy config."""
 
+    if (evals is None) == (evalchemy_config_path is None):
+        raise ValueError("set exactly one of evals or evalchemy_config_path")
+    if evalchemy_config_path is not None and not evalchemy_config_path.is_file():
+        raise ValueError(f"Evalchemy config does not exist: {evalchemy_config_path}")
+
+    selection_name = evals
+    if evalchemy_config_path is not None:
+        selection_name = canonical_served_name(evalchemy_config_path.stem)
+    assert selection_name is not None
     deps = model.deps()
 
     def build_config(ctx: StepContext) -> EvalStepConfig:
-        resolved_model = model.resolve(ctx)
         return EvalStepConfig(
-            model=resolved_model,
+            model=model.resolve(ctx),
             evals=evals,
+            evalchemy_config_path=None if evalchemy_config_path is None else str(evalchemy_config_path),
             limit=limit,
             artifact_path=ctx.output_path,
             accelerator=ctx.runtime_arg(_ACCELERATOR_RUNTIME_ARG),
@@ -145,7 +184,7 @@ def eval_step(
 
     model_name = model.resolve(StepContext.for_fingerprint(deps=deps)).name
     return ArtifactStep(
-        name=f"evals/{model_name}/{evals}",
+        name=f"evals/{model_name}/{selection_name}",
         version=version,
         artifact_type=EvaluationResult,
         run=run_eval_pipeline_step,

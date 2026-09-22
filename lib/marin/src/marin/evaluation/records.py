@@ -207,6 +207,15 @@ class EvalTaskRef(BaseModel):
     """The evaluator-owned benchmark protocol, when the harness emitted one."""
 
 
+class EvalchemyJudgeRef(BaseModel):
+    """Non-secret identity of the external judge used by Evalchemy."""
+
+    model_config = ConfigDict(frozen=True)
+
+    base_url: str
+    model: str
+
+
 class EvalchemyRef(BaseModel):
     """The normalized Evalchemy launch configuration recorded for a run.
 
@@ -225,6 +234,7 @@ class EvalchemyRef(BaseModel):
     extra_gen_kwargs: dict[str, str] = Field(default_factory=dict)
     extra_model_args: dict[str, str | int | float | bool] = Field(default_factory=dict)
     max_length: int | None = None
+    judge: EvalchemyJudgeRef | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class HarborRef(BaseModel):
