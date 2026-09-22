@@ -37,6 +37,7 @@ def test_local_llm_inference():
     config = InferenceModelConfig(
         name="test-llama-200m",
         path="gs://marin-us-east5/gcsfuse_mount/perplexity-models/llama-200m",
+        # Exercise direct offline eager vLLM inference on TPU; this does not launch a Marin server.
         engine_kwargs={"enforce_eager": True, "max_model_len": 1024},
     )
     model_name_or_path, config = resolve_model_name_or_path(config)

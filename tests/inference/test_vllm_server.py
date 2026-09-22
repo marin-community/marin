@@ -8,6 +8,8 @@ routing by severity and flushing/draining on teardown. A second group covers sta
 process without HTTP readiness and waiting once for an ordinary server.
 """
 
+import json
+import logging
 import os
 import socket
 import subprocess
@@ -411,11 +413,14 @@ def test_subprocess_environment_overrides_reach_vllm():
         cache.close()
 
 
-def _environment(launcher: _FakeLauncher, *, timeout_seconds: float = 30) -> VllmEnvironment:
+def _environment(
+    launcher: _FakeLauncher, *, timeout_seconds: float = 30, extra_args: list[str] | None = None
+) -> VllmEnvironment:
     return VllmEnvironment(
         vllm_server.InferenceModelConfig(name="fake-model", path=None, engine_kwargs={}),
         port=_free_port(),
         timeout_seconds=timeout_seconds,
+        extra_args=extra_args,
         launcher=launcher,
         compilation_cache_mode=VllmCompilationCacheMode.CALLER_MANAGED,
         wait_for_ready=False,
@@ -424,6 +429,75 @@ def _environment(launcher: _FakeLauncher, *, timeout_seconds: float = 30) -> Vll
 
 def _wait_until_ready(environment: VllmEnvironment) -> None:
     environment.wait_until_ready(poll_interval_seconds=0.05)
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--enforce-eager"],
+        ["--enforce_eager"],
+        ["--enforce-e"],
+        ["--enf"],
+        ["--no-enforce-eager", "--enforce-eager"],
+    ],
+)
+def test_eager_without_acknowledgement_fails_before_spawn(monkeypatch, args):
+    monkeypatch.setattr(vllm_server.subprocess, "Popen", lambda *_args, **_kwargs: pytest.fail("vLLM spawned"))
+
+    with pytest.raises(ValueError, match="--i-know-i-am-making-vllm-slow"):
+        with _environment(_FakeLauncher("exit"), extra_args=args):
+            pass
+
+
+@pytest.mark.parametrize(
+    ("args", "expected_eager"),
+    [
+        ([], False),
+        (["--no-enforce-eager"], False),
+        (["--enforce-eager", "--no-enforce-eager"], False),
+        (["--enf", "--no-enf"], False),
+        (["--enforce-eager", "--i-know-i-am-making-vllm-slow"], True),
+        (["--no-enforce-eager", "--enforce_eager", "--i-know-i-am-making-vllm-slow"], True),
+    ],
+)
+def test_eager_guard_preserves_vllm_args_and_warns_on_acknowledged_eager(tmp_path, caplog, args, expected_eager):
+    argv_path = tmp_path / "argv.json"
+    with _environment(_FakeLauncher("record-args", str(argv_path)), extra_args=args) as environment:
+        _wait_until_ready(environment)
+        argv = json.loads(argv_path.read_text())
+
+    assert argv[argv.index("--port") + 2 :] == [arg for arg in args if arg != "--i-know-i-am-making-vllm-slow"]
+    assert "--i-know-i-am-making-vllm-slow" not in argv
+    assert (
+        any(record.name == vllm_server.__name__ and record.levelno == logging.WARNING for record in caplog.records)
+        is expected_eager
+    )
+
+
+@pytest.mark.parametrize("key", ["enforce_eager", "enf"])
+def test_config_eager_requires_acknowledgement_before_spawn(tmp_path, monkeypatch, key):
+    config = tmp_path / "vllm.yaml"
+    config.write_text(f"{key}: true\n")
+    monkeypatch.setattr(vllm_server.subprocess, "Popen", lambda *_args, **_kwargs: pytest.fail("vLLM spawned"))
+
+    with pytest.raises(ValueError, match="--i-know-i-am-making-vllm-slow"):
+        with _environment(_FakeLauncher("exit"), extra_args=["--config", str(config)]):
+            pass
+
+
+def test_config_eager_can_be_disabled_by_cli(tmp_path, caplog):
+    config = tmp_path / "vllm.yaml"
+    config.write_text("enforce-eager: true\n")
+    argv_path = tmp_path / "argv.json"
+    args = ["--config", str(config), "--no_enforce_eager"]
+
+    with _environment(_FakeLauncher("record-args", str(argv_path)), extra_args=args) as environment:
+        _wait_until_ready(environment)
+
+    assert json.loads(argv_path.read_text())[-len(args) :] == args
+    assert not any(
+        record.name == vllm_server.__name__ and record.levelno == logging.WARNING for record in caplog.records
+    )
 
 
 def test_environment_starts_without_waiting_for_http_readiness(tmp_path):
