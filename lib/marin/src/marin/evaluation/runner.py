@@ -461,7 +461,8 @@ def submit_evaluation_batch(batch: EvaluationBatch, client: IrisClient) -> Submi
         ),
         environment=EnvironmentSpec(env_vars=launch_env),
         constraints=constraints,
-        max_retries_failure=0,
+        max_retries_failure=1,
+        max_task_failures=1,
         priority_band=batch.priority_band,
     )
     logger.info("submitted eval batch %s (%d evals) as job %s", batch.group_id, len(batch.evaluations), job)

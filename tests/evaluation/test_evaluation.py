@@ -17,7 +17,7 @@ from click.testing import CliRunner
 from finestore.eval import EvaluationStore
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.rpc import job_pb2
-from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyRunConfig
+from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyRunConfig, _run_evalchemy_child
 from marin.evaluation.evalchemy.runtime import EVALCHEMY_REQUIRED_EXTRAS
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.harbor.driver_config import (
@@ -205,6 +205,37 @@ def _remote_session(endpoint: str = "https://inference.example/v1") -> RemoteInf
         tensor_parallel_size=1,
         backend_name="vllm",
     )
+
+
+def test_evalchemy_child_can_retry_task_setup_failure(monkeypatch):
+    captured: dict = {}
+
+    class Job:
+        job_id = "/eval/job"
+
+        def wait(self, *, timeout):
+            assert timeout == float("inf")
+
+    class Client:
+        def submit(self, **kwargs):
+            captured.update(kwargs)
+            return Job()
+
+    monkeypatch.setattr(
+        "marin.evaluation.evalchemy.runner.iris_ctx",
+        lambda: SimpleNamespace(client=Client()),
+    )
+
+    job_path = _run_evalchemy_child(
+        _remote_session().model,
+        EvalchemyRunConfig(name="gsm8k", tasks=(EvalTaskConfig(name="gsm8k", num_fewshot=5),)),
+        "memory://evalchemy-output",
+        {},
+    )
+
+    assert job_path == "/eval/job"
+    assert captured["max_retries_failure"] == 1
+    assert captured["max_task_failures"] == 1
 
 
 def _lm_eval_generation(doc_id: int, metric: str, score: float, response: str) -> dict:
@@ -486,6 +517,8 @@ def test_submit_evaluation_batch_resolves_declared_secrets_outside_the_pickled_b
 
     assert captured["environment"].env_vars["DAYTONA_API_KEY"] == resolved_value
     assert resolved_value.encode() not in captured["entrypoint"].workdir_files["_callable.pkl"]
+    assert captured["max_retries_failure"] == 1
+    assert captured["max_task_failures"] == 1
 
 
 @pytest.mark.parametrize(

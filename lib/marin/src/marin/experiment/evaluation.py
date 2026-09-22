@@ -171,6 +171,7 @@ def evaluate_evalchemy(
             run_served_evalchemy,
             resources=_orchestrator_resources(accelerator),
             env_vars=env_vars_from_keys(EVAL_ENV_KEYS),
+            max_retries_failure=1,
         ),
         build_config=build_config,
         deps=deps,

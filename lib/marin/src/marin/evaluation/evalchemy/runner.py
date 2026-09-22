@@ -245,7 +245,8 @@ def _run_evalchemy_child(
                 **{CONFIG_ENV_KEY: _run_config_json(model, config, output_dir)},
             )
         ),
-        max_retries_failure=0,
+        max_retries_failure=1,
+        max_task_failures=1,
     )
     eval_path = str(eval_job.job_id)
     logger.info(

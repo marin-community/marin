@@ -18,3 +18,4 @@ def test_rollouts_use_requested_version_and_inherit_root_cluster() -> None:
     assert {step.version for step in qa_steps} == {"2099.01.02"}
     assert [step.version for step in agentic_steps] == ["2099.01.02.1", "2099.01.02.2", "2099.01.02.3"]
     assert config.accelerator.target_cluster is None
+    assert step.run.max_retries_failure == 1
