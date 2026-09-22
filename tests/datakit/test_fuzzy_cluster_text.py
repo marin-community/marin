@@ -389,6 +389,32 @@ def test_repeated_normalized_id_requires_equal_text(tmp_path: Path) -> None:
         list(_join_shard(shard, {}))
 
 
+def test_repeated_normalized_id_need_not_be_adjacent(tmp_path: Path) -> None:
+    normalized = tmp_path / "normalized.parquet"
+    candidates = tmp_path / "candidates.parquet"
+    _write_parquet(
+        normalized,
+        [
+            {"id": "a", "text": "first"},
+            {"id": "b", "text": "second"},
+            {"id": "a", "text": "first"},
+        ],
+    )
+    _write_parquet(candidates, [{"id": key, "dup_cluster_id": "7"} for key in ("a", "b")])
+    shard = TextShard(
+        file_idx=0,
+        normalized_path=str(normalized),
+        candidate_path=str(candidates),
+        source_key="normalized/source",
+        source_tag="source_000",
+        basename="part.parquet",
+    )
+
+    rows = list(_join_shard(shard, {}))
+
+    assert [(row["id"], row["text"]) for row in rows] == [("a", "first"), ("b", "second")]
+
+
 def test_cluster_steps_build_from_dependencies_and_persist_grouped_text(tmp_path: Path) -> None:
     normalized_path = tmp_path / "normalized"
     candidate_path = tmp_path / "candidates"

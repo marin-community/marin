@@ -5,6 +5,7 @@
 
 import argparse
 import logging
+import os
 
 from fray.types import ResourceConfig
 from marin.execution.artifact import write_artifact
@@ -25,11 +26,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--worker-disk", default="64g")
     parser.add_argument("--task-cpu", type=float, default=1)
     parser.add_argument("--task-ram", default="7g")
+    parser.add_argument("--task-disk", default="32g")
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
+    os.environ["MARIN_PREFIX"] = args.prefix
     logging.basicConfig(level=logging.INFO)
     result = plan_large_clusters(
         prefix=args.prefix,
@@ -39,7 +42,7 @@ def main(argv: list[str] | None = None) -> None:
         shards_per_task=args.shards_per_task,
         max_workers=args.max_workers,
         worker_resources=ResourceConfig(cpu=args.worker_cpu, ram=args.worker_ram, disk=args.worker_disk),
-        task_resources=ResourceConfig(cpu=args.task_cpu, ram=args.task_ram, disk="32g"),
+        task_resources=ResourceConfig(cpu=args.task_cpu, ram=args.task_ram, disk=args.task_disk),
     )
     write_artifact(result, args.out)
 

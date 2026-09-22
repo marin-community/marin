@@ -14,14 +14,13 @@ CLUSTER_TEXT_MANIFEST_FILENAME = "manifest.json"
 CLUSTER_TEXT_MANIFEST_VERSION = "v1"
 CLUSTER_TEXT_SUBDIRECTORY = "text"
 CLUSTER_TEXT_SUCCESS_FILENAME = "_SUCCESS"
+DEFAULT_MAX_CLUSTER_SIZE = 100_000
 
 
 class ClusterTextParams(BaseModel):
-    """Parameters from the production cluster-text materialization."""
-
     model_config = ConfigDict(frozen=True)
 
-    max_cluster_size: int = Field(default=100_000, ge=1)
+    max_cluster_size: int = Field(default=DEFAULT_MAX_CLUSTER_SIZE, ge=1)
     output_shards: int = Field(default=8192, ge=1)
     groups_per_shard: int = Field(default=8, ge=1)
     split_ngram_size: int = Field(default=5, ge=1)
@@ -30,7 +29,7 @@ class ClusterTextParams(BaseModel):
 
 
 class ClusterTextData(BaseModel):
-    """Completed grouped text and its production parameters."""
+    """Grouped text and the parameters used to produce it."""
 
     path: DatakitArtifactPath
     params: ClusterTextParams
@@ -60,10 +59,10 @@ class ClusterTextManifest(BaseModel):
     groups_per_shard: int = Field(ge=1)
     split_ngram_size: int = Field(ge=1)
     split_strategy: Literal["minhash_id_v1"] = "minhash_id_v1"
-    split_subdivisions: int = Field(default=16, ge=1)
-    maximum_document_chars: int = Field(default=64 * 1024 * 1024, ge=1)
+    split_subdivisions: int = Field(default=ClusterTextParams().split_subdivisions, ge=1)
+    maximum_document_chars: int = Field(default=ClusterTextParams().maximum_document_chars, ge=1)
     oversized_clusters: dict[str, int]
-    oversized_cluster_members: int = Field(ge=0)
+    oversized_cluster_members: int = Field(ge=0, description="Estimated members from the row-stride sample")
     shards: list[ClusterTextShard]
 
     @model_validator(mode="after")

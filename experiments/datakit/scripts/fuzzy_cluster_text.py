@@ -5,6 +5,7 @@
 
 import argparse
 import logging
+import os
 
 from fray.types import ResourceConfig
 from marin.datakit.copartitioned import CopartitionedSource
@@ -32,6 +33,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=ClusterTextParams().groups_per_shard,
         help="Output files assigned to each reduce task",
     )
+    parser.add_argument("--split-ngram-size", type=int, default=ClusterTextParams().split_ngram_size)
+    parser.add_argument("--split-subdivisions", type=int, default=ClusterTextParams().split_subdivisions)
+    parser.add_argument("--maximum-document-chars", type=int, default=ClusterTextParams().maximum_document_chars)
     parser.add_argument("--shards-per-task", type=int, default=8, help="Input shards joined by one map task")
     parser.add_argument("--max-workers", type=int, default=64)
     parser.add_argument("--worker-cpu", type=float, default=32)
@@ -47,6 +51,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
+    os.environ["MARIN_PREFIX"] = args.prefix
     logging.basicConfig(level=logging.INFO)
     candidates = read_artifact(resolve_data_path(args.prefix, args.candidates), FuzzyDupsAttrData)
     result = materialize_cluster_text(
@@ -62,6 +67,9 @@ def main(argv: list[str] | None = None) -> None:
             max_cluster_size=args.max_cluster_size,
             output_shards=args.output_shards,
             groups_per_shard=args.groups_per_shard,
+            split_ngram_size=args.split_ngram_size,
+            split_subdivisions=args.split_subdivisions,
+            maximum_document_chars=args.maximum_document_chars,
         ),
         shards_per_task=args.shards_per_task,
         max_workers=args.max_workers,

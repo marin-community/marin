@@ -8,9 +8,9 @@ The split can separate duplicates. Documents retain at most 64 Mi characters.
 """
 
 import dataclasses
+import hashlib
 import json
 import logging
-import os
 from collections.abc import Iterator, Mapping, Sequence
 from typing import Any
 
@@ -33,6 +33,7 @@ from marin.datakit.source_key import datakit_source_key
 from marin.execution.artifact import read_artifact, read_record
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.cluster_text import (
+    CLUSTER_TEXT_MANIFEST_FILENAME,
     CLUSTER_TEXT_SUBDIRECTORY,
     ClusterTextData,
     ClusterTextManifest,
@@ -75,15 +76,7 @@ class TextShard:
 
 
 def _split_hash(text: str, ngram_size: int) -> int:
-    """One MinHash permutation over the document's word n-grams.
-
-    Returns the minimum 64-bit hash of the case-folded word n-grams. Two
-    documents with Jaccard J share this value with probability exactly J, which
-    is what makes it a partition key that keeps duplicates together where a
-    split on the document ID would scatter them. Python's own string hash is
-    salted per process and would place the same document differently on
-    different workers, so this uses dupekit's fixed xxh3.
-    """
+    """Minimum xxh3 hash of the case-folded word n-grams."""
     tokens = text.casefold().split()
     if len(tokens) < ngram_size:
         return dupekit.hash_xxh3_64(" ".join(tokens).encode("utf-8", "ignore"))
@@ -108,12 +101,7 @@ def _read_table(path: str, columns: list[str]) -> pa.Table | None:
 
 
 def _join_shard_group(shards: list[TextShard], params: ClusterTextParams) -> Iterator[dict[str, Any]]:
-    """Join a group of shards in one task.
-
-    The shuffle reads every map output once per reduce partition, so its cost
-    scales with the product of the two counts. Grouping input shards cuts the
-    map side of that product without changing the result.
-    """
+    """Group map inputs to reduce shuffle fan-out."""
     oversized: dict[str, int] = zephyr_worker_ctx().get_shared(_SHARED_OVERSIZED_KEY)
     for shard in shards:
         yield from _join_shard(shard, oversized, params)
@@ -122,12 +110,7 @@ def _join_shard_group(shards: list[TextShard], params: ClusterTextParams) -> Ite
 def _join_shard(
     shard: TextShard, oversized: Mapping[str, int], params: ClusterTextParams = ClusterTextParams()
 ) -> Iterator[dict[str, Any]]:
-    """Join one shard's candidate rows to their normalized text.
-
-    Only a fifth of a normalized shard is a candidate in a typical source, so
-    the row selection happens in Arrow and only the selected text crosses into
-    Python. Converting every row first was the dominant cost of this stage.
-    """
+    """Select candidate text in Arrow before converting it to Python."""
     if not StoragePath(shard.candidate_path).exists():
         counters.pipeline.update_counter(f"{COUNTER_PREFIX}/candidate_shards_missing", 1)
         return
@@ -148,8 +131,7 @@ def _join_shard(
     wanted = candidates.column("id").combine_chunks()
 
     emitted = 0
-    previous_id: str | None = None
-    previous_text: str | None = None
+    emitted_text_hashes: dict[str, bytes] = {}
     with StoragePath(shard.normalized_path).open("rb") as handle:
         parquet = pq.ParquetFile(handle)
         for batch in parquet.iter_batches(columns=["id", "text"]):
@@ -160,14 +142,14 @@ def _join_shard(
                 texts = selected.column("text").to_pylist()
                 for record_id, text in zip(ids, texts, strict=True):
                     raw_text = text or ""
+                    text_hash = hashlib.sha256(raw_text.encode("utf-8", "surrogatepass")).digest()
                     cluster_id = attributes.pop(record_id, None)
                     if cluster_id is None:
-                        if record_id != previous_id or raw_text != previous_text:
+                        if text_hash != emitted_text_hashes[record_id]:
                             raise ValueError(f"Repeated normalized ID {record_id!r} has inconsistent text")
                         counters.pipeline.update_counter(f"{COUNTER_PREFIX}/repeated_normalized_ids", 1)
                         continue
-                    previous_id = record_id
-                    previous_text = raw_text
+                    emitted_text_hashes[record_id] = text_hash
                     text = raw_text
                     if len(text) > params.maximum_document_chars:
                         counters.pipeline.update_counter(f"{COUNTER_PREFIX}/oversized_documents", 1)
@@ -200,21 +182,12 @@ def _join_shard(
 
 
 def group_key_of(cluster_key: str, groups: int) -> int:
-    """Stable output group for one cluster group.
-
-    Partitions on the *split* key, not the cluster ID. The largest component
-    holds 831 million members: routing all of its splits to one file would
-    hand one reduce task the whole component and undo the split.
-
-    Keep ``groups`` above the reduce-task count. Zephyr hashes this key again
-    to select a reduce task. More groups per task decrease the variation in
-    partition size.
-    """
+    """Hash the split key so one oversized component can use multiple tasks."""
     return dupekit.hash_xxh3_64(cluster_key.encode("utf-8")) % groups
 
 
 def cluster_sort_key(record: Mapping[str, Any]) -> tuple[str, str]:
-    """Preserve the production member order within each cluster."""
+    """Order by cluster and ID; ID breaks equal-length processing ties in the solver."""
     return record["cluster_key"], record["id"]
 
 
@@ -252,7 +225,7 @@ def build_shards(
     for source_key, source in candidate_artifact.sources.items():
         candidate_dir = resolve_data_path(prefix, source.attr_dir)
         candidate_paths = StoragePath(prefix_join(candidate_dir, "*.parquet")).glob()
-        candidate_basenames = {os.path.basename(str(path)) for path in candidate_paths}
+        candidate_basenames = {path.name for path in candidate_paths}
         extra = candidate_basenames - expected_by_source[source_key]
         if extra:
             raise ValueError(f"Candidate source {source_key!r} has unexpected shards: {sorted(extra)!r}")
@@ -280,14 +253,13 @@ def load_oversized(plan: LargeClusterPlan, max_cluster_size: int, candidate_path
         raise ValueError("Large-cluster plan threshold is above the materializer cap")
     with StoragePath(plan.counts_path).open("rb") as handle:
         table = pq.ParquetFile(handle).read(columns=["dup_cluster_id", "size"])
+    sizes = table.column("size").to_pylist()
     oversized = {
         str(cluster_id): -(-int(size) // max_cluster_size)
-        for cluster_id, size in zip(
-            table.column("dup_cluster_id").to_pylist(), table.column("size").to_pylist(), strict=True
-        )
+        for cluster_id, size in zip(table.column("dup_cluster_id").to_pylist(), sizes, strict=True)
         if size > max_cluster_size
     }
-    members = sum(int(size) for size in table.column("size").to_pylist() if size > max_cluster_size)
+    members = sum(int(size) for size in sizes if size > max_cluster_size)
     return oversized, members
 
 
@@ -307,8 +279,8 @@ def materialize_cluster_text(
     max_shard_failures: int = DEFAULT_MAX_SHARD_FAILURES,
 ) -> ClusterTextData:
     """Join normalized text to candidates and write groups with explicit lineage."""
-    if shards_per_task < 1:
-        raise ValueError("shards_per_task must be positive")
+    if shards_per_task < 1 or max_workers < 1:
+        raise ValueError("shards_per_task and max_workers must be positive")
     shards = build_shards(prefix, candidates, output_path, normalized_sources)
     candidate_path = resolve_data_path(prefix, candidates)
     oversized, oversized_cluster_members = load_oversized(plan, params.max_cluster_size, candidate_path)
@@ -370,7 +342,7 @@ def materialize_cluster_text(
     )
 
     payload = {
-        "manifest": prefix_join(output_path, "manifest.json"),
+        "manifest": prefix_join(output_path, CLUSTER_TEXT_MANIFEST_FILENAME),
         "shards": len(shards),
         "oversized_clusters": len(oversized),
         "oversized_cluster_members": oversized_cluster_members,
