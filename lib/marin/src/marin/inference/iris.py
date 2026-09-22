@@ -582,6 +582,7 @@ def _start_direct_inference(
             environment=iris.worker_environment,
             max_retries_failure=iris.max_retries_failure,
             max_retries_preemption=iris.max_retries_preemption,
+            max_task_failures=iris.max_retries_failure,
             priority=iris.priority,
         )
     )
@@ -680,6 +681,7 @@ def _submit_broker_workers(
                     environment=iris.worker_environment,
                     max_retries_failure=broker.max_retries_failure,
                     max_retries_preemption=broker.max_retries_preemption,
+                    max_task_failures=broker.max_retries_failure,
                     priority=iris.priority,
                 )
             )
