@@ -438,16 +438,14 @@ def batch_lines(
     return lines, by_custom_id
 
 
-def jsonl_text(rows: list[dict[str, Any]]) -> str:
-    """Serialize JSON objects as compact newline-delimited text."""
-
+def _jsonl(rows: list[dict[str, Any]]) -> str:
     return "".join(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n" for row in rows)
 
 
 def submit_batch(base_url: str, token: str, lines: list[dict[str, Any]], filename: str) -> tuple[str, str]:
     query = urllib.parse.urlencode({"purpose": "batch", "filename": filename})
     file_response = json.loads(
-        _request(f"{base_url}/files?{query}", token, data=jsonl_text(lines).encode(), content_type="application/jsonl")
+        _request(f"{base_url}/files?{query}", token, data=_jsonl(lines).encode(), content_type="application/jsonl")
     )
     file_id = file_response["id"]
     batch = _request_json(
@@ -686,7 +684,7 @@ def run_worker(config: RoutingConfig) -> None:
     lines, by_custom_id = batch_lines(tasks, config.request_batch_size, worker_index)
     request_path = output_root / "requests.jsonl"
     if not request_path.exists():
-        request_path.write_text(jsonl_text(lines))
+        request_path.write_text(_jsonl(lines))
 
     state_path = output_root / "batch-state.json"
     if state_path.exists():
@@ -720,9 +718,9 @@ def run_worker(config: RoutingConfig) -> None:
         raise RuntimeError(f"worker {worker_index} routed {len(routed)} of {len(tasks)} tasks")
 
     routed.sort(key=lambda row: row["task_id"])
-    (output_root / DECISIONS_FILENAME).write_text(jsonl_text(routed))
+    (output_root / DECISIONS_FILENAME).write_text(_jsonl(routed))
     mappings = [{key: row[key] for key in ROUTE_MAPPING_FIELDS} for row in routed]
-    (output_root / ROUTE_MAPPINGS_FILENAME).write_text(jsonl_text(mappings))
+    (output_root / ROUTE_MAPPINGS_FILENAME).write_text(_jsonl(mappings))
 
     route_subject = defaultdict(Counter)
     for row in routed:

@@ -11,7 +11,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
 
-from marin.evaluation.evalchemy.config import JUDGE_API_KEY_ENV, EvalchemyConfig
+from marin.evaluation.evalchemy.config import EvalchemyConfig
 from marin.evaluation.evalchemy.runner import (
     DEFAULT_NUM_CONCURRENT,
     EvalchemyRunConfig,
@@ -23,7 +23,7 @@ from marin.evaluation.harbor.agent_context import MODEL_INFO_KEY, served_model_i
 from marin.evaluation.harbor.driver_config import HARBOR_RUNTIME, ValidatedHarborConfig
 from marin.evaluation.harbor.runner import HarborExecutor
 from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.records import EvalchemyJudgeRef, EvalchemyRef, EvalRef, EvalTaskRef, HarborRef
+from marin.evaluation.records import EvalchemyRef, EvalRef, EvalTaskRef, HarborRef
 from marin.evaluation.runner import EvalExecutor
 from marin.external_dependencies import EVALCHEMY
 from rigging.secrets import SecretSpec
@@ -53,15 +53,6 @@ class EvalchemyDefinition:
     secret_env: Mapping[str, SecretSpec] = field(default_factory=dict)
     family: str | None = None
 
-    def secret_env_for(self, config: EvalchemyRunConfig) -> Mapping[str, SecretSpec]:
-        secret_env = dict(self.secret_env)
-        if config.judge is not None:
-            judge_secret = config.judge.api_key
-            if JUDGE_API_KEY_ENV in secret_env and secret_env[JUDGE_API_KEY_ENV] != judge_secret:
-                raise ValueError(f"Evalchemy definition conflicts with judge.api_key for {JUDGE_API_KEY_ENV}")
-            secret_env[JUDGE_API_KEY_ENV] = judge_secret
-        return MappingProxyType(secret_env)
-
     def record_ref_for(self, config: EvalchemyRunConfig) -> EvalRef:
         return EvalRef(
             name=config.name,
@@ -88,11 +79,6 @@ class EvalchemyDefinition:
                 extra_gen_kwargs=dict(config.extra_gen_kwargs),
                 extra_model_args=dict(config.extra_model_args),
                 max_length=config.max_length,
-                judge=(
-                    EvalchemyJudgeRef(base_url=config.judge.base_url, model=config.judge.model)
-                    if config.judge is not None
-                    else None
-                ),
             ),
         )
 
@@ -255,7 +241,6 @@ def evalchemy_run_config(name: str, config: EvalchemyConfig) -> EvalchemyRunConf
         runtime=EvalchemyRuntimeConfig(
             requirement=EVALCHEMY.requirement((*EVALCHEMY_REQUIRED_EXTRAS, *config.runtime_extras))
         ),
-        judge=config.judge,
     )
 
 

@@ -10,9 +10,3 @@ seed: 42
 # No max_tokens: the generation budget comes from the served context (Evalchemy derives it for its own
 # benchmarks; Marin sizes lm-eval-native tasks) or from the model config's generation.max_gen_toks.
 runtime_extras: [financebench]
-judge:
-  base_url: https://api.together.xyz/v1
-  model: openai/gpt-oss-120b
-  api_key:
-    - env:TOGETHER_API_KEY
-    - gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest
