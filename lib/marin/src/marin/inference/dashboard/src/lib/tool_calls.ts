@@ -14,13 +14,9 @@ export interface ToolCallAccumulator {
   calls: Map<number, PendingToolCall>
 }
 
-export interface ToolCallRun {
+interface ToolCallRun {
   signature: string
   length: number
-}
-
-export function reachedToolRoundLimit(maxToolRounds: number, completedRounds: number): boolean {
-  return maxToolRounds > 0 && completedRounds >= maxToolRounds
 }
 
 function canonicalJsonValue(value: unknown): unknown {
@@ -35,8 +31,7 @@ function canonicalJsonValue(value: unknown): unknown {
   return value
 }
 
-/** Record a tool call and reject a third identical call in execution order. */
-export function nextToolCallRun(previous: ToolCallRun | null, call: ToolCall): ToolCallRun {
+function nextToolCallRun(previous: ToolCallRun | null, call: ToolCall): ToolCallRun {
   const signature = JSON.stringify([call.name, canonicalJsonValue(call.arguments)])
   const next = {
     signature,
@@ -46,6 +41,29 @@ export function nextToolCallRun(previous: ToolCallRun | null, call: ToolCall): T
     throw new Error(`Model made the same tool call ${REPEATED_TOOL_CALL_LIMIT} times in a row`)
   }
   return next
+}
+
+/** Run model/tool rounds until the model answers or a configured guard stops the exchange. */
+export async function runToolRounds(
+  maxToolRounds: number,
+  nextCalls: () => Promise<ToolCall[]>,
+  executeCall: (call: ToolCall) => Promise<void>,
+): Promise<void> {
+  let completedRounds = 0
+  let toolCallRun: ToolCallRun | null = null
+  while (true) {
+    const calls = await nextCalls()
+    if (!calls.length) return
+
+    for (const call of calls) {
+      toolCallRun = nextToolCallRun(toolCallRun, call)
+      await executeCall(call)
+    }
+    completedRounds += 1
+    if (maxToolRounds > 0 && completedRounds >= maxToolRounds) {
+      throw new Error(`Stopped after ${maxToolRounds} consecutive tool rounds.`)
+    }
+  }
 }
 
 function objectValue(value: unknown, message: string): Record<string, unknown> {
