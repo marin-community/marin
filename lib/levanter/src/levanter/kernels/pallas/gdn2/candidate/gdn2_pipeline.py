@@ -4,10 +4,7 @@
 # Derived from Atomic Ops, Copyright (c) 2026 Omirbay Akseleu, MIT licensed.
 # The original MIT copyright and permission notice are retained in ../LICENSE.
 
-"""
-Trainable wrapper: custom_vjp with fused Pallas backward.
-Backward uses residuals from forward_with_residuals — NO recomputation.
-"""
+"""Differentiable GDN-2 for single-device arrays with FP32 state."""
 
 from __future__ import annotations
 
@@ -82,7 +79,6 @@ def _gdn2_core_bwd(scale, config, residuals, cotangents):
     bsz, L, H, D = q.shape
     n_chunks = L // config.bt
 
-    # Reshape do into chunk form
     do_r = _r2c(do, bsz, n_chunks, H, D, config.bt)
 
     # Build gc from g (needed for B3 and B4)
@@ -130,7 +126,6 @@ def _gdn2_core_bwd(scale, config, residuals, cotangents):
     dgc_total = b3_out["dgc"] + dgc4
     dg_raw = reverse_cumsum_bwd(dgc_total, chunk_size=config.bt, config=config)
 
-    # Assemble
     dq = _r2f(b3_out["dq"] + dq4, bsz, n_chunks, config.bt, H, D)
     dk = _r2f(b3_out["dk"] + dk4, bsz, n_chunks, config.bt, H, D)
     db = _r2f(b3_out["db"] + db4, bsz, n_chunks, config.bt, H, D)
@@ -150,7 +145,6 @@ def _gdn2_core_bwd(scale, config, residuals, cotangents):
     return dq, dk, dv, dw, db, dg, dh0
 
 
-# Register corrected VJP
 _gdn2_core.defvjp(_gdn2_core_fwd, _gdn2_core_bwd)
 
 

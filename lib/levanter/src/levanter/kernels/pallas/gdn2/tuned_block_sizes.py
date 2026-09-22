@@ -4,6 +4,7 @@
 """Measured local-device GDN-2 tiles; callers choose the untuned fallback."""
 
 from dataclasses import dataclass, replace
+from types import MappingProxyType
 
 from .candidate.configs import KernelConfig, ScoreLayout
 
@@ -36,16 +37,18 @@ class TuningBucket:
 # v4-full1 confirms the forward+backward winner at both seeds. One forward
 # timing row has periodic stalls; this choice does not promise stable tails.
 _LONG_SEQUENCE = TuningBucket(4, 8, 4096, 6, 128, KernelConfig(bt=128, bc=64, mb=16))
-TUNED_BLOCK_SIZES: dict[str, tuple[TuningBucket, ...]] = {
-    "TPU v5 lite": (_LONG_SEQUENCE,),
-    "TPU v5": (_LONG_SEQUENCE,),
-    "TPU v4": (
-        replace(
-            _LONG_SEQUENCE,
-            config=KernelConfig(bt=128, bc=64, mb=16, score_layout=ScoreLayout.FEATURE_FIRST),
+TUNED_BLOCK_SIZES = MappingProxyType(
+    {
+        "TPU v5 lite": (_LONG_SEQUENCE,),
+        "TPU v5": (_LONG_SEQUENCE,),
+        "TPU v4": (
+            replace(
+                _LONG_SEQUENCE,
+                config=KernelConfig(bt=128, bc=64, mb=16, score_layout=ScoreLayout.FEATURE_FIRST),
+            ),
         ),
-    ),
-}
+    }
+)
 
 
 def select_kernel_config(

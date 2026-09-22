@@ -52,7 +52,7 @@ class KernelConfig:
                 f"supports only the 2-block case); got bc={self.bc}. "
                 f"Vary `mb` instead of `bc` to change solver granularity -- "
                 f"bc/mb do not affect numerical accuracy of the solve, only "
-                f"its speed (see grid_bt_bc_condition_diag.py Part 3)."
+                f"its speed."
             )
         if self.bc % self.mb != 0:
             raise ValueError(f"bc={self.bc} must be divisible by mb={self.mb}")

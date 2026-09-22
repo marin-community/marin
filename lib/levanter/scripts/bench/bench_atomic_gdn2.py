@@ -41,6 +41,7 @@ from levanter.kernels.pallas.gdn2.reference import gdn2_reference
 
 FORWARD_NAMES = ("output", "final_state")
 GRADIENT_NAMES = ("loss", "dq", "dk", "dv", "dw", "db", "dg", "dh0")
+CACHE_VERSION = 1
 
 
 def token_reference(q, k, v, w, b, g, h0):
@@ -166,7 +167,7 @@ def load_tuning_cache(path):
     if not path.exists():
         return {}
     payload = json.loads(path.read_text())
-    if payload["version"] != 1 or not isinstance(payload["entries"], dict):
+    if payload["version"] != CACHE_VERSION or not isinstance(payload["entries"], dict):
         raise ValueError(f"Unsupported GDN-2 tuning cache: {path}")
     return payload["entries"]
 
@@ -175,7 +176,7 @@ def save_tuning_cache(path, entries):
     """Atomically replace the optional single-writer benchmark cache."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, prefix=path.name, delete=False) as stream:
-        json.dump({"version": 1, "entries": entries}, stream, indent=2, allow_nan=False)
+        json.dump({"version": CACHE_VERSION, "entries": entries}, stream, indent=2, allow_nan=False)
         stream.write("\n")
         temporary = stream.name
     os.replace(temporary, path)

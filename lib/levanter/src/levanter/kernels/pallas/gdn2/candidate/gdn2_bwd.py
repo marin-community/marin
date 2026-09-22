@@ -288,8 +288,9 @@ def _dgc_pair_sum(dM, edecay, L, R):
 
 
 def _diagonal_intra_grads(dM_qk, dM_kk, L_qk, L_kk, R, gc):
-    """Bound pairwise temporaries to 16 query rows for v4's smaller VMEM."""
+    """Return query/key derivatives for a causal diagonal score block."""
     bc = gc.shape[0]
+    # Bound pairwise temporaries to 16 query rows for v4's smaller VMEM.
     rows_per_tile = min(16, bc)
     dL_qk_tiles = []
     dL_kk_tiles = []
