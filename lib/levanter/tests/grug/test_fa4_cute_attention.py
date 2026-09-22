@@ -177,7 +177,7 @@ def test_fa4_frontend_shards_metadata_with_qkv_batch_axis(monkeypatch):
         )
 
     assert out.shape == q.shape
-    assert out.sharding.spec == P(("data", "expert"), None, None, None)
+    assert out.sharding.spec == qkv_sharding.spec
 
 
 def _fake_unsharded_forward(q, k, v, lower_bounds, valid, *, sm_scale, kernel_config, q_offset):
@@ -238,7 +238,7 @@ def test_fa4_accepts_unit_context_axis(monkeypatch, context_entry):
         )
 
     assert out.shape == q.shape
-    assert out.sharding.spec == P(("data", "expert"), None, None, None)
+    assert out.sharding.spec == q_sharding.spec
 
 
 def test_fa4_precomputed_bounds_reject_mismatched_context_lengths(monkeypatch):
