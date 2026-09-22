@@ -288,6 +288,7 @@ def inference_config_for_model(
             revision=model.revision,
             api_model=api_model,
             tokenizer=model.tokenizer or model.location,
+            tokenizer_revision=model.effective_tokenizer_revision,
             max_model_len=max_model_len,
             tensor_parallel_size=serve.tensor_parallel_size,
             chat_template_content=serve.chat_template,
