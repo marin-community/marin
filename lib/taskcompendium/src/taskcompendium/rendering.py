@@ -5,15 +5,8 @@
 
 import json
 from dataclasses import dataclass
-from enum import StrEnum
 
-from taskcompendium.models import NativeFunction, TaskSpec
-
-
-class AnswerFormat(StrEnum):
-    PLAIN = "plain"
-    JSON = "json"
-    FINAL_ACTION = "final_action"
+from taskcompendium.models import AnswerFormat, NativeFunction, TaskSpec
 
 
 @dataclass(frozen=True)
@@ -61,6 +54,10 @@ def _object_with_unique_fields(pairs: list[tuple[str, object]]) -> dict[str, obj
 
 def render_instruction(specification: TaskSpec, rendering: Rendering) -> str:
     """Return the public request with only its answer convention attached."""
+    if rendering.answer_format not in specification.permitted_answer_formats:
+        raise ValueError(
+            f"Task {specification.id!r} does not permit the {rendering.answer_format.value!r} answer format"
+        )
     if rendering.answer_format == AnswerFormat.FINAL_ACTION:
         if not rendering.functions or not rendering.messages:
             raise ValueError("Final-action rendering requires advertised functions and source messages")

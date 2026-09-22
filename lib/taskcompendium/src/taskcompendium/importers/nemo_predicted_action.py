@@ -7,9 +7,9 @@ import hashlib
 import json
 from typing import Any
 
-from taskcompendium.models import FunctionCall, NativeFunction, Source, TaskRequirements, TaskSpec
+from taskcompendium.models import AnswerFormat, FunctionCall, NativeFunction, Source, TaskRequirements, TaskSpec
 from taskcompendium.nemo_verifier import predicted_action_verifier
-from taskcompendium.rendering import AnswerFormat, NativeMessage, Rendering, format_native_messages
+from taskcompendium.rendering import NativeMessage, Rendering, format_native_messages
 
 DATASET = "nvidia/Nemotron-RL-Agentic-Conversational-Tool-Use-Pivot-v1"
 REVISION = "9643c8103d7bfbc2d7fc4d15991d6739c612ff58"
@@ -130,6 +130,7 @@ def import_row(row: dict[str, Any], expected_sha256: str) -> tuple[TaskSpec, Ren
         verifier=predicted_action_verifier(expected_calls),
         source=source,
         requirements=TaskRequirements(),
+        permitted_answer_formats=(AnswerFormat.FINAL_ACTION,),
     )
     rendering = Rendering(
         "nemo-native-final-action", AnswerFormat.FINAL_ACTION, functions, messages, tool_choice, parallel_tool_calls
