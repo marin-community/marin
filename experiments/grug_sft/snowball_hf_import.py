@@ -34,6 +34,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from experiments.june_tpu_67b_a2b.moe.model import Block, GrugModelConfig, Transformer
 
 _CHECKPOINT_STEP = 0
+_CONVERSION_ENV = {"XLA_PYTHON_CLIENT_PREALLOCATE": "false"}
 
 
 def _stack_blocks(blocks: Sequence[Block], template: ArrayStacked[Block]) -> ArrayStacked[Block]:
@@ -74,12 +75,12 @@ def import_snowball_hf_weights(
         raise ValueError("Snowball SFT import requires use_array_stacked_blocks=True")
 
     unstacked_config = dataclasses.replace(config, use_array_stacked_blocks=False)
-    load_template = Transformer.init(unstacked_config, key=key)
+    load_template = eqx.filter_eval_shape(Transformer.init, unstacked_config, key=key)
     loaded = snowball_from_state_dict(load_template, dict(state_dict))
     if loaded.blocks is None:
         raise ValueError("HF import did not produce unstacked blocks")
 
-    target = Transformer.init(config, key=key)
+    target = eqx.filter_eval_shape(Transformer.init, config, key=key)
     if target.stacked_blocks is None:
         raise ValueError("Stacked trainer template did not produce stacked blocks")
     stacked_blocks = _stack_blocks(loaded.blocks, target.stacked_blocks)
@@ -184,7 +185,7 @@ def _run_snowball_hf_to_grug(config: SnowballHfToGrugConfig) -> None:
 
 
 def _convert_job(config: SnowballHfToGrugConfig) -> None:
-    remote(_run_snowball_hf_to_grug, resources=config.resources)(config)
+    remote(_run_snowball_hf_to_grug, resources=config.resources, env_vars=_CONVERSION_ENV)(config)
 
 
 def snowball_hf_to_grug(

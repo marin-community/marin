@@ -55,7 +55,7 @@ from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig as LegacyGrug
 HF_MODEL = "open-athena/snowball-67b-a2b-base-262k-qk175-skew8"
 HF_REVISION = "058ecaf27b9e4f37219df221a51e7d490d58ec3d"
 DATA_SOURCE = "openthoughts-agent-sft-100k"
-CONVERSION_VERSION = "2026.09.21"
+CONVERSION_VERSION = "2026.09.22"
 DEFAULT_RUN_ID = "snowball-67b-262k-h100-demo"
 WANDB_PROJECT = "snowball_sft_demo"
 
@@ -281,7 +281,7 @@ def build_demo(
         hf_revision=HF_REVISION,
         model=legacy_model_config(),
         version=CONVERSION_VERSION,
-        resources=ResourceConfig.with_cpu(cpu=32, ram="512g", disk="256g"),
+        resources=ResourceConfig.with_cpu(cpu=64, ram="768g", disk="384g"),
     )
     conversion_step = conversion.step.lower()
     tokenizer = conversion.step.path()
