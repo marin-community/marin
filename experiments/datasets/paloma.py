@@ -16,7 +16,7 @@ from experiments.llama import llama3_tokenizer
 
 # Pinned Paloma download (out-of-region: gated HF, no in-region download step).
 _PALOMA_RAW = "raw/paloma-fc6827/65cd6fc"
-# In-region byte-lossless text reconstruction of the eval sets (see experiments/datakit/paloma_detok.py).
+# In-region byte-lossless text reconstruction of the eval sets (see experiments/grug/fast_track/paloma_detok.py).
 # Use this raw_prefix to rebuild the caches under any tokenizer without the out-of-region raw.
 _PALOMA_DETOK_RAW = "raw/paloma-detok"
 # Default cache version; bump when repointing raw or rebuilding under a new tokenizer.

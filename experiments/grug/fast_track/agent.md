@@ -46,17 +46,31 @@ variant's optima and on the baseline's, and compare the projections — but fit
 
 ### Effective speedup (throughput-aware refinement)
 
-When a variant trades quality for throughput (or vice versa), compare wall-clock
-time to reach a fixed macro loss rather than loss alone. Given a fitted exponent `alpha`
-and asymptote `L_inf`:
+When a variant trades quality for throughput (or vice versa), compare wall-clock time to reach a
+fixed macro loss rather than loss alone. The one rule: **`budget`/`C` and the throughput must be the
+same currency** — both tokens, or both FLOPs — or the wall-clock ratio silently gains a spurious
+`flops_per_token` factor.
+
+For the default **data-matched** ladder, work in tokens: `budget` is the shared token count both runs
+trained (data-match guarantees they match, so one `budget` applies to both) and `*_tps` is
+`throughput/tokens_per_second`. Then `compute / throughput` is genuinely seconds and this is exact
+(fit `alpha`/`L_inf` as loss-vs-tokens):
 
 ```python
 def effective_speedup(baseline_loss, baseline_tps, variant_loss, variant_tps, budget, *, L_inf, alpha):
-    """Wall-clock speedup of the variant over the baseline (>1 = variant reaches its loss faster)."""
-    A_bl = (baseline_loss - L_inf) * budget ** alpha          # fit A through the baseline point
-    C_needed = (A_bl / (variant_loss - L_inf)) ** (1 / alpha)  # compute baseline needs to match variant loss
+    """Wall-clock speedup of the variant over the baseline (>1 = variant reaches its loss faster).
+    DATA-matched: `budget` = shared token count; `*_tps` = tokens/sec; alpha/L_inf fit as loss-vs-tokens."""
+    A_bl = (baseline_loss - L_inf) * budget ** alpha           # fit A through the baseline point
+    C_needed = (A_bl / (variant_loss - L_inf)) ** (1 / alpha)  # tokens the baseline needs for variant_loss
     return (C_needed / baseline_tps) / (budget / variant_tps)
 ```
+
+For **`--match compute`** (or any architecture change that alters FLOPs/token), tokens/sec is the
+wrong denominator: `budget`/`C` are FLOPs but the two runs process *different* token counts, so
+dividing FLOPs by tokens/sec drops the `flops_per_token` ratio — a +18% FLOPs/token variant that is
+genuinely equal gets reported as ~0.85. Keep `budget`/`C` in FLOPs but pass throughput as **FLOP/s**
+(`flops_per_second = tokens_per_second * flops_per_token`, with `flops_per_token` from `_compute_flops`)
+for `*_tps`; then `FLOPs / (FLOPs/sec)` is seconds and the FLOPs/token difference cancels correctly.
 
 ## Implementation
 
