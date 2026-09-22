@@ -129,7 +129,6 @@ _BENCHMARK_PROMPTS = 128
 _BENCHMARK_SAMPLES_PER_PROMPT = 4
 _AGENTIC_BENCHMARK_PROMPTS = 128
 _AGENTIC_BENCHMARK_SEED = 71
-_AGENTIC_GROUP_ADMISSION_STALL_TIMEOUT = 3600
 _BENCHMARK_MEMORY = "512GB"
 _BENCHMARK_DISK = "2TB"
 _BENCHMARK_DISTRIBUTED_TIMEOUT = 60
@@ -144,8 +143,8 @@ _TORCHAUDIO_CU128_REQUIREMENT = (
 
 def _rl_benchmark_role_plan() -> SkyRLRolePlan:
     return SkyRLRolePlan(
-        colocate_all=False,
-        policy_num_nodes=4,
+        colocate_all=True,
+        policy_num_nodes=8,
         policy_num_gpus_per_node=GPUS_PER_NODE,
         num_inference_engines=GPUS_PER_NODE,
         inference_engine_tensor_parallel_size=1,
@@ -261,19 +260,11 @@ def _rl_benchmark_config_yaml(role_plan: SkyRLRolePlan, *, speculative: bool) ->
 
 
 def _agentic_benchmark_config_yaml(role_plan: SkyRLRolePlan, *, speculative: bool) -> str:
-    if role_plan.policy_mini_batch_size != role_plan.train_batch_size:
-        raise ValueError("Fully asynchronous agentic benchmarks require one policy mini-batch per rollout batch")
     config = yaml.safe_load(_rl_benchmark_config_yaml(role_plan, speculative=speculative))
     config["entrypoint"] = "terminal_bench"
     config["config_groups"] = {"terminal_bench_config": "terminal_bench"}
-    # A TaskTrove prompt group can legitimately outlive SkyRL's 30-minute
-    # first-batch default: each of its four trials may exhaust the configured
-    # agent timeout and retry envelope before the group becomes admissible.
-    config["trainer"]["algorithm"]["group_admission"] = {
-        "stall_timeout": _AGENTIC_GROUP_ADMISSION_STALL_TIMEOUT,
-    }
     config["context_budget"] = {
-        "request_window_tokens": 32_768,
+        "request_window_tokens": 32_767,
         "max_new_tokens_per_turn": 4096,
         "max_turns": 8,
     }
@@ -783,7 +774,7 @@ def _benchmark_step(
             train_data=train_data,
             validation_data=(),
             topology=SkyRLTopology(
-                num_nodes=12,
+                num_nodes=role_plan.policy_num_nodes,
                 gpus_per_node=GPUS_PER_NODE,
                 gpu_variant=GPU_VARIANT,
                 role_plan=role_plan,

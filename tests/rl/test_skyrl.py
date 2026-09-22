@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import IO, cast
 
 import pytest
+import yaml
 from marin.evaluation.model_config import ModelConfig, ResourceHint
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -242,11 +243,35 @@ def test_skyrl_temporary_run_path_does_not_repeat_bucket_name(monkeypatch: pytes
     )
 
 
-def test_skyrl_smoke_disables_checkpoint_and_export_callbacks() -> None:
-    step = skyrl_smoke(_spec(), _execution())
+def test_skyrl_smoke_runs_training_data_as_rollout_only_evaluation() -> None:
+    spec = dataclasses.replace(
+        _spec(),
+        config_yaml=yaml.safe_dump(
+            {
+                "entrypoint": "standard",
+                "context_budget": {"max_new_tokens_per_turn": 512},
+                "trainer": {"max_steps": 8, "eval_interval": -1},
+                "generator": {
+                    "n_samples_per_prompt": 4,
+                    "sampling_params": {"temperature": 0.7, "top_p": 0.9},
+                },
+            }
+        ),
+    )
+    step = skyrl_smoke(spec, _execution())
     config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
 
-    assert config.request.overrides[-4] == "++trainer.callbacks=[{type:inference_stats},{type:logging}]"
+    smoke_config = yaml.safe_load(config.request.config_yaml)
+    assert smoke_config["entrypoint"] == "generate"
+    assert smoke_config["trainer"]["eval_interval"] == 1
+    assert smoke_config["generator"]["eval_n_samples_per_prompt"] == 4
+    assert smoke_config["generator"]["eval_sampling_params"] == {
+        "temperature": 0.7,
+        "top_p": 0.9,
+        "max_generate_length": 512,
+    }
+    assert config.request.train_data == ()
+    assert len(config.request.validation_data) == 1
     assert config.request.export_hf is False
 
 

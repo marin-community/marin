@@ -651,7 +651,28 @@ def skyrl_step(
 
 
 def skyrl_smoke(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[SkyRLRun]:
-    """Build a run that emits metrics without checkpointing or exporting a model."""
-    callbacks_override = "++trainer.callbacks=[{type:inference_stats},{type:logging}]"
-    smoke_spec = replace(spec, overrides=(*spec.overrides, callbacks_override))
+    """Build a rollout-only evaluation that never creates policy workers or checkpoints."""
+    config = yaml.safe_load(spec.config_yaml)
+    if not isinstance(config, dict):
+        raise ValueError("SkyRL smoke configuration must be a YAML mapping")
+
+    config["entrypoint"] = "generate"
+    trainer = config.setdefault("trainer", {})
+    generator = config.setdefault("generator", {})
+    context_budget = config.get("context_budget", {})
+    trainer["eval_interval"] = 1
+    generator["eval_n_samples_per_prompt"] = spec.topology.role_plan.n_samples_per_prompt
+    generator["eval_sampling_params"] = dict(generator.get("sampling_params", {}))
+    if "max_new_tokens_per_turn" in context_budget:
+        generator["eval_sampling_params"]["max_generate_length"] = context_budget["max_new_tokens_per_turn"]
+
+    evaluation_data = spec.validation_data or spec.train_data
+    if not evaluation_data:
+        raise ValueError("SkyRL smoke evaluation requires train_data or validation_data")
+    smoke_spec = replace(
+        spec,
+        config_yaml=yaml.safe_dump(config, sort_keys=False),
+        train_data=(),
+        validation_data=evaluation_data,
+    )
     return skyrl_step(smoke_spec, execution)
