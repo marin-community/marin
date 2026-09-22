@@ -11,8 +11,16 @@ from pathlib import Path
 import msgspec
 
 from taskcompendium.grading import validate_verifier
-from taskcompendium.models import SCHEMA_VERSION, AnswerKind, Source, TaskRequirements, TaskSpec, VerifierSpec
-from taskcompendium.rendering import AnswerFormat, Rendering, render_instruction
+from taskcompendium.models import (
+    SCHEMA_VERSION,
+    AnswerFormat,
+    AnswerKind,
+    Source,
+    TaskRequirements,
+    TaskSpec,
+    VerifierSpec,
+)
+from taskcompendium.rendering import Rendering, render_instruction
 
 DIRECT_CHAT_ENVIRONMENT = "direct_chat"
 
@@ -52,6 +60,7 @@ def read_specification(path: Path) -> TaskSpec:
             action_interfaces=tuple(data["requirements"]["action_interfaces"]),
         ),
         answer_kind=AnswerKind(data["answer_kind"]),
+        permitted_answer_formats=tuple(AnswerFormat(value) for value in data["permitted_answer_formats"]),
         schema_version=data["schema_version"],
     )
     validate_verifier(specification.verifier)

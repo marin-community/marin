@@ -10,7 +10,7 @@ import tomllib
 from tasktrove_verify.spec import McqSpec, parse_spec
 
 from taskcompendium.importers.tasktrove import TaskArchive
-from taskcompendium.models import AnswerKind, TaskRequirements, TaskSpec
+from taskcompendium.models import AnswerFormat, AnswerKind, TaskRequirements, TaskSpec
 from taskcompendium.verifiers.tasktrove_mcqa import tasktrove_mcqa
 
 FAMILY = "qa-short-answer"
@@ -58,4 +58,5 @@ def import_task(archive: TaskArchive) -> TaskSpec:
         source=archive.source,
         requirements=TaskRequirements(),
         answer_kind=AnswerKind.OPTION_LETTER,
+        permitted_answer_formats=(AnswerFormat.PLAIN, AnswerFormat.JSON),
     )

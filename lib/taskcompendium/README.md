@@ -1,6 +1,6 @@
 # TaskCompendium direct-chat slice
 
-`TaskSpec` holds one fixed answer task, its source provenance, semantic requirements, an answer form, and a private verifier. The direct-chat slice supports exact answers and multiple-choice option letters. A `Rendering` selects plain text or a JSON object with an `answer` string for tasks that support that convention. Task importers choose the applicable renderings; TaskCompendium does not assume that every task supports JSON. MCQA renderings ask for the selected letter; the TaskTrove `McqSpec` syntax remains private to grading. `HarborTaskBinding` selects the direct-chat environment with no tools and must satisfy the task requirements. `HarborLaunch` selects a replay agent for validation or an OpenAI-compatible chat agent for a model run.
+`TaskSpec` holds one fixed answer task, its source provenance, semantic requirements, permitted answer formats, an answer form, and a private verifier. The direct-chat slice supports exact answers and multiple-choice option letters. A `Rendering` selects plain text or a JSON object with an `answer` string. Plain text is the conservative default; an importer must explicitly permit JSON when that wrapper preserves the task. Lowering rejects renderings outside the specification's allowlist. MCQA renderings ask for the selected letter; the TaskTrove `McqSpec` syntax remains private to grading. `HarborTaskBinding` selects the direct-chat environment with no tools and must satisfy the task requirements. `HarborLaunch` selects a replay agent for validation or an OpenAI-compatible chat agent for a model run.
 
 The exporter writes `instruction.md`, `task.toml`, an empty `environment/` directory, `specification.json`, `rendering.json`, and `binding.json`. The specification and rendering files remain private to the Harbor custom verifier. Launch checks the stored binding before starting Harbor. The agent receives the rendered instruction and has no filesystem or shell tools. The package requires Harbor at the revision containing [custom-verifier task loading](https://github.com/marin-community/harbor/pull/155); exported tasks contain no `tests/test.sh`.
 
@@ -13,8 +13,8 @@ from pathlib import Path
 
 from taskcompendium.grading import exact_answer
 from taskcompendium.lowering import HarborTaskBinding, lower_to_harbor
-from taskcompendium.models import Source, TaskRequirements, TaskSpec
-from taskcompendium.rendering import AnswerFormat, Rendering
+from taskcompendium.models import AnswerFormat, Source, TaskRequirements, TaskSpec
+from taskcompendium.rendering import Rendering
 
 spec = TaskSpec(
     id="arithmetic-7-plus-5",
@@ -22,6 +22,7 @@ spec = TaskSpec(
     verifier=exact_answer("12"),
     source=Source("hand-authored", "2026-09-16", "arithmetic-7-plus-5", "1"),
     requirements=TaskRequirements(),
+    permitted_answer_formats=(AnswerFormat.PLAIN, AnswerFormat.JSON),
 )
 binding = HarborTaskBinding()
 lower_to_harbor(spec, Rendering("plain", AnswerFormat.PLAIN), binding, Path("/tmp/arithmetic-plain"))
