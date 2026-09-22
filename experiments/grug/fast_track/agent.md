@@ -131,7 +131,7 @@ before checking status — do not poll in a tight loop.
 
 List your jobs:
 ```bash
-uv run iris --cluster marin job list --prefix "$(whoami)"
+uv run iris --cluster marin job list --prefix "/$(whoami)"
 ```
 
 Reconnect to logs:
