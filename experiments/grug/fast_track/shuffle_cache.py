@@ -32,7 +32,7 @@ Everything stays in ``marin-us-east-02a``; point ``MARIN_PREFIX`` there. Launche
         --target-cluster cw-us-east-08a --priority production --cpu 4 --memory 64GB --disk 16GB \\
         --max-retries 2 --no-wait --job-name shuf-v16k-scatter-$k \\
         -e MARIN_PREFIX s3://marin-us-east-02a/marin \\
-        -- python -m experiments.datakit.shuffle_cache --phase scatter \\
+        -- python -m experiments.grug.fast_track.shuffle_cache --phase scatter \\
            --in-cache s3://marin-us-east-02a/marin/datakit/hero_tok/v16384_617680a7/train \\
            --out s3://marin-us-east-02a/marin/datakit/hero_tok/v16384_shuf \\
            --num-buckets 128 --num-tasks 64 --task-index $k
