@@ -31,8 +31,9 @@ from marin.datakit.normalize import (
 )
 from marin.execution.step_spec import StepSpec
 
-CHAT_NORMALIZE_VERSION = "2026.09.18"
+CHAT_NORMALIZE_VERSION = "2026.09.18.1"
 MAX_REJECTED_RECORD_FRACTION = 0.05
+LONG_FINAL_RESPONSE_ESTIMATED_TOKEN_THRESHOLD = 2_000
 
 
 _SAFE_TOOL_IDENTIFIER = re.compile(r"[A-Za-z0-9_.:-]+")
@@ -97,6 +98,23 @@ def message_text(message: Message) -> str:
     if not message.content or any(not isinstance(part, TextContent) for part in message.content):
         raise ValueError("Datakit chat messages require text content parts")
     return "".join(part.text for part in message.content)
+
+
+def _estimated_token_count(text: str) -> int:
+    # Keep normalization tokenizer-free; the larger estimate handles long words,
+    # punctuation-heavy code, and non-ASCII text better than either proxy alone.
+    byte_estimate = (len(text.encode("utf-8")) + 3) // 4
+    lexical_estimate = len(re.findall(r"[A-Za-z0-9_]+|[^\s]", text))
+    return max(byte_estimate, lexical_estimate)
+
+
+def _has_long_final_response(messages: list[Message]) -> bool:
+    return any(
+        message.author.role == Role.ASSISTANT
+        and message.channel == ChatChannel.FINAL
+        and _estimated_token_count(message_text(message)) > LONG_FINAL_RESPONSE_ESTIMATED_TOKEN_THRESHOLD
+        for message in messages
+    )
 
 
 def has_stalled_tool_call(messages: list[Message]) -> bool:
@@ -255,6 +273,9 @@ def _normalize_chat_record(record: dict[str, Any], messages_field: str, id_field
     if not isinstance(raw_kwargs, dict):
         raise ValueError("chat_template_kwargs must be a JSON object")
     kwargs = dict(raw_kwargs)
+    kwargs["enable_thinking"] = any(
+        message.author.role == Role.ASSISTANT and message.channel == ChatChannel.ANALYSIS for message in messages
+    )
     tools = kwargs.get("tools", [])
     if not isinstance(tools, list):
         raise ValueError("tools must be a list of function definitions")
@@ -301,6 +322,10 @@ def _build_chat_pipeline(
             counters.pipeline.update_counter("normalize_chat/records_quarantined", 1)
             counters.pipeline.update_counter(f"normalize_chat/quarantined/{type(error).__name__}", 1)
             return []
+        messages = [Message.from_dict(message) for message in normalized["messages"]]
+        if _has_long_final_response(messages):
+            # Long finals can indicate reasoning that a source adapter failed to separate.
+            counters.pipeline.update_counter("normalize_chat/conversations_with_final_over_2k_estimated_tokens", 1)
         counters.pipeline.update_counter("normalize_chat/records_validated", 1)
         return [normalized]
 

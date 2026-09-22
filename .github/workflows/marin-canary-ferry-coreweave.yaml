@@ -143,6 +143,7 @@ jobs:
           echo "GPU replicas: $CANARY_GPU_REPLICAS"
           JOB_ID=$(.venv/bin/iris --config="$IRIS_CONFIG" \
             job run --no-wait \
+            --timeout 21600 \
             --memory=2G --disk=4G --cpu=1 --extra=cpu \
             -e MARIN_PREFIX "$MARIN_PREFIX" \
             -e RUN_ID "$RUN_ID" \

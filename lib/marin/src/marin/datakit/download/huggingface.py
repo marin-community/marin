@@ -27,7 +27,7 @@ from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
 from marin.execution.step_spec import StepSpec
-from marin.utilities.validation_utils import write_provenance_json
+from marin.utilities.provenance import write_provenance_json
 
 logger = logging.getLogger(__name__)
 

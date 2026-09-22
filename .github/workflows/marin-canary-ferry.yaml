@@ -87,6 +87,7 @@ jobs:
             'from experiments.ferries.canary_ferry import _tpu_types_from_env; print(_tpu_types_from_env()[0])')
           JOB_ID=$(.venv/bin/iris --config=${{ env.IRIS_CONFIG }} \
             job run --no-wait \
+            --timeout 21600 \
             --memory=2G --disk=4G --cpu=1 --extra=cpu \
             --priority production \
             --preemptible \

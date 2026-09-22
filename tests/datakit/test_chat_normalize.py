@@ -15,6 +15,7 @@ from marin.datakit.chat_normalize import (
     normalize_chat_to_parquet,
     validate_chat_messages,
 )
+from marin.datakit.chat_render import render_chat_record
 from marin.datakit.download.coderforge import SOURCE_CHAT_SCHEMA
 from marin.datakit.download.coderforge import transform_chat as transform_coderforge_chat
 from openai_harmony import Author, Message, Role
@@ -41,6 +42,26 @@ def test_normalization_preserves_native_harmony_channels_without_interpreting_te
     normalized = _normalize_chat_record(record, "messages", "id")
     assert normalized["messages"] == record["messages"]
     assert _normalize_chat_record(normalized, "messages", "id")["id"] == normalized["id"]
+
+
+@pytest.mark.parametrize(
+    ("analysis", "expected_mode", "expected_instruction"),
+    [(None, False, "Reasoning: /nothink"), ("Check the answer.", True, "Reasoning: /think")],
+)
+def test_normalization_derives_conversation_mode_from_analysis(analysis, expected_mode, expected_instruction):
+    messages = [Message.from_role_and_content(Role.USER, "What is two plus two?")]
+    if analysis is not None:
+        messages.append(Message.from_role_and_content(Role.ASSISTANT, analysis).with_channel(ChatChannel.ANALYSIS))
+    messages.append(Message.from_role_and_content(Role.ASSISTANT, "Four.").with_channel(ChatChannel.FINAL))
+    record = {
+        "messages": [message.to_dict() for message in messages],
+        "chat_template_kwargs": {"enable_thinking": not expected_mode},
+    }
+
+    normalized = _normalize_chat_record(record, "messages", "id")
+
+    assert json.loads(normalized["chat_template_kwargs"])["enable_thinking"] is expected_mode
+    assert expected_instruction in render_chat_record(normalized)["text"]
 
 
 def test_normalization_rejects_legacy_source_turns():
@@ -157,6 +178,22 @@ def test_normalization_filters_repeated_tool_call_after_identical_replies(tmp_pa
     assert normalized[0]["messages"][0]["content"][0]["text"] == "Hello."
     assert result.counters["normalize_chat/repeated_tool_calls_filtered"] == 1
     assert result.counters.get("normalize_chat/records_quarantined", 0) == 0
+
+
+def test_normalization_counts_conversations_with_long_final_responses_once(tmp_path: Path):
+    messages = [
+        Message.from_role_and_content(Role.USER, "First question"),
+        Message.from_role_and_content(Role.ASSISTANT, "word " * 2_001).with_channel(ChatChannel.FINAL),
+        Message.from_role_and_content(Role.USER, "Second question"),
+        Message.from_role_and_content(Role.ASSISTANT, "word " * 2_001).with_channel(ChatChannel.FINAL),
+    ]
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    (input_dir / "data.jsonl").write_text(json.dumps({"messages": [message.to_dict() for message in messages]}))
+
+    result = normalize_chat_to_parquet(input_path=str(input_dir), output_path=str(tmp_path / "normalized"))
+
+    assert result.counters["normalize_chat/conversations_with_final_over_2k_estimated_tokens"] == 1
 
 
 @pytest.mark.parametrize("replies", [("43% complete", "65% complete"), ("same result", "same result")])
