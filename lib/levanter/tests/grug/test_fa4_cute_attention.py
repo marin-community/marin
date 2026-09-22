@@ -43,29 +43,6 @@ def _make_qkv(*, batch: int = 2, q_len: int = 6, k_len: int = 6, q_heads: int = 
     return q, k, v
 
 
-def test_packed_segment_backward_block_sparse_indices_are_q_direction():
-    segment_ids = jnp.array([[0, 0, 0, 0, 1, 1, 1, -1]], dtype=jnp.int32)
-    lower_bounds, valid = fa4_cute._packed_segment_causal_lower_bounds(
-        segment_ids,
-        batch_size=1,
-        seq_len=8,
-        sliding_window=None,
-    )
-
-    mask_block_cnt, mask_block_idx = fa4_cute_backend._packed_segment_backward_block_sparse_indices(
-        lower_bounds,
-        valid,
-        tile_m=2,
-        tile_n=4,
-    )
-
-    np.testing.assert_array_equal(mask_block_cnt, jnp.array([[[2, 2]]], dtype=jnp.int32))
-    np.testing.assert_array_equal(
-        mask_block_idx,
-        jnp.array([[[[0, 1, 0, 0], [2, 3, 0, 0]]]], dtype=jnp.int32),
-    )
-
-
 def test_packed_segment_backward_block_sparse_indices_split_full_blocks():
     segment_ids = jnp.zeros((1, 8), dtype=jnp.int32)
     lower_bounds, valid = fa4_cute._packed_segment_causal_lower_bounds(

@@ -346,20 +346,6 @@ def _is_infrastructure_error(sample: EvalSample) -> bool:
     )
 
 
-def _validated_coverage(coverage: TaskCoverage) -> TaskCoverage:
-    if coverage.n_attempted is not None and coverage.n_scored > coverage.n_attempted:
-        raise ValueError(f"scored count {coverage.n_scored} exceeds intended count {coverage.n_attempted}")
-    if coverage.n_benchmark is None:
-        return coverage
-    if coverage.n_benchmark <= 0:
-        raise ValueError(f"benchmark size must be positive, got {coverage.n_benchmark}")
-    if coverage.n_attempted is None:
-        raise ValueError("benchmark size requires an intended attempted count")
-    if coverage.n_attempted > coverage.n_benchmark:
-        raise ValueError(f"intended count {coverage.n_attempted} exceeds benchmark size {coverage.n_benchmark}")
-    return coverage
-
-
 def task_coverage_and_metrics(
     samples: Sequence[EvalSample],
     *,
