@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import IO, cast
 
 import pytest
+from iris.cluster.client.job_info import JobInfo, set_job_info
+from iris.cluster.types import JobName
 from marin.evaluation.model_config import ModelConfig, ResourceHint
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -433,13 +435,22 @@ def test_run_skyrl_returns_external_terminal_model(monkeypatch: pytest.MonkeyPat
     catalog_rows = []
     monkeypatch.setattr("marin.rl.skyrl.record_rollout_run", catalog_rows.append)
 
-    model = run_skyrl(
-        SkyRLRunConfig(
-            request=request,
-            execution=_execution(),
-            launcher_requirement=MARIN_SKYRL.requirement(),
-        )
+    execution = dataclasses.replace(
+        _execution(),
+        target_cluster="cw-us-east-08a",
+        parent_cluster_config="lib/iris/config/marin.yaml",
     )
+    set_job_info(JobInfo(task_id=JobName.from_wire("/alice/rl-coordinator/0")))
+    try:
+        model = run_skyrl(
+            SkyRLRunConfig(
+                request=request,
+                execution=execution,
+                launcher_requirement=MARIN_SKYRL.requirement(),
+            )
+        )
+    finally:
+        set_job_info(None)
 
     assert model.policy_export_uri.endswith("global_step_8/policy")
     assert model.global_step == 8
@@ -461,6 +472,8 @@ def test_run_skyrl_returns_external_terminal_model(monkeypatch: pytest.MonkeyPat
         "n_samples_per_prompt": 4,
     }
     assert launch_envelopes[0]["execution"]["job_name"] == "checkpoints-iceball-rl-2026.08.01-attempt-1"
+    assert launch_envelopes[0]["execution"]["target_cluster"] is None
+    assert launch_envelopes[0]["execution"]["parent_cluster_config"] is None
     assert "coordinator_timeout_hours" not in launch_envelopes[0]["execution"]
     assert len(catalog_rows) == 1
     assert catalog_rows[0].run_id == request.run_id

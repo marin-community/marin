@@ -18,6 +18,7 @@ from typing import Literal, cast
 
 import fsspec
 import yaml
+from iris.cluster.client.job_info import get_job_info
 from pydantic import BaseModel
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath, prefix_join
@@ -654,6 +655,12 @@ def run_skyrl(config: SkyRLRunConfig) -> SkyRLModel:
     request["topology"]["role_plan"] = {field_name: role_plan[field_name] for field_name in _MARINSKYRL_ROLE_PLAN_FIELDS}
     execution = asdict(config.execution)
     execution.pop("coordinator_timeout_hours")
+    if get_job_info() is not None and execution["target_cluster"] is not None:
+        # The RL coordinator was already federated to this target cluster. Submit the GPU child
+        # through its ambient controller so Iris preserves the parent/child lifecycle and does not
+        # require a second set of IAP credentials inside the coordinator task.
+        execution["target_cluster"] = None
+        execution["parent_cluster_config"] = None
     envelope = {
         "request": request,
         "execution": {
