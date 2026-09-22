@@ -15,7 +15,7 @@ and generated hidden states stay in the same object-store region::
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 import click
@@ -289,7 +289,7 @@ def _qa_rollout_steps() -> tuple[ArtifactStep[FineStoreEvalchemyResult], ...]:
                 discover_latest_checkpoint=False,
                 version=None,
             )
-            steps.append(replace(step, run=replace(step.run, max_retries_failure=0)))
+            steps.append(step)
     return tuple(steps)
 
 
