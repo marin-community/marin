@@ -42,6 +42,27 @@ GCP project access, Iris IAP access, GitHub access, and external-service access
 are separate grants. The onboarding agent can identify a missing grant. Ask
 your manager or a Marin infrastructure maintainer to route the request.
 
+### Pulumi operators
+
+Running `pulumi up` for the `marin` GCP stack requires elevated access outside
+ordinary developer onboarding. An operator needs both project custom roles:
+
+- `projects/hai-gcp-models/roles/marindev`
+- `projects/hai-gcp-models/roles/marinPulumiAdmin`
+
+`marinPulumiAdmin` can change resource-scoped IAM policy. Grant it only to
+trusted operators of the `marin` stack. A maintainer adds an operator through
+the [Pulumi user-grant workflow](https://github.com/marin-community/marin/blob/main/infra/pulumi/README.md#user-grants):
+`add-grant` creates a PR with the encrypted principal and role bindings. A
+separate reviewer runs `review-grant`, confirms the decrypted grant, merges the
+PR, and applies the `marin` stack. Do not store a plaintext email in the public
+repository or change the managed IAM bindings with `gcloud`.
+
+The onboarding agent should verify both live role bindings, local Pulumi
+tooling, and read access to the Pulumi state. It must not run `pulumi up` as an
+access check. CoreWeave stacks also require the kubeconfig credentials described
+in the Pulumi infrastructure guide.
+
 ## What humans should read
 
 Ask the onboarding agent to execute the installation and access checks. Read
