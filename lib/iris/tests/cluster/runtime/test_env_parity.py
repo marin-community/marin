@@ -17,6 +17,8 @@ from iris.cluster.backends.k8s.tasks import PodConfig, _build_pod_manifest
 from iris.cluster.runtime.env import (
     IRIS_SLICE_COUNT,
     IRIS_TASKS_PER_SLICE,
+    UV_CACHE_PATH,
+    UV_RETRY_CACHE_PATH,
     build_common_iris_env,
     with_slice_topology_env,
 )
@@ -164,6 +166,15 @@ def test_attempt_id_zero_includes_suffix():
 def test_attempt_id_nonzero_gets_suffix():
     env = _common_env(_make_req(attempt_id=5))
     assert env["IRIS_TASK_ID"] == "/my-job/task-0:5"
+
+
+def test_retry_uses_attempt_local_uv_cache():
+    first_attempt = _common_env(_make_req(attempt_id=0))
+    retry = _common_env(_make_req(attempt_id=1))
+
+    assert first_attempt["UV_CACHE_DIR"] == UV_CACHE_PATH
+    assert retry["UV_CACHE_DIR"] == UV_RETRY_CACHE_PATH
+    assert retry["UV_PYTHON_INSTALL_DIR"] == f"{UV_CACHE_PATH}/python"
 
 
 def test_controller_address_omitted_when_none():

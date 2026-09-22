@@ -43,6 +43,7 @@ VENV_PATH = f"{WORKDIR_PATH}/.venv"
 # bring its own image: build_common_iris_env points each tool here explicitly, so
 # nothing depends on that image's HOME.
 UV_CACHE_PATH = "/uv/cache"
+UV_RETRY_CACHE_PATH = f"{WORKDIR_PATH}/.uv-cache"
 HF_HUB_CACHE_PATH = "/hf/cache"
 CARGO_HOME_PATH = "/cargo"
 # Unclaimed node-local scratch, for anything that needs a real directory on the
@@ -217,12 +218,15 @@ def build_common_iris_env(
     # custom setup script does not have to depend on uv's cwd-relative default.
     env["IRIS_VENV"] = VENV_PATH
     env["UV_PROJECT_ENVIRONMENT"] = VENV_PATH
-    # Point each tool at its STANDARD_MOUNTS cache. Set here rather than in the
-    # task image so a task running its own image still hits the shared caches.
+    # Point long-lived downloads at their STANDARD_MOUNTS caches. Set these
+    # paths here so tasks that bring their own images use the same cache policy.
     # HF_HOME is left alone on purpose: it holds the submitter's HF_TOKEN, which
     # must not land on a node directory every other task can read. HF_HUB_CACHE
     # covers the part worth sharing -- the content-addressed model/dataset blobs.
-    env["UV_CACHE_DIR"] = UV_CACHE_PATH
+    # A failed attempt may have read a malformed entry from the persistent
+    # node cache. Retrying from the attempt-local workdir avoids repeating that
+    # failure while keeping uv's symlink targets alive for the run phase.
+    env["UV_CACHE_DIR"] = UV_CACHE_PATH if attempt_id == 0 else UV_RETRY_CACHE_PATH
     env["UV_PYTHON_INSTALL_DIR"] = f"{UV_CACHE_PATH}/python"
     env["HF_HUB_CACHE"] = HF_HUB_CACHE_PATH
     # CARGO_HOME moves the crate registry onto the mount; a rustup toolchain
