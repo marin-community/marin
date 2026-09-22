@@ -16,7 +16,7 @@ from levanter.cutlass_kernel_cache import gpu_compute_capability
 from levanter.grug.attention._core import AttentionMask
 from levanter.grug.attention._fa4_cute_backend import fa4_cute_attention_forward
 from levanter.grug.attention._fa4_cute_config import Flash4CuteKernelConfig, flash4_cute_kernel_config
-from levanter.grug.sharding import _partitioning_axes, _spec_of
+from levanter.grug.sharding import partitioning_axes, partition_spec_of
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
 _CONTEXT_AXIS: str = "context"
@@ -46,7 +46,7 @@ def _batched_segment_ids(segment_ids: jax.Array, *, batch_size: int, seq_len: in
 
 def _replicate_sequence_axis(x: jax.Array) -> jax.Array:
     """Replicate a ``[B, S]`` metadata array over sequence, preserving batch sharding."""
-    spec = _spec_of(x)
+    spec = partition_spec_of(x)
     if spec is None or len(spec) < 2 or spec[1] is None:
         return x
     return reshard(x, P(spec[0], None))
@@ -224,11 +224,11 @@ def _partitioned_dims(
     Size-1 axes are dropped, so a spec that merely names ``context`` on an unpartitioned
     mesh reads as replicated.
     """
-    spec = _spec_of(x)
+    spec = partition_spec_of(x)
     if spec is None:
         return None
     entries = tuple(spec) + (None,) * (x.ndim - len(spec))
-    return tuple(_partitioning_axes(entry, mesh) for entry in entries)
+    return tuple(partitioning_axes(entry, mesh) for entry in entries)
 
 
 def _query_sequence_shard_axis(q: jax.Array, mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh) -> str | None:
@@ -242,14 +242,14 @@ def _query_sequence_shard_axis(q: jax.Array, mesh: jax.sharding.Mesh | jax.shard
         return None
     if any(_CONTEXT_AXIS in axes for axes in dims[:1] + dims[2:]):
         raise ValueError(
-            f"FA4/CuTe shard_map accepts {_CONTEXT_AXIS!r} only on q's sequence axis, got sharding {_spec_of(q)}."
+            f"FA4/CuTe shard_map accepts {_CONTEXT_AXIS!r} only on q's sequence axis, got sharding {partition_spec_of(q)}."
         )
     if not dims[1]:
         return None
     if dims[1] != (_CONTEXT_AXIS,):
         raise ValueError(
             f"FA4/CuTe shard_map supports a q sequence axis sharded only over {_CONTEXT_AXIS!r}, "
-            f"got sharding {_spec_of(q)}."
+            f"got sharding {partition_spec_of(q)}."
         )
     return _CONTEXT_AXIS
 
@@ -267,7 +267,7 @@ def _assert_kv_replicated_over_context(
     if dims[1] or any(_CONTEXT_AXIS in axes for axes in dims):
         raise ValueError(
             f"FA4/CuTe shard_map requires {name} sequence-replicated and unsharded over "
-            f"{_CONTEXT_AXIS!r} (all-gather-KV context parallelism), got sharding {_spec_of(x)}."
+            f"{_CONTEXT_AXIS!r} (all-gather-KV context parallelism), got sharding {partition_spec_of(x)}."
         )
 
 
