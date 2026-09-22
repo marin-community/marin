@@ -147,9 +147,6 @@ def test_the_two_candidate_paths_find_the_same_duplicates(exact_scan_maximum):
 
 @pytest.mark.parametrize("exact_scan_maximum", [2, 256], ids=["inverted_index", "exact_scan"])
 def test_blank_documents_are_neither_removed_nor_representatives(exact_scan_maximum):
-    # The whitespace-only document is the longest member, thus it is the first
-    # candidate representative for every other member. It holds no n-gram, thus
-    # containment against it is 0 and it absorbs nothing.
     documents = _cluster(
         {
             "blank": BLANK,
