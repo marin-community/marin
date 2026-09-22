@@ -11,7 +11,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
 
-from marin.evaluation.evalchemy.config import EvalchemyConfig
+from marin.evaluation.evalchemy.config import JUDGE_API_KEY_ENV, EvalchemyConfig
 from marin.evaluation.evalchemy.runner import (
     DEFAULT_NUM_CONCURRENT,
     EvalchemyRunConfig,
@@ -57,9 +57,9 @@ class EvalchemyDefinition:
         secret_env = dict(self.secret_env)
         if config.judge is not None:
             judge_secret = config.judge.api_key
-            if "JUDGE_API_KEY" in secret_env and secret_env["JUDGE_API_KEY"] != judge_secret:
-                raise ValueError("Evalchemy definition conflicts with judge.api_key for JUDGE_API_KEY")
-            secret_env["JUDGE_API_KEY"] = judge_secret
+            if JUDGE_API_KEY_ENV in secret_env and secret_env[JUDGE_API_KEY_ENV] != judge_secret:
+                raise ValueError(f"Evalchemy definition conflicts with judge.api_key for {JUDGE_API_KEY_ENV}")
+            secret_env[JUDGE_API_KEY_ENV] = judge_secret
         return MappingProxyType(secret_env)
 
     def record_ref_for(self, config: EvalchemyRunConfig) -> EvalRef:

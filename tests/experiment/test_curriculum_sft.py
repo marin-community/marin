@@ -11,10 +11,11 @@ from marin.execution.lazy import materialized_config
 from experiments.post_training.curriculum_rl.pool import QWEN3_MODEL
 from experiments.post_training.curriculum_sft.pipeline import (
     QWEN_EXECUTION_CLUSTER,
+    CurriculumSftRequest,
     build_pipeline,
     completion_body,
     parse_batch_output,
-    selected_capabilities,
+    subject_and_capabilities,
 )
 from experiments.post_training.task_curriculum.models import CurriculumCatalog
 
@@ -82,20 +83,20 @@ def _batch_response(arguments: dict) -> str:
     return json.dumps(row)
 
 
-def test_selected_capabilities_preserves_requested_order() -> None:
-    subject, capabilities = selected_capabilities(_catalog(), "D27", ("d27.reporting.analysis",))
+def test_subject_and_capabilities_preserves_requested_order() -> None:
+    subject, capabilities = subject_and_capabilities(_catalog(), "D27", ("d27.reporting.analysis",))
 
     assert subject == "Finance, Accounting & Audit"
     assert [capability.id for capability in capabilities] == ["d27.reporting.analysis"]
 
 
-def test_selected_capabilities_rejects_unknown_ids() -> None:
+def test_subject_and_capabilities_rejects_unknown_ids() -> None:
     with pytest.raises(ValueError, match="unknown capabilities"):
-        selected_capabilities(_catalog(), "D27", ("d27.reporting.missing",))
+        subject_and_capabilities(_catalog(), "D27", ("d27.reporting.missing",))
 
 
 def test_completion_body_requests_low_reasoning_effort() -> None:
-    _, capabilities = selected_capabilities(_catalog(), "D27", ("d27.reporting.analysis",))
+    _, capabilities = subject_and_capabilities(_catalog(), "D27", ("d27.reporting.analysis",))
 
     body = completion_body(
         subject_name="Finance, Accounting & Audit",
@@ -127,10 +128,12 @@ def test_parse_batch_output_emits_canonical_messages_with_provenance() -> None:
     rows = parse_batch_output(
         output,
         {"examples-000000-01": (0, 1)},
-        subject_id="D27",
-        capability_ids=("d27.reporting.analysis",),
-        task="financial disclosure calculation",
-        evaluation_area="financial question answering",
+        request=CurriculumSftRequest(
+            subject_id="D27",
+            capability_ids=("d27.reporting.analysis",),
+            task="financial disclosure calculation",
+            evaluation_area="financial question answering",
+        ),
     )
 
     assert [message["role"] for message in rows[0]["messages"]] == ["user", "assistant"]
@@ -145,19 +148,23 @@ def test_parse_batch_output_rejects_non_array_examples() -> None:
         parse_batch_output(
             output,
             {"examples-000000-01": (0, 1)},
-            subject_id="D27",
-            capability_ids=("d27.reporting.analysis",),
-            task="financial disclosure calculation",
-            evaluation_area="financial question answering",
+            request=CurriculumSftRequest(
+                subject_id="D27",
+                capability_ids=("d27.reporting.analysis",),
+                task="financial disclosure calculation",
+                evaluation_area="financial question answering",
+            ),
         )
 
 
 def test_pipeline_connects_generation_training_and_reevaluation(tmp_path: Path) -> None:
     pipeline = build_pipeline(
-        subject_id="D27",
-        capability_ids=("d27.reporting.analysis",),
-        task="financial disclosure calculation",
-        evaluation_area="financial question answering",
+        request=CurriculumSftRequest(
+            subject_id="D27",
+            capability_ids=("d27.reporting.analysis",),
+            task="financial disclosure calculation",
+            evaluation_area="financial question answering",
+        ),
         eval_config=Path("experiments/evaluation/configs/evalchemy/financebench.yaml"),
         sample_count=8,
         version="2026.09.21",

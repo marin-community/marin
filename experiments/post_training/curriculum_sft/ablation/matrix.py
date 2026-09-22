@@ -185,28 +185,9 @@ def generated_payloads_to_rows(
     return [_sft_row(cell, payload) for payload in accepted]
 
 
-def build_sft_rows(
-    cell: AblationCell,
-    *,
-    generated_payloads: Sequence[object],
-) -> list[dict[str, Any]]:
-    """Build matched canonical rows from accepted generated payloads."""
-
-    return generated_payloads_to_rows(cell, generated_payloads)
-
-
 def build_held_out_tasks(*, task_count: int, seed: int = 17) -> list[SyntheticFinanceTask]:
     """Build the same held-out oracle set for every ablation arm."""
 
     if task_count <= 0:
         raise ValueError("task_count must be positive")
     return [held_out_task(index, seed=seed) for index in range(task_count)]
-
-
-def row_task_payload(row: dict[str, Any]) -> dict[str, Any]:
-    """Extract the strict answer contract from an SFT row for verification."""
-
-    messages = row["messages"]
-    question = next(message["content"] for message in messages if message["role"] == "user")
-    assistant = json.loads(next(message["content"] for message in messages if message["role"] == "assistant"))
-    return {"question": question, "answer": assistant["result"], "evidence": assistant["evidence"]}

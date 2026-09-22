@@ -14,6 +14,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+EVIDENCE_IDS = ("disclosure.revenue", "disclosure.operating_cost")
+TASK_PAYLOAD_FIELDS = frozenset({"task_id", "issuer", "facts", "question", "answer", "evidence"})
+FACT_FIELDS = frozenset({"revenue", "operating_cost"})
+RESULT_FIELDS = frozenset({"gross_profit", "margin_bps"})
+
 
 @dataclass(frozen=True)
 class SyntheticFinanceTask:
@@ -37,7 +42,7 @@ class SyntheticFinanceTask:
 
     @property
     def evidence_ids(self) -> tuple[str, str]:
-        return ("disclosure.revenue", "disclosure.operating_cost")
+        return EVIDENCE_IDS
 
     @property
     def question(self) -> str:
@@ -114,7 +119,7 @@ def task_payload(task: SyntheticFinanceTask) -> dict[str, Any]:
 
 
 def task_from_payload(payload: dict[str, Any]) -> SyntheticFinanceTask:
-    """Reconstruct a verified task payload for deterministic response scoring."""
+    """Reconstruct a task after the caller validates its payload."""
 
     facts = payload["facts"]
     return SyntheticFinanceTask(

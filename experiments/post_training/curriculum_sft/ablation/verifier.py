@@ -11,7 +11,13 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from experiments.post_training.curriculum_sft.ablation.tasks import SyntheticFinanceTask
+from experiments.post_training.curriculum_sft.ablation.tasks import (
+    EVIDENCE_IDS,
+    FACT_FIELDS,
+    RESULT_FIELDS,
+    TASK_PAYLOAD_FIELDS,
+    SyntheticFinanceTask,
+)
 
 
 @dataclass(frozen=True)
@@ -54,11 +60,11 @@ def _question_contains_integer(question: str, value: object) -> bool:
 def task_payload_has_schema(payload: object) -> bool:
     """Return whether GLM honored the shared task-object wire schema."""
 
-    task = _strict_object(payload, {"task_id", "issuer", "facts", "question", "answer", "evidence"})
+    task = _strict_object(payload, TASK_PAYLOAD_FIELDS)
     if task is None:
         return False
-    facts = _strict_object(task["facts"], {"revenue", "operating_cost"})
-    answer = _strict_object(task["answer"], {"gross_profit", "margin_bps"})
+    facts = _strict_object(task["facts"], FACT_FIELDS)
+    answer = _strict_object(task["answer"], RESULT_FIELDS)
     evidence = task["evidence"]
     return (
         isinstance(task["task_id"], str)
@@ -79,11 +85,11 @@ def task_payload_has_schema(payload: object) -> bool:
 def verify_task_payload(payload: object) -> TaskVerification:
     """Validate a generated task against its supplied facts and answer."""
 
-    task = _strict_object(payload, {"task_id", "issuer", "facts", "question", "answer", "evidence"})
+    task = _strict_object(payload, TASK_PAYLOAD_FIELDS)
     if task is None:
         return TaskVerification(False, False, False)
-    facts = _strict_object(task["facts"], {"revenue", "operating_cost"})
-    answer = _strict_object(task["answer"], {"gross_profit", "margin_bps"})
+    facts = _strict_object(task["facts"], FACT_FIELDS)
+    answer = _strict_object(task["answer"], RESULT_FIELDS)
     evidence = task["evidence"]
     format_valid = task_payload_has_schema(task)
     if not format_valid or facts is None or answer is None or not isinstance(evidence, list):
@@ -115,7 +121,7 @@ def verify_task_payload(payload: object) -> TaskVerification:
         )
     except (ArithmeticError, TypeError):
         arithmetic_valid = False
-    evidence_valid = evidence == ["disclosure.revenue", "disclosure.operating_cost"]
+    evidence_valid = evidence == list(EVIDENCE_IDS)
     return TaskVerification(format_valid, arithmetic_valid, evidence_valid)
 
 
@@ -148,7 +154,7 @@ def score_response(task: SyntheticFinanceTask, response: object) -> TaskVerifica
     parsed, exact_envelope = _parse_response(response)
     if parsed is None:
         return TaskVerification(False, False, False)
-    result = _strict_object(parsed["result"], {"gross_profit", "margin_bps"})
+    result = _strict_object(parsed["result"], RESULT_FIELDS)
     if result is None or not isinstance(parsed["evidence"], list):
         return TaskVerification(False, False, False)
     arithmetic_valid = result == task.expected_result

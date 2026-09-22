@@ -17,7 +17,6 @@ from experiments.post_training.curriculum_sft.ablation.matrix import (
     ablation_matrix,
     build_generation_prompt,
     build_held_out_tasks,
-    build_sft_rows,
     generated_payloads_to_rows,
 )
 from experiments.post_training.curriculum_sft.ablation.tasks import synthetic_task, task_payload
@@ -39,8 +38,7 @@ def _response(task, *, result=None, evidence=None):
 def test_synthetic_task_has_exact_machine_checkable_oracle() -> None:
     task = synthetic_task(0)
 
-    assert task.gross_profit == task.revenue - task.operating_cost
-    assert task.margin_bps == task.gross_profit * 10_000 // task.revenue
+    assert task.expected_result == {"gross_profit": 47047, "margin_bps": 4700}
     assert verify_task_payload(task_payload(task)).accepted
 
 
@@ -144,8 +142,8 @@ def test_payload_conversion_uses_one_canonical_target_for_every_generation_spec(
     strict = AblationCell(CurriculumCondition.TASK_ONLY, GenerationSpec.STRICT, SftDose.LOW, accepted_examples=4)
     weak = AblationCell(CurriculumCondition.TASK_ONLY, GenerationSpec.WEAK, SftDose.LOW, accepted_examples=4)
 
-    strict_rows = build_sft_rows(strict, generated_payloads=strict_payloads)
-    weak_rows = build_sft_rows(weak, generated_payloads=weak_payloads)
+    strict_rows = generated_payloads_to_rows(strict, strict_payloads)
+    weak_rows = generated_payloads_to_rows(weak, weak_payloads)
 
     assert json.loads(strict_rows[0]["messages"][-1]["content"]) == {
         "result": strict_tasks[0].expected_result,
@@ -163,7 +161,7 @@ def test_weak_conversion_rejects_generator_answer_errors() -> None:
     cell = AblationCell(CurriculumCondition.TASK_ONLY, GenerationSpec.WEAK, SftDose.LOW, accepted_examples=1)
 
     with pytest.raises(ValueError, match="unique oracle-accepted"):
-        build_sft_rows(cell, generated_payloads=[payload])
+        generated_payloads_to_rows(cell, [payload])
 
 
 def test_weak_conversion_rejects_schema_valid_unsolvable_task() -> None:
@@ -174,7 +172,7 @@ def test_weak_conversion_rejects_schema_valid_unsolvable_task() -> None:
     assert task_payload_has_schema(payload)
     assert not verify_task_payload(payload).format_valid
     with pytest.raises(ValueError, match="unique oracle-accepted"):
-        build_sft_rows(cell, generated_payloads=[payload])
+        generated_payloads_to_rows(cell, [payload])
 
 
 def test_sft_dose_reuses_identical_accepted_examples() -> None:
@@ -182,8 +180,8 @@ def test_sft_dose_reuses_identical_accepted_examples() -> None:
     payloads = [task_payload(task) for task in tasks]
     low = AblationCell(CurriculumCondition.TASK_ONLY, GenerationSpec.STRICT, SftDose.LOW, accepted_examples=4)
     high = AblationCell(CurriculumCondition.TASK_ONLY, GenerationSpec.STRICT, SftDose.HIGH, accepted_examples=4)
-    low_rows = build_sft_rows(low, generated_payloads=payloads)
-    high_rows = build_sft_rows(high, generated_payloads=payloads)
+    low_rows = generated_payloads_to_rows(low, payloads)
+    high_rows = generated_payloads_to_rows(high, payloads)
 
     assert [row["metadata"]["source_task_id"] for row in low_rows] == [
         row["metadata"]["source_task_id"] for row in high_rows

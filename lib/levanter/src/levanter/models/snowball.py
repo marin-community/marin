@@ -717,7 +717,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         pos_ids: NamedArray | None = None,
     ) -> NamedArray:
         # attn_mask is ignored: the pinned recipe builds its own per-layer short/long causal masks
-        # inside the transformer core. Segmented/packed inputs are a follow-up (see plan).
+        # inside the transformer core. Snowball training therefore requires unpacked inputs.
         Pos = input_ids.resolve_axis(self.Pos.name)
         raw = input_ids.array
         lead = raw.shape[:-1]
@@ -743,7 +743,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         loss_dtype: Optional[jnp.dtype] = jnp.float32,
         logit_soft_cap: Optional[float] = None,
     ) -> jnp.ndarray | NamedArray:
-        """Compute loss without forcing Snowball's FSDP-sharded LM head through a named shard map."""
+        """Compute weighted next-token loss for Snowball training examples."""
         del key
         if logit_soft_cap is not None:
             raise ValueError("Snowball does not support logit_soft_cap")

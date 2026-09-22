@@ -19,26 +19,21 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import click
-import jmp
 from fray.cluster import ResourceConfig
 from levanter.data.text.datasets import LmDataConfig
-from levanter.models.snowball import SnowballConfig
 from levanter.optim.config import AdamConfig
-from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint, ServeConfig
-from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_owned_name
-from marin.export import ConvertCheckpointStepConfig, convert_checkpoint_to_hf
 from marin.training.training import LevanterCheckpoint, TrainLmOnPodConfig
 from rigging.filesystem.cluster_config import marin_temp_bucket
 
-from experiments.evaluation.pipeline import EvaluationModelSource, EvaluationResult, evalchemy_config_step
+from experiments.evaluation.pipeline import EvaluationResult, ProducedEvaluationModel, evalchemy_config_step
 from experiments.models import ModelConfig as DownloadModelConfig
 from experiments.models import download_model
 from experiments.post_training.curriculum_sft.ablation.matrix import (
@@ -58,7 +53,9 @@ from experiments.sft.launcher import ArtifactDatasetSpec, ModelSource, PreparedM
 SNOWBALL_REPO = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.20"
 SNOWBALL_REVISION = "9f2ee50f3d4a12c79b0808bb2414ddba2cdf0098"
 SNOWBALL_TOKENIZER = "marin-community/marin-tokenizer"
-SNOWBALL_EOS_TOKEN_IDS = (128001, 128009)
+SNOWBALL_EOT_TOKEN_ID = 128001
+SNOWBALL_END_OF_MESSAGE_TOKEN_ID = 128009
+SNOWBALL_EOS_TOKEN_IDS = (SNOWBALL_EOT_TOKEN_ID, SNOWBALL_END_OF_MESSAGE_TOKEN_ID)
 
 DATA_VERSION = "2026.09.21.7"
 FINANCEBENCH_CONFIG = Path("experiments/evaluation/configs/evalchemy/financebench.yaml")
@@ -72,7 +69,6 @@ TRAIN_SEQUENCE_LENGTH = 4096
 DATA_AXIS_SIZE = 8
 EXPERT_AXIS_SIZE = 8
 MAX_COMPILED_MEMORY_BYTES = 70 * 1024**3
-RECOVERY_SOURCE_VERSION = "2026.09.21.11"
 
 
 @dataclass(frozen=True)
@@ -91,7 +87,7 @@ class SnowballModelSource(ModelSource):
     def tokenizer_cache_key(self) -> str:
         return SNOWBALL_TOKENIZER
 
-    def resolve_tokenizer(self, ctx: StepContext) -> str:
+    def resolve_tokenizer(self, _ctx: StepContext) -> str:
         return SNOWBALL_TOKENIZER
 
     @property
@@ -142,44 +138,27 @@ class SnowballModelSource(ModelSource):
         return dataclasses.replace(pod_config, train_config=train_config)
 
 
-@dataclass(frozen=True)
-class ProducedSnowballEvaluationModel(EvaluationModelSource):
-    """Resolve a Snowball SFT artifact's final HF export for evaluation."""
-
-    step: ArtifactStep[Artifact]
-    name: str
-
-    def deps(self) -> tuple[ArtifactStep, ...]:
-        return (self.step,)
-
-    def resolve(self, ctx: StepContext) -> ModelConfig:
-        if ctx.is_fingerprint:
-            location = f"artifact://{self.step.name}@{self.step.version}"
-        else:
-            checkpoints = discover_hf_checkpoints(ctx.artifact_path(self.step))
-            if not checkpoints:
-                raise FileNotFoundError(f"no HF checkpoint found under {ctx.artifact_path(self.step)}")
-            location = checkpoints[-1]
-        return ModelConfig(
-            name=self.name,
-            location=location,
-            tokenizer=SNOWBALL_TOKENIZER,
-            apply_chat_template=True,
-            resource_hint=ResourceHint(gpu={"H100": 8}, memory="512g"),
-            serve=ServeConfig(
-                tensor_parallel_size=1,
-                data_parallel_size=8,
-                max_model_len=73728,
-                max_num_seqs=32,
-                auto_overrides=False,
-                vllm_extra_args=(
-                    "--enable-expert-parallel",
-                    "--model-loader-extra-config",
-                    '{"distributed":true}',
-                ),
+def _evaluation_model(name: str) -> ModelConfig:
+    return ModelConfig(
+        name=name,
+        location="artifact://pending",
+        tokenizer=SNOWBALL_TOKENIZER,
+        apply_chat_template=True,
+        resource_hint=ResourceHint(gpu={"H100": 8}, memory="512g"),
+        serve=ServeConfig(
+            tensor_parallel_size=1,
+            data_parallel_size=8,
+            max_model_len=73728,
+            max_num_seqs=32,
+            auto_overrides=False,
+            vllm_extra_args=(
+                "--enable-expert-parallel",
+                "--model-loader-extra-config",
+                '{"distributed":true}',
             ),
-            generation=GenerationConfig(extra_gen_kwargs={"skip_special_tokens": "false"}),
-        )
+        ),
+        generation=GenerationConfig(extra_gen_kwargs={"skip_special_tokens": "false"}),
+    )
 
 
 def _training_resources() -> ResourceConfig:
@@ -190,17 +169,6 @@ def _training_resources() -> ResourceConfig:
         ram="512g",
         disk="256g",
         replicas=8,
-        preemptible=False,
-    )
-
-
-def _export_resources() -> ResourceConfig:
-    return ResourceConfig.with_gpu(
-        "H100",
-        count=8,
-        cpu=32,
-        ram="512g",
-        disk="256g",
         preemptible=False,
     )
 
@@ -284,7 +252,7 @@ def build_pipeline(
     }
     evaluations = {
         arm: evalchemy_config_step(
-            ProducedSnowballEvaluationModel(step, f"snowball-curriculum-sft-{arm}"),
+            ProducedEvaluationModel(step, _evaluation_model(f"snowball-curriculum-sft-{arm}")),
             FINANCEBENCH_CONFIG,
             version=version,
             limit=None,
@@ -296,117 +264,16 @@ def build_pipeline(
     return trainings, evaluations
 
 
-def _recovery_export_step(
-    condition: CurriculumCondition,
-    staged_model: ArtifactStep[LevanterCheckpoint],
-    *,
-    version: str,
-) -> ArtifactStep[Artifact]:
-    """Export a completed native checkpoint after the original final hook failed."""
-    arm = condition.value
-    source_root = "s3://marin-us-east-02a/tmp/ttl=7d/curriculum-sft/snowball"
-    source = f"{source_root}/{RECOVERY_SOURCE_VERSION}/{arm}/checkpoints"
-    resources = _export_resources()
-
-    def build_config(ctx: StepContext) -> ConvertCheckpointStepConfig:
-        tokenizer = ctx.artifact_path(staged_model)
-        return ConvertCheckpointStepConfig(
-            checkpoint_path=source,
-            discover_latest=True,
-            job_name=f"export-snowball-{arm}",
-            trainer=TrainerConfig(
-                mp=jmp.get_policy("p=f32,c=bfloat16"),
-                mesh=MeshConfig(
-                    axes={"data": 1, "expert": EXPERT_AXIS_SIZE, "replica": 1, "model": 1},
-                    dcn_axes={"replica_dcn": 1},
-                    compute_mapping={"batch": ["replica_dcn", "data", "expert"]},
-                ),
-                use_explicit_mesh_axes=True,
-                log_jaxprs=False,
-                log_xla_hlo=False,
-            ),
-            model=SnowballConfig(
-                hidden_dim=2560,
-                intermediate_dim=1280,
-                shared_expert_intermediate_dim=2560,
-                num_experts=256,
-                num_experts_per_token=4,
-                num_layers=26,
-                num_heads=20,
-                num_kv_heads=5,
-                head_dim=128,
-                max_seq_len=262144,
-                sliding_window=2048,
-                layer_norm_eps=1e-5,
-                initializer_std=0.009882117688026186,
-                qk_mult=1.75,
-                reference_checkpoint=f"{SNOWBALL_REPO}@{SNOWBALL_REVISION}",
-                tokenizer=tokenizer,
-            ),
-            resources=ctx.runtime_arg("resources"),
-            output_path=ctx.output_path,
-            tokenizer=tokenizer,
-            save_dtype="bfloat16",
-            config_overrides={
-                "bos_token_id": 128000,
-                "eos_token_id": 128001,
-                "decoder_start_token_id": 128000,
-                "begin_suppress_tokens": [128000, 128001],
-            },
-        )
-
-    step = ArtifactStep(
-        name=user_owned_name(f"exports/curriculum-sft/snowball/{arm}"),
-        version=version,
-        artifact_type=Artifact,
-        run=convert_checkpoint_to_hf,
-        build_config=build_config,
-        deps=(staged_model,),
-        runtime_args={"resources": resources},
-    )
-    output = marin_temp_bucket(
-        TEMP_TTL_DAYS,
-        prefix=f"curriculum-sft/snowball/{version}/recovered/{arm}",
-        source_prefix=COREWEAVE_PREFIX,
-    )
-    return dataclasses.replace(step, override_path=output)
-
-
-def build_recovery_pipeline(
-    version: str,
-) -> tuple[dict[str, ArtifactStep[Artifact]], dict[str, ArtifactStep[EvaluationResult]]]:
-    staged_model = _staged_model()
-    exports = {
-        condition.value: _recovery_export_step(condition, staged_model, version=version)
-        for condition in (CurriculumCondition.TASK_ONLY, CurriculumCondition.CURRICULUM_CONDITIONED)
-    }
-    evaluations = {
-        arm: evalchemy_config_step(
-            ProducedSnowballEvaluationModel(step, f"snowball-curriculum-sft-{arm}"),
-            FINANCEBENCH_CONFIG,
-            version=version,
-            limit=None,
-            submission_cluster=COREWEAVE_CLUSTER,
-            federated_cluster=COREWEAVE_CLUSTER,
-        )
-        for arm, step in exports.items()
-    }
-    return exports, evaluations
-
-
 @click.command(help=__doc__)
 @click.option(
     "--stage",
-    type=click.Choice(("sft", "eval", "all", "recover-export", "recover-eval")),
+    type=click.Choice(("sft", "eval", "all")),
     default="all",
     show_default=True,
 )
 @build_options
 def main(stage: str) -> dict[str, ArtifactStep]:
     version = resolve_version("curriculum-sft/snowball", None)
-    if stage in {"recover-export", "recover-eval"}:
-        exports, recovery_evaluations = build_recovery_pipeline(version)
-        return exports if stage == "recover-export" else recovery_evaluations
     trainings, evaluations = build_pipeline(version)
     if stage == "sft":
         return trainings

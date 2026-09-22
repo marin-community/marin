@@ -8,10 +8,9 @@ from __future__ import annotations
 import gzip
 import json
 import urllib.request
-from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
-from typing import Any, Protocol
+from typing import Protocol
 
 import click
 from levanter.optim.config import AdamConfig
@@ -40,6 +39,7 @@ from experiments.post_training.curriculum_sft.ablation.matrix import (
     generated_payloads_to_rows,
 )
 from experiments.post_training.curriculum_sft.ablation.verifier import evaluate_responses, score_response
+from experiments.post_training.tasktrove.mcqa_routing import jsonl_text
 from experiments.sft.launcher import ArtifactDatasetSpec, HFModel, SFTSpec, resources_from_accelerator, sft_step
 
 DEFAULT_GENERATION_URI = "s3://marin-us-east-02a/marin/users/power/documents/curriculum-sft/ablation/2026.09.21.4"
@@ -121,10 +121,6 @@ class ProducedOracleModel:
         return checkpoints[-1], None
 
 
-def _jsonl(rows: Sequence[dict[str, Any]]) -> bytes:
-    return "".join(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n" for row in rows).encode()
-
-
 def _generation_cell_name(cell: AblationCell) -> str:
     return AblationCell(cell.curriculum, cell.generation_spec, SftDose.LOW).name
 
@@ -147,7 +143,7 @@ def materialize_dataset(config: MaterializeDatasetConfig) -> AblationDataset:
     training_path.parent.mkdirs()
     with training_path.open("wb") as raw:
         with gzip.GzipFile(fileobj=raw, mode="wb", mtime=0) as compressed:
-            compressed.write(_jsonl(rows))
+            compressed.write(jsonl_text(rows).encode())
     manifest = {
         "cell": config.cell.name,
         "generation_cell": expected_name,
@@ -365,12 +361,6 @@ def qwen_sft_step(
     )
 
 
-def selected_cells(accepted_examples: int) -> tuple[AblationCell, ...]:
-    """Return the complete curriculum x specification x dose factorial."""
-
-    return ablation_matrix(accepted_examples=accepted_examples)
-
-
 @click.command(help=__doc__)
 @click.option("--generation-uri", default=DEFAULT_GENERATION_URI, show_default=True)
 @click.option("--accepted-examples", type=click.IntRange(min=1), default=DEFAULT_ACCEPTED_EXAMPLES, show_default=True)
@@ -396,7 +386,7 @@ def main(
         source=generation_uri,
         kind=Artifact,
     )
-    cells = selected_cells(accepted_examples)
+    cells = ablation_matrix(accepted_examples=accepted_examples)
     datasets: dict[tuple[CurriculumCondition, GenerationSpec], ArtifactStep[AblationDataset]] = {}
     for cell in cells:
         key = (cell.curriculum, cell.generation_spec)

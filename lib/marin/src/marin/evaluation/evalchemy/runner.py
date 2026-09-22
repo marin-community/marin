@@ -17,7 +17,7 @@ from iris.client.client import Job, JobFailedError, iris_ctx
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 
 from marin.evaluation.evalchemy.client import CONFIG_ENV_KEY
-from marin.evaluation.evalchemy.config import RESERVED_ENDPOINT_MODEL_ARGS, EvalchemyJudgeConfig
+from marin.evaluation.evalchemy.config import JUDGE_API_KEY_ENV, RESERVED_ENDPOINT_MODEL_ARGS, EvalchemyJudgeConfig
 from marin.evaluation.evalchemy.result import FineStoreEvalchemyResult
 from marin.evaluation.evalchemy.runtime import (
     EVALCHEMY_EXTRA_PACKAGES,
@@ -227,11 +227,11 @@ def _run_evalchemy_child(
     judge_env: dict[str, str] = {}
     if config.judge is not None:
         try:
-            judge_api_key = env_vars["JUDGE_API_KEY"]
+            judge_api_key = env_vars[JUDGE_API_KEY_ENV]
         except KeyError as exc:
             raise ValueError("FinanceBench judge configuration requires JUDGE_API_KEY") from exc
         judge_env = {
-            "JUDGE_API_KEY": judge_api_key,
+            JUDGE_API_KEY_ENV: judge_api_key,
             "JUDGE_BASE_URL": config.judge.base_url,
             "JUDGE_MODEL": config.judge.model,
         }

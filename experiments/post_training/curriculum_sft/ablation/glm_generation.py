@@ -11,6 +11,7 @@ the local arithmetic/evidence oracle.
 
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import os
@@ -25,7 +26,14 @@ from experiments.post_training.curriculum_sft.ablation.matrix import (
     SftDose,
     build_generation_prompt,
 )
+from experiments.post_training.curriculum_sft.ablation.tasks import (
+    EVIDENCE_IDS,
+    FACT_FIELDS,
+    RESULT_FIELDS,
+    TASK_PAYLOAD_FIELDS,
+)
 from experiments.post_training.curriculum_sft.ablation.verifier import verify_task_payload
+from experiments.post_training.curriculum_sft.glm_responses import tool_arguments
 from experiments.post_training.tasktrove.mcqa_routing import (
     GLM_BULK_TOKEN_ENV,
     read_batch_output,
@@ -59,42 +67,33 @@ CURRICULUM_PACKET = "\n".join(
 TASK_FAMILY = "fictional company questions"
 
 
-def _tool_arguments(response_body: dict[str, Any]) -> dict[str, Any]:
-    """Extract the single submit_tasks call from a successful GLM response."""
-
-    calls = response_body["choices"][0]["message"].get("tool_calls") or []
-    if len(calls) != 1 or calls[0]["function"]["name"] != "submit_tasks":
-        raise ValueError("expected exactly one submit_tasks tool call")
-    return json.loads(calls[0]["function"]["arguments"])
-
-
 def _task_schema(expected_tasks: int) -> dict[str, Any]:
     task = {
         "type": "object",
         "additionalProperties": False,
-        "required": ["task_id", "issuer", "facts", "question", "answer", "evidence"],
+        "required": sorted(TASK_PAYLOAD_FIELDS),
         "properties": {
             "task_id": {"type": "string", "minLength": 1},
             "issuer": {"type": "string", "minLength": 1},
             "facts": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["revenue", "operating_cost"],
+                "required": sorted(FACT_FIELDS),
                 "properties": {"revenue": {"type": "integer"}, "operating_cost": {"type": "integer"}},
             },
             "question": {"type": "string", "minLength": 1},
             "answer": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["gross_profit", "margin_bps"],
+                "required": sorted(RESULT_FIELDS),
                 "properties": {"gross_profit": {"type": "integer"}, "margin_bps": {"type": "integer"}},
             },
             "evidence": {
                 "type": "array",
-                "description": 'Use exactly ["disclosure.revenue", "disclosure.operating_cost"] in this order.',
+                "description": f"Use exactly {json.dumps(EVIDENCE_IDS)} in this order.",
                 "items": {"type": "string"},
-                "minItems": 2,
-                "maxItems": 2,
+                "minItems": len(EVIDENCE_IDS),
+                "maxItems": len(EVIDENCE_IDS),
             },
         },
     }
@@ -194,7 +193,7 @@ def run_matrix(
         result = response.get("response") or {}
         if response.get("error") or result.get("status_code") != 200:
             raise RuntimeError(f"GLM request {custom_id} failed")
-        payload = _tool_arguments(result["body"])["tasks"]
+        payload = tool_arguments(result["body"], "submit_tasks")["tasks"]
         if not isinstance(payload, list):
             raise ValueError(f"GLM request {custom_id} returned tasks as {type(payload).__name__}, expected array")
         if len(payload) != tasks_per_replicate:
@@ -268,8 +267,6 @@ def run_matrix(
 
 
 if __name__ == "__main__":
-    import argparse
-
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", required=True)
     parser.add_argument("--tasks-per-replicate", type=int, default=16)

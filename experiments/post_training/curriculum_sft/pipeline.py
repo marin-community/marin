@@ -15,14 +15,13 @@ import gzip
 import hashlib
 import json
 import os
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import click
 from levanter.optim.config import AdamConfig
 from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint
-from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -31,13 +30,15 @@ from marin.experiment.namespacing import user_owned_name
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-from experiments.evaluation.pipeline import EvaluationResult, evalchemy_config_step
+from experiments.evaluation.pipeline import EvaluationResult, ProducedEvaluationModel, evalchemy_config_step
 from experiments.post_training.curriculum_rl.pool import QWEN3_MODEL, QWEN3_REVISION
+from experiments.post_training.curriculum_sft.glm_responses import tool_arguments
 from experiments.post_training.iceball_micro import QWEN3_CHAT_TEMPLATE
 from experiments.post_training.task_curriculum.catalog_artifact import TASK_CURRICULUM
 from experiments.post_training.task_curriculum.models import CapabilitySection, CurriculumCatalog
 from experiments.post_training.tasktrove.mcqa_routing import (
     GLM_BULK_TOKEN_ENV,
+    jsonl_text,
     read_batch_output,
     resolve_base_url,
     submit_batch,
@@ -83,13 +84,20 @@ class CurriculumSftData(Artifact):
 
 
 @dataclass(frozen=True)
-class RolloutGenerationConfig:
-    catalog_uri: str
-    output_path: str
+class CurriculumSftRequest:
+    """Curriculum selection and synthetic task family for one data arm."""
+
     subject_id: str
     capability_ids: tuple[str, ...]
     task: str
     evaluation_area: str
+
+
+@dataclass(frozen=True)
+class RolloutGenerationConfig:
+    catalog_uri: str
+    output_path: str
+    request: CurriculumSftRequest
     sample_count: int
     request_batch_size: int
     seed: int
@@ -109,25 +117,6 @@ class StaticEvaluationModel:
 
 
 @dataclass(frozen=True)
-class ProducedEvaluationModel:
-    step: ArtifactStep[LevanterCheckpoint]
-    model: ModelConfig
-
-    def deps(self) -> tuple[ArtifactStep, ...]:
-        return (self.step,)
-
-    def resolve(self, ctx: StepContext) -> ModelConfig:
-        if ctx.is_fingerprint:
-            location = f"artifact://{self.step.name}@{self.step.version}"
-        else:
-            checkpoints = discover_hf_checkpoints(ctx.artifact_path(self.step))
-            if not checkpoints:
-                raise FileNotFoundError(f"no HF checkpoint found under {ctx.artifact_path(self.step)}")
-            location = checkpoints[-1]
-        return replace(self.model, location=location)
-
-
-@dataclass(frozen=True)
 class CurriculumSftPipeline:
     data: ArtifactStep[CurriculumSftData]
     baseline: ArtifactStep[EvaluationResult]
@@ -135,7 +124,7 @@ class CurriculumSftPipeline:
     reevaluation: ArtifactStep[EvaluationResult]
 
 
-def selected_capabilities(
+def subject_and_capabilities(
     catalog: CurriculumCatalog, subject_id: str, capability_ids: tuple[str, ...]
 ) -> tuple[str, list[CapabilitySection]]:
     entries = [entry.curriculum for entry in catalog.curricula if entry.curriculum.subject_id == subject_id]
@@ -278,21 +267,11 @@ def batch_lines(
     return lines, requests
 
 
-def _tool_arguments(response_body: dict[str, Any]) -> dict[str, Any]:
-    calls = response_body["choices"][0]["message"].get("tool_calls") or []
-    if len(calls) != 1 or calls[0]["function"]["name"] != "submit_examples":
-        raise ValueError("expected exactly one submit_examples tool call")
-    return json.loads(calls[0]["function"]["arguments"])
-
-
 def parse_batch_output(
     output: str,
     requests: dict[str, tuple[int, int]],
     *,
-    subject_id: str,
-    capability_ids: tuple[str, ...],
-    task: str,
-    evaluation_area: str,
+    request: CurriculumSftRequest,
 ) -> list[dict[str, Any]]:
     rows = []
     seen = set()
@@ -308,7 +287,7 @@ def parse_batch_output(
         result = response.get("response") or {}
         if response.get("error") or result.get("status_code") != 200:
             raise RuntimeError(f"GLM request {custom_id} failed")
-        examples = _tool_arguments(result["body"])["examples"]
+        examples = tool_arguments(result["body"], "submit_examples")["examples"]
         if not isinstance(examples, list):
             raise ValueError(f"GLM request {custom_id} returned examples as {type(examples).__name__}, expected array")
         if len(examples) != count:
@@ -333,10 +312,10 @@ def parse_batch_output(
                     "metadata": {
                         "policy_version": POLICY_VERSION,
                         "generator": MODEL,
-                        "subject_id": subject_id,
-                        "capability_ids": list(capability_ids),
-                        "task_family": task,
-                        "evaluation_area": evaluation_area,
+                        "subject_id": request.subject_id,
+                        "capability_ids": list(request.capability_ids),
+                        "task_family": request.task,
+                        "evaluation_area": request.evaluation_area,
                         "sample_index": global_id,
                         "task_summary": example["task_summary"],
                         "verification": example["verification"],
@@ -350,10 +329,6 @@ def parse_batch_output(
     return rows
 
 
-def _jsonl(rows: list[dict[str, Any]]) -> str:
-    return "".join(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n" for row in rows)
-
-
 def run_generation(config: RolloutGenerationConfig) -> CurriculumSftData:
     output = StoragePath(config.output_path)
     output.mkdirs()
@@ -363,17 +338,21 @@ def run_generation(config: RolloutGenerationConfig) -> CurriculumSftData:
 
     catalog_bytes = StoragePath(config.catalog_uri).read_bytes()
     catalog = CurriculumCatalog.model_validate_json(catalog_bytes)
-    subject_name, capabilities = selected_capabilities(catalog, config.subject_id, config.capability_ids)
+    subject_name, capabilities = subject_and_capabilities(
+        catalog,
+        config.request.subject_id,
+        config.request.capability_ids,
+    )
     lines, requests = batch_lines(
         subject_name=subject_name,
         capabilities=capabilities,
-        task=config.task,
-        evaluation_area=config.evaluation_area,
+        task=config.request.task,
+        evaluation_area=config.request.evaluation_area,
         sample_count=config.sample_count,
         request_batch_size=config.request_batch_size,
         seed=config.seed,
     )
-    (output / REQUESTS_FILENAME).write_text(_jsonl(lines))
+    (output / REQUESTS_FILENAME).write_text(jsonl_text(lines))
 
     state_path = output / "batch-state.json"
     base_url = resolve_base_url(config.relay_job)
@@ -393,10 +372,7 @@ def run_generation(config: RolloutGenerationConfig) -> CurriculumSftData:
     rows = parse_batch_output(
         raw_output,
         requests,
-        subject_id=config.subject_id,
-        capability_ids=config.capability_ids,
-        task=config.task,
-        evaluation_area=config.evaluation_area,
+        request=config.request,
     )
     if len(rows) != config.sample_count:
         raise ValueError(f"generated {len(rows)} examples, expected {config.sample_count}")
@@ -407,17 +383,17 @@ def run_generation(config: RolloutGenerationConfig) -> CurriculumSftData:
     training_path.parent.mkdirs()
     with training_path.open("wb") as raw:
         with gzip.GzipFile(fileobj=raw, mode="wb", mtime=0) as compressed:
-            compressed.write(_jsonl(rows).encode())
+            compressed.write(jsonl_text(rows).encode())
     manifest = {
         "policy_version": POLICY_VERSION,
         "generator": MODEL,
         "catalog_uri": config.catalog_uri,
         "catalog_sha256": hashlib.sha256(catalog_bytes).hexdigest(),
-        "subject_id": config.subject_id,
+        "subject_id": config.request.subject_id,
         "subject_name": subject_name,
-        "capability_ids": list(config.capability_ids),
-        "task_family": config.task,
-        "evaluation_area": config.evaluation_area,
+        "capability_ids": list(config.request.capability_ids),
+        "task_family": config.request.task,
+        "evaluation_area": config.request.evaluation_area,
         "sample_count": len(rows),
         "seed": config.seed,
         "glm_batch_id": batch_id,
@@ -429,10 +405,7 @@ def run_generation(config: RolloutGenerationConfig) -> CurriculumSftData:
 
 def generation_step(
     *,
-    subject_id: str,
-    capability_ids: tuple[str, ...],
-    task: str,
-    evaluation_area: str,
+    request: CurriculumSftRequest,
     sample_count: int,
     version: str,
     request_batch_size: int = DEFAULT_BATCH_SIZE,
@@ -449,10 +422,7 @@ def generation_step(
         return RolloutGenerationConfig(
             catalog_uri=prefix_join(ctx.artifact_path(TASK_CURRICULUM), "curriculum.json"),
             output_path=ctx.output_path,
-            subject_id=subject_id,
-            capability_ids=capability_ids,
-            task=task,
-            evaluation_area=evaluation_area,
+            request=request,
             sample_count=sample_count,
             request_batch_size=request_batch_size,
             seed=seed,
@@ -461,7 +431,7 @@ def generation_step(
         )
 
     return ArtifactStep(
-        name=user_owned_name(f"documents/curriculum-sft/{subject_id.lower()}"),
+        name=user_owned_name(f"documents/curriculum-sft/{request.subject_id.lower()}"),
         version=version,
         artifact_type=CurriculumSftData,
         run=run_generation,
@@ -484,23 +454,17 @@ def _qwen_model(name: str, location: str) -> ModelConfig:
 
 def build_pipeline(
     *,
-    subject_id: str,
-    capability_ids: tuple[str, ...],
-    task: str,
-    evaluation_area: str,
+    request: CurriculumSftRequest,
     eval_config: Path,
     sample_count: int,
     version: str,
 ) -> CurriculumSftPipeline:
     data = generation_step(
-        subject_id=subject_id,
-        capability_ids=capability_ids,
-        task=task,
-        evaluation_area=evaluation_area,
+        request=request,
         sample_count=sample_count,
         version=version,
     )
-    base_name = f"curriculum-sft-{subject_id.lower()}-qwen3-0.6b-base"
+    base_name = f"curriculum-sft-{request.subject_id.lower()}-qwen3-0.6b-base"
     baseline = evalchemy_config_step(
         StaticEvaluationModel(_qwen_model(base_name, QWEN3_MODEL)),
         eval_config,
@@ -509,7 +473,7 @@ def build_pipeline(
         submission_cluster=QWEN_EXECUTION_CLUSTER,
         federated_cluster=None,
     )
-    checkpoint_name = user_owned_name(f"checkpoints/curriculum-sft/{subject_id.lower()}-qwen3-0.6b")
+    checkpoint_name = user_owned_name(f"checkpoints/curriculum-sft/{request.subject_id.lower()}-qwen3-0.6b")
     sft = sft_step(
         SFTSpec(
             name=checkpoint_name,
@@ -522,7 +486,7 @@ def build_pipeline(
             chat_template=QWEN3_CHAT_TEMPLATE,
             datasets=(
                 ArtifactDatasetSpec(
-                    slug=f"curriculum-{subject_id.lower()}",
+                    slug=f"curriculum-{request.subject_id.lower()}",
                     artifact=data,
                     relative_pattern=TRAIN_FILENAME,
                     weight=1.0,
@@ -546,7 +510,7 @@ def build_pipeline(
         ),
         resources_from_accelerator("1xH100"),
     )
-    post_name = f"curriculum-sft-{subject_id.lower()}-qwen3-0.6b"
+    post_name = f"curriculum-sft-{request.subject_id.lower()}-qwen3-0.6b"
     reevaluation = evalchemy_config_step(
         ProducedEvaluationModel(sft, _qwen_model(post_name, "artifact://pending")),
         eval_config,
@@ -589,10 +553,12 @@ def main(
     base_name = f"documents/curriculum-sft/{subject_id.lower()}"
     version = resolve_version(base_name, None)
     pipeline = build_pipeline(
-        subject_id=subject_id,
-        capability_ids=capability_ids,
-        task=task,
-        evaluation_area=evaluation_area,
+        request=CurriculumSftRequest(
+            subject_id=subject_id,
+            capability_ids=capability_ids,
+            task=task,
+            evaluation_area=evaluation_area,
+        ),
         eval_config=eval_config,
         sample_count=sample_count,
         version=version,

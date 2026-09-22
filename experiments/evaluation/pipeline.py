@@ -22,7 +22,7 @@ The demo pipeline below runs the smoke suite for one small model.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol
 
@@ -31,6 +31,7 @@ from iris.rpc import job_pb2
 from marin.evaluation.harbor.runner import canonical_served_name
 from marin.evaluation.hardware import default_platform
 from marin.evaluation.model_config import ModelConfig
+from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.step_runner import StepRunner
@@ -91,6 +92,27 @@ class CatalogEvaluationModel:
 
     def resolve(self, _ctx: StepContext) -> ModelConfig:
         return models()[self.name]
+
+
+@dataclass(frozen=True)
+class ProducedEvaluationModel:
+    """Evaluate the newest Hugging Face checkpoint produced by an upstream step."""
+
+    step: ArtifactStep[Artifact]
+    model: ModelConfig
+
+    def deps(self) -> tuple[ArtifactStep, ...]:
+        return (self.step,)
+
+    def resolve(self, ctx: StepContext) -> ModelConfig:
+        if ctx.is_fingerprint:
+            location = f"artifact://{self.step.name}@{self.step.version}"
+        else:
+            checkpoints = discover_hf_checkpoints(ctx.artifact_path(self.step))
+            if not checkpoints:
+                raise FileNotFoundError(f"no HF checkpoint found under {ctx.artifact_path(self.step)}")
+            location = checkpoints[-1]
+        return replace(self.model, location=location)
 
 
 def run_eval_pipeline_step(config: EvalStepConfig) -> EvaluationResult:
