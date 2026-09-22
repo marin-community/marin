@@ -218,8 +218,8 @@ def build_common_iris_env(
     # custom setup script does not have to depend on uv's cwd-relative default.
     env["IRIS_VENV"] = VENV_PATH
     env["UV_PROJECT_ENVIRONMENT"] = VENV_PATH
-    # Point each tool at its STANDARD_MOUNTS cache. Set here rather than in the
-    # task image so a task running its own image still hits the shared caches.
+    # Point long-lived downloads at their STANDARD_MOUNTS caches. Set these
+    # paths here so tasks that bring their own images use the same cache policy.
     # HF_HOME is left alone on purpose: it holds the submitter's HF_TOKEN, which
     # must not land on a node directory every other task can read. HF_HUB_CACHE
     # covers the part worth sharing -- the content-addressed model/dataset blobs.
