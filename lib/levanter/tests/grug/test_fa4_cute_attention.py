@@ -18,6 +18,7 @@ from levanter.grug.attention import (
     reference_attention,
 )
 from levanter.grug.attention._fa4_cute import _simple_causal_lower_bounds
+from levanter.grug.attention._fa4_cute_config import flash4_cute_kernel_config
 
 
 class _reset_abstract_mesh:
@@ -362,3 +363,40 @@ def test_real_gpu_fa4_cute_zeroes_padding_tiles_before_reusing_query_storage(sli
     expected_gradients = jax.jit(jax.grad(reference_loss, argnums=(0, 1, 2)))(*short_qkv)
     for actual, expected in zip(gradients, expected_gradients, strict=True):
         np.testing.assert_allclose(actual[:1, :40], expected, atol=7e-2, rtol=7e-2)
+
+
+@pytest.mark.timeout(300)
+def test_real_gpu_fa4_cute_partial_backward_tiles_match_reference():
+    if jax.default_backend() != "gpu" or fa4_cute.gpu_compute_capability() != 100:
+        pytest.skip("This segmented backward regression requires an SM100 GPU.")
+    pytest.importorskip("cutlass.cute")
+    pytest.importorskip("flash_attn.cute.flash_bwd_preprocess")
+    config = flash4_cute_kernel_config(128, arch=100)
+    keys = jax.random.split(jax.random.key(23), 4)
+    shapes = ((1, 257, 8, 128), (1, 257, 2, 128), (1, 257, 2, 128), (1, 257, 8, 128))
+    q, k, v, cotangent = (jax.random.normal(key, shape, dtype=jnp.bfloat16) for key, shape in zip(keys, shapes))
+    positions = jnp.arange(257)[None, :]
+    ids = jnp.where(positions < 129, 0, 1)
+    bounds = jnp.where(positions < 129, 0, 129).astype(jnp.int32)
+    valid = jnp.ones_like(ids, dtype=jnp.bool_)
+    mask = AttentionMask.causal().with_segment_ids(ids)
+
+    def actual_loss(q, k, v):
+        output = fa4_cute_backend.fa4_cute_attention_forward(
+            q, k, v, bounds, valid, sm_scale=128**-0.5, kernel_config=config
+        )
+        return jnp.sum(output.astype(jnp.float32) * cotangent.astype(jnp.float32)), output
+
+    def reference_loss(q, k, v):
+        output = reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
+        return jnp.sum(output.astype(jnp.float32) * cotangent.astype(jnp.float32)), output
+
+    actual_call = jax.jit(jax.value_and_grad(actual_loss, (0, 1, 2), has_aux=True))
+    (_, expected), expected_gradients = jax.jit(jax.value_and_grad(reference_loss, (0, 1, 2), has_aux=True))(q, k, v)
+    # Partial tiles must not consume stale shared memory on repeated invocations.
+    for _ in range(3):
+        (_, actual), actual_gradients = actual_call(q, k, v)
+        for name, got, want in zip(
+            ("out", "dq", "dk", "dv"), (actual, *actual_gradients), (expected, *expected_gradients), strict=True
+        ):
+            np.testing.assert_allclose(got, want, atol=7e-2, rtol=7e-2, err_msg=name)
