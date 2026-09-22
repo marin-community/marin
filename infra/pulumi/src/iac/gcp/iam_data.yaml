@@ -92,6 +92,7 @@ principals:
   human-072: CiQAKk3j6ZQLD7r1vaRwiSHTnivaFUvKNXMMqXYuKdc5Js6e41ISQgCdtF6iUVQYgRvAP6ktihBwriBkTiNYuHkN8N8n0gulAVVONh2eQROrZyLGaXpHLm6LZtzXdBRKa45h17J8c7brDw==
   human-073: CiQAKk3j6XhHG0zB0wc8wvTpRg+a917RHbGNiKEfMOjUg5U7wooSNgCdtF6ixFHhqzu9HE/B1BG+tZfnvFdja1vsa5ENcA6A9Ct91HlL1KEVF0TRQWLh335BYvlk3A==
   human-075: CiQAKk3j6V2XjAnKG39Q8zgl3j8jK9Zk9dwrtR6fPz4RFPxErg8SQgCdtF6iJ1/xLdoLq2J7yUCspueUSGAPi9yG/Vma+6MOZKvL1znD+mVqUNmKckGVsezo7ULL6czGhn3RDgHehmJt2w==
+  human-076: CiQAKk3j6VCsdaf6iHkrQzBdlzqwnko2/2xSXpg6RLWtjZ6k26ASQwCdtF6iNOPCdpO/Jn/4zwO6i/ffJUGqWJn+Y5mPP+8dbnFawlJMKFovCvIXPb8GTU81BMqkiqrTNT+ZgzgB5gnumLA=
 custom_roles:
 - role_id: marinGcpResourcePreviewer
   title: Marin GCP Resource Previewer
@@ -136,6 +137,86 @@ custom_roles:
   permissions:
   - iap.webServices.getIamPolicy
   - iap.webServices.setIamPolicy
+- role_id: marinPulumiAdmin
+  title: Marin Pulumi Admin
+  description: Apply resources and IAM bindings owned by the marin-iac marin stack. Pair with the Marin Dev role.
+  permissions:
+  - artifactregistry.repositories.create
+  - artifactregistry.repositories.setIamPolicy
+  - cloudkms.cryptoKeys.get
+  - cloudkms.cryptoKeys.getIamPolicy
+  - cloudkms.cryptoKeys.setIamPolicy
+  - compute.addresses.create
+  - compute.addresses.delete
+  - compute.addresses.setLabels
+  - compute.addresses.use
+  - compute.backendServices.create
+  - compute.backendServices.delete
+  - compute.backendServices.setSecurityPolicy
+  - compute.backendServices.update
+  - compute.backendServices.use
+  - compute.firewalls.create
+  - compute.firewalls.delete
+  - compute.firewalls.update
+  - compute.globalAddresses.create
+  - compute.globalAddresses.delete
+  - compute.globalAddresses.setLabels
+  - compute.globalAddresses.use
+  - compute.globalForwardingRules.create
+  - compute.globalForwardingRules.delete
+  - compute.globalForwardingRules.setLabels
+  - compute.globalForwardingRules.setTarget
+  - compute.globalForwardingRules.update
+  - compute.healthChecks.create
+  - compute.healthChecks.delete
+  - compute.healthChecks.update
+  - compute.healthChecks.use
+  - compute.instances.use
+  - compute.networkEndpointGroups.attachNetworkEndpoints
+  - compute.networkEndpointGroups.create
+  - compute.networkEndpointGroups.delete
+  - compute.networkEndpointGroups.detachNetworkEndpoints
+  - compute.networkEndpointGroups.use
+  - compute.networks.updatePolicy
+  - compute.networks.use
+  - compute.securityPolicies.create
+  - compute.securityPolicies.delete
+  - compute.securityPolicies.setLabels
+  - compute.securityPolicies.update
+  - compute.securityPolicies.use
+  - compute.sslCertificates.create
+  - compute.sslCertificates.delete
+  - compute.subnetworks.use
+  - compute.targetHttpsProxies.create
+  - compute.targetHttpsProxies.delete
+  - compute.targetHttpsProxies.setSslCertificates
+  - compute.targetHttpsProxies.setUrlMap
+  - compute.targetHttpsProxies.update
+  - compute.targetHttpsProxies.use
+  - compute.urlMaps.create
+  - compute.urlMaps.delete
+  - compute.urlMaps.update
+  - compute.urlMaps.use
+  - iam.roles.create
+  - iam.roles.delete
+  - iam.roles.get
+  - iam.roles.update
+  - iam.serviceAccounts.create
+  - iam.serviceAccounts.delete
+  - iam.serviceAccounts.get
+  - iam.serviceAccounts.getIamPolicy
+  - iam.serviceAccounts.setIamPolicy
+  - iam.serviceAccounts.update
+  - iap.webServices.getIamPolicy
+  - iap.webServices.getSettings
+  - iap.webServices.setIamPolicy
+  - iap.webServices.updateSettings
+  - run.services.get
+  - run.services.getIamPolicy
+  - run.services.setIamPolicy
+  - serviceusage.services.use
+  - storage.buckets.getIamPolicy
+  - storage.buckets.setIamPolicy
 - role_id: RayWorker
   title: Ray Worker
   description: 'Created on: 2024-09-10'
@@ -821,6 +902,9 @@ project_grants:
 - role: projects/hai-gcp-models/roles/marinIapIamManager
   members:
   - serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
+- role: projects/hai-gcp-models/roles/marinPulumiAdmin
+  members:
+  - principal: human-076
 - role: projects/hai-gcp-models/roles/marin_agent
   members:
   - serviceAccount:eczech-agent@hai-gcp-models.iam.gserviceaccount.com

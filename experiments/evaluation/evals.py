@@ -13,7 +13,6 @@ from types import MappingProxyType
 
 from marin.evaluation.evalchemy.config import EvalchemyConfig
 from marin.evaluation.evalchemy.runner import (
-    DEFAULT_MAX_GEN_TOKS,
     DEFAULT_NUM_CONCURRENT,
     EvalchemyRunConfig,
     EvalchemyRuntimeConfig,
@@ -108,7 +107,7 @@ class EvalchemyDefinition:
         model_max_gen_toks = model.generation.max_gen_toks
         max_gen_toks = config.max_gen_toks
         if model_max_gen_toks is not None:
-            if source.max_tokens is None or model_max_gen_toks < max_gen_toks:
+            if max_gen_toks is None or model_max_gen_toks < max_gen_toks:
                 max_gen_toks = model_max_gen_toks
             elif model_max_gen_toks > max_gen_toks:
                 logger.warning(
@@ -250,7 +249,7 @@ def evalchemy_run_config(name: str, config: EvalchemyConfig) -> EvalchemyRunConf
         name=name,
         tasks=tuple(tasks),
         apply_chat_template=config.apply_chat_template or False,
-        max_gen_toks=config.max_tokens or DEFAULT_MAX_GEN_TOKS,
+        max_gen_toks=config.max_tokens,
         max_eval_instances=config.limit,
         num_concurrent=num_concurrent,
         batch_size=config.batch_size,

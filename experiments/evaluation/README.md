@@ -207,7 +207,7 @@ default.
 
 The `agentic` suite (`tb2`, `swebench`, `gaia`, `bfcl`, `aider`, `medagentbench`, `financeagent`) runs
 in-sandbox agentic benchmarks through the same launcher. Each preset names an `hf://` repository whose
-root contains Harbor task directories. The runner materializes that repository at its configured
+root contains Harbor task directories. Harbor resolves that repository at its configured
 revision, the launcher serves the model once and mints a capability URL for the served endpoint, and
 an in-sandbox terminal agent (Daytona) reaches the model through that URL. Harbor's verifier scores
 each trial, which normalizes into one agentic `EvalSample` (reward ->
@@ -239,10 +239,10 @@ explicit `tasks` are rejected.
 
 The pinned subprocess returns deterministic policy JSON, a SHA-256 digest, and dataset/agent/environment
 metadata. Marin treats the JSON as opaque. At execution it supplies a separate overlay for `job_name`,
-`jobs_dir`, the served model, endpoint, materialized dataset path, model-catalog kwargs, and `--limit`.
+`jobs_dir`, the served model, endpoint, local dataset path, model-catalog kwargs, and `--limit`.
 The isolated driver applies that overlay to typed Harbor models and validates the complete effective job
 before calling Harbor. Policy agent kwargs override model-catalog kwargs; endpoint, model, output path,
-materialized source, and an explicit `--limit` are reserved runtime values.
+local source, and an explicit `--limit` are reserved runtime values.
 
 Write Hugging Face sources as `datasets[].name: hf://org/repository` with an optional `ref`; do not put
 an `hf://` URI in `datasets[].path`. Local `path` values must be relative to the config file, must name
@@ -282,8 +282,8 @@ uv run python -m experiments.evaluation.cli launch \
   --model grug-agentic-s3-step1903 --evals ot-tblite --limit 1
 ```
 
-The profile materializes `DCAgent/dev_set_v2` from a pinned Hugging Face commit before passing its
-task directories to Harbor.
+Harbor downloads the `DCAgent/dev_set_v2` snapshot at the pinned Hugging Face commit and loads its
+task directories.
 
 Mechanism code lives under `marin.evaluation.evalchemy` and `marin.evaluation.harbor`; the common
 runner depends only on the callable executor protocol and the shared record types.

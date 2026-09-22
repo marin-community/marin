@@ -14,6 +14,7 @@ from marin.evaluation.records import (
     EvalRef,
     EvalRunRecord,
     EvalTaskRef,
+    HarborRef,
     HardwareRef,
     MetricKind,
     ModelRef,
@@ -497,6 +498,43 @@ def test_an_eval_with_no_declared_family_is_a_column_of_one():
     assert panel["families"] == [
         {"family": "gsm8k", "variants": ["gsm8k"], "default": "gsm8k"},
         {"family": "mmlu", "variants": ["mmlu"], "default": "mmlu"},
+    ]
+
+
+def test_harbor_evals_share_their_dataset_family_across_versions():
+    records = []
+    for eval_name, dataset_version, family in (
+        ("aime24-v1", "1.0", None),
+        ("aime24-v2", "2.0", None),
+        ("aime24-publication", "2.0", "publication-aime"),
+    ):
+        record = _record("a", eval_name, None, "2026-01-01T00:00:00+00:00", 0.5, family=family)
+        records.append(
+            record.model_copy(
+                update={
+                    "evaluation": record.evaluation.model_copy(
+                        update={
+                            "mechanism": "harbor",
+                            "evalchemy": None,
+                            "harbor": HarborRef(
+                                dataset="aime24",
+                                version=dataset_version,
+                                agent="terminus-2",
+                                env="daytona",
+                            ),
+                        }
+                    )
+                }
+            )
+        )
+
+    assert build_meta(records)["families"] == [
+        {"family": "aime24", "variants": ["aime24-v1", "aime24-v2"]},
+        {"family": "publication-aime", "variants": ["aime24-publication"]},
+    ]
+    assert build_panel(records, panel_request())["families"] == [
+        {"family": "publication-aime", "variants": ["aime24-publication"], "default": "aime24-publication"},
+        {"family": "aime24", "variants": ["aime24-v1", "aime24-v2"], "default": "aime24-v1"},
     ]
 
 

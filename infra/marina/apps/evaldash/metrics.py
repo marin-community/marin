@@ -105,16 +105,25 @@ def eval_suites(evals: set[str]) -> list[dict]:
 
 
 def declared_families(records: Iterable[EvalRunRecord]) -> dict[str, str]:
-    """Map each eval name to its newest non-null family declaration."""
-    declared: dict[str, tuple[str, str]] = {}
+    """Map each eval name to its explicit family or newest Harbor dataset."""
+    explicit: dict[str, tuple[str, str]] = {}
+    inferred: dict[str, tuple[str, str]] = {}
     for record in records:
         family = record.evaluation.family
-        if family is None:
+        if family is not None:
+            current = explicit.get(record.evaluation.name)
+            if current is None or (record.created_at or "") > current[1]:
+                explicit[record.evaluation.name] = (family, record.created_at or "")
             continue
-        current = declared.get(record.evaluation.name)
-        if current is None or (record.created_at or "") > current[1]:
-            declared[record.evaluation.name] = (family, record.created_at or "")
-    return {name: family for name, (family, _) in declared.items()}
+        harbor = record.evaluation.harbor
+        if harbor is not None:
+            current = inferred.get(record.evaluation.name)
+            if current is None or (record.created_at or "") > current[1]:
+                inferred[record.evaluation.name] = (harbor.dataset, record.created_at or "")
+    return {
+        **{name: family for name, (family, _) in inferred.items()},
+        **{name: family for name, (family, _) in explicit.items()},
+    }
 
 
 def group_by_family(names: Iterable[str], families: Mapping[str, str]) -> dict[str, list[str]]:

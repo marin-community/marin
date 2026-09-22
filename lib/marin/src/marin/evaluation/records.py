@@ -124,6 +124,8 @@ class ModelServeConfig(BaseModel):
     backend: str
     tensor_parallel_size: int | None
     data_parallel_size: int | None
+    pipeline_parallel_size: int = 1
+    gpu_memory_utilization: float | None = None
     max_model_len: int | None
     max_num_batched_tokens: int | None
     max_num_seqs: int | None
@@ -168,6 +170,7 @@ class ModelConfigRef(BaseModel):
     location: str
     revision: str | None
     tokenizer: str | None
+    tokenizer_revision: str | None
     apply_chat_template: bool
     resource_hint: ModelResourceConfig
     serve: ModelServeConfig
@@ -224,7 +227,7 @@ class EvalchemyRef(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     apply_chat_template: bool
-    max_gen_toks: int
+    max_gen_toks: int | None
     max_eval_instances: int | None
     num_concurrent: int
     batch_size: str | None
@@ -300,6 +303,7 @@ class HardwareRef(BaseModel):
     platform: str
     accelerator: str
     region_or_cluster: str | None
+    task_count: int = 1
 
 
 class Provenance(BaseModel):
@@ -323,14 +327,17 @@ class ServingParams(BaseModel):
     The typed fields are the settings that change results or throughput (parallelism, context length,
     generation budget); ``extra`` carries the long tail -- backend-specific engine flags and extra
     generation kwargs -- as strings so the record stays backend-agnostic. The whole field is optional:
-    runs whose launcher did not record it (every run written so far) omit it, and the dashboard shows
-    no serving section for them.
+    older runs whose launcher did not record it omit it. ``effective`` distinguishes resolved
+    endpoint settings from requested settings recorded when startup failed.
     """
 
     model_config = ConfigDict(frozen=True)
 
     tensor_parallel_size: int | None = None
     data_parallel_size: int | None = None
+    pipeline_parallel_size: int = 1
+    task_count: int = 1
+    effective: bool = False
     max_model_len: int | None = None
     max_gen_tokens: int | None = None
     extra: dict[str, str] = Field(default_factory=dict)

@@ -43,7 +43,7 @@ dependencies = [
     "requests>=2.33.0",
     "resiliparse>=0.17.2",
     "s3fs>=2024",
-    "shellsim>=0.1.3,<0.2",
+    "shellsim>=0.1.10",
     "tqdm",
     "tqdm-loggable",
     "wandb>0.24.0",

@@ -28,6 +28,7 @@ from marin.inference.vllm_server import (
     _engine_kwargs_to_cli_args,
     _linux_process_group_status,
     _LogPump,
+    _native_error_summary,
     _native_logs,
     _native_logs_tail,
     _prepare_vllm_compilation_cache,
@@ -213,6 +214,17 @@ def test_native_logs_tail_includes_unterminated_final_fragment(tmp_path):
 
     assert "FATAL partial line no newline" in _native_logs_tail(str(tmp_path))
     pump.close()
+
+
+def test_native_error_summary_preserves_originating_exception(tmp_path):
+    (tmp_path / "stdout.log").write_text("ordinary output\nRuntimeError: engine initialization failed\n")
+    (tmp_path / "stderr.log").write_text("Ninja build stopped\nCalledProcessError: nvcc exited 1\n")
+
+    summary = _native_error_summary(str(tmp_path))
+
+    assert "RuntimeError: engine initialization failed" in summary
+    assert "CalledProcessError: nvcc exited 1" in summary
+    assert "ordinary output" not in summary
 
 
 def test_native_logs_keeps_placement_older_than_diagnostic_tail(tmp_path):
