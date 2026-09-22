@@ -486,8 +486,9 @@ class GrugTrainState:
 
 def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
     """Set router biases from QB betas (computed on previous step)."""
-    if isinstance(model.stacked_blocks.stacked.mlp, DenseMLP):
-        # Dense blocks have no router (QB routing dropped), so there is no router_bias to set.
+    if model.stacked_blocks is None or isinstance(model.stacked_blocks.stacked.mlp, DenseMLP):
+        # Omni-neurons (unrolled, stacked_blocks is None) and dense blocks have no router (QB routing
+        # dropped), so there is no router_bias to set.
         return model
     new_bias = -qb_betas
     new_bias = new_bias - jnp.mean(new_bias, axis=-1, keepdims=True)
