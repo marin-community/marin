@@ -30,7 +30,7 @@ fetch server-side, so nothing outside the container reaches it.
 
 ```
 GET /finelog/{cluster}/query?sql=&from=&to=      finelog SQL
-GET /finelog/{cluster}/v1/{node,training,runs,rl,accelerator,jobs}/overview
+GET /finelog/{cluster}/v1/{node,training,runs,rl,async-rl,accelerator,jobs}/overview
                                                     bounded shared dashboard datasets
 GET /finelog/{cluster}/v1/zephyr/overview        bounded ranked shuffle snapshot
 GET /finelog/{cluster}/v1/rl/recent              bounded recent RL runs
@@ -146,13 +146,13 @@ that extracted `src/`, and pass its parent as `--grafana-dir`. Keep the identity
 window, and request sequence the same, and use a separate output directory.
 These are read-only live queries; repeat only the windows needed for comparison.
 
-The Node Details, Zephyr, Training, Runs, RL, Accelerators, Jobs, and Home
-dashboards use the same shared-dataset contract. Each endpoint validates every
+The Node Details, Zephyr, Training, Runs, RL (sync and async), Accelerators, Jobs,
+and Home dashboards use the same shared-dataset contract. Each endpoint validates every
 identity and time input, runs a small fixed set of domain queries, and projects all
 panel views locally. Concurrent panel requests coalesce on one logical cache key;
 the `view` parameter only filters the cached result. A cold traversal uses one
 Finelog source for Node and Zephyr, three for Training, two for Runs, three for RL,
-three for Accelerators, and five for Jobs. Those boundaries are intentional:
+nine for async RL, three for Accelerators, and five for Jobs. Those boundaries are intentional:
 crossing namespaces or mixing fleet-wide per-device data with compact summaries
 just to reach one RPC would make the query less predictable.
 
@@ -332,6 +332,27 @@ reads: lifecycle, step, buffer, staleness, phase-wall and exporter series arrive
 whenever MarinSkyRL telemetry is configured, while the training-metric, span and
 Megatron panels stay empty until the run exports `trainer.training_metrics`,
 `trainer.async_spans` or `trainer.policy_train_spans`.
+
+Every panel reads `/v1/async-rl/overview` (`src/async_rl_observability.py`) with the
+selected clusters, run, job and executions, the window and the display interval, and
+names its view; the three selectors stay on `/query`. The dataset holds nine sources
+over `telemetry_v1.marinskyrl`, each shaped for the panels it serves: `core` (loop
+events summed, maxed, latest-per-process or percentiled per display bucket and
+execution), `metrics` (one row per `training_metric_value` point on the allowlisted
+metric names and every `eval/%` metric), `staleness` (group counts and token sums per
+optimizer step and staleness value), `processes` (the latest lifecycle event and the
+exporter/nonfinite totals per process), `memory`, `megatron`, `windows`, `overlap` and
+`service`. The last two carry the interval joins of the two table panels, because a
+join over raw rollout calls or engine counter samples is only bounded on the Finelog
+side. Each view keeps its panel's series names, filters, units and empty-state text.
+Two things differ from a per-panel query. Display buckets are aligned to the window
+start rather than the epoch, are at least 30 s wide and number at most 360, so the
+requested interval widens on a long window. Each source has a row cap (100,000 for
+`core` and `metrics`, 50,000 for per-step and span sources, 10,000 for per-process
+ones) and the window is capped at 7 days; a breach is a 400 asking the operator to
+narrow the filters or time range rather than a partial result. The tests in
+`tests/test_async_rl_dashboard.py` hold every view to the per-panel SQL it replaces,
+kept in `tests/async_rl_panel_reference.json`, on two fixture stores.
 
 Native token counters are summed; queue gauges use their latest observation.
 Concurrent producer waits can exceed elapsed time. Rollout completions are joined

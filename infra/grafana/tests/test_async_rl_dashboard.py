@@ -2,17 +2,28 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace as Record
 from typing import NamedTuple
 
 import duckdb
 import pyarrow as pa
 import pytest
-from conftest import install_finelog_dialect_macros
+from async_rl_observability import async_rl_overview_dataset
+from config import ClusterTarget
+from conftest import bridge_config, install_finelog_dialect_macros
+from server import create_app
+from starlette.testclient import TestClient
 
 DASHBOARD = json.loads((Path(__file__).parents[1] / "dashboards/async_rl.json").read_text())
 PANELS = {panel["title"]: panel for panel in DASHBOARD["panels"] if "targets" in panel}
+ENDPOINT = "/v1/async-rl/overview"
+# The per-panel Finelog SQL each view replaces, keyed by panel title. The equivalence test below
+# holds every view to this reference on the fixture store.
+REFERENCE_SQL = json.loads((Path(__file__).parent / "async_rl_panel_reference.json").read_text())
 
 # The finelog namespace every async panel reads, quoted the way the dashboards spell it.
 TABLE = '"telemetry_v1.marinskyrl"'
@@ -38,11 +49,11 @@ def _window_literal(epoch_ms):
     return f"TIMESTAMP '{datetime.fromtimestamp(epoch_ms / 1000, UTC).strftime('%Y-%m-%d %H:%M:%S')}'"
 
 
-def resolve(sql):
+def resolve(sql, *, window_ms=WINDOW_MS, interval_ms=WINDOW_MS):
     for macro, value in {
         "{{from}}": _window_literal(WINDOW_START_MS),
-        "{{to}}": _window_literal(WINDOW_START_MS + WINDOW_MS),
-        "${__interval_ms}": str(WINDOW_MS),
+        "{{to}}": _window_literal(WINDOW_START_MS + window_ms),
+        "${__interval_ms}": str(interval_ms),
         "${cluster:sqlstring}": f"'{CLUSTER}'",
         "${run:sqlstring}": f"'{RUN_ID}'",
         "${job:sqlstring}": f"'{JOB_ID}'",
@@ -58,14 +69,29 @@ def run_variable_sql():
     return next(param["value"] for param in params if param["key"] == "sql")
 
 
-def panel_sql(title):
+def panel_view(title):
     target = PANELS[title]["targets"][0]
-    return next(param["value"] for param in target["url_options"]["params"] if param["key"] == "sql")
+    assert target["url"] == ENDPOINT
+    return next(param["value"] for param in target["url_options"]["params"] if param["key"] == "view")
 
 
-def query(database, title):
+def dataset(*, window_ms=WINDOW_MS, bucket_ms=WINDOW_MS):
+    """The dataset every panel requests for the selected identity over this suite's window."""
+    return async_rl_overview_dataset(
+        (CLUSTER,), RUN_ID, JOB_ID, (DRIVER, WORKER), WINDOW_START_MS, WINDOW_START_MS + window_ms, bucket_ms
+    )
+
+
+def materialize_sources(database, selected):
+    for source in selected.sources:
+        database.execute(f'CREATE OR REPLACE TEMP TABLE "{source.name}" AS {source.sql}')
+
+
+def query(database, title, *, window_ms=WINDOW_MS, bucket_ms=WINDOW_MS):
     target = PANELS[title]["targets"][0]
-    cursor = database.execute(resolve(panel_sql(title)))
+    selected = dataset(window_ms=window_ms, bucket_ms=bucket_ms)
+    materialize_sources(database, selected)
+    cursor = database.execute(selected.views[panel_view(title)])
     columns = [column[0] for column in cursor.description]
     assert columns == [column["selector"] for column in target["columns"]]
     return [dict(zip(columns, row, strict=True)) for row in cursor.fetchall()]
@@ -442,8 +468,448 @@ PANEL_SERIES = {
 
 
 @pytest.mark.parametrize("title", PANELS)
-def test_shipped_panel_sql_returns_declared_fields_for_selected_attempt(store, title):
+def test_every_panel_view_returns_declared_fields_for_selected_attempt(store, title):
     assert len(query(store, title)) == PANEL_SERIES[title]
+
+
+def _comparable(value):
+    """One cell as both query paths report it: timestamps as epoch milliseconds, numbers as floats."""
+    if isinstance(value, datetime):
+        return round(value.replace(tzinfo=UTC).timestamp() * 1000)
+    if isinstance(value, Decimal | float | int) and not isinstance(value, bool):
+        return round(float(value), 6)
+    return value
+
+
+# The equivalence fixture spans three display buckets so that bucketing, per-step grouping,
+# running sums and latest-per-process selection all have more than one candidate row.
+BUCKETS = 3
+STEPS_PER_BUCKET = 2
+
+
+@pytest.fixture
+def busy_store(store):
+    """The store plus several steps per bucket from both executions and two reporting processes."""
+    rows = []
+    resources = {
+        DRIVER: [{"role": "trainer", "host": "trainer", "training_loop": "async"}],
+        WORKER: [
+            {"role": "trainer", "host": "learner", "training_loop": "async"},
+            {"role": "trainer", "host": "learner-b", "training_loop": "async"},
+        ],
+    }
+
+    def add(name, value=0, *, execution, resource, timestamp, attributes=None, body=None):
+        rows.append(
+            telemetry_row(
+                name,
+                value,
+                execution=execution,
+                timestamp=timestamp,
+                seq=10_000 + len(rows),
+                attributes=attributes,
+                resource=resource,
+                body=body,
+            )
+        )
+
+    for bucket in range(BUCKETS):
+        for offset in range(STEPS_PER_BUCKET):
+            step = 10 + bucket * STEPS_PER_BUCKET + offset
+            at = WINDOW_START_MS + bucket * WINDOW_MS + 30_000 + offset * 90_000
+            scale = 1 + step / 10
+            for execution, processes in resources.items():
+                trainer = {"role": "trainer", "step": str(step)}
+                for process in processes:
+                    add("policy_step", step, execution=execution, resource=process, timestamp=at, attributes=trainer)
+                    add("lifecycle", execution=execution, resource=process, timestamp=at, body={"state": "running"})
+                    add("telemetry_lost_records", step, execution=execution, resource=process, timestamp=at)
+                    add("training_nonfinite_values", 1, execution=execution, resource=process, timestamp=at)
+                    for name, value in (("rollout_queue_depth", step % 5), ("rollout_capacity", 64)):
+                        add(name, value, execution=execution, resource=process, timestamp=at + 1, attributes=trainer)
+                        add(name, value + 1, execution=execution, resource=process, timestamp=at + 2, attributes=trainer)
+                    for rank in ("0", "1"):
+                        for phase, outcome in (
+                            ("ppo_train", "success"),
+                            ("forward", "success"),
+                            ("ppo_train", "failure"),
+                        ):
+                            add(
+                                "phase_duration_seconds",
+                                scale * (1 + int(rank)),
+                                execution=execution,
+                                resource=process,
+                                timestamp=at + 3,
+                                attributes={
+                                    **trainer,
+                                    "phase": phase,
+                                    "outcome": outcome,
+                                    "rank": rank,
+                                    "backend": "megatron",
+                                },
+                            )
+                        add(
+                            "phase_duration_seconds",
+                            -0.1 * scale,
+                            execution=execution,
+                            resource=process,
+                            timestamp=at + 3,
+                            attributes={**trainer, "phase": "ppo_train_residual", "outcome": "success", "rank": rank},
+                        )
+                        add(
+                            "cuda_memory_observation",
+                            execution=execution,
+                            resource=process,
+                            timestamp=at + 4,
+                            attributes={
+                                **trainer,
+                                "worker_role": "policy",
+                                "rank": rank,
+                                "gpu_uuid": f"GPU-{rank}",
+                                "phase": "ppo_train",
+                            },
+                            body={
+                                "peak_allocated_bytes": step * 2**30,
+                                "peak_reserved_bytes": (step + 1) * 2**30,
+                                "allocated_bytes": 2**30,
+                                "device_free_bytes": (20 - step) * 2**30,
+                                "device_total_bytes": 32 * 2**30,
+                            },
+                        )
+                process = processes[0]
+                add(
+                    "weight_sync_completed",
+                    execution=execution,
+                    resource=process,
+                    timestamp=at + 5,
+                    body={"model_version_step": step},
+                )
+                for kind, value in (
+                    ("generated_token", 300 * scale),
+                    ("consumed_response_token", 200),
+                    ("consumed_loss_token", 150),
+                ):
+                    add(
+                        "work_completed",
+                        value,
+                        execution=execution,
+                        resource=process,
+                        timestamp=at + 6,
+                        attributes={**trainer, "work_kind": kind},
+                    )
+                for phase, outcome in (
+                    ("step", "success"),
+                    ("run_training", "success"),
+                    ("run_training", "failure"),
+                    ("sync_weights", "success"),
+                    ("sync_weights", None),
+                    ("rollout_call", "success"),
+                    ("rollout_call", "failure"),
+                ):
+                    attributes = {**trainer, "phase": phase}
+                    if outcome is not None:
+                        attributes["outcome"] = outcome
+                    for value in (scale, 2 * scale, 5 * scale):
+                        add(
+                            "phase_duration_seconds",
+                            value,
+                            execution=execution,
+                            resource=process,
+                            timestamp=at + 7,
+                            attributes=attributes,
+                        )
+                add(
+                    "phase_duration_seconds",
+                    -0.2 * scale,
+                    execution=execution,
+                    resource=process,
+                    timestamp=at + 7,
+                    attributes={**trainer, "phase": "rollout_call_residual", "outcome": "success"},
+                )
+                for wait in ("slot", "prompt"):
+                    add(
+                        "rollout_wait_seconds",
+                        10 * scale,
+                        execution=execution,
+                        resource=process,
+                        timestamp=at + 8,
+                        attributes={**trainer, "wait": wait, "stat": "sum"},
+                    )
+                    add(
+                        "rollout_waits",
+                        4,
+                        execution=execution,
+                        resource=process,
+                        timestamp=at + 8,
+                        attributes={**trainer, "wait": wait},
+                    )
+                    if wait == "slot":
+                        add(
+                            "rollout_wait_seconds",
+                            7 * scale,
+                            execution=execution,
+                            resource=process,
+                            timestamp=at + 8,
+                            attributes={**trainer, "wait": wait, "stat": "max"},
+                        )
+                for value in (0.5, 1.5, 4.0 * scale):
+                    add(
+                        "rollout_buffer_dwell_seconds",
+                        value,
+                        execution=execution,
+                        resource=process,
+                        timestamp=at + 9,
+                        attributes={**trainer, "disposition": "consumed"},
+                    )
+                    add(
+                        "rollout_buffer_dwell_seconds",
+                        9 * value,
+                        execution=execution,
+                        resource=process,
+                        timestamp=at + 9,
+                        attributes={**trainer, "disposition": "rejected"},
+                    )
+                add(
+                    "event_loop_lag_seconds",
+                    0.01 * scale,
+                    execution=execution,
+                    resource=process,
+                    timestamp=at + 10,
+                    attributes=trainer,
+                )
+                for disposition, groups, tokens in (
+                    ("consumed", 3, 900),
+                    ("rejected", 1, 200),
+                    ("stale_enqueue", 2, 100),
+                ):
+                    add(
+                        "rollout_groups",
+                        groups,
+                        execution=execution,
+                        resource=process,
+                        timestamp=at + 11,
+                        attributes={**trainer, "disposition": disposition},
+                    )
+                    add(
+                        "rollout_group_tokens",
+                        tokens,
+                        execution=execution,
+                        resource=process,
+                        timestamp=at + 11,
+                        attributes={**trainer, "disposition": disposition},
+                    )
+                for staleness, tokens in ((0, 40), (1, 60), (1, 70), (step % 3, 80)):
+                    add(
+                        "rollout_staleness_steps",
+                        staleness,
+                        execution=execution,
+                        resource=process,
+                        timestamp=at + 12,
+                        attributes=trainer,
+                    )
+                    add(
+                        "consumed_staleness",
+                        execution=execution,
+                        resource=process,
+                        timestamp=at + 12,
+                        attributes=trainer,
+                        body={"staleness": staleness, "response_tokens": tokens},
+                    )
+                training_start = at + 20_000
+                add(
+                    "async_phase_window",
+                    execution=execution,
+                    resource=process,
+                    timestamp=at + 13,
+                    attributes={**trainer, "phase": "training", "outcome": "success"},
+                    body={
+                        "started_unix_ms": training_start,
+                        "finished_unix_ms": training_start + 10_000,
+                        "duration_seconds": 10.0,
+                    },
+                )
+                add(
+                    "async_phase_window",
+                    execution=execution,
+                    resource=process,
+                    timestamp=at + 13,
+                    attributes={**trainer, "phase": "weight_sync", "outcome": "success"},
+                    body={
+                        "started_unix_ms": training_start + 10_000,
+                        "finished_unix_ms": training_start + 14_000,
+                        "duration_seconds": 4.0,
+                    },
+                )
+                for call, finish, tokens in (
+                    ("a", 2_000, 5),
+                    ("b", 8_000, 11),
+                    ("edge", 10_000, 13),
+                    ("late", 15_000, 17),
+                ):
+                    add(
+                        "rollout_call",
+                        execution=execution,
+                        resource=process,
+                        timestamp=at + 14,
+                        attributes={**trainer, "outcome": "success"},
+                        body={
+                            "call_id": f"{step}-{call}",
+                            "started_unix_ms": training_start - 1_000,
+                            "finished_unix_ms": training_start + finish,
+                            "duration_seconds": (finish + 1_000) / 1_000,
+                            "response_tokens": tokens,
+                        },
+                    )
+                for engine, samples in (
+                    ("engine-A", ((0, 100), (4_000, 140), (6_000, 5), (8_000, 25), (12_000, 100))),
+                    ("engine-B", ((0, 1_000), (4_000, 1_080))),
+                ):
+                    for offset_ms, value in samples:
+                        add(
+                            "generation_tokens_total",
+                            value * scale,
+                            execution=execution,
+                            resource=process,
+                            timestamp=training_start + offset_ms,
+                            attributes={
+                                "engine": engine,
+                                "metric_source": "vllm",
+                                "source_temporality": "cumulative_snapshot",
+                            },
+                        )
+                metrics = {
+                    "reward/avg_raw_reward": 0.5 * scale,
+                    "reward/avg_pass_at_4": 0.6,
+                    "eval/all/avg_score": 0.25 * scale,
+                    "eval/all/response_tokens_mean": 150,
+                    "eval/all/length_stop_fraction": 0.5,
+                    "eval/all/stop_reason_coverage": 1,
+                    "eval/all/length_stop_score_contribution": 0.2,
+                    "policy/policy_loss": -0.2 * scale,
+                    "policy/raw_grad_norm": 4 * scale,
+                    "consumed/length_stop_fraction": 0.25,
+                    "consumed/stop_reason_coverage": 1 if step % 2 else 0.5,
+                    "policy/mismatch/pooled/log_ratio_mean": -0.1 * scale,
+                    "policy/mismatch/pooled/log_ratio_mean_squared": 0.04 * scale,
+                    "policy/mismatch/pooled/ess_fraction": 0.8,
+                    "policy/mismatch/pooled/finite_fraction": 1,
+                    "policy/mismatch/pooled/missing_behavior": 0,
+                    "policy/mismatch/pooled/upper_clip_pressure": 0.1,
+                    "tis/skipped_fraction": 0,
+                    "async/staleness_min": step % 2,
+                    "async/staleness_max": step % 2 + (1 if step % 4 == 0 else 0),
+                    "async/performance/consumed_loss_tokens": 100 * step,
+                    "async/performance/consumed_response_tokens": 200 * step,
+                    "consumed/sequences": 2,
+                    "async/performance/core_seconds": 10 * scale,
+                    "async/performance/cycle_seconds": 25 * scale,
+                    "async/performance/consumed_loss_tokens_per_core_second": 100,
+                    "async/performance/buffer_wait_fraction": 0.2,
+                    "async/performance/loss_tokens_per_configured_policy_gpu_second": 5,
+                    "async/performance/configured_policy_gpus": 8,
+                    "async/performance/configured_inference_gpus": 8 if step % 4 else None,
+                    "policy/mismatch/staleness0/log_ratio_abs_mean": 0.1 * scale,
+                    "policy/mismatch/staleness1/log_ratio_abs_mean": 0.3 * scale,
+                    "policy/log_ratio_abs_mean": 0.05 * scale,
+                    "policy/mismatch/pooled/pos_first256/log_ratio_abs_mean": 0.12,
+                    "policy/log_ratio_pos_last256/log_ratio_abs_mean": 0.04,
+                    "policy/grad_cosine": 0.2 * scale,
+                    "policy/m2_mask/m2_before": 0.03 * scale,
+                    "policy/ppo_clip_ratio": 0.08,
+                }
+                for metric, value in metrics.items():
+                    if value is None:
+                        continue
+                    add(
+                        "training_metric_value",
+                        value,
+                        execution=execution,
+                        resource=process,
+                        timestamp=at + 15,
+                        attributes={
+                            **trainer,
+                            "metric": metric,
+                            "payload_kind": "eval" if metric.startswith("eval/") else "train",
+                        },
+                    )
+    seed(store, rows)
+    return store
+
+
+BUSY_WINDOW = {"window_ms": BUCKETS * WINDOW_MS, "bucket_ms": WINDOW_MS}
+
+
+@pytest.mark.parametrize("fixture", ["store", "busy_store"])
+@pytest.mark.parametrize("title", PANELS)
+def test_every_view_matches_the_panel_sql_it_replaces(request, fixture, title):
+    """The view and the per-panel SQL agree cell for cell on both fixtures. Buckets here are the
+    reference's epoch-aligned five minutes; the one intended difference, buckets aligned to the window
+    start and widened to at least 30 s and at most 360 per window, does not show. The README documents it."""
+    database = request.getfixturevalue(fixture)
+    windows = BUSY_WINDOW if fixture == "busy_store" else {}
+    reference = database.execute(
+        resolve(REFERENCE_SQL[title], window_ms=windows.get("window_ms", WINDOW_MS), interval_ms=WINDOW_MS)
+    )
+    reference_columns = [column[0] for column in reference.description]
+    expected = sorted((tuple(_comparable(cell) for cell in row) for row in reference.fetchall()), key=repr)
+
+    rows = query(database, title, **windows)
+
+    assert expected, f"{title}: the reference returns nothing on {fixture}"
+    assert [column for column in rows[0]] == reference_columns
+    assert sorted((tuple(_comparable(cell) for cell in row.values()) for row in rows), key=repr) == expected
+
+
+def _bridge(database, *, max_rows=1000):
+    queries = []
+
+    def query_source(sql, *, max_rows):
+        queries.append(sql)
+        return database.execute(sql).fetch_arrow_table()
+
+    source = Record(target=ClusterTarget("marin", "project", "zone", "fleet", "cluster"), query=query_source)
+    return create_app(replace(bridge_config(), max_rows=max_rows), {"marin": source}, {}, None, None, None), queries
+
+
+REQUEST = {
+    "clusters": CLUSTER,
+    "run": RUN_ID,
+    "job": JOB_ID,
+    "executions": f"{DRIVER},{WORKER}",
+    "from": WINDOW_START_MS,
+    "to": WINDOW_START_MS + WINDOW_MS,
+    "bucket_ms": WINDOW_MS,
+}
+
+
+def test_the_page_reads_finelog_once_per_source_for_every_panel(store):
+    app, queries = _bridge(store)
+
+    with TestClient(app) as client:
+        responses = {
+            title: client.get(f"/finelog/marin{ENDPOINT}", params={**REQUEST, "view": panel_view(title)})
+            for title in PANELS
+        }
+
+    assert len(queries) == len(dataset().sources)
+    assert {response.status_code for response in responses.values()} == {200}
+    assert {title: len(response.json()) for title, response in responses.items()} == PANEL_SERIES
+
+
+def test_a_request_past_the_budget_asks_the_operator_to_narrow_it(store):
+    app, _ = _bridge(store, max_rows=3)
+
+    with TestClient(app) as client:
+        capped = client.get(f"/finelog/marin{ENDPOINT}", params={**REQUEST, "view": "policy_step"})
+        too_wide = client.get(
+            f"/finelog/marin{ENDPOINT}",
+            params={**REQUEST, "from": WINDOW_START_MS - 8 * 24 * 3600 * 1000, "view": "policy_step"},
+        )
+
+    assert capped.status_code == 400
+    assert capped.json()["error"].endswith("narrow the async RL overview filters or time range")
+    assert too_wide.status_code == 400
+    assert too_wide.json() == {"error": "async RL overview range must not exceed 7 days"}
 
 
 def test_the_seeded_row_matches_the_table_it_is_inserted_into():
@@ -851,9 +1317,9 @@ def test_weight_sync_timeline_orders_training_and_sync_windows(store):
     spans = {row["state"]: row for row in rows}
     assert set(spans) == {"training", "weight sync", "weights synced"}
     assert spans["training"]["finish"] == spans["weight sync"]["start"]
-    assert (spans["training"]["finish"] - spans["training"]["start"]).total_seconds() == 10
-    assert (spans["weight sync"]["finish"] - spans["weight sync"]["start"]).total_seconds() == 4
-    assert (spans["weights synced"]["finish"] - spans["weights synced"]["start"]).total_seconds() == 0.001
+    assert spans["training"]["finish"] - spans["training"]["start"] == 10_000
+    assert spans["weight sync"]["finish"] - spans["weight sync"]["start"] == 4_000
+    assert spans["weights synced"]["finish"] - spans["weights synced"]["start"] == 1
 
 
 def test_ratio_panels_read_mismatch_and_learner_drift_families_separately(store):
