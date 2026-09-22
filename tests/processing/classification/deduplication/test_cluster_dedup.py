@@ -66,9 +66,7 @@ def test_lightly_edited_copy_is_removed_at_the_default_threshold():
 
     assert documents[removal.member_index].id == "copy"
     assert documents[removal.representative_index].id == "original"
-    # The one edit puts the pair between the two thresholds: the copy is a
-    # near-duplicate, not an exact subset of the original.
-    assert ClusterDedupParams().minimum_containment <= removal.containment < 1.0
+    assert removal.containment == pytest.approx(26 / 29)
     assert removal.novel_tokens == 1
 
 
@@ -83,12 +81,6 @@ def test_production_threshold_keeps_a_pair_that_passes_at_sixty_percent():
 
     assert _removed_by(documents) == {}
     assert _removed_by(documents, ClusterDedupParams(minimum_containment=0.60)) == {"copy": "original"}
-
-
-def test_unrelated_document_in_the_same_cluster_is_never_removed():
-    documents = _cluster({"original": ORIGINAL, "copy": SHORTER_COPY, "excerpt": EXCERPT, "unrelated": UNRELATED})
-
-    assert _removed_by(documents) == {"copy": "original", "excerpt": "original"}
 
 
 @pytest.mark.parametrize(

@@ -11,6 +11,8 @@ Small clusters compare each member with earlier survivors. Large clusters use
 a rare-n-gram index with limits on posting lists and candidate counts. These
 limits can miss duplicates within a cluster. The materializer can also split
 large components with a MinHash key, which can separate containment pairs.
+The production index includes member-only probes and applies its candidate cap
+before it excludes removed documents. These limits are part of its output rule.
 """
 
 from collections.abc import Sequence
@@ -67,6 +69,7 @@ class Removal:
     jaccard: float
     novel_tokens: int
     comparisons: int
+    """Comparisons for this member through its first accepted representative."""
 
 
 def ngram_hashes(text: str, ngram_size: int) -> np.ndarray:
