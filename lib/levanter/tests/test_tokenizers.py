@@ -1125,8 +1125,9 @@ def test_local_tokenizer_encode_batch(tmp_path):
 
 def test_object_store_tokenizer_encode_batch(tmp_path, fake_tokenizer_dir, clear_stage_cache):
     remote_dir = f"memory://tokenizers/{tmp_path.name}"
+    remote_path = StoragePath(remote_dir)
     for filename in os.listdir(fake_tokenizer_dir):
-        StoragePath(f"{remote_dir}/{filename}").upload_from(str(fake_tokenizer_dir / filename))
+        (remote_path / filename).upload_from(str(fake_tokenizer_dir / filename))
 
     load_tokenizer.cache_clear()
     tokenizer = load_tokenizer(remote_dir)
