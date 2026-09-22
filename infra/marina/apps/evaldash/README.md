@@ -9,6 +9,8 @@ results and per-sample artifacts. The app's own Postgres schema is the serving c
 full validated record snapshot before answering, and object storage stays the durable producer and
 recovery input. The EvalDash Marina runner scans object storage and commits catalog changes; serving
 instances do no background reconciliation work.
+Historical records may omit `model.config.tokenizer_revision`; the record reader treats an omitted
+value as `None`. Current writers include the field.
 
 The default scan also includes the former flat `gs://marin-eval-metadata/runs` and
 `s3://marin-us-east-02a/marin/eval-metadata/runs` roots because older CLI checkouts still write there.

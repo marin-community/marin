@@ -170,7 +170,7 @@ class ModelConfigRef(BaseModel):
     location: str
     revision: str | None
     tokenizer: str | None
-    tokenizer_revision: str | None
+    tokenizer_revision: str | None = None
     apply_chat_template: bool
     resource_hint: ModelResourceConfig
     serve: ModelServeConfig
