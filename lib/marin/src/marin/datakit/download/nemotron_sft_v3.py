@@ -3,16 +3,19 @@
 
 """Nemotron post-training SFT exports as structured Harmony chat sources."""
 
+import io
 import json
 from collections.abc import Iterator, Mapping
 from functools import cache
+from itertools import pairwise
 from types import MappingProxyType
+from typing import NamedTuple, cast
 
 import msgspec
 import pyarrow as pa
 from fray.types import ResourceConfig
 from openai_harmony import Message
-from rigging.filesystem.storage_path import prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr import counters
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
@@ -30,6 +33,9 @@ from marin.datakit.download.rollout_transforms import load_parquet_batched, open
 from marin.execution.step_spec import StepSpec
 
 TRANSFORM_VERSION = "2026.09.17.chat-v4"
+SCIENCE_VENDOR_TRANSFORM_VERSION = "2026.09.18"
+MATH_V3_TRANSFORM_VERSION = "2026.09.18.buffered-byte-range-shards"
+MATH_V3_JSONL_SHARDS = 64
 MAX_CONSECUTIVE_IDENTICAL_LINES = 256
 _SKIPPED_JSONL_LINES = MappingProxyType({("agentic_v2", "tool_calling"): frozenset({1095})})
 _RESTORED_CHAT_FAMILY = "instruction_following_chat_v3"
@@ -264,7 +270,7 @@ def _parse_messages(value: object) -> list[dict]:
 
 
 def _tool_definitions(value: object) -> list[dict]:
-    if value is None:
+    if value is None or (isinstance(value, str) and not value.strip()):
         return []
     if isinstance(value, str):
         value = json.loads(value)
@@ -386,6 +392,35 @@ def load_jsonl_with_skips(source: str, skipped_lines: frozenset[int]) -> Iterato
             yield record
 
 
+class _JsonlByteRange(NamedTuple):
+    path: str
+    start: int
+    stop: int
+
+
+def _load_jsonl_byte_range(shard: _JsonlByteRange) -> Iterator[dict]:
+    """Read complete JSONL lines whose first byte falls in a byte range."""
+    decoder = msgspec.json.Decoder()
+    with (
+        open_file(shard.path, "rb") as raw_source,
+        io.BufferedReader(cast(io.RawIOBase, raw_source), buffer_size=1 << 20) as source,
+    ):
+        if shard.start:
+            source.seek(shard.start - 1)
+            if source.read(1) != b"\n":
+                source.readline()
+        while source.tell() < shard.stop:
+            line = source.readline()
+            if not line:
+                break
+            if line.strip():
+                record = decoder.decode(line)
+                if not isinstance(record, dict):
+                    raise ValueError(f"JSONL row in {shard.path} must be an object")
+                counters.pipeline.update_counter(counters.RECORDS_IN, 1)
+                yield record
+
+
 @cache
 def download_nemotron_sft_v3_step(family: str) -> StepSpec:
     """Create one pinned raw-file download shared by a repository's partitions."""
@@ -404,6 +439,12 @@ def _transform_chat(input_path: str, output_path: str, *, family: str, partition
     files = Dataset.from_files(prefix_join(input_path, file_glob))
     if file_glob.endswith(".parquet"):
         rows = files.flat_map(load_parquet_batched)
+    elif (family, partition_name) == ("math_v3", "train"):
+        path = prefix_join(input_path, file_glob)
+        size = StoragePath.parse(path).size()
+        bounds = [size * index // MATH_V3_JSONL_SHARDS for index in range(MATH_V3_JSONL_SHARDS + 1)]
+        shards = [_JsonlByteRange(path, start, stop) for start, stop in pairwise(bounds) if start < stop]
+        rows = Dataset.from_list(shards).flat_map(_load_jsonl_byte_range)
     elif skipped_lines := _SKIPPED_JSONL_LINES.get((family, partition_name)):
         rows = files.flat_map(lambda path: load_jsonl_with_skips(path, skipped_lines))
     else:
@@ -416,19 +457,32 @@ def _transform_chat(input_path: str, output_path: str, *, family: str, partition
         schema=SOURCE_CHAT_SCHEMA,
         skip_existing=True,
     )
+    resources = ResourceConfig(cpu=1, ram="16g")
+    max_workers = None
+    if (family, partition_name) == ("math_v3", "train"):
+        resources = ResourceConfig(cpu=1, ram="8g", preemptible=False)
+        max_workers = MATH_V3_JSONL_SHARDS
     ZephyrContext(
-        name=f"nemotron-sft-chat-{family}-{partition_name}", resources=ResourceConfig(cpu=1, ram="16g")
+        name=f"nemotron-sft-chat-{family}-{partition_name}", resources=resources, max_workers=max_workers
     ).execute(pipeline)
 
 
 def _processed_chat_step(download: StepSpec, *, family: str, partition_name: str) -> StepSpec:
+    version = TRANSFORM_VERSION
+    hash_attrs: dict[str, str | int] = {"family": family, "partition": partition_name}
+    if (family, partition_name) == ("science_v2", "vendor"):
+        version = SCIENCE_VENDOR_TRANSFORM_VERSION
+    elif (family, partition_name) == ("math_v3", "train"):
+        version = MATH_V3_TRANSFORM_VERSION
+        hash_attrs["jsonl_shards"] = MATH_V3_JSONL_SHARDS
+    hash_attrs["version"] = version
     return StepSpec(
         name=f"processed-chat/nemotron_sft_v3/{family}/{partition_name}",
         deps=[download],
         fn=lambda output_path: _transform_chat(
             download.output_path, output_path, family=family, partition_name=partition_name
         ),
-        hash_attrs={"family": family, "partition": partition_name, "version": TRANSFORM_VERSION},
+        hash_attrs=hash_attrs,
     )
 
 
@@ -437,7 +491,7 @@ def _restored_chat_step(download: StepSpec) -> StepSpec:
         name=f"restored-chat/nemotron_sft_v3/{_RESTORED_CHAT_FAMILY}",
         deps=[download],
         fn=lambda output_path: restore_chat_prompts(download.output_path, output_path),
-        hash_attrs={"version": "2026.09.17", "seed_revisions": dict(SEED_DATASET_REVISIONS)},
+        hash_attrs={"version": "2026.09.18.authenticated-lmsys", "seed_revisions": dict(SEED_DATASET_REVISIONS)},
     )
 
 
