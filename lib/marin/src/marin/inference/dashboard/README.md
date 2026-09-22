@@ -40,6 +40,34 @@ system and user messages, unparsed assistant `content` and reasoning fields,
 structured tool calls, tool results, and errors. The OpenAI-compatible response
 does not include numeric token IDs, so the dashboard cannot display those.
 
+## Rendered output and shared chats
+
+Assistant messages render Markdown. Unfenced HTML and XML from the model are
+displayed as literal text instead of DOM elements. The Markdown parser places a
+raw markup region in a code block when it classifies the region as a block;
+tags embedded in prose remain inline. This preserves custom tags such as
+`<ticket_analysis>` and prevents model output from adding active HTML to the
+dashboard.
+
+Choose **Share chat** to copy a link with a snapshot in its URL fragment. The
+snapshot includes the title, model name, message text, full reasoning fields,
+tool calls, tool results, and errors. Collapsed reasoning and tool-result fields
+are included in full. It excludes the system prompt, custom template
+instructions, Python tool source, shell workspace, and unparsed raw protocol
+fields. The share operation does not redact excluded data that was copied into
+an included message, tool call, tool result, or error. Opening the link loads a
+new active conversation in that browser and removes the snapshot fragment from
+the address bar. The snapshot is not stored on the dashboard server.
+
+The copied link retains the current dashboard URL. A `marin-serve iris` URL is
+an endpoint-scoped capability credential that authorizes inference and tool
+requests until its Iris-assigned expiration time. Share chat links only with
+trusted users. The share operation grants the same access as the current URL;
+it does not narrow or revoke that access. URL length grows with the transcript,
+so external chat and ticket systems may truncate links for long conversations.
+An invalid or truncated snapshot opens an empty chat and displays an import
+error.
+
 ## Custom Python tools
 
 Open **Python tools** above the Chat composer to define functions for the active
@@ -86,9 +114,19 @@ and source is limited to 64 KiB. ShellSim implements a source-compatible subset
 of Python rather than full CPython, so unsupported modules and language features
 fail the tool call.
 
-One model response counts as one round, including a response with multiple
-calls. The UI executes calls from the eighth round, stops before another model
-request, and displays a limit error.
+Within one user turn, each model response that contains one or more calls counts
+as one tool round. **Max tool rounds** in **More settings** controls the number
+of rounds in that turn. The default value, `0`, allows unlimited rounds. For a
+positive value, the UI executes calls from the final allowed round, stops before
+another model request, and displays a limit error.
+
+The UI also stops before executing the third identical tool call in a row. A
+call is identical when its function name and arguments match; object key order
+does not affect the comparison. Multiple calls in one response are checked in
+execution order. A call with another function name or different arguments
+resets the repetition count. The count resets at the start of each user turn.
+Calls that return tool errors still count because the UI records the call before
+execution.
 
 ## ShellSim agent workspaces
 

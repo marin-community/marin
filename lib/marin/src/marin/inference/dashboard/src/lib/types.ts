@@ -90,4 +90,5 @@ export interface SamplingParams {
   temperature: number
   maxTokens: number
   topP: number
+  maxToolRounds: number
 }
