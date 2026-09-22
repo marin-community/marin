@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
+import pyarrow.parquet as pq
 from levanter.data.text.formats import TextLmDatasetFormat
 from levanter.tokenizers import TokenizerBackend
 from marin.datakit.chat_normalize import CHAT_SCHEMA, normalize_chat_to_parquet
@@ -25,10 +26,10 @@ from marin.processing.tokenize.store_builder import (
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr.writers import write_parquet_file
 
+from experiments.post_training.curriculum_sft.ablation.generated_tasks import GENERATION_FILENAME, task_payload
 from experiments.post_training.curriculum_sft.ablation.matrix import AblationCell, generated_payloads_to_rows
 
-DEFAULT_GENERATION_URI = "s3://marin-us-east-02a/marin/users/power/documents/curriculum-sft/ablation/2026.09.21.4"
-GENERATION_FILENAME = "generation.json"
+DEFAULT_GENERATION_URI = "s3://marin-us-east-02a/marin/users/power/documents/curriculum-sft/ablation/2026.09.22.1"
 RAW_CHAT_FILENAME = "chat/part-00000-of-00001.parquet"
 MANIFEST_FILENAME = "manifest.json"
 DATA_SOURCE = "curriculum-sft"
@@ -73,7 +74,16 @@ def materialize_dataset(config: MaterializeDatasetConfig) -> AblationDataset:
     if len(matches) != 1:
         raise ValueError(f"expected one generation ledger entry for {expected_name}, found {len(matches)}")
     entry = matches[0]
-    rows = generated_payloads_to_rows(config.cell, entry["tasks"])
+    task_data_path = prefix_join(config.generation_root, ledger["task_data"])
+    with StoragePath(task_data_path).open("rb") as handle:
+        task_records = pq.ParquetFile(handle).read().to_pylist()
+    payloads = [task_payload(record) for record in task_records if record["cell"] == expected_name]
+    if len(payloads) != entry["requested"]:
+        raise ValueError(
+            f"generation manifest records {entry['requested']} tasks for {expected_name}, "
+            f"but task Parquet contains {len(payloads)}"
+        )
+    rows = generated_payloads_to_rows(config.cell, payloads)
 
     output = StoragePath(config.output_path)
     output.mkdirs()

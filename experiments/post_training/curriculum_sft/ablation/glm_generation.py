@@ -21,8 +21,15 @@ from marin.inference.openai_batch import CHAT_COMPLETIONS_ENDPOINT, OpenAIBatchC
 from marin.inference.structured_output import StructuredTool
 from pydantic import Field
 from rigging.filesystem.storage_path import StoragePath
+from zephyr.writers import write_parquet_file
 
-from experiments.post_training.curriculum_sft.ablation.dataset import GENERATION_FILENAME
+from experiments.post_training.curriculum_sft.ablation.generated_tasks import (
+    GENERATED_TASK_SCHEMA,
+    GENERATED_TASKS_FILENAME,
+    GENERATION_FILENAME,
+    RAW_RESPONSES_FILENAME,
+    generated_task_record,
+)
 from experiments.post_training.curriculum_sft.ablation.matrix import (
     AblationCell,
     CurriculumCondition,
@@ -128,7 +135,7 @@ def run_matrix(
     seed: int = 17,
     relay_job: str = DEFAULT_GLM_RELAY_JOB,
 ) -> None:
-    """Run paired generation replicates and write raw quality plus all payloads."""
+    """Run paired generation replicates and write task Parquet plus an audit manifest."""
 
     cells = tuple(
         AblationCell(curriculum, generation_spec)
@@ -161,7 +168,7 @@ def run_matrix(
     if raw_errors:
         raise RuntimeError("GLM returned batch errors for paired ablation generation")
 
-    results: dict[str, dict[str, Any]] = {}
+    results: dict[str, list[dict[str, Any]]] = {}
     for line in raw_output.splitlines():
         if not line.strip():
             continue
@@ -183,6 +190,7 @@ def run_matrix(
         raise RuntimeError(f"GLM batch omitted requests: {sorted(missing)}")
 
     rows = []
+    task_records = []
     for cell in cells:
         tasks: list[dict[str, Any]] = []
         replicates = []
@@ -191,6 +199,15 @@ def run_matrix(
             payload = results[custom_id]
             checks = [verify_task_payload(task) for task in payload]
             tasks.extend(payload)
+            task_records.extend(
+                generated_task_record(
+                    cell,
+                    replicate=replicate,
+                    seed=cell_by_request[custom_id][1],
+                    payload=task,
+                )
+                for task in payload
+            )
             replicates.append(
                 {
                     "replicate": replicate,
@@ -220,17 +237,22 @@ def run_matrix(
                 "format_rate": sum(check.format_valid for check in checks) / len(checks),
                 "arithmetic_rate": sum(check.arithmetic_valid for check in checks) / len(checks),
                 "evidence_rate": sum(check.evidence_valid for check in checks) / len(checks),
-                "tasks": tasks,
             }
         )
 
     output_path = StoragePath(output)
     output_path.mkdirs()
+    task_data_path = output_path / GENERATED_TASKS_FILENAME
+    task_data_path.parent.mkdirs()
+    write_parquet_file(task_records, str(task_data_path), schema=GENERATED_TASK_SCHEMA)
+    (output_path / RAW_RESPONSES_FILENAME).write_text(raw_output.rstrip() + "\n")
     ledger = {
         "batch_id": batch_id,
         "base_seed": seed,
         "replicate_count": replicate_count,
         "tasks_per_replicate": tasks_per_replicate,
+        "task_data": GENERATED_TASKS_FILENAME,
+        "raw_responses": RAW_RESPONSES_FILENAME,
         "cells": rows,
     }
     (output_path / GENERATION_FILENAME).write_text(json.dumps(ledger, indent=2, ensure_ascii=False) + "\n")
