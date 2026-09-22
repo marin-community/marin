@@ -429,18 +429,6 @@ _STRATEGY_FOR_PROFILE = {
     SkyRLRuntimeProfile.MEGATRON: "megatron",
 }
 
-_ROLE_PLAN_CONFIG_FIELDS = {
-    "trainer.placement.colocate_all": "colocate_all",
-    "trainer.train_batch_size": "train_batch_size",
-    "trainer.policy_mini_batch_size": "policy_mini_batch_size",
-    "trainer.micro_train_batch_size_per_gpu": "micro_train_batch_size_per_gpu",
-    "generator.num_inference_engines": "num_inference_engines",
-    "generator.inference_engine_tensor_parallel_size": "inference_engine_tensor_parallel_size",
-    "generator.inference_engine_pipeline_parallel_size": "inference_engine_pipeline_parallel_size",
-    "generator.inference_engine_data_parallel_size": "inference_engine_data_parallel_size",
-    "generator.inference_engine_expert_parallel_size": "inference_engine_expert_parallel_size",
-    "generator.n_samples_per_prompt": "n_samples_per_prompt",
-}
 _MISSING_CONFIG_VALUE = object()
 
 
@@ -463,15 +451,55 @@ def _declared_config_value(config: dict[str, object], dotted_key: str) -> object
     return value
 
 
+def _role_plan_config_values(role_plan: SkyRLRolePlan) -> dict[str, object]:
+    """Map Marin's typed role plan to the canonical SkyRL Hydra paths."""
+    return {
+        "trainer.placement.colocate_all": role_plan.colocate_all,
+        "trainer.placement.colocate_policy_ref": True,
+        "trainer.placement.policy_num_nodes": role_plan.policy_num_nodes,
+        "trainer.placement.policy_num_gpus_per_node": role_plan.policy_num_gpus_per_node,
+        "trainer.placement.ref_num_nodes": role_plan.policy_num_nodes,
+        "trainer.placement.ref_num_gpus_per_node": role_plan.policy_num_gpus_per_node,
+        "trainer.train_batch_size": role_plan.train_batch_size,
+        "trainer.policy_mini_batch_size": role_plan.policy_mini_batch_size,
+        "trainer.micro_train_batch_size_per_gpu": role_plan.micro_train_batch_size_per_gpu,
+        "generator.num_inference_engines": role_plan.num_inference_engines,
+        "generator.inference_engine_tensor_parallel_size": role_plan.inference_engine_tensor_parallel_size,
+        "generator.inference_engine_pipeline_parallel_size": role_plan.inference_engine_pipeline_parallel_size,
+        "generator.inference_engine_data_parallel_size": role_plan.inference_engine_data_parallel_size,
+        "generator.inference_engine_expert_parallel_size": role_plan.inference_engine_expert_parallel_size,
+        "generator.n_samples_per_prompt": role_plan.n_samples_per_prompt,
+    }
+
+
 def _validate_role_plan_config(config: dict[str, object], role_plan: SkyRLRolePlan) -> None:
-    """Ensure the trainer config cannot silently disagree with the identity-bearing role plan."""
-    for dotted_key, field_name in _ROLE_PLAN_CONFIG_FIELDS.items():
-        expected = getattr(role_plan, field_name)
+    """Reject recipe values that disagree with Marin's canonical role plan."""
+    for dotted_key, expected in _role_plan_config_values(role_plan).items():
         actual = _declared_config_value(config, dotted_key)
         if actual is _MISSING_CONFIG_VALUE:
-            raise ValueError(f"SkyRL config must explicitly set {dotted_key} from role_plan.{field_name}")
+            continue
         if type(actual) is not type(expected) or actual != expected:
-            raise ValueError(f"SkyRL config {dotted_key}={actual!r} disagrees with role_plan.{field_name}={expected!r}")
+            raise ValueError(f"SkyRL config {dotted_key}={actual!r} disagrees with the role plan value {expected!r}")
+
+
+def _set_config_value(config: dict[str, object], dotted_key: str, value: object) -> None:
+    node = config
+    parts = dotted_key.split(".")
+    for part in parts[:-1]:
+        child = node.get(part)
+        if child is None:
+            child = {}
+            node[part] = child
+        if not isinstance(child, dict):
+            raise ValueError(f"SkyRL config {'.'.join(parts[:-1])} must be a mapping")
+        node = child
+    node[parts[-1]] = value
+
+
+def _materialize_role_plan_config(config: dict[str, object], role_plan: SkyRLRolePlan) -> None:
+    """Render the typed Marin role plan into the SkyRL Hydra document."""
+    for dotted_key, value in _role_plan_config_values(role_plan).items():
+        _set_config_value(config, dotted_key, value)
 
 
 def _validate_entrypoint_config(config: dict[str, object], role_plan: SkyRLRolePlan) -> None:
@@ -730,6 +758,7 @@ def _launch_config_yaml(
     output: SkyRLOutputPaths,
 ) -> str:
     recipe = _parsed_config(spec.config_yaml)
+    _materialize_role_plan_config(recipe, spec.topology.role_plan)
     task_env = recipe.get("extra_env", {})
     if not isinstance(task_env, dict):
         raise ValueError("SkyRL extra_env must be a mapping")

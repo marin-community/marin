@@ -54,3 +54,13 @@ def test_workflow_is_one_dependency_chain_through_both_evaluators(monkeypatch) -
     rl_config = workflow.rl.build_config(StepContext.for_fingerprint(workflow.rl.runtime_args, workflow.rl.deps))
     launch = yaml.safe_load(rl_config.launch_config_yaml)
     assert launch["artifacts"]["resume_checkpoint_count"] == 1
+    assert launch["iris"]["allocation"]["num_nodes"] == 2
+    assert launch["skyrl"]["trainer"]["placement"] == {
+        "colocate_all": False,
+        "colocate_policy_ref": True,
+        "policy_num_nodes": 1,
+        "policy_num_gpus_per_node": 4,
+        "ref_num_nodes": 1,
+        "ref_num_gpus_per_node": 4,
+    }
+    assert launch["skyrl"]["generator"]["num_inference_engines"] == 4

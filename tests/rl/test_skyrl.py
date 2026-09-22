@@ -100,28 +100,16 @@ def _role_plan() -> SkyRLRolePlan:
     )
 
 
-def _config_yaml(plan: SkyRLRolePlan | None = None, *, strategy: str | None = None) -> str:
-    plan = plan or _role_plan()
+def _config_yaml(*, strategy: str | None = None) -> str:
     strategy_line = f"  strategy: {strategy}\n" if strategy is not None else ""
     return f"""\
 trainer:
 {strategy_line}  max_steps: 8
-  train_batch_size: {plan.train_batch_size}
-  policy_mini_batch_size: {plan.policy_mini_batch_size}
-  micro_train_batch_size_per_gpu: {plan.micro_train_batch_size_per_gpu}
-  placement:
-    colocate_all: {str(plan.colocate_all).lower()}
   algorithm:
     use_kl_loss: false
 generator:
   backend: vllm
   run_engines_locally: true
-  num_inference_engines: {plan.num_inference_engines}
-  inference_engine_tensor_parallel_size: {plan.inference_engine_tensor_parallel_size}
-  inference_engine_pipeline_parallel_size: {plan.inference_engine_pipeline_parallel_size}
-  inference_engine_data_parallel_size: {plan.inference_engine_data_parallel_size}
-  inference_engine_expert_parallel_size: {plan.inference_engine_expert_parallel_size}
-  n_samples_per_prompt: {plan.n_samples_per_prompt}
 """
 
 
@@ -227,21 +215,11 @@ def test_skyrl_topology_rejects_unequal_colocated_role_sizes() -> None:
 
 
 def test_skyrl_spec_rejects_config_that_disagrees_with_role_plan() -> None:
-    with pytest.raises(ValueError, match=r"generator\.inference_engine_data_parallel_size=2"):
+    with pytest.raises(ValueError, match=r"trainer\.train_batch_size=32"):
         dataclasses.replace(
             _spec(),
-            config_yaml=_config_yaml().replace(
-                "  inference_engine_data_parallel_size: 1",
-                "  inference_engine_data_parallel_size: 2",
-            ),
+            config_yaml=_config_yaml().replace("  max_steps: 8", "  max_steps: 8\n  train_batch_size: 32"),
         )
-
-
-def test_skyrl_spec_requires_explicit_engine_geometry() -> None:
-    config = _config_yaml().replace("  inference_engine_data_parallel_size: 1\n", "")
-
-    with pytest.raises(ValueError, match=r"must explicitly set generator\.inference_engine_data_parallel_size"):
-        dataclasses.replace(_spec(), config_yaml=config)
 
 
 def test_skyrl_spec_rejects_distinct_batch_sizes_for_fully_async() -> None:
@@ -254,7 +232,7 @@ def test_skyrl_spec_rejects_distinct_batch_sizes_for_fully_async() -> None:
     ):
         dataclasses.replace(
             spec,
-            config_yaml=f"entrypoint: fully_async\n{_config_yaml(plan)}",
+            config_yaml=f"entrypoint: fully_async\n{_config_yaml()}",
             topology=dataclasses.replace(spec.topology, role_plan=plan),
         )
 
@@ -278,7 +256,7 @@ def test_skyrl_step_fingerprint_includes_runtime_identity_and_excludes_placement
     changed_roles = skyrl_step(
         dataclasses.replace(
             spec,
-            config_yaml=_config_yaml(changed_plan),
+            config_yaml=_config_yaml(),
             topology=dataclasses.replace(spec.topology, role_plan=changed_plan),
         ),
         _execution(),
@@ -455,6 +433,17 @@ def test_run_skyrl_returns_external_terminal_model(monkeypatch: pytest.MonkeyPat
     }
     assert launch["inputs"]["train_data"][0]["kind"] == "directory"
     assert launch["skyrl"]["trainer"]["max_steps"] == 8
+    assert launch["skyrl"]["trainer"]["train_batch_size"] == 16
+    assert launch["skyrl"]["trainer"]["placement"] == {
+        "colocate_all": True,
+        "colocate_policy_ref": True,
+        "policy_num_nodes": 1,
+        "policy_num_gpus_per_node": 4,
+        "ref_num_nodes": 1,
+        "ref_num_gpus_per_node": 4,
+    }
+    assert launch["skyrl"]["generator"]["num_inference_engines"] == 4
+    assert launch["skyrl"]["generator"]["inference_engine_data_parallel_size"] == 1
     assert len(catalog_rows) == 1
     assert catalog_rows[0].run_id == config.run_id
     assert catalog_rows[0].attempt_id == config.attempt_id

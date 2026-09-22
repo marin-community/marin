@@ -538,7 +538,6 @@ def model_step(version: str) -> ArtifactStep[LevanterCheckpoint]:
 
 
 def rl_config_yaml(preset: ScalePreset, arm: ArmSpec, policy: PolicySpec) -> str:
-    plan = preset.role_plan
     config = yaml.safe_load(
         f"""\
 entrypoint: standard
@@ -561,11 +560,8 @@ trainer:
   epochs: 50
   max_steps: {preset.max_steps}
   update_epochs_per_batch: 1
-  train_batch_size: {plan.train_batch_size}
-  policy_mini_batch_size: {plan.policy_mini_batch_size}
   eval_batch_size: 256
   micro_forward_batch_size_per_gpu: {preset.micro_forward_batch_size_per_gpu}
-  micro_train_batch_size_per_gpu: {plan.micro_train_batch_size_per_gpu}
   eval_before_train: {str(preset.eval_interval > 0).lower()}
   eval_interval: {preset.eval_interval}
   ckpt_interval: {preset.ckpt_interval}
@@ -579,19 +575,10 @@ trainer:
     fsdp_config:
       cpu_offload: false
       reshard_after_forward: true
-  placement:
-    colocate_all: {str(plan.colocate_all).lower()}
-
 generator:
   backend: vllm
   model_dtype: bfloat16
   vllm_attention_backend: FLASH_ATTN
-  inference_engine_tensor_parallel_size: {plan.inference_engine_tensor_parallel_size}
-  inference_engine_pipeline_parallel_size: {plan.inference_engine_pipeline_parallel_size}
-  inference_engine_data_parallel_size: {plan.inference_engine_data_parallel_size}
-  inference_engine_expert_parallel_size: {plan.inference_engine_expert_parallel_size}
-  num_inference_engines: {plan.num_inference_engines}
-  n_samples_per_prompt: {plan.n_samples_per_prompt}
   gpu_memory_utilization: 0.75
   enforce_eager: false
   run_engines_locally: true

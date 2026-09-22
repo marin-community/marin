@@ -169,11 +169,8 @@ trainer:
   epochs: 1
   max_steps: 8
   update_epochs_per_batch: 1
-  train_batch_size: {ICEBALL_RL_ROLE_PLAN.train_batch_size}
-  policy_mini_batch_size: {ICEBALL_RL_ROLE_PLAN.policy_mini_batch_size}
   eval_batch_size: 16
   micro_forward_batch_size_per_gpu: 2
-  micro_train_batch_size_per_gpu: {ICEBALL_RL_ROLE_PLAN.micro_train_batch_size_per_gpu}
   eval_before_train: false
   eval_interval: -1
   ckpt_interval: 2
@@ -188,19 +185,10 @@ trainer:
     fsdp_config:
       cpu_offload: false
       reshard_after_forward: true
-  placement:
-    colocate_all: {str(ICEBALL_RL_ROLE_PLAN.colocate_all).lower()}
-
 generator:
   backend: vllm
   model_dtype: bfloat16
   vllm_attention_backend: FLASH_ATTN
-  inference_engine_tensor_parallel_size: {ICEBALL_RL_ROLE_PLAN.inference_engine_tensor_parallel_size}
-  inference_engine_pipeline_parallel_size: {ICEBALL_RL_ROLE_PLAN.inference_engine_pipeline_parallel_size}
-  inference_engine_data_parallel_size: {ICEBALL_RL_ROLE_PLAN.inference_engine_data_parallel_size}
-  inference_engine_expert_parallel_size: {ICEBALL_RL_ROLE_PLAN.inference_engine_expert_parallel_size}
-  num_inference_engines: {ICEBALL_RL_ROLE_PLAN.num_inference_engines}
-  n_samples_per_prompt: {ICEBALL_RL_ROLE_PLAN.n_samples_per_prompt}
   gpu_memory_utilization: 0.70
   enforce_eager: true
   run_engines_locally: true
