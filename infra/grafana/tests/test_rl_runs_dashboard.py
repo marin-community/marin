@@ -20,6 +20,7 @@ WINDOW_START = NOW - timedelta(hours=1)
 CLUSTER = "cw-rno2a"
 RUN_ID = "snowball-e6-muonh-0"
 ASYNC_RUN_ID = "snowball-e6-muonh-0-async"
+UNSTAMPED_RUN_ID = "snowball-e5-unstamped-0"
 _NOW_MS = round(NOW.timestamp() * 1000)
 _WINDOW_START_MS = round(WINDOW_START.timestamp() * 1000)
 JOB_ID = "/atqamar/snowball-e6-muonh-0-attempt-0"
@@ -58,10 +59,12 @@ def _row(
     node_name: str | None = None,
     execution_uid: str = "iris:/atqamar/snowball-e6-muonh-0-attempt-0/0:attempt:0",
     role: str = "",
-    training_loop: str = "sync",
+    training_loop: str | None = "sync",
     attributes: dict[str, str] | None = None,
 ) -> tuple:
-    resource = {"role": role, "training_loop": training_loop} if role else {"training_loop": training_loop}
+    resource = {"role": role} if role else {}
+    if training_loop is not None:
+        resource["training_loop"] = training_loop
     return (
         CLUSTER,
         service,
@@ -694,11 +697,30 @@ def test_a_listed_run_opens_the_dashboard_whose_picker_offers_it(store) -> None:
             ),
         )
 
+    # A run logged before the trainer stamped its loop carries no training_loop attribute.
+    store.execute(
+        f'INSERT INTO "telemetry_v1.marinskyrl" VALUES ({", ".join("?" for _ in _COLUMNS)})',
+        list(
+            _row(
+                service="marinskyrl",
+                name="policy_step",
+                value=0.0,
+                moment=WINDOW_START,
+                seq=0,
+                run_id=UNSTAMPED_RUN_ID,
+                job_id=JOB_ID,
+                node_name=NODES[0],
+                role="trainer",
+                training_loop=None,
+            )
+        ),
+    )
+
     result = store.execute(_recent_runs_sql())
     columns = [description[0] for description in result.description]
     routed = {row["run"]: row["dashboard"] for row in (dict(zip(columns, r, strict=True)) for r in result.fetchall())}
 
-    assert routed == {RUN_ID: "marin-rl-runs", ASYNC_RUN_ID: "marin-async-rl"}
+    assert routed == {RUN_ID: "marin-rl-runs", ASYNC_RUN_ID: "marin-async-rl", UNSTAMPED_RUN_ID: "marin-rl-runs"}
     for uid in set(routed.values()):
         offered = {run for (run,) in store.execute(_run_picker_sql(uid)).fetchall()}
         assert offered == {run for run, target in routed.items() if target == uid}, uid
