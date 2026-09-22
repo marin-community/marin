@@ -24,6 +24,7 @@ from collections.abc import Sequence
 
 # cloudpickle for callable entrypoints, py-spy/memray for the profiler attach paths.
 _IRIS_RUNTIME_DEPS = ("cloudpickle", "py-spy", "memray")
+_UV_RECOVERY_CACHE = "$IRIS_WORKDIR/.uv-recovery-cache"
 
 
 def _uv_sync_target(packages: Sequence[str] | None) -> str:
@@ -95,11 +96,15 @@ def default_setup_script(
         ]
         if part
     )
+    recovery_sync_cmd = f'UV_CACHE_DIR="{_UV_RECOVERY_CACHE}" {sync_cmd} --reinstall'
     lines = [
         "set -e",
         'cd "$IRIS_WORKDIR"',
         "echo 'syncing deps'",
-        sync_cmd,
+        f"if ! {sync_cmd}; then",
+        " echo 'dependency sync failed; retrying with task-local cache'",
+        f" {recovery_sync_cmd}",
+        "fi",
         # uv sync writes .pth links for editable path sources but does not invoke
         # the build backend, so rust-dev mode (editable = true) leaves native
         # extensions unbuilt. Build every maturin member explicitly.
