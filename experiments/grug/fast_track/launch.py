@@ -54,6 +54,22 @@ DEFAULT_WANDB_PROJECT = "marin_moe"
 DENSE_TPP = 20
 MOE_TPP = 60
 
+# Fixed baseline active-param counts per (size, dense) for the recorded dense/MoE baseline runs.
+# These pin the reference budget so a candidate architecture's own param count cannot move the
+# baseline it is compared against (data-match holds these tokens; compute-match holds 6*N*tokens).
+# They are NOT recomputed from the candidate model on purpose. Regenerate deliberately only when the
+# baseline recipe itself changes, via `_active_params(_h100_ladder_model(_h100_ladder_rung(size), dense=dense))`.
+_BASELINE_ACTIVE_PARAMS: dict[tuple[str, bool], int] = {
+    ("d512", False): 20_840_448,
+    ("d512", True): 18_087_936,
+    ("d768", False): 60_555_264,
+    ("d768", True): 53_477_376,
+    ("d1024", False): 162_004_992,
+    ("d1024", True): 144_703_488,
+    ("d1280", False): 291_307_520,
+    ("d1280", True): 261_488_640,
+}
+
 
 class MatchMode(StrEnum):
     """How to budget a run against its variant's baseline (dense@DENSE_TPP / MoE@MOE_TPP).
@@ -253,9 +269,13 @@ def build_h100_ladder_run(
             f"global_device_count ({rung.global_device_count})"
         )
 
-    # Baseline: this variant's standard recipe (DENSE_TPP/MOE_TPP at the rung's baseline batch).
+    # Baseline: the recorded dense/MoE baseline for this size (DENSE_TPP/MOE_TPP at the rung's baseline
+    # batch). baseline_active is a FIXED reference (not the candidate's), so an architecture change moves
+    # the candidate's FLOPs/token but never the budget it is compared against.
     active = _active_params(model)
-    baseline_active = active  # option 1: the baseline is this variant's own standard config
+    if (size, dense) not in _BASELINE_ACTIVE_PARAMS:
+        raise ValueError(f"No baseline budget recorded for (size={size!r}, dense={dense})")
+    baseline_active = _BASELINE_ACTIVE_PARAMS[(size, dense)]
     baseline_tpp = DENSE_TPP if dense else MOE_TPP
     baseline_steps = max(1, round(baseline_tpp * baseline_active / (rung.baseline_batch * SEQ_LEN)))
     baseline_tokens = rung.baseline_batch * baseline_steps * SEQ_LEN
@@ -264,8 +284,8 @@ def build_h100_ladder_run(
     if batch_size <= 0 or batch_size % rung.global_device_count != 0:
         raise ValueError(f"batch_size must be positive and divisible by {rung.global_device_count}, got {batch_size}")
     if num_steps is None:
-        # DATA holds baseline tokens; COMPUTE holds baseline FLOPs (6*N*tokens), i.e. tokens scaled by
-        # baseline_active/active. Equal here (run == baseline), diverging only under a future ablation.
+        # DATA holds the baseline's tokens; COMPUTE holds its FLOPs (6*N*tokens), i.e. tokens scaled by
+        # baseline_active/active. The two modes coincide only when the candidate matches the baseline.
         target_tokens = baseline_tokens if match is MatchMode.DATA else baseline_tokens * baseline_active / active
         num_steps = max(1, round(target_tokens / (batch_size * SEQ_LEN)))
     elif num_steps <= 0:
