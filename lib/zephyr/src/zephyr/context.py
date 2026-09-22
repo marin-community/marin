@@ -265,7 +265,7 @@ class ZephyrContext:
     max_workers: int | None = None
     resources: ResourceConfig | None = None
     coordinator_resources: ResourceConfig = field(
-        default_factory=lambda: ResourceConfig(cpu=0.1, ram="1g", preemptible=False)
+        default_factory=lambda: ResourceConfig(cpu=1, ram="4g", preemptible=False)
     )
     chunk_storage_prefix: str | None = None
     name: str = ""
