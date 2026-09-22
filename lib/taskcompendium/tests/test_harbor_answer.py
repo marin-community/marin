@@ -14,8 +14,8 @@ from harbor.models.task.task import Task
 
 from taskcompendium.harbor.runner import HarborLaunch, run_trial
 from taskcompendium.lowering import HarborTaskBinding, lower_to_harbor
-from taskcompendium.models import ExactAnswer, Source, TaskRequirements, TaskSpec
-from taskcompendium.rendering import AnswerFormat, Rendering
+from taskcompendium.models import AnswerFormat, ExactAnswer, Source, TaskRequirements, TaskSpec
+from taskcompendium.rendering import Rendering
 
 
 @dataclass
@@ -62,6 +62,7 @@ def specification() -> TaskSpec:
         verifier=ExactAnswer("12"),
         source=Source("hand-authored", "2026-09-16", "arithmetic-7-plus-5", "1"),
         requirements=TaskRequirements(),
+        permitted_answer_formats=(AnswerFormat.PLAIN, AnswerFormat.JSON),
     )
 
 
@@ -120,6 +121,25 @@ def test_direct_chat_rejects_unsatisfied_requirements(tmp_path, specification):
 
     with pytest.raises(ValueError, match="cannot satisfy"):
         lower_to_harbor(specification, Rendering("plain", AnswerFormat.PLAIN), HarborTaskBinding(), tmp_path / "task")
+
+
+def test_lowering_rejects_answer_format_forbidden_by_task(tmp_path, specification):
+    specification = dataclasses.replace(
+        specification,
+        instructions="Return only the raw C++ program output.",
+        permitted_answer_formats=(AnswerFormat.PLAIN,),
+    )
+    destination = tmp_path / "task"
+
+    with pytest.raises(ValueError, match="does not permit the 'json' answer format"):
+        lower_to_harbor(
+            specification,
+            Rendering("json", AnswerFormat.JSON),
+            HarborTaskBinding(),
+            destination,
+        )
+
+    assert not destination.exists()
 
 
 async def test_launch_rejects_binding_changed_after_export(tmp_path, specification):
