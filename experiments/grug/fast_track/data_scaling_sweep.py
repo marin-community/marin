@@ -13,6 +13,7 @@ import time
 import jax
 import jax.numpy as jnp
 import jax.random as jr
+import numpy as np
 import optax
 
 import experiments.grug.fast_track.fractal_regression_sweep as F
@@ -23,7 +24,7 @@ K_LIST = [128, 512, 2048]  # fixed parameter counts (one data-scaling curve each
 STEPS_LIST = [1000, 2000, 4000, 8000, 16000, 32000, 64000, 128000]
 BATCH = 8192
 N_EVAL = 65_536
-SEED = 0
+N_SEEDS = 4  # average final loss over seeds to smooth single-run SGD noise
 
 
 def train_n(x, k, field, mu, sd, Veval, yeval, steps, seed):
@@ -80,12 +81,13 @@ def main():
         params = X_DIM * k + k + k + 1
         for steps in STEPS_LIST:
             ts = time.time()
-            traj = train_n(X_DIM, k, field, mu, sd, Veval, yeval, steps, SEED)
-            losses = [l for _, l in traj]
-            final = losses[-1]
-            # tail plateau: relative change over the last 20% of the trajectory (small => converged)
-            tail0 = losses[max(0, int(len(losses) * 0.8)) - 1]
-            plateau_rel = abs(final - tail0) / final
+            finals, plateaus = [], []
+            for seed in range(N_SEEDS):
+                traj = train_n(X_DIM, k, field, mu, sd, Veval, yeval, steps, seed)
+                losses = [l for _, l in traj]
+                finals.append(losses[-1])
+                tail0 = losses[max(0, int(len(losses) * 0.8)) - 1]
+                plateaus.append(abs(losses[-1] - tail0) / losses[-1])
             tokens = steps * BATCH
             results.append(
                 {
@@ -93,15 +95,17 @@ def main():
                     "params": params,
                     "steps": steps,
                     "tokens": tokens,
-                    "loss_final": final,
-                    "loss_min": min(losses),
-                    "plateau_rel": plateau_rel,
-                    "traj": traj,
+                    "loss_mean": float(np.mean(finals)),
+                    "loss_std": float(np.std(finals)),
+                    "loss_final": float(np.mean(finals)),
+                    "n_seeds": N_SEEDS,
+                    "plateau_rel": float(np.mean(plateaus)),
                 }
             )
             print(
-                f"  k={k:<5} steps={steps:<7} tokens={tokens/1e6:7.1f}M loss={final:.4f} "
-                f"plateau_rel={plateau_rel*100:4.1f}% ({time.time()-ts:.0f}s)",
+                f"  k={k:<5} steps={steps:<7} tokens={tokens/1e6:7.1f}M "
+                f"loss={np.mean(finals):.4f}±{np.std(finals):.4f} "
+                f"plateau_rel={np.mean(plateaus)*100:4.1f}% ({time.time()-ts:.0f}s)",
                 flush=True,
             )
     print(f"total {time.time()-t0:.0f}s", flush=True)
