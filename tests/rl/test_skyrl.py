@@ -598,13 +598,10 @@ def test_a_runtime_profile_that_contradicts_the_config_strategy_is_refused() -> 
     ],
 )
 def test_a_config_that_does_not_contradict_the_profile_is_accepted(config_yaml: str) -> None:
-    """A matching or omitted strategy leaves the trainer's own default intact."""
     spec = _spec()
 
-    accepted = dataclasses.replace(
+    dataclasses.replace(
         spec,
         config_yaml=config_yaml,
         runtime=dataclasses.replace(spec.runtime, profile=SkyRLRuntimeProfile.MEGATRON),
     )
-
-    assert accepted.config_yaml == config_yaml

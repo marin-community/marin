@@ -370,7 +370,6 @@ class SkyRLSpec:
     seed: int
 
     def __post_init__(self) -> None:
-        """Validate the complete launch recipe before an artifact can be submitted."""
         _validate_skyrl_recipe(self.config_yaml, self.runtime, self.topology)
 
 
@@ -397,6 +396,20 @@ class IrisSkyRLExecution:
             raise ValueError("SkyRL target_cluster and parent_cluster_config must be set together")
         if self.target_cluster is not None and self.target_cluster != self.cluster:
             raise ValueError("SkyRL target_cluster must match the execution cluster")
+
+
+_FINGERPRINT_EXECUTION = IrisSkyRLExecution(
+    cluster="<runtime>",
+    cluster_config="<runtime>",
+    cpu=0.0,
+    memory="<runtime>",
+    disk="<runtime>",
+    priority="<runtime>",
+    max_retries=0,
+    target_cluster=None,
+    parent_cluster_config=None,
+    coordinator_timeout_hours=1,
+)
 
 
 @dataclass(frozen=True)
@@ -711,9 +724,8 @@ def _record_skyrl_run(config: SkyRLRunConfig, status: str, response: _SkyRLLaunc
 
 def _launch_config_yaml(
     spec: SkyRLSpec,
-    execution: IrisSkyRLExecution | str,
+    execution: IrisSkyRLExecution,
     *,
-    is_fingerprint: bool,
     run_id: str,
     attempt_id: str,
     model: ResolvedModelLocator,
@@ -729,26 +741,9 @@ def _launch_config_yaml(
     harbor = terminal_bench.get("harbor", {}) if isinstance(terminal_bench, dict) else {}
     agent_name = harbor.get("name") if isinstance(harbor, dict) else None
     controller_ingress = agent_name == "opencode"
-    if is_fingerprint:
-        cluster = cluster_config = memory = disk = "<runtime>"
-        cpu = 0.0
-        priority = "<runtime>"
-        max_retries = 0
-        target_cluster = parent_cluster_config = wandb_entity = None
-    else:
-        assert isinstance(execution, IrisSkyRLExecution)
-        submit_through_ambient_controller = get_job_info() is not None and execution.target_cluster is not None
-        cluster = execution.cluster
-        cluster_config = execution.cluster_config
-        cpu = execution.cpu
-        memory = execution.memory
-        disk = execution.disk
-        priority = execution.priority
-        max_retries = execution.max_retries
-        target_cluster = None if submit_through_ambient_controller else execution.target_cluster
-        parent_cluster_config = None if submit_through_ambient_controller else execution.parent_cluster_config
-        wandb_entity = execution.wandb_entity
-    attempts_root = output.attempts_root.rstrip("/")
+    submit_through_ambient_controller = get_job_info() is not None and execution.target_cluster is not None
+    target_cluster = None if submit_through_ambient_controller else execution.target_cluster
+    parent_cluster_config = None if submit_through_ambient_controller else execution.parent_cluster_config
     launch = {
         "schema_version": 1,
         "run": {
@@ -767,27 +762,27 @@ def _launch_config_yaml(
             "task_env": task_env,
         },
         "iris": {
-            "cluster": cluster,
-            "cluster_config": cluster_config,
+            "cluster": execution.cluster,
+            "cluster_config": execution.cluster_config,
             "job_name": sanitize_job_name(f"{run_id}-{attempt_id}"),
-            "wandb_entity": wandb_entity,
+            "wandb_entity": execution.wandb_entity,
             "allocation": {
                 "num_nodes": spec.topology.num_nodes,
                 "gpus_per_node": spec.topology.gpus_per_node,
                 "gpu_variant": spec.topology.gpu_variant,
-                "cpu": cpu,
-                "memory": memory,
-                "disk": disk,
+                "cpu": execution.cpu,
+                "memory": execution.memory,
+                "disk": execution.disk,
             },
-            "priority": priority,
-            "max_retries": max_retries,
+            "priority": execution.priority,
+            "max_retries": execution.max_retries,
             "timeout": 0,
             "target_cluster": target_cluster,
             "parent_cluster_config": parent_cluster_config,
         },
         "ingress": {
             "mode": "controller" if controller_ingress else "direct",
-            "host": "iris.oa.dev" if controller_ingress and cluster.startswith("cw-") else "",
+            "host": "iris.oa.dev" if controller_ingress and execution.cluster.startswith("cw-") else "",
             "record_literal": controller_ingress,
             "vllm_http_port": 8000,
         },
@@ -795,8 +790,8 @@ def _launch_config_yaml(
             "port": 6379,
             "spill_backend": "local",
             "spill_dir": "/tmp/skyrl-ray-spill",
-            "rendezvous_dir": f"{attempts_root}/rendezvous",
-            "log_dir": f"{attempts_root}/ray-logs",
+            "rendezvous_dir": prefix_join(output.attempts_root, "rendezvous"),
+            "log_dir": prefix_join(output.attempts_root, "ray-logs"),
             "rendezvous_timeout": 1800,
             "cluster_join_timeout": 1800,
             "driver_liveness_timeout": 9000,
@@ -854,12 +849,13 @@ def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[S
         model = spec.model.resolve(ctx)
         train_data = tuple(source.resolve(ctx) for source in spec.train_data)
         validation_data = tuple(source.resolve(ctx) for source in spec.validation_data)
-        execution = cast(IrisSkyRLExecution, ctx.runtime_arg(_EXECUTION))
+        execution = (
+            _FINGERPRINT_EXECUTION if ctx.is_fingerprint else cast(IrisSkyRLExecution, ctx.runtime_arg(_EXECUTION))
+        )
         return SkyRLRunConfig(
             launch_config_yaml=_launch_config_yaml(
                 spec,
                 execution,
-                is_fingerprint=ctx.is_fingerprint,
                 run_id=run_id,
                 attempt_id=attempt_id,
                 model=model,

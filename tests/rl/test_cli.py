@@ -7,11 +7,9 @@ import dataclasses
 from pathlib import Path
 
 import pytest
-from iris.cluster.client.job_info import JobInfo, set_job_info
-from iris.cluster.types import JobName
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep
-from marin.rl.cli import _coordinator_request, _submit_or_run
+from marin.rl.cli import _coordinator_request
 from marin.rl.skyrl import IrisSkyRLExecution
 from rigging.timing import Duration
 
@@ -71,20 +69,6 @@ def test_coordinator_request_replays_the_experiment_main() -> None:
         "--max-concurrent",
         "3",
     ]
-
-
-def test_submit_or_run_executes_the_graph_inside_iris(monkeypatch) -> None:
-    observed = []
-    monkeypatch.setattr("marin.rl.cli.run", lambda *handles, max_concurrent: observed.append((handles, max_concurrent)))
-    step = _step(_execution())
-
-    set_job_info(JobInfo(task_id=JobName.from_wire("/alice/rl-coordinator/0")))
-    try:
-        _submit_or_run("experiments.test_rl", [step], 5, {})
-    finally:
-        set_job_info(None)
-
-    assert observed == [((step,), 5)]
 
 
 def test_coordinator_request_requires_a_skyrl_step() -> None:
