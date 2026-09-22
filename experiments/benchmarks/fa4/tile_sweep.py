@@ -319,46 +319,52 @@ def main() -> None:
     if args.output is None and "IRIS_OUTPUT_DIR" in os.environ:
         args.output = Path(os.environ["IRIS_OUTPUT_DIR"]) / "tile-sweep.jsonl"
     if args.backend == "native-sm100" and args.candidate_index is None:
-        # Do not initialize JAX in this parent: every child gets the full GPU memory budget.
-        count = len(NATIVE_FORWARD_TILES if args.sweep == "forward" else NATIVE_BACKWARD_TILES) * 2
-        failed = []
-        for index in range(args.shard, count, args.num_shards):
-            try:
-                result = subprocess.run(
-                    [
-                        sys.executable,
-                        "-m",
-                        "experiments.benchmarks.fa4.tile_sweep",
-                        *sys.argv[1:],
-                        "--candidate-index",
-                        str(index),
-                    ],
-                    check=False,
-                    timeout=args.candidate_timeout,
-                )
-            except subprocess.TimeoutExpired:
-                failed.append(index)
-                _emit(args.output, {"kind": "timeout", "candidate_index": index})
-                continue
-            if result.returncode:
-                failed.append(index)
-                _emit(
-                    args.output, {"kind": "process_failure", "candidate_index": index, "returncode": result.returncode}
-                )
-        _emit(
-            args.output,
-            {
-                "kind": "sweep_complete",
-                "backend": args.backend,
-                "sweep": args.sweep,
-                "shard": args.shard,
-                "num_shards": args.num_shards,
-                "failed_processes": failed,
-            },
-        )
-        if failed:
-            raise SystemExit(1)
-        return
+        _run_isolated_candidates(args)
+    else:
+        _run_sweep(args)
+
+
+def _run_isolated_candidates(args: argparse.Namespace) -> None:
+    # Do not initialize JAX in this parent: every child gets the full GPU memory budget.
+    count = len(NATIVE_FORWARD_TILES if args.sweep == "forward" else NATIVE_BACKWARD_TILES) * 2
+    failed = []
+    for index in range(args.shard, count, args.num_shards):
+        try:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "experiments.benchmarks.fa4.tile_sweep",
+                    *sys.argv[1:],
+                    "--candidate-index",
+                    str(index),
+                ],
+                check=False,
+                timeout=args.candidate_timeout,
+            )
+        except subprocess.TimeoutExpired:
+            failed.append(index)
+            _emit(args.output, {"kind": "timeout", "candidate_index": index})
+            continue
+        if result.returncode:
+            failed.append(index)
+            _emit(args.output, {"kind": "process_failure", "candidate_index": index, "returncode": result.returncode})
+    _emit(
+        args.output,
+        {
+            "kind": "sweep_complete",
+            "backend": args.backend,
+            "sweep": args.sweep,
+            "shard": args.shard,
+            "num_shards": args.num_shards,
+            "failed_processes": failed,
+        },
+    )
+    if failed:
+        raise SystemExit(1)
+
+
+def _run_sweep(args: argparse.Namespace) -> None:
     if jax.default_backend() != "gpu":
         raise SystemExit("tile_sweep requires the JAX GPU backend.")
 
@@ -446,6 +452,7 @@ def main() -> None:
                                 **record,
                                 "kind": "timing",
                                 "role": role,
+                                "config": dataclasses.asdict(measured.config),
                                 "round": round_index,
                                 "forward": got.forward,
                                 "backward": got.backward,
