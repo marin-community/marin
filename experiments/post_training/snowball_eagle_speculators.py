@@ -3,19 +3,14 @@
 
 """Train and benchmark a reusable Snowball EAGLE-3 draft.
 
-The corpus consists of fresh responses from the target checkpoint across math,
-code, instruction-following, science, finance, tool-use, terminal, and software
-engineering tasks. Run on the US East 02A controller so the target checkpoint
+The corpus is a bounded sample of 512 fresh math-reasoning responses from the
+target checkpoint. Run on the US East 02A controller so the target checkpoint
 and generated hidden states stay in the same object-store region::
 
     uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
       --enable-extra-resources --target-cluster cw-us-east-02a \
       -- python experiments/post_training/snowball_eagle_speculators.py \
-      --version 2026.09.21 --stage draft --run
-
-The agentic benchmark stage requires ``DAYTONA_API_KEY`` in the coordinator
-environment. The Harbor corpus jobs resolve that secret through their task
-configuration.
+      --version 2026.09.22.1 --stage draft --run
 """
 
 from __future__ import annotations
@@ -29,7 +24,7 @@ from fray.types import ResourceConfig
 from marin.evaluation.evalchemy.config import EvalchemyConfig, load_evalchemy_config
 from marin.evaluation.evalchemy.result import FineStoreEvalchemyResult
 from marin.evaluation.hardware import AcceleratorChoice, Platform
-from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint, ServeConfig
+from marin.evaluation.model_config import ResourceHint, ServeConfig
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -51,8 +46,6 @@ from marin.rl.skyrl import (
     SkyRLRuntimeProfile,
     SkyRLSpec,
     SkyRLTopology,
-    TaskTroveDataSource,
-    TaskTroveSelection,
     skyrl_smoke,
 )
 from marin.training.speculators import (
@@ -73,29 +66,19 @@ from rigging.filesystem.storage_path import prefix_join
 
 from experiments.evaluation.evals import evalchemy_run_config
 from experiments.evaluation.models import SNOWBALL_VLLM_ARGS
-from experiments.evaluation.pipeline import EvaluationResult
-from experiments.evaluation.pipeline import eval_step as evaluation_step
 from experiments.post_training.curriculum_rl.launch import (
     GPUS_PER_NODE,
     POOL_ARTIFACT_NAME,
 )
-from experiments.post_training.curriculum_rl.pool import TRAIN_FILENAME, VALIDATION_FILENAME, pool_step
+from experiments.post_training.curriculum_rl.pool import VALIDATION_FILENAME, pool_step
 
 CORPUS_EVALS = (
-    "olympiadbench",
-    "gsm8k",
-    "mbppplus",
-    "cruxeval",
-    "ifeval",
-    "gpqa-diamond",
-    "financebench",
+    ("olympiadbench", 30),
+    ("gsm8k", 482),
 )
-CORPUS_SEEDS = (17, 29, 43)
-CORPUS_LIMIT_PER_TASK = 2048
-AGENTIC_CORPUS_EVALS = "bfcl,tb2,swebench-full"
-AGENTIC_CORPUS_REPETITIONS = (1, 2, 3)
-AGENTIC_CORPUS_LIMIT_PER_TASK = 512
-CORPUS_MAX_SAMPLES = 16_384
+CORPUS_SEEDS = (17,)
+CORPUS_MAX_GENERATION_TOKENS = 4096
+CORPUS_MAX_SAMPLES = 512
 CORPUS_MINIMUM_VALID_TOKENS = 32
 _EVALCHEMY_CONFIG_DIR = Path(__file__).parents[1] / "evaluation" / "configs" / "evalchemy"
 TARGET_MODEL_NAME = "snowball-67b-a2b-sft-s3-agentic-step1903"
@@ -114,23 +97,19 @@ TARGET_LAYER_IDS = (2, 13, 23)
 VERIFIER_NUM_HIDDEN_LAYERS = 26
 SEQUENCE_LENGTH = 32768
 RL_DATA_VERSION = "2026.09.18"
-RL_ARTIFACT_NAME = "checkpoints/snowball-e3-bench"
-TASKTROVE_RELEASE = ArtifactStep.adopt(
-    "tasktrove/clean",
-    "2026.09.18.3",
-    "s3://marin-us-east-02a/marin/tasktrove/clean/2026.09.18.3",
-)
-AGENTIC_BENCHMARK_SOURCE = "DCAgent2__nl2bash-tasks-cleaned-oracle-v2"
+RL_ARTIFACT_NAME = "benchmarks/snowball-e3"
 CLUSTER = "cw-us-east-02a"
 GPU_VARIANT = "H100"
 _DRAFT_GPU_COUNT = 8
-_BENCHMARK_PROMPTS = 128
-_BENCHMARK_SAMPLES_PER_PROMPT = 4
-_AGENTIC_BENCHMARK_PROMPTS = 128
-_AGENTIC_BENCHMARK_SEED = 71
+_BENCHMARK_PROMPTS = 64
+_BENCHMARK_SAMPLES_PER_PROMPT = 1
 _BENCHMARK_MEMORY = "512GB"
 _BENCHMARK_DISK = "2TB"
 _BENCHMARK_DISTRIBUTED_TIMEOUT = 60
+_MAX_NUM_SEQS = 16
+_MAX_NUM_BATCHED_TOKENS = 16_384
+# The 512-example packed corpus yields one optimizer update per epoch.
+_SFT_EPOCHS = 32
 _DRAFT_TASK_CPU = 96
 _DRAFT_TASK_MEMORY = "512g"
 _DRAFT_TASK_DISK = "1t"
@@ -146,27 +125,20 @@ _TORCHAUDIO_CU128_REQUIREMENT = (
 def _rl_benchmark_role_plan() -> SkyRLRolePlan:
     return SkyRLRolePlan(
         colocate_all=True,
-        policy_num_nodes=8,
+        policy_num_nodes=1,
         policy_num_gpus_per_node=GPUS_PER_NODE,
-        num_inference_engines=GPUS_PER_NODE,
+        num_inference_engines=1,
         inference_engine_tensor_parallel_size=1,
         inference_engine_data_parallel_size=GPUS_PER_NODE,
         inference_engine_expert_parallel_size=GPUS_PER_NODE,
         train_batch_size=_BENCHMARK_PROMPTS,
-        policy_mini_batch_size=64,
+        policy_mini_batch_size=_BENCHMARK_PROMPTS,
         micro_train_batch_size_per_gpu=1,
         n_samples_per_prompt=_BENCHMARK_SAMPLES_PER_PROMPT,
     )
 
 
-def _agentic_benchmark_role_plan() -> SkyRLRolePlan:
-    return replace(
-        _rl_benchmark_role_plan(),
-        policy_mini_batch_size=_BENCHMARK_PROMPTS,
-    )
-
-
-def _rl_benchmark_config_yaml(role_plan: SkyRLRolePlan, *, speculative: bool) -> str:
+def _rl_benchmark_config_yaml(role_plan: SkyRLRolePlan) -> str:
     config = {
         "entrypoint": "standard",
         "context_budget": {
@@ -233,8 +205,8 @@ def _rl_benchmark_config_yaml(role_plan: SkyRLRolePlan, *, speculative: bool) ->
             "num_inference_engines": role_plan.num_inference_engines,
             "n_samples_per_prompt": role_plan.n_samples_per_prompt,
             "gpu_memory_utilization": 0.75,
-            "max_num_seqs": 16,
-            "max_num_batched_tokens": 16384,
+            "max_num_seqs": _MAX_NUM_SEQS,
+            "max_num_batched_tokens": _MAX_NUM_BATCHED_TOKENS,
             "enforce_eager": False,
             "vllm_v1_disable_multiproc": False,
             "run_engines_locally": True,
@@ -251,142 +223,48 @@ def _rl_benchmark_config_yaml(role_plan: SkyRLRolePlan, *, speculative: bool) ->
         "data": {"kind": "parquet", "train_data": [], "val_data": [], "shuffle": False},
         "extra_env": {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"},
     }
-    if speculative:
-        config["generator"]["speculative_decoding"] = {
-            "method": "eagle3",
-            "model": {},
-            "num_speculative_tokens": 3,
-            "training": None,
-        }
     return yaml.safe_dump(config, sort_keys=False)
 
 
-def _agentic_benchmark_config_yaml(role_plan: SkyRLRolePlan, *, speculative: bool) -> str:
-    config = yaml.safe_load(_rl_benchmark_config_yaml(role_plan, speculative=speculative))
-    config["entrypoint"] = "terminal_bench"
-    config["config_groups"] = {"terminal_bench_config": "terminal_bench"}
-    config["context_budget"] = {
-        "request_window_tokens": 32_767,
-        "max_new_tokens_per_turn": 4096,
-        "max_turns": 8,
+def _eagle_benchmark_config_yaml(role_plan: SkyRLRolePlan) -> str:
+    config = yaml.safe_load(_rl_benchmark_config_yaml(role_plan))
+    config["generator"]["speculative_decoding"] = {
+        "method": "eagle3",
+        "model": {},
+        "num_speculative_tokens": 3,
+        "training": None,
     }
-    config["terminal_bench"] = {
-        "harbor": {
-            "name": "terminus-2",
-            "enable_summarize": False,
-            "store_all_messages": True,
-            "strict_json_parser": True,
-            "interleaved_thinking": False,
-            "extra_body": {"chat_template_kwargs": {"enable_thinking": True}},
-            "override_timeout_sec": 600,
-            "override_cpus": 1,
-            "override_memory_mb": 2048,
-            "override_storage_mb": 2048,
-            "auto_snapshot": True,
-            "verifier_override_timeout_sec": 300,
-            "max_retries": 2,
-            "min_wait_sec": 30.0,
-            "max_wait_sec": 300.0,
-            "wait_multiplier": 2.0,
-            "exclude_exceptions": [
-                "VerifierTimeoutError",
-                "VerifierRuntimeError",
-                "RewardFileNotFoundError",
-                "RewardFileEmptyError",
-                "VerifierOutputParseError",
-            ],
-            "n_concurrent_trials": 64,
-            "collect_rollout_details": False,
-            "enable_error_classification": True,
-            "mask_exceptions": [
-                "DaytonaError",
-                "EnvironmentStartTimeoutError",
-                "NetworkError",
-                "ConnectionError",
-                "RewardFileNotFoundError",
-                "RewardFileEmptyError",
-                "AgentEnvironmentTimeoutError",
-                "ContextLengthExceededError",
-            ],
-            "default_error_treatment": "zero",
-            "passthrough_exceptions": ["AgentTimeoutError"],
-        },
-        "model_info": None,
-        "archiving": {"enabled": False},
-        "trace_upload": {"enabled": False},
-    }
-    config["generator"]["enable_http_endpoint"] = True
-    config["data"]["kind"] = "tasks"
-    config["trajectory_runner"] = {"process_pool": {"num_coordinators": 8, "cpus_per_coordinator": 4}}
     return yaml.safe_dump(config, sort_keys=False)
 
 
-def _corpus_evalchemy_config(seed: int) -> EvalchemyConfig:
-    sources = [load_evalchemy_config(_EVALCHEMY_CONFIG_DIR / f"{name}.yaml") for name in CORPUS_EVALS]
+def _corpus_evalchemy_config(name: str, limit: int, seed: int) -> EvalchemyConfig:
+    source = load_evalchemy_config(_EVALCHEMY_CONFIG_DIR / f"{name}.yaml")
     return EvalchemyConfig.model_validate(
         {
-            "tasks": [task for source in sources for task in source.tasks],
+            "tasks": source.tasks,
             "task_options": {
-                name: options.model_dump(exclude_none=True)
-                for source in sources
-                for name, options in source.task_options.items()
+                name: options.model_dump(exclude_none=True) for name, options in source.task_options.items()
             },
             "apply_chat_template": True,
-            "limit": CORPUS_LIMIT_PER_TASK,
+            "limit": limit,
             "batch_size": 1,
             "seed": seed,
             "gen_kwargs": "temperature=1.0,top_p=1.0",
-            "runtime_extras": list(dict.fromkeys(extra for source in sources for extra in source.runtime_extras)),
+            "max_tokens": CORPUS_MAX_GENERATION_TOKENS,
+            "runtime_extras": source.runtime_extras,
         }
-    )
-
-
-@dataclass(frozen=True)
-class ArtifactEvaluationModel:
-    """An HF export artifact adapted to the shared evaluation launcher."""
-
-    step: ArtifactStep[LevanterCheckpoint]
-    model: ModelConfig
-
-    def deps(self) -> tuple[ArtifactStep, ...]:
-        return (self.step,)
-
-    def resolve(self, ctx: StepContext) -> ModelConfig:
-        return replace(self.model, location=ctx.artifact_path(self.step))
-
-
-def _target_evaluation_model() -> ArtifactEvaluationModel:
-    return ArtifactEvaluationModel(
-        step=TARGET_MODEL,
-        model=ModelConfig(
-            name=TARGET_MODEL_NAME,
-            location="<artifact>",
-            tokenizer=TARGET_TOKENIZER,
-            apply_chat_template=True,
-            resource_hint=ResourceHint(
-                gpu={GPU_VARIANT: GPUS_PER_NODE}, cpu=64, memory=_BENCHMARK_MEMORY, disk=_BENCHMARK_DISK
-            ),
-            serve=ServeConfig(
-                tensor_parallel_size=1,
-                data_parallel_size=GPUS_PER_NODE,
-                max_model_len=65_536,
-                max_num_batched_tokens=7168,
-                max_num_seqs=32,
-                tool_call_parser="hermes",
-                auto_overrides=False,
-                vllm_extra_args=SNOWBALL_VLLM_ARGS,
-            ),
-            generation=GenerationConfig(max_gen_toks=8192),
-        ),
     )
 
 
 def _qa_rollout_steps() -> tuple[ArtifactStep[FineStoreEvalchemyResult], ...]:
     steps = []
     for seed in CORPUS_SEEDS:
-        config = evalchemy_run_config(f"snowball-eagle-mixed-s{seed}", _corpus_evalchemy_config(seed))
-        steps.append(
-            evaluate_evalchemy(
+        for name, limit in CORPUS_EVALS:
+            config = evalchemy_run_config(
+                f"snowball-eagle-{name}-s{seed}",
+                _corpus_evalchemy_config(name, limit, seed),
+            )
+            step = evaluate_evalchemy(
                 model_name=TARGET_MODEL_NAME,
                 model=TARGET_MODEL,
                 config=config,
@@ -394,8 +272,8 @@ def _qa_rollout_steps() -> tuple[ArtifactStep[FineStoreEvalchemyResult], ...]:
                     tensor_parallel_size=1,
                     data_parallel_size=GPUS_PER_NODE,
                     max_model_len=SEQUENCE_LENGTH,
-                    max_num_batched_tokens=16384,
-                    max_num_seqs=16,
+                    max_num_batched_tokens=_MAX_NUM_BATCHED_TOKENS,
+                    max_num_seqs=_MAX_NUM_SEQS,
                     vllm_extra_args=SNOWBALL_VLLM_ARGS,
                 ),
                 resource_hint=ResourceHint(
@@ -413,30 +291,8 @@ def _qa_rollout_steps() -> tuple[ArtifactStep[FineStoreEvalchemyResult], ...]:
                 discover_latest_checkpoint=False,
                 version=None,
             )
-        )
+            steps.append(replace(step, run=replace(step.run, max_retries_failure=0)))
     return tuple(steps)
-
-
-def _agentic_rollout_steps() -> tuple[ArtifactStep[EvaluationResult], ...]:
-    model = _target_evaluation_model()
-    artifact_name = f"evals/{model.model.name}/{AGENTIC_CORPUS_EVALS}"
-    base_version = resolve_version(artifact_name, None)
-    return tuple(
-        evaluation_step(
-            model,
-            AGENTIC_CORPUS_EVALS,
-            version=f"{base_version}.{repetition}",
-            limit=AGENTIC_CORPUS_LIMIT_PER_TASK,
-            accelerator=f"{GPU_VARIANT}x{GPUS_PER_NODE}",
-            submission_cluster=CLUSTER,
-            federated_cluster=CLUSTER,
-        )
-        for repetition in AGENTIC_CORPUS_REPETITIONS
-    )
-
-
-def _rollout_steps() -> tuple[ArtifactStep, ...]:
-    return (*_qa_rollout_steps(), *_agentic_rollout_steps())
 
 
 @dataclass(frozen=True)
@@ -477,20 +333,8 @@ class DraftSftTrainingConfig:
 
 def _conversation_step(*, name: str, rollouts: tuple[ArtifactStep, ...]) -> ArtifactStep[Artifact]:
     def build_config(ctx: StepContext) -> RolloutConversationConfig:
-        source_archives: list[str] = []
-        for rollout in rollouts:
-            if rollout.artifact_type is not EvaluationResult:
-                source_archives.append(ctx.artifact_path(rollout))
-                continue
-            if ctx.is_fingerprint:
-                source_archives.append(prefix_join(ctx.artifact_path(rollout), "<evaluation-output>"))
-                continue
-            evaluation = ctx.resolved(rollout)
-            source_archives.extend(
-                prefix_join(evaluation.records_prefix, f"{run_id}/results") for run_id in evaluation.run_ids
-            )
         return RolloutConversationConfig(
-            source_archives=tuple(source_archives),
+            source_archives=tuple(ctx.artifact_path(rollout) for rollout in rollouts),
             output_path=ctx.output_path,
         )
 
@@ -700,7 +544,6 @@ def sft_draft_model(
 
 def snowball_eagle_sft() -> DraftSftPipeline:
     """Build the Snowball-specific EAGLE-3 SFT pipeline."""
-    rollouts = _rollout_steps()
     return sft_draft_model(
         names=DraftSftArtifactNames(
             conversations="data/snowball-eagle-mixed-conversations",
@@ -709,7 +552,7 @@ def snowball_eagle_sft() -> DraftSftPipeline:
             captured_data="data/snowball-eagle3-hidden-states",
             draft="models/snowball-eagle3-speculators",
         ),
-        rollouts=rollouts,
+        rollouts=_qa_rollout_steps(),
         target_model=TARGET_MODEL,
         initial_draft_repo=INITIAL_DRAFT_REPO,
         initial_draft_revision=INITIAL_DRAFT_REVISION,
@@ -724,11 +567,11 @@ def snowball_eagle_sft() -> DraftSftPipeline:
             minimum_valid_tokens=CORPUS_MINIMUM_VALID_TOKENS,
         ),
         training=DraftSftTrainingConfig(
-            epochs=2,
+            epochs=_SFT_EPOCHS,
             learning_rate=1e-5,
             muon_learning_rate=0.02,
             train_data_ratio=0.9,
-            save_best=True,
+            save_best=False,
         ),
     )
 
@@ -737,11 +580,7 @@ def snowball_eagle_sft() -> DraftSftPipeline:
 class SnowballDraftPipeline:
     """Snowball draft SFT stages and matched rollout benchmarks."""
 
-    conversations: ArtifactStep[Artifact]
-    initial_draft: ArtifactStep[EagleDraftArtifact]
-    verifier: ArtifactStep[Artifact]
-    captured_data: ArtifactStep[Artifact]
-    draft: ArtifactStep[EagleDraftArtifact]
+    sft: DraftSftPipeline
     benchmarks: dict[str, ArtifactStep[SkyRLRun]]
 
 
@@ -757,7 +596,7 @@ def build_rl_benchmark(
     name = f"{RL_ARTIFACT_NAME}-{label}"
     return _benchmark_step(
         name=name,
-        config_yaml=_rl_benchmark_config_yaml(role_plan, speculative=draft is not None),
+        config_yaml=(_rl_benchmark_config_yaml(role_plan) if draft is None else _eagle_benchmark_config_yaml(role_plan)),
         train_data=(ArtifactDataSource(pool, relative_path=data_file),),
         draft=draft,
         role_plan=role_plan,
@@ -811,55 +650,22 @@ def _benchmark_step(
     )
 
 
-def build_agentic_rl_benchmark(
-    *,
-    label: str,
-    draft: ArtifactStep[EagleDraftArtifact] | None,
-) -> ArtifactStep[SkyRLRun]:
-    """Build a matched acceptance benchmark on disjoint multi-turn terminal tasks."""
-    role_plan = _agentic_benchmark_role_plan()
-    name = f"{RL_ARTIFACT_NAME}-agentic-{label}"
-    return _benchmark_step(
-        name=name,
-        config_yaml=_agentic_benchmark_config_yaml(role_plan, speculative=draft is not None),
-        train_data=(
-            TaskTroveDataSource(
-                TASKTROVE_RELEASE,
-                TaskTroveSelection(
-                    sources=(AGENTIC_BENCHMARK_SOURCE,),
-                    limit=_AGENTIC_BENCHMARK_PROMPTS,
-                    seed=_AGENTIC_BENCHMARK_SEED,
-                ),
-            ),
-        ),
-        draft=draft,
-        role_plan=role_plan,
-        seed=_AGENTIC_BENCHMARK_SEED,
-    )
-
-
 def build_pipeline() -> SnowballDraftPipeline:
-    """Build draft SFT and matched Q/A and agentic rollout benchmarks."""
+    """Build the bounded draft SFT pilot and matched held-out benchmarks."""
     sft = snowball_eagle_sft()
     pool = pool_step(POOL_ARTIFACT_NAME, RL_DATA_VERSION)
     arms = (("control", None), ("starting", sft.initial_draft), ("trained", sft.draft))
     benchmarks = {
-        f"{split}-{arm}": build_rl_benchmark(
+        f"heldout-{arm}": build_rl_benchmark(
             pool=pool,
-            label=f"{split}-{arm}",
-            data_file=data_file,
+            label=f"heldout-{arm}",
+            data_file=VALIDATION_FILENAME,
             draft=draft,
         )
-        for split, data_file in (("production", TRAIN_FILENAME), ("heldout", VALIDATION_FILENAME))
         for arm, draft in arms
     }
-    benchmarks.update({f"agentic-{arm}": build_agentic_rl_benchmark(label=arm, draft=draft) for arm, draft in arms})
     return SnowballDraftPipeline(
-        conversations=sft.conversations,
-        initial_draft=sft.initial_draft,
-        verifier=sft.verifier,
-        captured_data=sft.captured_data,
-        draft=sft.draft,
+        sft=sft,
         benchmarks=benchmarks,
     )
 
@@ -873,7 +679,10 @@ def build_pipeline() -> SnowballDraftPipeline:
 )
 @build_options
 def main(stage: str) -> ArtifactStep | dict[str, ArtifactStep]:
-    return getattr(build_pipeline(), stage)
+    pipeline = build_pipeline()
+    if stage == "benchmarks":
+        return pipeline.benchmarks
+    return getattr(pipeline.sft, stage)
 
 
 if __name__ == "__main__":

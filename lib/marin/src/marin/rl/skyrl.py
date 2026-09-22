@@ -663,6 +663,7 @@ def skyrl_smoke(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[
     generator = config.setdefault("generator", {})
     context_budget = config.get("context_budget", {})
     trainer["eval_interval"] = 1
+    trainer["eval_num_prompts"] = spec.topology.role_plan.train_batch_size
     generator["eval_n_samples_per_prompt"] = spec.topology.role_plan.n_samples_per_prompt
     generator["eval_sampling_params"] = dict(generator.get("sampling_params", {}))
     if "max_new_tokens_per_turn" in context_budget:

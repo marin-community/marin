@@ -264,6 +264,7 @@ def test_skyrl_smoke_runs_training_data_as_rollout_only_evaluation() -> None:
     smoke_config = yaml.safe_load(config.request.config_yaml)
     assert smoke_config["entrypoint"] == "generate"
     assert smoke_config["trainer"]["eval_interval"] == 1
+    assert smoke_config["trainer"]["eval_num_prompts"] == 16
     assert smoke_config["generator"]["eval_n_samples_per_prompt"] == 4
     assert smoke_config["generator"]["eval_sampling_params"] == {
         "temperature": 0.7,
