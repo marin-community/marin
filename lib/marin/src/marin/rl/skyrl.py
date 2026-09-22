@@ -413,10 +413,6 @@ class SkyRLRun(Artifact):
 class _SkyRLTerminalModel(BaseModel):
     policy_export_uri: str
     global_step: int
-    tokenizer_uri: str
-    tokenizer_revision: str
-    checkpoint_root: str
-    terminal_manifest_uri: str
 
 
 class _SkyRLLaunchResponse(BaseModel):

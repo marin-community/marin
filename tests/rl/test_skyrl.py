@@ -351,7 +351,7 @@ def test_evaluation_uses_the_validated_training_tokenizer() -> None:
     assert model.tokenizer == terminal.tokenizer_uri
 
 
-def test_run_skyrl_returns_external_terminal_model(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_skyrl_returns_run_with_hf_model(monkeypatch: pytest.MonkeyPatch) -> None:
     request = dataclasses.replace(_launch_request(), export_hf=True)
     output = request.output
     response = {

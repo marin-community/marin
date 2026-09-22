@@ -31,7 +31,7 @@ Advance one project with:
 uv run config/update-external.py evalchemy
 ```
 
-Omit the project name to advance all three Git projects. The command updates
+Omit the project name to advance all four Git projects. The command updates
 the selected lockfiles and regenerates the packaged requirements. Regenerate
 only the promoted vLLM release after editing `vllm/gpu.toml` with:
 

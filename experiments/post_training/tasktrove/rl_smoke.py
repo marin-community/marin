@@ -1,11 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Smoke-train Qwen3-0.6B directly from a packed TaskTrove Clean release.
+"""Evaluate Qwen3-0.6B directly from a packed TaskTrove Clean release.
 
-The run proves the release drives a Harbor RL loop end to end without an exploded staging
+The run proves the release drives Harbor rollouts end to end without an exploded staging
 artifact. Each Iris node caches the clean Parquet file, and MarinSkyRL extracts a task only when
-its rollout batch is about to construct the Harbor trial.
+its evaluation batch is about to construct the Harbor trial. It creates no policy workers or checkpoints.
 
 Plan or run::
 
@@ -64,8 +64,8 @@ REQUEST_WINDOW_TOKENS = 4096
 MAX_NEW_TOKENS_PER_TURN = 256
 MAX_TURNS = 1
 
-# One H100 node with colocated policy and inference actors. Qwen3-0.6B is the smallest mirrored
-# policy that exercises the real vLLM, Harbor, weight-sync, optimizer, checkpoint, and export path.
+# One H100 node runs the vLLM engines and Harbor task coordinators. Qwen3-0.6B is the smallest
+# mirrored policy that exercises the packed-task rollout path.
 ROLE_PLAN = SkyRLRolePlan(
     colocate_all=True,
     policy_num_nodes=1,
