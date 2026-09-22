@@ -1,33 +1,39 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fine-tune the 262K Snowball skew8 base on one 8xH100 node.
+"""Run a full-context Snowball SFT demo from pinned Hugging Face inputs.
 
-The Hugging Face model is the BF16 export of ``BASE_CHECKPOINT`` at
-``HF_REVISION``. Training reads the native checkpoint so each process restores
-only its parameter shards rather than materializing the 134 GB HF export on one
-host.
+The graph downloads and converts the base model, transforms UltraChat's public
+``test_sft`` split, builds the chat cache, and trains on one 8xH100 node. No
+prebuilt Marin checkpoint, tokenizer, token store, or Marin bucket is required.
+All generated artifacts are written beneath the caller's ``MARIN_PREFIX``.
+
+For example, with an S3 bucket available to every worker::
+
+    MARIN_PREFIX=s3://my-bucket/snowball-demo uv run python -m \
+      experiments.grug_sft.snowball_262k_h100 --version dev --run
 """
 
-import argparse
-import json
-import logging
-import math
+from dataclasses import dataclass
 from datetime import timedelta
+from typing import Any
 
+import click
 import jmp
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
-from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.data.text.datasets import LmDataConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from marin.training.training import temporary_checkpoint_base_path
-from rigging.filesystem.storage_path import StoragePath
-from rigging.log_setup import configure_logging
+from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
+from marin.execution.build_context import resolve_version
+from marin.execution.lazy import ArtifactStep, StepContext
+from marin.experiment.cli import build_options
+from marin.training.training import LevanterCheckpoint
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.grug.moe_hero_ep.model import GrugModelConfig
 from experiments.grug.moe_hero_ep.train import (
@@ -37,36 +43,64 @@ from experiments.grug.moe_hero_ep.train import (
     grug_trainer_mesh_config,
     run_grug,
 )
-from experiments.grug_sft.special_token_lr import (
-    ANCHORS,
-    EXPECTED_ANCHOR_IDS,
-    TOKENIZER,
-    mixture_data_config,
-)
+from experiments.grug_sft.snowball_hf_import import SnowballHfToGrugCheckpoint, snowball_hf_to_grug
+from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig as LegacyGrugModelConfig
 from experiments.june_tpu_67b_a2b.moe.optimizer import GrugMoeMuonHConfig
-
-logger = logging.getLogger(__name__)
+from experiments.sft.launcher import DatasetSpec, SFTSpec, sft_step
 
 HF_MODEL = "open-athena/snowball-67b-a2b-base-262k-qk175-skew8"
 HF_REVISION = "058ecaf27b9e4f37219df221a51e7d490d58ec3d"
-BASE_CHECKPOINT = (
-    "gs://marin-us-central2/grug/"
-    "moe_67b_a2b_d2560_ep1_rep1_ctx4_bs256_seq262144_ctxext_step156k_qk175_longctx_skew8-c06695/"
-    "checkpoints/step-157000"
-)
-DEFAULT_STORES_MANIFEST = "gs://marin-us-central2/users/held/grug_sft/grug-67b-sft-20260919-48h-data/stores.json"
-DEFAULT_RUN_ID = "grug-67b-sft-262k-h100x8"
-WANDB_PROJECT = "marin_moe_sft"
+HF_DATASET = "HuggingFaceH4/ultrachat_200k"
+HF_DATASET_REVISION = "8049631c405ae6576f93f445c6b8166f76f5505a"
+HF_DATASET_SPLIT = "test_sft"
+CONVERSION_VERSION = "2026.09.21"
+DEFAULT_RUN_ID = "snowball-67b-262k-h100-demo"
+WANDB_PROJECT = "snowball_sft_demo"
 
 CONTEXT_LENGTH = 262_144
 CONTEXT_SHARDS = 8
 BATCH_SIZE = 1
-DEFAULT_STEPS = 1_000
-BASE_STEP = 157_000
+DEFAULT_STEPS = 10
 TENSORSTORE_CACHE_BYTES = 2 * 1024**3
 
 
+@dataclass(frozen=True)
+class NoThinkChatKwargs:
+    """Render this non-reasoning source with the model's explicit no-think mode."""
+
+    def __call__(self, _row: dict[str, Any]) -> dict[str, Any]:
+        return {"chat_template_kwargs": {"enable_thinking": False}}
+
+
+def legacy_model_config() -> LegacyGrugModelConfig:
+    """Architecture used only while converting the canonical HF tensors."""
+    return LegacyGrugModelConfig(
+        vocab_size=128_256,
+        hidden_dim=2_560,
+        intermediate_dim=1_280,
+        shared_expert_intermediate_dim=2_560,
+        num_experts=256,
+        num_experts_per_token=4,
+        num_layers=26,
+        num_heads=20,
+        num_kv_heads=5,
+        head_dim=128,
+        max_seq_len=CONTEXT_LENGTH,
+        sliding_window=2_048,
+        layer_norm_eps=1e-5,
+        initializer_std=0.009882117688026186,
+        qk_mult=1.75,
+        disable_pko=True,
+        disable_long_rope=True,
+        attention_implementation="gpu_fa4_cute",
+        moe_implementation="ring",
+        ce_implementation="batched_xla",
+        use_array_stacked_blocks=True,
+    )
+
+
 def model_config() -> GrugModelConfig:
+    """Current GPU trainer architecture corresponding to the pinned HF model."""
     return GrugModelConfig(
         vocab_size=128_256,
         hidden_dim=2_560,
@@ -109,20 +143,21 @@ def optimizer_config(steps: int) -> GrugMoeMuonHConfig:
 
 
 def run_config(
+    *,
     run_id: str,
     steps: int,
     data: LmDataConfig,
-    token_ids: tuple[int, ...],
-    anchor_ids: tuple[tuple[int, ...], ...],
+    output_path: str,
+    base_checkpoint: str,
+    resources: ResourceConfig,
 ) -> GrugRunConfig:
     if not run_id.strip():
         raise ValueError("Run ID must not be empty")
     if steps <= 0:
         raise ValueError("Steps must be positive")
 
-    output = f"gs://marin-us-central2/users/held/grug_sft/{run_id}"
-    permanent_checkpoints = str(StoragePath(output) / "checkpoints")
-    temporary_checkpoints = temporary_checkpoint_base_path(output)
+    permanent_checkpoints = prefix_join(output_path, "checkpoints")
+    temporary_checkpoints = prefix_join(output_path, "temporary-checkpoints")
     trainer = TrainerConfig(
         id=run_id,
         seed=0,
@@ -131,12 +166,12 @@ def run_config(
         profiler=ProfilerConfig(enabled=False),
         mp=jmp.get_policy("params=bfloat16,compute=bfloat16,output=bfloat16"),
         tracker=WandbConfig(
-            entity="marin-community",
             project=WANDB_PROJECT,
             name=run_id,
             id=run_id,
+            mode="disabled",
             resume="allow",
-            tags=["sft", "snowball", "262k", "h100x8", f"hf-{HF_REVISION[:12]}"],
+            tags=["sft", "snowball", "262k", "h100x8", "ultrachat", f"hf-{HF_REVISION[:12]}"],
         ),
         watch=WatchConfig(interval=0),
         progress_watchdog=ProgressWatchdogConfig(
@@ -148,7 +183,7 @@ def run_config(
         mesh=grug_trainer_mesh_config(CONTEXT_SHARDS),
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
-        initialize_from=BASE_CHECKPOINT,
+        initialize_from=base_checkpoint,
         load_checkpoint_path=[permanent_checkpoints, temporary_checkpoints],
         checkpointer=CheckpointerConfig(
             base_path=permanent_checkpoints,
@@ -163,14 +198,7 @@ def run_config(
     return GrugRunConfig(
         model=model_config(),
         data=data,
-        resources=ResourceConfig.with_gpu(
-            "H100",
-            count=8,
-            cpu=64,
-            ram="768g",
-            disk="256g",
-            preemptible=False,
-        ),
+        resources=resources,
         tensorstore_cache_bytes=TENSORSTORE_CACHE_BYTES,
         optimizer=optimizer_config(steps),
         trainer=GrugTrainerConfig(
@@ -184,10 +212,6 @@ def run_config(
             replica_axis_size=1,
             context_axis_size=CONTEXT_SHARDS,
             weight_initialization=WeightInitialization.LEGACY_SINGLE_SHARED_EXPERT,
-            reinitialize_token_ids=token_ids,
-            reinitialize_token_anchors=anchor_ids,
-            special_token_lr_ids=token_ids,
-            special_token_lr_multiplier=math.sqrt(32),
         ),
         eval=None,
         processes_per_task=8,
@@ -196,25 +220,104 @@ def run_config(
     )
 
 
-def train(run_id: str, steps: int, stores_manifest: str) -> None:
-    metadata = json.loads((StoragePath(BASE_CHECKPOINT) / "metadata.json").read_text())
-    if metadata["step"] != BASE_STEP:
-        raise ValueError(f"Base checkpoint is step {metadata['step']}, expected {BASE_STEP}")
+@dataclass(frozen=True)
+class HuggingFaceSnowballModel:
+    """Pinned HF Snowball export converted for the context-parallel trainer."""
 
-    tokenizer = load_tokenizer(TOKENIZER)
-    token_ids = tuple(token_id for token_id, _ in ANCHORS)
-    anchor_ids = tuple(tuple(tokenizer.encode(text, add_special_tokens=False)) for _, text in ANCHORS)
-    if anchor_ids != EXPECTED_ANCHOR_IDS:
-        raise ValueError(f"Semantic token anchors changed: {anchor_ids}")
+    conversion: SnowballHfToGrugCheckpoint
+    run_id: str
 
-    run_grug(run_config(run_id, steps, mixture_data_config(stores_manifest), token_ids, anchor_ids))
+    def tokenizer_cache_key(self) -> str:
+        return f"{HF_MODEL}@{HF_REVISION}"
+
+    def resolve_tokenizer(self, ctx: StepContext) -> str:
+        return ctx.artifact_path(self.conversion.step)
+
+    @property
+    def run(self):
+        return run_grug
+
+    def init_deps(self) -> tuple[ArtifactStep, ...]:
+        return (self.conversion.step,)
+
+    def build_train_config(
+        self,
+        ctx: StepContext,
+        spec: SFTSpec,
+        data_config: LmDataConfig,
+        resources: ResourceConfig,
+        num_train_steps: int,
+    ) -> GrugRunConfig:
+        return run_config(
+            run_id=self.run_id,
+            steps=num_train_steps,
+            data=data_config,
+            output_path=ctx.output_path,
+            base_checkpoint=prefix_join(ctx.artifact_path(self.conversion.step), "checkpoints"),
+            resources=resources,
+        )
+
+
+def build_demo(
+    *,
+    run_id: str = DEFAULT_RUN_ID,
+    steps: int = DEFAULT_STEPS,
+    version: str | None = None,
+) -> ArtifactStep[LevanterCheckpoint]:
+    """Build the HF model/data conversion and one-node SFT graph."""
+    if steps <= 0:
+        raise ValueError("Steps must be positive")
+    conversion = snowball_hf_to_grug(
+        HF_MODEL,
+        hf_revision=HF_REVISION,
+        model=legacy_model_config(),
+        version=CONVERSION_VERSION,
+        resources=ResourceConfig.with_cpu(cpu=32, ram="512g", disk="256g"),
+    )
+    step_name = f"grug-sft/{run_id}"
+    resolved_version = resolve_version(step_name, version)
+    spec = SFTSpec(
+        name=step_name,
+        version=resolved_version,
+        model=HuggingFaceSnowballModel(conversion, run_id),
+        chat_template=MARIN_CHAT_TEMPLATE,
+        datasets=[
+            DatasetSpec(
+                slug="ultrachat-200k-test-sft",
+                hf_dataset_id=HF_DATASET,
+                revision=HF_DATASET_REVISION,
+                adapter_kwargs={
+                    "conversation_column": "messages",
+                    "extra_metadata_fn": NoThinkChatKwargs(),
+                },
+                weight=1.0,
+                splits=(HF_DATASET_SPLIT,),
+            )
+        ],
+        optimizer=optimizer_config(steps),
+        seq_len=CONTEXT_LENGTH,
+        batch_size=BATCH_SIZE,
+        num_train_steps=steps,
+        wandb_project=WANDB_PROJECT,
+    )
+    resources = ResourceConfig.with_gpu(
+        "H100",
+        count=8,
+        cpu=64,
+        ram="768g",
+        disk="384g",
+        preemptible=False,
+    )
+    return sft_step(spec, resources)
+
+
+@click.command()
+@click.option("--run-id", default=DEFAULT_RUN_ID, show_default=True)
+@click.option("--steps", type=click.IntRange(min=1), default=DEFAULT_STEPS, show_default=True)
+@build_options
+def main(run_id: str, steps: int) -> ArtifactStep[LevanterCheckpoint]:
+    return build_demo(run_id=run_id, steps=steps)
 
 
 if __name__ == "__main__":
-    configure_logging(logging.INFO)
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--run-id", default=DEFAULT_RUN_ID)
-    parser.add_argument("--steps", type=int, default=DEFAULT_STEPS)
-    parser.add_argument("--stores-manifest", default=DEFAULT_STORES_MANIFEST)
-    args = parser.parse_args()
-    train(args.run_id, args.steps, args.stores_manifest)
+    main()

@@ -8,10 +8,12 @@ import jax.numpy as jnp
 import jmp
 import numpy as np
 import optax
+from fray.cluster import ResourceConfig
 from haliax.partitioning import set_mesh
 from levanter.checkpoint import save_checkpoint
 from levanter.data.text.datasets import LmDataConfig
 from levanter.grug.sharding import compact_grug_mesh
+from marin.execution.lazy import StepContext
 
 from experiments.grug.moe_hero_ep import train as hero_train
 from experiments.grug.moe_hero_ep.model import GrugModelConfig as CurrentConfig
@@ -23,7 +25,15 @@ from experiments.june_tpu_67b_a2b.moe.model import Transformer as LegacyTransfor
 
 def test_snowball_run_uses_one_h100_node_for_one_context_sharded_example():
     data = LmDataConfig(tokenizer="test", components={}, train_weights={})
-    config = snowball_262k_h100.run_config("test-run", 7, data, (11,), ((12,),))
+    resources = ResourceConfig.with_gpu("H100", count=8, cpu=64, ram="768g", disk="384g")
+    config = snowball_262k_h100.run_config(
+        run_id="test-run",
+        steps=7,
+        data=data,
+        output_path="s3://test-output/run",
+        base_checkpoint="s3://test-output/conversion/checkpoints",
+        resources=resources,
+    )
 
     assert config.resources.device.variant == "H100"
     assert config.resources.device.count == 8
@@ -37,10 +47,28 @@ def test_snowball_run_uses_one_h100_node_for_one_context_sharded_example():
     assert config.trainer.expert_axis_size == 1
     assert config.trainer.offload_opt_state
     assert config.trainer.weight_initialization == WeightInitialization.LEGACY_SINGLE_SHARED_EXPERT
-    assert config.trainer.trainer.initialize_from == snowball_262k_h100.BASE_CHECKPOINT
+    assert config.trainer.trainer.initialize_from == "s3://test-output/conversion/checkpoints"
     checkpoint_paths = config.trainer.trainer.load_checkpoint_path
     assert isinstance(checkpoint_paths, list)
-    assert checkpoint_paths[0].endswith("/test-run/checkpoints")
+    assert checkpoint_paths[0] == "s3://test-output/run/checkpoints"
+
+
+def test_demo_builds_both_inputs_from_pinned_huggingface_revisions():
+    step = snowball_262k_h100.build_demo(version="2026.09.21.99")
+    dataset, conversion = step.deps
+
+    dataset_config = dataset.build_config(StepContext.for_fingerprint((), ()))
+    assert dataset_config.source == snowball_262k_h100.HF_DATASET
+    assert dataset_config.revision == snowball_262k_h100.HF_DATASET_REVISION
+    assert dataset_config.splits == [snowball_262k_h100.HF_DATASET_SPLIT]
+    assert dataset_config.adapter.extra_metadata_fn({}) == {"chat_template_kwargs": {"enable_thinking": False}}
+    assert conversion.name.endswith("open-athena--snowball-67b-a2b-base-262k-qk175-skew8")
+
+    source = snowball_262k_h100.__file__
+    assert source is not None
+    assert "gs://" not in Path(source).read_text()
+    importer = Path(snowball_262k_h100.__file__).with_name("snowball_hf_import.py")
+    assert "gs://" not in importer.read_text()
 
 
 def test_legacy_initializer_remaps_the_single_shared_expert(tmp_path: Path):
