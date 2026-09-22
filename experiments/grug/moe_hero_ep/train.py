@@ -1103,6 +1103,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         else:
             assert train_loader is not None
             batch_source = train_loader.iter_from_step(int(state.step))
+            gc_resources.callback(batch_source.close)
         iterator = LoadingTimeTrackerIterator(batch_source)
 
         state_callbacks = StateCallbackRunner[GrugTrainState](

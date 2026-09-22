@@ -243,13 +243,16 @@ class DataLoaderIterator(Iterator[Ex]):
             self.mapping = hax.partitioning.current_thread_local_mapping()
 
         buffered_batches = self.dl.max_buffered_batches
-        self._batches: Iterator[Ex]
+        self._closed = False
+        self._batches: AsyncIteratorWrapper | BackgroundIterator[Ex]
         if buffered_batches == 0:
             self._batches = AsyncIteratorWrapper(self._produce_batches())
         else:
             self._batches = _JaxCpuBackgroundIterator(self._produce_batches, max_capacity=buffered_batches)
 
     def __next__(self):
+        if self._closed:
+            raise StopIteration
         time_start = time.time()
         batch = next(self._batches)
         elapsed = time.time() - time_start
@@ -264,9 +267,17 @@ class DataLoaderIterator(Iterator[Ex]):
             )
         return batch
 
-    def __del__(self):
-        if hasattr(self, "_batches") and hasattr(self._batches, "stop"):
+    def close(self) -> None:
+        """Stop prefetching and join the producer before releasing JAX resources."""
+        self._closed = True
+        if isinstance(self._batches, BackgroundIterator):
             self._batches.stop()
+        else:
+            self._batches.close()
+
+    def __del__(self):
+        if hasattr(self, "_batches"):
+            self.close()
 
     async def _produce_batches(self):
         with local_cpu_mesh():
