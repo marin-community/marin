@@ -253,6 +253,11 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             # GatedNorms route to muonh (NS + Frobenius hyperball), same as matrices.
             if "gated_norm" in path_lower:
                 return "muonh"
+            # Per-expert latent RMS gain is a norm gain (stacked [layers,E,latent] -> 3-D); route to
+            # adam so it does not fall into the matrix (muonh) catch-all below. The latent down/up
+            # projections stay matrices and route to muonh like the expert w_gate/w_up/w_down.
+            if path_lower.endswith("pe_latent_gain"):
+                return "adam"
             # Scanning prepends a layer axis, so norm gains / SConv kernels stay named ``.weight``
             # (route to Adam) while expert matrices become 4D and other matmuls 3D (route to MuonH).
             if path_lower.endswith(".weight"):

@@ -21,7 +21,9 @@ try:
     from jax.shard_map import shard_map
 except ModuleNotFoundError:
     from jax.experimental.shard_map import shard_map
+from haliax.nn.ragged_dot import ragged_dot
 from jaxtyping import Array, Float, Int, PRNGKeyArray
+from levanter.grug._moe.common import _prepare_moe_dispatch, _zero_inactive_grouped_rows, split_moe_w13_output
 from levanter.grug.attention import (
     AttentionMask,
     RotaryConfig,
@@ -112,6 +114,9 @@ class GrugModelConfig:
     num_experts_per_token: int = 8
     # LatentMoE (arXiv 2601.18089); latent RMSNorm per issue #6822.
     latent_dim: int | None = 256
+    # Multi-latent MoE: each routed expert gets its OWN latent down/up + learnable RMS gain
+    # (full activation dispatched to the expert). Requires FSDP MoE (expert_axis_size=1).
+    per_expert_latent: bool = False
     num_layers: int = 6
     num_heads: int = 4
     num_kv_heads: int = 1
@@ -481,11 +486,15 @@ class MoEMLP(eqx.Module):
     w_latent_down: jax.Array | None
     latent_norm: RMSNorm | None
     w_latent_up: jax.Array | None
+    # Multi-latent (per-expert) projections: [E, d, lat] / [E, lat] / [E, lat, d]. None unless cfg.per_expert_latent.
+    pe_latent_down: jax.Array | None
+    pe_latent_gain: jax.Array | None
+    pe_latent_up: jax.Array | None
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "MoEMLP":
-        k_router, k_expert, k_down, k_up = random.split(key, 4)
+        k_router, k_expert, k_down, k_up, k_pd, k_pu = random.split(key, 6)
         mesh = get_abstract_mesh()
 
         expert_axis_size = _mesh_axis_size(mesh, "expert")
@@ -493,6 +502,9 @@ class MoEMLP(eqx.Module):
             raise ValueError(f"num_experts={cfg.num_experts} must be divisible by expert axis size={expert_axis_size}")
 
         d, e = cfg.hidden_dim, cfg.num_experts
+        if cfg.per_expert_latent and cfg.latent_dim is None:
+            raise ValueError("per_expert_latent requires latent_dim")
+        pe = cfg.per_expert_latent
         # Routed experts live in the latent space; the router reads the full-width token, so its
         # own projection keeps `hidden_dim`.
         expert_width = cfg.latent_dim if cfg.latent_dim is not None else d
@@ -502,14 +514,21 @@ class MoEMLP(eqx.Module):
             router_bias=jnp.zeros((e,)),
             w_latent_down=(
                 None
-                if latent is None
+                if latent is None or pe
                 else reshard(_init_weight(k_down, (d, latent), cfg.initializer_std), P(_FSDP_AXES, "model"))
             ),
-            latent_norm=None if latent is None else RMSNorm.init(latent, cfg.layer_norm_eps),
+            latent_norm=None if latent is None or pe else RMSNorm.init(latent, cfg.layer_norm_eps),
             w_latent_up=(
                 None
-                if latent is None
+                if latent is None or pe
                 else reshard(_init_weight(k_up, (latent, d), cfg.initializer_std), P("model", _FSDP_AXES))
+            ),
+            pe_latent_down=(
+                reshard(_init_weight(k_pd, (e, d, latent), cfg.initializer_std), P("expert", None, None)) if pe else None
+            ),
+            pe_latent_gain=(reshard(jnp.ones((e, latent)), P("expert", None)) if pe else None),
+            pe_latent_up=(
+                reshard(_init_weight(k_pu, (e, latent, d), cfg.initializer_std), P("expert", None, None)) if pe else None
             ),
             expert_mlp=MoEExpertMlp.init(
                 num_experts=cfg.num_experts,
@@ -525,6 +544,73 @@ class MoEMLP(eqx.Module):
                 num_expert_waves=1,
             ),
             cfg=cfg,
+        )
+
+    def _per_expert_latent_forward(
+        self,
+        x_flat: Float[Array, "T D"],
+        selected_experts: jax.Array,
+        combine_weights: jax.Array,
+    ) -> Float[Array, "T D"]:
+        """Multi-latent MoE (FSDP): each expert down-projects the full token to its own latent, applies
+        a per-expert learnable RMS-norm, runs its latent SwiGLU, then up-projects back. The RMS gain is
+        folded into gate/up ((rms(x)*g)@W == rms(x)@(g*W)); all tokens are processed locally (no drops).
+
+        The grouped ``ragged_dot``s run inside ``shard_map`` (manual mode) so they need no explicit
+        out_sharding. Requires FSDP MoE (expert axis size 1) so every expert is local on each shard."""
+        num_experts = self.cfg.num_experts
+        eps = self.cfg.layer_norm_eps
+        mesh = get_abstract_mesh()
+        if _mesh_axis_size(mesh, "expert") != 1:
+            raise ValueError("per_expert_latent requires FSDP MoE (expert axis size 1)")
+        batch_spec = P(_BATCH_AXES, None)
+        weight_spec = P("expert", None, None)
+        gain_spec = P("expert", None)
+
+        def _local(x_l, sel_l, cw_l, pd, pg, pu, wg, wu, wd):
+            token_valid = jnp.ones((x_l.shape[0],), dtype=jnp.bool_)
+            x_disp, w_disp, tok_disp, group_sizes = _prepare_moe_dispatch(
+                x_l, sel_l.astype(jnp.int32), cw_l, token_valid, num_experts=num_experts
+            )
+            cum = jnp.cumsum(group_sizes).astype(jnp.int32)
+            x_disp = _zero_inactive_grouped_rows(x_disp, cum)
+            dt = x_l.dtype
+            lat = ragged_dot(x_disp, pd.astype(dt), group_sizes)
+            variance = jnp.mean(jnp.square(lat.astype(jnp.float32)), axis=-1, keepdims=True)
+            lat = (lat * jax.lax.rsqrt(variance + eps)).astype(dt)
+            w13 = (jnp.concatenate([wg, wu], axis=-1) * pg[:, :, None]).astype(dt)
+            w13_out = ragged_dot(lat, w13, group_sizes)
+            gate, up = split_moe_w13_output(w13_out, intermediate_dim=wd.shape[1], interleaved=False)
+            out_lat = ragged_dot(jax.nn.silu(gate) * up, wd.astype(dt), group_sizes)
+            out_d = ragged_dot(out_lat, pu.astype(dt), group_sizes)
+            weighted = _zero_inactive_grouped_rows(out_d * w_disp[:, None], cum)
+            return jnp.zeros_like(x_l).at[tok_disp].add(weighted, mode="drop")
+
+        return shard_map(
+            _local,
+            mesh=mesh,
+            in_specs=(
+                batch_spec,
+                batch_spec,
+                batch_spec,
+                weight_spec,
+                gain_spec,
+                weight_spec,
+                weight_spec,
+                weight_spec,
+                weight_spec,
+            ),
+            out_specs=batch_spec,
+        )(
+            reshard(x_flat, batch_spec),
+            reshard(selected_experts, batch_spec),
+            reshard(combine_weights, batch_spec),
+            reshard(self.pe_latent_down, weight_spec),
+            reshard(self.pe_latent_gain, gain_spec),
+            reshard(self.pe_latent_up, weight_spec),
+            reshard(self.expert_mlp.w_gate, weight_spec),
+            reshard(self.expert_mlp.w_up, weight_spec),
+            reshard(self.expert_mlp.w_down, weight_spec),
         )
 
     @named_call
@@ -573,40 +659,48 @@ class MoEMLP(eqx.Module):
         router_stats["margin_min"] = margin_min
         router_stats["margin_max"] = margin_max
 
-        routed_input = x_flat
-        if self.w_latent_down is not None and self.latent_norm is not None:
-            routed_input = jnp.einsum(
-                "td,dl->tl",
-                x_flat,
-                self.w_latent_down.astype(x_flat.dtype),
-                out_sharding=_batch_spec(),
+        if self.cfg.per_expert_latent:
+            routed_flat = self._per_expert_latent_forward(x_flat, selected_experts, combine_weights)
+            # FSDP path: all tokens processed locally, no capacity limit -> no drops.
+            zero = jnp.zeros((), dtype=jnp.int32)
+            router_stats["capacity_overflow"] = zero
+            router_stats["sender_capacity_overflow"] = zero
+            router_stats["receiver_capacity_overflow"] = zero
+        else:
+            routed_input = x_flat
+            if self.w_latent_down is not None and self.latent_norm is not None:
+                routed_input = jnp.einsum(
+                    "td,dl->tl",
+                    x_flat,
+                    self.w_latent_down.astype(x_flat.dtype),
+                    out_sharding=_batch_spec(),
+                )
+                # Keep the expert input scale independent of the down-projection initialization.
+                routed_input = self.latent_norm(routed_input)
+            moe_out = self.expert_mlp(
+                routed_input,
+                selected_experts.astype(jnp.int32),
+                combine_weights,
+                mesh=get_abstract_mesh(),
+                report_capacity_overflow=True,
             )
-            # Keep the expert input scale independent of the down-projection initialization.
-            routed_input = self.latent_norm(routed_input)
-        moe_out = self.expert_mlp(
-            routed_input,
-            selected_experts.astype(jnp.int32),
-            combine_weights,
-            mesh=get_abstract_mesh(),
-            report_capacity_overflow=True,
-        )
-        routed_flat, capacity_overflow = moe_out
-        dropped_assignments = capacity_overflow.dropped
-        sender_dropped_assignments = capacity_overflow.sender_dropped
-        receiver_dropped_assignments = capacity_overflow.receiver_dropped
-        router_stats["capacity_overflow"] = dropped_assignments
-        router_stats["sender_capacity_overflow"] = sender_dropped_assignments
-        router_stats["receiver_capacity_overflow"] = receiver_dropped_assignments
+            routed_flat, capacity_overflow = moe_out
+            dropped_assignments = capacity_overflow.dropped
+            sender_dropped_assignments = capacity_overflow.sender_dropped
+            receiver_dropped_assignments = capacity_overflow.receiver_dropped
+            router_stats["capacity_overflow"] = dropped_assignments
+            router_stats["sender_capacity_overflow"] = sender_dropped_assignments
+            router_stats["receiver_capacity_overflow"] = receiver_dropped_assignments
 
-        # Expand after the combine: `expert_mlp` already returns the weight-summed expert output,
-        # which is the vector the paper's W_up acts on.
-        if self.w_latent_up is not None:
-            routed_flat = jnp.einsum(
-                "tl,ld->td",
-                routed_flat,
-                self.w_latent_up.astype(routed_flat.dtype),
-                out_sharding=_batch_spec(),
-            )
+            # Expand after the combine: `expert_mlp` already returns the weight-summed expert output,
+            # which is the vector the paper's W_up acts on.
+            if self.w_latent_up is not None:
+                routed_flat = jnp.einsum(
+                    "tl,ld->td",
+                    routed_flat,
+                    self.w_latent_up.astype(routed_flat.dtype),
+                    out_sharding=_batch_spec(),
+                )
 
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = reshard(routed, _batch_spec())

@@ -245,6 +245,8 @@ def build_h100_ladder_run(
     no_eval: bool = False,
     dense: bool = False,
     save_checkpoints: bool = False,
+    fsdp_moe: bool = False,
+    per_expert_latent: bool = False,
 ) -> ArtifactStep[ThroughputResult]:
     """Build one H100 scaling-ladder rung.
 
@@ -260,8 +262,12 @@ def build_h100_ladder_run(
 
     rung = _h100_ladder_rung(size)
     model = dataclasses.replace(_h100_ladder_model(rung, dense=dense), vocab_size=vocab_size)
+    if per_expert_latent:
+        model = dataclasses.replace(model, per_expert_latent=True)
+        fsdp_moe = True  # per-expert latent dispatches the full activation locally; no expert parallelism
     mp_policy = "params=float32,compute=bfloat16,output=bfloat16"
-    expert_axis_size = 1 if dense else rung.gpus_per_task
+    # FSDP MoE: no expert parallelism (experts replicated, params FSDP-sharded over the data axis).
+    expert_axis_size = 1 if (dense or fsdp_moe) else rung.gpus_per_task
     replica_axis_size = 1
     if rung.global_device_count % (expert_axis_size * replica_axis_size) != 0:
         raise ValueError(
@@ -431,6 +437,12 @@ def build_h100_ladder_run(
 )
 @click.option("--no-eval", is_flag=True, help="Disable in-run eval (clean MFU probes).")
 @click.option("--dense", is_flag=True, help="Dense baseline: 3x hidden SwiGLU per block, no MoE.")
+@click.option("--fsdp-moe", is_flag=True, help="Run MoE under FSDP (expert_axis_size=1) instead of expert parallelism.")
+@click.option(
+    "--per-expert-latent",
+    is_flag=True,
+    help="Multi-latent MoE: each expert owns its latent down/up + RMS gain (implies --fsdp-moe).",
+)
 @click.option(
     "--save-checkpoints",
     is_flag=True,
@@ -446,6 +458,8 @@ def main(
     num_steps: int | None,
     no_eval: bool,
     dense: bool,
+    fsdp_moe: bool,
+    per_expert_latent: bool,
     save_checkpoints: bool,
 ) -> ArtifactStep[ThroughputResult]:
     return build_h100_ladder_run(
@@ -456,6 +470,8 @@ def main(
         num_steps=num_steps,
         no_eval=no_eval,
         dense=dense,
+        fsdp_moe=fsdp_moe,
+        per_expert_latent=per_expert_latent,
         save_checkpoints=save_checkpoints,
     )
 
