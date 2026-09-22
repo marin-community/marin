@@ -967,6 +967,22 @@ def _latent_config(latent_dim=None):
     )
 
 
+@pytest.mark.parametrize("context_size", [1, 2])
+def test_logits_preserves_context_sharding(context_size):
+    mesh = AbstractMesh(
+        axis_sizes=(1, 1, context_size, 2, 1),
+        axis_names=("replica_dcn", "data", "context", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 5,
+    )
+    config = _latent_config()
+    tokens = jax.ShapeDtypeStruct((2, 8), jnp.int32)
+    with use_abstract_mesh(mesh):
+        logits = jax.eval_shape(lambda ids: model.Transformer.init(config, key=jax.random.key(0)).logits(ids), tokens)
+    assert logits.shape == (2, 8, config.vocab_size)
+    # Replicating this axis would multiply the per-device logits allocation by context_size.
+    assert logits.sharding.spec[1] == ("context" if context_size > 1 else None)
+
+
 def test_block_threads_attention_padding_into_moe_metrics():
     mesh = _explicit_mesh(1, 1, 1, 1, 1)
     cfg = _latent_config()

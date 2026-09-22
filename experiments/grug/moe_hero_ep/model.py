@@ -1366,9 +1366,8 @@ class Transformer(eqx.Module):
         token_ids: Int[Array, "B S"],
         mask: AttentionMask | jax.Array | None = None,
     ) -> Float[Array, "B S V"]:
-        batch_spec = _batch_spec()
         hidden, _ = self(token_ids, mask=mask)
-        return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=batch_spec)
+        return jnp.einsum("bsh,hd->bsd", hidden, self.output_proj, out_sharding=_activation_spec(hidden))
 
     def to_state_dict(self, prefix: str | None = None) -> dict[str, jax.Array]:
         return grugmoe_inference_state_dict(self, prefix=prefix)
