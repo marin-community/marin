@@ -28,7 +28,10 @@ from iris.cluster.node_agent.uv_cache_recovery import (
     COREWEAVE_PENDING_STATE_CONDITION,
     COREWEAVE_PENDING_STATE_LABEL,
     COREWEAVE_POWER_RESET_STATE,
+    UV_CACHE_REBOOT_REQUESTED_EVENT,
+    UV_CACHE_RECOVERY_OBSERVED_EVENT,
     UV_CACHE_RECOVERY_THRESHOLD,
+    UV_CACHE_RESET_COMPLETED_EVENT,
     UV_CACHE_RESET_MARKER,
     complete_uv_cache_reset,
     reconcile_uv_cache_recovery,
@@ -90,7 +93,12 @@ DCGM_FI_DEV_POWER_MGMT_LIMIT{{{_DCGM_GPU1}}} 700
 _MIB = 1024 * 1024
 
 
-def test_complete_uv_cache_reset_waits_for_machine_reboot(tmp_path):
+def test_complete_uv_cache_reset_waits_for_machine_reboot(tmp_path, monkeypatch):
+    events = []
+    monkeypatch.setattr(
+        "iris.cluster.node_agent.uv_cache_recovery.telemetry.event",
+        lambda name, body: events.append((name, dict(body.fields))),
+    )
     uv_cache = tmp_path / "uv-cache"
     uv_cache.mkdir()
     cached_file = uv_cache / "archive.whl"
@@ -100,14 +108,30 @@ def test_complete_uv_cache_reset_waits_for_machine_reboot(tmp_path):
 
     complete_uv_cache_reset(tmp_path, "current-boot")
     assert cached_file.exists()
+    assert events == []
 
     complete_uv_cache_reset(tmp_path, "next-boot")
     assert uv_cache.is_dir()
     assert list(uv_cache.iterdir()) == []
     assert not marker.exists()
+    assert events == [
+        (
+            UV_CACHE_RESET_COMPLETED_EVENT,
+            {
+                "requested_boot_id": "current-boot",
+                "current_boot_id": "next-boot",
+                "cache_path": str(uv_cache),
+            },
+        )
+    ]
 
 
-def test_uv_cache_recovery_threshold_requests_coreweave_safe_reboot(tmp_path):
+def test_uv_cache_recovery_threshold_requests_coreweave_safe_reboot(tmp_path, monkeypatch):
+    events = []
+    monkeypatch.setattr(
+        "iris.cluster.node_agent.uv_cache_recovery.telemetry.event",
+        lambda name, body: events.append((name, dict(body.fields))),
+    )
     now = datetime(2026, 9, 22, tzinfo=UTC).timestamp()
     uv_cache = tmp_path / "uv-cache"
     uv_cache.mkdir()
@@ -133,9 +157,20 @@ def test_uv_cache_recovery_threshold_requests_coreweave_safe_reboot(tmp_path):
     assert condition["lastHeartbeatTime"] == "2026-09-22T00:00:00Z"
     assert condition["lastTransitionTime"] == "2026-09-22T00:00:00Z"
     assert (tmp_path / UV_CACHE_RESET_MARKER).read_text() == "boot-a\n"
+    observed_events = [body for name, body in events if name == UV_CACHE_RECOVERY_OBSERVED_EVENT]
+    assert {body["attempt_uid"] for body in observed_events} == {"0", "1", "2"}
+    assert [body for name, body in events if name == UV_CACHE_REBOOT_REQUESTED_EVENT] == [
+        {
+            "recovery_count": UV_CACHE_RECOVERY_THRESHOLD,
+            "recovery_window_seconds": 1800.0,
+            "lifecycle_state": COREWEAVE_POWER_RESET_STATE,
+        }
+    ]
 
+    event_count = len(events)
     reconcile_uv_cache_recovery(k8s, "node-a", tmp_path, "boot-a", now=now)
     assert len(node["status"]["conditions"]) == 1
+    assert len(events) == event_count
 
 
 def test_uv_cache_recovery_ignores_stale_and_subthreshold_signals(tmp_path):

@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from rigging import telemetry
+from rigging.telemetry.serialization import EventBody
 
 from iris.cluster.platforms.k8s.service import K8sService
 from iris.cluster.platforms.k8s.types import K8sResource
@@ -28,6 +29,10 @@ COREWEAVE_PENDING_STATE_LABEL_PATH = "/metadata/labels/" + COREWEAVE_PENDING_STA
     "/", "~1"
 )
 COREWEAVE_POWER_RESET_STATE = "production-powerreset"
+UV_CACHE_RECOVERY_OBSERVED_EVENT = "uv_cache_recovery_observed"
+UV_CACHE_REBOOT_REQUESTED_EVENT = "uv_cache_reboot_requested"
+UV_CACHE_RESET_COMPLETED_EVENT = "uv_cache_reset_completed"
+_OBSERVED_RECOVERY_SIGNAL_PREFIX = ".iris-recovery-observed-"
 _RECOVERY_FAILURES = telemetry.counter("iris_uv_cache_recovery_failures", unit="{failure}")
 
 
@@ -35,10 +40,17 @@ def _uv_cache_dir(cache_dir: Path) -> Path:
     return cache_dir / cache_host_dirname(UV_CACHE_PATH)
 
 
+def _emit_event(name: str, **fields: str | int | float | bool) -> None:
+    telemetry.event(name, EventBody(fields))
+
+
 def complete_uv_cache_reset(cache_dir: Path, boot_id: str) -> None:
     """Clear a marked uv cache only when the machine boot ID has changed."""
     marker = cache_dir / UV_CACHE_RESET_MARKER
-    if not marker.exists() or marker.read_text().strip() == boot_id:
+    if not marker.exists():
+        return
+    requested_boot_id = marker.read_text().strip()
+    if requested_boot_id == boot_id:
         return
 
     uv_cache_dir = _uv_cache_dir(cache_dir)
@@ -47,20 +59,37 @@ def complete_uv_cache_reset(cache_dir: Path, boot_id: str) -> None:
     uv_cache_dir.mkdir(parents=True)
     marker.unlink()
     logger.warning("cleared uv cache %s after node reboot", uv_cache_dir)
+    _emit_event(
+        UV_CACHE_RESET_COMPLETED_EVENT,
+        requested_boot_id=requested_boot_id,
+        current_boot_id=boot_id,
+        cache_path=str(uv_cache_dir),
+    )
 
 
 def _prune_and_count_recovery_signals(cache_dir: Path, now: float) -> int:
     cutoff = now - UV_CACHE_RECOVERY_WINDOW
-    count = 0
+    attempt_uids: set[str] = set()
     for signal in _uv_cache_dir(cache_dir).glob(f"{UV_CACHE_RECOVERY_SIGNAL_PREFIX}*"):
-        if signal.stat().st_mtime >= cutoff:
-            count += 1
-        else:
+        if signal.stat().st_mtime < cutoff:
             signal.unlink()
-    return count
+            continue
+        if signal.name.startswith(_OBSERVED_RECOVERY_SIGNAL_PREFIX):
+            attempt_uid = signal.name.removeprefix(_OBSERVED_RECOVERY_SIGNAL_PREFIX)
+        else:
+            attempt_uid = signal.name.removeprefix(UV_CACHE_RECOVERY_SIGNAL_PREFIX)
+            _emit_event(UV_CACHE_RECOVERY_OBSERVED_EVENT, attempt_uid=attempt_uid)
+            signal.replace(signal.with_name(f"{_OBSERVED_RECOVERY_SIGNAL_PREFIX}{attempt_uid}"))
+        attempt_uids.add(attempt_uid)
+    return len(attempt_uids)
 
 
-def _request_coreweave_safe_reboot(k8s: K8sService, node_name: str, now: datetime) -> None:
+def _request_coreweave_safe_reboot(
+    k8s: K8sService,
+    node_name: str,
+    now: datetime,
+    recovery_count: int,
+) -> None:
     node = k8s.get_json(K8sResource.NODES, node_name)
     if node is None:
         raise ConnectionError(f"Kubernetes node {node_name!r} is not visible")
@@ -116,6 +145,12 @@ def _request_coreweave_safe_reboot(k8s: K8sService, node_name: str, now: datetim
         )
     if not has_power_reset_condition or not has_power_reset_label:
         logger.error("requested CoreWeave safe reboot for node %s", node_name)
+        _emit_event(
+            UV_CACHE_REBOOT_REQUESTED_EVENT,
+            recovery_count=recovery_count,
+            recovery_window_seconds=UV_CACHE_RECOVERY_WINDOW,
+            lifecycle_state=COREWEAVE_POWER_RESET_STATE,
+        )
 
 
 def reconcile_uv_cache_recovery(
@@ -133,7 +168,7 @@ def reconcile_uv_cache_recovery(
 
     marker = cache_dir / UV_CACHE_RESET_MARKER
     marker.write_text(f"{boot_id}\n")
-    _request_coreweave_safe_reboot(k8s, node_name, datetime.fromtimestamp(now, UTC))
+    _request_coreweave_safe_reboot(k8s, node_name, datetime.fromtimestamp(now, UTC), recovery_count)
 
 
 def run_uv_cache_recovery(

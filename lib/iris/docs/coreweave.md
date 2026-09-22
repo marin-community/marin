@@ -378,7 +378,10 @@ cache, Iris records that recovery on the node. Three distinct recoveries within
 lifecycle operation. CoreWeave drains the node before rebooting it. The
 node-agent records the current boot ID before the request and clears the shared
 uv cache only after it starts on a different boot, so a node-agent restart alone
-cannot delete a live cache.
+cannot delete a live cache. The node agent emits `uv_cache_recovery_observed`,
+`uv_cache_reboot_requested`, and `uv_cache_reset_completed` telemetry events for
+these transitions; repair-loop errors increment
+`iris_uv_cache_recovery_failures`.
 
 `/cache` is unclaimed node-local scratch: a task that needs a real directory on
 the node instead of a bucket picks its own subdirectory there. The node-agent
