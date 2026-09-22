@@ -1490,16 +1490,20 @@ def segmented_flash_attention_backward_sm90_launcher(
     return _launch_segmented_flash_attention_backward_sm90
 
 
-@cute_launcher_factory
-def segmented_flash_attention_backward_sm100_launcher(
-    modules: Any, *, head_dim: int, head_dim_v: int, qhead_per_kvhead: int, config: Flash4CuteSm100BackwardConfig
-) -> Any:
-    """Build the native SM100 packed backward launcher with one CTA per cluster."""
+def _validate_sm100_backward_config(config: Flash4CuteSm100BackwardConfig) -> None:
     if config.tile != (128, 128):
         # FA4 b28 fails CuTe copy-layout verification for the 128x64 packed path.
         raise NotImplementedError("Packed SM100 backward currently supports 128x128 tiles.")
     if config.cluster_size != 1 or config.use_2cta_instrs:
         raise NotImplementedError("Packed SM100 backward currently supports one CTA per cluster.")
+
+
+@cute_launcher_factory
+def segmented_flash_attention_backward_sm100_launcher(
+    modules: Any, *, head_dim: int, head_dim_v: int, qhead_per_kvhead: int, config: Flash4CuteSm100BackwardConfig
+) -> Any:
+    """Build the native SM100 packed backward launcher with one CTA per cluster."""
+    _validate_sm100_backward_config(config)
     deps = _import_cute_dependencies(modules)
     cutlass, cute, cuda = deps.cutlass, deps.cute, deps.cuda
     native_module = importlib.import_module("flash_attn.cute.flash_bwd_sm100")
