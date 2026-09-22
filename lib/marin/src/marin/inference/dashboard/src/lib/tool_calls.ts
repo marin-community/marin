@@ -1,6 +1,7 @@
 import type { ChatTemplateProtocol, ToolCall } from './types'
 
 const TOOL_CALL_ID_PREFIX = 'call_'
+const REPEATED_TOOL_CALL_LIMIT = 3
 
 interface PendingToolCall {
   id: string | null
@@ -11,6 +12,40 @@ interface PendingToolCall {
 
 export interface ToolCallAccumulator {
   calls: Map<number, PendingToolCall>
+}
+
+export interface ToolCallRun {
+  signature: string
+  length: number
+}
+
+export function reachedToolRoundLimit(maxToolRounds: number, completedRounds: number): boolean {
+  return maxToolRounds > 0 && completedRounds >= maxToolRounds
+}
+
+function canonicalJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalJsonValue)
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, child]) => [key, canonicalJsonValue(child)]),
+    )
+  }
+  return value
+}
+
+/** Record a tool call and reject a third identical call in execution order. */
+export function nextToolCallRun(previous: ToolCallRun | null, call: ToolCall): ToolCallRun {
+  const signature = JSON.stringify([call.name, canonicalJsonValue(call.arguments)])
+  const next = {
+    signature,
+    length: previous?.signature === signature ? previous.length + 1 : 1,
+  }
+  if (next.length >= REPEATED_TOOL_CALL_LIMIT) {
+    throw new Error(`Model made the same tool call ${REPEATED_TOOL_CALL_LIMIT} times in a row`)
+  }
+  return next
 }
 
 function objectValue(value: unknown, message: string): Record<string, unknown> {

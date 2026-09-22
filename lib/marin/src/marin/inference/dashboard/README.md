@@ -86,9 +86,19 @@ and source is limited to 64 KiB. ShellSim implements a source-compatible subset
 of Python rather than full CPython, so unsupported modules and language features
 fail the tool call.
 
-One model response counts as one round, including a response with multiple
-calls. The UI executes calls from the eighth round, stops before another model
-request, and displays a limit error.
+Within one user turn, each model response that contains one or more calls counts
+as one tool round. **Max tool rounds** in **More settings** controls the number
+of rounds in that turn. The default value, `0`, allows unlimited rounds. For a
+positive value, the UI executes calls from the final allowed round, stops before
+another model request, and displays a limit error.
+
+The UI also stops before executing the third identical tool call in a row. A
+call is identical when its function name and arguments match; object key order
+does not affect the comparison. Multiple calls in one response are checked in
+execution order. A call with another function name or different arguments
+resets the repetition count. The count resets at the start of each user turn.
+Calls that return tool errors still count because the UI records the call before
+execution.
 
 ## ShellSim agent workspaces
 
