@@ -98,6 +98,7 @@ nav:
   - Technical Reference:
       - Specifying Hardware Resources: references/resource-config.md
       - Default Steps: references/default-steps.md
+      - Launching RL experiments: references/rl-launching.md
       - Training Configuration: references/train-config.md
       - HBM Optimization: references/hbm-optimization.md
       - Perplexity Gap Analysis: references/perplexity-gap-analysis.md

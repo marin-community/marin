@@ -34,9 +34,10 @@ from marin.evaluation.model_config import GenerationConfig, ModelConfig, Resourc
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep
 from marin.execution.remote import remote
-from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_owned_name
+from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import (
+    IRIS_HUB_CLUSTER_CONFIG,
     SKYRL_POLICY_LOCATION,
     ArtifactDataSource,
     ArtifactHfModel,
@@ -138,10 +139,7 @@ SNOWBALL_POLICY = PolicySpec(
     tokenizer_uri=MARIN_TOKENIZER,
     tokenizer_revision=MARIN_TOKENIZER_REVISION,
     model_relative_path="",
-    overrides=(
-        "generator.inference_engine_data_parallel_size=8",
-        "generator.inference_engine_expert_parallel_size=8",
-    ),
+    overrides=(),
     task_memory="512GB",
     serve_gpus=GPUS_PER_NODE,
     serve_memory="512g",
@@ -262,6 +260,9 @@ SMOKE = ScalePreset(
         policy_num_gpus_per_node=GPUS_PER_NODE,
         num_inference_engines=GPUS_PER_NODE,
         inference_engine_tensor_parallel_size=1,
+        inference_engine_pipeline_parallel_size=1,
+        inference_engine_data_parallel_size=1,
+        inference_engine_expert_parallel_size=1,
         train_batch_size=64,
         policy_mini_batch_size=32,
         micro_train_batch_size_per_gpu=4,
@@ -288,6 +289,9 @@ FULL = ScalePreset(
         policy_num_gpus_per_node=GPUS_PER_NODE,
         num_inference_engines=6 * GPUS_PER_NODE,
         inference_engine_tensor_parallel_size=1,
+        inference_engine_pipeline_parallel_size=1,
+        inference_engine_data_parallel_size=1,
+        inference_engine_expert_parallel_size=1,
         train_batch_size=512,
         policy_mini_batch_size=64,
         micro_train_batch_size_per_gpu=8,
@@ -315,6 +319,9 @@ SNOWBALL_SMOKE = ScalePreset(
         policy_num_gpus_per_node=GPUS_PER_NODE,
         num_inference_engines=1,
         inference_engine_tensor_parallel_size=1,
+        inference_engine_pipeline_parallel_size=1,
+        inference_engine_data_parallel_size=GPUS_PER_NODE,
+        inference_engine_expert_parallel_size=GPUS_PER_NODE,
         train_batch_size=32,
         policy_mini_batch_size=32,
         micro_train_batch_size_per_gpu=4,
@@ -343,6 +350,9 @@ SNOWBALL_FULL = ScalePreset(
         policy_num_gpus_per_node=GPUS_PER_NODE,
         num_inference_engines=4,
         inference_engine_tensor_parallel_size=1,
+        inference_engine_pipeline_parallel_size=1,
+        inference_engine_data_parallel_size=GPUS_PER_NODE,
+        inference_engine_expert_parallel_size=GPUS_PER_NODE,
         train_batch_size=128,
         policy_mini_batch_size=64,
         # At micro=1 the FSDP update ran 32 sequential micro-steps, each
@@ -387,6 +397,9 @@ SNOWBALL_SMOKE_R4 = ScalePreset(
         policy_num_gpus_per_node=GPUS_PER_NODE,
         num_inference_engines=1,
         inference_engine_tensor_parallel_size=1,
+        inference_engine_pipeline_parallel_size=1,
+        inference_engine_data_parallel_size=GPUS_PER_NODE,
+        inference_engine_expert_parallel_size=GPUS_PER_NODE,
         train_batch_size=64,
         policy_mini_batch_size=64,
         micro_train_batch_size_per_gpu=8,
@@ -411,6 +424,9 @@ SNOWBALL_FULL_R4 = ScalePreset(
         policy_num_gpus_per_node=GPUS_PER_NODE,
         num_inference_engines=4,
         inference_engine_tensor_parallel_size=1,
+        inference_engine_pipeline_parallel_size=1,
+        inference_engine_data_parallel_size=GPUS_PER_NODE,
+        inference_engine_expert_parallel_size=GPUS_PER_NODE,
         train_batch_size=64,
         policy_mini_batch_size=64,
         # Eight 3072-token sequences per micro-batch fit in HBM at this window;
@@ -443,6 +459,9 @@ SNOWBALL_SMOKE_R5 = ScalePreset(
         policy_num_gpus_per_node=GPUS_PER_NODE,
         num_inference_engines=1,
         inference_engine_tensor_parallel_size=1,
+        inference_engine_pipeline_parallel_size=1,
+        inference_engine_data_parallel_size=GPUS_PER_NODE,
+        inference_engine_expert_parallel_size=GPUS_PER_NODE,
         train_batch_size=64,
         policy_mini_batch_size=64,
         micro_train_batch_size_per_gpu=2,
@@ -467,6 +486,9 @@ SNOWBALL_FULL_R5 = ScalePreset(
         policy_num_gpus_per_node=GPUS_PER_NODE,
         num_inference_engines=4,
         inference_engine_tensor_parallel_size=1,
+        inference_engine_pipeline_parallel_size=1,
+        inference_engine_data_parallel_size=GPUS_PER_NODE,
+        inference_engine_expert_parallel_size=GPUS_PER_NODE,
         train_batch_size=64,
         policy_mini_batch_size=64,
         micro_train_batch_size_per_gpu=2,
@@ -592,6 +614,9 @@ generator:
   model_dtype: bfloat16
   vllm_attention_backend: FLASH_ATTN
   inference_engine_tensor_parallel_size: {plan.inference_engine_tensor_parallel_size}
+  inference_engine_pipeline_parallel_size: {plan.inference_engine_pipeline_parallel_size}
+  inference_engine_data_parallel_size: {plan.inference_engine_data_parallel_size}
+  inference_engine_expert_parallel_size: {plan.inference_engine_expert_parallel_size}
   num_inference_engines: {plan.num_inference_engines}
   n_samples_per_prompt: {plan.n_samples_per_prompt}
   gpu_memory_utilization: 0.75
@@ -690,6 +715,9 @@ def build_arm(
             # Fail fast: a broken config surfaces on the first attempt, and a
             # healthy run resumes from its latest checkpoint on resubmission.
             max_retries=1,
+            target_cluster=policy.cluster,
+            parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
+            coordinator_timeout_hours=72,
             wandb_entity="marin-community",
         ),
     )
@@ -749,7 +777,7 @@ def build_arms(
     show_default=True,
     help="Terminal stage per arm; dependencies are included automatically.",
 )
-@build_options
+@rl_build_options
 def main(arms: tuple[str, ...], scale: str, model_label: str, stage: str) -> dict[str, ArtifactStep]:
     built = build_arms(specs=tuple(ARMS[arm] for arm in arms), scale=scale, policy=POLICIES[model_label])
     return {name: getattr(arm, stage) for name, arm in built.items()}
