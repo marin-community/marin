@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
+import { useVllmDebug } from '../composables/useVllmDebug'
 import {
   fetchToolDefinitions,
   invokeShell,
@@ -58,8 +59,7 @@ const busy = ref(false)
 const showTools = ref(false)
 const showWorkspace = ref(false)
 const showRawChat = ref(false)
-const showVllmDebug = ref(false)
-const lastRequestDebug = ref<VllmRequestDebug | null>(null)
+const { enabled: showVllmDebug, lastRequest: lastRequestDebug } = useVllmDebug()
 const rawChat = computed(() => plainTextChat(props.conversation))
 const scroller = ref<HTMLElement | null>(null)
 const composer = ref<HTMLTextAreaElement | null>(null)
@@ -287,6 +287,7 @@ async function complete(
   let thinkingStartedAt: number | null = null
   const structuredCalls = createToolCallAccumulator()
 
+  const debugEnabled = showVllmDebug.value
   const body: Record<string, unknown> = {
     model: props.model,
     messages,
@@ -295,9 +296,8 @@ async function complete(
     max_tokens: props.params.maxTokens,
     top_p: props.params.topP,
     ...templateFields,
-    ...vllmDebugStreamOptions(showVllmDebug.value, props.streaming),
+    ...vllmDebugStreamOptions(debugEnabled, props.streaming),
   }
-  const debugEnabled = showVllmDebug.value
   let requestDebug: VllmRequestDebug | null = null
   if (tools.length) {
     // Permit model-native call generation without requiring vLLM auto-tool parsing.
@@ -445,8 +445,8 @@ async function complete(
               <span>Generation {{ formatMetric(lastRequestDebug.metrics?.generation_time_ms, 'ms') }}</span>
               <span>Mean inter-token {{ formatMetric(lastRequestDebug.metrics?.mean_itl_ms, 'ms') }}</span>
               <span>Output {{ formatMetric(lastRequestDebug.metrics?.tokens_per_second, 'tokens/s') }}</span>
-              <span>Prompt tokens {{ lastRequestDebug.usage?.prompt_tokens?.toLocaleString() ?? '—' }}</span>
-              <span>Output tokens {{ lastRequestDebug.usage?.completion_tokens?.toLocaleString() ?? '—' }}</span>
+              <span>Prompt tokens {{ lastRequestDebug.usage?.prompt_tokens.toLocaleString() ?? '—' }}</span>
+              <span>Output tokens {{ lastRequestDebug.usage?.completion_tokens.toLocaleString() ?? '—' }}</span>
             </div>
           </template>
         </div>

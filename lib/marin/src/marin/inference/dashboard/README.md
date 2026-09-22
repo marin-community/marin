@@ -46,8 +46,8 @@ inter-token latency (the average gap between generated tokens),
 output tokens per second, and prompt/output token counts. The checkbox is off
 by default. It works with streaming and buffered chat responses. The dashboard
 requests usage at the end of a streaming chat response only while this checkbox is
-enabled. Debug values stay in the current page and are not saved with the
-conversation or added to Raw chat.
+enabled. Turning the checkbox off clears the last result. Debug values stay in
+the current page and are not saved with the conversation or added to Raw chat.
 
 Start the serving process with `--vllm-arg=--enable-per-request-metrics` to
 receive timings. The panel explains when the server does not return them; token

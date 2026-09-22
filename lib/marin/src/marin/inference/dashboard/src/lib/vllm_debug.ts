@@ -20,7 +20,7 @@ export function vllmDebugStreamOptions(enabled: boolean, streaming: boolean): Re
   return enabled && streaming ? { stream_options: { include_usage: true } } : {}
 }
 
-/** Content chunks have neither field; the final streaming usage chunk can have no choices. */
+/** Streaming content chunks can carry null usage; the final usage chunk can have no choices. */
 export function requestDebugData(data: unknown): VllmRequestDebug | null {
   if (typeof data !== 'object' || data === null || (!('metrics' in data) && !('usage' in data))) return null
   const metrics = ('metrics' in data ? data.metrics : null) as VllmRequestMetrics | null | undefined
