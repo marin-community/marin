@@ -1,7 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Reproduce the hero duplicate rule from PR 8405, run v11-c075-restored.
+"""Reproduce the hero duplicate rule used by v11-c075-restored.
+
+Reference run: https://github.com/marin-community/marin/pull/8405
 
 The solver processes documents in descending character count. Input order
 resolves equal lengths in that processing order. A surviving representative must meet the
