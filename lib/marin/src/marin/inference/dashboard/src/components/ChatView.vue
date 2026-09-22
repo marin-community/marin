@@ -25,6 +25,7 @@ import {
   createToolCallAccumulator,
   finalizeToolCalls,
   inlineToolCalls,
+  runToolRounds,
 } from '../lib/tool_calls'
 import { newId } from '../lib/storage'
 import type {
@@ -37,8 +38,6 @@ import type {
 } from '../lib/types'
 import MessageBubble from './MessageBubble.vue'
 import ShellWorkspacePanel from './ShellWorkspacePanel.vue'
-
-const MAX_TOOL_ROUNDS = 8
 
 const props = defineProps<{
   conversation: Conversation
@@ -170,27 +169,24 @@ async function runToolExchange(conversation: Conversation, pythonTools: string, 
       conversation.customInstructions,
       tools,
     )
-    for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
-      const request = modelMessages(conversation)
-      reply = appendAssistantReply(conversation)
-
-      await complete(reply, request, tools, templateFields, signal)
-      const calls = reply.toolCalls ?? []
-      persistConversation(conversation)
-      if (!calls.length) break
-
-      await executeToolCalls(conversation, calls, pythonTools, workspaceFiles, signal)
-
-      if (round === MAX_TOOL_ROUNDS - 1) {
-        reply.error = `Stopped after ${MAX_TOOL_ROUNDS} consecutive tool rounds.`
-      }
-    }
+    await runToolRounds(
+      props.params.maxToolRounds,
+      async () => {
+        const request = modelMessages(conversation)
+        reply = appendAssistantReply(conversation)
+        await complete(reply, request, tools, templateFields, signal)
+        persistConversation(conversation)
+        return reply.toolCalls ?? []
+      },
+      (call) => executeToolCall(conversation, call, pythonTools, workspaceFiles, signal),
+    )
   } catch (error) {
     if (isAbortError(error)) {
-      appendCancelledToolResults(conversation, reply)
+      appendMissingToolResults(conversation, reply, 'tool call cancelled')
     } else {
       reply ??= appendAssistantReply(conversation)
-      reply.error = String(error)
+      appendMissingToolResults(conversation, reply, 'tool call not executed')
+      reply.error = error instanceof Error ? error.message : String(error)
     }
   }
 }
@@ -213,33 +209,31 @@ function appendAssistantReply(conversation: Conversation): AssistantMessage {
   return reply
 }
 
-async function executeToolCalls(
+async function executeToolCall(
   conversation: Conversation,
-  calls: ToolCall[],
+  call: ToolCall,
   pythonTools: string,
   workspaceFiles: Record<string, string> | null,
   signal: AbortSignal,
-) {
-  for (const call of calls) {
-    let result: unknown
-    try {
-      if (call.name === BASH_TOOL_NAME) {
-        const workspace = conversation.shellWorkspace
-        if (!workspace || !workspaceFiles) throw new Error('Shell workspace is not enabled')
-        const command = bashCommand(call.arguments)
-        const shellResult = await invokeShell(workspaceFiles, workspace.commits, workspace.history, command, signal)
-        result = shellResult
-        if (shellResult.stop_reason === null) workspace.history.push(command)
-      } else {
-        result = await invokeTool(call.name, pythonTools, call.arguments, signal)
-      }
-    } catch (error) {
-      if (isAbortError(error)) throw error
-      result = { error: String(error) }
+): Promise<void> {
+  let result: unknown
+  try {
+    if (call.name === BASH_TOOL_NAME) {
+      const workspace = conversation.shellWorkspace
+      if (!workspace || !workspaceFiles) throw new Error('Shell workspace is not enabled')
+      const command = bashCommand(call.arguments)
+      const shellResult = await invokeShell(workspaceFiles, workspace.commits, workspace.history, command, signal)
+      result = shellResult
+      if (shellResult.stop_reason === null) workspace.history.push(command)
+    } else {
+      result = await invokeTool(call.name, pythonTools, call.arguments, signal)
     }
-    conversation.messages.push(toolResultMessage(call, result))
-    persistConversation(conversation)
+  } catch (error) {
+    if (isAbortError(error)) throw error
+    result = { error: String(error) }
   }
+  conversation.messages.push(toolResultMessage(call, result))
+  persistConversation(conversation)
 }
 
 function persistConversation(conversation: Conversation) {
@@ -247,13 +241,13 @@ function persistConversation(conversation: Conversation) {
   emit('persist')
 }
 
-function appendCancelledToolResults(conversation: Conversation, reply: AssistantMessage | null) {
+function appendMissingToolResults(conversation: Conversation, reply: AssistantMessage | null, error: string) {
   const completed = new Set(
     conversation.messages.filter((message) => message.role === 'tool').map((message) => message.toolCallId),
   )
   for (const call of reply?.toolCalls ?? []) {
     if (completed.has(call.id)) continue
-    conversation.messages.push(toolResultMessage(call, { error: 'tool call cancelled' }))
+    conversation.messages.push(toolResultMessage(call, { error }))
   }
 }
 
