@@ -18,6 +18,15 @@ import optax
 
 import experiments.grug.fast_track.fractal_regression_sweep as F
 
+ACTIVATION = "relu2"  # squared ReLU (Primer); overrides F.predict's plain ReLU for this sweep
+
+
+def predict(p, V):
+    """x -> k (ReLU^2) -> 1."""
+    z = jnp.maximum(V @ p["W1"] + p["b1"], 0.0)
+    return ((z * z) @ p["W2"] + p["b2"])[:, 0]
+
+
 X_DIM = 64
 BETA = 1.0
 K_LIST = [128, 512, 2048]  # fixed parameter counts (one data-scaling curve each)
@@ -34,10 +43,10 @@ def train_n(x, k, field, mu, sd, Veval, yeval, steps, seed):
         return (jnp.cos(V @ G.T + phi) @ a - mu) / sd
 
     def loss_on(p, V):
-        return jnp.mean((F.predict(p, V) - target(V)) ** 2)
+        return jnp.mean((predict(p, V) - target(V)) ** 2)
 
     def eval_mse(p):
-        return jnp.mean((F.predict(p, Veval) - yeval) ** 2)
+        return jnp.mean((predict(p, Veval) - yeval) ** 2)
 
     warmup = max(1, min(1000, steps // 10))
     eval_every = max(1, steps // 20)
@@ -70,7 +79,7 @@ def train_n(x, k, field, mu, sd, Veval, yeval, steps, seed):
 
 
 def main():
-    print("backend:", jax.default_backend(), jax.devices(), flush=True)
+    print("backend:", jax.default_backend(), jax.devices(), "activation:", ACTIVATION, flush=True)
     field, mu, sd = F.make_field(X_DIM, BETA)
     Veval = F.sphere(jr.PRNGKey(12345), N_EVAL, X_DIM)
     yeval = (jnp.cos(Veval @ field[0].T + field[1]) @ field[2] - mu) / sd
@@ -110,7 +119,11 @@ def main():
             )
     print(f"total {time.time()-t0:.0f}s", flush=True)
     print("DATASCALE_JSON_BEGIN")
-    print(json.dumps({"x": X_DIM, "beta": BETA, "batch": BATCH, "online": True, "results": results}))
+    print(
+        json.dumps(
+            {"x": X_DIM, "beta": BETA, "batch": BATCH, "online": True, "activation": ACTIVATION, "results": results}
+        )
+    )
     print("DATASCALE_JSON_END")
 
 
