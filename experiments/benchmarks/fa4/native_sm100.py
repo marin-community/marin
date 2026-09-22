@@ -32,14 +32,12 @@ from levanter.grug.attention._fa4_cute_config import (
 VARIANTS = ("baseline", "forward")
 
 
-def emit(record):
+def emit(output: Path | None, record):
     line = json.dumps(record, sort_keys=True)
     print(line, flush=True)
-    output = os.environ.get("IRIS_OUTPUT_DIR")
     if output:
-        path = Path(output)
-        path.mkdir(parents=True, exist_ok=True)
-        with (path / "native-sm100.jsonl").open("a") as stream:
+        output.mkdir(parents=True, exist_ok=True)
+        with (output / "native-sm100.jsonl").open("a") as stream:
             stream.write(line + "\n")
 
 
@@ -66,7 +64,9 @@ def bounds_for(ids, window):
     return _packed_segment_causal_lower_bounds(ids, batch_size=ids.shape[0], seq_len=ids.shape[1], sliding_window=window)
 
 
-def check(variant, sequence, window, kv_heads, q_stage, implementation: GrugAttentionImplementation | None = None):
+def check(
+    output, variant, sequence, window, kv_heads, q_stage, implementation: GrugAttentionImplementation | None = None
+):
     config = kernel_config(variant, q_stage)
 
     def actual_loss(q, k, v, cotangent, ids):
@@ -112,6 +112,7 @@ def check(variant, sequence, window, kv_heads, q_stage, implementation: GrugAtte
             np.testing.assert_allclose(got, want, atol=7e-2, rtol=7e-2, err_msg=name)
             np.testing.assert_array_equal(got[ids < 0], 0, err_msg=name)
         emit(
+            output,
             {
                 "kind": "correctness",
                 "variant": variant,
@@ -121,7 +122,7 @@ def check(variant, sequence, window, kv_heads, q_stage, implementation: GrugAtte
                 "iteration": iteration,
                 "metrics": metrics,
                 "compile_and_execute_seconds": time.perf_counter() - start,
-            }
+            },
         )
 
 
@@ -132,7 +133,7 @@ def measure(call, args, iterations):
     return (time.perf_counter() - start) / iterations
 
 
-def benchmark(variants, batch, sequence, window, kv_heads, documents, q_stage, iterations, rounds):
+def benchmark(output, variants, batch, sequence, window, kv_heads, documents, q_stage, iterations, rounds):
     q, k, v, cotangent = inputs(batch, sequence, kv_heads, 42)
     boundaries = np.linspace(0, sequence, documents + 1, dtype=np.int32)[1:-1]
     ids = jnp.asarray(
@@ -171,6 +172,7 @@ def benchmark(variants, batch, sequence, window, kv_heads, documents, q_stage, i
         compiled = total.lower(*total_args).compile()
         memory = compiled.memory_analysis()
         emit(
+            output,
             {
                 "kind": "compiled",
                 "variant": variant,
@@ -182,7 +184,7 @@ def benchmark(variants, batch, sequence, window, kv_heads, documents, q_stage, i
                 "temporary_bytes": memory.temp_size_in_bytes,
                 "argument_bytes": memory.argument_size_in_bytes,
                 "output_bytes": memory.output_size_in_bytes,
-            }
+            },
         )
     order = list(variants)
     rng = random.Random(71)
@@ -194,6 +196,7 @@ def benchmark(variants, batch, sequence, window, kv_heads, documents, q_stage, i
                 for name, (call, args) in zip(("forward", "backward", "total"), calls[variant], strict=True)
             }
             emit(
+                output,
                 {
                     "kind": "timing",
                     "variant": variant,
@@ -204,7 +207,7 @@ def benchmark(variants, batch, sequence, window, kv_heads, documents, q_stage, i
                     "documents": documents,
                     "round": round_index,
                     "seconds": metrics,
-                }
+                },
             )
 
 
@@ -221,10 +224,13 @@ def main():
     parser.add_argument("--iterations", type=int, default=20)
     parser.add_argument("--rounds", type=int, default=5)
     args = parser.parse_args()
+    output_dir = os.environ.get("IRIS_OUTPUT_DIR")
+    output = Path(output_dir) if output_dir else None
     if gpu_compute_capability() != 100 and args.variant != "baseline":
         raise ValueError("Select --variant baseline to validate the existing backend on other architectures.")
     source = Path(__file__).resolve().parents[3] / "lib/levanter/src/levanter/grug/attention"
     emit(
+        output,
         {
             "kind": "environment",
             "devices": [{"device": str(d), "kind": d.device_kind} for d in jax.devices()],
@@ -237,13 +243,13 @@ def main():
                 p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(source.glob("_fa4*.py"))
             },
             "arguments": vars(args),
-        }
+        },
     )
     variants = VARIANTS if args.variant == "all" else (args.variant,)
     if args.mode == "frontend":
         for sequence, window in ((257, None), (257, 31), (2305, 2048)):
             for kv_heads in (6, 12):
-                check("forward", sequence, window, kv_heads, 2, implementation="gpu_fa4_cute_sm100")
+                check(output, "forward", sequence, window, kv_heads, 2, implementation="gpu_fa4_cute_sm100")
     elif args.mode in ("smoke", "check"):
         cases = (
             ((257, 31, 12),)
@@ -254,9 +260,10 @@ def main():
         )
         for variant in variants:
             for sequence, window, kv in cases:
-                check(variant, sequence, window, kv, args.q_stage)
+                check(output, variant, sequence, window, kv, args.q_stage)
     else:
         benchmark(
+            output,
             variants,
             args.batch,
             args.sequence,
@@ -267,7 +274,7 @@ def main():
             args.iterations,
             args.rounds,
         )
-    emit({"kind": "complete", "mode": args.mode})
+    emit(output, {"kind": "complete", "mode": args.mode})
 
 
 if __name__ == "__main__":
