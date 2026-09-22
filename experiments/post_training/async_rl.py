@@ -1,16 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Launch fully asynchronous RL on the curriculum pool with every setting written explicitly.
+"""Launch fully asynchronous RL on the curriculum pool.
 
-One launcher for asynchronous RL experiments. It reuses the curriculum-RL policy, pool and
-evaluation wiring and adds the fully asynchronous training loop and the Megatron geometry the
-67B-A2B Snowball policy trains with. Every setting below carries one sentence saying what it does;
-presets bundle them and ``--set`` changes one. The launcher writes every setting it decides into
-the rendered config, including values MarinSkyRL's base config or the curriculum template already
-hold, so a run never depends on a default changing underneath it, and two runs that differ in any
-setting never share an address. A Hydra override inherited from the curriculum policy is dropped
-where the launcher writes its key, since Hydra applies overrides after the config.
+The launcher trains the 67B-A2B Snowball policy with MarinSkyRL's fully asynchronous loop, using the
+curriculum-RL pool, policy and evaluation. It writes every setting it decides into the rendered
+config, including values that MarinSkyRL's base config or the curriculum template already hold.
+Presets bundle the loop settings, and ``--set`` changes one key; a run's address carries a hash of
+its ``--set`` changes. Hydra applies overrides after the config, so the launcher drops each
+inherited override whose key it writes.
 
 Plan or run::
 
@@ -19,13 +17,13 @@ Plan or run::
     python -m experiments.post_training.async_rl --version 2026.09.18 --preset default \\
         --set trainer.fully_async.max_staleness_steps=2 --run
 
-The defaults are sized for the 40-GPU topology: 128 prompts per update at four answers each, 192
-generation workers, a buffer of 32 finished groups, staleness 4, and an 8192-token request window
-with a 4096-token response cap. A larger batch grows in prompts rather than in answers per prompt,
-which would change the advantage estimate. The loop settings, the telemetry gates and the
-``marin_tokenizer`` chat template need a MarinSkyRL revision carrying
-marin-community/MarinSkyRL#654 and marin-community/MarinSkyRL#685; an older pin rejects the keys
-when Hydra parses the config, before any GPU is used.
+The default preset runs on 40 GPUs: 128 prompts per update with four answers each, 192 generation
+workers, a buffer of 32 finished groups, staleness 4, and an 8192-token request window with a
+4096-token response cap. To grow the batch, add prompts; more answers per prompt changes the group
+each advantage is computed over. The loop settings, the telemetry gates and the ``marin_tokenizer``
+chat template need a MarinSkyRL revision that contains marin-community/MarinSkyRL#654 and
+marin-community/MarinSkyRL#685. An older revision rejects the keys when Hydra parses the config,
+before the job takes a GPU.
 """
 
 from __future__ import annotations
@@ -81,14 +79,15 @@ from experiments.post_training.curriculum_rl.pool import (
 
 EXPERIMENT_NAME = "async-rl"
 WANDB_PROJECT = f"marin-{EXPERIMENT_NAME}"
-# Prompts sampled per optimizer update; the trainer's batch sizes count prompts, not answers.
+# Prompts per optimizer update. MarinSkyRL's train_batch_size counts prompts.
 PROMPTS_PER_UPDATE = 128
 # Answers sampled per prompt, so one update trains on 512 sequences.
 ANSWERS_PER_PROMPT = 4
 # Engines cancel requests still generating when new weights arrive, and the client resubmits each
 # prompt with the tokens it already generated.
 PAUSE_MODE = "abort"
-# Two resumable checkpoints in the TTL-14-day temporary bucket; the terminal export is durable.
+# Keep two resumable checkpoints in the temporary bucket, which deletes objects after 14 days. The
+# terminal export does not expire.
 RETENTION = SkyRLRetentionPolicy(resume_checkpoint_count=2)
 
 
@@ -100,8 +99,7 @@ class ChatTemplate:
     name_or_path: str
 
 
-# The marin-tokenizer's own template registered in MarinSkyRL, so the runner tokenizes exactly what
-# the tokenizer would.
+# The marin tokenizer's chat template, which MarinSkyRL registers under this name.
 CHAT_TEMPLATE = ChatTemplate(source="name", name_or_path="marin_tokenizer")
 
 
@@ -126,9 +124,9 @@ class TrainingRecipe:
     num_nodes: int
     # Placement and batch shape; MarinSkyRL writes these over the config from the topology.
     role_plan: SkyRLRolePlan
-    # AdamW step size; the checked-in Snowball Megatron configs and the measured runs use 1e-6.
+    # AdamW learning rate; MarinSkyRL's Snowball Megatron configs use 1e-6.
     learning_rate: float
-    # AdamW decoupled weight decay; the base config's 1e-2, written here so it cannot drift.
+    # AdamW decoupled weight decay; MarinSkyRL's base config also uses 1e-2.
     weight_decay: float
     # Gradient-norm clip applied before each optimizer step.
     max_grad_norm: float
@@ -138,8 +136,8 @@ class TrainingRecipe:
     # MarinSkyRL receives carries neither, so these reach the run through the rendered config.
     engine_data_parallel_size: int
     engine_expert_parallel_size: int
-    # Host memory per training task; Megatron checkpoint staging needs 1800GB where the policy
-    # spec's 512GB covers only the FSDP load.
+    # Host memory per training task. Megatron checkpoint staging needs 1800GB; the policy spec's
+    # 512GB is sized for an FSDP load.
     host_memory: str
     # vLLM engine settings the model needs beyond the ones the launcher writes itself.
     engine_init_kwargs: dict[str, object]
@@ -187,8 +185,11 @@ SNOWBALL_RECIPE = TrainingRecipe(
 
 @dataclass(frozen=True)
 class AsyncPreset:
-    """One bundle of async-loop settings: ``default`` is the house loop, ``smoke`` proves the wiring
-    in two short updates, and ``on_policy`` admits only groups the current weights sampled."""
+    """Async-loop settings.
+
+    ``default`` is the 40-GPU configuration, ``smoke`` runs two short updates to check the wiring, and
+    ``on_policy`` admits only groups that the current weights sampled.
+    """
 
     label: str
     # Optimizer updates the run performs before it stops; the epoch bound never fires first.
@@ -202,8 +203,8 @@ class AsyncPreset:
     # Groups generating at once across the engines: at least one update's prompts, or the trainer
     # refuses to start.
     generation_workers: int
-    # Finished groups held before a worker waits with its group in hand; always a literal, since
-    # null would mean the worker count.
+    # Finished groups the buffer holds before a worker waits to hand its group over. Always an
+    # integer here; null would mean one slot per worker.
     max_buffered_groups: int
     # Prompt-plus-response budget one request may occupy in the engine, in tokens.
     request_window_tokens: int
@@ -213,10 +214,10 @@ class AsyncPreset:
     evals: str
     # Drop the engines' KV cache at the pause so nothing computed by the old weights is reused.
     clear_kv_cache_on_weight_sync: bool = True
-    # Count a group's staleness from the policy version that sampled its first token rather than
-    # from the trainer's step when the group was submitted.
+    # Count a group's staleness from the policy version that sampled its first token. When off,
+    # staleness counts from the trainer's step at submission.
     first_token_admission: bool = True
-    # Export the telemetry the async dashboards read; each gate is written separately below.
+    # Export the telemetry the async RL dashboard reads.
     telemetry: bool = True
     # Record exact quantiles of the log-ratio; no dashboard panel reads them and they gather up to
     # 4M values per rank.
@@ -226,8 +227,8 @@ class AsyncPreset:
     grad_cosine: bool = False
 
 
-# The house loop the module docstring sizes. An evaluation pauses generation for its 256 prompts,
-# and at every 5 updates a run spent longer evaluating than training, so it evaluates every 10.
+# An evaluation pauses generation for 256 prompts, about 13 minutes against a 55 to 97 second
+# update, so the default evaluates every 10 updates.
 DEFAULT = AsyncPreset(
     label="default",
     max_steps=100,
@@ -239,7 +240,7 @@ DEFAULT = AsyncPreset(
     max_new_tokens=4096,
     evals="math500,gsm8k-0shot",
 )
-# Two updates on the default geometry and batch with short responses: proves the wiring end to end.
+# Two updates with short responses on the default geometry and batch, to check the wiring.
 SMOKE_PRESET = replace(
     DEFAULT,
     label="smoke",
@@ -260,11 +261,9 @@ def checkpoint_interval(max_steps: int, eval_interval: int) -> int:
     return max_steps if eval_interval <= 0 else eval_interval
 
 
-# The curriculum scale point this launcher renders the template through. Only the template's data
-# and environment sections survive: entrypoint, context_budget, trainer and generator are rewritten
-# in full below, so no field of the scale point reaches a run, and the two fields
-# ``evaluation_serving`` reads are replaced with the rendered context budget before it sees them.
-# Every scale point renders the same two sections; this is the curriculum's Snowball smoke point.
+# The curriculum scale point the template renders through. The launcher keeps only the template's
+# data and environment sections, which every scale point renders the same way, and passes the
+# rendered context budget to ``evaluation_serving``.
 CURRICULUM_TEMPLATE = SNOWBALL_SMOKE
 
 
@@ -344,7 +343,7 @@ def apply_setting(config: dict, setting: Setting) -> None:
         if isinstance(node.get(part), dict):
             node = node[part]
         elif part in node:
-            raise click.BadParameter(f"{key!r} descends into a setting that holds a value, not a section")
+            raise click.BadParameter(f"{key!r} descends into {part!r}, which holds a value")
         elif adds:
             node = node.setdefault(part, {})
         else:
@@ -355,7 +354,7 @@ def apply_setting(config: dict, setting: Setting) -> None:
 
 
 def check_loop_shape(config: dict) -> None:
-    """Refuse a rendered config the trainer would reject or whose groups would age out."""
+    """Refuse a rendered config the trainer would reject or whose groups would exceed the staleness."""
     budget = config["context_budget"]
     trainer = config["trainer"]
     loop = trainer["fully_async"]
@@ -375,7 +374,7 @@ def check_loop_shape(config: dict) -> None:
     if in_flight / prompts >= staleness:
         raise click.BadParameter(
             f"{in_flight} groups in flight or buffered exceed {staleness} updates of {prompts}, "
-            "so the last of them would age out"
+            "so the last of them would exceed the staleness allowance"
         )
 
 
@@ -392,15 +391,15 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
     config["context_budget"] = {
         "request_window_tokens": preset.request_window_tokens,
         "max_new_tokens_per_turn": preset.max_new_tokens,
-        # Single-turn math: the policy answers once and the episode ends. The four answers per
-        # prompt are separate rollouts of it, not turns.
+        # Single-turn math: the policy answers once and the episode ends. Each of a prompt's four
+        # answers is its own rollout.
         "max_turns": 1,
     }
     config["trainer"] = {
         "strategy": recipe.strategy,
         # Megatron brings its own fused attention; flash_attn is the FSDP2 switch.
         "flash_attn": False,
-        # One sequence per row, as every measured run trained; packing changes the micro-step shape.
+        # One sequence per row; packing changes the micro-step shape.
         "use_sample_packing": False,
         # Recompute activations in the backward pass; the 67B-A2B forward does not fit otherwise.
         "gradient_checkpointing": True,
@@ -472,7 +471,7 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
             "ref_num_nodes": plan.policy_num_nodes,
             "ref_num_gpus_per_node": plan.policy_num_gpus_per_node,
         },
-        # Group-scale knobs of the fully asynchronous loop; see AsyncPreset for each.
+        # The fully asynchronous loop; AsyncPreset documents each setting.
         "fully_async": {
             "max_staleness_steps": preset.max_staleness_steps,
             "num_parallel_generation_workers": preset.generation_workers,
@@ -486,7 +485,7 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
         "backend": "vllm",
         "model_dtype": "bfloat16",
         "vllm_attention_backend": "FLASH_ATTN",
-        # The engine runs inside the job on its own node rather than as a remote server.
+        # vLLM runs inside the job, on the engine node.
         "run_engines_locally": True,
         # Weights reach the engine over NCCL from the policy ranks at each sync.
         "weight_sync_backend": "nccl",
@@ -511,7 +510,7 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
         "enable_prefix_caching": True,
         # Split long prefills across scheduling steps so decodes keep flowing.
         "enable_chunked_prefill": True,
-        # CUDA graphs on; eager mode costs decode throughput.
+        # Capture CUDA graphs for decode.
         "enforce_eager": False,
         # The fully asynchronous entrypoint samples through the OpenAI-compatible chat route.
         "enable_http_endpoint": True,
@@ -550,12 +549,9 @@ def config_keys(node: dict, prefix: str = "") -> set[str]:
 
 
 def request_overrides(policy: PolicySpec, config: dict) -> tuple[str, ...]:
-    """The policy's inherited Hydra overrides minus every key this launcher writes itself.
+    """Return the policy's inherited Hydra overrides whose keys the rendered config does not set.
 
-    MarinSkyRL applies the request's overrides as Hydra arguments after the config, so an inherited
-    override on a key the launcher writes would win over the rendered value and a recipe edit would
-    change nothing. The launcher's written value wins: an inherited override survives only where the
-    config says nothing about its key.
+    MarinSkyRL applies overrides after the config, so a kept override would replace the rendered value.
     """
     written = config_keys(config)
     return tuple(
@@ -577,7 +573,7 @@ def build_run(policy: PolicySpec, preset: AsyncPreset, version: str | None, sett
     config = training_config(preset, settings)
     pool = pool_step(POOL_ARTIFACT_NAME, version or resolve_version(POOL_ARTIFACT_NAME, None))
     model = policy.adopted_model or model_step(version or resolve_version(MODEL_ARTIFACT_NAME, None))
-    # Settings change what the run is, so they change its address: two --set runs never share one.
+    # A --set run gets its own address: the name carries a hash of its settings.
     changes = "\n".join(settings)
     suffix = f"-set-{hashlib.sha256(changes.encode()).hexdigest()[:8]}" if settings else ""
     base_name = f"checkpoints/{EXPERIMENT_NAME}/{policy.label}-{preset.label}{suffix}"

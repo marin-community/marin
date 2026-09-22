@@ -86,7 +86,7 @@ EXPLICIT_KEYS = (
     "extra_env.PYTORCH_CUDA_ALLOC_CONF",
 )
 
-# Values that are contracts with MarinSkyRL rather than tuning.
+# Values MarinSkyRL requires as written.
 CONTRACT_VALUES = {
     "entrypoint": "fully_async",
     "trainer.strategy": "megatron",
@@ -175,7 +175,7 @@ def test_settings_change_existing_keys_and_reject_unknown_ones():
         rendered(settings=("entrypoint=standard",))
     with pytest.raises(click.BadParameter, match=r"dotted\.key=value"):
         rendered(settings=("trainer.max_steps",))
-    with pytest.raises(click.BadParameter, match="holds a value, not a section"):
+    with pytest.raises(click.BadParameter, match="which holds a value"):
         rendered(settings=("+trainer.max_steps.more=1",))
     with pytest.raises(click.BadParameter, match="derives"):
         rendered(settings=("+generator.max_input_length=1024",))
@@ -189,7 +189,7 @@ def test_settings_cannot_escape_the_loop_invariants():
     with pytest.raises(click.BadParameter, match="do not fit the request window"):
         rendered(settings=("context_budget.request_window_tokens=1024",))
     # 480 workers plus the 32-group buffer is exactly four updates of 128: the bound is strict.
-    with pytest.raises(click.BadParameter, match="would age out"):
+    with pytest.raises(click.BadParameter, match="exceed the staleness allowance"):
         rendered(settings=("trainer.fully_async.num_parallel_generation_workers=480",))
     # At staleness 0 nothing is ever admitted stale, so only the worker floor applies.
     on_policy = rendered(async_rl.ON_POLICY, settings=("trainer.fully_async.num_parallel_generation_workers=480",))
