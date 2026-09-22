@@ -11,8 +11,9 @@ import pyarrow.parquet as pq
 from marin.execution.artifact import write_artifact
 from marin.processing.classification.deduplication.fuzzy_dups import FuzzyDupsAttrData, FuzzyDupsPerSource
 from marin.processing.classification.deduplication.fuzzy_minhash import MinHashParams
+from marin.processing.classification.deduplication.large_clusters import candidate_shard_paths
 
-from experiments.datakit.scripts.fuzzy_large_clusters import _sample_indices, candidate_shard_paths, main
+from experiments.datakit.scripts.fuzzy_large_clusters import main
 
 
 def _write_parquet(path: Path, rows: list[dict]) -> None:
@@ -38,16 +39,6 @@ def test_candidate_shard_paths_skip_a_source_with_no_candidate_files(tmp_path: P
 
     assert candidate_shard_paths(str(tmp_path), "candidates") == [str(first_attr / "part-1.parquet")]
     assert not second_attr.exists()
-
-
-def test_hash_sample_is_independent_of_row_position() -> None:
-    ids = [f"document-{index}" for index in range(100)]
-    selected = {ids[index] for index in _sample_indices(ids, stride=8)}
-    reversed_ids = list(reversed(ids))
-    selected_reversed = {reversed_ids[index] for index in _sample_indices(reversed_ids, stride=8)}
-
-    assert selected
-    assert selected_reversed == selected
 
 
 def test_planner_ignores_count_files_from_previous_runs(tmp_path: Path) -> None:

@@ -8,11 +8,33 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
+from marin.datakit.source_key import DatakitArtifactPath
+
 CLUSTER_TEXT_MANIFEST_FILENAME = "manifest.json"
 CLUSTER_TEXT_MANIFEST_VERSION = "v1"
 CLUSTER_TEXT_SUBDIRECTORY = "text"
 CLUSTER_TEXT_SUCCESS_FILENAME = "_SUCCESS"
-MAXIMUM_VERIFICATION_TEXT_CHARS = 8 * 1024 * 1024
+
+
+class ClusterTextParams(BaseModel):
+    """Parameters from the production cluster-text materialization."""
+
+    model_config = ConfigDict(frozen=True)
+
+    max_cluster_size: int = Field(default=100_000, ge=1)
+    output_shards: int = Field(default=8192, ge=1)
+    groups_per_shard: int = Field(default=8, ge=1)
+    split_ngram_size: int = Field(default=5, ge=1)
+    split_subdivisions: int = Field(default=16, ge=1)
+    maximum_document_chars: int = Field(default=64 * 1024 * 1024, ge=1)
+
+
+class ClusterTextData(BaseModel):
+    """Completed grouped text and its production parameters."""
+
+    path: DatakitArtifactPath
+    params: ClusterTextParams
+    counters: dict[str, int | float]
 
 
 class ClusterTextShard(BaseModel):
@@ -37,7 +59,9 @@ class ClusterTextManifest(BaseModel):
     output_shards: int = Field(ge=1)
     groups_per_shard: int = Field(ge=1)
     split_ngram_size: int = Field(ge=1)
-    split_strategy: Literal["minhash_jaccard_v1"] = "minhash_jaccard_v1"
+    split_strategy: Literal["minhash_id_v1"] = "minhash_id_v1"
+    split_subdivisions: int = Field(default=16, ge=1)
+    maximum_document_chars: int = Field(default=64 * 1024 * 1024, ge=1)
     oversized_clusters: dict[str, int]
     oversized_cluster_members: int = Field(ge=0)
     shards: list[ClusterTextShard]
