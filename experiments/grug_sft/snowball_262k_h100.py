@@ -21,7 +21,7 @@ from functools import partial
 
 import click
 import jmp
-from fray.cluster import ResourceConfig
+from fray.cluster import ANY_REGION, ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
@@ -309,6 +309,7 @@ def build_demo(
         ram="768g",
         disk="384g",
         preemptible=False,
+        regions=[ANY_REGION],
     )
     return StepSpec(
         name=f"grug-sft/{run_id}",

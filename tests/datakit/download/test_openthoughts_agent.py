@@ -1,10 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from openai_harmony import Message, Role
-
 from marin.datakit.chat_normalize import ChatChannel, message_text, validate_chat_messages
 from marin.datakit.download.openthoughts_agent import HF_DATASET_ID, row_to_chat_doc
+from openai_harmony import Message, Role
 
 
 def test_row_to_chat_doc_parses_reasoning_across_interactive_turns() -> None:

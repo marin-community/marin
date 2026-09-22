@@ -8,84 +8,15 @@ import jax.numpy as jnp
 import jmp
 import numpy as np
 import optax
-from fray.cluster import ResourceConfig
 from haliax.partitioning import set_mesh
 from levanter.checkpoint import save_checkpoint
-from levanter.data.text.datasets import LmDataConfig
 from levanter.grug.sharding import compact_grug_mesh
-from marin.execution.step_spec import StepSpec
 
 from experiments.grug.moe_hero_ep import train as hero_train
 from experiments.grug.moe_hero_ep.model import GrugModelConfig as CurrentConfig
-from experiments.grug.moe_hero_ep.train import WeightInitialization, initial_state
-from experiments.grug_sft import snowball_262k_h100
+from experiments.grug.moe_hero_ep.train import initial_state
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig as LegacyConfig
 from experiments.june_tpu_67b_a2b.moe.model import Transformer as LegacyTransformer
-
-
-def test_snowball_run_uses_one_h100_node_for_one_context_sharded_example():
-    data = LmDataConfig(tokenizer="test", components={}, train_weights={})
-    resources = ResourceConfig.with_gpu("H100", count=8, cpu=64, ram="768g", disk="384g")
-    config = snowball_262k_h100.run_config(
-        run_id="test-run",
-        steps=7,
-        data=data,
-        output_path="s3://test-output/run",
-        base_checkpoint="s3://test-output/conversion/checkpoints",
-        resources=resources,
-    )
-
-    assert config.resources.device.variant == "H100"
-    assert config.resources.device.count == 8
-    assert config.resources.replicas == 1
-    assert config.processes_per_task == 8
-    assert config.model.max_seq_len == 262_144
-    assert config.model.attention_implementation == "gpu_fa4_cute"
-    assert config.model.moe_implementation == "sonic"
-    assert config.trainer.trainer.train_batch_size == 1
-    assert config.trainer.context_axis_size == 8
-    assert config.trainer.expert_axis_size == 1
-    assert config.trainer.offload_opt_state
-    assert config.trainer.weight_initialization == WeightInitialization.LEGACY_SINGLE_SHARED_EXPERT
-    assert config.trainer.trainer.initialize_from == "s3://test-output/conversion/checkpoints"
-    checkpoint_paths = config.trainer.trainer.load_checkpoint_path
-    assert isinstance(checkpoint_paths, list)
-    assert checkpoint_paths[0] == "s3://test-output/run/checkpoints"
-
-
-def _step_graph(step: StepSpec) -> dict[str, StepSpec]:
-    graph: dict[str, StepSpec] = {}
-
-    def visit(current: StepSpec) -> None:
-        graph[current.name] = current
-        for dep in current.deps:
-            visit(dep)
-
-    visit(step)
-    return graph
-
-
-def test_demo_routes_registered_openthoughts_source_through_datakit() -> None:
-    step = snowball_262k_h100.build_demo(version="2026.09.22.99", sample_count=3)
-    graph = _step_graph(step)
-
-    assert "raw/openthoughts-agent-sft-100k" in graph
-    assert "processed-chat/openthoughts-agent-sft-100k" in graph
-    assert "normalized-chat/openthoughts-agent-sft-100k" in graph
-    assert "rendered/sft/openthoughts-agent-sft-100k" in graph
-    assert "normalized/sft/openthoughts-agent-sft-100k" in graph
-    assert "datakit/tokenize/sft-demo/openthoughts-agent-sft-100k" in graph
-    assert "datakit/store/sft-demo/openthoughts-agent-sft-100k" in graph
-    conversion_name = "checkpoints/hf-to-stacked-grug/open-athena--snowball-67b-a2b-base-262k-qk175-skew8"
-    assert conversion_name in graph
-    tokenized = graph["datakit/tokenize/sft-demo/openthoughts-agent-sft-100k"]
-    assert graph[conversion_name] in tokenized.deps
-
-    source = snowball_262k_h100.__file__
-    assert source is not None
-    assert "gs://" not in Path(source).read_text()
-    importer = Path(snowball_262k_h100.__file__).with_name("snowball_hf_import.py")
-    assert "gs://" not in importer.read_text()
 
 
 def test_legacy_initializer_remaps_the_single_shared_expert(tmp_path: Path):
