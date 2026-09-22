@@ -24,6 +24,7 @@ from collections.abc import Sequence
 
 # cloudpickle for callable entrypoints, py-spy/memray for the profiler attach paths.
 _IRIS_RUNTIME_DEPS = ("cloudpickle", "py-spy", "memray")
+_UV_RECOVERY_CACHE = "$IRIS_WORKDIR/.uv-recovery-cache"
 
 
 def _uv_sync_target(packages: Sequence[str] | None) -> str:
@@ -57,7 +58,9 @@ def default_setup_script(
 
     uv runs at its default verbosity so its progress (``Resolved``,
     ``Downloading <pkg>``, ``Installed``) streams into the task logs; this is the
-    only signal a live setup gives, so it is never suppressed.
+    only signal a live setup gives, so it is never suppressed. If the shared
+    node cache fails, sync retries once from a task-local cache so a corrupt
+    cache entry cannot poison every retry scheduled on that worker.
 
     Args:
         extras: uv extras to enable (``extra`` or ``package:extra``).
@@ -95,12 +98,16 @@ def default_setup_script(
         ]
         if part
     )
+    recovery_sync_cmd = f'UV_CACHE_DIR="{_UV_RECOVERY_CACHE}" {sync_cmd} --reinstall'
 
     lines = [
         "set -e",
         'cd "$IRIS_WORKDIR"',
         "echo 'syncing deps'",
-        sync_cmd,
+        f"if ! {sync_cmd}; then",
+        " echo 'dependency sync failed; retrying with task-local cache'",
+        f" {recovery_sync_cmd}",
+        "fi",
         # uv sync writes .pth links for editable path sources but does not invoke
         # the build backend, so rust-dev mode (editable = true) leaves native
         # extensions unbuilt. Build every maturin member explicitly.
