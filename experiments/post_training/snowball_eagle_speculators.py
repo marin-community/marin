@@ -409,7 +409,6 @@ def _qa_rollout_steps() -> tuple[ArtifactStep[FineStoreEvalchemyResult], ...]:
                     platform=Platform.GPU,
                     gpu_type=GPU_VARIANT,
                     gpu_count=GPUS_PER_NODE,
-                    target_cluster=CLUSTER,
                 ),
                 tokenizer=TARGET_TOKENIZER,
                 discover_latest_checkpoint=False,
