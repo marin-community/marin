@@ -97,9 +97,11 @@ a failed post aborts submission. Iris also records `MARIN_PROVENANCE`.
 
 ## Coordinated garbage collection
 
-Pass `--gc-interval 100` to `python -m experiments.grug.moe_hero_ep.launch_diagnostics`,
-or set `gc_interval=100` in `hero_grug_trainer_config`. The default `None` preserves automatic
-Python garbage collection. The launcher distributes one configuration to all ranks. After ten
+The scaling-ladder launcher, including the production hero launched by `trigger_hero.sh`,
+enables coordinated GC every 100 completed training steps. For diagnostics, pass
+`--gc-interval 100` to `python -m experiments.grug.moe_hero_ep.launch_diagnostics`.
+Other callers can set `gc_interval=100` in `hero_grug_trainer_config`; its default `None`
+preserves automatic Python garbage collection. The launcher distributes one configuration to all ranks. After ten
 training steps in each process (including after resume), disable automatic cyclic collection
 and collect once. Then a training hook collects at completed global steps divisible by the
 interval, after evaluation hooks and before checkpoint work. It also collects on the forced
@@ -130,8 +132,7 @@ with no increase above their post-warmup baselines. Live memory was sampled ever
 steps and at completion; the allocator peak includes warmup. The largest per-rank RSS increase in treatment was
 54.4 MiB above its post-warmup baseline. This single pair exercised checkpoint decisions with writes
 and evaluation disabled. The result supports the mechanism and short-term memory behavior at this
-batch size. Cycles can still retain device buffers between collections; keep the feature opt-in
-pending a production-batch trial that includes evaluation transitions and longer memory tracking.
+batch size. Cycles can still retain device buffers between collections.
 See [#9205](https://github.com/marin-community/marin/issues/9205).
 
 ## Why this recipe
