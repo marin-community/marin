@@ -4,6 +4,7 @@
 """vLLM local inference backend."""
 
 import contextlib
+import dataclasses
 import os
 import socket
 import tempfile
@@ -101,7 +102,8 @@ class VllmBackend:
             if spec.chat_template_content is not None
             else read_tool_chat_template(spec.weights, spec.revision)
         )
-        with self.start(spec) as environment:
+        resolved_spec = dataclasses.replace(spec, chat_template_content=chat_template_content)
+        with self.start(resolved_spec) as environment:
             environment.wait_until_ready()
             yield VllmServedModel(
                 base_url=environment.server_url.removesuffix(OPENAI_API_SUFFIX),

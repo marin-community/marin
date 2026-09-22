@@ -145,10 +145,13 @@ def test_vllm_backend_revision_argument_follows_weights_kind(monkeypatch, weight
     """vLLM gets ``--revision`` only for bare hub ids; a resolved cache path carries its own pin."""
 
     observed_extra_args: list[list[str]] = []
+    observed_chat_templates: list[str] = []
 
     @contextmanager
     def environment(**kwargs):
         observed_extra_args.append(kwargs["extra_args"])
+        chat_template_path = kwargs["extra_args"][kwargs["extra_args"].index("--chat-template") + 1]
+        observed_chat_templates.append(Path(chat_template_path).read_text())
         yield SimpleNamespace(
             model_id="public-model",
             server_url="http://127.0.0.1:8000/v1",
@@ -177,6 +180,7 @@ def test_vllm_backend_revision_argument_follows_weights_kind(monkeypatch, weight
         assert "--revision" not in extra_args
     else:
         assert extra_args[extra_args.index("--revision") + 1] == expected_revision
+    assert observed_chat_templates == ["{{ messages }}"]
 
 
 def test_resolved_model_keeps_requested_id_as_served_name(monkeypatch):
