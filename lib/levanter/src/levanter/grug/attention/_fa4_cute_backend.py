@@ -185,6 +185,8 @@ def segmented_flash_attention_backward(
             valid,
             tile_m=sm90_config.tile[0],
             tile_n=sm90_config.tile[1],
+            key_sequence_length=k.shape[1],
+            q_offset=q_offset,
         )
         return segmented_flash_attention_backward_sm90_native(
             q,
@@ -333,6 +335,7 @@ def segmented_flash_attention_backward_sm90_native(
         dpsum,
         lower_bounds,
         valid.astype(jnp.int32),
+        jnp.zeros((1,), dtype=jnp.int32),
         mask_block_cnt,
         mask_block_idx,
         full_block_cnt,
@@ -473,6 +476,7 @@ def _cutlass_attention_backward_sm90_accum_specs(
         scratch_spec,
         metadata_spec,
         metadata_spec,
+        tensor_spec(mode=(0,), static=True),
         sparse_cnt_spec,
         sparse_idx_spec,
         sparse_cnt_spec,
@@ -504,10 +508,14 @@ def _packed_segment_backward_block_sparse_indices_with_full(
     lower_bounds: jax.Array,
     valid: jax.Array,
     *,
+    key_sequence_length: int,
+    q_offset: jax.Array,
     tile_m: int,
     tile_n: int,
 ) -> _BlockSparseMetadata:
-    partial, full = _packed_segment_block_masks(lower_bounds, valid, tile_m=tile_m, tile_n=tile_n)
+    partial, full = _packed_segment_block_masks(
+        lower_bounds, valid, key_sequence_length=key_sequence_length, q_offset=q_offset, tile_m=tile_m, tile_n=tile_n
+    )
     return _block_sparse_indices(partial, full)
 
 
@@ -515,6 +523,8 @@ def _packed_segment_block_masks(
     lower_bounds: jax.Array,
     valid: jax.Array,
     *,
+    key_sequence_length: int,
+    q_offset: jax.Array,
     tile_m: int,
     tile_n: int,
 ) -> tuple[jax.Array, jax.Array]:
@@ -526,16 +536,20 @@ def _packed_segment_block_masks(
     if lower_bounds.shape != valid.shape:
         raise ValueError(f"lower_bounds and valid must have matching shape, got {lower_bounds.shape=} {valid.shape=}")
 
+    if key_sequence_length <= 0:
+        raise ValueError(f"key_sequence_length must be positive, got {key_sequence_length}")
+    if q_offset.shape != (1,) or q_offset.dtype != jnp.int32:
+        raise ValueError(f"q_offset must be int32[1], got {q_offset.shape} {q_offset.dtype}")
     batch_size, seq_len = lower_bounds.shape
     num_m_blocks = (seq_len + tile_m - 1) // tile_m
-    num_n_blocks = (seq_len + tile_n - 1) // tile_n
+    num_n_blocks = (key_sequence_length + tile_n - 1) // tile_n
     padded_q_len = num_m_blocks * tile_m
-    q_positions = jnp.arange(padded_q_len, dtype=jnp.int32).reshape(num_m_blocks, tile_m)
+    q_positions = jnp.arange(padded_q_len, dtype=jnp.int32).reshape(num_m_blocks, tile_m) + q_offset[0]
     lower_padded = jnp.pad(
         lower_bounds,
         ((0, 0), (0, padded_q_len - seq_len)),
         mode="constant",
-        constant_values=seq_len,
+        constant_values=key_sequence_length,
     ).reshape(batch_size, num_m_blocks, tile_m)
     valid_padded = jnp.pad(
         valid,
@@ -545,7 +559,7 @@ def _packed_segment_block_masks(
     ).reshape(batch_size, num_m_blocks, tile_m)
 
     n_starts = jnp.arange(num_n_blocks, dtype=jnp.int32) * tile_n
-    n_ends = jnp.minimum(n_starts + tile_n, seq_len) - 1
+    n_ends = jnp.minimum(n_starts + tile_n, key_sequence_length) - 1
     has_contributor = jnp.any(
         valid_padded[:, None, :, :]
         & (q_positions[None, None, :, :] >= n_starts[None, :, None, None])
@@ -643,7 +657,7 @@ def _cutlass_attention_backward_sm90_backward_output_shapes(
     kv_heads = k.shape[2]
     tile_m, tile_n = backward_tile
     seq_q_rounded = ((seq_len + tile_m - 1) // tile_m) * tile_m
-    seq_k_rounded = ((seq_len + tile_n - 1) // tile_n) * tile_n
+    seq_k_rounded = ((k.shape[1] + tile_n - 1) // tile_n) * tile_n
     head_dim_rounded = ((head_dim + 31) // 32) * 32
     head_dim_v_rounded = ((v.shape[-1] + 31) // 32) * 32
     dq_accum = jax.ShapeDtypeStruct((batch, q_heads, seq_q_rounded * head_dim_rounded), jnp.float32)

@@ -55,6 +55,8 @@ def test_packed_segment_backward_block_sparse_indices_split_full_blocks():
     sparse_metadata = fa4_cute_backend._packed_segment_backward_block_sparse_indices_with_full(
         lower_bounds,
         valid,
+        key_sequence_length=8,
+        q_offset=jnp.zeros((1,), dtype=jnp.int32),
         tile_m=2,
         tile_n=2,
     )
@@ -69,6 +71,63 @@ def test_packed_segment_backward_block_sparse_indices_split_full_blocks():
         sparse_metadata.full_block_idx,
         jnp.array([[[[1, 2, 3, 0], [2, 3, 0, 0], [3, 0, 0, 0], [0, 0, 0, 0]]]], dtype=jnp.int32),
     )
+
+
+@pytest.mark.parametrize("direction", ["backward"])
+@pytest.mark.parametrize("tile", [(2, 4), (4, 2), (4, 4)])
+@pytest.mark.parametrize("window", [None, 3])
+@pytest.mark.parametrize("query_slice", [(0, 11), (0, 5), (3, 8), (7, 11)])
+def test_packed_sparse_blocks_match_dense_mask(direction, tile, window, query_slice):
+    ids = np.array([[-1, 0, 0, 0, 0, 0, 1, 1, 1, 1, -1], [-1] * 11], dtype=np.int32)
+    lower, valid = fa4_cute._packed_segment_causal_lower_bounds(
+        jnp.asarray(ids), batch_size=2, seq_len=11, sliding_window=window
+    )
+    build = (
+        fa4_cute_backend._packed_segment_forward_block_sparse_indices_with_full
+        if direction == "forward"
+        else fa4_cute_backend._packed_segment_backward_block_sparse_indices_with_full
+    )
+    tile_m, tile_n = tile
+    start, stop = query_slice
+    sparse = build(
+        lower[:, start:stop],
+        valid[:, start:stop],
+        key_sequence_length=ids.shape[1],
+        q_offset=jnp.array([start], dtype=jnp.int32),
+        tile_m=tile_m,
+        tile_n=tile_n,
+    )
+    query = np.arange(ids.shape[1])[:, None]
+    key = np.arange(ids.shape[1])[None, :]
+    dense = (ids[:, :, None] == ids[:, None, :]) & (ids[:, :, None] >= 0) & (key <= query)
+    if window is not None:
+        dense &= key >= query - window + 1
+    dense = dense[:, start:stop, :]
+    query_blocks = (stop - start + tile_m - 1) // tile_m
+    key_blocks = (ids.shape[1] + tile_n - 1) // tile_n
+    partial = np.zeros((2, key_blocks, query_blocks), dtype=bool)
+    full = np.zeros_like(partial)
+    for batch in range(2):
+        for q_block in range(query_blocks):
+            for k_block in range(key_blocks):
+                block = dense[
+                    batch, q_block * tile_m : (q_block + 1) * tile_m, k_block * tile_n : (k_block + 1) * tile_n
+                ]
+                full[batch, k_block, q_block] = block.shape[0] == tile_m and block.all()
+                partial[batch, k_block, q_block] = block.any() and not full[batch, k_block, q_block]
+    if direction == "forward":
+        partial, full = partial.swapaxes(1, 2), full.swapaxes(1, 2)
+    for expected, counts, indices in (
+        (partial, sparse.partial_block_cnt, sparse.partial_block_idx),
+        (full, sparse.full_block_cnt, sparse.full_block_idx),
+    ):
+        counts, indices = np.asarray(counts), np.asarray(indices)
+        for batch in range(2):
+            for block in range(expected.shape[1]):
+                np.testing.assert_array_equal(
+                    indices[batch, 0, block, : counts[batch, 0, block]],
+                    np.flatnonzero(expected[batch, block]),
+                )
 
 
 def test_packed_segment_causal_lower_bounds_carry_next_valid_bound_through_padding():
