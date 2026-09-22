@@ -218,7 +218,19 @@ def test_isolated_cuda_vllm_marin_fork_uses_verified_wheel(monkeypatch, machine)
     assert separator
     assert urlunsplit(parsed_url._replace(fragment="")) == wheel.url
     assert parse_qs(parsed_url.fragment) == {"sha256": [wheel.sha256]}
-    assert cmd[cmd.index("--torch-backend") + 1] == VLLM_GPU_RELEASE.torch_backend
+    indexes = [cmd[index + 1] for index, value in enumerate(cmd) if value == "--index"]
+    assert indexes == [
+        f"https://download.pytorch.org/whl/{VLLM_GPU_RELEASE.torch_backend}",
+        "https://download.pytorch.org/whl/cpu",
+    ]
+    assert cmd[cmd.index("--index-strategy") + 1] == "unsafe-best-match"
+    assert "--torch-backend" not in cmd
+    requirements = [cmd[index + 1] for index, value in enumerate(cmd) if value == "--with"]
+    assert set(requirements) >= {
+        "nvidia-cuda-nvcc==13.2.86",
+        "nvidia-cuda-crt==13.2.86",
+        "nvidia-nvvm==13.2.86",
+    }
     bootstrap_index = cmd.index("-c")
     wrapped_command = cmd[bootstrap_index + 2 :]
     assert wrapped_command[0] == "python"
