@@ -228,6 +228,10 @@ class IsolatedCudaVllm:
                 torch_backend=VLLM_GPU_RELEASE.torch_backend,
                 toolchain_version=CUDA_TOOLCHAIN_VERSION_BY_BACKEND[VLLM_GPU_RELEASE.torch_backend],
                 torch_install_args=(
+                    # The promoted wheel is built against PyTorch 2.13 CUDA 13.2. Do not let
+                    # the CPU index supply a same-version torch build on H100 workers.
+                    "--with",
+                    "torch==2.13.0+cu132",
                     "--index",
                     f"{_PYTORCH_WHEEL_INDEX_BASE}/{VLLM_GPU_RELEASE.torch_backend}",
                     "--index",
