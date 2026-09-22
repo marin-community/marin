@@ -260,3 +260,10 @@ def test_fuzzy_source_exemptions_rekey_only_the_store():
 
     assert changed["datakit/store"].hash_id != base["datakit/store"].hash_id
     assert changed["datakit/verify_fuzzy_clusters"].hash_id == base["datakit/verify_fuzzy_clusters"].hash_id
+
+
+def test_unknown_fuzzy_exemption_fails_before_building_the_pipeline():
+    store = dataclasses.replace(SMOKE_SCALE.store, fuzzy_exempt_sources=("misspelled-source",))
+
+    with pytest.raises(ValueError, match=r"Unknown fuzzy-exempt sources.*misspelled-source"):
+        _build(scale=dataclasses.replace(SMOKE_SCALE, store=store))

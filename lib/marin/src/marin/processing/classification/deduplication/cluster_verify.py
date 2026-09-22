@@ -4,7 +4,8 @@
 """Write the production cluster-verification markers in normalized shard order.
 
 The word 3-gram rule and text limits reproduce the v11-c075-restored hero run
-from PR 8405. Prefix truncation and cluster splits can change removal decisions.
+at https://github.com/marin-community/marin/pull/8405.
+Prefix truncation and cluster splits can change removal decisions.
 """
 
 import logging
