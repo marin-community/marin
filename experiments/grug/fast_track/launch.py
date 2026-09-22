@@ -43,6 +43,7 @@ from experiments.grug.fast_track.train import (
     GrugRunConfig,
     GrugTrainerConfig,
     WatchMode,
+    _compute_flops,
     run_grug,
 )
 from experiments.grug.moe.launch_datakit_moe_mix import _val_component
@@ -68,6 +69,23 @@ _BASELINE_ACTIVE_PARAMS: dict[tuple[str, bool], int] = {
     ("d1024", True): 144_703_488,
     ("d1280", False): 291_307_520,
     ("d1280", True): 261_488_640,
+}
+
+# Fixed baseline training FLOPs/example of the recorded dense/MoE baselines, from the trainer's own
+# `_compute_flops` (which prices the lm_head and attention matmuls that `_active_params` omits). These
+# pin the compute-match budget so it holds the baseline's *true* FLOPs, not an active-param proxy, and
+# so a candidate architecture cannot move the budget it is compared against. NOT recomputed from the
+# candidate. Regenerate deliberately only when the baseline recipe changes, via
+# `_compute_flops(model_config=_h100_ladder_model(_h100_ladder_rung(size), dense=dense))[0]`.
+_BASELINE_FLOPS_PER_EXAMPLE: dict[tuple[str, bool], int] = {
+    ("d512", False): 1_133_066_059_776,
+    ("d512", True): 1_065_420_324_864,
+    ("d768", False): 2_575_067_774_976,
+    ("d768", True): 2_401_121_599_488,
+    ("d1024", False): 5_929_672_114_176,
+    ("d1024", True): 5_504_470_351_872,
+    ("d1280", False): 9_975_229_317_120,
+    ("d1280", True): 9_242_400_522_240,
 }
 
 
@@ -272,22 +290,28 @@ def build_h100_ladder_run(
     # Baseline: the recorded dense/MoE baseline for this size (DENSE_TPP/MOE_TPP at the rung's baseline
     # batch). baseline_active is a FIXED reference (not the candidate's), so an architecture change moves
     # the candidate's FLOPs/token but never the budget it is compared against.
-    active = _active_params(model)
     if (size, dense) not in _BASELINE_ACTIVE_PARAMS:
         raise ValueError(f"No baseline budget recorded for (size={size!r}, dense={dense})")
     baseline_active = _BASELINE_ACTIVE_PARAMS[(size, dense)]
     baseline_tpp = DENSE_TPP if dense else MOE_TPP
     baseline_steps = max(1, round(baseline_tpp * baseline_active / (rung.baseline_batch * SEQ_LEN)))
     baseline_tokens = rung.baseline_batch * baseline_steps * SEQ_LEN
+    # Baseline's true total training FLOPs (fixed): flops/example * examples, at the baseline batch.
+    baseline_flops = _BASELINE_FLOPS_PER_EXAMPLE[(size, dense)] * baseline_steps * rung.baseline_batch
 
     batch_size = batch_size if batch_size is not None else rung.baseline_batch
     if batch_size <= 0 or batch_size % rung.global_device_count != 0:
         raise ValueError(f"batch_size must be positive and divisible by {rung.global_device_count}, got {batch_size}")
     if num_steps is None:
-        # DATA holds the baseline's tokens; COMPUTE holds its FLOPs (6*N*tokens), i.e. tokens scaled by
-        # baseline_active/active. The two modes coincide only when the candidate matches the baseline.
-        target_tokens = baseline_tokens if match is MatchMode.DATA else baseline_tokens * baseline_active / active
-        num_steps = max(1, round(target_tokens / (batch_size * SEQ_LEN)))
+        if match is MatchMode.DATA:
+            # DATA holds the baseline's token budget.
+            num_steps = max(1, round(baseline_tokens / (batch_size * SEQ_LEN)))
+        else:
+            # COMPUTE holds the baseline's *true* training FLOPs, derived from the candidate's own
+            # flops/example (the trainer's `_compute_flops`, which counts the lm_head and attention that
+            # `_active_params` omits) -- so an architecture change never buys or loses compute.
+            candidate_flops_per_example, _ = _compute_flops(model_config=model)
+            num_steps = max(1, round(baseline_flops / (candidate_flops_per_example * batch_size)))
     elif num_steps <= 0:
         raise ValueError(f"--num-steps must be positive, got {num_steps}")
 
