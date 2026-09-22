@@ -70,11 +70,12 @@ def _partitioning_axes(entry, mesh: Mesh | jax.sharding.AbstractMesh | None) -> 
 
 def _spec_of(x: jax.Array) -> PartitionSpec | None:
     """Read explicit sharding from either a traced or concrete array."""
-    for candidate in (jax.typeof(x), x):
-        spec = getattr(getattr(candidate, "sharding", None), "spec", None)
-        if spec is not None and len(spec) > 0:
-            return spec
-    return None
+    if isinstance(x, jax.Array) and not isinstance(x, jax.core.Tracer):
+        sharding = x.sharding
+    else:
+        sharding = jax.typeof(x).sharding
+    spec = getattr(sharding, "spec", None)
+    return spec if spec is not None and len(spec) > 0 else None
 
 
 def _token_spec_from_x(x: jax.Array, mesh: Mesh | jax.sharding.AbstractMesh | None) -> PartitionSpec:

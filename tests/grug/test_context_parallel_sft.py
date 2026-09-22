@@ -1,12 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-import subprocess
-import sys
 import textwrap
 
-_CPU_TEST_ENV = {**os.environ, "JAX_PLATFORMS": "cpu", "JAX_NUM_CPU_DEVICES": "2"}
+from levanter.testing.cpu_devices import run_on_cpu_devices
 
 
 def test_context_parallel_packed_model_matches_unsharded_loss_and_gradients():
@@ -57,8 +54,7 @@ def test_context_parallel_packed_model_matches_unsharded_loss_and_gradients():
             np.testing.assert_allclose(actual, expected, rtol=1e-4, atol=1e-4)
         """
     )
-    result = subprocess.run([sys.executable, "-c", script], env=_CPU_TEST_ENV, capture_output=True, text=True)
-    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+    run_on_cpu_devices(script, device_count=2)
 
 
 def test_context_parallel_splash_matches_reference_loss_and_gradients():
@@ -103,5 +99,4 @@ def test_context_parallel_splash_matches_reference_loss_and_gradients():
                 np.testing.assert_allclose(observed, reference, rtol=1e-4, atol=1e-4)
         """
     )
-    result = subprocess.run([sys.executable, "-c", script], env=_CPU_TEST_ENV, capture_output=True, text=True)
-    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+    run_on_cpu_devices(script, device_count=2)

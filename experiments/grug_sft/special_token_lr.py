@@ -59,6 +59,7 @@ EXPECTED_ANCHOR_IDS = ((3560,), (1984,), (1781,), (4320,), (5507,), (842,), (128
 
 
 CONTEXT = 262144
+CONTEXT_AXIS_SIZE = 4
 BATCH = 256
 START_STEP = 157000
 DEFAULT_STEPS = 1000
@@ -258,7 +259,7 @@ def train(steps: int, stores_manifest: str) -> None:
         mp=jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16"),
         tracker=WandbConfig(entity="marin-community", project="marin_moe_sft", name=RUN_ID, id=RUN_ID, resume="allow"),
         use_explicit_mesh_axes=True,
-        mesh=MeshConfig(axes={"expert": 1, "context": 4}, compute_mapping={"batch": ["data", "expert"]}),
+        mesh=MeshConfig(axes={"expert": 1, "context": CONTEXT_AXIS_SIZE}, compute_mapping={"batch": ["data", "expert"]}),
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
         initialize_from=BASE,
@@ -305,7 +306,7 @@ def train(steps: int, stores_manifest: str) -> None:
                 ema_beta=None,
                 log_every=1,
                 replica_axis_size=1,
-                context_axis_size=4,
+                context_axis_size=CONTEXT_AXIS_SIZE,
             ),
             eval=None,
         )
