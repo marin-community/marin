@@ -108,3 +108,32 @@ fi
         str(shared_cache),
         str(workdir / ".uv-recovery-cache"),
     ]
+
+
+def test_default_setup_uses_task_local_cache_on_task_retry(tmp_path):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    uv = bin_dir / "uv"
+    uv.write_text('#!/bin/sh\necho "$UV_CACHE_DIR" >> "$IRIS_WORKDIR/cache-paths"\n')
+    uv.chmod(0o755)
+    env = {
+        **os.environ,
+        "IRIS_TASK_ID": "/user/job/0:1",
+        "IRIS_VENV": str(tmp_path / "venv"),
+        "IRIS_WORKDIR": str(workdir),
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "UV_CACHE_DIR": str(tmp_path / "shared-cache"),
+        "UV_PROJECT_ENVIRONMENT": str(tmp_path / "venv"),
+    }
+
+    subprocess.run(
+        ["bash", "-c", default_setup_script(python_version="3.12")],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert (workdir / "cache-paths").read_text().splitlines() == [str(workdir / ".uv-cache")]

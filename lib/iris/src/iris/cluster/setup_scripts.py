@@ -25,6 +25,7 @@ from collections.abc import Sequence
 # cloudpickle for callable entrypoints, py-spy/memray for the profiler attach paths.
 _IRIS_RUNTIME_DEPS = ("cloudpickle", "py-spy", "memray")
 _UV_RECOVERY_CACHE = "$IRIS_WORKDIR/.uv-recovery-cache"
+_UV_RETRY_CACHE = "$IRIS_WORKDIR/.uv-cache"
 
 
 def _uv_sync_target(packages: Sequence[str] | None) -> str:
@@ -101,6 +102,9 @@ def default_setup_script(
     lines = [
         "set -e",
         'cd "$IRIS_WORKDIR"',
+        'case "$IRIS_TASK_ID" in',
+        f'  *:0) ;; *:*) export UV_CACHE_DIR="{_UV_RETRY_CACHE}" ;;',
+        "esac",
         "echo 'syncing deps'",
         f"if ! {sync_cmd}; then",
         " echo 'dependency sync failed; retrying with task-local cache'",
