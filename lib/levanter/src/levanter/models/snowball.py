@@ -39,6 +39,7 @@ from haliax.jax_utils import named_call
 from haliax.state_dict import ModuleWithStateDictSerialization, StateDict
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
+from levanter.data.text.examples import grug_attention_mask_from_named
 from levanter.grug.attention import (
     AttentionMask,
     GrugAttentionImplementation,
@@ -738,6 +739,26 @@ class SnowballTransformer(eqx.Module):
 # --- LmHeadModel adapter -----------------------------------------------------------------------
 
 
+def _snowball_attention_mask(
+    mask: LmHeadAttentionMask | NamedArray | None, token_shape: tuple[int, int]
+) -> AttentionMask | None:
+    if mask is None:
+        return None
+    if isinstance(mask, NamedArray):
+        raise NotImplementedError("Snowball requires a structured causal attention mask")
+    if not mask.is_causal or mask.causal_offset is not None or mask.bidirectional_window is not None:
+        raise NotImplementedError("Snowball supports causal attention without offsets or bidirectional windows")
+    if mask.sliding_window is not None:
+        raise NotImplementedError("Snowball uses its configured per-layer sliding windows")
+    converted = grug_attention_mask_from_named(mask)
+    if converted.segment_ids is None:
+        return converted
+    query_ids, key_ids = converted.segment_ids
+    query_ids = _batch_reshard(jnp.broadcast_to(query_ids.reshape(-1, token_shape[-1]), token_shape))
+    key_ids = _batch_reshard(jnp.broadcast_to(key_ids.reshape(-1, token_shape[-1]), token_shape))
+    return converted.with_segment_ids(query_ids, key_ids)
+
+
 class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[SnowballConfig]):
     """Levanter ``LmHeadModel`` boundary over the array-first Snowball transformer.
 
@@ -775,7 +796,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         s = raw.shape[-1]
         b = int(np.prod(lead)) if lead else 1
         tokens = raw.reshape(b, s)
-        hidden = self.transformer(tokens, _to_grug_attention_mask(attn_mask, b, s))  # [B, S, D]
+        hidden = self.transformer(tokens, _snowball_attention_mask(attn_mask, tokens.shape))  # [B, S, D]
         hidden = hidden.reshape(*lead, s, self.Embed.size) if lead else hidden.reshape(s, self.Embed.size)
         out_axes = (*input_ids.axes, self.Embed) if lead else (Pos, self.Embed)
         return hax.named(hidden, out_axes)
@@ -803,8 +824,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         sequence_length = raw_tokens.shape[-1]
         batch_size = int(np.prod(raw_tokens.shape[:-1])) if raw_tokens.ndim > 1 else 1
         tokens = raw_tokens.reshape(batch_size, sequence_length)
-        mask = _to_grug_attention_mask(example.attn_mask, batch_size, sequence_length)
-        hidden = self.transformer(tokens, mask)
+        hidden = self.transformer(tokens, _snowball_attention_mask(example.attn_mask, tokens.shape))
         labels = jnp.concatenate([tokens[:, 1:], jnp.zeros_like(tokens[:, :1])], axis=1)
         dtype = example.loss_weight.dtype if loss_dtype is None else loss_dtype
         raw_loss = fused_linear_softmax_cross_entropy_loss(
