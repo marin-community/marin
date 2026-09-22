@@ -104,7 +104,6 @@ def test_rollout_conversations_groups_complete_rollouts():
         _row("3", ParticipantType.USER, "third prompt"),
         _row("3", ParticipantType.ASSISTANT, "third response"),
     ]
-
     assert list(rollout_conversations(rows)) == [
         {
             "conversations": [
@@ -120,6 +119,11 @@ def test_rollout_conversations_groups_complete_rollouts():
             ]
         },
     ]
+
+
+def test_rollout_conversations_rejects_assistant_only_rollout():
+    with pytest.raises(ValueError, match="assistant response but no prompt"):
+        list(rollout_conversations([_row("1", ParticipantType.ASSISTANT, "orphaned response")]))
 
 
 def test_interleave_conversation_streams_preserves_short_sources() -> None:

@@ -298,6 +298,7 @@ def _conversation_step(*, name: str, rollouts: tuple[ArtifactStep, ...]) -> Arti
         return RolloutConversationConfig(
             source_archives=tuple(ctx.artifact_path(rollout) for rollout in rollouts),
             output_path=ctx.output_path,
+            expected_conversations=len(CORPUS_SEEDS) * sum(limit for _, limit in CORPUS_EVALS),
         )
 
     return ArtifactStep(

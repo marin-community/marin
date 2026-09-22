@@ -61,6 +61,7 @@ _TOKENIZER_FILES = (
 class RolloutConversationConfig:
     source_archives: tuple[str, ...]
     output_path: str
+    expected_conversations: int
 
 
 @dataclass(frozen=True)
@@ -130,14 +131,18 @@ def rollout_conversations(rows: Iterable[Mapping[str, Any]]) -> Iterator[dict[st
     current_key: tuple[str, str, str] | None = None
     messages: list[dict[str, str]] = []
     has_assistant = False
+    has_prompt = False
 
     for row in rows:
         key = _rollout_key(row)
         if current_key is not None and key != current_key:
             if messages and has_assistant:
+                if not has_prompt:
+                    raise ValueError(f"rollout {current_key} has an assistant response but no prompt")
                 yield {"conversations": messages}
             messages = []
             has_assistant = False
+            has_prompt = False
         current_key = key
 
         content = row.get("content")
@@ -147,8 +152,11 @@ def rollout_conversations(rows: Iterable[Mapping[str, Any]]) -> Iterator[dict[st
         role = _message_role(participant)
         messages.append({"role": role, "content": content})
         has_assistant = has_assistant or role == "assistant"
+        has_prompt = has_prompt or role != "assistant"
 
     if messages and has_assistant:
+        if not has_prompt:
+            raise ValueError(f"rollout {current_key} has an assistant response but no prompt")
         yield {"conversations": messages}
 
 
@@ -184,6 +192,8 @@ def write_rollout_conversations(config: RolloutConversationConfig) -> None:
             count += 1
     if count == 0:
         raise ValueError("evaluation archives contain no assistant responses")
+    if count != config.expected_conversations:
+        raise ValueError(f"expected {config.expected_conversations} conversations, wrote {count}")
     logger.info("Wrote %d on-policy conversations to %s", count, destination)
 
 
