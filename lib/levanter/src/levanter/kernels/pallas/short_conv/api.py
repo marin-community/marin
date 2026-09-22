@@ -260,12 +260,11 @@ def short_conv(
     zero. Each channel is independent.
 
     A sequence sharded over one mesh axis exchanges a left halo before local
-    convolution. The local sequence must contain at least ``kernel_size - 1`` tokens. The
-    forward stays bit-identical to the unsharded reference; ``dx`` at the
-    ``kernel_size - 2`` tokens preceding the last token of each shard is the sum of the
-    local and the neighbour's partials, rounded separately, so it agrees to one ulp of
-    the activation dtype there. The last token itself stays bitwise because only the
-    lag-0 tap is local, which reproduces the reference's association order.
+    convolution. Each shard must contain at least ``kernel_size - 1`` tokens.
+    With ``exact_reference_rounding=True``, the bf16 forward matches the unsharded
+    reference bitwise. FP32 forward results can differ due to compiler fusion.
+    Input gradients near shard boundaries combine separately rounded local and
+    neighboring contributions, so they can differ from the unsharded reference.
 
     Args:
       weight: ``[kernel_size, channels]`` taps; ``weight[0]`` is the current token.
