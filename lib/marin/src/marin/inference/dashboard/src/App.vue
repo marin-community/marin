@@ -7,6 +7,7 @@ import HistoryPanel from './components/HistoryPanel.vue'
 import SamplingControls from './components/SamplingControls.vue'
 import { useServing } from './composables/useServing'
 import { ThinkingMode } from './lib/chat_template'
+import { isSharedChatHash, sharedChatUrl, sharedConversationFromHash } from './lib/shared_chat'
 import { loadConversations, loadParams, newId, saveConversations, saveParams } from './lib/storage'
 import type { Conversation } from './lib/types'
 
@@ -16,7 +17,14 @@ const params = reactive(loadParams())
 watch(params, () => saveParams(params))
 
 const conversations = ref<Conversation[]>(loadConversations())
-const active = ref<Conversation>(freshConversation())
+const sharedHashPresent = isSharedChatHash(window.location.hash)
+const importedConversation = sharedConversationFromHash(window.location.hash, newId(), Date.now())
+const active = ref<Conversation>(importedConversation ?? freshConversation())
+if (sharedHashPresent) {
+  const cleanUrl = new URL(window.location.href)
+  cleanUrl.hash = ''
+  window.history.replaceState(null, '', cleanUrl.toString())
+}
 
 const sorted = computed(() => [...conversations.value].sort((a, b) => b.updatedAt - a.updatedAt))
 
@@ -25,6 +33,19 @@ const userPickedMode = ref(false)
 const showParams = ref(false)
 // Below the md breakpoint the history panel is an overlay drawer.
 const showHistory = ref(false)
+const shareState = ref<'idle' | 'copied' | 'failed'>('idle')
+const shareImportFailed = ref(sharedHashPresent && !importedConversation)
+const shareLabel = computed(() => {
+  if (shareState.value === 'copied') return 'Link copied'
+  if (shareState.value === 'failed') return 'Copy failed'
+  return 'Share chat'
+})
+watch(
+  () => [active.value.id, active.value.updatedAt],
+  () => {
+    shareState.value = 'idle'
+  },
+)
 
 // Base checkpoints without a chat template start in completion mode.
 watch(info, (loaded) => {
@@ -34,6 +55,15 @@ watch(info, (loaded) => {
 function pickMode(picked: 'chat' | 'completion') {
   mode.value = picked
   userPickedMode.value = true
+}
+
+async function shareConversation() {
+  try {
+    await navigator.clipboard.writeText(sharedChatUrl(window.location.href, active.value))
+    shareState.value = 'copied'
+  } catch {
+    shareState.value = 'failed'
+  }
 }
 
 function freshConversation(): Conversation {
@@ -53,6 +83,7 @@ function freshConversation(): Conversation {
 }
 
 function persist() {
+  shareImportFailed.value = false
   const current = active.value
   const alreadySaved = conversations.value.some((conversation) => conversation.id === current.id)
   if (!current.messages.length && !current.pythonTools.trim() && !current.shellWorkspace && !alreadySaved) return
@@ -64,12 +95,14 @@ function persist() {
 function newConversation() {
   if (active.value.messages.length) persist()
   active.value = freshConversation()
+  shareImportFailed.value = false
   showHistory.value = false
 }
 
 function selectConversation(id: string) {
   const found = conversations.value.find((c) => c.id === id)
   if (found) active.value = found
+  shareImportFailed.value = false
   showHistory.value = false
 }
 
@@ -83,6 +116,7 @@ function clearHistory() {
   conversations.value = []
   saveConversations([])
   active.value = freshConversation()
+  shareImportFailed.value = false
   showHistory.value = false
 }
 </script>
@@ -125,7 +159,24 @@ function clearHistory() {
           >
             {{ tab }}
           </button>
-          <label class="ml-auto flex items-center gap-2 whitespace-nowrap text-xs font-medium text-text-secondary">
+          <div class="ml-auto"></div>
+          <button
+            v-if="mode === 'chat'"
+            class="flex items-center gap-1.5 whitespace-nowrap rounded-lg px-2 py-1 text-xs text-text-muted transition-colors hover:text-text-secondary disabled:cursor-not-allowed disabled:opacity-40"
+            :class="{ 'text-accent': shareState === 'copied', 'text-status-danger': shareState === 'failed' }"
+            :disabled="!active.messages.length"
+            title="Copy a link containing the visible chat snapshot; hidden prompts and executable tools are excluded"
+            @click="shareConversation"
+          >
+            <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="18" cy="5" r="3" />
+              <circle cx="6" cy="12" r="3" />
+              <circle cx="18" cy="19" r="3" />
+              <path d="m8.6 10.5 6.8-4M8.6 13.5l6.8 4" />
+            </svg>
+            <span class="hidden sm:inline">{{ shareLabel }}</span>
+          </button>
+          <label class="flex items-center gap-2 whitespace-nowrap text-xs font-medium text-text-secondary">
             Max tokens
             <input
               v-model.number="params.maxTokens"
@@ -157,6 +208,13 @@ function clearHistory() {
           v-model:custom-instructions="active.customInstructions"
           :show-chat-controls="mode === 'chat'"
         />
+        <div
+          v-if="shareImportFailed"
+          role="alert"
+          class="border-b border-status-danger/40 bg-status-danger/10 px-4 py-2 text-center text-xs text-status-danger"
+        >
+          Could not import the shared chat. The link is invalid or was truncated.
+        </div>
         <ChatView
           v-if="mode === 'chat'"
           :conversation="active"

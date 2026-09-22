@@ -40,6 +40,34 @@ system and user messages, unparsed assistant `content` and reasoning fields,
 structured tool calls, tool results, and errors. The OpenAI-compatible response
 does not include numeric token IDs, so the dashboard cannot display those.
 
+## Rendered output and shared chats
+
+Assistant messages render Markdown. Unfenced HTML and XML from the model are
+displayed as literal text instead of DOM elements. The Markdown parser places a
+raw markup region in a code block when it classifies the region as a block;
+tags embedded in prose remain inline. This preserves custom tags such as
+`<ticket_analysis>` and prevents model output from adding active HTML to the
+dashboard.
+
+Choose **Share chat** to copy a link with a snapshot in its URL fragment. The
+snapshot includes the title, model name, message text, full reasoning fields,
+tool calls, tool results, and errors. Collapsed reasoning and tool-result fields
+are included in full. It excludes the system prompt, custom template
+instructions, Python tool source, shell workspace, and unparsed raw protocol
+fields. The share operation does not redact excluded data that was copied into
+an included message, tool call, tool result, or error. Opening the link loads a
+new active conversation in that browser and removes the snapshot fragment from
+the address bar. The snapshot is not stored on the dashboard server.
+
+The copied link retains the current dashboard URL. A `marin-serve iris` URL is
+an endpoint-scoped capability credential that authorizes inference and tool
+requests until its Iris-assigned expiration time. Share chat links only with
+trusted users. The share operation grants the same access as the current URL;
+it does not narrow or revoke that access. URL length grows with the transcript,
+so external chat and ticket systems may truncate links for long conversations.
+An invalid or truncated snapshot opens an empty chat and displays an import
+error.
+
 ## Custom Python tools
 
 Open **Python tools** above the Chat composer to define functions for the active
