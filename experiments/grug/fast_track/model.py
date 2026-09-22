@@ -13,15 +13,10 @@ from einops import rearrange
 from haliax import Axis
 from haliax.jax_utils import named_call
 from haliax.nn import ArrayStacked
-from jax import core, random
+from haliax.nn.ragged_dot import ragged_dot
+from jax import core, random, shard_map
 from jax.sharding import NamedSharding, get_abstract_mesh, reshard
 from jax.sharding import PartitionSpec as P
-
-try:
-    from jax.shard_map import shard_map
-except ModuleNotFoundError:
-    from jax.experimental.shard_map import shard_map
-from haliax.nn.ragged_dot import ragged_dot
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 from levanter.grug._moe.common import _prepare_moe_dispatch, _zero_inactive_grouped_rows, split_moe_w13_output
 from levanter.grug.attention import (
@@ -601,6 +596,7 @@ class MoEMLP(eqx.Module):
                 weight_spec,
             ),
             out_specs=batch_spec,
+            check_vma=False,
         )(
             reshard(x_flat, batch_spec),
             reshard(selected_experts, batch_spec),
