@@ -64,19 +64,21 @@ to the role plan when the experiment constructs the artifact.
 For one inference engine:
 
 ```text
-engine ranks = tensor parallel * pipeline parallel * data parallel
+engine slice = tensor parallel * pipeline parallel
+engine ranks = engine slice * data parallel
 ```
 
-The current launcher places each engine within one node, so its ranks cannot exceed
-`gpus_per_node`. Expert parallel size must divide `tensor parallel * data parallel`; pipeline
-stages form separate expert groups. Total planned GPUs are:
+For disaggregated roles, one engine's ranks must fit within one node. For colocated roles, each
+TP-by-PP slice must fit within and divide a policy node; DP replicas occupy separate slices. Expert
+parallel size must divide `tensor parallel * data parallel`; pipeline stages form separate expert
+groups. Total planned GPUs are:
 
 ```text
 policy GPUs = policy nodes * policy GPUs per node
 rollout GPUs = engine count * engine ranks
 
 separate roles: policy GPUs + rollout GPUs
-colocated roles: max(policy GPUs, rollout GPUs)
+colocated roles: policy GPUs, which must equal rollout GPUs
 ```
 
 That total must equal `num_nodes * gpus_per_node`. For example, four 8-GPU policy nodes plus four

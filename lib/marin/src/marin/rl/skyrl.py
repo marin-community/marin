@@ -38,6 +38,19 @@ _TEMPORARY_OUTPUT_PREFIX = "skyrl"
 _TRACE_JOBS_SUBDIR = "trace_jobs"
 _TRAJECTORIES_SUBDIR = "trajectories"
 _LAUNCHER_DIAGNOSTIC_LINES = 20
+# The pinned launcher protocol predates PP/DP/EP role fields. Those values stay in config_yaml,
+# where the same pinned runtime consumes them, while its typed request receives this exact schema.
+_MARINSKYRL_ROLE_PLAN_FIELDS = (
+    "colocate_all",
+    "policy_num_nodes",
+    "policy_num_gpus_per_node",
+    "num_inference_engines",
+    "inference_engine_tensor_parallel_size",
+    "train_batch_size",
+    "policy_mini_batch_size",
+    "micro_train_batch_size_per_gpu",
+    "n_samples_per_prompt",
+)
 SKYRL_POLICY_LOCATION = "<skyrl-policy>"
 SKYRL_TEMPORARY_STORAGE_TTL_DAYS = 14
 IRIS_HUB_CLUSTER_CONFIG = "lib/iris/config/marin.yaml"
@@ -119,12 +132,14 @@ class SkyRLTopology:
         if plan.policy_num_gpus_per_node > self.gpus_per_node:
             raise ValueError("SkyRL policy_num_gpus_per_node exceeds the GPUs on one allocated node")
 
-        engine_gpus = (
-            plan.inference_engine_tensor_parallel_size
-            * plan.inference_engine_pipeline_parallel_size
-            * plan.inference_engine_data_parallel_size
-        )
-        if engine_gpus > self.gpus_per_node:
+        tensor_pipeline_gpus = plan.inference_engine_tensor_parallel_size * plan.inference_engine_pipeline_parallel_size
+        engine_gpus = tensor_pipeline_gpus * plan.inference_engine_data_parallel_size
+        if plan.colocate_all and self.gpus_per_node % tensor_pipeline_gpus:
+            raise ValueError(
+                "each colocated SkyRL inference engine TP*PP slice must divide gpus_per_node; "
+                f"got TP*PP={tensor_pipeline_gpus} and gpus_per_node={self.gpus_per_node}"
+            )
+        if not plan.colocate_all and engine_gpus > self.gpus_per_node:
             raise ValueError(
                 "each SkyRL inference engine must fit on one node, but "
                 f"TP*PP*DP={engine_gpus} exceeds gpus_per_node={self.gpus_per_node}"
@@ -137,11 +152,18 @@ class SkyRLTopology:
             )
 
         policy_gpus = plan.policy_num_nodes * plan.policy_num_gpus_per_node
-        rollout_gpus = plan.num_inference_engines * engine_gpus
-        planned_gpus = max(policy_gpus, rollout_gpus) if plan.colocate_all else policy_gpus + rollout_gpus
+        rollout_gpus = plan.num_inference_engines * tensor_pipeline_gpus * plan.inference_engine_data_parallel_size
+        if plan.colocate_all and policy_gpus != rollout_gpus:
+            raise ValueError(
+                "colocated SkyRL roles must use the same GPUs: "
+                f"policy={policy_gpus}, rollout={rollout_gpus} "
+                f"({plan.num_inference_engines} engines x TP{plan.inference_engine_tensor_parallel_size} "
+                f"x PP{plan.inference_engine_pipeline_parallel_size} x DP{plan.inference_engine_data_parallel_size})"
+            )
+        planned_gpus = policy_gpus if plan.colocate_all else policy_gpus + rollout_gpus
         allocated_gpus = self.num_nodes * self.gpus_per_node
         if planned_gpus != allocated_gpus:
-            placement = "colocated max(policy, rollout)" if plan.colocate_all else "policy + rollout"
+            placement = "colocated policy/rollout" if plan.colocate_all else "policy + rollout"
             raise ValueError(
                 "SkyRL role plan does not consume the allocated topology: "
                 f"{placement}={planned_gpus} GPUs, topology={allocated_gpus} GPUs "
@@ -627,10 +649,13 @@ def _run_launcher(command: list[str]) -> subprocess.CompletedProcess[str]:
 
 def run_skyrl(config: SkyRLRunConfig) -> SkyRLModel:
     """Run the pinned external launcher and return its validated model value."""
+    request = asdict(config.request)
+    role_plan = request["topology"]["role_plan"]
+    request["topology"]["role_plan"] = {field_name: role_plan[field_name] for field_name in _MARINSKYRL_ROLE_PLAN_FIELDS}
     execution = asdict(config.execution)
     execution.pop("coordinator_timeout_hours")
     envelope = {
-        "request": asdict(config.request),
+        "request": request,
         "execution": {
             **execution,
             "job_name": sanitize_job_name(f"{config.request.run_id}-{config.request.attempt_id}"),

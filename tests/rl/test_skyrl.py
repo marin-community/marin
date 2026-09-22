@@ -204,6 +204,30 @@ def test_skyrl_topology_accepts_node_local_dp8_engines() -> None:
     SkyRLTopology(num_nodes=8, gpus_per_node=8, gpu_variant="H100", role_plan=plan)
 
 
+def test_skyrl_topology_rejects_a_colocated_slice_that_does_not_tile_the_node() -> None:
+    plan = dataclasses.replace(
+        _role_plan(),
+        policy_num_gpus_per_node=8,
+        num_inference_engines=2,
+        inference_engine_tensor_parallel_size=3,
+    )
+
+    with pytest.raises(ValueError, match=r"TP\*PP slice must divide gpus_per_node"):
+        SkyRLTopology(num_nodes=1, gpus_per_node=8, gpu_variant="H100", role_plan=plan)
+
+
+def test_skyrl_topology_rejects_unequal_colocated_role_sizes() -> None:
+    plan = dataclasses.replace(
+        _role_plan(),
+        policy_num_gpus_per_node=8,
+        num_inference_engines=3,
+        inference_engine_tensor_parallel_size=2,
+    )
+
+    with pytest.raises(ValueError, match="colocated SkyRL roles must use the same GPUs: policy=8, rollout=6"):
+        SkyRLTopology(num_nodes=1, gpus_per_node=8, gpu_variant="H100", role_plan=plan)
+
+
 def test_skyrl_spec_rejects_config_that_disagrees_with_role_plan() -> None:
     with pytest.raises(ValueError, match=r"generator\.inference_engine_data_parallel_size=2"):
         dataclasses.replace(
@@ -425,6 +449,17 @@ def test_run_skyrl_returns_external_terminal_model(monkeypatch: pytest.MonkeyPat
         "profile": SkyRLRuntimeProfile.FSDP.value,
     }
     assert launch_envelopes[0]["request"]["train_data"][0]["kind"] == "directory"
+    assert launch_envelopes[0]["request"]["topology"]["role_plan"] == {
+        "colocate_all": True,
+        "policy_num_nodes": 1,
+        "policy_num_gpus_per_node": 4,
+        "num_inference_engines": 4,
+        "inference_engine_tensor_parallel_size": 1,
+        "train_batch_size": 16,
+        "policy_mini_batch_size": 16,
+        "micro_train_batch_size_per_gpu": 1,
+        "n_samples_per_prompt": 4,
+    }
     assert launch_envelopes[0]["execution"]["job_name"] == "checkpoints-iceball-rl-2026.08.01-attempt-1"
     assert "coordinator_timeout_hours" not in launch_envelopes[0]["execution"]
     assert len(catalog_rows) == 1

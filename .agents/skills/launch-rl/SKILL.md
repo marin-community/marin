@@ -23,13 +23,16 @@ deterministic SkyRL launch geometry and config before Iris allocates GPUs.
 The rollout arithmetic is:
 
 ```text
-engine GPUs = num engines * TP * PP * DP
+engine slice = TP * PP
+engine GPUs = num engines * engine slice * DP
 separate roles = policy GPUs + engine GPUs
-colocated roles = max(policy GPUs, engine GPUs)
+colocated roles require policy GPUs == engine GPUs
 ```
 
-Each engine's `TP * PP * DP` must fit on one node. EP must divide `TP * DP`. The result must equal
-`num_nodes * gpus_per_node`; unused requested GPUs usually mean DP or the engine count is wrong.
+For separate roles, each engine's `TP * PP * DP` must fit on one node. For colocated roles, the
+`TP * PP` slice must divide a policy node and DP replicas occupy separate slices. EP must divide
+`TP * DP`. The result must equal `num_nodes * gpus_per_node`; unused requested GPUs usually mean DP
+or the engine count is wrong.
 
 ## Validate before launch
 
