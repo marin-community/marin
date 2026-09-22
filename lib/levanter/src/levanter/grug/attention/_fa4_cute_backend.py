@@ -487,39 +487,6 @@ def _cutlass_attention_backward_sm90_postprocess_specs(
     return (scratch_spec,), (qkv_spec,)
 
 
-def _packed_segment_backward_block_sparse_indices(
-    lower_bounds: jax.Array,
-    valid: jax.Array,
-    *,
-    tile_m: int,
-    tile_n: int,
-) -> tuple[jax.Array, jax.Array]:
-    """Build upstream-style backward Q-block sparse metadata for Grug masks."""
-    sparse_metadata = _packed_segment_backward_block_sparse_indices_with_full(
-        lower_bounds,
-        valid,
-        tile_m=tile_m,
-        tile_n=tile_n,
-    )
-    partial_block_cnt = sparse_metadata.partial_block_cnt
-    mask_block_cnt = partial_block_cnt + sparse_metadata.full_block_cnt
-    max_count = sparse_metadata.partial_block_idx.shape[-1]
-    positions = jnp.arange(max_count, dtype=jnp.int32)
-    partial_idx = jnp.where(
-        positions[None, None, None, :] < partial_block_cnt[..., None],
-        sparse_metadata.partial_block_idx,
-        max_count,
-    )
-    full_idx = jnp.where(
-        positions[None, None, None, :] < sparse_metadata.full_block_cnt[..., None],
-        sparse_metadata.full_block_idx,
-        max_count,
-    )
-    combined = jnp.sort(jnp.concatenate([partial_idx, full_idx], axis=-1), axis=-1)
-    mask_block_idx = jnp.where(combined[..., :max_count] < max_count, combined[..., :max_count], 0)
-    return mask_block_cnt, mask_block_idx
-
-
 def _packed_segment_backward_block_sparse_indices_with_full(
     lower_bounds: jax.Array,
     valid: jax.Array,
