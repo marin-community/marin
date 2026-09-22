@@ -63,7 +63,7 @@ export function sharedChatUrl(currentUrl: string, conversation: Conversation): s
     messages: sharedMessages(conversation.messages),
   }
   const url = new URL(currentUrl)
-  url.hash = `chat=${base64UrlEncode(JSON.stringify(payload))}`
+  url.hash = `${SHARED_CHAT_PREFIX}${base64UrlEncode(JSON.stringify(payload))}`
   return url.toString()
 }
 

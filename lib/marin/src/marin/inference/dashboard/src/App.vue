@@ -44,6 +44,7 @@ watch(
   () => [active.value.id, active.value.updatedAt],
   () => {
     shareState.value = 'idle'
+    shareImportFailed.value = false
   },
 )
 
@@ -83,7 +84,6 @@ function freshConversation(): Conversation {
 }
 
 function persist() {
-  shareImportFailed.value = false
   const current = active.value
   const alreadySaved = conversations.value.some((conversation) => conversation.id === current.id)
   if (!current.messages.length && !current.pythonTools.trim() && !current.shellWorkspace && !alreadySaved) return
@@ -95,14 +95,12 @@ function persist() {
 function newConversation() {
   if (active.value.messages.length) persist()
   active.value = freshConversation()
-  shareImportFailed.value = false
   showHistory.value = false
 }
 
 function selectConversation(id: string) {
   const found = conversations.value.find((c) => c.id === id)
   if (found) active.value = found
-  shareImportFailed.value = false
   showHistory.value = false
 }
 
@@ -116,7 +114,6 @@ function clearHistory() {
   conversations.value = []
   saveConversations([])
   active.value = freshConversation()
-  shareImportFailed.value = false
   showHistory.value = false
 }
 </script>
