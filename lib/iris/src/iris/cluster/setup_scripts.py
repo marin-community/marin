@@ -58,10 +58,7 @@ def default_setup_script(
 
     uv runs at its default verbosity so its progress (``Resolved``,
     ``Downloading <pkg>``, ``Installed``) streams into the task logs; this is the
-    only signal a live setup gives, so it is never suppressed. A failed sync
-    retries once with a task-local cache and reinstalls the environment. This
-    isolates the retry from a broken shared cache without penalizing later task
-    attempts whose earlier failures were unrelated to dependency setup.
+    only signal a live setup gives, so it is never suppressed.
 
     Args:
         extras: uv extras to enable (``extra`` or ``package:extra``).
