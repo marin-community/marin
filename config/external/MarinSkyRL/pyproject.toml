@@ -8,5 +8,5 @@ dependencies = ["marinskyrl"]
 package = false
 
 [tool.uv.sources]
-# Keep this branch-based: uv.lock pins the runtime commit, and the external dependency updater advances it.
-marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", branch = "main" }
+# Return this to main after MarinSkyRL #721 merges; the lock keeps this review pin immutable.
+marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", branch = "agent/export-gpu-variant" }

@@ -39,19 +39,6 @@ _TEMPORARY_OUTPUT_PREFIX = "skyrl"
 _TRACE_JOBS_SUBDIR = "trace_jobs"
 _TRAJECTORIES_SUBDIR = "trajectories"
 _LAUNCHER_DIAGNOSTIC_LINES = 20
-# The pinned launcher protocol predates PP/DP/EP role fields. Those values stay in config_yaml,
-# where the same pinned runtime consumes them, while its typed request receives this exact schema.
-_MARINSKYRL_ROLE_PLAN_FIELDS = (
-    "colocate_all",
-    "policy_num_nodes",
-    "policy_num_gpus_per_node",
-    "num_inference_engines",
-    "inference_engine_tensor_parallel_size",
-    "train_batch_size",
-    "policy_mini_batch_size",
-    "micro_train_batch_size_per_gpu",
-    "n_samples_per_prompt",
-)
 SKYRL_POLICY_LOCATION = "<skyrl-policy>"
 SKYRL_TEMPORARY_STORAGE_TTL_DAYS = 14
 IRIS_HUB_CLUSTER_CONFIG = "lib/iris/config/marin.yaml"
@@ -177,6 +164,40 @@ class SkyRLTopology:
             raise ValueError("SkyRL train_batch_size must be divisible by policy_mini_batch_size")
         if plan.policy_mini_batch_size % plan.micro_train_batch_size_per_gpu:
             raise ValueError("SkyRL policy_mini_batch_size must be divisible by micro_train_batch_size_per_gpu")
+
+
+@dataclass(frozen=True)
+class _SkyRLModelRoleClaim:
+    role_id: str
+    kind: str
+    execution: str
+    backend: str
+    colocation_group: str
+    num_nodes: int
+    gpus_per_node: int
+    replicas: int
+    tensor_parallel_size: int
+    pipeline_parallel_size: int
+    data_parallel_size: int
+    expert_parallel_size: int
+
+
+@dataclass(frozen=True)
+class _SkyRLRoleBundle:
+    name: str
+    role_ids: tuple[str, ...]
+    num_nodes: int
+    gpus_per_node: int
+
+
+@dataclass(frozen=True)
+class _MarinSkyRLRolePlan:
+    claims: tuple[_SkyRLModelRoleClaim, ...]
+    bundles: tuple[_SkyRLRoleBundle, ...]
+    train_batch_size: int
+    policy_mini_batch_size: int
+    micro_train_batch_size_per_gpu: int
+    n_samples_per_prompt: int
 
 
 @dataclass(frozen=True)
@@ -388,6 +409,7 @@ class SkyRLSpec:
         _validate_runtime_strategy(self.config_yaml, self.overrides, self.runtime)
         _validate_role_plan_config(self.config_yaml, self.overrides, self.topology.role_plan)
         _validate_entrypoint_config(self.config_yaml, self.overrides, self.topology.role_plan)
+        _marinskyrl_role_plan(self.config_yaml, self.overrides, self.runtime, self.topology)
 
 
 @dataclass(frozen=True)
@@ -525,6 +547,146 @@ def _validate_runtime_strategy(config_yaml: str, overrides: tuple[str, ...], run
         )
 
 
+def _marinskyrl_role_plan(
+    config_yaml: str,
+    overrides: tuple[str, ...],
+    runtime: SkyRLRuntime,
+    topology: SkyRLTopology,
+) -> _MarinSkyRLRolePlan:
+    """Compile Marin's validated scalar plan into the pinned launcher's role protocol."""
+    config = _parsed_config(config_yaml)
+    plan = topology.role_plan
+    if plan.policy_num_gpus_per_node != topology.gpus_per_node:
+        raise ValueError(
+            "SkyRL policy_num_gpus_per_node must match the whole-node topology width; "
+            f"got {plan.policy_num_gpus_per_node} and {topology.gpus_per_node}"
+        )
+
+    run_engines_locally = _effective_config_value(config, overrides, "generator.run_engines_locally")
+    if run_engines_locally is _MISSING_CONFIG_VALUE:
+        raise ValueError("SkyRL config must explicitly set generator.run_engines_locally")
+    if run_engines_locally is not True:
+        raise ValueError("Marin SkyRL artifact topology requires generator.run_engines_locally=true")
+    rollout_backend = _effective_config_value(config, overrides, "generator.backend")
+    if not isinstance(rollout_backend, str) or not rollout_backend:
+        raise ValueError("SkyRL config must explicitly set a non-empty generator.backend")
+
+    use_kl_loss = _effective_config_value(config, overrides, "trainer.algorithm.use_kl_loss")
+    if use_kl_loss is _MISSING_CONFIG_VALUE:
+        raise ValueError("SkyRL config must explicitly set trainer.algorithm.use_kl_loss")
+    use_kl_in_reward = _effective_config_value(config, overrides, "trainer.algorithm.use_kl_in_reward")
+    use_reference = bool(use_kl_loss) or (use_kl_in_reward is not _MISSING_CONFIG_VALUE and bool(use_kl_in_reward))
+    critic_path = _effective_config_value(config, overrides, "trainer.critic.model.path")
+    if critic_path is not _MISSING_CONFIG_VALUE and critic_path:
+        raise ValueError("Marin SkyRL artifact topology does not yet describe a separate critic role")
+
+    policy_group = "all" if plan.colocate_all else "policy"
+    strategy = _effective_strategy(config_yaml, overrides) or _STRATEGY_FOR_PROFILE[runtime.profile]
+    policy_replicas = plan.policy_num_nodes * plan.policy_num_gpus_per_node
+    claims = [
+        _SkyRLModelRoleClaim(
+            role_id="policy",
+            kind="policy",
+            execution="local",
+            backend=strategy,
+            colocation_group=policy_group,
+            num_nodes=plan.policy_num_nodes,
+            gpus_per_node=topology.gpus_per_node,
+            replicas=policy_replicas,
+            tensor_parallel_size=1,
+            pipeline_parallel_size=1,
+            data_parallel_size=policy_replicas,
+            expert_parallel_size=1,
+        )
+    ]
+    policy_role_ids = ["policy"]
+    if use_reference:
+        colocate_policy_ref = _effective_config_value(config, overrides, "trainer.placement.colocate_policy_ref")
+        if colocate_policy_ref is not _MISSING_CONFIG_VALUE and colocate_policy_ref is not True:
+            raise ValueError("Marin SkyRL artifact topology requires policy and reference roles to be colocated")
+        ref_num_nodes = _effective_config_value(config, overrides, "trainer.placement.ref_num_nodes")
+        ref_num_gpus = _effective_config_value(config, overrides, "trainer.placement.ref_num_gpus_per_node")
+        ref_num_nodes = plan.policy_num_nodes if ref_num_nodes in (_MISSING_CONFIG_VALUE, None) else ref_num_nodes
+        ref_num_gpus = plan.policy_num_gpus_per_node if ref_num_gpus in (_MISSING_CONFIG_VALUE, None) else ref_num_gpus
+        if (ref_num_nodes, ref_num_gpus) != (plan.policy_num_nodes, plan.policy_num_gpus_per_node):
+            raise ValueError("Marin SkyRL artifact topology requires policy and reference roles to share one footprint")
+        claims.append(
+            _SkyRLModelRoleClaim(
+                role_id="reference",
+                kind="reference",
+                execution="local",
+                backend=strategy,
+                colocation_group=policy_group,
+                num_nodes=plan.policy_num_nodes,
+                gpus_per_node=topology.gpus_per_node,
+                replicas=policy_replicas,
+                tensor_parallel_size=1,
+                pipeline_parallel_size=1,
+                data_parallel_size=policy_replicas,
+                expert_parallel_size=1,
+            )
+        )
+        policy_role_ids.append("reference")
+
+    rollout_group = "all" if plan.colocate_all else "rollout"
+    rollout_gpus = (
+        plan.num_inference_engines
+        * plan.inference_engine_tensor_parallel_size
+        * plan.inference_engine_pipeline_parallel_size
+        * plan.inference_engine_data_parallel_size
+    )
+    rollout_nodes = plan.policy_num_nodes if plan.colocate_all else rollout_gpus // topology.gpus_per_node
+    claims.append(
+        _SkyRLModelRoleClaim(
+            role_id="rollout",
+            kind="rollout",
+            execution="local",
+            backend=rollout_backend,
+            colocation_group=rollout_group,
+            num_nodes=rollout_nodes,
+            gpus_per_node=topology.gpus_per_node,
+            replicas=plan.num_inference_engines,
+            tensor_parallel_size=plan.inference_engine_tensor_parallel_size,
+            pipeline_parallel_size=plan.inference_engine_pipeline_parallel_size,
+            data_parallel_size=plan.inference_engine_data_parallel_size,
+            expert_parallel_size=plan.inference_engine_expert_parallel_size,
+        )
+    )
+
+    if plan.colocate_all:
+        bundles = (
+            _SkyRLRoleBundle(
+                name="all",
+                role_ids=(*policy_role_ids, "rollout"),
+                num_nodes=plan.policy_num_nodes,
+                gpus_per_node=topology.gpus_per_node,
+            ),
+        )
+    else:
+        bundles = (
+            _SkyRLRoleBundle(
+                name="policy",
+                role_ids=tuple(policy_role_ids),
+                num_nodes=plan.policy_num_nodes,
+                gpus_per_node=topology.gpus_per_node,
+            ),
+            _SkyRLRoleBundle(
+                name="rollout",
+                role_ids=("rollout",),
+                num_nodes=rollout_nodes,
+                gpus_per_node=topology.gpus_per_node,
+            ),
+        )
+    return _MarinSkyRLRolePlan(
+        claims=tuple(claims),
+        bundles=bundles,
+        train_batch_size=plan.train_batch_size,
+        policy_mini_batch_size=plan.policy_mini_batch_size,
+        micro_train_batch_size_per_gpu=plan.micro_train_batch_size_per_gpu,
+        n_samples_per_prompt=plan.n_samples_per_prompt,
+    )
+
+
 @dataclass(frozen=True)
 class SkyRLLaunchRequest:
     run_id: str
@@ -536,6 +698,7 @@ class SkyRLLaunchRequest:
     validation_data: tuple[ResolvedDataSource, ...]
     topology: SkyRLTopology
     output: SkyRLOutputPaths
+    export_hf: bool
     seed: int
     overrides: tuple[str, ...]
 
@@ -651,8 +814,14 @@ def _run_launcher(command: list[str]) -> subprocess.CompletedProcess[str]:
 def run_skyrl(config: SkyRLRunConfig) -> SkyRLModel:
     """Run the pinned external launcher and return its validated model value."""
     request = asdict(config.request)
-    role_plan = request["topology"]["role_plan"]
-    request["topology"]["role_plan"] = {field_name: role_plan[field_name] for field_name in _MARINSKYRL_ROLE_PLAN_FIELDS}
+    request["topology"]["role_plan"] = asdict(
+        _marinskyrl_role_plan(
+            config.request.config_yaml,
+            config.request.overrides,
+            config.request.runtime,
+            config.request.topology,
+        )
+    )
     execution = asdict(config.execution)
     execution.pop("coordinator_timeout_hours")
     if get_job_info() is not None and execution["target_cluster"] is not None:
@@ -772,6 +941,7 @@ def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[S
             validation_data=tuple(source.resolve(ctx) for source in spec.validation_data),
             topology=spec.topology,
             output=output,
+            export_hf=True,
             seed=spec.seed,
             overrides=(*spec.overrides, *retention_overrides),
         )

@@ -118,7 +118,11 @@ trainer:
   micro_train_batch_size_per_gpu: {plan.micro_train_batch_size_per_gpu}
   placement:
     colocate_all: {str(plan.colocate_all).lower()}
+  algorithm:
+    use_kl_loss: false
 generator:
+  backend: vllm
+  run_engines_locally: true
   num_inference_engines: {plan.num_inference_engines}
   inference_engine_tensor_parallel_size: {plan.inference_engine_tensor_parallel_size}
   inference_engine_pipeline_parallel_size: {plan.inference_engine_pipeline_parallel_size}
@@ -405,6 +409,16 @@ def test_evaluation_uses_the_validated_training_tokenizer() -> None:
 
 def test_run_skyrl_returns_external_terminal_model(monkeypatch: pytest.MonkeyPatch) -> None:
     request = _launch_request()
+    role_plan = dataclasses.replace(
+        request.topology.role_plan,
+        num_inference_engines=2,
+        inference_engine_pipeline_parallel_size=2,
+    )
+    request = dataclasses.replace(
+        request,
+        config_yaml=_config_yaml(role_plan),
+        topology=dataclasses.replace(request.topology, role_plan=role_plan),
+    )
     output = request.output
     response = {
         "run_id": request.run_id,
@@ -461,16 +475,43 @@ def test_run_skyrl_returns_external_terminal_model(monkeypatch: pytest.MonkeyPat
     }
     assert launch_envelopes[0]["request"]["train_data"][0]["kind"] == "directory"
     assert launch_envelopes[0]["request"]["topology"]["role_plan"] == {
-        "colocate_all": True,
-        "policy_num_nodes": 1,
-        "policy_num_gpus_per_node": 4,
-        "num_inference_engines": 4,
-        "inference_engine_tensor_parallel_size": 1,
+        "claims": [
+            {
+                "role_id": "policy",
+                "kind": "policy",
+                "execution": "local",
+                "backend": "fsdp2",
+                "colocation_group": "all",
+                "num_nodes": 1,
+                "gpus_per_node": 4,
+                "replicas": 4,
+                "tensor_parallel_size": 1,
+                "pipeline_parallel_size": 1,
+                "data_parallel_size": 4,
+                "expert_parallel_size": 1,
+            },
+            {
+                "role_id": "rollout",
+                "kind": "rollout",
+                "execution": "local",
+                "backend": "vllm",
+                "colocation_group": "all",
+                "num_nodes": 1,
+                "gpus_per_node": 4,
+                "replicas": 2,
+                "tensor_parallel_size": 1,
+                "pipeline_parallel_size": 2,
+                "data_parallel_size": 1,
+                "expert_parallel_size": 1,
+            },
+        ],
+        "bundles": [{"name": "all", "role_ids": ["policy", "rollout"], "num_nodes": 1, "gpus_per_node": 4}],
         "train_batch_size": 16,
         "policy_mini_batch_size": 16,
         "micro_train_batch_size_per_gpu": 1,
         "n_samples_per_prompt": 4,
     }
+    assert launch_envelopes[0]["request"]["export_hf"] is True
     assert launch_envelopes[0]["execution"]["job_name"] == "checkpoints-iceball-rl-2026.08.01-attempt-1"
     assert launch_envelopes[0]["execution"]["target_cluster"] is None
     assert launch_envelopes[0]["execution"]["parent_cluster_config"] is None
@@ -627,6 +668,7 @@ def _launch_request() -> SkyRLLaunchRequest:
             resolved_config_uri="s3://test/run/resolved.json",
             terminal_manifest_uri="s3://test/run/terminal.json",
         ),
+        export_hf=True,
         seed=17,
         overrides=(),
     )
