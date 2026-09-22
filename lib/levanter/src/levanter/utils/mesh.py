@@ -82,8 +82,10 @@ class MeshConfig:
 
         per_slice = num_devices // num_slices
 
-        axes = {**DEFAULT_ICI_AXIS_SPEC, **self.axes}
-        dcn_axes = {**DEFAULT_DCN_AXIS_SPEC, **self.dcn_axes}
+        axes = {name: size for name, size in DEFAULT_ICI_AXIS_SPEC.items() if name not in self.dcn_axes}
+        axes.update(self.axes)
+        dcn_axes = {name: size for name, size in DEFAULT_DCN_AXIS_SPEC.items() if name not in self.axes}
+        dcn_axes.update(self.dcn_axes)
 
         # If the user added another absorber (-1), drop the default absorber so exactly one remains.
         if sum(1 for v in axes.values() if v == -1) > 1 and "data" in axes and "data" not in self.axes:
