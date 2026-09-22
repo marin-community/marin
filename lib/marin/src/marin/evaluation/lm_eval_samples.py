@@ -269,6 +269,10 @@ def sample_from_lm_eval(task: str, raw: dict, primary_metric_name: str | None = 
     if isinstance(arguments, list) and arguments:
         first = arguments[0]
         candidate = first[0] if isinstance(first, list) and first else first
+        # Native Evalchemy records the positional generation arguments as a list,
+        # followed by the request kwargs: [[[prompt], kwargs]].
+        if isinstance(candidate, list) and candidate:
+            candidate = candidate[0]
         if isinstance(candidate, str):
             prompt = candidate
     output = ""

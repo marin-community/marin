@@ -31,6 +31,7 @@ from marin.evaluation.lm_eval_samples import (
     preserved_sample_sources,
     rebuild_lm_eval_samples,
     run_artifacts,
+    sample_from_lm_eval,
     summarize_native_eval_samples,
 )
 from marin.evaluation.records import DEFAULT_SCAN_PREFIXES, EvalTaskRef, TaskCoverage
@@ -242,6 +243,24 @@ def test_export_lm_eval_samples_preserves_unicode_line_separator(tmp_path):
     sample = sample_from_archive_row(row)
     assert sample.prompt_messages is not None
     assert sample.prompt_messages[0].content == content
+
+
+def test_native_evalchemy_generation_preserves_prompt():
+    prompt = json.dumps([{"role": "user", "content": "How many eggs?"}])
+    sample = sample_from_lm_eval(
+        "gsm8k_5shot",
+        {
+            "doc_id": 0,
+            "doc": {"question": "How many eggs?"},
+            "target": "18",
+            "arguments": [[[prompt], {"temperature": 1.0}]],
+            "resps": [["18"]],
+            "filtered_resps": ["18"],
+        },
+    )
+
+    assert sample.prompt_messages is not None
+    assert [(message.role, message.content) for message in sample.prompt_messages] == [("user", "How many eggs?")]
 
 
 def _lm_eval_row(doc_id: int, extraction_filter: str, score: float, response: str) -> dict:
