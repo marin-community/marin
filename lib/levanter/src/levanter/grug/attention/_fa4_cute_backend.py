@@ -299,7 +299,7 @@ def _segmented_flash_attention_backward_sm100(
     modules = _import_cutlass_cute()
     tile = config.tile
     sparse = _packed_segment_backward_block_sparse_indices_with_full(
-        lower_bounds, valid, tile_m=tile[0], tile_n=tile[1]
+        lower_bounds, valid, tile_m=tile[0], tile_n=tile[1] * config.cluster_size
     )
     dpsum, lse_log2 = _native_backward_preprocess(modules, q, out, dout, lse, tile=tile, softmax_scale=softmax_scale)
     accum_inputs, accum_outputs = _cutlass_attention_backward_sm90_accum_specs(modules, vector_elems=8)
@@ -307,7 +307,9 @@ def _segmented_flash_attention_backward_sm100(
         segmented_flash_attention_backward_sm100_launcher(
             modules, head_dim=q.shape[-1], head_dim_v=v.shape[-1], qhead_per_kvhead=ratio, config=config
         ),
-        output_shape_dtype=_cutlass_attention_backward_sm90_backward_output_shapes(q, k, v, tile),
+        output_shape_dtype=_cutlass_attention_backward_sm90_backward_output_shapes(
+            q, k, v, (tile[0], tile[1] * config.cluster_size)
+        ),
         input_spec=accum_inputs,
         output_spec=accum_outputs,
         use_static_tensors=True,
@@ -491,8 +493,15 @@ def _native_backward_gradients(
 ) -> tuple[jax.Array, jax.Array, jax.Array]:
     inputs, outputs = _cutlass_attention_backward_sm90_postprocess_specs(modules, vector_elems=8)
     gradients = []
-    for tensor, accum, scale, rows in zip(
-        qkv, accumulators, (softmax_scale, softmax_scale, 1.0), tile_rows, strict=True
+    # dQ uses two-CTA instructions; dK/dV postprocess the cluster-wide KV tiles.
+    for tensor, accum, scale, rows, cluster, two_cta in zip(
+        qkv,
+        accumulators,
+        (softmax_scale, softmax_scale, 1.0),
+        tile_rows,
+        (1, cluster_size, cluster_size),
+        (use_2cta_instrs, False, False),
+        strict=True,
     ):
         postprocess = cutlass_call(
             flash_attention_backward_postprocess_launcher(
@@ -503,8 +512,8 @@ def _native_backward_gradients(
                 atom_layout_m=1,
                 arch=arch,
                 num_threads=num_threads,
-                cluster_size=cluster_size,
-                use_2cta_instrs=use_2cta_instrs,
+                cluster_size=cluster,
+                use_2cta_instrs=two_cta,
                 accum_is_gmem=True,
             ),
             output_shape_dtype=(jax.ShapeDtypeStruct(tensor.shape, tensor.dtype),),

@@ -1532,6 +1532,7 @@ def segmented_flash_attention_backward_sm100_launcher(
         deterministic=False,
         mask_mod=_grug_segment_mask_mod,
         has_aux_tensors=True,
+        kv_subtile_factor=config.cluster_size,
     )
 
     _broadcast_heads = _native_broadcast_heads(modules)
