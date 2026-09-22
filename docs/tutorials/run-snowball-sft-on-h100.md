@@ -16,19 +16,17 @@ artifacts under the same prefix.
 
 - Complete the [installation tutorial](installation.md) in the image or
   environment used by your cluster workers.
-- Configure Marin's Fray execution client for your cluster. It must be able to
-  schedule CPU preprocessing tasks and one task with eight H100 GPUs, 64 CPU
-  cores, 768 GiB of RAM, and 384 GiB of local disk.
-- Create an object-store prefix that the coordinator and every worker can read
-  and write. Any [fsspec](https://filesystem-spec.readthedocs.io/) backend
-  supported by your environment can be used.
+- Make one node with eight H100 GPUs, 64 CPU cores, 768 GiB of RAM, and 384 GiB
+  of local disk available to the job.
+- Create a persistent artifact prefix that the job can read and write. A shared
+  filesystem path or any [fsspec](https://filesystem-spec.readthedocs.io/)
+  object-store backend supported by your environment can be used.
 - Export an `HF_TOKEN` that can read
   [`open-athena/snowball-67b-a2b-base-262k-qk175-skew8`](https://huggingface.co/open-athena/snowball-67b-a2b-base-262k-qk175-skew8)
   and
   [`open-thoughts/OpenThoughts-Agent-SFT-100K`](https://huggingface.co/datasets/open-thoughts/OpenThoughts-Agent-SFT-100K).
-- Inject the Hugging Face token and object-store credentials into CPU and GPU
-  tasks. Exporting them only on a login node is insufficient when your
-  scheduler does not forward that environment.
+- Make the Hugging Face token and storage credentials available inside the
+  scheduled job.
 
 The experiment pins the Hugging Face revisions for both inputs. A rerun uses
 the same model and data even if either repository changes later.
@@ -57,19 +55,18 @@ Environment](local-gpu.md) for the required NVIDIA driver and JAX runtime.
 
 ## Set the artifact prefix
 
-Choose a unique prefix for this run and export the Hugging Face token in the
-coordinator environment. This example uses S3; use the URI and credential
-mechanism for your cluster's object store.
+Choose a persistent prefix for this run and export the Hugging Face token in
+the scheduled job. This example uses a shared filesystem:
 
 ```bash
-export MARIN_PREFIX=s3://my-training-bucket/snowball-demo
+export MARIN_PREFIX=/shared/training/snowball-demo
 export HF_TOKEN=hf_example
 ```
 
 The prefix stores the downloaded dataset, normalized chat records, tokenized
-data, converted checkpoint, and training checkpoints. Keep it in the same
-region as the compute nodes. Confirm that the same URI and credentials are
-available inside CPU and GPU tasks before starting the experiment.
+data, converted checkpoint, and training checkpoints. An `s3://` prefix also
+works when the job has the required credentials. Keep object storage in the
+same region as the compute nodes.
 
 ## Inspect the execution graph
 
@@ -92,11 +89,10 @@ The graph contains these stages:
 4. Train at a sequence length of 262,144 tokens with context parallelism across
    all eight H100s.
 
-## Run the demo
+## Run on an allocated H100 node
 
-Submit a small CPU coordinator with your cluster scheduler and have it execute
-the command below. The configured Fray client dispatches each graph stage to
-the CPU or H100 resources declared by the experiment.
+Request one complete 8xH100 node from your cluster, then run this command inside
+that allocation:
 
 ```bash
 uv run python -m experiments.grug_sft.snowball_262k_h100 \
@@ -105,6 +101,19 @@ uv run python -m experiments.grug_sft.snowball_262k_h100 \
   --sample-count 256 \
   --run
 ```
+
+In this mode, Marin's local execution backend runs preprocessing and training
+on the allocated node. No separate coordinator service is required.
+
+## Run through Iris
+
+If your cluster runs Iris, submit the same command as a CPU-only Iris job
+instead. Iris acts as the coordinator and dispatches the preprocessing and
+8xH100 child tasks from the resource requests in the experiment. This
+coordinator pattern is specific to Iris; do not allocate H100s to the
+coordinator itself. Configure the Iris task environment so the coordinator and
+child tasks receive the same `MARIN_PREFIX`, `HF_TOKEN`, and storage
+credentials.
 
 Use a new `--version` when you want a separate output. Reusing the same version
 resumes incomplete work and skips stages whose success records already exist.
