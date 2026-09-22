@@ -19,6 +19,8 @@ deterministic SkyRL launch geometry and config before Iris allocates GPUs.
   PP, EP, engine count, placement, or batch sizes as unrelated literals or Hydra overrides.
 - Express models and data as artifact dependencies. Pin tokenizer and source revisions; do not depend
   on an ambient checkpoint path or whatever happens to be on a worker.
+- Treat the generated `SkyRLLaunchConfig` YAML as the only Marin-to-MarinSkyRL boundary. Do not add a
+  request envelope, a second config dataclass tree, or internal per-field command-line flags.
 
 The rollout arithmetic is:
 
@@ -46,6 +48,11 @@ Graph construction checks the topology arithmetic, batch divisibility, runtime-p
 agreement between the rendered config and role plan. It also requires `train_batch_size ==
 policy_mini_batch_size` for the `fully_async` entry point. Treat a preflight failure as a recipe
 error; fix the single source of truth instead of weakening the validator.
+
+Render experiment choices directly into the `skyrl` mapping. MarinSkyRL composes that mapping
+against its Hydra defaults once, validates the complete root document, and submits the resolved YAML
+to Iris. If a new setting is needed, add it to the structured launch config and consume it directly;
+do not restore dotted override forwarding or tests that only assert an option crossed argv layers.
 
 Use a fresh RL artifact version whenever `SkyRLRuntime.commit` changes. The temporary checkpoint
 root follows the artifact name and version, so reusing a version can make `resume_mode=latest` load

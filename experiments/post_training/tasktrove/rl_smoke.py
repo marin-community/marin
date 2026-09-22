@@ -76,9 +76,6 @@ ROLE_PLAN = SkyRLRolePlan(
     n_samples_per_prompt=2,
 )
 
-# The launcher defaults trainer.hf_hub_repo_id to an org repo the export job cannot create.
-OVERRIDES = ("++trainer.hf_hub_repo_id=null",)
-
 
 def rl_config_yaml(plan: SkyRLRolePlan) -> str:
     return f"""\
@@ -166,6 +163,7 @@ trainer:
   enable_db_registration: false
   logger: console
   project_name: {WANDB_PROJECT}
+  hf_hub_repo_id: null
   policy:
     optimizer_config:
       lr: 2.0e-6
@@ -244,7 +242,6 @@ def smoke_step(release: ArtifactStep) -> ArtifactStep[SkyRLModel]:
             ),
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=1, temporary_storage_ttl_days=1),
             seed=SEED,
-            overrides=OVERRIDES,
         ),
         IrisSkyRLExecution(
             cluster=CLUSTER,

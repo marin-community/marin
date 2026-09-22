@@ -28,6 +28,7 @@ from enum import StrEnum
 from pathlib import Path
 
 import click
+import yaml
 from fray.types import ResourceConfig
 from huggingface_hub import snapshot_download
 from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint, ServeConfig
@@ -90,7 +91,7 @@ class PolicySpec:
     tokenizer_uri: str
     tokenizer_revision: str
     model_relative_path: str
-    overrides: tuple[str, ...]
+    enable_thinking: bool | None
     # Host memory for every training and engine task. The Snowball export
     # streams ~134GB of bf16 shards through host buffers on load (per node,
     # policy and engine alike); 128GB of host RAM OOM-killed its first smoke.
@@ -115,7 +116,7 @@ QWEN_POLICY = PolicySpec(
     model_relative_path=HF_EXPORT_SUBDIR,
     # Thinking mode ate the whole generation budget at 0.6B (85% truncation in
     # the round-1 smoke); Qwen arms train and roll out in non-thinking mode.
-    overrides=("++generator.chat_template_kwargs.enable_thinking=false",),
+    enable_thinking=False,
     task_memory="128GB",
     serve_gpus=1,
 )
@@ -139,7 +140,7 @@ SNOWBALL_POLICY = PolicySpec(
     tokenizer_uri=MARIN_TOKENIZER,
     tokenizer_revision=MARIN_TOKENIZER_REVISION,
     model_relative_path="",
-    overrides=(),
+    enable_thinking=None,
     task_memory="512GB",
     serve_gpus=GPUS_PER_NODE,
     serve_memory="512g",
@@ -165,21 +166,6 @@ class SamplerKind(StrEnum):
     LEARNABILITY = "learnability"
     GRADE_ADAPTIVE = "grade-adaptive"
     GRADE_PRIOR = "grade-prior"
-
-
-# The launcher auto-defaults trainer.hf_hub_repo_id to laion/<job_name>, and the
-# export job then needs create access to that org. Exports stay in object storage.
-# (enable_thinking rides on the Qwen policy's overrides through ++ because the
-# config flattener emits bare keys and hydra rejects new children under the
-# empty chat_template_kwargs.)
-BASE_OVERRIDES = ("++trainer.hf_hub_repo_id=null",)
-
-
-# DAPO-style dynamic sampling: drop zero-advantage GRPO groups and keep
-# drawing batches until a full batch of informative groups accumulates. The
-# curriculum sampler is updated on raw pre-filter batches, so its statistics
-# stay unbiased under filtering.
-DAPO_OVERRIDE = "trainer.algorithm.dynamic_sampling.type=filter"
 
 
 @dataclass(frozen=True)
@@ -211,25 +197,14 @@ ARMS = {
 # per-sample reward variance p(1-p): the filter's actual rollout-cost model,
 # near-flat across mid difficulties.
 GROUP_INFORMATIVE_SAMPLERS = frozenset({SamplerKind.LEARNABILITY, SamplerKind.GRADE_PRIOR})
-GROUP_INFORMATIVE_OVERRIDE = "data.sampling.weighting=group-informative"
 
 
-def arm_overrides(spec: ArmSpec, policy: PolicySpec) -> tuple[str, ...]:
-    """Per-arm hydra overrides; curriculum arms select a data.sampling policy.
-
-    The naive sampler keeps ``data.sampling.kind`` at its null default, i.e. the
-    stock uniform shuffle without replacement. Curriculum arms use the branch
-    defaults for decay, priors, and adaptive thresholds so arms differ only in
-    kind.
-    """
-    overrides = (*BASE_OVERRIDES, *policy.overrides)
-    if spec.sampler is not SamplerKind.NAIVE:
-        overrides = (*overrides, f"data.sampling.kind={spec.sampler.value}")
-    if spec.sampler in GROUP_INFORMATIVE_SAMPLERS:
-        overrides = (*overrides, GROUP_INFORMATIVE_OVERRIDE)
-    if spec.dapo:
-        overrides = (*overrides, DAPO_OVERRIDE)
-    return overrides
+@dataclass(frozen=True)
+class TrainerTuning:
+    optimizer: str
+    learning_rate: float
+    weight_decay: float
+    sampling_reversion_mass: float
 
 
 @dataclass(frozen=True)
@@ -246,9 +221,7 @@ class ScalePreset:
     max_new_tokens: int
     micro_forward_batch_size_per_gpu: int
     evals: str
-    # Round-scoped hydra overrides applied to every arm at this scale point
-    # (optimizer recipe, sampler knobs); inert keys are harmless per-arm.
-    extra_overrides: tuple[str, ...] = ()
+    trainer_tuning: TrainerTuning | None = None
 
 
 SMOKE = ScalePreset(
@@ -376,13 +349,12 @@ SNOWBALL_FULL = ScalePreset(
 # peak; AdamW at GRPO-typical rates barely moves validation on this model and
 # destabilized one run despite max_grad_norm=1.0. reversion_mass keeps starved
 # bins re-probeable (inert for the naive arm).
-SNOWBALL_MUONH_OVERRIDES = (
-    "trainer.policy.optimizer_config.optimizer=MuonH",
-    "trainer.policy.optimizer_config.lr=1.0e-5",
-    # MuonH validates weight_decay=0 (every group is decay-free by recipe); the
-    # base config's AdamW default of 1e-2 must be overridden explicitly.
-    "trainer.policy.optimizer_config.weight_decay=0.0",
-    "data.sampling.reversion_mass=2.0",
+SNOWBALL_MUONH_TUNING = TrainerTuning(
+    optimizer="MuonH",
+    learning_rate=1.0e-5,
+    # MuonH validates weight_decay=0 because every group is decay-free by recipe.
+    weight_decay=0.0,
+    sampling_reversion_mass=2.0,
 )
 
 # Memory probe for the round-4 recipe: same 4-node FSDP sharding as the full
@@ -412,7 +384,7 @@ SNOWBALL_SMOKE_R4 = ScalePreset(
     max_new_tokens=2048,
     micro_forward_batch_size_per_gpu=2,
     evals="gsm8k-smoke",
-    extra_overrides=SNOWBALL_MUONH_OVERRIDES,
+    trainer_tuning=SNOWBALL_MUONH_TUNING,
 )
 
 SNOWBALL_FULL_R4 = ScalePreset(
@@ -441,7 +413,7 @@ SNOWBALL_FULL_R4 = ScalePreset(
     max_new_tokens=2048,
     micro_forward_batch_size_per_gpu=2,
     evals="math500,gsm8k-0shot",
-    extra_overrides=SNOWBALL_MUONH_OVERRIDES,
+    trainer_tuning=SNOWBALL_MUONH_TUNING,
 )
 
 # The long-budget Snowball presets: an 8192-token response budget over the
@@ -474,7 +446,7 @@ SNOWBALL_SMOKE_R5 = ScalePreset(
     max_new_tokens=8192,
     micro_forward_batch_size_per_gpu=2,
     evals="gsm8k-smoke",
-    extra_overrides=SNOWBALL_MUONH_OVERRIDES,
+    trainer_tuning=SNOWBALL_MUONH_TUNING,
 )
 
 SNOWBALL_FULL_R5 = ScalePreset(
@@ -501,7 +473,7 @@ SNOWBALL_FULL_R5 = ScalePreset(
     max_new_tokens=8192,
     micro_forward_batch_size_per_gpu=2,
     evals="math500,gsm8k-0shot",
-    extra_overrides=SNOWBALL_MUONH_OVERRIDES,
+    trainer_tuning=SNOWBALL_MUONH_TUNING,
 )
 
 SCALES = {
@@ -565,9 +537,10 @@ def model_step(version: str) -> ArtifactStep[LevanterCheckpoint]:
     )
 
 
-def rl_config_yaml(preset: ScalePreset) -> str:
+def rl_config_yaml(preset: ScalePreset, arm: ArmSpec, policy: PolicySpec) -> str:
     plan = preset.role_plan
-    return f"""\
+    config = yaml.safe_load(
+        f"""\
 entrypoint: standard
 
 context_budget:
@@ -634,6 +607,29 @@ data:
   train_data: []
   val_data: []
 """
+    )
+    trainer = config["trainer"]
+    generator = config["generator"]
+    data = config["data"]
+    trainer["hf_hub_repo_id"] = None
+    if policy.enable_thinking is not None:
+        generator["chat_template_kwargs"] = {"enable_thinking": policy.enable_thinking}
+    if arm.sampler is not SamplerKind.NAIVE:
+        data.setdefault("sampling", {})["kind"] = arm.sampler.value
+    if arm.sampler in GROUP_INFORMATIVE_SAMPLERS:
+        data.setdefault("sampling", {})["weighting"] = "group-informative"
+    if arm.dapo:
+        trainer["algorithm"]["dynamic_sampling"] = {"type": "filter"}
+    if preset.trainer_tuning is not None:
+        tuning = preset.trainer_tuning
+        optimizer = trainer["policy"]["optimizer_config"]
+        optimizer.update(
+            optimizer=tuning.optimizer,
+            lr=tuning.learning_rate,
+            weight_decay=tuning.weight_decay,
+        )
+        data.setdefault("sampling", {})["reversion_mass"] = tuning.sampling_reversion_mass
+    return yaml.safe_dump(config, sort_keys=False)
 
 
 @dataclass(frozen=True)
@@ -685,7 +681,7 @@ def build_arm(
         SkyRLSpec(
             name=user_owned_name(rl_base_name),
             version=version or resolve_version(rl_base_name, None),
-            config_yaml=rl_config_yaml(preset),
+            config_yaml=rl_config_yaml(preset, spec, policy),
             runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.FSDP),
             model=ArtifactHfModel(
                 step=model,
@@ -703,7 +699,6 @@ def build_arm(
             ),
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=2),
             seed=SEED,
-            overrides=(*arm_overrides(spec, policy), *preset.extra_overrides),
         ),
         IrisSkyRLExecution(
             cluster=policy.cluster,

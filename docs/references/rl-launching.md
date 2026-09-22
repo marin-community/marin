@@ -46,6 +46,57 @@ inside Iris, where `--run` executes the artifact graph. This preserves one const
 validation path. The submitter forwards `DAYTONA_API_KEY`, `HF_TOKEN`, and `WANDB_API_KEY` when they
 are present in its environment.
 
+## One Hydra launch document
+
+Marin and MarinSkyRL share one `SkyRLLaunchConfig` YAML document. There is no parallel request
+envelope and no internal command-line rendering layer.
+
+```text
+Marin experiment
+  SkyRLSpec + IrisSkyRLExecution + resolved artifacts
+                         |
+                         v
+  source launch.yaml: run, runtime, iris, ingress, ray,
+                      artifacts, inputs, skyrl recipe
+                         |
+                         v
+MarinSkyRL launch host
+  compose skyrl recipe against ppo_base_config once
+  inject canonical model/data/output values
+  validate topology, strategy, entrypoint, TP, and batches
+                         |
+                         v
+  resolved launch.yaml ---------> Iris allocation and submission
+           |                               |
+           +-------------------------------+
+                         |
+                         v
+Iris task
+  stage immutable inputs -> patch task-local paths -> run(cfg.skyrl)
+```
+
+The top-level sections name what they configure: `iris` owns allocation and routing, `ray` owns
+cluster bootstrap, `inputs` owns immutable model and data locators, `artifacts` owns durable and
+temporary outputs, and `skyrl` is the trainer's Hydra subtree. `launch_config` means the complete
+declarative input to a launch. `role_plan` means a derived resource calculation. Neither is called a
+protocol because no independently versioned message exchange exists.
+
+Experiments render their final source recipe directly into the `skyrl` mapping. There is no
+`SkyRLSpec.overrides` escape hatch and MarinSkyRL never translates fields into dotted command-line
+arguments. The launch host resolves Hydra defaults once; the resolved document is the input to
+allocation, task bootstrap, training, checkpoint export, and the persisted run manifest.
+
+```text
+                    +-> derive Iris resources
+resolved launch.yaml +-> configure Ray and staging
+                    +-> call the registered run(cfg.skyrl)
+                    +-> derive checkpoint-export launch.yaml
+```
+
+This shape keeps validation mechanical. Adding a launch setting means adding one structured field and
+reading it where the behavior lives; it does not require adding matching CLI flags, argv builders, and
+forwarding tests at every process boundary.
+
 ## SkyRL role plan
 
 `SkyRLRolePlan` is the source of truth for policy, rollout, and batch geometry. Every parallelism
@@ -58,8 +109,8 @@ field is required:
 - samples per prompt and whether roles are colocated.
 
 Render these values into `config_yaml` from the role plan. Do not maintain parallel literals or
-Hydra overrides for the same values. `SkyRLSpec` compares the effective YAML, including overrides,
-to the role plan when the experiment constructs the artifact.
+dotted Hydra overrides for the same values. `SkyRLSpec` compares the rendered YAML to the role plan
+when the experiment constructs the artifact, then writes that recipe into the launch document.
 
 For one inference engine:
 
@@ -92,7 +143,7 @@ stricter batch contract: `train_batch_size` must equal `policy_mini_batch_size`.
 ## Artifact and runtime boundaries
 
 Identity-bearing inputs belong in `SkyRLSpec`: the pinned MarinSkyRL runtime, model and tokenizer,
-data artifacts, topology, seed, retention, rendered config, and semantic overrides. Cluster routing,
+data artifacts, topology, seed, retention, and the rendered config. Cluster routing,
 host resources, priority, and retry policy belong in `IrisSkyRLExecution`; changing placement must
 not fork artifact identity.
 

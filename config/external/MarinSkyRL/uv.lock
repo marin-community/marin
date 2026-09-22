@@ -1109,7 +1109,7 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "marinskyrl", git = "https://github.com/marin-community/MarinSkyRL.git?branch=agent%2Fexport-gpu-variant" }]
+requires-dist = [{ name = "marinskyrl", git = "https://github.com/marin-community/MarinSkyRL.git?branch=agent%2Fhydra-launch-config" }]
 
 [[package]]
 name = "marin-finelog"
@@ -1237,7 +1237,7 @@ secrets = [
 [[package]]
 name = "marinskyrl"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/MarinSkyRL.git?branch=agent%2Fexport-gpu-variant#0fd99b26c029f61af90aea7c219fa928f3f58d4c" }
+source = { git = "https://github.com/marin-community/MarinSkyRL.git?branch=agent%2Fhydra-launch-config#378742bd9a6392fa3b2a556168d65de62c8c3ca2" }
 dependencies = [
     { name = "aiohttp" },
     { name = "boto3" },
@@ -1268,6 +1268,7 @@ dependencies = [
     { name = "pyarrow" },
     { name = "pycosat", version = "0.6.6", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'x86_64' or sys_platform != 'linux'" },
     { name = "pycosat", version = "0.6.6", source = { url = "https://huggingface.co/datasets/open-athena/marinskyrl-gpu-wheelhouse/resolve/d761f1e357b6d5a9b80427f4710eb2e04adf1101/linux-x86_64/cp312/20260915-tinker-aime/pycosat-0.6.6-cp312-cp312-linux_x86_64.whl" }, marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "pydantic" },
     { name = "pyyaml" },
     { name = "ray" },
     { name = "reasoning-gym" },
