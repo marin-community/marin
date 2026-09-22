@@ -400,6 +400,12 @@ def test_run_skyrl_returns_run_with_hf_model(monkeypatch: pytest.MonkeyPatch) ->
         "commit": MARIN_SKYRL.commit,
         "profile": SkyRLRuntimeProfile.FSDP.value,
     }
+    assert launch_envelopes[0]["request"]["model"] == {
+        "uri": "s3://test/sft/hf",
+        "identity": "sft@version:fingerprint",
+        "tokenizer_uri": "Qwen/Qwen3-0.6B-Base",
+        "tokenizer_revision": "da87bfb",
+    }
     assert launch_envelopes[0]["request"]["train_data"][0]["kind"] == "directory"
     assert launch_envelopes[0]["execution"]["job_name"] == "checkpoints-iceball-rl-2026.08.01-attempt-1"
     assert len(catalog_rows) == 1
@@ -568,7 +574,6 @@ def _launch_request() -> SkyRLLaunchRequest:
         model=ResolvedModelLocator(
             uri="s3://test/sft/hf",
             identity="sft@version:fingerprint",
-            local_path="/tmp/model",
             tokenizer_uri="Qwen/Qwen3-0.6B-Base",
             tokenizer_revision="da87bfb",
         ),

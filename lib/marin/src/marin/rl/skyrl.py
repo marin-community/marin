@@ -108,7 +108,6 @@ class SkyRLRetentionPolicy:
 class ResolvedModelLocator:
     uri: str
     identity: str
-    local_path: str
     tokenizer_uri: str
     tokenizer_revision: str
 
@@ -214,7 +213,6 @@ class ArtifactHfModel:
         return ResolvedModelLocator(
             uri=uri,
             identity=_artifact_identity(self.step),
-            local_path=_artifact_local_path("models", self.step),
             tokenizer_uri=self.tokenizer_uri,
             tokenizer_revision=self.tokenizer_revision,
         )
