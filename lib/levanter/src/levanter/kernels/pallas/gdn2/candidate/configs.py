@@ -127,6 +127,8 @@ def validate_inputs(q, k, v, w, b, g, scale, h0, config: KernelConfig):
         expected_h0 = (bsz, H, D, D)
         if h0.shape != expected_h0:
             raise ValueError(f"h0.shape={h0.shape} must be {expected_h0}")
+        if h0.dtype != jnp.float32:
+            raise ValueError(f"h0 must have dtype float32; got {h0.dtype}")
 
     n_chunks = L // config.bt
     return bsz, L, H, D, n_chunks

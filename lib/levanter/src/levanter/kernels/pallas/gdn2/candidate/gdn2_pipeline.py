@@ -155,6 +155,12 @@ _gdn2_core.defvjp(_gdn2_core_fwd, _gdn2_core_bwd)
 
 
 def gdn2_pallas_forward_trainable(q, k, v, w, b, g, scale, h0=None, config: KernelConfig = DEFAULT_CONFIG):
+    """Apply GDN-2 to single-device arrays with finite log-decay ``g <= 0``.
+
+    The optional initial state ``h0`` must be FP32; omission initializes zeros.
+    Outputs and final state are FP32. No clipping or non-finite replacement is
+    performed, and callers must keep all inputs local to the same device.
+    """
     bsz, L, H, D = q.shape
     if h0 is None:
         h0 = jnp.zeros((bsz, H, D, D), dtype=jnp.float32)

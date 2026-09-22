@@ -50,7 +50,8 @@ output = scale * q^T @ S
 ```
 
 `q`, `k`, `v`, `w`, `b`, and `g` have shape `[B, L, H, D]`;
-the initial state has shape `[B, H, D, D]`. Kernel inputs must be local
+the initial state has shape `[B, H, D, D]` and must be FP32. Log-decays
+must be finite and nonpositive. Kernel inputs must be local
 to one device, `D=128`, and `L` must be divisible by `BT`.
 `BT` is the token chunk length, `BC=BT/2` is its score/solve subblock
 length, and `MB` is the triangular solver's microblock size. The current
