@@ -201,6 +201,58 @@ class _MarinSkyRLRolePlan:
 
 
 @dataclass(frozen=True)
+class _MarinSkyRLProtocolConfig:
+    strategy: str
+    rollout_backend: str
+    use_reference: bool
+
+
+@dataclass(frozen=True)
+class _MarinSkyRLTopology:
+    num_nodes: int
+    gpus_per_node: int
+    gpu_variant: str
+    role_plan: _MarinSkyRLRolePlan
+
+
+@dataclass(frozen=True)
+class _MarinSkyRLLaunchRequest:
+    run_id: str
+    attempt_id: str
+    config_yaml: str
+    runtime: SkyRLRuntime
+    model: ResolvedModelLocator
+    train_data: tuple[ResolvedDataSource, ...]
+    validation_data: tuple[ResolvedDataSource, ...]
+    topology: _MarinSkyRLTopology
+    output: SkyRLOutputPaths
+    export_hf: bool
+    seed: int
+    overrides: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _MarinSkyRLIrisExecution:
+    cluster: str
+    cluster_config: str
+    cpu: float
+    memory: str
+    disk: str
+    target_cluster: str | None
+    parent_cluster_config: str | None
+    priority: str
+    max_retries: int
+    job_name: str
+    wandb_entity: str | None
+
+
+@dataclass(frozen=True)
+class _MarinSkyRLJobSpec:
+    request: _MarinSkyRLLaunchRequest
+    execution: _MarinSkyRLIrisExecution
+
+
+@dataclass(frozen=True)
 class SkyRLRetentionPolicy:
     """Temporary storage lifetime and rolling resume depth for one SkyRL run.
 
@@ -406,10 +458,7 @@ class SkyRLSpec:
 
     def __post_init__(self) -> None:
         """Validate the complete launch recipe before an artifact can be submitted."""
-        _validate_runtime_strategy(self.config_yaml, self.overrides, self.runtime)
-        _validate_role_plan_config(self.config_yaml, self.overrides, self.topology.role_plan)
-        _validate_entrypoint_config(self.config_yaml, self.overrides, self.topology.role_plan)
-        _marinskyrl_role_plan(self.config_yaml, self.overrides, self.runtime, self.topology)
+        _validate_skyrl_recipe(self.config_yaml, self.overrides, self.runtime, self.topology)
 
 
 @dataclass(frozen=True)
@@ -499,9 +548,8 @@ def _effective_config_value(config: dict[str, object], overrides: tuple[str, ...
     return _declared_config_value(config, dotted_key)
 
 
-def _validate_role_plan_config(config_yaml: str, overrides: tuple[str, ...], role_plan: SkyRLRolePlan) -> None:
+def _validate_role_plan_config(config: dict[str, object], overrides: tuple[str, ...], role_plan: SkyRLRolePlan) -> None:
     """Ensure the trainer config cannot silently disagree with the identity-bearing role plan."""
-    config = _parsed_config(config_yaml)
     for dotted_key, field_name in _ROLE_PLAN_CONFIG_FIELDS.items():
         expected = getattr(role_plan, field_name)
         actual = _effective_config_value(config, overrides, dotted_key)
@@ -511,9 +559,8 @@ def _validate_role_plan_config(config_yaml: str, overrides: tuple[str, ...], rol
             raise ValueError(f"SkyRL config {dotted_key}={actual!r} disagrees with role_plan.{field_name}={expected!r}")
 
 
-def _validate_entrypoint_config(config_yaml: str, overrides: tuple[str, ...], role_plan: SkyRLRolePlan) -> None:
+def _validate_entrypoint_config(config: dict[str, object], overrides: tuple[str, ...], role_plan: SkyRLRolePlan) -> None:
     """Reject entrypoint-specific constraints that MarinSkyRL would otherwise discover at startup."""
-    config = _parsed_config(config_yaml)
     entrypoint = _effective_config_value(config, overrides, "entrypoint")
     if entrypoint == "fully_async" and role_plan.train_batch_size != role_plan.policy_mini_batch_size:
         raise ValueError(
@@ -522,7 +569,7 @@ def _validate_entrypoint_config(config_yaml: str, overrides: tuple[str, ...], ro
         )
 
 
-def _effective_strategy(config_yaml: str, overrides: tuple[str, ...]) -> str | None:
+def _effective_strategy(config: dict[str, object], overrides: tuple[str, ...]) -> str | None:
     """Return the trainer strategy the launched run will use, or None when nothing names one.
 
     MarinSkyRL applies overrides as Hydra arguments after the config, so the last override naming
@@ -532,13 +579,12 @@ def _effective_strategy(config_yaml: str, overrides: tuple[str, ...]) -> str | N
         key, separator, value = override.lstrip("+").partition("=")
         if separator and key == "trainer.strategy":
             return value.strip("'\"")
-    declared = _parsed_config(config_yaml)
-    trainer = declared.get("trainer")
+    trainer = config.get("trainer")
     return trainer.get("strategy") if isinstance(trainer, dict) else None
 
 
-def _validate_runtime_strategy(config_yaml: str, overrides: tuple[str, ...], runtime: SkyRLRuntime) -> None:
-    strategy = _effective_strategy(config_yaml, overrides)
+def _validate_runtime_strategy(config: dict[str, object], overrides: tuple[str, ...], runtime: SkyRLRuntime) -> None:
+    strategy = _effective_strategy(config, overrides)
     expected = _STRATEGY_FOR_PROFILE.get(runtime.profile)
     if strategy is not None and expected is not None and strategy != expected:
         raise ValueError(
@@ -547,14 +593,13 @@ def _validate_runtime_strategy(config_yaml: str, overrides: tuple[str, ...], run
         )
 
 
-def _marinskyrl_role_plan(
-    config_yaml: str,
+def _marinskyrl_protocol_config(
+    config: dict[str, object],
     overrides: tuple[str, ...],
     runtime: SkyRLRuntime,
     topology: SkyRLTopology,
-) -> _MarinSkyRLRolePlan:
-    """Compile Marin's validated scalar plan into the pinned launcher's role protocol."""
-    config = _parsed_config(config_yaml)
+) -> _MarinSkyRLProtocolConfig:
+    """Validate assumptions imposed by Marin's scalar role-plan interface."""
     plan = topology.role_plan
     if plan.policy_num_gpus_per_node != topology.gpus_per_node:
         raise ValueError(
@@ -580,15 +625,41 @@ def _marinskyrl_role_plan(
     if critic_path is not _MISSING_CONFIG_VALUE and critic_path:
         raise ValueError("Marin SkyRL artifact topology does not yet describe a separate critic role")
 
+    if use_reference:
+        colocate_policy_ref = _effective_config_value(config, overrides, "trainer.placement.colocate_policy_ref")
+        if colocate_policy_ref is not _MISSING_CONFIG_VALUE and colocate_policy_ref is not True:
+            raise ValueError("Marin SkyRL artifact topology requires policy and reference roles to be colocated")
+        ref_num_nodes = _effective_config_value(config, overrides, "trainer.placement.ref_num_nodes")
+        ref_num_gpus = _effective_config_value(config, overrides, "trainer.placement.ref_num_gpus_per_node")
+        ref_num_nodes = plan.policy_num_nodes if ref_num_nodes in (_MISSING_CONFIG_VALUE, None) else ref_num_nodes
+        ref_num_gpus = plan.policy_num_gpus_per_node if ref_num_gpus in (_MISSING_CONFIG_VALUE, None) else ref_num_gpus
+        if (ref_num_nodes, ref_num_gpus) != (plan.policy_num_nodes, plan.policy_num_gpus_per_node):
+            raise ValueError("Marin SkyRL artifact topology requires policy and reference roles to share one footprint")
+
+    return _MarinSkyRLProtocolConfig(
+        strategy=_effective_strategy(config, overrides) or _STRATEGY_FOR_PROFILE[runtime.profile],
+        rollout_backend=rollout_backend,
+        use_reference=use_reference,
+    )
+
+
+def _marinskyrl_role_plan(
+    config: dict[str, object],
+    overrides: tuple[str, ...],
+    runtime: SkyRLRuntime,
+    topology: SkyRLTopology,
+) -> _MarinSkyRLRolePlan:
+    """Compile Marin's validated scalar plan into MarinSkyRL's role protocol."""
+    plan = topology.role_plan
+    protocol = _marinskyrl_protocol_config(config, overrides, runtime, topology)
     policy_group = "all" if plan.colocate_all else "policy"
-    strategy = _effective_strategy(config_yaml, overrides) or _STRATEGY_FOR_PROFILE[runtime.profile]
     policy_replicas = plan.policy_num_nodes * plan.policy_num_gpus_per_node
     claims = [
         _SkyRLModelRoleClaim(
             role_id="policy",
             kind="policy",
             execution="local",
-            backend=strategy,
+            backend=protocol.strategy,
             colocation_group=policy_group,
             num_nodes=plan.policy_num_nodes,
             gpus_per_node=topology.gpus_per_node,
@@ -600,32 +671,8 @@ def _marinskyrl_role_plan(
         )
     ]
     policy_role_ids = ["policy"]
-    if use_reference:
-        colocate_policy_ref = _effective_config_value(config, overrides, "trainer.placement.colocate_policy_ref")
-        if colocate_policy_ref is not _MISSING_CONFIG_VALUE and colocate_policy_ref is not True:
-            raise ValueError("Marin SkyRL artifact topology requires policy and reference roles to be colocated")
-        ref_num_nodes = _effective_config_value(config, overrides, "trainer.placement.ref_num_nodes")
-        ref_num_gpus = _effective_config_value(config, overrides, "trainer.placement.ref_num_gpus_per_node")
-        ref_num_nodes = plan.policy_num_nodes if ref_num_nodes in (_MISSING_CONFIG_VALUE, None) else ref_num_nodes
-        ref_num_gpus = plan.policy_num_gpus_per_node if ref_num_gpus in (_MISSING_CONFIG_VALUE, None) else ref_num_gpus
-        if (ref_num_nodes, ref_num_gpus) != (plan.policy_num_nodes, plan.policy_num_gpus_per_node):
-            raise ValueError("Marin SkyRL artifact topology requires policy and reference roles to share one footprint")
-        claims.append(
-            _SkyRLModelRoleClaim(
-                role_id="reference",
-                kind="reference",
-                execution="local",
-                backend=strategy,
-                colocation_group=policy_group,
-                num_nodes=plan.policy_num_nodes,
-                gpus_per_node=topology.gpus_per_node,
-                replicas=policy_replicas,
-                tensor_parallel_size=1,
-                pipeline_parallel_size=1,
-                data_parallel_size=policy_replicas,
-                expert_parallel_size=1,
-            )
-        )
+    if protocol.use_reference:
+        claims.append(replace(claims[0], role_id="reference", kind="reference"))
         policy_role_ids.append("reference")
 
     rollout_group = "all" if plan.colocate_all else "rollout"
@@ -641,7 +688,7 @@ def _marinskyrl_role_plan(
             role_id="rollout",
             kind="rollout",
             execution="local",
-            backend=rollout_backend,
+            backend=protocol.rollout_backend,
             colocation_group=rollout_group,
             num_nodes=rollout_nodes,
             gpus_per_node=topology.gpus_per_node,
@@ -687,6 +734,20 @@ def _marinskyrl_role_plan(
     )
 
 
+def _validate_skyrl_recipe(
+    config_yaml: str,
+    overrides: tuple[str, ...],
+    runtime: SkyRLRuntime,
+    topology: SkyRLTopology,
+) -> _MarinSkyRLRolePlan:
+    """Validate one effective recipe and return its launcher role protocol."""
+    config = _parsed_config(config_yaml)
+    _validate_runtime_strategy(config, overrides, runtime)
+    _validate_role_plan_config(config, overrides, topology.role_plan)
+    _validate_entrypoint_config(config, overrides, topology.role_plan)
+    return _marinskyrl_role_plan(config, overrides, runtime, topology)
+
+
 @dataclass(frozen=True)
 class SkyRLLaunchRequest:
     run_id: str
@@ -703,10 +764,8 @@ class SkyRLLaunchRequest:
     overrides: tuple[str, ...]
 
     def __post_init__(self) -> None:
-        """Reject a runtime profile that does not install the strategy the config asks for."""
-        _validate_runtime_strategy(self.config_yaml, self.overrides, self.runtime)
-        _validate_role_plan_config(self.config_yaml, self.overrides, self.topology.role_plan)
-        _validate_entrypoint_config(self.config_yaml, self.overrides, self.topology.role_plan)
+        """Validate the complete effective recipe before invoking the external launcher."""
+        _validate_skyrl_recipe(self.config_yaml, self.overrides, self.runtime, self.topology)
 
 
 @dataclass(frozen=True)
@@ -811,32 +870,50 @@ def _run_launcher(command: list[str]) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(command, returncode, response.read(), "".join(tail))
 
 
+def _marinskyrl_job_spec(config: SkyRLRunConfig) -> _MarinSkyRLJobSpec:
+    request = config.request
+    role_plan = _validate_skyrl_recipe(request.config_yaml, request.overrides, request.runtime, request.topology)
+    launcher_request = _MarinSkyRLLaunchRequest(
+        run_id=request.run_id,
+        attempt_id=request.attempt_id,
+        config_yaml=request.config_yaml,
+        runtime=request.runtime,
+        model=request.model,
+        train_data=request.train_data,
+        validation_data=request.validation_data,
+        topology=_MarinSkyRLTopology(
+            num_nodes=request.topology.num_nodes,
+            gpus_per_node=request.topology.gpus_per_node,
+            gpu_variant=request.topology.gpu_variant,
+            role_plan=role_plan,
+        ),
+        output=request.output,
+        export_hf=request.export_hf,
+        seed=request.seed,
+        overrides=request.overrides,
+    )
+
+    execution = config.execution
+    submit_through_ambient_controller = get_job_info() is not None and execution.target_cluster is not None
+    launcher_execution = _MarinSkyRLIrisExecution(
+        cluster=execution.cluster,
+        cluster_config=execution.cluster_config,
+        cpu=execution.cpu,
+        memory=execution.memory,
+        disk=execution.disk,
+        target_cluster=None if submit_through_ambient_controller else execution.target_cluster,
+        parent_cluster_config=None if submit_through_ambient_controller else execution.parent_cluster_config,
+        priority=execution.priority,
+        max_retries=execution.max_retries,
+        job_name=sanitize_job_name(f"{request.run_id}-{request.attempt_id}"),
+        wandb_entity=execution.wandb_entity,
+    )
+    return _MarinSkyRLJobSpec(request=launcher_request, execution=launcher_execution)
+
+
 def run_skyrl(config: SkyRLRunConfig) -> SkyRLModel:
     """Run the pinned external launcher and return its validated model value."""
-    request = asdict(config.request)
-    request["topology"]["role_plan"] = asdict(
-        _marinskyrl_role_plan(
-            config.request.config_yaml,
-            config.request.overrides,
-            config.request.runtime,
-            config.request.topology,
-        )
-    )
-    execution = asdict(config.execution)
-    execution.pop("coordinator_timeout_hours")
-    if get_job_info() is not None and execution["target_cluster"] is not None:
-        # The RL coordinator was already federated to this target cluster. Submit the GPU child
-        # through its ambient controller so Iris preserves the parent/child lifecycle and does not
-        # require a second set of IAP credentials inside the coordinator task.
-        execution["target_cluster"] = None
-        execution["parent_cluster_config"] = None
-    envelope = {
-        "request": request,
-        "execution": {
-            **execution,
-            "job_name": sanitize_job_name(f"{config.request.run_id}-{config.request.attempt_id}"),
-        },
-    }
+    envelope = asdict(_marinskyrl_job_spec(config))
     response: _SkyRLLaunchResponse | None = None
     try:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", encoding="utf-8") as request_file:

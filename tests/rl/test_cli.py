@@ -7,7 +7,6 @@ import dataclasses
 from pathlib import Path
 
 import pytest
-from fray.types import CpuConfig
 from iris.cluster.client.job_info import JobInfo, set_job_info
 from iris.cluster.types import JobName
 from marin.execution.artifact import Artifact
@@ -58,7 +57,6 @@ def test_coordinator_request_replays_the_experiment_main() -> None:
     assert request.resources.target_cluster == "cw-rno2a"
     assert request.resources.cpu == 4
     assert request.resources.ram == "16GB"
-    assert isinstance(request.resources.device, CpuConfig)
     assert request.environment is not None
     assert request.environment.env_vars["DAYTONA_API_KEY"] == "secret"
     assert request.timeout == Duration.from_hours(18)

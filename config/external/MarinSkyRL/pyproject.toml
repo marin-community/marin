@@ -8,5 +8,5 @@ dependencies = ["marinskyrl"]
 package = false
 
 [tool.uv.sources]
-# Return this to main after MarinSkyRL #721 merges; the lock keeps this review pin immutable.
+# The isolated lock keeps this integration-branch revision immutable.
 marinskyrl = { git = "https://github.com/marin-community/MarinSkyRL.git", branch = "agent/export-gpu-variant" }
