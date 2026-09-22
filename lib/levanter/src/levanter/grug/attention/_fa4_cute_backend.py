@@ -16,7 +16,7 @@ import functools
 import importlib
 from dataclasses import dataclass
 from functools import partial
-from typing import Any
+from typing import Any, NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -734,10 +734,15 @@ def _segmented_flash_attention_custom_vjp(
     return out
 
 
-# (q, k, v, out, lse, lower_bounds, valid, q_offset).
-_SegmentedAttentionResiduals = tuple[
-    jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array
-]
+class _SegmentedAttentionResiduals(NamedTuple):
+    q: jax.Array
+    k: jax.Array
+    v: jax.Array
+    out: jax.Array
+    lse: jax.Array
+    lower_bounds: jax.Array
+    valid: jax.Array
+    q_offset: jax.Array
 
 
 def _segmented_flash_attention_custom_vjp_fwd(
@@ -760,7 +765,16 @@ def _segmented_flash_attention_custom_vjp_fwd(
         kernel_config=kernel_config,
         q_offset=q_offset,
     )
-    return out, (q, k, v, out, lse, lower_bounds, valid, q_offset)
+    return out, _SegmentedAttentionResiduals(
+        q=q,
+        k=k,
+        v=v,
+        out=out,
+        lse=lse,
+        lower_bounds=lower_bounds,
+        valid=valid,
+        q_offset=q_offset,
+    )
 
 
 def _segmented_flash_attention_custom_vjp_bwd(
@@ -769,21 +783,20 @@ def _segmented_flash_attention_custom_vjp_bwd(
     residuals: _SegmentedAttentionResiduals,
     cotangent: jax.Array | jax.custom_derivatives.SymbolicZero,
 ) -> tuple[jax.Array | None, jax.Array | None, jax.Array | None, None, None, None]:
-    q, k, v, out, lse, lower_bounds, valid, q_offset = residuals
     if isinstance(cotangent, jax.custom_derivatives.SymbolicZero):
-        return jnp.zeros_like(q), jnp.zeros_like(k), jnp.zeros_like(v), None, None, None
+        return jnp.zeros_like(residuals.q), jnp.zeros_like(residuals.k), jnp.zeros_like(residuals.v), None, None, None
     dq, dk, dv = segmented_flash_attention_backward(
-        q,
-        k,
-        v,
-        out,
-        cotangent.astype(q.dtype),
-        lse,
-        lower_bounds,
-        valid,
+        residuals.q,
+        residuals.k,
+        residuals.v,
+        residuals.out,
+        cotangent.astype(residuals.q.dtype),
+        residuals.lse,
+        residuals.lower_bounds,
+        residuals.valid,
         softmax_scale=softmax_scale,
         kernel_config=kernel_config,
-        q_offset=q_offset,
+        q_offset=residuals.q_offset,
     )
     return dq, dk, dv, None, None, None
 
