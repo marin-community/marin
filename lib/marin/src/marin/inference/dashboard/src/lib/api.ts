@@ -1,5 +1,6 @@
 import type { ImportedGitCommit, ServingInfo } from './types'
 import type { ToolDefinition } from './python_tools'
+import type { SharedChatSnapshot } from './shared_chat'
 
 /** Resolve a path relative to the page URL. The dashboard is served under the
  * Iris controller proxy at /proxy/<name>/, and the proxy does not rewrite
@@ -70,6 +71,18 @@ export async function importRepository(url: string, signal: AbortSignal): Promis
   return postJsonResult('shell/repository', { url }, signal, 'repository import')
 }
 
+export async function createChatShare(snapshot: SharedChatSnapshot): Promise<string> {
+  const result = await postJsonResult<{ id: string }>('chat-shares', snapshot, undefined, 'chat share')
+  if (typeof result.id !== 'string') throw new Error('chat share returned an invalid ID')
+  return result.id
+}
+
+export async function fetchChatShare(shareId: string): Promise<unknown> {
+  const response = await fetch(api(`chat-shares/${encodeURIComponent(shareId)}`))
+  if (response.ok) return response.json()
+  throw new Error(`chat share returned ${response.status}: ${await response.text()}`)
+}
+
 /** POST an OpenAI request and invoke onData for either buffered JSON or SSE events. */
 export async function requestCompletion(
   path: string,
@@ -109,7 +122,7 @@ export async function requestCompletion(
   }
 }
 
-function postJson(path: string, body: Record<string, unknown>, signal: AbortSignal): Promise<Response> {
+function postJson(path: string, body: object, signal: AbortSignal | undefined): Promise<Response> {
   return fetch(api(path), {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -120,8 +133,8 @@ function postJson(path: string, body: Record<string, unknown>, signal: AbortSign
 
 async function postJsonResult<T>(
   path: string,
-  body: Record<string, unknown>,
-  signal: AbortSignal,
+  body: object,
+  signal: AbortSignal | undefined,
   label: string,
 ): Promise<T> {
   const response = await postJson(path, body, signal)

@@ -200,6 +200,7 @@ custom_roles:
   - iam.roles.create
   - iam.roles.delete
   - iam.roles.get
+  - iam.roles.undelete
   - iam.roles.update
   - iam.serviceAccounts.create
   - iam.serviceAccounts.delete
@@ -961,6 +962,7 @@ project_grants:
   - principal: human-026
   - principal: human-072
   - principal: human-075
+  - principal: human-076
 - role: projects/hai-gcp-models/roles/ray1
   members:
   - serviceAccount:748532799086-compute@developer.gserviceaccount.com

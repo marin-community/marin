@@ -1,13 +1,20 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import AppHeader from './components/AppHeader.vue'
 import ChatView from './components/ChatView.vue'
 import CompletionView from './components/CompletionView.vue'
 import HistoryPanel from './components/HistoryPanel.vue'
 import SamplingControls from './components/SamplingControls.vue'
 import { useServing } from './composables/useServing'
+import { createChatShare, fetchChatShare } from './lib/api'
 import { ThinkingMode } from './lib/chat_template'
-import { isSharedChatHash, sharedChatUrl, sharedConversationFromHash } from './lib/shared_chat'
+import {
+  conversationFromSharedChat,
+  isSharedChatHash,
+  sharedChatIdFromHash,
+  sharedChatSnapshot,
+  sharedChatUrl,
+} from './lib/shared_chat'
 import { loadConversations, loadParams, newId, saveConversations, saveParams } from './lib/storage'
 import type { Conversation } from './lib/types'
 
@@ -17,9 +24,10 @@ const params = reactive(loadParams())
 watch(params, () => saveParams(params))
 
 const conversations = ref<Conversation[]>(loadConversations())
-const sharedHashPresent = isSharedChatHash(window.location.hash)
-const importedConversation = sharedConversationFromHash(window.location.hash, newId(), Date.now())
-const active = ref<Conversation>(importedConversation ?? freshConversation())
+const initialHash = window.location.hash
+const sharedHashPresent = isSharedChatHash(initialHash)
+const sharedChatId = sharedChatIdFromHash(initialHash)
+const active = ref<Conversation>(freshConversation())
 if (sharedHashPresent) {
   const cleanUrl = new URL(window.location.href)
   cleanUrl.hash = ''
@@ -34,7 +42,7 @@ const showParams = ref(false)
 // Below the md breakpoint the history panel is an overlay drawer.
 const showHistory = ref(false)
 const shareState = ref<'idle' | 'copied' | 'failed'>('idle')
-const shareImportFailed = ref(sharedHashPresent && !importedConversation)
+const shareImportFailed = ref(false)
 const shareLabel = computed(() => {
   if (shareState.value === 'copied') return 'Link copied'
   if (shareState.value === 'failed') return 'Copy failed'
@@ -47,6 +55,22 @@ watch(
     shareImportFailed.value = false
   },
 )
+onMounted(async () => {
+  if (!sharedHashPresent) return
+  if (!sharedChatId) {
+    shareImportFailed.value = true
+    return
+  }
+  try {
+    const snapshot = await fetchChatShare(sharedChatId)
+    const imported = conversationFromSharedChat(snapshot, newId(), Date.now(), ThinkingMode.TemplateDefault)
+    if (!imported) throw new Error('Invalid shared chat snapshot')
+    active.value = imported
+    persist()
+  } catch {
+    shareImportFailed.value = true
+  }
+})
 
 // Base checkpoints without a chat template start in completion mode.
 watch(info, (loaded) => {
@@ -60,7 +84,8 @@ function pickMode(picked: 'chat' | 'completion') {
 
 async function shareConversation() {
   try {
-    await navigator.clipboard.writeText(sharedChatUrl(window.location.href, active.value))
+    const shareId = await createChatShare(sharedChatSnapshot(active.value))
+    await navigator.clipboard.writeText(sharedChatUrl(window.location.href, shareId))
     shareState.value = 'copied'
   } catch {
     shareState.value = 'failed'
@@ -162,7 +187,7 @@ function clearHistory() {
             class="flex items-center gap-1.5 whitespace-nowrap rounded-lg px-2 py-1 text-xs text-text-muted transition-colors hover:text-text-secondary disabled:cursor-not-allowed disabled:opacity-40"
             :class="{ 'text-accent': shareState === 'copied', 'text-status-danger': shareState === 'failed' }"
             :disabled="!active.messages.length"
-            title="Copy a link containing the visible chat snapshot; hidden prompts and executable tools are excluded"
+            title="Copy a short link containing user and assistant messages; hidden prompts and tool details are excluded"
             @click="shareConversation"
           >
             <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

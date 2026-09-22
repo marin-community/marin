@@ -645,7 +645,10 @@ def test_build_evaluation_batch_routes_declared_verifier_host_secrets(monkeypatc
             "env:DAYTONA_API_KEY",
             "gcp-secret://projects/hai-gcp-models/secrets/DAYTONA_EVAL_API_KEY/versions/latest",
         ),
-        "TOGETHER_API_KEY": ("env:TOGETHER_API_KEY",),
+        "TOGETHER_API_KEY": (
+            "env:TOGETHER_API_KEY",
+            "gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest",
+        ),
     }
     assert batch.evaluations[0].secret_env_keys == ("DAYTONA_API_KEY", "TOGETHER_API_KEY")
 
@@ -679,6 +682,43 @@ def test_build_evaluation_batch_records_evalchemy_benchmark_extras(monkeypatch):
     )
 
     assert batch.evaluations[0].identity.eval_runtime == EVALCHEMY.requirement((*EVALCHEMY_REQUIRED_EXTRAS, "math500"))
+
+
+def test_build_evaluation_batch_routes_and_records_financebench_judge(monkeypatch):
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    definition = EvalchemyDefinition(
+        name="financebench",
+        config_path=Path("experiments/evaluation/configs/evalchemy/financebench.yaml"),
+    )
+    spec = LaunchSpec(
+        model=models()["qwen3-8b"],
+        evals=(),
+        evalchemy_definitions=(definition,),
+        harbor_definitions=(),
+        platform=Platform.TPU,
+        accelerator=None,
+        limit=1,
+        records_prefix="memory://records",
+        submission_cluster="marin",
+        federated_cluster=None,
+        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
+    )
+
+    batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
+
+    evaluation = batch.evaluations[0]
+    assert batch.secret_env == {
+        "JUDGE_API_KEY": (
+            "env:TOGETHER_API_KEY",
+            "gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest",
+        )
+    }
+    assert evaluation.secret_env_keys == ("JUDGE_API_KEY",)
+    assert evaluation.identity.eval_ref.evalchemy.judge.model_dump() == {
+        "base_url": "https://api.together.xyz/v1",
+        "model": "openai/gpt-oss-120b",
+    }
+    assert "TOGETHER_API_KEY" not in evaluation.identity.eval_ref.model_dump_json()
 
 
 def test_file_evalchemy_chat_template_overrides_model_default(monkeypatch):
