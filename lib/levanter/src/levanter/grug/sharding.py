@@ -6,6 +6,8 @@ import numpy as np
 from jax import P
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec, get_abstract_mesh, get_mesh, reshard
 
+from levanter.sharding import partition_spec_of
+
 # Convenience shorthand for batch sharding. Keep this aligned with Levanter's
 # default distributed batch mapping, which includes the cross-slice axis.
 Pbatch = P(("replica_dcn", "data"))
@@ -59,18 +61,9 @@ def _axis_names(entry) -> tuple[str, ...]:
     return tuple(str(name) for name in entry) if isinstance(entry, tuple) else (str(entry),)
 
 
-def _spec_of(x: jax.Array) -> PartitionSpec | None:
-    """Read explicit sharding from either a traced or concrete array."""
-    for candidate in (jax.typeof(x), x):
-        spec = getattr(getattr(candidate, "sharding", None), "spec", None)
-        if spec is not None and len(spec) > 0:
-            return spec
-    return None
-
-
 def _token_spec_from_x(x: jax.Array, mesh: Mesh | jax.sharding.AbstractMesh | None) -> PartitionSpec:
-    spec = _spec_of(x)
-    if spec is not None and spec[0] is not None:
+    spec = partition_spec_of(x)
+    if spec is not None and len(spec) > 0 and spec[0] is not None:
         return P(spec[0])
     return _token_spec(mesh)
 
@@ -80,8 +73,8 @@ def _is_replicated_spec(spec: PartitionSpec) -> bool:
 
 
 def _value_spec_or_default(x: jax.Array, default: PartitionSpec, *, replace_replicated: bool = False) -> PartitionSpec:
-    spec = _spec_of(x)
-    if spec is not None and not (replace_replicated and _is_replicated_spec(spec)):
+    spec = partition_spec_of(x)
+    if spec is not None and len(spec) > 0 and not (replace_replicated and _is_replicated_spec(spec)):
         return spec
     return default
 
