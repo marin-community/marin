@@ -12,11 +12,12 @@ import jax.numpy as jnp
 from jax.sharding import PartitionSpec as P
 
 from haliax.jax_utils import named_call
-from levanter.grug.sharding import _axis_names, _current_mesh, _reshard_for_shard_map, partition_spec_of
+from levanter.grug.sharding import _axis_names, _current_mesh, _reshard_for_shard_map
 from levanter.kernels.pallas.fused_cross_entropy_loss import (
     BlockSizes,
     fused_cross_entropy_loss_and_logsumexp_penalty,
 )
+from levanter.sharding import partition_spec_of
 
 
 def _token_dim_specs(x: jax.Array) -> tuple:
