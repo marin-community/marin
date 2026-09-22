@@ -32,6 +32,7 @@ from jax.tree_util import register_dataclass
 from jaxtyping import PRNGKeyArray
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
+from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 from levanter.checkpoint_manifest import read_manifest
 from levanter.data.dataset import AsyncDataset
 from levanter.data.loader import DataLoader
@@ -63,6 +64,7 @@ from levanter.utils.mesh import MeshConfig
 from experiments.grug.checkpointing import (
     LEGACY_STATE_KEY,
     MASTER_PARAMS_KEY,
+    init_weights_only_from_checkpoint,
     restore_grug_state_from_checkpoint,
 )
 from experiments.grug.dispatch import dispatch_grug_training_run
@@ -134,6 +136,13 @@ class TrainingDataMode(StrEnum):
 
     MIXTURE = "mixture"
     SYNTHETIC = "synthetic"
+
+
+class WeightInitialization(StrEnum):
+    """External checkpoint layouts supported for fresh optimizer initialization."""
+
+    NATIVE = "native"
+    LEGACY_SINGLE_SHARED_EXPERT = "legacy_single_shared_expert"
 
 
 def restore_template_from(state):
@@ -298,6 +307,8 @@ class GrugTrainerConfig:
     # restores from the latest committed checkpoint, so without a writer an interrupted run
     # restarts at step 0.
     save_checkpoints: bool = False
+    weight_initialization: WeightInitialization | None = None
+    """Load model weights from ``TrainerConfig.initialize_from`` after own-run resume."""
 
     # Grug builds its own compact (replica_dcn, data, context, expert, model) mesh instead of using
     # the Trainer's logical axis mapping; `data` absorbs whatever these leave free.
@@ -747,6 +758,34 @@ def initial_state(
     )
 
 
+def initialize_legacy_single_shared_expert_weights(
+    state: GrugTrainState,
+    checkpoint_path: str,
+    *,
+    mesh: Mesh,
+) -> GrugTrainState:
+    """Load a pre tuple shared-expert checkpoint into the current model layout."""
+    state = init_weights_only_from_checkpoint(
+        state,
+        checkpoint_path,
+        mesh=mesh,
+        allow_partial=True,
+        additional_weight_fields=("pending_qb_betas",),
+    )
+    concrete_path = latest_checkpoint_path(checkpoint_path)
+    shared = state.params.stacked_blocks.stacked.shared
+    if shared is None or len(shared) != 1:
+        raise ValueError("Legacy single shared-expert initialization requires exactly one shared expert")
+    exemplar = {"params": {"stacked_blocks": {"stacked": {"shared": shared[0]}}}}
+    loaded = load_checkpoint(exemplar, concrete_path, mesh=mesh, allow_partial=True)
+    legacy_shared = loaded["params"]["stacked_blocks"]["stacked"]["shared"]
+    params = eqx.tree_at(lambda model: model.stacked_blocks.stacked.shared[0], state.params, legacy_shared)
+    ema_params = state.ema_params
+    if ema_params is not None:
+        ema_params = eqx.tree_at(lambda model: model.stacked_blocks.stacked.shared[0], ema_params, legacy_shared)
+    return dataclasses.replace(state, params=params, ema_params=ema_params)
+
+
 def _drop_metrics(
     dropped_assignments: jax.Array,
     sender_dropped_assignments: jax.Array,
@@ -1022,6 +1061,32 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             state = take_master_as_params(state)
         if released_initial_state and any(isinstance(leaf, jax.ShapeDtypeStruct) for leaf in jax.tree.leaves(state)):
             state = _init_state(model_key)
+        initialization = config.trainer.weight_initialization
+        if initialization is not None:
+            if trainer.initialize_from is None:
+                raise ValueError("Weight initialization requires TrainerConfig.initialize_from")
+            if config.trainer.master_param_mode != MasterParamMode.DEVICE:
+                raise ValueError("External weight initialization currently requires device parameters")
+            if int(state.step) == 0:
+                if initialization == WeightInitialization.NATIVE:
+                    state = init_weights_only_from_checkpoint(
+                        state,
+                        trainer.initialize_from,
+                        mesh=mesh,
+                        allow_partial=False,
+                        additional_weight_fields=("pending_qb_betas",),
+                    )
+                elif initialization == WeightInitialization.LEGACY_SINGLE_SHARED_EXPERT:
+                    state = initialize_legacy_single_shared_expert_weights(
+                        state,
+                        trainer.initialize_from,
+                        mesh=mesh,
+                    )
+                else:
+                    raise ValueError(f"Unsupported weight initialization: {initialization}")
+                params = trainer.mp.cast_to_param(state.params)
+                ema_params = None if state.ema_params is None else trainer.mp.cast_to_param(state.ema_params)
+                state = dataclasses.replace(state, params=params, ema_params=ema_params)
         dump_grug_state_sharding_run_artifact(
             state,
             log_dir=trainer.log_dir,
@@ -1352,6 +1417,8 @@ __all__ = [
     "GrugTrainState",
     "GrugTrainerConfig",
     "MasterParamMode",
+    "WeightInitialization",
     "initial_state",
+    "initialize_legacy_single_shared_expert_weights",
     "run_grug",
 ]

@@ -119,13 +119,15 @@ class DatasetSpec:
     ``adapter_kwargs`` are forwarded to ``multi_turn_adapter(**adapter_kwargs)`` so a source's
     ShareGPT/OpenAI schema (column plus role/content conventions) is declared per source.
     ``weight`` is the un-normalized mixture weight; the data config normalizes across the mix.
+    ``splits`` selects immutable Hugging Face split names such as ``train_sft`` or ``test_sft``.
     """
 
     slug: str  # short mixture key, e.g. "magpie"
     hf_dataset_id: str
-    revision: str  # 7-char commit pin, for fingerprint stability
+    revision: str  # immutable commit pin, for fingerprint stability
     adapter_kwargs: Mapping[str, object]
     weight: float
+    splits: Sequence[str] = ("train",)
 
 
 @runtime_checkable
@@ -673,6 +675,7 @@ def _dataset_deps(spec: SFTSpec) -> tuple[ArtifactStep, ...]:
                 adapter=multi_turn_adapter(**dict(dataset.adapter_kwargs)),
                 metadata_columns=[],
                 name=dataset.slug,
+                splits=list(dataset.splits),
             )
         )
         for dataset in spec.datasets
