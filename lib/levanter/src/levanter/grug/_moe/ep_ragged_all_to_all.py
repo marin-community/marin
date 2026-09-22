@@ -50,11 +50,11 @@ _SM100_COMPUTE_CAPABILITY = 10.0
 # back to a single chunk when the local expert count is not divisible.
 _EXPERT_CHUNKS = 2
 
-# Selects the device-initiated ragged all-to-all kernel. The second entry is scoped to that op, so
-# every other collective keeps NCCL's host-launched kernels.
+# Select the device-initiated ragged all-to-all kernel and register symmetric buffers
+# for its transport and the model's all-gather/reduce-scatter collectives.
 RAGGED_REQUIRED_XLA_FLAGS = (
     "--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=true",
-    "--xla_enable_nccl_symmetric_buffers_for_collectives=raggedalltoall",
+    "--xla_enable_nccl_symmetric_buffers_for_collectives=raggedalltoall,allgather,reducescatter",
 )
 
 
