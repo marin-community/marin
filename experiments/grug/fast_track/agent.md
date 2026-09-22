@@ -90,8 +90,8 @@ Create a new branch for each experiment issue, off `main`. Follow
 `.agents/skills/research/SKILL.md` for explicitly requested research programs and
 their existing issue, W&B, or session records.
 
-Experiment issues should be titled `Agent fast_track Experiment: [description]`
-and include the exact prompt from the user that initiated the experiment.
+Experiment issues should be titled `[fast-track] <description>` and include the exact prompt from
+the user that initiated the experiment. Label them `fast-track` and `agent-generated`.
 
 ## Authentication
 
@@ -111,6 +111,9 @@ uv run iris --cluster marin job run --no-wait --enable-extra-resources \
   -e WANDB_API_KEY "$WANDB_API_KEY" -e WANDB_PROJECT marin_moe \
   -- python -m experiments.grug.fast_track.launch --run-id <name> --size <size> [--dense] --version <v> --run
 ```
+
+(Locally, the `fast-track` entry point is equivalent: `uv run fast-track --run-id <name> --size <size>
+…` — without `--run` it just prints the plan.)
 
 `--size` (d512/d768/d1024/d1280) and `--run-id` are required; `--dense` selects
 the dense baseline. The step budget derives from the variant baseline (`--match`,

@@ -89,6 +89,11 @@ irun() { uv run iris --cluster marin job run --no-wait --enable-extra-resources 
   -- python -m experiments.grug.fast_track.launch "${@:2}" --run; }
 ```
 
+The launcher is also exposed as a `fast-track` entry point for local use:
+`uv run fast-track --run-id <name> --size <size> [--dense] --version dev` prints the lowered plan
+(drop `--run` to inspect without submitting). `irun` wraps the equivalent `python -m …` as a cluster
+submission.
+
 Pick a size and variant; the budget defaults to **data-matching** that variant's baseline (dense at
 20 TPP, MoE at 60 TPP) at the rung's baseline batch (128 for d512/d768, 256 for d1024/d1280). Steps
 are derived automatically. Use `--match compute` to FLOP-match instead, `--batch-size` to change the
