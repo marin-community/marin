@@ -129,6 +129,7 @@ _BENCHMARK_PROMPTS = 128
 _BENCHMARK_SAMPLES_PER_PROMPT = 4
 _AGENTIC_BENCHMARK_PROMPTS = 128
 _AGENTIC_BENCHMARK_SEED = 71
+_AGENTIC_GROUP_ADMISSION_STALL_TIMEOUT = 3600
 _BENCHMARK_MEMORY = "512GB"
 _BENCHMARK_DISK = "2TB"
 _BENCHMARK_DISTRIBUTED_TIMEOUT = 60
@@ -265,6 +266,12 @@ def _agentic_benchmark_config_yaml(role_plan: SkyRLRolePlan, *, speculative: boo
     config = yaml.safe_load(_rl_benchmark_config_yaml(role_plan, speculative=speculative))
     config["entrypoint"] = "terminal_bench"
     config["config_groups"] = {"terminal_bench_config": "terminal_bench"}
+    # A TaskTrove prompt group can legitimately outlive SkyRL's 30-minute
+    # first-batch default: each of its four trials may exhaust the configured
+    # agent timeout and retry envelope before the group becomes admissible.
+    config["trainer"]["algorithm"]["group_admission"] = {
+        "stall_timeout": _AGENTIC_GROUP_ADMISSION_STALL_TIMEOUT,
+    }
     config["context_budget"] = {
         "request_window_tokens": 32_768,
         "max_new_tokens_per_turn": 4096,
