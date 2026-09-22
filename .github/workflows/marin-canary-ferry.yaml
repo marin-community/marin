@@ -226,6 +226,8 @@ jobs:
           retention-days: 1
           if-no-files-found: ignore
 
+      # Keep this last so expected capacity exhaustion does not trigger the
+      # failure-gated diagnostics and scheduled triage above.
       - name: Mark resource exhaustion as failure
         if: steps.wait.outputs.resource_exhausted == 'true'
         run: |
