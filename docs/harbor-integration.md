@@ -152,6 +152,9 @@ The agent's `model_info.max_input_tokens` comes from the model's resolved `serve
 `model_info.max_output_tokens` from `generation.max_gen_toks`, so the agent compacts against the
 window the server actually offers. With `auto_overrides`, explicit context limits are clamped to the
 checkpoint's native window before Harbor preflight; the batch retains that resolved serving configuration.
+A Terminus-2 policy also receives the resolved output limit as `llm_call_kwargs.max_tokens`, which applies
+the budget to ordinary chat-completion requests. An explicit lower request limit in the policy wins; a
+request limit above `model_info.max_output_tokens` fails preflight.
 A policy may state a lower limit to keep headroom under that window, and the lower limit wins:
 `grug-opencode-id.yaml` asks for 64512 input tokens against a
 model serving 65536. A policy limit above the served one fails preflight, before Iris opens, with

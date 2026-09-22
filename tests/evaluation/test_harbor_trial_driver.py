@@ -513,6 +513,51 @@ def test_effective_job_applies_runtime_precedence_and_validates_nested_updates(t
     }
 
 
+@pytest.mark.parametrize(("policy_max_tokens", "expected_max_tokens"), [(None, 32768), (16384, 16384)])
+def test_effective_terminus_job_applies_output_limit_to_llm_requests(tmp_path, policy_max_tokens, expected_max_tokens):
+    agent: dict[str, object] = {"name": "terminus-2"}
+    if policy_max_tokens is not None:
+        agent["kwargs"] = {"llm_call_kwargs": {"max_tokens": policy_max_tokens}}
+    policy_path = tmp_path / "policy.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "environment": {"type": "daytona"},
+                "agents": [agent],
+                "datasets": [{"name": "terminal-bench", "version": "2.0"}],
+            }
+        )
+    )
+    overlay_path = tmp_path / "overlay.json"
+    overlay_path.write_text(
+        json.dumps(
+            {
+                "job_name": "runtime-job",
+                "jobs_dir": str(tmp_path / "jobs"),
+                "dataset_path": None,
+                "endpoint_url": "https://iris.example/capability/v1",
+                "served_model": "served-glm",
+                "task_limit": 1,
+                "model_agent_kwargs": {
+                    "model_info": {"max_input_tokens": 65536, "max_output_tokens": 32768},
+                },
+                "archive_root": str(tmp_path / "archive"),
+                "archive_dataset": "terminal-bench",
+            }
+        )
+    )
+    script = (
+        "from pathlib import Path; "
+        "from marin.evaluation.harbor.trial_driver import effective_job_config; "
+        f"config=effective_job_config(Path({str(policy_path)!r}), Path({str(overlay_path)!r})); "
+        "print(config.model_dump_json())"
+    )
+
+    effective = json.loads(_external_python("-c", script).stdout)
+
+    assert effective["agents"][0]["kwargs"]["llm_call_kwargs"]["max_tokens"] == expected_max_tokens
+
+
 def test_effective_aime_job_preserves_capability_url_in_live_config_and_redacts_dump(tmp_path, checked_policies):
     capability_token = "dummy-capability-token"
     capability_url = f"https://iris.example/proxy/t/{capability_token}/serve.inference-test/v1"
