@@ -80,9 +80,6 @@ ROLE_PLAN = SkyRLRolePlan(
     n_samples_per_prompt=2,
 )
 
-# The launcher defaults trainer.hf_hub_repo_id to an org repo the export job cannot create.
-OVERRIDES = ("++trainer.hf_hub_repo_id=null",)
-
 
 def rl_config_yaml(plan: SkyRLRolePlan) -> str:
     return f"""\
@@ -247,7 +244,6 @@ def smoke_step(release: ArtifactStep) -> ArtifactStep[SkyRLRun]:
             ),
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=1, temporary_storage_ttl_days=1),
             seed=SEED,
-            overrides=OVERRIDES,
         ),
         IrisSkyRLExecution(
             cluster=CLUSTER,
