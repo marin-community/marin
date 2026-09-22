@@ -8,9 +8,18 @@ from iac.gcp.iam import GcpEncryptedMember, GcpIamArgs, merge_iam_grant_sets
 from iac.gcp.iam_config import GcpIamConfig
 
 
+def _project_role_members(project: str, config: GcpIamConfig, role_id: str) -> tuple[str | GcpEncryptedMember, ...]:
+    role = f"projects/{project}/roles/{role_id}"
+    matching_grants = tuple(grant for grant in config.project_grants if grant.role == role)
+    if len(matching_grants) != 1:
+        raise ValueError(f"expected exactly one project grant for {role}, found {len(matching_grants)}")
+    return matching_grants[0].members
+
+
 def global_iam_args(project: str, config: GcpIamConfig) -> GcpIamArgs:
     """Return the complete global IAM graph, including each deploy target."""
     principals = {principal.principal_id: GcpEncryptedMember(principal.ciphertext) for principal in config.principals}
+    marin_dev_members = _project_role_members(project, config, "marindev")
     args = GcpIamArgs(
         project=project,
         kms_location=config.kms_location,
@@ -30,7 +39,7 @@ def global_iam_args(project: str, config: GcpIamConfig) -> GcpIamArgs:
     return merge_iam_grant_sets(
         args,
         (
-            iris.iam_grants(project, principals),
+            iris.iam_grants(project, principals, marin_dev_members),
             grafana.iam_grants(project, principals),
             loom.iam_grants(project),
             marina.iam_grants(project, principals),

@@ -64,3 +64,14 @@ def test_global_iam_composes_deploy_target_grants_without_duplicate_resources() 
     grant_keys = _grant_keys(args)
 
     assert len(grant_keys) == len(set(grant_keys))
+
+
+def test_marin_dev_members_can_access_production_iris() -> None:
+    config = load_iam_config()
+    args = global_iam_args(PROJECT, config)
+
+    marin_dev_grant = next(grant for grant in args.project_grants if grant.role == f"projects/{PROJECT}/roles/marindev")
+    iris_backend = next(service for service in args.backend_service_iap if service.service == "iris-marin-be")
+    iap_grant = next(grant for grant in iris_backend.iap_grants if grant.role == "roles/iap.httpsResourceAccessor")
+
+    assert set(marin_dev_grant.members) <= set(iap_grant.members)
