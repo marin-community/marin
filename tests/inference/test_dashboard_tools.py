@@ -229,17 +229,15 @@ def test_dashboard_shared_chat_round_trips_through_short_id(dashboard_tool_base_
             {
                 "role": "assistant",
                 "content": "The second charge should be refunded.",
-                "thinking": "",
-                "thinkingSeconds": None,
                 "error": None,
             },
         ],
     }
 
-    created = requests.post(f"{dashboard_tool_base_url}/chat-shares", json=snapshot, timeout=10)
+    created = requests.post(f"{dashboard_tool_base_url}/chat-shares", json=snapshot, timeout=DASHBOARD_REQUEST_TIMEOUT)
     assert created.status_code == 201
     share_id = created.json()["id"]
-    fetched = requests.get(f"{dashboard_tool_base_url}/chat-shares/{share_id}", timeout=10)
+    fetched = requests.get(f"{dashboard_tool_base_url}/chat-shares/{share_id}", timeout=DASHBOARD_REQUEST_TIMEOUT)
 
     assert fetched.status_code == 200
     assert len(share_id) == 16
@@ -252,7 +250,7 @@ def test_dashboard_shared_chat_rejects_payload_over_512_kib(dashboard_tool_base_
     oversized = requests.post(
         f"{dashboard_tool_base_url}/chat-shares",
         json={"message": "x" * (512 * 1024)},
-        timeout=10,
+        timeout=DASHBOARD_REQUEST_TIMEOUT,
     )
 
     assert oversized.status_code == 413

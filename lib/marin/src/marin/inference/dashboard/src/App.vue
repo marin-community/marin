@@ -63,7 +63,7 @@ onMounted(async () => {
   }
   try {
     const snapshot = await fetchChatShare(sharedChatId)
-    const imported = conversationFromSharedChat(snapshot, newId(), Date.now())
+    const imported = conversationFromSharedChat(snapshot, newId(), Date.now(), ThinkingMode.TemplateDefault)
     if (!imported) throw new Error('Invalid shared chat snapshot')
     active.value = imported
     persist()

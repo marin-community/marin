@@ -71,6 +71,41 @@ class ServingInfo:
     chat_template_protocol: ChatTemplateProtocol = field(default_factory=ChatTemplateProtocol)
 
 
+@dataclass
+class _ChatShareStore:
+    max_bytes: int = MAX_SHARED_CHAT_BYTES
+    max_chats: int = MAX_SHARED_CHATS
+    id_bytes: int = SHARED_CHAT_ID_BYTES
+    chats: OrderedDict[str, bytes] = field(default_factory=OrderedDict)
+
+    async def create_response(self, request: Request) -> Response:
+        body = bytearray()
+        async for chunk in request.stream():
+            body.extend(chunk)
+            if len(body) > self.max_bytes:
+                return JSONResponse({"error": "shared chat is too large"}, status_code=413)
+        try:
+            payload = json.loads(body)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return JSONResponse({"error": "shared chat must be valid JSON"}, status_code=400)
+        if not isinstance(payload, dict):
+            return JSONResponse({"error": "shared chat must be a JSON object"}, status_code=400)
+
+        share_id = secrets.token_urlsafe(self.id_bytes)
+        while share_id in self.chats:
+            share_id = secrets.token_urlsafe(self.id_bytes)
+        self.chats[share_id] = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
+        if len(self.chats) > self.max_chats:
+            self.chats.popitem(last=False)
+        return JSONResponse({"id": share_id}, status_code=201, headers={"cache-control": "no-store"})
+
+    async def get_response(self, request: Request) -> Response:
+        payload = self.chats.get(request.path_params["share_id"])
+        if payload is None:
+            return JSONResponse({"error": "shared chat not found"}, status_code=404)
+        return Response(payload, media_type="application/json", headers={"cache-control": "no-store"})
+
+
 def build_dashboard_app(
     *,
     upstream_base_url: str,
@@ -87,7 +122,7 @@ def build_dashboard_app(
         request_timeout_seconds: Per-request timeout for upstream proxying.
     """
     state: dict[str, httpx.AsyncClient] = {}
-    shared_chats: OrderedDict[str, bytes] = OrderedDict()
+    chat_shares = _ChatShareStore()
 
     @asynccontextmanager
     async def lifespan(_app: Starlette) -> AsyncIterator[None]:
@@ -117,33 +152,6 @@ def build_dashboard_app(
             {"status": "ok" if ready else "loading", "model": model_id},
             status_code=200 if ready else 503,
         )
-
-    async def create_chat_share(request: Request) -> Response:
-        body = bytearray()
-        async for chunk in request.stream():
-            body.extend(chunk)
-            if len(body) > MAX_SHARED_CHAT_BYTES:
-                return JSONResponse({"error": "shared chat is too large"}, status_code=413)
-        try:
-            payload = json.loads(body)
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            return JSONResponse({"error": "shared chat must be valid JSON"}, status_code=400)
-        if not isinstance(payload, dict):
-            return JSONResponse({"error": "shared chat must be a JSON object"}, status_code=400)
-
-        share_id = secrets.token_urlsafe(SHARED_CHAT_ID_BYTES)
-        while share_id in shared_chats:
-            share_id = secrets.token_urlsafe(SHARED_CHAT_ID_BYTES)
-        shared_chats[share_id] = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
-        if len(shared_chats) > MAX_SHARED_CHATS:
-            shared_chats.popitem(last=False)
-        return JSONResponse({"id": share_id}, status_code=201, headers={"cache-control": "no-store"})
-
-    async def get_chat_share(request: Request) -> Response:
-        payload = shared_chats.get(request.path_params["share_id"])
-        if payload is None:
-            return JSONResponse({"error": "shared chat not found"}, status_code=404)
-        return Response(payload, media_type="application/json", headers={"cache-control": "no-store"})
 
     async def proxy(request: Request) -> Response:
         client = state["client"]
@@ -183,8 +191,8 @@ def build_dashboard_app(
             Route("/dashboard", index),
             Route("/info", serving_info),
             Route("/health", health),
-            Route("/chat-shares", create_chat_share, methods=["POST"]),
-            Route("/chat-shares/{share_id}", get_chat_share),
+            Route("/chat-shares", chat_shares.create_response, methods=["POST"]),
+            Route("/chat-shares/{share_id}", chat_shares.get_response),
             Route("/tools", python_tool_definitions_response, methods=["POST"]),
             Route("/tools/{name}", invoke_tool_response, methods=["POST"]),
             Route("/shell", shell_workspace_response, methods=["POST"]),

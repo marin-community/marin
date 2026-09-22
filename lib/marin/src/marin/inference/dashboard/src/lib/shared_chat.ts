@@ -10,8 +10,6 @@ type SharedChatMessage =
   | {
       role: 'assistant'
       content: string
-      thinking: string
-      thinkingSeconds: number | null
       error: string | null
     }
 
@@ -35,8 +33,6 @@ function sharedMessages(messages: ChatMessage[]): SharedChatMessage[] {
       shared.push({
         role: 'assistant',
         content: message.content,
-        thinking: '',
-        thinkingSeconds: null,
         error: message.error,
       })
     }
@@ -44,7 +40,7 @@ function sharedMessages(messages: ChatMessage[]): SharedChatMessage[] {
   return shared
 }
 
-/** Build the bounded, non-executable snapshot stored by the dashboard server. */
+/** Build the non-executable snapshot submitted to the dashboard server. */
 export function sharedChatSnapshot(conversation: Conversation): SharedChatSnapshot {
   return {
     version: SHARED_CHAT_VERSION,
@@ -80,8 +76,6 @@ function parsedChatMessage(value: unknown): ChatMessage | null {
   if (
     value.role !== 'assistant' ||
     typeof value.content !== 'string' ||
-    typeof value.thinking !== 'string' ||
-    (value.thinkingSeconds !== null && typeof value.thinkingSeconds !== 'number') ||
     (value.error !== null && typeof value.error !== 'string')
   ) {
     return null
@@ -90,8 +84,8 @@ function parsedChatMessage(value: unknown): ChatMessage | null {
   const message: AssistantMessage = {
     role: 'assistant',
     content: value.content,
-    thinking: value.thinking,
-    thinkingSeconds: value.thinkingSeconds,
+    thinking: '',
+    thinkingSeconds: null,
     error: value.error,
   }
   return message
@@ -102,6 +96,7 @@ export function conversationFromSharedChat(
   value: unknown,
   conversationId: string,
   timestamp: number,
+  thinkingMode: ThinkingMode,
 ): Conversation | null {
   if (!isRecord(value)) return null
   if (
@@ -125,7 +120,7 @@ export function conversationFromSharedChat(
     system: '',
     pythonTools: '',
     shellWorkspace: null,
-    thinkingMode: 'default' satisfies ThinkingMode,
+    thinkingMode,
     customInstructions: '',
     createdAt: timestamp,
     updatedAt: timestamp,
