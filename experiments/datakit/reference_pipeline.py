@@ -86,6 +86,7 @@ from dataclasses import dataclass, field, replace
 
 from fray.types import ResourceConfig
 from levanter.tokenizers import TokenizerBackend
+from marin.datakit import CPU_DATAKIT_DEPENDENCY_GROUPS
 from marin.datakit.decon import (
     DeconAttributes,
     DropSetSource,
@@ -193,7 +194,20 @@ TOKENIZER = "marin-community/marin-tokenizer"
 # loader.
 TOKENIZER_REVISION = "a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2"
 TOKENIZER_BACKEND = TokenizerBackend.HF
+# Stable recipe identity for the quality-model files at QUALITY_MODEL.
+QUALITY_MODEL_VERSION = "pooled-junkgate2"
 SPLIT = "train"
+
+DEFAULT_MAX_CONCURRENT = 8
+
+
+@dataclass(frozen=True)
+class TokenizerSpec:
+    """Tokenizer location and content identity for DataKit cache keys."""
+
+    name: str
+    identity: str
+
 
 # Decontam. Mandatory AA and best-effort lm-eval artifacts use one versioned root.
 EVAL_ROOT = f"{marin_prefix()}/{EVALS_RELATIVE}"
@@ -387,7 +401,7 @@ def _build_embed_step(name: str, normalize_step: StepSpec, scale: PipelineScale)
                 max_workers=scale.pool.n_workers,
             ),
             resources=DRIVER_RESOURCES,
-            pip_dependency_groups=["datakit"],
+            pip_dependency_groups=CPU_DATAKIT_DEPENDENCY_GROUPS,
         ),
     )
 
@@ -434,7 +448,7 @@ def build_train_centroids_step(embed_steps: dict[str, StepSpec], scale: Pipeline
                 parallel_sources=scale.sample_parallel_sources,
             ),
             resources=DRIVER_RESOURCES,
-            pip_dependency_groups=["datakit"],
+            pip_dependency_groups=CPU_DATAKIT_DEPENDENCY_GROUPS,
         ),
     )
     # Pin the K-means/BLAS thread count to the allocated CPUs so centroid training
@@ -465,7 +479,7 @@ def build_train_centroids_step(embed_steps: dict[str, StepSpec], scale: Pipeline
                 seed=cluster.train_seed,
             ),
             resources=scale.train_centroids_resources,
-            pip_dependency_groups=["datakit"],
+            pip_dependency_groups=CPU_DATAKIT_DEPENDENCY_GROUPS,
         ),
     )
 
@@ -569,8 +583,12 @@ def zephyr_datakit_steps(
     sources: dict[str, StepSpec],
     scale: PipelineScale = DEFAULT_SCALE,
     zephyr_context: ZephyrContext | None = None,
+    *,
+    tokenizer: TokenizerSpec | None = None,
 ) -> ZephyrDatakitSteps:
     """Build exact-dedup, tokenize, MinHash, and fuzzy-dedup stages."""
+    if tokenizer is None:
+        tokenizer = TokenizerSpec(TOKENIZER, TOKENIZER_REVISION)
     source_names = sorted(sources)
     exact_dedup = StepSpec(
         name="datakit/global_exact_dedup",
@@ -592,9 +610,9 @@ def zephyr_datakit_steps(
         tokenize_steps[name] = tokenize_attributes_step(
             name=f"datakit/tokenize/{name}",
             train_normalize=normalize_step,
-            tokenizer=TOKENIZER,
+            tokenizer=tokenizer.name,
             tokenizer_backend=TOKENIZER_BACKEND,
-            tokenizer_revision=TOKENIZER_REVISION,
+            tokenizer_revision=tokenizer.identity,
             max_workers=scale.pool.n_workers,
             worker_resources=scale.pool.worker,
             zephyr_context=zephyr_context,
@@ -653,6 +671,7 @@ def reference_datakit_steps(
     centroids_version: str | None = None,
     scale: PipelineScale = DEFAULT_SCALE,
     zephyr_context: ZephyrContext | None = None,
+    tokenizer: TokenizerSpec | None = None,
 ) -> DatakitSteps:
     """Build the reference Datakit DAG over the given normalize steps.
 
@@ -690,9 +709,16 @@ def reference_datakit_steps(
             ``DEFAULT_SCALE`` is the production full-fleet shape; ``SMOKE_SCALE``
             runs the same DAG end-to-end on a testbed sample.
         zephyr_context: Optional shared context for subprocess-compatible stages.
+        tokenizer: Tokenizer location and stable content identity. Uses the
+            pinned reference tokenizer by default.
     """
     cluster = scale.cluster
-    zephyr_steps = zephyr_datakit_steps(sources, scale, zephyr_context)
+    zephyr_steps = zephyr_datakit_steps(
+        sources,
+        scale,
+        zephyr_context,
+        tokenizer=tokenizer,
+    )
     exact_dedup = zephyr_steps.exact_dedup
     embed_steps = build_per_source_embed_steps(sources, scale)
     if domain_centroids is None:
@@ -768,7 +794,7 @@ def reference_datakit_steps(
                     scale=scale,
                 ),
                 resources=DRIVER_RESOURCES,
-                pip_dependency_groups=["datakit"],
+                pip_dependency_groups=CPU_DATAKIT_DEPENDENCY_GROUPS,
             ),
         )
 
@@ -960,6 +986,33 @@ def reference_datakit_steps(
     return DatakitSteps(sources=sources, output_buckets=store, all_steps=all_steps)
 
 
+def materialize_reference_store(
+    sources: dict[str, StepSpec],
+    *,
+    quality_model: str,
+    quality_model_version: str,
+    domain_centroids: str | StepSpec | None = None,
+    centroids_version: str | None = None,
+    scale: PipelineScale = DEFAULT_SCALE,
+    zephyr_context: ZephyrContext | None = None,
+    tokenizer: TokenizerSpec | None = None,
+    max_concurrent: int = DEFAULT_MAX_CONCURRENT,
+) -> ClusteredStoreData:
+    """Run the reference DataKit DAG and return its clustered store."""
+    datakit = reference_datakit_steps(
+        sources,
+        quality_model=quality_model,
+        quality_model_version=quality_model_version,
+        domain_centroids=domain_centroids,
+        centroids_version=centroids_version,
+        scale=scale,
+        zephyr_context=zephyr_context,
+        tokenizer=tokenizer,
+    )
+    StepRunner().run(datakit.all_steps, max_concurrent=max_concurrent)
+    return read_artifact(datakit.output_buckets.output_path, ClusteredStoreData)
+
+
 SAMPLE_PREFIX = "s3://marin-us-east-02a/marin/datakit/sample_0.1b_7d7d8fd7"
 
 QUALITY_MODEL = "datakit/models/quality/pooled_junkgate2"
@@ -1096,7 +1149,13 @@ def main() -> None:
     parser.add_argument("--pool-cpu", type=float, default=None, help="per-worker CPUs (override scale)")
     parser.add_argument("--pool-ram", default=None, help="per-worker RAM, e.g. 16g (override scale)")
     parser.add_argument("--pool-disk", default=None, help="per-worker disk, e.g. 16g (override scale)")
-    parser.add_argument("--max-concurrent", type=int, default=8, metavar="N", help="max steps StepRunner runs at once")
+    parser.add_argument(
+        "--max-concurrent",
+        type=int,
+        default=DEFAULT_MAX_CONCURRENT,
+        metavar="N",
+        help="max steps StepRunner runs at once",
+    )
     parser.add_argument(
         "--run-tag",
         default="",
@@ -1115,7 +1174,7 @@ def main() -> None:
         max_workers=scale.pool.n_workers,
         stage_runner_factory=SubprocessRunner,
     ) as zephyr_context:
-        result = reference_datakit_steps(
+        materialize_reference_store(
             sources,
             quality_model=args.quality_model,
             quality_model_version=args.quality_model_version,
@@ -1123,8 +1182,8 @@ def main() -> None:
             centroids_version=args.domain_centroids_version,
             scale=scale,
             zephyr_context=zephyr_context,
+            max_concurrent=args.max_concurrent,
         )
-        StepRunner().run(result.all_steps, max_concurrent=args.max_concurrent)
 
 
 if __name__ == "__main__":

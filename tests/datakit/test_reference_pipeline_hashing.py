@@ -13,6 +13,8 @@ import dataclasses
 import json
 
 import pytest
+from marin.datakit import CPU_DATAKIT_DEPENDENCY_GROUPS
+from marin.execution.remote import RemoteCallable
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.fuzzy_dups import compute_fuzzy_dups_attrs_step
 from marin.processing.classification.deduplication.fuzzy_minhash import compute_minhash_attrs_step
@@ -21,6 +23,7 @@ from experiments.datakit import reference_pipeline
 from experiments.datakit.reference_pipeline import (
     SMOKE_SCALE,
     PoolConfig,
+    TokenizerSpec,
     reference_datakit_steps,
     zephyr_datakit_steps,
 )
@@ -82,6 +85,25 @@ def test_no_region_path_in_hash_attrs_except_known_bloom_gap():
         if step.name == "datakit/bloom/_combined_fixed":
             continue
         assert "gs://" not in json.dumps(step.hash_attrs, default=str), f"{step.name} leaks a gs:// path into its hash"
+
+
+def test_explicit_datakit_dependencies_include_cpu():
+    result = _build()
+
+    def dependencies(step: StepSpec):
+        yield step
+        for dependency in step.deps:
+            yield from dependencies(dependency)
+
+    explicit_dependency_groups = {
+        step.name: step.fn.pip_dependency_groups
+        for root in result.all_steps
+        for step in dependencies(root)
+        if isinstance(step.fn, RemoteCallable) and step.fn.pip_dependency_groups is not None
+    }
+
+    assert explicit_dependency_groups
+    assert set(map(tuple, explicit_dependency_groups.values())) == {tuple(CPU_DATAKIT_DEPENDENCY_GROUPS)}
 
 
 def test_store_hash_tracks_content_not_resources():
@@ -147,6 +169,15 @@ def test_upstream_revision_bump_rekeys_its_step(monkeypatch, constant, step):
     base = _steps_by_name(_build())[step].hash_id
     monkeypatch.setattr(reference_pipeline, constant, "deadbeef")
     assert _steps_by_name(_build())[step].hash_id != base
+
+
+def test_explicit_tokenizer_rekeys_tokenize_and_store():
+    base = _steps_by_name(_build())
+    changed = _steps_by_name(_build(tokenizer=TokenizerSpec("hero-bpe-v16384", "sha256:abcd")))
+
+    assert changed["datakit/tokenize/a"].hash_id != base["datakit/tokenize/a"].hash_id
+    assert changed["datakit/store"].hash_id != base["datakit/store"].hash_id
+    assert changed["datakit/minhash/a"].hash_id == base["datakit/minhash/a"].hash_id
 
 
 def test_external_path_requires_version_tag():

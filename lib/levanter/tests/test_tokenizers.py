@@ -34,6 +34,7 @@ from levanter.tokenizers import (
     _stage_tokenizer,
     _try_load_tokenizer_from_dir,
     load_tokenizer,
+    tokenizer_content_hash,
 )
 
 
@@ -1498,3 +1499,16 @@ def test_stage_from_mirror_tolerates_broken_fs(tmp_path):
 
     assert result is False
     assert not list(local_dir.iterdir())
+
+
+def test_tokenizer_content_hash_tracks_staged_files(tmp_path):
+    tokenizer_dir = tmp_path / "tokenizer"
+    tokenizer_dir.mkdir()
+    (tokenizer_dir / "tokenizer.json").write_text('{"version":"1.0"}')
+    first = tokenizer_content_hash(str(tokenizer_dir))
+
+    (tokenizer_dir / "tokenizer_config.json").write_text('{"bos_token":"<s>"}')
+    second = tokenizer_content_hash(str(tokenizer_dir))
+
+    assert first.startswith("sha256:")
+    assert second != first
