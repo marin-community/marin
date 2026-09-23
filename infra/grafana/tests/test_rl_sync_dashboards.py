@@ -860,10 +860,32 @@ def test_the_generate_subtree_is_subtracted_from_generate_and_not_stacked_beside
     assert sum(bands[phase] for phase in subtree) == pytest.approx(DRIVER_PHASES["generate"])
 
 
-def test_policy_train_share_reproduces_the_measured_ninety_percent(store) -> None:
-    rows = _panel_rows(store, "policy_train share of the step")
+SHORT_STEP = {"step": 1000.0, "policy_train": 100.0}
 
-    assert {round(share, 4) for _, share in rows} == {round(DRIVER_PHASES["policy_train"] / STEP_SECONDS, 4)}
+
+def test_policy_train_share_reproduces_the_measured_ninety_percent(store) -> None:
+    """The first bucket also holds a short step, so the share there is of the bucket's step time:
+    a mean of the two steps' ratios would weigh the short step as much as the long one."""
+    store.execute(
+        f"""INSERT INTO "telemetry_v1.marinskyrl"
+            SELECT * REPLACE (
+                CASE json_get(attributes_json, 'phase') WHEN 'step' THEN {SHORT_STEP["step"]}
+                     ELSE {SHORT_STEP["policy_train"]} END AS value,
+                timestamp_ms + 60000 AS timestamp_ms,
+                CAST(json_merge_patch(attributes_json, json_object('step', '100')) AS VARCHAR) AS attributes_json)
+            FROM "telemetry_v1.marinskyrl"
+            WHERE json_get(attributes_json, 'role') = 'trainer' AND json_get(attributes_json, 'step') = '0'
+              AND json_get(attributes_json, 'clock_domain') = 'inclusive_wall'
+              AND json_get(attributes_json, 'phase') IN ('step', 'policy_train')"""
+    )
+
+    shares = dict(_panel_rows(store, "policy_train share of the step"))
+    first = shares.pop(min(shares))
+
+    assert first == pytest.approx(
+        (DRIVER_PHASES["policy_train"] + SHORT_STEP["policy_train"]) / (STEP_SECONDS + SHORT_STEP["step"])
+    )
+    assert {round(share, 4) for share in shares.values()} == {round(DRIVER_PHASES["policy_train"] / STEP_SECONDS, 4)}
 
 
 def test_the_decomposition_reads_the_critical_rank_and_never_a_per_phase_maximum(store) -> None:
@@ -1384,8 +1406,9 @@ GPUS_PER_NODE = 8
 LONG_RUN_STEP_MS = 60_000
 
 
-def _long_run_store(ranks: int) -> duckdb.DuckDBPyConnection:
-    """LONG_RUN_STEPS steps, one a minute, across `ranks` worker ranks eight to a node.
+def _long_run_store(ranks: int, steps: int = LONG_RUN_STEPS) -> duckdb.DuckDBPyConnection:
+    """`steps` steps spread over the window of LONG_RUN_STEPS one-minute steps, across `ranks` worker
+    ranks eight to a node.
 
     The first step of this suite's run is the template: its worker rows are copied onto every rank
     of the same parity, its node agent rows onto every GPU, and everything onto every step. Copied
@@ -1438,10 +1461,10 @@ def _long_run_store(ranks: int) -> duckdb.DuckDBPyConnection:
         database.execute(
             f"""INSERT INTO "{stream}" ({columns})
                 SELECT cluster, service, run_id, job_id, execution_uid, {node}, process_index, name, value,
-                       timestamp_ms + step * {LONG_RUN_STEP_MS}, step, resource_attributes_json,
-                       CAST({attributes} AS VARCHAR), body_json, kind
+                       timestamp_ms + step * {LONG_RUN_STEP_MS * LONG_RUN_STEPS // steps}, step,
+                       resource_attributes_json, CAST({attributes} AS VARCHAR), body_json, kind
                 FROM template_rows,
-                     (SELECT range AS step FROM range({LONG_RUN_STEPS})) AS steps,
+                     (SELECT range AS step FROM range({steps})) AS steps,
                      (SELECT range AS copy FROM {"range(1)" if single else copies}) AS copies
                 WHERE {predicate}"""
         )
@@ -1451,8 +1474,13 @@ def _long_run_store(ranks: int) -> duckdb.DuckDBPyConnection:
 def test_no_source_grows_with_the_rank_count_on_a_long_run() -> None:
     """Span data is steps x ranks x phases x clock domains, so every source reduces the ranks in
     Finelog. At 500 steps across 64 ranks, each source holds under its cap, and a span or counter
-    source returns exactly as many rows as it does across eight."""
+    source returns exactly as many rows as it does across eight.
+
+    The overview also reduces the steps: ten times as many steps in the same window return the same
+    rows. A per-step overview source would pass its cap on a long window of a fast run, and the cap
+    fails the whole overview, including panels that do not read spans."""
     wide, narrow = _long_run_store(LONG_RUN_RANKS), _long_run_store(RANKS_PER_NODE)
+    dense = _long_run_store(RANKS_PER_NODE, steps=10 * LONG_RUN_STEPS)
     start_ms = _millis(WINDOW_START)
     end_ms = start_ms + (LONG_RUN_STEPS + 1) * LONG_RUN_STEP_MS
 
@@ -1463,6 +1491,10 @@ def test_no_source_grows_with_the_rank_count_on_a_long_run() -> None:
             assert 0 < rows <= source.max_rows, (dataset.name, source.name, rows)
             if source.name != "gpu":
                 assert rows == narrow.execute(source.sql).fetch_arrow_table().num_rows, (dataset.name, source.name)
+            if build is rl_overview_dataset:
+                assert dense.execute(source.sql).fetch_arrow_table().num_rows == (
+                    narrow.execute(source.sql).fetch_arrow_table().num_rows
+                ), source.name
 
     targets = [
         target
@@ -1471,11 +1503,12 @@ def test_no_source_grows_with_the_rank_count_on_a_long_run() -> None:
         for target in panel.get("targets", [])
         if target["url"] in _DATASETS
     ]
-    app, _ = _bridge(wide)
     window = {"from": str(start_ms), "to": str(end_ms)}
-    with TestClient(app) as client:
-        statuses = {
-            client.get(f"/finelog/marin{target['url']}", params={**_params(target), **window}).status_code
-            for target in targets
-        }
-    assert statuses == {200}
+    for database, served in ((wide, targets), (dense, [t for t in targets if t["url"] == "/v1/rl/overview"])):
+        app, _ = _bridge(database)
+        with TestClient(app) as client:
+            statuses = {
+                client.get(f"/finelog/marin{target['url']}", params={**_params(target), **window}).status_code
+                for target in served
+            }
+        assert statuses == {200}

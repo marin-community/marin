@@ -3,9 +3,9 @@
 
 """Bounded datasets behind the synchronous RL post-training dashboard and its two drill-downs.
 
-The span sources hold one row per step and phase. Finelog reduces each step's worker spans to the
-step's critical rank, the rank with the longest ``policy_ppo_train``, and to a per-bucket spread
-across ranks.
+The overview's span source holds one row per bucket and phase; the drill-downs' span sources hold
+one row per step and phase. Finelog reduces each step's worker spans to the step's critical rank,
+the rank with the longest ``policy_ppo_train``, and to a per-bucket spread across ranks.
 """
 
 from dashboard_dataset import (
@@ -287,7 +287,7 @@ WITH {_phase_rows_cte(bucket, scope)}, {_CRITICAL_RANK_CTE}, terminal AS (
       AND name = 'terminal'
     GROUP BY 1, 2, 3
 )
-SELECT 'driver' AS statistic, t, step,
+SELECT 'driver' AS statistic, t,
        CAST(NULL AS VARCHAR) AS role,
        phase, parent, clock_domain,
        SUM(value) AS sum_value,
@@ -303,9 +303,9 @@ SELECT 'driver' AS statistic, t, step,
 FROM phase_rows
 WHERE role = 'trainer'
   AND ((clock_domain = 'inclusive_wall' AND root = 'step') OR phase = 'generate_span_residual')
-GROUP BY t, step, phase, parent, clock_domain
+GROUP BY t, phase, parent, clock_domain
 UNION ALL
-SELECT 'critical_rank' AS statistic, t, step,
+SELECT 'critical_rank' AS statistic, t,
        CAST(NULL AS VARCHAR) AS role,
        phase, parent, clock_domain,
        SUM(value) AS sum_value,
@@ -320,11 +320,10 @@ SELECT 'critical_rank' AS statistic, t, step,
        CAST(NULL AS BIGINT) AS queued_records
 FROM tagged
 WHERE worker_rank = critical_rank AND phase = 'policy_span_residual'
-GROUP BY t, step, phase, parent, clock_domain
+GROUP BY t, phase, parent, clock_domain
 UNION ALL
 SELECT 'coverage' AS statistic,
        CAST(NULL AS BIGINT) AS t,
-       CAST(NULL AS VARCHAR) AS step,
        role,
        CAST(NULL AS VARCHAR) AS phase,
        CAST(NULL AS VARCHAR) AS parent,
@@ -345,7 +344,6 @@ GROUP BY role, clock_domain
 UNION ALL
 SELECT 'terminal' AS statistic,
        CAST(NULL AS BIGINT) AS t,
-       CAST(NULL AS VARCHAR) AS step,
        role,
        CAST(NULL AS VARCHAR) AS phase,
        CAST(NULL AS VARCHAR) AS parent,
@@ -358,7 +356,7 @@ SELECT 'terminal' AS statistic,
        CAST(NULL AS BIGINT) AS failed_steps,
        status, reason, lost_records, queued_records
 FROM terminal
-ORDER BY statistic, t, step
+ORDER BY statistic, t
 LIMIT {RL_MAX_SPAN_ROWS + 1}
 """.strip()
     views = {
@@ -474,37 +472,31 @@ GROUP BY 1, 2 ORDER BY 1
             "SELECT role, status, reason, lost_records, queued_records "
             "FROM spans WHERE statistic = 'terminal' ORDER BY 1, 2"
         ),
-        # A phase's band is its wall minus its children's walls in the same step, so the bands
+        # A phase's band is its wall minus its children's walls in the same bucket, so the bands
         # close on the step at any depth; the step's own band is what no phase accounts for.
         "step_composition": (
             """
 WITH driver AS (
     SELECT * FROM spans WHERE statistic = 'driver' AND clock_domain = 'inclusive_wall'
 ), contained AS (
-    SELECT t, step, parent AS phase, SUM(sum_value) AS child_seconds
-    FROM driver WHERE parent IS NOT NULL AND parent <> '' GROUP BY 1, 2, 3
+    SELECT t, parent AS phase, SUM(sum_value) AS child_seconds
+    FROM driver WHERE parent IS NOT NULL AND parent <> '' GROUP BY 1, 2
 )
 SELECT driver.t,
        driver.phase AS series,
-       SUM(driver.sum_value - driver.sample_count * COALESCE(contained.child_seconds, 0))
-           / SUM(driver.sample_count) AS value
+       SUM(driver.sum_value - COALESCE(contained.child_seconds, 0)) / SUM(driver.sample_count) AS value
 FROM driver
-LEFT JOIN contained
-  ON contained.t = driver.t AND contained.step = driver.step AND contained.phase = driver.phase
+LEFT JOIN contained ON contained.t = driver.t AND contained.phase = driver.phase
 GROUP BY 1, 2 ORDER BY 1
 """.strip()
         ),
         "policy_train_share": (
             """
-WITH per_step AS (
-    SELECT t, step,
-           MAX(CASE WHEN phase = 'policy_train' THEN max_value END) AS policy_train,
-           MAX(CASE WHEN phase = 'step' THEN max_value END) AS step_seconds
-    FROM spans WHERE statistic = 'driver' AND clock_domain = 'inclusive_wall'
-    GROUP BY 1, 2
-)
-SELECT t, AVG(policy_train / NULLIF(step_seconds, 0)) AS policy_train_share
-FROM per_step GROUP BY 1 ORDER BY 1
+SELECT t,
+       SUM(CASE WHEN phase = 'policy_train' THEN sum_value END)
+           / NULLIF(SUM(CASE WHEN phase = 'step' THEN sum_value END), 0) AS policy_train_share
+FROM spans WHERE statistic = 'driver' AND clock_domain = 'inclusive_wall'
+GROUP BY 1 ORDER BY 1
 """.strip()
         ),
         "generate_residual": (

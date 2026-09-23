@@ -1,7 +1,7 @@
 {
   "type": "timeseries",
   "title": "policy_train share of the step",
-  "description": "Driver `policy_train` ÷ `step`, per step. Near 1 means `policy_train` dominates the step. Near 0 means `generate` does.",
+  "description": "The share of step time in the bucket spent in `policy_train`: driver `policy_train` seconds ÷ `step` seconds, each summed over the bucket's steps. Near 1 means `policy_train` dominates the step. Near 0 means `generate` does.",
   "datasource": {
     "type": "yesoreyeram-infinity-datasource",
     "uid": "finelog-marin"

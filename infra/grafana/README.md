@@ -334,10 +334,13 @@ RL Post-training (sync) and its two drill-downs read datasets built in `src/rl_o
 `/v1/rl/generation` (`driver`: the driver's step spans and rollout counters) and, for its vLLM
 panels, the run's `/v1/vllm/overview` result, which carries vLLM detail only for windows of 7
 hours or less. The train-step board reads `/v1/rl/train-step` (`spans`, `counters` and `gpu`).
-Span and counter sources keep one row per step and phase. Finelog reduces each step's worker spans
-to its slowest rank, the rank with the longest `policy_ppo_train`, and to a per-bucket spread
-across ranks, so their row counts do not grow with the rank count. Each is capped at 50,000 rows;
-at 500 steps across 64 ranks the largest, `driver`, holds 11,000.
+The overview's `spans` source keeps one row per bucket and phase, so a long window on a fast run
+does not grow it. The drill-downs' span and counter sources keep one row per step and phase.
+Finelog reduces each step's worker spans to its slowest rank, the rank with the longest
+`policy_ppo_train`, and to a per-bucket spread across ranks, so no source grows with the rank
+count. Each is capped at 50,000 rows, and one source past its cap fails its whole dataset with a
+400. At 500 steps across 64 ranks the largest, `driver`, holds 11,000 and the overview's `spans`
+holds 1,405.
 
 The two inference dashboards keep the selected identity and time range when
 linked. The existing `marin-inference` UID now opens diagnostics, preserving old
