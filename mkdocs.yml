@@ -68,6 +68,7 @@ nav:
       - Add a Chat Dataset: tutorials/add-chat-dataset.md
       - Setting up a Local GPU Environment: tutorials/local-gpu.md
       - Training on Cloud GPUs: tutorials/cloud-gpu.md
+      - Fine-tune Snowball on Your H100 Cluster: tutorials/run-snowball-sft-on-h100.md
       - Prepare a Storage Bucket: tutorials/storage-bucket.md
       - Publishing an Analysis Site: tutorials/publish-analysis-site.md
       - Training an LM: tutorials/train-an-lm.md
