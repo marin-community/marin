@@ -365,7 +365,7 @@ def _stable_policy_json(config: JobConfig) -> str:
     return _stable_json(_normalized(config.model_dump(mode="python")))
 
 
-def _harbor_config_commit() -> str:
+def _harbor_commit() -> str:
     distribution_name = importlib.metadata.packages_distributions()["harbor"][0]
     direct_url = json.loads(importlib.metadata.distribution(distribution_name).read_text("direct_url.json") or "{}")
     commit = direct_url.get("vcs_info", {}).get("commit_id")
@@ -433,7 +433,7 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict
             "agent": sorted(agent_errors),
             "passthrough": sorted(passthrough_errors),
             "undecided": sorted(undecided_errors),
-            "commit": _harbor_config_commit(),
+            "commit": _harbor_commit(),
         },
         "max_input_tokens": model_info[MAX_INPUT_TOKENS_KEY],
         "max_output_tokens": model_info[MAX_OUTPUT_TOKENS_KEY],
