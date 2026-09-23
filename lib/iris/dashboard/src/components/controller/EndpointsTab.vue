@@ -15,16 +15,31 @@ const query = ref('')
 const showAll = ref(false)
 
 const {
-  data: listResponse,
-  loading,
-  error,
-  refresh: fetchEndpoints,
+  data: taskListResponse,
+  loading: taskLoading,
+  error: taskError,
+  refresh: fetchTaskEndpoints,
 } = useEndpointRpc<ListEndpointsResponse>('ListEndpoints')
+const {
+  data: systemListResponse,
+  loading: systemLoading,
+  error: systemError,
+  refresh: fetchSystemEndpoints,
+} = useEndpointRpc<ListEndpointsResponse>('ListEndpoints', { prefix: '/system/' })
 
-const endpoints = computed(() => listResponse.value?.endpoints ?? [])
+const endpoints = computed(() => [
+  ...(systemListResponse.value?.endpoints ?? []),
+  ...(taskListResponse.value?.endpoints ?? []),
+])
+const loading = computed(() => taskLoading.value || systemLoading.value)
+const error = computed(() => taskError.value || systemError.value)
 const matchingEndpoints = computed(() => sortEndpointsByName(filterEndpoints(endpoints.value, query.value)))
 
 watch(() => matchingEndpoints.value.length, () => { showAll.value = false })
+
+async function fetchEndpoints() {
+  await Promise.all([fetchTaskEndpoints(), fetchSystemEndpoints()])
+}
 
 onMounted(fetchEndpoints)
 useAutoRefresh(fetchEndpoints, DEFAULT_REFRESH_MS)
