@@ -50,6 +50,7 @@ def iam_grants(project: str, principals: Mapping[str, GcpEncryptedMember]) -> Gc
                         role="roles/iap.httpsResourceAccessor",
                         members=(
                             f"serviceAccount:iris-controller@{project}.iam.gserviceaccount.com",
+                            f"serviceAccount:contractor@{project}.iam.gserviceaccount.com",
                             "serviceAccount:ravwojdyla@rav-openathena.iam.gserviceaccount.com",
                             principals["human-014"],
                             principals["human-032"],
