@@ -45,13 +45,17 @@
       "source": "url",
       "format": "table",
       "parser": "backend",
-      "url": "/query",
+      "url": "/v1/rl/overview",
       "url_options": {
         "method": "GET",
         "params": [
           {
-            "key": "sql",
-            "value": "SELECT json_get(attributes_json, 'role') AS role, json_get(attributes_json, 'clock_domain') AS clock, NULLIF(COUNT(DISTINCT json_get(attributes_json, 'rank')), 0) AS ranks, COUNT(DISTINCT json_get(attributes_json, 'step')) AS steps, CASE WHEN COUNT(json_get(attributes_json, 'outcome')) = 0 THEN NULL ELSE COUNT(DISTINCT CASE WHEN json_get(attributes_json, 'outcome') = 'failure' THEN json_get(attributes_json, 'step') END) END AS truncated_steps FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'phase_duration_seconds' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1, 2"
+            "key": "clusters",
+            "value": "${cluster:csv}"
+          },
+          {
+            "key": "run",
+            "value": "${run}"
           },
           {
             "key": "from",
@@ -60,6 +64,14 @@
           {
             "key": "to",
             "value": "${__to}"
+          },
+          {
+            "key": "bucket_ms",
+            "value": "${__interval_ms}"
+          },
+          {
+            "key": "view",
+            "value": "span_coverage"
           }
         ]
       },

@@ -1,7 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Three bounded sources shared by the RL post-training dashboard."""
+"""Bounded datasets behind the synchronous RL post-training dashboard.
+
+The span sources hold one row per step and phase. Finelog reduces each step's worker spans to the
+step's critical rank, the rank with the longest ``policy_ppo_train``, and to a per-bucket spread
+across ranks.
+"""
 
 from dashboard_dataset import (
     DashboardDataset,
@@ -20,6 +25,7 @@ RL_MAX_CLUSTERS = 16
 RL_MAX_CORE_ROWS = 100_000
 RL_MAX_ENGINE_ROWS = 100_000
 RL_MAX_GPU_ROWS = 50_000
+RL_MAX_SPAN_ROWS = 50_000
 RL_MAX_RESULT_ROWS = 100_000
 RL_RECENT_MAX_ROWS = 20
 RL_RECENT_WINDOW_PADDING_MS = 60_000
@@ -34,24 +40,85 @@ _CORE_NAMES = (
     "ray_spill_manager_objects_bytes",
     "work_completed",
 )
+_INCLUSIVE_CLOCKS = "('inclusive_wall', 'inclusive_launch')"
+_EXCLUSIVE_CLOCKS = "('exclusive_wall', 'exclusive_launch')"
+
+
+def _rl_bucket_ms(
+    clusters: tuple[str, ...], run: str, start_ms: int, end_ms: int, requested_bucket_ms: int, label: str
+) -> int:
+    validate_values("clusters", clusters, max_values=RL_MAX_CLUSTERS, max_length=128)
+    validate_value("run", run, max_length=512)
+    return bounded_bucket_ms(
+        start_ms,
+        end_ms,
+        requested_bucket_ms,
+        max_window_ms=RL_MAX_WINDOW_MS,
+        max_window_error=f"{label} range must not exceed 7 days",
+        min_bucket_ms=RL_MIN_BUCKET_MS,
+        max_points=RL_MAX_POINTS,
+    )
+
+
+def _bucket_sql(start_ms: int, bucket_ms: int) -> str:
+    return f"{start_ms} + (timestamp_ms - {start_ms}) - (timestamp_ms - {start_ms}) % {bucket_ms}"
+
+
+def _run_scope(clusters: tuple[str, ...], run: str, start_ms: int, end_ms: int) -> str:
+    """The MarinSkyRL rows of one run, in the selected clusters and window."""
+    return f"""service = 'marinskyrl'
+      AND run_id = {sql_string(run)}
+      AND COALESCE(NULLIF(cluster, ''), 'marin') IN ({sql_values(clusters)})
+      AND timestamp_ms >= {start_ms} AND timestamp_ms < {end_ms}"""
+
+
+def _phase_rows_cte(bucket: str, scope: str) -> str:
+    return f"""phase_rows AS (
+    SELECT {bucket} AS t,
+           json_get(attributes_json, 'role') AS role,
+           json_get(attributes_json, 'step') AS step,
+           json_get(attributes_json, 'rank') AS worker_rank,
+           json_get(attributes_json, 'phase') AS phase,
+           json_get(attributes_json, 'parent') AS parent,
+           json_get(attributes_json, 'root') AS root,
+           json_get(attributes_json, 'clock_domain') AS clock_domain,
+           json_get(attributes_json, 'outcome') AS outcome,
+           value
+    FROM "telemetry_v1.marinskyrl"
+    WHERE {scope}
+      AND name = 'phase_duration_seconds'
+)"""
+
+
+# Worker spans tagged with their step's critical rank r*: the rank whose policy_ppo_train ran
+# longest, with ties going to the rank id that sorts first. parent_seconds is the step's longest
+# policy_ppo_train. covered_seconds sums the exclusive spans each rank published under
+# policy_ppo_train, except the producer's own residual.
+_CRITICAL_RANK_CTE = f"""tagged AS (
+    SELECT t, step, worker_rank, phase, parent, clock_domain, value,
+           FIRST_VALUE(worker_rank) OVER (
+               PARTITION BY step
+               ORDER BY CASE WHEN phase = 'policy_ppo_train' AND clock_domain IN {_INCLUSIVE_CLOCKS}
+                             THEN value ELSE -1 END DESC,
+                        worker_rank
+               ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+           ) AS critical_rank,
+           MAX(CASE WHEN phase = 'policy_ppo_train' AND clock_domain IN {_INCLUSIVE_CLOCKS} THEN value END)
+               OVER (PARTITION BY step) AS parent_seconds,
+           SUM(CASE WHEN parent = 'policy_ppo_train' AND clock_domain IN {_EXCLUSIVE_CLOCKS}
+                         AND phase <> 'policy_span_residual' THEN value END)
+               OVER (PARTITION BY step, worker_rank) AS covered_seconds
+    FROM phase_rows
+    WHERE role = 'worker'
+)"""
 
 
 def rl_overview_dataset(
     clusters: tuple[str, ...], run: str, start_ms: int, end_ms: int, requested_bucket_ms: int
 ) -> DashboardDataset:
-    """Build bounded RL-core, engine, and node-attribution sources."""
-    validate_values("clusters", clusters, max_values=RL_MAX_CLUSTERS, max_length=128)
-    validate_value("run", run, max_length=512)
-    bucket_ms = bounded_bucket_ms(
-        start_ms,
-        end_ms,
-        requested_bucket_ms,
-        max_window_ms=RL_MAX_WINDOW_MS,
-        max_window_error="RL overview range must not exceed 7 days",
-        min_bucket_ms=RL_MIN_BUCKET_MS,
-        max_points=RL_MAX_POINTS,
-    )
-    bucket = f"{start_ms} + (timestamp_ms - {start_ms}) - (timestamp_ms - {start_ms}) % {bucket_ms}"
+    """Build bounded RL-core, engine, node-attribution and span sources."""
+    bucket_ms = _rl_bucket_ms(clusters, run, start_ms, end_ms, requested_bucket_ms, "RL overview")
+    bucket = _bucket_sql(start_ms, bucket_ms)
     clusters_sql = sql_values(clusters)
     run_sql = sql_string(run)
     core_sql = f"""
@@ -183,6 +250,93 @@ WHERE run_node.run = {run_sql}
 GROUP BY 1, 2 ORDER BY 1
 LIMIT {RL_MAX_GPU_ROWS + 1}
 """.strip()
+    scope = _run_scope(clusters, run, start_ms, end_ms)
+    spans_sql = f"""
+WITH {_phase_rows_cte(bucket, scope)}, {_CRITICAL_RANK_CTE}, terminal AS (
+    SELECT json_get(attributes_json, 'role') AS role,
+           json_get(body_json, 'status') AS status,
+           json_get(body_json, 'reason') AS reason,
+           MAX(CAST(json_get(body_json, 'export_lost_records') AS BIGINT)) AS lost_records,
+           MAX(CAST(json_get(body_json, 'export_queued_records') AS BIGINT)) AS queued_records
+    FROM "telemetry_v1.marinskyrl"
+    WHERE {scope}
+      AND name = 'terminal'
+    GROUP BY 1, 2, 3
+)
+SELECT 'driver' AS statistic, t, step,
+       CAST(NULL AS VARCHAR) AS role,
+       phase, parent, clock_domain,
+       SUM(value) AS sum_value,
+       COUNT(value) AS sample_count,
+       MAX(value) AS max_value,
+       CAST(NULL AS BIGINT) AS ranks,
+       CAST(NULL AS BIGINT) AS steps,
+       CAST(NULL AS BIGINT) AS truncated_steps,
+       CAST(NULL AS VARCHAR) AS status,
+       CAST(NULL AS VARCHAR) AS reason,
+       CAST(NULL AS BIGINT) AS lost_records,
+       CAST(NULL AS BIGINT) AS queued_records
+FROM phase_rows
+WHERE role = 'trainer'
+  AND ((clock_domain = 'inclusive_wall' AND root = 'step') OR phase = 'generate_span_residual')
+GROUP BY t, step, phase, parent, clock_domain
+UNION ALL
+SELECT 'critical_rank' AS statistic, t, step,
+       CAST(NULL AS VARCHAR) AS role,
+       phase, parent, clock_domain,
+       SUM(value) AS sum_value,
+       COUNT(value) AS sample_count,
+       MAX(value) AS max_value,
+       CAST(NULL AS BIGINT) AS ranks,
+       CAST(NULL AS BIGINT) AS steps,
+       CAST(NULL AS BIGINT) AS truncated_steps,
+       CAST(NULL AS VARCHAR) AS status,
+       CAST(NULL AS VARCHAR) AS reason,
+       CAST(NULL AS BIGINT) AS lost_records,
+       CAST(NULL AS BIGINT) AS queued_records
+FROM tagged
+WHERE worker_rank = critical_rank AND phase = 'policy_span_residual'
+GROUP BY t, step, phase, parent, clock_domain
+UNION ALL
+SELECT 'coverage' AS statistic,
+       CAST(NULL AS BIGINT) AS t,
+       CAST(NULL AS VARCHAR) AS step,
+       role,
+       CAST(NULL AS VARCHAR) AS phase,
+       CAST(NULL AS VARCHAR) AS parent,
+       clock_domain,
+       CAST(NULL AS DOUBLE) AS sum_value,
+       CAST(NULL AS BIGINT) AS sample_count,
+       CAST(NULL AS DOUBLE) AS max_value,
+       NULLIF(COUNT(DISTINCT worker_rank), 0) AS ranks,
+       COUNT(DISTINCT step) AS steps,
+       CASE WHEN COUNT(outcome) = 0 THEN NULL
+            ELSE COUNT(DISTINCT CASE WHEN outcome = 'failure' THEN step END) END AS truncated_steps,
+       CAST(NULL AS VARCHAR) AS status,
+       CAST(NULL AS VARCHAR) AS reason,
+       CAST(NULL AS BIGINT) AS lost_records,
+       CAST(NULL AS BIGINT) AS queued_records
+FROM phase_rows
+GROUP BY role, clock_domain
+UNION ALL
+SELECT 'terminal' AS statistic,
+       CAST(NULL AS BIGINT) AS t,
+       CAST(NULL AS VARCHAR) AS step,
+       role,
+       CAST(NULL AS VARCHAR) AS phase,
+       CAST(NULL AS VARCHAR) AS parent,
+       CAST(NULL AS VARCHAR) AS clock_domain,
+       CAST(NULL AS DOUBLE) AS sum_value,
+       CAST(NULL AS BIGINT) AS sample_count,
+       CAST(NULL AS DOUBLE) AS max_value,
+       CAST(NULL AS BIGINT) AS ranks,
+       CAST(NULL AS BIGINT) AS steps,
+       CAST(NULL AS BIGINT) AS truncated_steps,
+       status, reason, lost_records, queued_records
+FROM terminal
+ORDER BY statistic, t, step
+LIMIT {RL_MAX_SPAN_ROWS + 1}
+""".strip()
     views = {
         "policy_step": (
             """
@@ -288,6 +442,55 @@ WHERE name = 'ray_spill_manager_objects_bytes' AND metric_source = 'ray'
 GROUP BY 1, 2 ORDER BY 1
 """.strip()
         ),
+        "span_coverage": (
+            "SELECT role, clock_domain AS clock, ranks, steps, truncated_steps "
+            "FROM spans WHERE statistic = 'coverage' ORDER BY 1, 2"
+        ),
+        "run_outcome": (
+            "SELECT role, status, reason, lost_records, queued_records "
+            "FROM spans WHERE statistic = 'terminal' ORDER BY 1, 2"
+        ),
+        # A phase's band is its wall minus its children's walls in the same step, so the bands
+        # close on the step at any depth; the step's own band is what no phase accounts for.
+        "step_composition": (
+            """
+WITH driver AS (
+    SELECT * FROM spans WHERE statistic = 'driver' AND clock_domain = 'inclusive_wall'
+), contained AS (
+    SELECT t, step, parent AS phase, SUM(sum_value) AS child_seconds
+    FROM driver WHERE parent IS NOT NULL AND parent <> '' GROUP BY 1, 2, 3
+)
+SELECT driver.t,
+       CASE WHEN driver.phase = 'step' THEN 'unattributed' ELSE driver.phase END AS series,
+       SUM(driver.sum_value - driver.sample_count * COALESCE(contained.child_seconds, 0))
+           / SUM(driver.sample_count) AS value
+FROM driver
+LEFT JOIN contained
+  ON contained.t = driver.t AND contained.step = driver.step AND contained.phase = driver.phase
+GROUP BY 1, 2 ORDER BY 1
+""".strip()
+        ),
+        "policy_train_share": (
+            """
+WITH per_step AS (
+    SELECT t, step,
+           MAX(CASE WHEN phase = 'policy_train' THEN max_value END) AS policy_train,
+           MAX(CASE WHEN phase = 'step' THEN max_value END) AS step_seconds
+    FROM spans WHERE statistic = 'driver' AND clock_domain = 'inclusive_wall'
+    GROUP BY 1, 2
+)
+SELECT t, AVG(policy_train / NULLIF(step_seconds, 0)) AS policy_train_share
+FROM per_step GROUP BY 1 ORDER BY 1
+""".strip()
+        ),
+        "generate_residual": (
+            "SELECT t, SUM(sum_value) / SUM(sample_count) AS generate_residual FROM spans "
+            "WHERE statistic = 'driver' AND phase = 'generate_span_residual' GROUP BY 1 ORDER BY 1"
+        ),
+        "policy_residual": (
+            "SELECT t, SUM(sum_value) / SUM(sample_count) AS policy_residual FROM spans "
+            "WHERE statistic = 'critical_rank' AND phase = 'policy_span_residual' GROUP BY 1 ORDER BY 1"
+        ),
     }
     return DashboardDataset(
         name="RL overview",
@@ -296,6 +499,7 @@ GROUP BY 1, 2 ORDER BY 1
             SourceQuery("core", core_sql, RL_MAX_CORE_ROWS),
             SourceQuery("engine", engine_sql, RL_MAX_ENGINE_ROWS),
             SourceQuery("gpu", gpu_sql, RL_MAX_GPU_ROWS),
+            SourceQuery("spans", spans_sql, RL_MAX_SPAN_ROWS),
         ),
         setup_sql=(),
         views=views,

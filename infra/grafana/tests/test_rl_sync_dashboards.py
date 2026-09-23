@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The policy_train dashboard's SQL, run against the rows MarinSkyRL actually publishes.
+"""The sync RL boards' panels, read through the bridge from the rows MarinSkyRL actually publishes.
 
 The fixture is built from the emitting code rather than from the panels: driver spans carry
 ``clock_domain='inclusive_wall'`` and no rank, worker spans carry a rank and one of two clock
@@ -17,12 +17,21 @@ empty on every run made the other way and reads exactly like a producer that sto
 
 import json
 import re
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace as Record
 
 import duckdb
+import pyarrow as pa
 import pytest
+from config import ClusterTarget
+from conftest import bridge_config, install_finelog_dialect_macros
+from dashboard_dataset import projection_database
 from dashboard_stitch import stitch_all
+from rl_observability import RL_MAX_RESULT_ROWS, rl_overview_dataset
+from server import create_app
+from starlette.testclient import TestClient
 
 ROOT = Path(__file__).resolve().parent.parent
 DASHBOARDS = ROOT / "dashboards"
@@ -163,6 +172,7 @@ WORKER_ALLOCATOR = {"0": {"alloc_retries": 0.0, "alloc_ooms": 0.0}, "1": {"alloc
 GENERATION_TOKEN_BUCKETS = {"64": 10.0, "256": 50.0, "1024": 90.0, "4096": 99.0, "+Inf": 100.0}
 LATENCY_BUCKETS = {"0.5": 20.0, "2": 60.0, "8": 95.0, "32": 99.0, "+Inf": 100.0}
 
+GPU_UTILIZATION = 97.0
 SM_ACTIVE_RATIO = 0.82
 TENSOR_ACTIVE_RATIO = 0.04
 GPU_MEMORY_USED = 76.3 * 1024**3
@@ -183,6 +193,8 @@ _COLUMNS = (
     "seq",
     "resource_attributes_json",
     "attributes_json",
+    "body_json",
+    "kind",
 )
 
 _SCHEMA = """(
@@ -198,8 +210,15 @@ _SCHEMA = """(
     timestamp_ms BIGINT,
     seq BIGINT,
     resource_attributes_json VARCHAR,
-    attributes_json VARCHAR
+    attributes_json VARCHAR,
+    body_json VARCHAR,
+    kind VARCHAR
 )"""
+
+_ARROW_SCHEMA = pa.schema(
+    (column, pa.float64() if column == "value" else pa.int64() if column in ("timestamp_ms", "seq") else pa.string())
+    for column in _COLUMNS
+)
 
 _SEMANTIC_STREAM = {
     "vllm": "telemetry_v1.vllm",
@@ -223,6 +242,7 @@ def _row(
     node_name: str | None = None,
     role: str = "",
     attributes: dict[str, str] | None = None,
+    body: dict[str, object] | None = None,
 ) -> tuple:
     return (
         CLUSTER,
@@ -238,6 +258,9 @@ def _row(
         seq,
         json.dumps({"role": role} if role else {}),
         json.dumps(attributes or {}),
+        json.dumps(body or {}),
+        # Forwarded snapshots all arrive with kind 'gauge'; source_temporality carries the semantics.
+        "gauge",
     )
 
 
@@ -458,6 +481,7 @@ def _node_agent_rows(moment: datetime, seq: int) -> list[tuple]:
     for node in NODES:
         for gpu in ("0", "1"):
             gauges = {
+                "gpu_utilization_percent": GPU_UTILIZATION,
                 "gpu_sm_active_ratio": SM_ACTIVE_RATIO,
                 "gpu_tensor_active_ratio": TENSOR_ACTIVE_RATIO,
                 "gpu_memory_used_bytes": GPU_MEMORY_USED,
@@ -576,6 +600,26 @@ def _run_rows(clock: str) -> list[tuple]:
                 role="trainer",
             )
         )
+    for role, status, lost in (("trainer", "completed", 0), ("worker", "failed", 12)):
+        rows.append(
+            _row(
+                service="marinskyrl",
+                name="terminal",
+                value=0.0,
+                moment=NOW - timedelta(seconds=1),
+                seq=BUCKETS,
+                run_id=RUN_ID,
+                node_name=NODES[0],
+                role=role,
+                attributes={"role": role},
+                body={
+                    "status": status,
+                    "reason": "normal_exit",
+                    "export_lost_records": lost,
+                    "export_queued_records": 3,
+                },
+            )
+        )
     return rows
 
 
@@ -583,19 +627,23 @@ def _store(clock: str) -> duckdb.DuckDBPyConnection:
     database = duckdb.connect()
     for stream in sorted(set(_SEMANTIC_STREAM.values())):
         database.execute(f'CREATE TABLE "{stream}"{_SCHEMA}')
-    # finelog's SQL dialect, in the spellings the dashboards use.
-    database.execute("CREATE MACRO to_timestamp_millis(value) AS to_timestamp(value / 1000.0)::TIMESTAMP")
-    database.execute("CREATE MACRO date_bin(width, moment) AS time_bucket(width, moment)")
-    database.execute("CREATE MACRO json_get(document, key) AS json_extract_string(document, '$.' || key)")
-    database.execute("CREATE MACRO approx_percentile_cont(value, q) AS quantile_cont(value, q)")
-    placeholders = ", ".join("?" for _ in _COLUMNS)
+    install_finelog_dialect_macros(database)
+    # Finelog and DuckDB name the struct constructor the vLLM sample query uses differently.
+    database.execute(
+        """CREATE MACRO named_struct(k1, v1, k2, v2, k3, v3)
+                   AS struct_pack(timestamp_ms := v1, seq := v2, value := v3)"""
+    )
     service_index = _COLUMNS.index("service")
     routed: dict[str, list] = {}
     for row in _run_rows(clock):
         stream = _SEMANTIC_STREAM[row[service_index]]
         routed.setdefault(stream, []).append(row)
     for stream, stream_rows in routed.items():
-        database.executemany(f'INSERT INTO "{stream}" VALUES ({placeholders})', stream_rows)
+        # DuckDB's executemany costs milliseconds a row; one Arrow batch costs microseconds.
+        columns = [list(column) for column in zip(*stream_rows, strict=True)]
+        database.register("seeded_rows", pa.table(columns, schema=_ARROW_SCHEMA))
+        database.execute(f'INSERT INTO "{stream}" SELECT * FROM seeded_rows')
+        database.unregister("seeded_rows")
     return database
 
 
@@ -623,7 +671,9 @@ def _dashboard(name: str = "rl_sync_training_step.json") -> dict:
 
 
 def _rl_dashboards() -> dict:
-    return {name: _stitched()[name] for name in ("rl_sync_training_step.json", "rl_sync_generation.json", "rl_runs.json")}
+    return {
+        name: _stitched()[name] for name in ("rl_sync_training_step.json", "rl_sync_generation.json", "rl_runs.json")
+    }
 
 
 def _our_panels() -> list[dict]:
@@ -673,17 +723,101 @@ def _resolve(sql: str) -> str:
     return sql
 
 
-def _panel_sql(title: str) -> str:
-    """One panel's shipped SQL, with Grafana's macros resolved to this window.
+BUCKET_MS = 5 * 60 * 1000
+_DATASETS = {
+    "/v1/rl/overview": rl_overview_dataset,
+}
+_VLLM_OVERVIEW = "/v1/vllm/overview"
+_TEMPLATE = {
+    "${cluster:csv}": CLUSTER,
+    "${run}": RUN_ID,
+    "${__from}": str(_millis(WINDOW_START)),
+    "${__to}": str(_millis(NOW)),
+    "${__interval_ms}": str(BUCKET_MS),
+}
 
-    Searched across both RL dashboards, because a shared fragment has one body wherever it is
-    mounted -- and asserted unique, so a copy-pasted second body cannot pass as the same panel.
+
+def _dataset(url: str):
+    return _DATASETS[url]((CLUSTER,), RUN_ID, _millis(WINDOW_START), _millis(NOW), BUCKET_MS)
+
+
+def _params(target: dict) -> dict[str, str]:
+    """The target's query parameters, with Grafana's macros resolved to this window."""
+    params = {}
+    for param in target["url_options"]["params"]:
+        value = param["value"]
+        for macro, resolved in _TEMPLATE.items():
+            value = value.replace(macro, resolved)
+        assert "${" not in value, value
+        params[param["key"]] = value
+    return params
+
+
+def _bridge(database: duckdb.DuckDBPyConnection):
+    """The bridge app over this store, and every Finelog query it issues."""
+    queries = []
+
+    def query(sql: str, *, max_rows: int):
+        queries.append(sql)
+        table = database.execute(sql).fetch_arrow_table()
+        assert table.num_rows <= max_rows, (table.num_rows, max_rows)
+        return table
+
+    source = Record(target=ClusterTarget("marin", "project", "zone", "fleet", "cluster"), query=query)
+    app = create_app(replace(bridge_config(), max_rows=RL_MAX_RESULT_ROWS), {"marin": source}, {}, None, None, None)
+    return app, queries
+
+
+def _matches(expression: str | None, row: dict) -> bool:
+    """Infinity's filterExpression, which Grafana applies to the rows the bridge returns."""
+    if not expression:
+        return True
+    return eval(expression.replace("&&", " and ").replace("||", " or "), {"__builtins__": {}}, row)
+
+
+def _responses(database: duckdb.DuckDBPyConnection, targets: list[dict]) -> list[list[dict]]:
+    """Each target's rows through one bridge app, after the target's own filter."""
+    app, _ = _bridge(database)
+    with TestClient(app) as client:
+        responses = [client.get(f"/finelog/marin{target['url']}", params=_params(target)) for target in targets]
+    assert [response.status_code for response in responses] == [200] * len(targets), [r.text for r in responses]
+    return [
+        [row for row in response.json() if _matches(target.get("filterExpression"), row)]
+        for target, response in zip(targets, responses, strict=True)
+    ]
+
+
+def _target_rows(database: duckdb.DuckDBPyConnection, target: dict) -> list[tuple]:
+    """What one target renders: its rows, in the columns it declares."""
+    if target["url"] == "/query":
+        (sql,) = [param["value"] for param in target["url_options"]["params"] if param["key"] == "sql"]
+        return database.execute(_resolve(sql)).fetchall()
+    (rows,) = _responses(database, [target])
+    return [tuple(row[column["selector"]] for column in target["columns"]) for row in rows]
+
+
+def _panel_rows(database: duckdb.DuckDBPyConnection, title: str) -> list[tuple]:
+    """One panel's rows, searched across the sync RL boards.
+
+    A shared fragment has one body wherever it is mounted, and the panel is asserted unique, so a
+    copy-pasted second body cannot pass as the same panel.
     """
     matches = _all_panels(title)
-    assert matches, f"no panel titled {title!r} on either RL dashboard"
-    sql = {next(p["value"] for p in m["targets"][0]["url_options"]["params"] if p["key"] == "sql") for m in matches}
-    assert len(sql) == 1, f"{title} is mounted twice with different SQL"
-    return _resolve(sql.pop())
+    assert matches, f"no panel titled {title!r} on a sync RL board"
+    assert len({json.dumps(match["targets"], sort_keys=True) for match in matches}) == 1, title
+    (target,) = matches[0]["targets"]
+    return _target_rows(database, target)
+
+
+def _view_columns(database: duckdb.DuckDBPyConnection, target: dict) -> list[str]:
+    """The columns a dataset view returns, read from the projection even when it has no rows."""
+    dataset = _dataset(target["url"])
+    with projection_database() as projection:
+        for source in dataset.sources:
+            projection.register(source.name, database.execute(source.sql).fetch_arrow_table())
+        for statement in dataset.setup_sql:
+            projection.execute(statement)
+        return [column[0] for column in projection.execute(dataset.views[_params(target)["view"]]).description]
 
 
 def test_the_run_variable_offers_the_run_the_trainer_reported(store) -> None:
@@ -696,7 +830,7 @@ def test_the_run_variable_offers_the_run_the_trainer_reported(store) -> None:
 
 
 def test_the_step_bands_are_exclusive_and_they_close_on_the_step(store) -> None:
-    rows = store.execute(_panel_sql("Step composition — exclusive seconds per phase")).fetchall()
+    rows = _panel_rows(store, "Step composition — exclusive seconds per phase")
 
     bands = {series: seconds for _, series, seconds in rows}
     # Every phase gets a band, and it is the wall it did not spend inside a child. A parent banded
@@ -713,8 +847,7 @@ def test_the_generate_subtree_is_subtracted_from_generate_and_not_stacked_beside
     list could not see it: rollout_collect alone is 97% of generate, so banding both put 162% of
     the phase on the stack with nothing to say so."""
     bands = {
-        series: seconds
-        for _, series, seconds in store.execute(_panel_sql("Step composition — exclusive seconds per phase")).fetchall()
+        series: seconds for _, series, seconds in _panel_rows(store, "Step composition — exclusive seconds per phase")
     }
 
     # generate's own band is the orchestration it does outside its children, which is what the
@@ -730,13 +863,13 @@ def test_the_generate_subtree_is_subtracted_from_generate_and_not_stacked_beside
 
 
 def test_policy_train_share_reproduces_the_measured_ninety_percent(store) -> None:
-    rows = store.execute(_panel_sql("policy_train share of the step")).fetchall()
+    rows = _panel_rows(store, "policy_train share of the step")
 
     assert {round(share, 4) for _, share in rows} == {round(DRIVER_PHASES["policy_train"] / STEP_SECONDS, 4)}
 
 
 def test_the_decomposition_reads_the_critical_rank_and_never_a_per_phase_maximum(store) -> None:
-    rows = store.execute(_panel_sql("policy_ppo_train decomposition at the critical rank")).fetchall()
+    rows = _panel_rows(store, "policy_ppo_train decomposition at the critical rank")
 
     bands = {series: seconds for _, series, seconds in rows}
     expected = dict(WORKER_SPANS[CRITICAL_RANK])
@@ -775,7 +908,7 @@ def test_the_decomposition_reads_the_critical_rank_and_never_a_per_phase_maximum
 
 
 def test_the_skew_panel_reports_the_spread_and_names_the_same_slowest_rank(store) -> None:
-    rows = store.execute(_panel_sql("Rank skew: policy_ppo_train across ranks")).fetchall()
+    rows = _panel_rows(store, "Rank skew: policy_ppo_train across ranks")
 
     for _, slowest, _p95, _p50, fastest in rows:
         assert slowest == pytest.approx(PPO_TRAIN[CRITICAL_RANK])
@@ -783,16 +916,16 @@ def test_the_skew_panel_reports_the_spread_and_names_the_same_slowest_rank(store
 
 
 def test_the_derived_ratios_divide_the_quantities_they_name(store) -> None:
-    micro = store.execute(_panel_sql("policy_train ÷ micro-step count")).fetchall()
+    micro = _panel_rows(store, "policy_train ÷ micro-step count")
     for _, seconds_per_micro_step, micro_steps in micro:
         assert micro_steps == pytest.approx(64.0)
         assert seconds_per_micro_step == pytest.approx(DRIVER_PHASES["policy_train"] / 64.0)
 
-    ratio = store.execute(_panel_sql("backward ÷ forward at the critical rank")).fetchall()
+    ratio = _panel_rows(store, "backward ÷ forward at the critical rank")
     expected = WORKER_SPANS[CRITICAL_RANK]["policy_backward"] / WORKER_SPANS[CRITICAL_RANK]["policy_forward"]
     assert [round(value, 6) for _, value in ratio] == [round(expected, 6)] * len(ratio)
 
-    waiting = store.execute(_panel_sql("Waiting and collective share at the critical rank")).fetchall()
+    waiting = _panel_rows(store, "Waiting and collective share at the critical rank")
     barriers = sum(
         WORKER_SPANS[CRITICAL_RANK][phase]
         for phase in (
@@ -826,7 +959,7 @@ def test_the_waiting_share_is_absent_rather_than_zero_without_the_barrier_spans(
         list(BARRIER_SPANS),
     )
 
-    waiting = store.execute(_panel_sql("Waiting and collective share at the critical rank")).fetchall()
+    waiting = _panel_rows(store, "Waiting and collective share at the critical rank")
 
     assert waiting, "the panel still reports a bucket per step; only the share is unknown"
     assert {value for _, value in waiting} == {None}, f"a missing barrier span read as a share: {waiting}"
@@ -841,26 +974,24 @@ def test_the_worker_panels_read_whichever_clock_the_sink_stamped(launch_store) -
     """
     bands = {
         series: seconds
-        for _, series, seconds in launch_store.execute(
-            _panel_sql("policy_ppo_train decomposition at the critical rank")
-        ).fetchall()
+        for _, series, seconds in _panel_rows(launch_store, "policy_ppo_train decomposition at the critical rank")
     }
     assert bands["policy_backward"] == pytest.approx(WORKER_SPANS[CRITICAL_RANK]["policy_backward"])
     assert sum(bands.values()) == pytest.approx(PPO_TRAIN[CRITICAL_RANK])
 
-    skew = launch_store.execute(_panel_sql("Rank skew: policy_ppo_train across ranks")).fetchall()
+    skew = _panel_rows(launch_store, "Rank skew: policy_ppo_train across ranks")
     assert {round(slowest, 6) for _, slowest, _, _, _ in skew} == {round(PPO_TRAIN[CRITICAL_RANK], 6)}
 
-    ratio = launch_store.execute(_panel_sql("backward ÷ forward at the critical rank")).fetchall()
+    ratio = _panel_rows(launch_store, "backward ÷ forward at the critical rank")
     expected = WORKER_SPANS[CRITICAL_RANK]["policy_backward"] / WORKER_SPANS[CRITICAL_RANK]["policy_forward"]
     assert {round(value, 6) for _, value in ratio} == {round(expected, 6)}
 
-    waiting = launch_store.execute(_panel_sql("Waiting and collective share at the critical rank")).fetchall()
+    waiting = _panel_rows(launch_store, "Waiting and collective share at the critical rank")
     assert {value for _, value in waiting} != {None}
 
 
 def test_padding_is_a_per_rank_ratio_rather_than_a_ratio_of_summed_tokens(store) -> None:
-    rows = store.execute(_panel_sql("Padding waste and attention work")).fetchall()
+    rows = _panel_rows(store, "Padding waste and attention work")
 
     # Averaging the per-rank fractions (0.25 and 0.20) is unaffected by how the batch is sharded;
     # a ratio of summed tokens would not be.
@@ -877,27 +1008,27 @@ def test_the_padding_panel_reads_the_old_spelling_of_the_token_counters(store) -
     """Runs from before the 2026-09-03 rename publish tokens_real and tokens_padded. Reading only
     the current spelling empties this panel across the whole back catalogue, and an empty padding
     panel reads as an unpadded batch."""
-    fresh = store.execute(_panel_sql("Padding waste and attention work")).fetchall()
+    fresh = _panel_rows(store, "Padding waste and attention work")
     store.execute(
         """UPDATE "telemetry_v1.marinskyrl"
            SET attributes_json = replace(attributes_json, 'rank_tokens_', 'tokens_')"""
     )
-    renamed = store.execute(_panel_sql("Padding waste and attention work")).fetchall()
+    renamed = _panel_rows(store, "Padding waste and attention work")
 
     assert [row[1] for row in renamed] == [pytest.approx(row[1]) for row in fresh]
     assert all(row[1] is not None for row in renamed)
 
 
 def test_the_accelerator_panels_join_dcgm_to_the_run_through_its_nodes(store) -> None:
-    sm = store.execute(_panel_sql("SM and tensor-pipe activity on this run's nodes")).fetchall()
+    sm = _panel_rows(store, "SM and tensor-pipe activity on this run's nodes")
     by_series = {series: value for _, series, value in sm}
     assert by_series["SM active"] == pytest.approx(SM_ACTIVE_RATIO * 100.0)
     assert by_series["tensor pipe active"] == pytest.approx(TENSOR_ACTIVE_RATIO * 100.0)
 
-    memory = store.execute(_panel_sql("GPU memory in use on this run's nodes")).fetchall()
+    memory = _panel_rows(store, "GPU memory in use on this run's nodes")
     assert [row[2] for row in memory] == [pytest.approx(GPU_MEMORY_USED)] * len(memory)
 
-    fabric = store.execute(_panel_sql("NVLink against PCIe receive traffic")).fetchall()
+    fabric = _panel_rows(store, "NVLink against PCIe receive traffic")
     # Four GPUs across the run's two nodes, summed per direction.
     assert {series for _, series, _ in fabric} == {"NVLink receive", "PCIe receive"}
     assert {round(value) for _, series, value in fabric if series == "NVLink receive"} == {round(4 * NVLINK_RATE)}
@@ -908,11 +1039,11 @@ def test_a_trainer_that_stops_stamping_node_name_blanks_the_accelerator_panels(s
     # idle fleet rather than as a broken join.
     store.execute('UPDATE "telemetry_v1.marinskyrl" SET node_name = NULL')
 
-    assert store.execute(_panel_sql("SM and tensor-pipe activity on this run's nodes")).fetchall() == []
+    assert _panel_rows(store, "SM and tensor-pipe activity on this run's nodes") == []
 
 
 def test_the_fault_table_differences_the_counters_and_hides_healthy_gpus(store) -> None:
-    rows = store.execute(_panel_sql("Link faults and power on this run's GPUs")).fetchall()
+    rows = _panel_rows(store, "Link faults and power on this run's GPUs")
 
     # One GPU is degraded; the other three have flat counters and must not appear.
     assert len(rows) == 1
@@ -924,7 +1055,7 @@ def test_the_fault_table_differences_the_counters_and_hides_healthy_gpus(store) 
 
 
 def test_the_engine_histograms_interpolate_quantiles_from_cumulative_buckets(store) -> None:
-    rows = store.execute(_panel_sql("Generated tokens per request")).fetchall()
+    rows = _panel_rows(store, "Generated tokens per request")
 
     by_series = {series: value for _, series, value in rows}
     # Counts are cumulative in `le`: 50 of 100 requests are at or below 256 tokens, 90 at or
@@ -935,18 +1066,18 @@ def test_the_engine_histograms_interpolate_quantiles_from_cumulative_buckets(sto
     # The first sample of a cumulative series has nothing to difference against and drops out.
     assert len({t for t, _, _ in rows}) == BUCKETS - 1
 
-    stages = store.execute(_panel_sql("Request latency by stage")).fetchall()
+    stages = _panel_rows(store, "Request latency by stage")
     assert {series for _, series, _ in stages} == {
         f"{stage} · {quantile}" for stage in ("queue", "decode", "end to end") for quantile in ("p50", "p99")
     }
 
-    tokens = store.execute(_panel_sql("Time to first token and inter-token latency")).fetchall()
+    tokens = _panel_rows(store, "Time to first token and inter-token latency")
     assert {series.split(" · ")[0] for _, series, _ in tokens} == {
         "time to first token",
         "inter-token latency",
     }
 
-    iteration = store.execute(_panel_sql("Tokens per engine iteration")).fetchall()
+    iteration = _panel_rows(store, "Tokens per engine iteration")
     assert {series for _, series, _ in iteration} == {
         "iteration tokens · p50",
         "iteration tokens · p90",
@@ -962,7 +1093,7 @@ def test_a_counter_reset_drops_the_sample_rather_than_reading_as_a_giant_delta(s
             f"""UPDATE "{stream}" SET value = 1.0
                 WHERE name = 'request_generation_tokens_bucket' AND seq >= 3"""
         )
-    rows = store.execute(_panel_sql("Generated tokens per request")).fetchall()
+    rows = _panel_rows(store, "Generated tokens per request")
 
     # Buckets 1 and 2 still difference cleanly; 3 is the reset and 4-5 are flat at 1.0, so no
     # quantile survives there.
@@ -973,46 +1104,45 @@ def test_engine_rows_are_read_from_whichever_namespace_the_run_wrote_them_to(sto
     # An RL run's engine metrics are forwarded by the MarinSkyRL process under its own service
     # name, so they land in telemetry_v1.marinskyrl rather than telemetry_v1.vllm. Reading only
     # the latter renders every engine panel blank for exactly the runs this dashboard is for.
-    both = store.execute(_panel_sql("Generated tokens per request")).fetchall()
+    both = _panel_rows(store, "Generated tokens per request")
     assert both
 
     store.execute('DELETE FROM "telemetry_v1.vllm"')
-    marinskyrl_only = store.execute(_panel_sql("Generated tokens per request")).fetchall()
+    marinskyrl_only = _panel_rows(store, "Generated tokens per request")
 
     assert {series for _, series, _ in marinskyrl_only} == {series for _, series, _ in both}
     assert {round(v, 6) for _, _, v in marinskyrl_only} == {round(v, 6) for _, _, v in both}
 
 
 def test_the_engine_gauges_are_averaged_and_never_differenced(store) -> None:
-    queue = store.execute(_panel_sql("Engine queue depth and why requests are waiting")).fetchall()
+    queue = _panel_rows(store, "Engine queue depth and why requests are waiting")
     by_series = {series: value for _, series, value in queue}
     assert by_series["queue depth"] == pytest.approx(6.0)
     assert by_series["waiting · kv_cache"] == pytest.approx(3.0)
     assert by_series["waiting · scheduler"] == pytest.approx(1.0)
 
-    cache = store.execute(_panel_sql("KV-cache utilisation")).fetchall()
+    cache = _panel_rows(store, "KV-cache utilisation")
     assert [(row[1], row[2]) for row in cache] == [(pytest.approx(0.42), pytest.approx(0.42))] * len(cache)
 
 
 def test_every_timeseries_panel_returns_the_columns_it_declares(store) -> None:
     """Grafana reads a panel through its declared columns, so a mismatch renders blank with no error.
 
-    Run each panel's shipped SQL and compare what it actually returned, rather than parsing the text
-    for aliases: a projection sitting inside a subquery reads as the derived table's alias, which is
-    how the engine panels' union of the two telemetry namespaces was mis-read.
+    A dataset view is compared column for column with what the projection returns, which holds even
+    for a view with no rows on this fixture.
     """
     for panel in (p for board in _rl_dashboards().values() for p in board["panels"]):
         if panel.get("type") != "timeseries":
             continue
         for target in panel["targets"]:
-            (parameter,) = [param for param in target["url_options"]["params"] if param["key"] == "sql"]
-            returned = {column[0] for column in store.execute(_resolve(parameter["value"])).description}
-            declared = {column["selector"]: column["type"] for column in target["columns"]}
-
-            assert (
-                set(declared) == returned
-            ), f"{panel['title']}: declares {sorted(declared)}, SQL returns {sorted(returned)}"
-            assert "number" in declared.values(), f"{panel['title']}: no numeric column to plot"
+            declared = [column["selector"] for column in target["columns"]]
+            if target["url"] == "/query":
+                (sql,) = [param["value"] for param in target["url_options"]["params"] if param["key"] == "sql"]
+                returned = [column[0] for column in store.execute(_resolve(sql)).description]
+            else:
+                returned = _view_columns(store, target)
+            assert declared == returned, f"{panel['title']}: declares {declared}, returns {returned}"
+            assert "number" in {column["type"] for column in target["columns"]}, panel["title"]
 
 
 def test_every_panel_says_on_its_face_why_it_would_be_blank() -> None:
@@ -1026,7 +1156,7 @@ def test_every_panel_says_on_its_face_why_it_would_be_blank() -> None:
 def test_generation_is_shown_against_training_rather_than_alone(store) -> None:
     """The premise the old layout encoded -- policy_train owns 90.4% of the step -- was true before
     the grouped-mm fix and is false now. Two series on one axis is what makes that legible."""
-    rows = store.execute(_panel_sql("Generation against training, per step")).fetchall()
+    rows = _panel_rows(store, "Generation against training, per step")
 
     by_series = {series: seconds for _, series, seconds in rows}
     assert set(by_series) == {"generate", "policy_train"}
@@ -1037,7 +1167,7 @@ def test_generation_is_shown_against_training_rather_than_alone(store) -> None:
 def test_the_tail_is_reported_against_the_per_trajectory_mean(store) -> None:
     """Generation is tail-latency-bound: the step ends with the last trajectory, so the mean alone
     misleads. The ratio has to divide the max by the per-trajectory mean, not by the raw sum."""
-    rows = store.execute(_panel_sql("How far the slowest trajectory runs past the mean")).fetchall()
+    rows = _panel_rows(store, "How far the slowest trajectory runs past the mean")
 
     expected = ENGINE_AWAIT_MAX / (ENGINE_AWAIT_SUM / TRAJECTORIES)
     assert expected > 1.0, "the fixture no longer has a tail"
@@ -1060,7 +1190,7 @@ def test_the_vitals_table_names_the_clock_domain_the_ranks_and_the_truncated_ste
     """Three things decide whether anything below can be read, and all three are invisible in a
     duration: which clock the worker sink stamped, whether any worker reported at all, and whether a
     step ended in a failure -- a truncated step renders exactly like a fast one."""
-    rows = store.execute(_panel_sql("Span coverage: clock, ranks, truncated steps")).fetchall()
+    rows = _panel_rows(store, "Span coverage: clock, ranks, truncated steps")
 
     by_sink = {(role, clock): (ranks, steps, failed) for role, clock, ranks, steps, failed in rows}
     assert by_sink[("worker", "exclusive_wall")][0] == len(WORKER_SPANS)
@@ -1083,23 +1213,29 @@ def test_the_vitals_table_shows_a_run_that_stamped_two_clock_domains_as_two_rows
            SET attributes_json = replace(attributes_json, 'exclusive_wall', 'exclusive_launch')
            WHERE seq >= 3 AND json_extract_string(attributes_json, '$.role') = 'worker'"""
     )
-    rows = store.execute(_panel_sql("Span coverage: clock, ranks, truncated steps")).fetchall()
+    rows = _panel_rows(store, "Span coverage: clock, ranks, truncated steps")
 
     worker_clocks = {clock for role, clock, *_ in rows if role == "worker"}
     assert worker_clocks == {"exclusive_wall", "exclusive_launch", "inclusive_wall"}
 
 
+def test_the_outcome_table_reports_each_process_terminal_event(store) -> None:
+    title = "How the run ended, and whether telemetry kept up"
+
+    assert _panel_rows(store, title) == [
+        ("trainer", "completed", "normal_exit", 0, 3),
+        ("worker", "failed", "normal_exit", 12, 3),
+    ]
+    store.execute("""DELETE FROM "telemetry_v1.marinskyrl" WHERE name = 'terminal'""")
+    assert _panel_rows(store, title) == []
+
+
 def test_the_residual_panel_reports_both_trees_signed(store) -> None:
     (panel,) = _all_panels("Signed span residuals — both trees")
-    targets = panel["targets"]
-    queries = [
-        _resolve(next(p["value"] for p in target["url_options"]["params"] if p["key"] == "sql")) for target in targets
-    ]
+    driver, worker = (_target_rows(store, target) for target in panel["targets"])
 
-    driver = store.execute(queries[0]).fetchall()
     assert {round(value, 6) for _, value in driver} == {round(GENERATE_RESIDUAL, 6)}
 
-    worker = store.execute(queries[1]).fetchall()
     published = (
         PPO_TRAIN[CRITICAL_RANK]
         - sum(WORKER_SPANS[CRITICAL_RANK].values())
@@ -1112,7 +1248,7 @@ def test_the_residual_panel_reports_both_trees_signed(store) -> None:
 
 
 def test_the_generate_shares_partition_the_phase(store) -> None:
-    rows = store.execute(_panel_sql("Inside generate — where the fan-out goes")).fetchall()
+    rows = _panel_rows(store, "Inside generate — where the fan-out goes")
 
     shares = {series: value for _, series, value in rows}
     assert shares["rollout_collect"] == pytest.approx(GENERATE_CHILDREN["rollout_collect"] / DRIVER_PHASES["generate"])
@@ -1130,11 +1266,11 @@ def test_the_generate_shares_are_blank_rather_than_a_single_full_band_without_th
            WHERE json_extract_string(attributes_json, '$.parent') = 'generate'"""
     )
 
-    assert store.execute(_panel_sql("Inside generate — where the fan-out goes")).fetchall() == []
+    assert _panel_rows(store, "Inside generate — where the fan-out goes") == []
 
 
 def test_the_rollout_waits_are_divided_by_the_trajectory_count(store) -> None:
-    rows = store.execute(_panel_sql("A trajectory's wait: the engine against the environment")).fetchall()
+    rows = _panel_rows(store, "A trajectory's wait: the engine against the environment")
 
     for _, engine, environment, slowest in rows:
         assert engine == pytest.approx(ENGINE_AWAIT_SUM / TRAJECTORIES)
@@ -1160,14 +1296,14 @@ def test_no_panel_plots_a_concurrent_await_sum_undivided(store) -> None:
     assert ENGINE_AWAIT_SUM > STEP_SECONDS, "the fixture no longer makes the raw sum implausible"
 
     for panel in readers:
-        for row in store.execute(_panel_sql(panel["title"])).fetchall():
+        for row in _panel_rows(store, panel["title"]):
             plotted = [cell for cell in row[1:] if isinstance(cell, float)]
             assert plotted, panel["title"]
             assert max(plotted) < STEP_SECONDS, f"{panel['title']} plots {max(plotted)}"
 
 
 def test_the_environment_split_is_a_partition_with_an_audit_band(store) -> None:
-    rows = store.execute(_panel_sql("Is the environment slow, or the loop around it?")).fetchall()
+    rows = _panel_rows(store, "Is the environment slow, or the loop around it?")
 
     shares = {series: value for _, series, value in rows}
     awaited = sum(ENV_SPLIT.values())
@@ -1180,7 +1316,7 @@ def test_the_environment_split_is_a_partition_with_an_audit_band(store) -> None:
 
 
 def test_memory_is_the_worst_rank_and_allocator_events_are_the_run_total(store) -> None:
-    rows = store.execute(_panel_sql("Allocator pressure and peak memory on the worst rank")).fetchall()
+    rows = _panel_rows(store, "Allocator pressure and peak memory on the worst rank")
 
     for _, reserved, allocated, retries, ooms in rows:
         # The binding constraint on the micro-batch is the rank that used most, never the mean.
@@ -1198,7 +1334,7 @@ def test_the_memory_panel_reads_the_instrument_the_byte_gauges_moved_to(store) -
         """UPDATE "telemetry_v1.marinskyrl" SET name = 'policy_train_count'
            WHERE name = 'policy_train_bytes'"""
     )
-    rows = store.execute(_panel_sql("Allocator pressure and peak memory on the worst rank")).fetchall()
+    rows = _panel_rows(store, "Allocator pressure and peak memory on the worst rank")
 
     assert all(row[1] is not None for row in rows)
     assert rows[0][1] == pytest.approx(max(m["peak_reserved_bytes"] for m in WORKER_MEMORY.values()))

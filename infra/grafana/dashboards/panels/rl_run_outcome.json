@@ -20,13 +20,17 @@
       "source": "url",
       "format": "table",
       "parser": "backend",
-      "url": "/query",
+      "url": "/v1/rl/overview",
       "url_options": {
         "method": "GET",
         "params": [
           {
-            "key": "sql",
-            "value": "SELECT json_get(attributes_json, 'role') AS role, json_get(body_json, 'status') AS status, json_get(body_json, 'reason') AS reason, MAX(CAST(json_get(body_json, 'export_lost_records') AS BIGINT)) AS lost_records, MAX(CAST(json_get(body_json, 'export_queued_records') AS BIGINT)) AS queued_records FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'terminal' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3 ORDER BY 1, 2"
+            "key": "clusters",
+            "value": "${cluster:csv}"
+          },
+          {
+            "key": "run",
+            "value": "${run}"
           },
           {
             "key": "from",
@@ -35,6 +39,14 @@
           {
             "key": "to",
             "value": "${__to}"
+          },
+          {
+            "key": "bucket_ms",
+            "value": "${__interval_ms}"
+          },
+          {
+            "key": "view",
+            "value": "run_outcome"
           }
         ]
       },
