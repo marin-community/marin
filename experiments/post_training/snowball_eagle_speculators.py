@@ -17,7 +17,7 @@ Run the complete bounded experiment on the US East 02A controller::
     uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
       --enable-extra-resources --target-cluster cw-us-east-02a \
       -- python experiments/post_training/snowball_eagle_speculators.py \
-      --version 2026.09.23.1 --stage evaluations --run
+      --version 2026.09.23.3 --stage evaluations --run
 """
 
 from __future__ import annotations
@@ -81,9 +81,11 @@ CLUSTER = "cw-us-east-02a"
 GPU_VARIANT = "H100"
 GPU_COUNT = 8
 
-# This 2,048-trajectory pilot matches the scale of the strongest prior Snowball
-# adaptation while adding tool-use behavior that the earlier corpus omitted.
-CORPUS_EVALS = (("gsm8k", 1024), ("olympiadbench", 768), ("bfcl", 256))
+# This 2,036-trajectory pilot matches the example-presentation budget of the
+# strongest prior Snowball adaptation while making a quarter of the corpus
+# tool-use behavior that the earlier corpus omitted. MATH-500 has 500 distinct
+# documents; OlympiadBench has only 30, regardless of a larger launcher limit.
+CORPUS_EVALS = (("gsm8k", 1024), ("math500", 500), ("bfcl", 512))
 CORPUS_EXPECTED_CONVERSATIONS = sum(limit for _, limit in CORPUS_EVALS)
 CORPUS_MAX_GENERATION_TOKENS = 4096
 CORPUS_MINIMUM_VALID_TOKENS = 32
@@ -159,7 +161,6 @@ def _eval_step(
         speculative=speculative,
         limit=limit,
         accelerator=f"{GPU_VARIANT}x{GPU_COUNT}",
-        submission_cluster=CLUSTER,
         federated_cluster=CLUSTER,
     )
 
