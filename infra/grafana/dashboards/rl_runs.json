@@ -26,6 +26,12 @@
       "url": "/d/marin-home"
     },
     {
+      "linkRef": "rl_generation"
+    },
+    {
+      "linkRef": "rl_training_step"
+    },
+    {
       "asDropdown": false,
       "icon": "dashboard",
       "includeVars": true,
@@ -490,6 +496,26 @@
       ]
     },
     {
+      "id": 20,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 9
+      },
+      "panelRef": "rl_span_coverage"
+    },
+    {
+      "id": 21,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 9
+      },
+      "panelRef": "rl_run_outcome"
+    },
+    {
       "type": "row",
       "title": "Where did the wall clock go?",
       "collapsed": false,
@@ -498,9 +524,19 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 9
+        "y": 17
       },
       "panels": []
+    },
+    {
+      "id": 12,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 18
+      },
+      "panelRef": "rl_step_composition"
     },
     {
       "id": 2,
@@ -513,9 +549,9 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 0,
-        "y": 10
+        "w": 12,
+        "x": 12,
+        "y": 18
       },
       "fieldConfig": {
         "defaults": {
@@ -614,9 +650,9 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 8,
-        "y": 10
+        "w": 12,
+        "x": 0,
+        "y": 26
       },
       "fieldConfig": {
         "defaults": {
@@ -707,6 +743,26 @@
       "interval": "1m"
     },
     {
+      "id": 22,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 26
+      },
+      "panelRef": "rl_policy_train_share"
+    },
+    {
+      "id": 23,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 34
+      },
+      "panelRef": "rl_span_residuals"
+    },
+    {
       "type": "row",
       "title": "Why is generation slow?",
       "collapsed": false,
@@ -715,7 +771,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 18
+        "y": 42
       },
       "panels": []
     },
@@ -732,7 +788,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 19
+        "y": 43
       },
       "fieldConfig": {
         "defaults": {
@@ -833,7 +889,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 19
+        "y": 43
       },
       "fieldConfig": {
         "defaults": {
@@ -964,7 +1020,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 19
+        "y": 43
       },
       "fieldConfig": {
         "defaults": {
@@ -1066,7 +1122,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 27
+        "y": 51
       },
       "fieldConfig": {
         "defaults": {
@@ -1167,7 +1223,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 27
+        "y": 51
       },
       "fieldConfig": {
         "defaults": {
@@ -1269,7 +1325,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 27
+        "y": 51
       },
       "fieldConfig": {
         "defaults": {
@@ -1366,7 +1422,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 35
+        "y": 59
       },
       "panels": []
     },
@@ -1383,7 +1439,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 36
+        "y": 60
       },
       "fieldConfig": {
         "defaults": {
@@ -1484,7 +1540,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 44
+        "y": 68
       },
       "panels": []
     },
@@ -1501,7 +1557,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 45
+        "y": 69
       },
       "fieldConfig": {
         "defaults": {
@@ -1597,7 +1653,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 45
+        "y": 69
       },
       "fieldConfig": {
         "defaults": {

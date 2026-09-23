@@ -1,0 +1,113 @@
+{
+  "type": "timeseries",
+  "title": "Signed span residuals — both trees",
+  "description": "What each parent measured that its children do not account for. Positive is ordinary. Negative means a child is double-counted — the first instrumented run read -1703 s inside a 1706 s parent. Never clamped.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "custom": {
+        "drawStyle": "line",
+        "lineWidth": 1,
+        "fillOpacity": 8,
+        "showPoints": "never",
+        "spanNulls": false,
+        "axisLabel": "seconds the children do not account for"
+      },
+      "unit": "s",
+      "noValue": "No residual rows. The residual ships with the spans, so this build predates an auditable tree."
+    },
+    "overrides": []
+  },
+  "options": {
+    "legend": {
+      "showLegend": true,
+      "displayMode": "list",
+      "placement": "bottom",
+      "calcs": []
+    },
+    "tooltip": {
+      "mode": "multi",
+      "sort": "desc"
+    }
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "type": "json",
+      "source": "url",
+      "format": "timeseries",
+      "parser": "backend",
+      "url": "/query",
+      "url_options": {
+        "method": "GET",
+        "params": [
+          {
+            "key": "sql",
+            "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, AVG(value) AS generate_residual FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'phase_duration_seconds' AND json_get(attributes_json, 'role') = 'trainer' AND json_get(attributes_json, 'phase') = 'generate_span_residual' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 1"
+          },
+          {
+            "key": "from",
+            "value": "${__from}"
+          },
+          {
+            "key": "to",
+            "value": "${__to}"
+          }
+        ]
+      },
+      "columns": [
+        {
+          "selector": "t",
+          "text": "time",
+          "type": "timestamp_epoch"
+        },
+        {
+          "selector": "generate_residual",
+          "text": "generate_residual",
+          "type": "number"
+        }
+      ]
+    },
+    {
+      "refId": "B",
+      "type": "json",
+      "source": "url",
+      "format": "timeseries",
+      "parser": "backend",
+      "url": "/query",
+      "url_options": {
+        "method": "GET",
+        "params": [
+          {
+            "key": "sql",
+            "value": "WITH spans AS ( SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS bucket, json_get(attributes_json, 'step') AS s, json_get(attributes_json, 'rank') AS worker_rank, json_get(attributes_json, 'phase') AS phase, json_get(attributes_json, 'clock_domain') AS domain, value FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'phase_duration_seconds' AND json_get(attributes_json, 'role') = 'worker' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) ), tagged AS ( SELECT bucket, s, worker_rank, phase, value, FIRST_VALUE(worker_rank) OVER ( PARTITION BY s ORDER BY CASE WHEN phase = 'policy_ppo_train' AND domain IN ('inclusive_wall', 'inclusive_launch') THEN value ELSE -1 END DESC, worker_rank ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING ) AS critical_rank FROM spans ) SELECT bucket AS t, AVG(value) AS policy_residual FROM tagged WHERE worker_rank = critical_rank AND phase = 'policy_span_residual' GROUP BY 1 ORDER BY 1"
+          },
+          {
+            "key": "from",
+            "value": "${__from}"
+          },
+          {
+            "key": "to",
+            "value": "${__to}"
+          }
+        ]
+      },
+      "columns": [
+        {
+          "selector": "t",
+          "text": "time",
+          "type": "timestamp_epoch"
+        },
+        {
+          "selector": "policy_residual",
+          "text": "policy_residual",
+          "type": "number"
+        }
+      ]
+    }
+  ],
+  "interval": "1m"
+}

@@ -1,0 +1,70 @@
+{
+  "type": "table",
+  "title": "How the run ended, and whether telemetry kept up",
+  "description": "The terminal event each process published: status, reason, and how many records the exporter queued or lost. A nonzero lost count means every number on this dashboard is computed from a short row set — max and p95 understate first.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "noValue": "No terminal event. The run is still going, or it died without one — check the job, not this panel."
+    },
+    "overrides": []
+  },
+  "options": {},
+  "targets": [
+    {
+      "refId": "A",
+      "type": "json",
+      "source": "url",
+      "format": "table",
+      "parser": "backend",
+      "url": "/query",
+      "url_options": {
+        "method": "GET",
+        "params": [
+          {
+            "key": "sql",
+            "value": "SELECT json_get(attributes_json, 'role') AS role, json_get(body_json, 'status') AS status, json_get(body_json, 'reason') AS reason, MAX(CAST(json_get(body_json, 'export_lost_records') AS BIGINT)) AS lost_records, MAX(CAST(json_get(body_json, 'export_queued_records') AS BIGINT)) AS queued_records FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'terminal' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3 ORDER BY 1, 2"
+          },
+          {
+            "key": "from",
+            "value": "${__from}"
+          },
+          {
+            "key": "to",
+            "value": "${__to}"
+          }
+        ]
+      },
+      "columns": [
+        {
+          "selector": "role",
+          "text": "process",
+          "type": "string"
+        },
+        {
+          "selector": "status",
+          "text": "status",
+          "type": "string"
+        },
+        {
+          "selector": "reason",
+          "text": "reason",
+          "type": "string"
+        },
+        {
+          "selector": "lost_records",
+          "text": "records lost",
+          "type": "number"
+        },
+        {
+          "selector": "queued_records",
+          "text": "records queued",
+          "type": "number"
+        }
+      ]
+    }
+  ]
+}
