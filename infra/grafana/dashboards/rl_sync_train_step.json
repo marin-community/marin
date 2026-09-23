@@ -1223,7 +1223,7 @@
       "id": 224,
       "type": "table",
       "title": "Link faults and power on this run's GPUs",
-      "description": "Per GPU: peak board power, and the increase in the NVLink and PCIe error counters with resets discarded. A degraded link shows here as a nonzero increase while throughput on the left stays flat.",
+      "description": "Per GPU: peak board power, and the increase in the NVLink and PCIe error counters, summed over each GPU's error kinds. After a counter reset, everything it counts is new. A degraded link shows here as a nonzero increase while throughput on the left stays flat.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"

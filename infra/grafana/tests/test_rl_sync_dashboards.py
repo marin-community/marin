@@ -202,6 +202,11 @@ TENSOR_ACTIVE_RATIO = 0.04
 GPU_MEMORY_USED = 76.3 * 1024**3
 NVLINK_RATE = 4.0e10
 PCIE_RATE = 9.0e9
+DEGRADED_GPU = ("h100-node-1", "1")
+NVLINK_ERRORS_PER_BUCKET = 7.0
+RESET_GPU = ("h100-node-0", "1")
+RESET_BUCKET = 3
+AFTER_RESET = 2.0
 
 _COLUMNS = (
     "cluster",
@@ -528,11 +533,19 @@ def _node_agent_rows(moment: datetime, seq: int) -> list[tuple]:
                 "gpu_pcie_transmit_bytes_per_second": PCIE_RATE,
                 "gpu_power_watts": 620.0,
             }
-            # Cumulative fault counters. Only one GPU is actually degraded.
-            degraded = node == NODES[1] and gpu == "1"
-            gauges["gpu_nvlink_errors"] = 100.0 + (7.0 * seq if degraded else 0.0)
             gauges["gpu_pcie_replay_errors"] = 3.0
-            for name, value in gauges.items():
+            identity = {"gpu_uuid": f"GPU-{node}-{gpu}", "gpu_index": gpu}
+            series = [(name, value, identity) for name, value in gauges.items()]
+            # One cumulative NVLink series per error kind, as the node agent publishes them. Every
+            # GPU holds one flat at a nonzero count and one flat at zero, which is no new fault.
+            # One GPU is degraded and keeps counting, and another's counter was reset.
+            nvlink = {"crc_flit": 100.0, "crc_data": 0.0, "replay": 0.0, "recovery": 0.0}
+            if (node, gpu) == DEGRADED_GPU:
+                nvlink["replay"] = NVLINK_ERRORS_PER_BUCKET * seq
+            if (node, gpu) == RESET_GPU:
+                nvlink["recovery"] = 40.0 if seq < RESET_BUCKET else AFTER_RESET
+            series += [("gpu_nvlink_errors", value, {**identity, "error_kind": kind}) for kind, value in nvlink.items()]
+            for name, value, attributes in series:
                 rows.append(
                     _row(
                         service="iris-node-agent",
@@ -541,7 +554,7 @@ def _node_agent_rows(moment: datetime, seq: int) -> list[tuple]:
                         moment=moment,
                         seq=seq,
                         node_name=node,
-                        attributes={"gpu_uuid": f"GPU-{node}-{gpu}", "gpu_index": gpu},
+                        attributes=attributes,
                     )
                 )
     return rows
@@ -1103,13 +1116,12 @@ def test_a_trainer_that_stops_stamping_node_name_blanks_the_accelerator_panels(s
 def test_the_fault_table_differences_the_counters_and_hides_healthy_gpus(store) -> None:
     rows = _panel_rows(store, "Link faults and power on this run's GPUs")
 
-    # One GPU is degraded; the other three have flat counters and must not appear.
-    assert len(rows) == 1
-    node, gpu, peak_power, nvlink_increase, pcie_increase = rows[0]
-    assert (node, gpu) == (NODES[1], f"GPU-{NODES[1]}-1")
-    assert peak_power == pytest.approx(620.0)
-    assert nvlink_increase == pytest.approx(7.0 * (BUCKETS - 1))
-    assert pcie_increase == pytest.approx(0.0)
+    # The two healthy GPUs hold only flat counters, one of them nonzero, and do not appear. A reset
+    # counts what the counter holds after it.
+    assert rows == [
+        (DEGRADED_GPU[0], "GPU-{}-{}".format(*DEGRADED_GPU), 620.0, NVLINK_ERRORS_PER_BUCKET * (BUCKETS - 1), 0.0),
+        (RESET_GPU[0], "GPU-{}-{}".format(*RESET_GPU), 620.0, AFTER_RESET, 0.0),
+    ]
 
 
 def test_the_engine_histograms_interpolate_quantiles_from_cumulative_buckets(store) -> None:

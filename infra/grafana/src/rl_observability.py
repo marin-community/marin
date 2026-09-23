@@ -51,7 +51,7 @@ _BARRIER_PHASES = (
     "('policy_entry_barrier', 'policy_final_barrier', 'policy_metric_allreduce', 'policy_entropy_allreduce')"
 )
 _ROLLOUT_COUNTER_NAMES = ("rollout_wait_seconds", "rollout_count")
-# DCGM gauges plotted per bucket, and per-device gauges and cumulative fault counters summarised
+# DCGM gauges plotted per bucket, and a per-device gauge and cumulative fault counters summarised
 # over the window.
 _DCGM_SERIES = (
     "gpu_sm_active_ratio",
@@ -60,7 +60,8 @@ _DCGM_SERIES = (
     "gpu_nvlink_receive_bytes_per_second",
     "gpu_pcie_receive_bytes_per_second",
 )
-_DCGM_DEVICE = ("gpu_power_watts", "gpu_nvlink_errors", "gpu_pcie_replay_errors")
+_DCGM_COUNTERS = ("gpu_nvlink_errors", "gpu_pcie_replay_errors")
+_DCGM_DEVICE = ("gpu_power_watts", *_DCGM_COUNTERS)
 _ALLOCATOR_COUNTERS = ("peak_reserved_bytes", "peak_allocated_bytes", "alloc_retries", "alloc_ooms")
 
 
@@ -764,8 +765,26 @@ FROM worker GROUP BY t, execution_uid, step, counter
 ORDER BY statistic, t, execution_uid, step, counter
 LIMIT {RL_MAX_COUNTER_ROWS + 1}
 """.strip()
+    dcgm_scope = f"""COALESCE(NULLIF(cluster, ''), 'marin') IN ({clusters_sql})
+      AND timestamp_ms >= {start_ms} AND timestamp_ms < {end_ms}"""
+    # The node agent publishes one cumulative series per error_kind of a GPU's NVLink errors, so a
+    # counter is differenced within its own series before a GPU's series are summed. A counter
+    # that fell was reset, and everything it holds since then is new.
     gpu_sql = f"""
-WITH {_run_nodes_cte(bucket, clusters_sql, start_ms, end_ms)}, gpu AS (
+WITH {_run_nodes_cte(bucket, clusters_sql, start_ms, end_ms)}, counter_samples AS (
+    SELECT COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
+           {bucket} AS t,
+           node_name AS node,
+           json_get(attributes_json, 'gpu_uuid') AS gpu,
+           name,
+           value,
+           LAG(value) OVER (
+               PARTITION BY cluster, node_name, name, resource_attributes_json, attributes_json
+               ORDER BY timestamp_ms, seq
+           ) AS previous_value
+    FROM "telemetry_v1.node_agent"
+    WHERE name IN ({sql_values(_DCGM_COUNTERS)}) AND {dcgm_scope}
+), gpu AS (
     SELECT COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
            {bucket} AS t,
            node_name AS node,
@@ -773,11 +792,16 @@ WITH {_run_nodes_cte(bucket, clusters_sql, start_ms, end_ms)}, gpu AS (
            name,
            AVG(value) AS mean_value,
            MAX(value) AS max_value,
-           MIN(value) AS min_value
+           CAST(NULL AS DOUBLE) AS increase
     FROM "telemetry_v1.node_agent"
-    WHERE name IN ({sql_values(_DCGM_SERIES + _DCGM_DEVICE)})
-      AND COALESCE(NULLIF(cluster, ''), 'marin') IN ({clusters_sql})
-      AND timestamp_ms >= {start_ms} AND timestamp_ms < {end_ms}
+    WHERE name IN ({sql_values((*_DCGM_SERIES, "gpu_power_watts"))}) AND {dcgm_scope}
+    GROUP BY 1, 2, 3, 4, 5
+    UNION ALL
+    SELECT origin_cluster, t, node, gpu, name,
+           CAST(NULL AS DOUBLE) AS mean_value,
+           CAST(NULL AS DOUBLE) AS max_value,
+           SUM(CASE WHEN value < previous_value THEN value ELSE value - previous_value END) AS increase
+    FROM counter_samples
     GROUP BY 1, 2, 3, 4, 5
 ), attributed AS (
     SELECT gpu.* FROM gpu JOIN run_node USING (origin_cluster, t, node)
@@ -788,7 +812,7 @@ SELECT CASE WHEN GROUPING(node) = 1 THEN 'series' ELSE 'device' END AS statistic
        CASE WHEN GROUPING(node) = 1 THEN AVG(mean_value) END AS mean_value,
        CASE WHEN GROUPING(node) = 1 THEN SUM(mean_value) END AS total_value,
        MAX(max_value) AS max_value,
-       CASE WHEN GROUPING(node) = 0 THEN MIN(min_value) END AS min_value
+       CASE WHEN GROUPING(node) = 0 THEN SUM(increase) END AS increase
 FROM attributed
 GROUP BY GROUPING SETS ((t, name), (name, node, gpu))
 HAVING (GROUPING(node) = 1 AND name IN ({sql_values(_DCGM_SERIES)}))
@@ -897,15 +921,14 @@ FROM counters WHERE statistic = 'worker' GROUP BY 1 ORDER BY 1
         ),
         # Only a GPU whose fault counters rose appears; an empty table is the healthy result.
         "link_faults": (
-            """
+            f"""
 SELECT node, gpu,
        MAX(CASE WHEN name = 'gpu_power_watts' THEN max_value END) AS peak_power_watts,
-       MAX(CASE WHEN name = 'gpu_nvlink_errors' THEN max_value - min_value END) AS nvlink_error_increase,
-       MAX(CASE WHEN name = 'gpu_pcie_replay_errors' THEN max_value - min_value END) AS pcie_replay_increase
+       SUM(CASE WHEN name = 'gpu_nvlink_errors' THEN increase END) AS nvlink_error_increase,
+       SUM(CASE WHEN name = 'gpu_pcie_replay_errors' THEN increase END) AS pcie_replay_increase
 FROM gpu WHERE statistic = 'device'
 GROUP BY 1, 2
-HAVING MAX(CASE WHEN name IN ('gpu_nvlink_errors', 'gpu_pcie_replay_errors')
-                THEN max_value - min_value END) > 0
+HAVING SUM(CASE WHEN name IN ({sql_values(_DCGM_COUNTERS)}) THEN increase END) > 0
 ORDER BY 4 DESC, 5 DESC
 """.strip()
         ),
