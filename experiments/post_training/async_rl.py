@@ -20,21 +20,22 @@ Plan or run::
 The default preset runs on 40 GPUs: 128 prompts per update with four answers each, 192 generation
 workers, a buffer of 32 finished groups, staleness 4, and an 8192-token request window with a
 4096-token response cap. To grow the batch, add prompts; more answers per prompt changes the group
-each advantage is computed over. The loop settings, the telemetry gates and the ``marin_tokenizer``
-chat template need a MarinSkyRL revision that contains marin-community/MarinSkyRL#654 and
-marin-community/MarinSkyRL#685. An older revision rejects the keys when Hydra parses the config,
-before the job takes a GPU.
+each advantage is computed over. The loop settings, telemetry gates and ``marin_tokenizer`` chat
+template need a MarinSkyRL revision that supports them. An older revision rejects the keys when
+Hydra parses the config, before the job takes a GPU.
 """
 
 from __future__ import annotations
 
-import hashlib
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, fields, replace
+from types import MappingProxyType
 from typing import NamedTuple
 
 import click
 import yaml
 from marin.execution.build_context import resolve_version
+from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import ArtifactStep
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_owned_name
@@ -66,7 +67,7 @@ from experiments.post_training.curriculum_rl.launch import (
     SNOWBALL_POLICY,
     SNOWBALL_SMOKE,
     PolicySpec,
-    evaluation_serving,
+    evaluation_model_config,
     model_step,
     rl_config_yaml,
 )
@@ -140,7 +141,7 @@ class TrainingRecipe:
     # 512GB is sized for an FSDP load.
     host_memory: str
     # vLLM engine settings the model needs beyond the ones the launcher writes itself.
-    engine_init_kwargs: dict[str, object]
+    engine_init_kwargs: Mapping[str, object]
 
     @property
     def strategy(self) -> str:
@@ -179,7 +180,7 @@ SNOWBALL_RECIPE = TrainingRecipe(
     engine_expert_parallel_size=GPUS_PER_NODE,
     host_memory="1800GB",
     # The Triton MoE kernels; the fused defaults do not cover this expert layout.
-    engine_init_kwargs={"moe_backend": "triton"},
+    engine_init_kwargs=MappingProxyType({"moe_backend": "triton"}),
 )
 
 
@@ -253,7 +254,9 @@ SMOKE_PRESET = replace(
 # Every consumed group was sampled by the current weights; workers sit at the trainer's floor of
 # one update's prompts.
 ON_POLICY = replace(DEFAULT, label="on_policy", max_staleness_steps=0, generation_workers=PROMPTS_PER_UPDATE)
-PRESETS = {preset.label: preset for preset in (SMOKE_PRESET, DEFAULT, ON_POLICY)}
+PRESETS: Mapping[str, AsyncPreset] = MappingProxyType(
+    {preset.label: preset for preset in (SMOKE_PRESET, DEFAULT, ON_POLICY)}
+)
 
 
 def checkpoint_interval(max_steps: int, eval_interval: int) -> int:
@@ -263,14 +266,14 @@ def checkpoint_interval(max_steps: int, eval_interval: int) -> int:
 
 # The curriculum scale point the template renders through. The launcher keeps only the template's
 # data and environment sections, which every scale point renders the same way, and passes the
-# rendered context budget to ``evaluation_serving``.
+# rendered context budget to ``evaluation_model_config``.
 CURRICULUM_TEMPLATE = SNOWBALL_SMOKE
 
 
 class Setting(NamedTuple):
     key: str
     value: object
-    adds: bool
+    allows_new_key: bool
 
 
 def parse_setting(text: str) -> Setting:
@@ -325,8 +328,8 @@ EVAL_DERIVED_SETTINGS = frozenset({"trainer.eval_before_train", "trainer.ckpt_in
 
 
 def apply_setting(config: dict, setting: Setting) -> None:
-    """Set one dotted key in the assembled config; unknown keys fail unless the setting adds."""
-    key, value, adds = setting
+    """Set one dotted key in the assembled config; unknown keys require creation permission."""
+    key, value, allows_new_key = setting
     if key == "entrypoint":
         raise click.BadParameter("this launcher is the fully asynchronous loop; entrypoint cannot change")
     if key in TOPOLOGY_OWNED_SETTINGS:
@@ -344,11 +347,11 @@ def apply_setting(config: dict, setting: Setting) -> None:
             node = node[part]
         elif part in node:
             raise click.BadParameter(f"{key!r} descends into {part!r}, which holds a value")
-        elif adds:
+        elif allows_new_key:
             node = node.setdefault(part, {})
         else:
             raise click.BadParameter(f"unknown setting {key!r}; prefix with + to add a new key")
-    if parts[-1] not in node and not adds:
+    if parts[-1] not in node and not allows_new_key:
         raise click.BadParameter(f"unknown setting {key!r}; prefix with + to add a new key")
     node[parts[-1]] = value
 
@@ -420,7 +423,6 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
         "eval_interval": preset.eval_interval,
         # No periodic HF export; the terminal export the launcher performs after training stays.
         "hf_save_interval": -1,
-        # Resume from the latest resumable checkpoint on resubmission.
         "resume_mode": "latest",
         "max_ckpts_to_keep": RETENTION.resume_checkpoint_count,
         # Sampling and shuffling seed; --set trainer.seed=N changes it and the run's address with it.
@@ -554,10 +556,9 @@ def config_keys(node: dict, prefix: str = "") -> set[str]:
 
 
 def request_overrides(policy: PolicySpec, config: dict) -> tuple[str, ...]:
-    """Return the policy's inherited Hydra overrides whose keys the rendered config does not set.
-
-    MarinSkyRL applies overrides after the config, so a kept override would replace the rendered value.
-    """
+    """Return inherited Hydra overrides for keys absent from the rendered config."""
+    # MarinSkyRL applies overrides after the config, so a kept collision would replace the
+    # rendered value.
     written = config_keys(config)
     return tuple(
         override
@@ -580,7 +581,7 @@ def build_run(policy: PolicySpec, preset: AsyncPreset, version: str | None, sett
     model = policy.adopted_model or model_step(version or resolve_version(MODEL_ARTIFACT_NAME, None))
     # A --set run gets its own address: the name carries a hash of its settings.
     changes = "\n".join(settings)
-    suffix = f"-set-{hashlib.sha256(changes.encode()).hexdigest()[:8]}" if settings else ""
+    suffix = f"-set-{fingerprint_hash(changes)}" if settings else ""
     base_name = f"checkpoints/{EXPERIMENT_NAME}/{policy.label}-{preset.label}{suffix}"
     rl = skyrl_step(
         SkyRLSpec(
@@ -622,7 +623,7 @@ def build_run(policy: PolicySpec, preset: AsyncPreset, version: str | None, sett
         ),
     )
     # The evaluation serves the rendered window, so a --set on the budget reaches the server.
-    # evaluation_serving adds max_new_tokens to request_window_tokens, so it gets the prompt share.
+    # evaluation_model_config adds max_new_tokens to request_window_tokens, so it gets the prompt share.
     budget = config["context_budget"]
     served = replace(
         CURRICULUM_TEMPLATE,
@@ -633,7 +634,7 @@ def build_run(policy: PolicySpec, preset: AsyncPreset, version: str | None, sett
     evaluation_model_name = f"{username_segment()}-{EXPERIMENT_NAME}-{policy.label}-{preset.label}{suffix}"
     evaluation_base_name = f"evals/{evaluation_model_name}/{preset.evals}"
     evaluation = eval_step(
-        SkyRLEvaluationModel(step=rl, model=evaluation_serving(policy, served, evaluation_model_name)),
+        SkyRLEvaluationModel(step=rl, model=evaluation_model_config(policy, served, evaluation_model_name)),
         preset.evals,
         version=version or resolve_version(evaluation_base_name, None),
         accelerator=f"{GPU_VARIANT}x{policy.serve_gpus}",

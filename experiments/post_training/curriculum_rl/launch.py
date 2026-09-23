@@ -618,8 +618,8 @@ class CurriculumArm:
     evaluation: ArtifactStep[EvaluationResult]
 
 
-def evaluation_serving(policy: PolicySpec, preset: ScalePreset, name: str) -> ModelConfig:
-    """Serving profile for the trained policy checkpoint, from the policy's
+def evaluation_model_config(policy: PolicySpec, preset: ScalePreset, name: str) -> ModelConfig:
+    """Model configuration for the trained policy checkpoint, from the policy's
     ``serve_*`` fields and the preset's context window."""
     return ModelConfig(
         name=name,
@@ -701,7 +701,7 @@ def build_arm(
     evaluation = eval_step(
         SkyRLEvaluationModel(
             step=rl,
-            model=evaluation_serving(policy, preset, evaluation_model_name),
+            model=evaluation_model_config(policy, preset, evaluation_model_name),
         ),
         preset.evals,
         version=version or resolve_version(evaluation_base_name, None),

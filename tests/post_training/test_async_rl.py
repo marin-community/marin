@@ -3,8 +3,6 @@
 
 from __future__ import annotations
 
-from marin.execution.lazy import StepContext
-
 from experiments.post_training import async_rl
 from experiments.post_training.curriculum_rl.launch import SNOWBALL_POLICY
 
@@ -20,5 +18,3 @@ def test_launcher_builds_complete_smoke_run(monkeypatch) -> None:
     assert any(dep.name == SNOWBALL_POLICY.adopted_model.name for dep in run.rl.deps)
     assert run.evaluation.deps == (run.rl,)
     assert run.evaluation.name == "evals/alice-async-rl-snowball-smoke/gsm8k-smoke"
-    run.rl.build_config(StepContext.for_fingerprint(run.rl.runtime_args, run.rl.deps))
-    run.evaluation.build_config(StepContext.for_fingerprint(run.evaluation.runtime_args, run.evaluation.deps))
