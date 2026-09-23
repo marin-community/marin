@@ -5,36 +5,21 @@ description: Define, validate, submit, or restart a Marin SkyRL experiment throu
 
 # Launch RL
 
-Make the experiment's artifact graph the only launch interface. Constructing the graph must validate
-deterministic SkyRL launch geometry and config before Iris allocates GPUs.
+Use the experiment's artifact graph as the launch interface. For the configuration model, role
+arithmetic, and ownership boundaries, read [RL launching](../../../docs/references/rl-launching.md).
 
 ## Define the experiment
 
 - Define a Click `main` that constructs and returns the requested terminal `ArtifactStep` handles.
-- Decorate it with `@rl_build_options`. Do not add a second hand-written `iris job run` or invoke
-  `marinskyrl iris launch` from an experiment.
-- Put policy and rollout identity in `SkyRLSpec`, including a fully explicit `SkyRLRolePlan`.
-  Placement-only details belong in `IrisSkyRLExecution`.
-- Render every role-plan setting that has a YAML counterpart from the plan. Do not repeat DP, TP,
-  PP, EP, engine count, placement, or batch sizes as unrelated literals or Hydra overrides.
+- Decorate it with `@rl_build_options`. Do not add another submission path to an experiment.
+- Put artifact identity and a fully explicit `SkyRLRolePlan` in `SkyRLSpec`. Put cluster placement
+  in `IrisSkyRLExecution`.
+- Render role geometry from the plan. Do not repeat DP, TP, PP, EP, engine count, placement, or
+  batch sizes as independent literals or Hydra overrides.
 - Express models and data as artifact dependencies. Pin tokenizer and source revisions; do not depend
   on an ambient checkpoint path or whatever happens to be on a worker.
-- Treat the generated `SkyRLLaunchConfig` YAML as the only Marin-to-MarinSkyRL boundary. Do not add a
-  request envelope, a second config dataclass tree, or internal per-field command-line flags.
-
-The rollout arithmetic is:
-
-```text
-engine slice = TP * PP
-engine GPUs = num engines * engine slice * DP
-separate roles = policy GPUs + engine GPUs
-colocated roles require policy GPUs == engine GPUs
-```
-
-For separate roles, each engine's `TP * PP * DP` must fit on one node. For colocated roles, the
-`TP * PP` slice must divide a policy node and DP replicas occupy separate slices. EP must divide
-`TP * DP`. The result must equal `num_nodes * gpus_per_node`; unused requested GPUs usually mean DP
-or the engine count is wrong.
+- Keep the generated `SkyRLLaunchConfig` YAML as the only Marin-to-MarinSkyRL boundary. Extend that
+  config instead of adding request envelopes or internal per-field command-line flags.
 
 ## Validate before launch
 
@@ -44,15 +29,9 @@ Run the main without `--run` first, using an immutable calendar version for a re
 uv run python -m experiments.<module> --version YYYY.MM.DD <selection-options>
 ```
 
-Graph construction checks the topology arithmetic, batch divisibility, runtime-profile strategy, and
-agreement between the rendered config and role plan. It also requires `train_batch_size ==
-policy_mini_batch_size` for the `fully_async` entry point. Treat a preflight failure as a recipe
-error; fix the single source of truth instead of weakening the validator.
-
-Render experiment choices directly into the `skyrl` mapping. MarinSkyRL composes that mapping
-against its Hydra defaults once, validates the complete root document, and submits the resolved YAML
-to Iris. If a new setting is needed, add it to the structured launch config and consume it directly;
-do not restore dotted override forwarding or tests that only assert an option crossed argv layers.
+Treat a preflight failure as a recipe error. Fix the source config or role plan instead of weakening
+the validator. Check the printed runtime commit, physical allocation, role geometry, entrypoint,
+batch sizes, artifact identities, output paths, and terminal stage.
 
 Use a fresh RL artifact version whenever `SkyRLRuntime.commit` changes. The temporary checkpoint
 root follows the artifact name and version, so reusing a version can make `resume_mode=latest` load
@@ -60,14 +39,9 @@ private Torch or distributed state written by the old runtime. Reuse an RL versi
 only when checkpoint compatibility has been established explicitly or resume points at a fresh
 checkpoint root.
 
-Before a large launch, also check:
-
-- the runtime commit contains the required backend and CUDA behavior;
-- resume mode, checkpoint retention, terminal export, and Hub upload behavior are explicit;
-- context and generation budgets match the chat template and task;
-- task CPU, memory, disk, concurrency, and required credentials are sufficient;
-- W&B entity/project and model/tokenizer identities are valid;
-- a smoke uses the same role geometry and runtime path as the intended full run.
+Before a large launch, run a smoke through the same strategy, artifact handoffs, and role geometry.
+Confirm the runtime contains the required backend fixes and that host resources, credentials,
+context budget, checkpoint/export policy, and W&B identity are explicit.
 
 ## Submit and observe
 
@@ -80,22 +54,14 @@ uv run python -m experiments.<module> --version YYYY.MM.DD <selection-options> -
 Choose the terminal stage explicitly when a main offers one. For example, use `--stage rl` when the
 request is only to train; a default evaluation stage may add downstream GPU work.
 
-Outside Iris, `--run` submits a CPU coordinator after validation. Inside Iris, it executes the
-artifact graph. CoreWeave coordinators must submit through the Marin hub with an explicit target
-cluster and a deadline sized for queue wait plus runtime. Set required `DAYTONA_API_KEY`, `HF_TOKEN`,
-and `WANDB_API_KEY` values on the submit host; the coordinator forwards values that are present.
-
-For a live submission or inspection, also use `use-iris` and read `lib/iris/OPS.md`. Record the
-coordinator job ID, child SkyRL job ID, artifact version, runtime commit, and resolved topology in
-the task's existing durable surface. Start with read-only inspection. Never restart an Iris cluster,
-cancel a run, or resubmit a failed run without the authority required by the selected operations
-workflow.
+For a live submission or inspection, use `use-iris`. Record the coordinator ID, child job ID,
+artifact version, runtime commit, and topology in the task's durable surface. Verify all expected
+tasks join, the configured model-loading path is active, optimizer steps advance, and terminal
+checkpoint/export metadata exists before calling the smoke successful.
 
 ## Diagnose preflight gaps
 
-If a failure occurs only after allocation, decide whether a deterministic input could have exposed
-it. Add that check at the artifact generator boundary with a behavior-focused regression test. Good
-preflight candidates include contradictory topology/config values, missing pinned dependencies,
-invalid job names, impossible worker resources, missing identity fields, and unsupported
-runtime/strategy combinations. Runtime service outages, hardware faults, and data-dependent model
-failures belong in operational diagnosis, not speculative launch validation.
+If a failure was deterministic from the artifact inputs, add a construction-time check with a
+behavior-focused regression test. Diagnose service outages, hardware faults, and data-dependent
+failures operationally. Cancel or resubmit only with current-thread authorization; a retry uses a
+fresh artifact version when the runtime commit changed.
