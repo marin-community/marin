@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared test helpers: the bridge config and a canned k8s API server."""
+"""Shared test helpers: the bridge config, a canned k8s API server, and finelog's SQL dialect."""
 
 import re
 
@@ -17,6 +17,14 @@ CERT_DEPLOY = "/apis/apps/v1/namespaces/cert-manager/deployments/cert-manager"
 FINELOG_DEPLOYMENTS_PATH = "/apis/apps/v1/deployments"
 KUEUE_SLICES = "/apis/discovery.k8s.io/v1/namespaces/kueue-system/endpointslices"
 NODE_POOLS = "/apis/compute.coreweave.com/v1alpha1/nodepools"
+
+
+def install_finelog_dialect_macros(database) -> None:
+    """Teach a DuckDB connection the finelog spellings the dashboards write."""
+    database.execute("CREATE MACRO to_timestamp_millis(value) AS to_timestamp(value / 1000.0)::TIMESTAMP")
+    database.execute("CREATE MACRO date_bin(width, moment) AS time_bucket(width, moment)")
+    database.execute("CREATE MACRO json_get(document, key) AS json_extract_string(document, '$.' || key)")
+    database.execute("CREATE MACRO approx_percentile_cont(value, q) AS quantile_cont(value, q)")
 
 
 def bridge_config(cache_ttl: float = 20.0) -> BridgeConfig:
