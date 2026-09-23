@@ -20,7 +20,7 @@ from jax.experimental.array_serialization.serialization import GlobalAsyncCheckp
 from levanter.checkpoint import save_checkpoint
 from levanter.compat.hf_checkpoints import RepoRef, load_tokenizer
 from levanter.grug.sharding import compact_grug_mesh
-from levanter.models.snowball import SnowballConfig, SnowballTransformer
+from levanter.models.snowball import SnowballConfig, SnowballTransformer, snowball_from_state_dict
 from levanter.utils.jax_utils import use_cpu_device
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
@@ -54,7 +54,7 @@ def _run_snowball_hf_to_grug(config: SnowballHfToGrugConfig) -> None:
         state_dict = converter.load_state_dict(ref, dtype=jnp.bfloat16)
         key = jax.random.key(0)
         source_template = eqx.filter_eval_shape(SnowballTransformer.init, source_config, key=key)
-        source = source_template.from_state_dict(state_dict)
+        source = snowball_from_state_dict(source_template, state_dict)
         target = eqx.filter_eval_shape(Transformer.init, model_config, key=key)
         model, pending_qb_betas = target.with_snowball_weights(source)
         manager = GlobalAsyncCheckpointManager()

@@ -7,7 +7,12 @@ import jax.numpy as jnp
 import numpy as np
 from haliax.partitioning import set_mesh
 from levanter.grug.sharding import compact_grug_mesh
-from levanter.models.snowball import SnowballConfig, SnowballTransformer
+from levanter.models.snowball import (
+    SnowballConfig,
+    SnowballTransformer,
+    snowball_from_state_dict,
+    snowball_to_state_dict,
+)
 
 from experiments.grug.moe_hero_ep.model import GrugModelConfig as TrainingConfig
 from experiments.grug.moe_hero_ep.model import Transformer
@@ -72,7 +77,7 @@ def test_hf_import_preserves_effective_weights_and_greedy_tokens_in_stacked_trai
 
         key = jax.random.key(11)
         source_template = eqx.filter_eval_shape(SnowballTransformer.init, _snowball_config(), key=key)
-        source = source_template.from_state_dict(exported.to_state_dict())
+        source = snowball_from_state_dict(source_template, snowball_to_state_dict(exported))
         target = eqx.filter_eval_shape(Transformer.init, _training_config(), key=key)
         imported, pending_qb_betas = target.with_snowball_weights(source)
         effective = _apply_qb_betas(imported, pending_qb_betas)
