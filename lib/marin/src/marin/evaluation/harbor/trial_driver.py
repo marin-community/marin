@@ -21,15 +21,17 @@ from typing import Any
 import yaml
 from harbor.agents.factory import AgentFactory  # pyrefly: ignore[missing-import]  # installed by external driver
 from harbor.environments.factory import _load_environment_class  # pyrefly: ignore[missing-import]
+from harbor.errors import (  # pyrefly: ignore[missing-import]
+    ErrorCategory,
+    errors_by_category,
+    known_error_types,
+)
 from harbor.job import Job  # pyrefly: ignore[missing-import]  # installed by external driver
-from harbor_config import JobConfig  # pyrefly: ignore[missing-import]  # installed by external driver
-from harbor_config.env import get_required_host_vars  # pyrefly: ignore[missing-import]
-from harbor_config.errors import ErrorCategory, errors_by_category, known_error_types  # pyrefly: ignore[missing-import]
-from harbor_config.models.agent.name import AgentName  # pyrefly: ignore[missing-import]
-from harbor_config.models.job.config import ArchiveConfig, DatasetConfig  # pyrefly: ignore[missing-import]
-from harbor_config.models.trial.config import AgentConfig  # pyrefly: ignore[missing-import]
+from harbor.models.agent.name import AgentName  # pyrefly: ignore[missing-import]
+from harbor.models.job.config import ArchiveConfig, DatasetConfig, JobConfig  # pyrefly: ignore[missing-import]
+from harbor.models.trial.config import AgentConfig  # pyrefly: ignore[missing-import]
+from harbor.utils.env import get_required_host_vars  # pyrefly: ignore[missing-import]
 from pydantic import BaseModel, ConfigDict, ValidationError
-from upath import UPath  # pyrefly: ignore[missing-import]  # installed by external driver
 
 from marin.evaluation.harbor.agent_context import (
     MAX_INPUT_TOKENS_KEY,
@@ -316,7 +318,7 @@ def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
     effective = config.model_copy(
         update={
             "job_name": overlay.job_name,
-            "jobs_dir": UPath(overlay.jobs_dir),
+            "jobs_dir": overlay.jobs_dir,
             "agents": [agent],
             "datasets": [dataset],
             "archive": ArchiveConfig(
@@ -325,7 +327,7 @@ def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
             ),
         }
     )
-    return effective
+    return JobConfig.model_validate(effective.model_dump(mode="json"), extra="forbid")
 
 
 def _stable_config(config: JobConfig) -> JobConfig:
@@ -363,8 +365,8 @@ def _stable_policy_json(config: JobConfig) -> str:
     return _stable_json(_normalized(config.model_dump(mode="python")))
 
 
-def _harbor_config_commit() -> str:
-    distribution_name = importlib.metadata.packages_distributions()["harbor_config"][0]
+def _harbor_commit() -> str:
+    distribution_name = importlib.metadata.packages_distributions()["harbor"][0]
     direct_url = json.loads(importlib.metadata.distribution(distribution_name).read_text("direct_url.json") or "{}")
     commit = direct_url.get("vcs_info", {}).get("commit_id")
     if not isinstance(commit, str) or len(commit) != FULL_GIT_COMMIT_LENGTH:
@@ -431,7 +433,7 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict
             "agent": sorted(agent_errors),
             "passthrough": sorted(passthrough_errors),
             "undecided": sorted(undecided_errors),
-            "commit": _harbor_config_commit(),
+            "commit": _harbor_commit(),
         },
         "max_input_tokens": model_info[MAX_INPUT_TOKENS_KEY],
         "max_output_tokens": model_info[MAX_OUTPUT_TOKENS_KEY],

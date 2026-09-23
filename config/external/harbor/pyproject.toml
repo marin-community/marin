@@ -17,4 +17,5 @@ prerelease = "allow"
 
 [tool.uv.sources]
 # Keep this branch-based: uv.lock pins the runtime commit, and the external dependency updater advances it.
-harbor = { git = "https://github.com/marin-community/harbor.git", branch = "main" }
+# main-next is reserved for a fully qualified candidate awaiting protected-main promotion.
+harbor = { git = "https://github.com/marin-community/harbor.git", branch = "main-next" }
