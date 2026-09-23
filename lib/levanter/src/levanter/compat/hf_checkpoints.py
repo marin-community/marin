@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import random
+import shutil
 import tempfile
 import time
 import urllib.parse
@@ -36,10 +37,10 @@ from haliax._src.state_dict import flatten_modules_for_export, to_state_dict
 from haliax.jax_utils import is_jax_array_like, sync_global_devices
 from haliax.partitioning import ResourceMapping
 from haliax.state_dict import StateDict, from_torch_compatible_state_dict, save_state_dict
-from huggingface_hub import HfApi, ModelInfo, repo_exists
+from huggingface_hub import HfApi, ModelInfo, hf_hub_download, repo_exists, snapshot_download
 from huggingface_hub.errors import HfHubHTTPError
 from huggingface_hub.file_download import repo_folder_name
-from huggingface_hub.utils import EntryNotFoundError, HFValidationError
+from huggingface_hub.utils import EntryNotFoundError, GatedRepoError, HFValidationError
 from jax import ShapeDtypeStruct
 from jax._src.mesh import get_concrete_mesh
 from jax._src.partition_spec import PartitionSpec
@@ -983,6 +984,16 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
         return lev_model
 
+    def _resolve_save_reference_code(self, save_reference_code: Optional[bool]) -> bool:
+        """Determine whether reference code should be bundled with the checkpoint."""
+        #  the way we determine this is if the config class is in the HF package or not
+        if save_reference_code is None:
+            if self.reference_checkpoint is None:
+                return False
+            return not self.HfConfigClass.__module__.startswith("transformers.")
+
+        return save_reference_code
+
     def _build_hf_config_dict(self, model: ModelWithHfSerializationMixin) -> dict:
         """Construct the Hugging Face config dictionary for the provided model."""
         config = model.config.to_hf_config(model.Vocab.size)
@@ -1046,6 +1057,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         model: ModelWithHfSerializationMixin,
         path,
         upload_to_hf: Union[bool, str, RepoRef] = False,
+        save_reference_code: Optional[bool] = None,
         save_tokenizer: bool = True,
         max_shard_size: int = DEFAULT_MAX_SHARD_SIZE,
         save_feature_extractor: bool = False,
@@ -1067,11 +1079,16 @@ class HFCheckpointConverter(Generic[LevConfig]):
         :param hf_repo: if provided, the checkpoint will be uploaded to the huggingface hub. If True, will use
         the reference_checkpoint as the repo name
         :param hf_upload_kwargs: any additional kwargs to pass to huggingface_hub.upload_folder
+        :param save_reference_code: if True, will save the reference code (from reference_checkpoint) to the checkpoint.
+        This is useful when using custom architectures, as it will allow the model to be loaded without the custom
+        architecture code being present (using trust_remote_code=True). "Code" here means anything not stored in LFS.
+        If None, will save code for models that aren't in the HF repo.
         :param chat_template: if given, overrides the tokenizer's chat template in the exported checkpoint
         (written to both tokenizer_config.json and chat_template.jinja)
         """
         logger.info(f"Saving HF-compatible checkpoint to {path}")
 
+        save_reference_code_flag = self._resolve_save_reference_code(save_reference_code)
         dict_config = self._build_hf_config_dict(model)
 
         if not _is_url_like(path):
@@ -1210,6 +1227,10 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
             files_before = _list_relative_files(local_path)
 
+            if save_reference_code_flag:
+                logger.info(f"Copying reference code from {self.reference_checkpoint}")
+                self._save_code_local(local_path)
+
             if save_tokenizer:
                 logger.info("Saving tokenizer")
                 _save_tokenizer_pretrained(self.tokenizer, local_path, chat_template=chat_template)
@@ -1244,6 +1265,74 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
         logger.info(f"Finished saving HF-compatible checkpoint to {path}")
 
+    def _save_code_local(self, path):
+        if self.reference_checkpoint is None:
+            warnings.warn("No reference checkpoint provided, so no code will be saved")
+            return
+
+        repo, revision = self._get_ref(self.reference_checkpoint)
+
+        # first we're going to decide what code to save
+        # as a heuristic, we'll use .gitattributes to decide what to save: anything not in LFS will be saved
+        # need to also save the .gitattributes file itself
+        # TODO: .gitignore too? it's not used a lot with the hub
+        if os.path.exists(repo):
+            # local path
+            if revision is not None:
+                warnings.warn("Ignoring revision because this is a local path. We don't handle this case well yet")
+            attributes_path = os.path.join(repo, ".gitattributes")
+            if not os.path.exists(attributes_path):
+                attributes_path = None
+        else:
+            # check hub
+            try:
+                attributes_path = hf_hub_download(repo_id=repo, filename=".gitattributes", revision=revision)
+            except EntryNotFoundError:
+                attributes_path = None
+            except GatedRepoError:
+                attributes_path = None
+
+        if attributes_path is None:
+            warnings.warn("HF Export - No .gitattributes file found, using a heuristic to decide what to save")
+            ignore_files = [
+                ".git",
+                "*.bin.*",
+                "*.lfs.*",
+                "*.bin",
+                "*.h5",
+                "*.tflite",
+                "*.tar.gz",
+                "*.ot",
+                "*.onnx",
+                "*.msgpack",
+                "model.safetensors",
+            ]
+        else:
+            # read the attributes file and get the globs
+            with open(attributes_path) as f:
+                attributes = f.read()
+            ignore_files = [".git"]
+            for line in attributes.split("\n"):
+                line = line.strip()
+                if line.startswith("#") or line == "":
+                    continue
+                # NB: this is not a full implementation of .gitattributes, but it's good enough for our purposes
+                if "filter=lfs" in line:
+                    ignore_files.append(line.split()[0])
+
+        if os.path.exists(repo):
+            local_code_path = repo
+        else:
+            local_code_path = snapshot_download(repo, revision=revision, ignore_patterns=ignore_files)
+
+        # now we'll save the code
+        os.makedirs(path, exist_ok=True)
+
+        shutil_ignore = shutil.ignore_patterns(*ignore_files)
+        shutil.copytree(local_code_path, path, ignore=shutil_ignore, dirs_exist_ok=True)
+
+        logger.debug(f"Saved code to {path}")
+
 
 def _is_url_like(path):
     return urllib.parse.urlparse(path).scheme != ""
@@ -1271,11 +1360,9 @@ def save_hf_checkpoint_callback(
     :return:
     """
 
-    def cb(step: StepInfo, force: bool = False):
+    def cb(step: StepInfo):
         nonlocal hf_upload_kwargs
-        # StepInfo is zero-indexed: a one-update run finishes at step 0. Suppress ordinary
-        # periodic step-0 callbacks, but allow Trainer.train's forced final flush to export it.
-        if step.step == 0 and not force:
+        if step.step == 0:
             return
         if upload_to_hf is not None and "commit_message" not in hf_upload_kwargs:
             my_upload_kwargs = hf_upload_kwargs.copy()

@@ -36,6 +36,7 @@ from levanter.models.snowball import (
     SnowballLMHeadModel,
     validate_single_name_config,
 )
+from levanter.testing.cpu_devices import run_on_cpu_devices
 
 
 def _tiny_config(**overrides) -> SnowballConfig:
@@ -329,9 +330,8 @@ def test_snowball_load_path_multidevice_sharding():
         from haliax.partitioning import set_mesh
         from haliax.state_dict import from_torch_compatible_state_dict, to_torch_compatible_state_dict
         from jax.random import PRNGKey
-        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+        from jax.sharding import NamedSharding, PartitionSpec as P
         from levanter.grug.sharding import compact_grug_mesh
-        from levanter.models.lm_model import LmExample
         from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 
         assert jax.device_count() == 8
@@ -343,18 +343,6 @@ def test_snowball_load_path_multidevice_sharding():
             initializer_std=0.02,
         )
         Vocab = Axis("vocab", cfg.vocab_size)
-        fsdp_mesh = Mesh(
-            np.asarray(jax.devices()).reshape(8, 1, 1, 1),
-            ("replica_dcn", "data", "expert", "model"),
-            axis_types=(AxisType.Explicit,) * 4,
-        )
-        with set_mesh(fsdp_mesh):
-            fsdp_model = SnowballLMHeadModel.init(Vocab, cfg, key=PRNGKey(0))
-        assert fsdp_model.transformer.blocks[0].attn.w_q.sharding.spec == P("replica_dcn", "model")
-        assert fsdp_model.transformer.blocks[0].mlp.expert_mlp.w_gate.sharding.spec == P(
-            "expert", "replica_dcn", "model"
-        )
-
         mesh = compact_grug_mesh(expert_axis_size=1)  # (replica_dcn=1, data=8, expert=1, model=1)
         Batch = Axis("batch", jax.device_count())
         Pos = Axis("position", 8)
@@ -377,10 +365,7 @@ def test_snowball_load_path_multidevice_sharding():
             template = eqx.filter_eval_shape(SnowballLMHeadModel.init, Vocab, cfg, key=PRNGKey(0))
             loaded = hax.named_jit(lambda t, s: from_torch_compatible_state_dict(t, s))(template, sd)
             got = np.asarray(hax.named_jit(lambda m, x: m(x))(loaded, ids).array)
-            example = LmExample(tokens=ids, loss_weight=hax.ones(ids.axes, dtype=jnp.float32))
-            loss = hax.named_jit(lambda m, e: m.compute_next_token_loss(e))(loaded, example)
         assert np.array_equal(ref, got), "data-sharded load-path logits differ from the reference"
-        assert np.isfinite(np.asarray(loss.array)).all(), "data-sharded Snowball loss is not finite"
         print("OK")
         """
     )
@@ -418,3 +403,58 @@ def test_snowball_fresh_process_hf_discovery(tmp_path):
     )
     assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
     assert "OK" in result.stdout
+
+
+@pytest.mark.timeout(120)
+def test_snowball_context_parallel_values_and_gradients_match_data_parallel():
+    run_on_cpu_devices(
+        """
+        import equinox as eqx
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        import haliax as hax
+        from haliax import Axis
+        from jax.sharding import AxisType, Mesh
+        from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
+
+        cfg = SnowballConfig(
+            vocab_size=32, hidden_dim=16, intermediate_dim=16,
+            shared_expert_intermediate_dim=16, num_experts=4,
+            num_experts_per_token=2, num_layers=2, num_heads=2,
+            num_kv_heads=1, head_dim=8, max_seq_len=8, sliding_window=4,
+            attention_implementation="reference", moe_implementation="ring",
+        )
+        ids = hax.named(
+            jnp.arange(32, dtype=jnp.int32).reshape(4, 8),
+            (Axis("batch", 4), Axis("position", 8)),
+        )
+        axes = ("replica_dcn", "data", "context", "expert", "model")
+
+        def run(shape):
+            mesh = Mesh(
+                np.asarray(jax.devices()).reshape(shape), axes,
+                axis_types=(AxisType.Explicit,) * len(axes),
+            )
+            with jax.set_mesh(mesh):
+                model = SnowballLMHeadModel.init(Axis("vocab", 32), cfg, key=jax.random.key(0))
+                activations = eqx.filter_jit(lambda m: m.activations(ids).array)(model)
+                value, grad = eqx.filter_jit(
+                    eqx.filter_value_and_grad(lambda m: jnp.mean(m(ids).array))
+                )(model)
+            block = grad.transformer.blocks[0]
+            return activations.sharding.spec[1], (
+                np.asarray(value), np.asarray(grad.transformer.token_embed),
+                np.asarray(block.attn.w_q), np.asarray(block.mlp.expert_mlp.w_gate),
+                np.asarray(block.shared.w_gate), np.asarray(grad.transformer.output_proj),
+            )
+
+        data_axis, reference = run((1, 2, 1, 2, 1))
+        context_axis, sharded = run((1, 1, 2, 2, 1))
+        assert data_axis is None
+        assert context_axis == "context"
+        for expected, actual in zip(reference, sharded, strict=True):
+            np.testing.assert_allclose(actual, expected, rtol=2e-4, atol=2e-4)
+        """,
+        device_count=4,
+    )

@@ -5,7 +5,6 @@ import contextlib
 import glob
 import json
 import os
-import struct
 import tempfile
 from types import SimpleNamespace
 
@@ -129,41 +128,3 @@ def test_export_lm_to_hf_custom_subpath_without_tokenizer():
         assert not os.path.exists(os.path.join(output_dir, "tokenizer.json"))
         assert os.path.exists(os.path.join(output_dir, SAFE_TENSORS_INDEX_NAME))
         assert len(glob.glob(os.path.join(output_dir, "*.safetensors"))) > 1
-
-
-def test_export_lm_to_hf_casts_saved_weights():
-    model_config = TokenizerlessGpt2Config(
-        num_layers=1,
-        num_heads=2,
-        max_seq_len=16,
-        use_flash_attention=False,
-        hidden_dim=16,
-    )
-    vocab_size = 64
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        Vocab = haliax.Axis("vocab", vocab_size)
-        model = Gpt2LMHeadModel.init(Vocab, model_config, key=jax.random.PRNGKey(0))
-        trainable, _ = eqx.partition(model, is_inexact_arrayish)
-        save_checkpoint({"model": trainable}, 0, f"{tmpdir}/ckpt")
-
-        trainer = SimpleNamespace(device_mesh=contextlib.nullcontext(), parameter_axis_mapping={})
-        output_dir = f"{tmpdir}/output"
-        export_lm_to_hf.main(
-            export_lm_to_hf.ConvertLmConfig(
-                trainer=trainer,
-                checkpoint_path=f"{tmpdir}/ckpt",
-                output_dir=output_dir,
-                model=model_config,
-                save_tokenizer=False,
-                override_vocab_size=vocab_size,
-                save_dtype="bfloat16",
-                use_cpu=True,
-            )
-        )
-
-        weights_path = glob.glob(os.path.join(output_dir, "*.safetensors"))[0]
-        with open(weights_path, "rb") as f:
-            header_size = struct.unpack("<Q", f.read(8))[0]
-            header = json.loads(f.read(header_size))
-        assert {tensor["dtype"] for name, tensor in header.items() if name != "__metadata__"} == {"BF16"}

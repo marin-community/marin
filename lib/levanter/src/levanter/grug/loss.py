@@ -12,16 +12,17 @@ import jax.numpy as jnp
 from jax.sharding import PartitionSpec as P
 
 from haliax.jax_utils import named_call
-from levanter.grug.sharding import _axis_names, _current_mesh, _reshard_for_shard_map, _spec_of
+from levanter.grug.sharding import _axis_names, _current_mesh, _reshard_for_shard_map
 from levanter.kernels.pallas.fused_cross_entropy_loss import (
     BlockSizes,
     fused_cross_entropy_loss_and_logsumexp_penalty,
 )
+from levanter.sharding import partition_spec_of
 
 
 def _token_dim_specs(x: jax.Array) -> tuple:
     """Preserve all token dimensions so sequence shards need no activation all-gather."""
-    spec = _spec_of(x)
+    spec = partition_spec_of(x)
     if spec is not None:
         padded = tuple(spec) + (None,) * (x.ndim - len(spec))
         token_dims = padded[: x.ndim - 1]

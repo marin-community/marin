@@ -9,7 +9,6 @@ from typing import Any, Optional, Protocol, runtime_checkable
 import equinox as eqx
 import haliax
 import jax
-import jax.numpy as jnp
 
 from haliax import Axis
 
@@ -39,7 +38,6 @@ class ConvertLmConfig:
     upload_to_hf: Optional[RepoRef] = None  # if specified, attempt to upload this checkpoint to the hf hub
     checkpoint_subpath: str = "model"
     max_shard_size: int = DEFAULT_MAX_SHARD_SIZE
-    save_dtype: str | None = None
 
     model: LmConfig = LlamaConfig()
     save_tokenizer: bool = True  # if True, save the tokenizer to the output directory
@@ -75,7 +73,8 @@ def main(config: ConvertLmConfig):
     if config.use_cpu:
         exit_stack.enter_context(local_cpu_mesh())
     else:
-        exit_stack.enter_context(haliax.partitioning.set_mesh(config.trainer.device_mesh))
+        # exit_stack.enter_context(Mesh(jax.local_devices(), "dev"))
+        exit_stack.enter_context(config.trainer.device_mesh)
         exit_stack.enter_context(haliax.axis_mapping(config.trainer.parameter_axis_mapping))
 
     with exit_stack:
@@ -105,7 +104,6 @@ def main(config: ConvertLmConfig):
             model,
             config.output_dir,
             upload_to_hf=config.upload_to_hf or False,
-            dtype=None if config.save_dtype is None else jnp.dtype(config.save_dtype),
             save_tokenizer=config.save_tokenizer,
             max_shard_size=config.max_shard_size,
         )

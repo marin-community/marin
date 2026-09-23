@@ -45,10 +45,8 @@ class ConvertCheckpointStepConfig:
     checkpoint_path: str
     trainer: TrainerConfig
     model: LmConfig
-    job_name: str = "convert-checkpoint-to-hf"
     checkpoint_subpath: str = "model"
     max_shard_size: int = DEFAULT_MAX_SHARD_SIZE
-    save_dtype: str | None = None
     resources: ResourceConfig = dataclasses.field(default_factory=_default_export_resources)
     output_path: str = ""
     upload_to_hf: bool | str | RepoRef = False
@@ -83,7 +81,6 @@ def convert_checkpoint_to_hf(config: ConvertCheckpointStepConfig) -> None:
         upload_to_hf=config.upload_to_hf,
         checkpoint_subpath=config.checkpoint_subpath,
         max_shard_size=config.max_shard_size,
-        save_dtype=config.save_dtype,
         model=config.model,
         save_tokenizer=config.save_tokenizer,
         tokenizer=config.tokenizer,
@@ -108,7 +105,7 @@ def convert_checkpoint_to_hf(config: ConvertCheckpointStepConfig) -> None:
 
     client = current_client()
     job_request = JobRequest(
-        name=config.job_name,
+        name="convert-checkpoint-to-hf",
         entrypoint=Entrypoint.from_callable(convert_task),
         resources=config.resources,
         environment=create_environment(env_vars=env, extras=extras),

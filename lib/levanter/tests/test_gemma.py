@@ -401,7 +401,7 @@ def test_gemma2_roundtrip():
 
         chex.assert_trees_all_close(jax_out, torch_out, rtol=1e-3, atol=1e-3)
 
-        converter.save_pretrained(model, f"{tmpdir}/lev_model")
+        converter.save_pretrained(model, f"{tmpdir}/lev_model", save_reference_code=False)
         torch_model2 = AutoModelForCausalLM.from_pretrained(f"{tmpdir}/lev_model")
         torch_model2.eval()
 
@@ -661,7 +661,7 @@ def test_gemma3_roundtrip():
 
         chex.assert_trees_all_close(jax_out, torch_out, rtol=1e-3, atol=1e-3)
 
-        converter.save_pretrained(model, f"{tmpdir}/lev_model")
+        converter.save_pretrained(model, f"{tmpdir}/lev_model", save_reference_code=False)
         torch_model2 = AutoModelForCausalLM.from_pretrained(f"{tmpdir}/lev_model")
         torch_model2.eval()
 

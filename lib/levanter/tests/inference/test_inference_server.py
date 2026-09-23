@@ -115,6 +115,7 @@ def local_hf_checkpoint(tmp_path_factory, trainer_config, generated_model_and_to
         converter.save_pretrained(
             model,
             str(checkpoint_path),
+            save_reference_code=False,
             chat_template=TEST_CHAT_TEMPLATE,
         )
     return checkpoint_path

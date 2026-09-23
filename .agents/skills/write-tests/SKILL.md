@@ -11,3 +11,9 @@ references.
 
 Treat those files as the source of truth for behavioral value, test style,
 fakes and mocks, timing, numerical tolerances, markers, and commands.
+
+Before adding a standalone scalar or configuration guard test, name the
+reported regression or compatibility-critical public contract it protects. If
+there is none, test consequential behavior on the valid path or omit the test.
+Do not pin an exact dependency version, default, or serialized configuration
+unless an external consumer depends on it.

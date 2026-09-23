@@ -20,11 +20,14 @@ import {
   parseWorkspaceFiles,
 } from '../lib/shell_workspace'
 import { splitThinking } from '../lib/thinking'
+import { requestDebugData, vllmDebugStreamOptions } from '../lib/vllm_debug'
+import type { VllmRequestDebug } from '../lib/vllm_debug'
 import {
   appendToolCallDelta,
   createToolCallAccumulator,
   finalizeToolCalls,
   inlineToolCalls,
+  runToolRounds,
 } from '../lib/tool_calls'
 import { newId } from '../lib/storage'
 import type {
@@ -37,8 +40,6 @@ import type {
 } from '../lib/types'
 import MessageBubble from './MessageBubble.vue'
 import ShellWorkspacePanel from './ShellWorkspacePanel.vue'
-
-const MAX_TOOL_ROUNDS = 8
 
 const props = defineProps<{
   conversation: Conversation
@@ -56,6 +57,7 @@ const busy = ref(false)
 const showTools = ref(false)
 const showWorkspace = ref(false)
 const showRawChat = ref(false)
+const showVllmDebug = ref(false)
 const rawChat = computed(() => plainTextChat(props.conversation))
 const scroller = ref<HTMLElement | null>(null)
 const composer = ref<HTMLTextAreaElement | null>(null)
@@ -170,27 +172,24 @@ async function runToolExchange(conversation: Conversation, pythonTools: string, 
       conversation.customInstructions,
       tools,
     )
-    for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
-      const request = modelMessages(conversation)
-      reply = appendAssistantReply(conversation)
-
-      await complete(reply, request, tools, templateFields, signal)
-      const calls = reply.toolCalls ?? []
-      persistConversation(conversation)
-      if (!calls.length) break
-
-      await executeToolCalls(conversation, calls, pythonTools, workspaceFiles, signal)
-
-      if (round === MAX_TOOL_ROUNDS - 1) {
-        reply.error = `Stopped after ${MAX_TOOL_ROUNDS} consecutive tool rounds.`
-      }
-    }
+    await runToolRounds(
+      props.params.maxToolRounds,
+      async () => {
+        const request = modelMessages(conversation)
+        reply = appendAssistantReply(conversation)
+        await complete(reply, request, tools, templateFields, signal)
+        persistConversation(conversation)
+        return reply.toolCalls ?? []
+      },
+      (call) => executeToolCall(conversation, call, pythonTools, workspaceFiles, signal),
+    )
   } catch (error) {
     if (isAbortError(error)) {
-      appendCancelledToolResults(conversation, reply)
+      appendMissingToolResults(conversation, reply, 'tool call cancelled')
     } else {
       reply ??= appendAssistantReply(conversation)
-      reply.error = String(error)
+      appendMissingToolResults(conversation, reply, 'tool call not executed')
+      reply.error = error instanceof Error ? error.message : String(error)
     }
   }
 }
@@ -213,33 +212,31 @@ function appendAssistantReply(conversation: Conversation): AssistantMessage {
   return reply
 }
 
-async function executeToolCalls(
+async function executeToolCall(
   conversation: Conversation,
-  calls: ToolCall[],
+  call: ToolCall,
   pythonTools: string,
   workspaceFiles: Record<string, string> | null,
   signal: AbortSignal,
-) {
-  for (const call of calls) {
-    let result: unknown
-    try {
-      if (call.name === BASH_TOOL_NAME) {
-        const workspace = conversation.shellWorkspace
-        if (!workspace || !workspaceFiles) throw new Error('Shell workspace is not enabled')
-        const command = bashCommand(call.arguments)
-        const shellResult = await invokeShell(workspaceFiles, workspace.commits, workspace.history, command, signal)
-        result = shellResult
-        if (shellResult.stop_reason === null) workspace.history.push(command)
-      } else {
-        result = await invokeTool(call.name, pythonTools, call.arguments, signal)
-      }
-    } catch (error) {
-      if (isAbortError(error)) throw error
-      result = { error: String(error) }
+): Promise<void> {
+  let result: unknown
+  try {
+    if (call.name === BASH_TOOL_NAME) {
+      const workspace = conversation.shellWorkspace
+      if (!workspace || !workspaceFiles) throw new Error('Shell workspace is not enabled')
+      const command = bashCommand(call.arguments)
+      const shellResult = await invokeShell(workspaceFiles, workspace.commits, workspace.history, command, signal)
+      result = shellResult
+      if (shellResult.stop_reason === null) workspace.history.push(command)
+    } else {
+      result = await invokeTool(call.name, pythonTools, call.arguments, signal)
     }
-    conversation.messages.push(toolResultMessage(call, result))
-    persistConversation(conversation)
+  } catch (error) {
+    if (isAbortError(error)) throw error
+    result = { error: String(error) }
   }
+  conversation.messages.push(toolResultMessage(call, result))
+  persistConversation(conversation)
 }
 
 function persistConversation(conversation: Conversation) {
@@ -247,13 +244,13 @@ function persistConversation(conversation: Conversation) {
   emit('persist')
 }
 
-function appendCancelledToolResults(conversation: Conversation, reply: AssistantMessage | null) {
+function appendMissingToolResults(conversation: Conversation, reply: AssistantMessage | null, error: string) {
   const completed = new Set(
     conversation.messages.filter((message) => message.role === 'tool').map((message) => message.toolCallId),
   )
   for (const call of reply?.toolCalls ?? []) {
     if (completed.has(call.id)) continue
-    conversation.messages.push(toolResultMessage(call, { error: 'tool call cancelled' }))
+    conversation.messages.push(toolResultMessage(call, { error }))
   }
 }
 
@@ -278,6 +275,7 @@ async function complete(
   let thinkingStartedAt: number | null = null
   const structuredCalls = createToolCallAccumulator()
 
+  const debugEnabled = showVllmDebug.value
   const body: Record<string, unknown> = {
     model: props.model,
     messages,
@@ -286,13 +284,16 @@ async function complete(
     max_tokens: props.params.maxTokens,
     top_p: props.params.topP,
     ...templateFields,
+    ...vllmDebugStreamOptions(debugEnabled, props.streaming),
   }
+  let requestDebug: VllmRequestDebug | null = null
   if (tools.length) {
     // Permit model-native call generation without requiring vLLM auto-tool parsing.
     // The response handling below also accepts structured calls when a server emits them.
     body.tool_choice = null
   }
   await requestCompletion('v1/chat/completions', body, props.streaming, signal, (data) => {
+    if (debugEnabled) requestDebug = requestDebugData(data) ?? requestDebug
     const delta = data.choices?.[0]?.delta ?? data.choices?.[0]?.message
     if (!delta) return
     const reasoning = delta.reasoning_content ?? delta.reasoning
@@ -319,6 +320,7 @@ async function complete(
       reply.thinkingSeconds = (performance.now() - thinkingStartedAt) / 1000
     }
   })
+  if (debugEnabled && !signal.aborted) reply.requestDebug = requestDebug ?? { metrics: null, usage: null }
 
   if (thinkingStartedAt !== null && reply.thinkingSeconds === null) {
     reply.thinkingSeconds = (performance.now() - thinkingStartedAt) / 1000
@@ -373,14 +375,15 @@ async function complete(
           :key="index"
           :message="message"
           :streaming="busy && index === conversation.messages.length - 1"
+          :show-vllm-debug="showVllmDebug"
         />
       </div>
     </div>
 
     <div class="border-t border-surface-border px-4 py-3">
       <div class="mx-auto max-w-3xl">
-        <div class="mb-2 flex items-center justify-between gap-4">
-          <div class="flex items-center gap-4">
+        <div class="mb-2 flex flex-wrap items-center justify-between gap-3">
+          <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
             <button
               class="flex items-center gap-2 text-xs font-medium text-text-muted transition-colors hover:text-text-secondary"
               :class="{ 'text-accent': conversation.pythonTools.trim() }"
@@ -404,13 +407,19 @@ async function complete(
               </span>
             </button>
           </div>
-          <label
-            class="flex cursor-pointer items-center gap-2 text-xs font-medium text-text-muted"
-            title="Show the whole chat as a plain-text transcript"
-          >
-            <input v-model="showRawChat" type="checkbox" class="accent-accent" />
-            Raw chat
-          </label>
+          <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
+            <label class="flex cursor-pointer items-center gap-2 text-xs font-medium text-text-muted" title="Record and show vLLM timings on each reply">
+              <input v-model="showVllmDebug" type="checkbox" class="accent-accent" />
+              vLLM debug
+            </label>
+            <label
+              class="flex cursor-pointer items-center gap-2 text-xs font-medium text-text-muted"
+              title="Show the whole chat as a plain-text transcript"
+            >
+              <input v-model="showRawChat" type="checkbox" class="accent-accent" />
+              Raw chat
+            </label>
+          </div>
         </div>
         <div v-if="showTools" class="mb-3">
           <textarea

@@ -13,7 +13,7 @@ from pathlib import Path
 import draccus
 from rigging.filesystem.storage_path import StoragePath
 
-from marin.inference.config import validate_pipeline_args
+from marin.inference.config import resolve_tokenizer_revision, validate_pipeline_args
 
 
 class ServeBackend(StrEnum):
@@ -143,16 +143,19 @@ class ModelConfig:
     ``name`` is the slash-free launch identity used in Iris job names and record paths. ``location``
     is an HF repo id or an object-store (``gs://``/``s3://``) HF-format export directory; an
     object-store location requires ``tokenizer`` (the eval client loads its tokenizer through HF).
-    ``revision`` pins an immutable checkpoint for a base HF model. ``apply_chat_template`` controls
-    whether Evalchemy formats requests with the tokenizer's chat template. ``resource_hint`` states
-    where the model is compatible; ``serve`` states how its inference server behaves. ``generation``
-    and ``agent`` are experiment-definition inputs and never affect inference placement.
+    ``revision`` pins an immutable checkpoint for a base HF model. ``tokenizer_revision`` pins the
+    tokenizer repository. When ``tokenizer`` is omitted, it defaults to ``location`` and its revision
+    defaults to ``revision``. ``apply_chat_template`` controls whether Evalchemy formats requests with
+    the tokenizer's chat template. ``resource_hint`` states where the model is compatible; ``serve``
+    states how its inference server behaves. ``generation`` and ``agent`` are experiment-definition
+    inputs and never affect inference placement.
     """
 
     name: str
     location: str
     revision: str | None = None
     tokenizer: str | None = None
+    tokenizer_revision: str | None = None
     apply_chat_template: bool = True
     resource_hint: ResourceHint = field(default_factory=ResourceHint)
     serve: ServeConfig = field(default_factory=ServeConfig)
@@ -164,6 +167,11 @@ class ModelConfig:
             raise ValueError("model name cannot contain '/'")
         if self.serve.pipeline_parallel_size > 1 and not self.resource_hint.gpu:
             raise ValueError("pipeline parallelism requires resource_hint.gpu")
+
+    @property
+    def effective_tokenizer_revision(self) -> str | None:
+        """Revision owned by the configured or default tokenizer repository."""
+        return resolve_tokenizer_revision(self.revision, self.tokenizer, self.tokenizer_revision)
 
 
 def has_vllm_option(args: tuple[str, ...], option: str) -> bool:
