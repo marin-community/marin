@@ -194,10 +194,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     ingested_usage = _server_usage(args.server_pid)
 
     client = LogClient.connect(args.endpoint, timeout_ms=120_000)
-    count_sql = (
-        'SELECT COUNT(*) AS rows FROM "telemetry_v1.marinskyrl" WHERE job_id = '
-        + sql_string(args.job_id)
-    )
+    count_sql = 'SELECT COUNT(*) AS rows FROM "telemetry_v1.marinskyrl" WHERE job_id = ' + sql_string(args.job_id)
     visibility_started = time.perf_counter()
     while True:
         visible_rows = client.query(count_sql).column("rows")[0].as_py()
@@ -231,8 +228,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     evidence = [
         {"metric": row["metric"], "stat": row["stat"], "value": row["value"], "samples": row["samples"]}
         for row in table.to_pylist()
-        if row["metric"] in ("ttft", "ttft_observations")
-        and (row["t"] is None)
+        if row["metric"] in ("ttft", "ttft_observations") and (row["t"] is None)
     ]
     return {
         "format": args.mode,
@@ -272,7 +268,9 @@ def main() -> None:
     parser.add_argument("--polls", type=int, required=True)
     parser.add_argument("--interval-ms", type=int, default=5_000)
     parser.add_argument("--summary", action="store_true")
-    parser.add_argument("--query-only", action="store_true", help="measure an existing complete replay without reposting it")
+    parser.add_argument(
+        "--query-only", action="store_true", help="measure an existing complete replay without reposting it"
+    )
     print(json.dumps(run(parser.parse_args()), sort_keys=True))
 
 
