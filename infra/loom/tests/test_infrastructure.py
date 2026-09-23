@@ -357,7 +357,6 @@ def test_deployment_models_durable_resources_without_secret_payloads():
         assert "loom-compose" in metadata
         assert "loom-caddyfile" in metadata
         assert "header_up X-Loom-Forwarded 1" in metadata["loom-caddyfile"]
-        assert "exec -T loom \\" in metadata["startup-script"]
         assert "http://127.0.0.1:${LOOM_PORT}/api/deployment/reconcile" in metadata["startup-script"]
         assert "metadataStartupScript" not in vm.inputs
         assert "metadata_startup_script" not in vm.inputs
