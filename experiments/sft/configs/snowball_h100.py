@@ -20,7 +20,7 @@ DATASET_REVISION = "45fb28fcc38d352133cb28a1c8a43a2f14fea97b"
 
 SPEC = SFTSpec(
     name="checkpoints/snowball-openthoughts-agent-sft",
-    version="2026.09.22",
+    version="2026.09.23",
     model=HFModel(
         model_ref=f"{HF_MODEL}@{HF_REVISION}",
         tokenizer_path=HF_MODEL,
@@ -47,10 +47,10 @@ SPEC = SFTSpec(
         lr_schedule="cosine",
         warmup=0.0,
     ),
-    mesh=MeshConfig(axes={"data": 1, "replica": 1, "model": 1, "expert": -1}),
-    seq_len=4096,
+    mesh=MeshConfig(axes={"data": 1, "replica": 1, "model": 1, "context": 4, "expert": -1}),
+    seq_len=32768,
     pack=False,
-    batch_size=32,
+    batch_size=8,
     num_train_steps=10,
     wandb_project="snowball-sft",
 )

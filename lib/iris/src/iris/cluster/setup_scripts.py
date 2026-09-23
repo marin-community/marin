@@ -147,10 +147,13 @@ def cuda_toolchain_setup_script() -> str:
     return rf"""set -e
 cuda_bin=""
 for _d in "$IRIS_VENV"/lib/python*/site-packages/nvidia/cu*/bin; do
-  if [ -x "$_d/ptxas" ]; then cuda_bin="$_d"; break; fi
+  if [ -f "$_d/ptxas" ]; then cuda_bin="$_d"; break; fi
 done
 if [ -z "$cuda_bin" ]; then echo 'no CUDA toolchain to stage'; exit 0; fi
 echo 'staging CUDA toolchain'
+# Some CUDA wheels install compiler files without the executable bit.
+chmod u+x "$cuda_bin/ptxas"
+if [ -f "$cuda_bin/nvlink" ]; then chmod u+x "$cuda_bin/nvlink"; fi
 ln -sf "$cuda_bin"/* "$IRIS_VENV/bin/"
 _libdevice="$(dirname "$cuda_bin")/nvvm/libdevice/{_LIBDEVICE_FILE}"
 if [ -f "$_libdevice" ]; then

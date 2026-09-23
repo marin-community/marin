@@ -2,9 +2,9 @@
 
 The [Snowball SFT recipe](https://github.com/marin-community/marin/blob/main/experiments/sft/configs/snowball_h100.py) trains Levanter's `SnowballLMHeadModel` directly from the pinned Snowball Hugging Face weights. It uses the shared chat SFT launcher to transform OpenThoughts Agent conversations, supervise assistant tokens, and save native Levanter checkpoints. There is no Grug trainer checkpoint or model-specific conversion job.
 
-This is a 4,096-token, ten-step starting recipe. It requests 32 H100s because a prior [Snowball training run](https://github.com/marin-community/marin/pull/9144) demonstrated the 67B model on 32 learner H100s at this length. That run was GRPO, not this SFT recipe; this exact end-to-end SFT job has not been measured. The model supports longer positions, but the current Levanter training path does not shard context for the 262K setting.
+This is a 32,768-token, ten-step starting recipe on 32 H100s. A prior [Snowball training run](https://github.com/marin-community/marin/pull/9144) demonstrated the 67B model on 32 learner H100s at 4,096 tokens. That run used GRPO; this longer SFT recipe has not completed an end-to-end accelerator run. Do not assume the model's 262K position limit is a validated training length.
 
-The recipe shards experts across the eight H100s on each host and uses four hosts for data parallelism. It keeps conversations separate (`pack=False`). Snowball currently builds its own causal attention mask and does not honor the packed-document mask supplied by Levanter. Its scan layers are checkpointed during reverse mode to bound activation memory.
+The mesh splits each sequence over four H100s and shards experts across the other eight mesh ranks. Attention keeps local queries and gathers the full keys and values. Large weight and optimizer leaves are sharded over both axes. The recipe keeps conversations separate (`pack=False`) because Snowball does not yet consume Levanter's packed-document attention mask. Its scan layers are checkpointed during reverse mode to bound activation memory.
 
 ## Prepare
 
