@@ -18,20 +18,14 @@ Zephyr reports reducer input rows, encoded payload bytes, and mapper counts to `
 
 ## Execution history
 
-Coordinator task status includes a **Zephyr** link to the Marina page and
-execution-specific links while a pipeline runs. The page shows execution
-history, stage dependencies, and reducer input sizes from Finelog.
-The coordinator enqueues a `zephyr.execution` record before executing stages.
-It contains the execution ID, root and coordinator Iris job IDs, input shard
-count, and `stages_json`: stage labels, types, reduce markers, and dependencies.
-Source values and callables are excluded. The stage names match `zephyr.stage`,
-`zephyr.worker`, and `zephyr.shuffle` for queries across these tables.
+Coordinator task status links to Marina's execution page. The page joins
+`zephyr.execution`, `zephyr.stage`, `zephyr.worker`, and `zephyr.shuffle` records
+to show stage dependencies, progress, and reducer input sizes. Execution
+records exclude source values and callables.
 
-Records use the existing Finelog connection and best-effort delivery. Local
-runs need `ZephyrContext(stats_config=StatsConfig(url))`; their job IDs are empty.
-Delivered records remain available after coordinator shutdown, subject to
-Finelog retention. They describe the plan, not live task state. Executions
-without a delivered record cannot be discovered through this table.
+Local runs need `ZephyrContext(stats_config=StatsConfig(url))`; their job IDs
+are empty. Records remain available after coordinator shutdown according to
+Finelog retention, but failed delivery leaves no discoverable execution record.
 
 ## Architecture
 

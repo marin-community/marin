@@ -193,7 +193,11 @@ class ZephyrShuffleStat:
 
 @dataclass
 class ZephyrExecutionStat:
-    """Execution plan metadata for historical queries, without source values."""
+    """Execution plan metadata for historical queries, without source values.
+
+    ``ts`` is when the coordinator records the plan and is the lower bound for
+    telemetry queries about this execution.
+    """
 
     key_column: ClassVar[str] = "root_job_id"
 
