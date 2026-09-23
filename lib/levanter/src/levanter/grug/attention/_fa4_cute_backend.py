@@ -244,12 +244,6 @@ def segmented_flash_attention_backward(
         )
 
     if kernel_config.sm90_backward is not None and qhead_per_kvhead > 1 and q.shape[-1] == 128:
-        # Equal lengths imply offset zero for a query slice contained in the key sequence.
-        if q.shape[1] != k.shape[1]:
-            raise NotImplementedError(
-                "The native SM90 segmented backward does not carry a context-parallel query offset; "
-                "context parallelism currently requires the SM80/SM120 segmented backward."
-            )
         sm90_config = kernel_config.sm90_backward
         sparse_metadata = _packed_segment_backward_block_sparse_indices_with_full(
             lower_bounds,
@@ -274,6 +268,7 @@ def segmented_flash_attention_backward(
             sparse_metadata.full_block_idx,
             softmax_scale=softmax_scale,
             kernel_config=kernel_config,
+            q_offset=q_offset,
             window_size_left=None,
         )
 
@@ -388,14 +383,15 @@ def segmented_flash_attention_backward_sm90_native(
     *,
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
+    q_offset: jax.Array,
     window_size_left: int | None = None,
 ) -> tuple[jax.Array, jax.Array, jax.Array]:
-    """Run the native SM90 segmented backward path for D128 GQA kernels."""
-    if q.shape[1] != k.shape[1]:
-        raise ValueError("native SM90 backward requires equal q/k sequence lengths")
-    _validate_forward_inputs(
-        q, k, v, lower_bounds, valid, softmax_scale=softmax_scale, q_offset=jnp.zeros((1,), dtype=jnp.int32)
-    )
+    """Run the native SM90 segmented backward path for D128 GQA kernels.
+
+    ``q_offset`` is an int32[1] array holding the global position of local query 0 within the
+    full key sequence. It is zero unless context parallelism slices the queries.
+    """
+    _validate_forward_inputs(q, k, v, lower_bounds, valid, softmax_scale=softmax_scale, q_offset=q_offset)
     _validate_backward_inputs(q, k, v, out, dout, lse)
     sm90_config = kernel_config.sm90_backward
     if sm90_config is None:
@@ -470,7 +466,7 @@ def segmented_flash_attention_backward_sm90_native(
         dpsum,
         lower_bounds,
         valid.astype(jnp.int32),
-        jnp.zeros((1,), dtype=jnp.int32),
+        q_offset,
         mask_block_cnt,
         mask_block_idx,
         full_block_cnt,
@@ -1032,12 +1028,12 @@ def _validate_backward_block_sparse_metadata(
     tile_m: int,
     tile_n: int,
 ) -> None:
-    batch, seq_len, q_heads, _ = q.shape
-    kv_heads = k.shape[2]
+    batch, q_len, q_heads, _ = q.shape
+    k_len, kv_heads = k.shape[1], k.shape[2]
     if q_heads % kv_heads != 0:
         raise ValueError(f"Hq must be divisible by Hkv for GQA, got q={q.shape}, k={k.shape}")
-    expected_n_blocks = (seq_len + tile_n - 1) // tile_n
-    expected_m_blocks = (seq_len + tile_m - 1) // tile_m
+    expected_n_blocks = (k_len + tile_n - 1) // tile_n
+    expected_m_blocks = (q_len + tile_m - 1) // tile_m
     if mask_block_cnt.dtype != jnp.int32:
         raise ValueError(f"mask_block_cnt must be int32, got {mask_block_cnt.dtype}")
     if mask_block_idx.dtype != jnp.int32:

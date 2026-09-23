@@ -19,7 +19,7 @@ from levanter.grug.attention import (
     gpu_fa4_cute_attention,
     reference_attention,
 )
-from levanter.grug.attention._fa4_cute import _segmented_kernel_config, _simple_causal_lower_bounds
+from levanter.grug.attention._fa4_cute import _simple_causal_lower_bounds
 from levanter.grug.attention._fa4_cute_config import SM100_GQA_RATIOS, SM100_HEAD_DIM, sm100_flash4_cute_kernel_config
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.testing.cpu_devices import run_on_cpu_devices
@@ -534,13 +534,6 @@ def test_real_gpu_fa4_cute_attention_matches_reference_with_sequence_sharded_que
     pytest.importorskip("cutlass")
     pytest.importorskip("cutlass.cute")
     pytest.importorskip("flash_attn.cute.flash_bwd_preprocess")
-    if (
-        context_size > 1
-        and head_dim == 128
-        and q_heads != kv_heads
-        and _segmented_kernel_config(head_dim).sm90_backward is not None
-    ):
-        pytest.skip("The native SM90 GQA backward carries no context-parallel query offset.")
     # Multiple query tiles exercise offset bounds in both forward and backward kernels.
     seq_len = 512
     if sequence_axes == ("context",):

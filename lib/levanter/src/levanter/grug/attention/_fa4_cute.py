@@ -254,10 +254,6 @@ def _fa4_cute_attention_forward_sharded(
                 f"FA4/CuTe requires {name} to match q's batch/head sharding with unsharded sequence/feature "
                 f"dimensions, got q={partition_spec_of(q)}, {name}={partition_spec_of(x)}."
             )
-    if q_dims[1] and kernel_config.sm90_backward is not None:
-        # Hopper's native segmented backward assumes local Q and K have equal lengths.
-        # The 64x64 segmented path handles the query offset used by context parallelism.
-        kernel_config = replace(kernel_config, sm90_backward=None)
     if not any(q_dims):
         return fa4_cute_attention_forward(
             q,
