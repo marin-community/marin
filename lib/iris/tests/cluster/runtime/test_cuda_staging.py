@@ -9,6 +9,7 @@ source text. The GPU extra wires it into the resolved setup scripts.
 """
 
 import os
+import shutil
 import subprocess
 import sys
 import zipfile
@@ -91,6 +92,44 @@ def _write_cuda13_library_wheel(wheelhouse: Path, package: str, version: str, li
         zf.writestr(f"{dist_info}/RECORD", "")
 
 
+def _write_cuda_toolchain_wheel(wheelhouse: Path, version: str) -> Path:
+    package = "nvidia-cuda-nvcc"
+    normalized_package = package.replace("-", "_")
+    dist_info = f"{normalized_package}-{version}.dist-info"
+    wheel = wheelhouse / f"{normalized_package}-{version}-py3-none-any.whl"
+    wheelhouse.mkdir(exist_ok=True)
+    with zipfile.ZipFile(wheel, "w") as zf:
+        zf.writestr(
+            f"{dist_info}/METADATA",
+            "\n".join(
+                [
+                    "Metadata-Version: 2.1",
+                    f"Name: {package}",
+                    f"Version: {version}",
+                    "",
+                ]
+            ),
+        )
+        zf.writestr(
+            f"{dist_info}/WHEEL",
+            "\n".join(
+                [
+                    "Wheel-Version: 1.0",
+                    "Generator: iris-test",
+                    "Root-Is-Purelib: true",
+                    "Tag: py3-none-any",
+                    "",
+                ]
+            ),
+        )
+        for tool in ("ptxas", "nvlink"):
+            tool_info = zipfile.ZipInfo(f"nvidia/cu13/bin/{tool}")
+            tool_info.external_attr = 0o755 << 16
+            zf.writestr(tool_info, "#!/bin/sh\n")
+        zf.writestr(f"{dist_info}/RECORD", "")
+    return wheel
+
+
 def _run_script(script: str, venv: Path, workdir: Path, *, path: str = "/usr/bin:/bin", extra_env=None) -> None:
     env = {"IRIS_VENV": str(venv), "IRIS_WORKDIR": str(workdir), "PATH": path}
     if extra_env:
@@ -167,6 +206,38 @@ def test_fails_when_ptxas_is_not_executable(tmp_path):
     assert not (venv / "bin" / "ptxas").exists()
 
 
+def test_repairs_installed_cuda_toolchain_when_files_are_missing(tmp_path):
+    version = "13.2.78"
+    venv = tmp_path / "venv"
+    subprocess.run(["uv", "venv", "--python", sys.executable, str(venv)], capture_output=True, text=True, check=True)
+    wheelhouse = tmp_path / "wheelhouse"
+    wheel = _write_cuda_toolchain_wheel(wheelhouse, version)
+    subprocess.run(
+        ["uv", "pip", "install", "--python", str(venv / "bin" / "python"), str(wheel)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    shutil.rmtree(_site_packages(venv) / "nvidia" / "cu13" / "bin")
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+
+    _run_script(
+        cuda_toolchain_setup_script(),
+        venv,
+        workdir,
+        path=os.environ["PATH"],
+        extra_env={
+            "UV_FIND_LINKS": str(wheelhouse),
+            "UV_OFFLINE": "1",
+            "UV_CACHE_DIR": str(tmp_path / "uv-cache"),
+        },
+    )
+
+    assert (venv / "bin" / "ptxas").resolve().is_file()
+    assert (venv / "bin" / "nvlink").resolve().is_file()
+
+
 def test_stages_when_libdevice_missing(tmp_path):
     # ptxas present but libdevice absent: still symlink the toolchain, skip copies.
     venv = _make_venv(tmp_path, cuda_major="cu13", with_ptxas=True, with_libdevice=False)
@@ -201,6 +272,8 @@ def test_restores_cuda13_shared_library_package_when_present(tmp_path, package, 
             "pip",
             "install",
             "--no-cache",
+            "--link-mode",
+            "copy",
             "--python",
             str(venv / "bin" / "python"),
             "--no-index",
