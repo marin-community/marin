@@ -200,7 +200,7 @@ def test_inference_dashboard_exposes_one_optional_baseline():
 
     assert diagnostics["uid"] == "marin-inference"
     variables = {variable["name"]: variable for variable in diagnostics["templating"]["list"]}
-    assert variables["baseline"]["type"] == "textbox"
+    assert variables["baseline"]["current"]["value"] == ""
     comparison = next(
         panel
         for panel in diagnostics["panels"]
@@ -551,8 +551,14 @@ def _comparison_app(scenario: ComparisonScenario = ComparisonScenario.DEFAULT):
             'INSERT INTO "telemetry_v1.vllm" '
             "VALUES ('cw-a', 'vllm', '/selected', 'num_requests_running', 'gauge', 1, ?, ?, 1060000, 99)",
             [
-                json.dumps({"node_name": "node-b-extra"}),
-                json.dumps({"model_name": selected_model, "source_temporality": "current_snapshot"}),
+                json.dumps({"node_name": "node-b"}),
+                json.dumps(
+                    {
+                        "engine": "engine-b-extra",
+                        "model_name": selected_model,
+                        "source_temporality": "current_snapshot",
+                    }
+                ),
             ],
         )
     if scenario == ComparisonScenario.STRUCTURED_HISTOGRAM:
@@ -585,11 +591,12 @@ def test_vllm_comparison_uses_each_jobs_observed_window_and_skips_an_empty_basel
     }
     with TestClient(app) as client:
         empty = client.get("/finelog/marin/v1/vllm/comparison", params={**params, "baseline": ""})
+        assert empty.status_code == 200
+        assert empty.json() == []
+        assert queries == []
         compared = client.get("/finelog/marin/v1/vllm/comparison", params={**params, "baseline": "/baseline"})
 
-    assert empty.status_code == compared.status_code == 200
-    assert empty.json() == []
-    assert len(queries) == 2
+    assert compared.status_code == 200
     rows = {row["metric"]: row for row in compared.json()}
     assert rows["time per output token"]["selected_value"] == pytest.approx(6.8)
     assert rows["time per output token"]["baseline_value"] == pytest.approx(12)
@@ -658,6 +665,10 @@ def test_vllm_comparison_withholds_direction_for_incomplete_context(scenario):
     assert {row["status"] for row in response.json()} == {"not_comparable"}
     assert all(row["reason"] for row in response.json())
     assert all(row["ratio"] is None and row["direction"] is None for row in response.json())
+    if scenario == ComparisonScenario.STRUCTURED_HISTOGRAM:
+        tpot = next(row for row in response.json() if row["metric"] == "time per output token")
+        assert tpot["selected_value"] is None
+        assert tpot["baseline_value"] is None
 
 
 def test_vllm_comparison_reports_a_missing_baseline():
@@ -675,3 +686,21 @@ def test_vllm_comparison_reports_a_missing_baseline():
         )
     assert response.status_code == 200
     assert response.json()[0]["status"] == "baseline_missing"
+
+
+def test_vllm_comparison_rejects_self_comparison_without_querying_finelog():
+    app, queries = _comparison_app()
+    with TestClient(app) as client:
+        response = client.get(
+            "/finelog/marin/v1/vllm/comparison",
+            params={
+                "identity_kind": "job_id",
+                "identity": "/selected",
+                "baseline": "/selected",
+                "from": 950_000,
+                "to": 1_200_000,
+            },
+        )
+    assert response.status_code == 200
+    assert response.json()[0]["status"] == "same_job"
+    assert queries == []

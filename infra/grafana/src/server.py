@@ -745,6 +745,17 @@ def create_app(
                     ]
                 )
             selected_job = params.get("identity_override") or _require(params, "identity")
+            if selected_job == baseline_job:
+                return JSONResponse(
+                    [
+                        {
+                            "section": VLLM_COMPARISON_SECTION,
+                            "metric": VLLM_COMPARISON_SECTION,
+                            "status": "same_job",
+                            "reason": "Choose a different baseline job",
+                        }
+                    ]
+                )
             start_ms = round(_require_time(params, "from").timestamp() * 1000)
             end_ms = round(_require_time(params, "to").timestamp() * 1000)
             try:

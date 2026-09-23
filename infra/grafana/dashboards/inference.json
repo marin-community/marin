@@ -156,7 +156,7 @@
     {
       "type": "table",
       "title": "Selected job vs baseline",
-      "description": "Time per output token is lower-is-better; generated tokens/s is higher-is-better. Each job is summarized over its own request-state window inside a centered seven-day search. Ratios and directions appear only for matching model, GPU, serving size, prompt/output lengths and observed load with enough completed-request samples. Empty baseline performs no Finelog query.",
+      "description": "Time per output token is lower-is-better. Generated tokens/s is the median of active one-minute rates. Each job uses its own request-state window inside a centered seven-day search. Ratios and directions require one producer, one node, peak concurrency of one, matching model and GPU, similar prompt/output lengths, and enough completed requests. Empty baseline performs no Finelog query.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"

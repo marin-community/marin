@@ -1465,7 +1465,10 @@ WITH session_samples AS (
     SELECT samples.job_id,
            MAX(CASE WHEN samples.name = 'num_requests_running' THEN samples.value END) AS peak_running,
            COUNT(DISTINCT CASE WHEN samples.name = 'num_requests_running'
-                              THEN samples.resource_attributes_json END) AS producers,
+                              THEN COALESCE(
+                                  json_get(samples.attributes_json, 'engine'),
+                                  samples.resource_attributes_json
+                              ) END) AS producers,
            COUNT(DISTINCT CASE WHEN samples.name = 'num_requests_running'
                               THEN json_get(samples.resource_attributes_json, 'node_name') END) AS nodes,
            MIN(json_get(samples.resource_attributes_json, 'node_name')) AS node_name,
@@ -1565,13 +1568,9 @@ def _comparison_context(selected: dict[str, object], baseline: dict[str, object]
         "gpu_model"
     ):
         return VLLM_COMPARISON_NOT_COMPARABLE, "GPU differs or is missing"
-    for field, label in (("producers", "serving producer count"), ("nodes", "serving node count")):
-        selected_value = selected.get(field)
-        baseline_value = baseline.get(field)
-        if not isinstance(selected_value, (int, float)) or not isinstance(baseline_value, (int, float)):
-            return VLLM_COMPARISON_NOT_COMPARABLE, f"{label} is missing"
-        if selected_value <= 0 or selected_value != baseline_value:
-            return VLLM_COMPARISON_NOT_COMPARABLE, f"{label} differs"
+    for field, label in (("producers", "serving producer"), ("nodes", "serving node")):
+        if selected.get(field) != 1 or baseline.get(field) != 1:
+            return VLLM_COMPARISON_NOT_COMPARABLE, f"comparison requires one {label} per job"
     selected_prompt = selected.get("prompt_tokens_mean")
     baseline_prompt = baseline.get("prompt_tokens_mean")
     if not isinstance(selected_prompt, (int, float)) or not isinstance(baseline_prompt, (int, float)):
@@ -1591,11 +1590,8 @@ def _comparison_context(selected: dict[str, object], baseline: dict[str, object]
     if not isinstance(selected_peak, (int, float)) or not isinstance(baseline_peak, (int, float)):
         return VLLM_COMPARISON_NOT_COMPARABLE, "request concurrency is missing"
 
-    def concurrency_bucket(value: float) -> str:
-        return "1" if value <= 1 else "2-4" if value <= 4 else "5+"
-
-    if concurrency_bucket(selected_peak) != concurrency_bucket(baseline_peak):
-        return VLLM_COMPARISON_NOT_COMPARABLE, "request concurrency differs"
+    if selected_peak != 1 or baseline_peak != 1:
+        return VLLM_COMPARISON_NOT_COMPARABLE, "comparison requires peak request concurrency of one"
     for job in (selected, baseline):
         count = job.get("request_count")
         if not isinstance(count, (int, float)) or count < VLLM_COMPARISON_MIN_REQUESTS:
@@ -1634,6 +1630,10 @@ def vllm_comparison_rows(table: pa.Table, selected_job: str, baseline_job: str) 
         selected_value = selected.get(field)
         baseline_value = baseline.get(field)
         metric_status, metric_reason = status, reason
+        if field == "tpot_seconds" and (
+            selected.get("has_structured_histograms") or baseline.get("has_structured_histograms")
+        ):
+            selected_value = baseline_value = None
         ratio = None
         direction = None
         if metric_status == "comparable":
