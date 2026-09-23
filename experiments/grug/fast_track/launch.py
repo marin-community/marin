@@ -11,6 +11,9 @@ data-matches or compute-matches it (``--match``, default data), or sets ``--batc
 
 import dataclasses
 import math
+import os
+import shlex
+import sys
 from datetime import timedelta
 from enum import StrEnum
 
@@ -431,6 +434,53 @@ def build_h100_ladder_run(
     )
 
 
+_DEFAULT_TARGET_CLUSTER = "cw-rno2a"  # override with IRIS_CLUSTER; cw-rno2a and cw-us-east-02a are both 8xH100
+_WANDB_PROJECT = "marin_moe"
+
+
+def _submit_to_cluster(run_id: str) -> None:
+    """Re-exec this launcher as an Iris H100 job: wrap the same launcher args in ``iris job run ... --
+    python -m ...launch <args> --run``. Replaces the old ``irun`` shell wrapper. Never returns."""
+    launch_args = [a for a in sys.argv[1:] if a != "--submit"]
+    if "--run" not in launch_args:
+        launch_args.append("--run")
+    wandb_key = os.environ.get("WANDB_API_KEY")
+    if not wandb_key:
+        raise click.ClickException("WANDB_API_KEY must be set in the environment to submit a cluster run.")
+    target_cluster = os.environ.get("IRIS_CLUSTER", _DEFAULT_TARGET_CLUSTER)
+    cmd = [
+        "uv",
+        "run",
+        "iris",
+        "--cluster",
+        "marin",
+        "job",
+        "run",
+        "--no-wait",
+        "--enable-extra-resources",
+        "--target-cluster",
+        target_cluster,
+        "--priority",
+        "interactive",
+        "--job-name",
+        f"{run_id}-coord",
+        "-e",
+        "WANDB_API_KEY",
+        wandb_key,
+        "-e",
+        "WANDB_PROJECT",
+        _WANDB_PROJECT,
+        "--",
+        "python",
+        "-m",
+        "experiments.grug.fast_track.launch",
+        *launch_args,
+    ]
+    printable = " ".join(shlex.quote("$WANDB_API_KEY" if c == wandb_key else c) for c in cmd)
+    click.echo(f"submitting: {printable}", err=True)
+    os.execvp(cmd[0], cmd)
+
+
 @click.command()
 @click.option("--run-id", required=True, help="Run identifier for artifact and W&B names.")
 @click.option("--size", required=True, type=click.Choice(H100_LADDER_SIZES), help="H100 ladder rung width.")
@@ -461,6 +511,12 @@ def build_h100_ladder_run(
     default=False,
     help="Save a permanent final checkpoint to S3 (off by default; also enables recovery).",
 )
+@click.option(
+    "--submit",
+    is_flag=True,
+    help="Submit as an Iris H100 job (wraps this launcher in `iris job run`); without it the "
+    "launcher builds/prints the plan locally.",
+)
 @build_options
 def main(
     run_id: str,
@@ -471,7 +527,10 @@ def main(
     no_eval: bool,
     dense: bool,
     save_checkpoints: bool,
+    submit: bool,
 ) -> ArtifactStep[ThroughputResult]:
+    if submit:
+        _submit_to_cluster(run_id)  # re-execs iris; never returns
     return build_h100_ladder_run(
         run_id=run_id,
         size=size,

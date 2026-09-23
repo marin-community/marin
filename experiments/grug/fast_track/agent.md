@@ -101,25 +101,24 @@ a shell variable. No `gcloud` / TPU auth is needed; this variant runs on H100.
 
 ## Job Submission
 
-Jobs run on **Iris**, one 8×H100 node per run. Any H100 cluster works — the data cache and
-checkpoints are the same S3 backend everywhere, so cluster choice is just capacity (no
-`--target-cluster`). Use the `irun` wrapper from the README, or submit directly:
+Jobs run on **Iris**, one 8×H100 node per run. `fast-track` is the single entry point: run it locally
+to print the lowered plan, or add `--submit` to launch it as a cluster job.
 
 ```bash
-uv run iris --cluster marin job run --no-wait --enable-extra-resources \
-  --priority interactive --job-name "<name>-coord" \
-  -e WANDB_API_KEY "$WANDB_API_KEY" -e WANDB_PROJECT marin_moe \
-  -- python -m experiments.grug.fast_track.launch --run-id <name> --size <size> [--dense] --version <v> --run
+uv run fast-track --submit --run-id <name> --size <size> [--dense] --version <v>
 ```
 
-(Locally, the `fast-track` entry point is equivalent: `uv run fast-track --run-id <name> --size <size>
-…` — without `--run` it just prints the plan.)
+`--submit` wraps the launcher in `iris job run … -- python -m experiments.grug.fast_track.launch …
+--run` and forwards `$WANDB_API_KEY` to the job. It targets `$IRIS_CLUSTER` (default `cw-rno2a`;
+`cw-us-east-02a` is the other 8×H100 cluster); the data cache and checkpoints are the same S3 backend
+on both, so cluster choice is just capacity. Drop `--submit` to print the plan without touching the
+cluster.
 
 `--size` (d512/d768/d1024/d1280) and `--run-id` are required; `--dense` selects
 the dense baseline. The step budget derives from the variant baseline (`--match`,
 default `data`) unless `--num-steps` is given; `--batch-size` defaults to the
 rung's baseline batch. `--version` sets the checkpoint version (use `dev` for
-scratch, a calendar `YYYY.MM.DD` for coordinated runs); `--run` submits (without
+scratch, a calendar `YYYY.MM.DD` for coordinated runs); `--submit` launches it as an Iris job (without
 it the lowered plan is printed and nothing runs). Pass `--save-checkpoints` (off by
 default) for runs whose final model you want to keep.
 
