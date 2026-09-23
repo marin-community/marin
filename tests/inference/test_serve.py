@@ -301,9 +301,11 @@ def test_isolated_cuda_vllm_marin_fork_uses_verified_wheel(monkeypatch, machine)
     assert cmd[cmd.index("--index-strategy") + 1] == "unsafe-best-match"
     assert "--torch-backend" not in cmd
     requirements = [cmd[index + 1] for index, value in enumerate(cmd) if value == "--with"]
+    assert f"torch=={VLLM_GPU_RELEASE.torch_version}" in requirements
     toolchain = {requirement.partition("==")[0]: requirement.partition("==")[2] for requirement in requirements}
-    toolchain_packages = {"nvidia-cuda-nvcc", "nvidia-cuda-crt", "nvidia-cuda-nvrtc", "nvidia-nvvm"}
+    toolchain_packages = {"nvidia-cuda-nvcc", "nvidia-cuda-crt", "nvidia-nvvm"}
     assert set(toolchain) >= toolchain_packages
+    assert "nvidia-cuda-nvrtc" not in toolchain
     assert {toolchain[package] for package in toolchain_packages} == {
         CUDA_TOOLCHAIN_VERSION_BY_BACKEND[VLLM_GPU_RELEASE.torch_backend]
     }
@@ -319,6 +321,7 @@ def test_isolated_cuda_vllm_marin_fork_uses_verified_wheel(monkeypatch, machine)
     assert "VLLM_USE_FLASHINFER_SAMPLER" not in env
     assert "addressing_style = virtual" in Path(env["AWS_CONFIG_FILE"]).read_text()
     assert requirement in launcher.cache_identity()
+    assert VLLM_GPU_RELEASE.torch_version in launcher.cache_identity()
 
 
 def test_isolated_cuda_vllm_marin_fork_rejects_unpublished_architecture(monkeypatch):
@@ -363,9 +366,9 @@ def test_isolated_cuda_vllm_bootstrap_exposes_wheel_nvcc(tmp_path):
     assert set(requirements) >= {
         "nvidia-cuda-nvcc==13.0.88",
         "nvidia-cuda-crt==13.0.88",
-        "nvidia-cuda-nvrtc==13.0.88",
         "nvidia-nvvm==13.0.88",
     }
+    assert not any(requirement.startswith("nvidia-cuda-nvrtc==") for requirement in requirements)
     assert "addressing_style = virtual" in Path(launcher.env()["AWS_CONFIG_FILE"]).read_text()
     bootstrap_index = command.index("-c")
     bootstrap = command[bootstrap_index + 1]
