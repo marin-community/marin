@@ -139,24 +139,25 @@ def train_centroids(
 
         _save_npy(centroids, output_path, f"centroids_{k_train}.npy")
 
-        # Cosine distance matrix between centroids (1 - cos sim, since centroids are unit-norm).
-        # squareform expects a condensed upper-triangle.
-        sim = centroids @ centroids.T
-        dist = np.clip(1.0 - sim, 0.0, 2.0)
-        np.fill_diagonal(dist, 0.0)
-        condensed = squareform(dist, checks=False)
-        Z = linkage(condensed, method="average")
+        if k_views:
+            # Cosine distance matrix between centroids (1 - cos sim, since centroids are unit-norm).
+            # squareform expects a condensed upper-triangle.
+            sim = centroids @ centroids.T
+            dist = np.clip(1.0 - sim, 0.0, 2.0)
+            np.fill_diagonal(dist, 0.0)
+            condensed = squareform(dist, checks=False)
+            Z = linkage(condensed, method="average")
 
-        for k in k_views:
-            labels = fcluster(Z, t=k, criterion="maxclust") - 1
-            labels = labels.astype(np.int32, copy=False)
-            _save_npy(labels, output_path, f"lookup_{k_train}_to_{k}.npy")
-            logger.info(
-                "Agglomerative merge: K=%d → K=%d (got %d unique labels)",
-                k_train,
-                k,
-                int(labels.max()) + 1,
-            )
+            for k in k_views:
+                labels = fcluster(Z, t=k, criterion="maxclust") - 1
+                labels = labels.astype(np.int32, copy=False)
+                _save_npy(labels, output_path, f"lookup_{k_train}_to_{k}.npy")
+                logger.info(
+                    "Agglomerative merge: K=%d → K=%d (got %d unique labels)",
+                    k_train,
+                    k,
+                    int(labels.max()) + 1,
+                )
 
     stats = {
         "k_train": int(k_train),
