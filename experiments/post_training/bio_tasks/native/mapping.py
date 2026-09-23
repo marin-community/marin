@@ -121,6 +121,8 @@ def solve_minimap(inputs: Path, work: Path) -> list[dict]:
             "1",
             "-m",
             "10",
+            "-s",
+            "10",
             "-n",
             "2",
             "--secondary=no",

@@ -63,8 +63,8 @@ def solve_limma(inputs: Path, work: Path) -> list[dict]:
 library(limma)
 x <- read.csv("patients.csv")
 fit <- lmFit(matrix(x$outcome, nrow=1), model.matrix(~treatment+batch, x))
-answer <- data.frame(id="cohort", treatment_effect=fit$coefficients[1,"treatment"],
-                     batch_effect=fit$coefficients[1,"batch"], n_patients=nrow(x))
+answer <- data.frame(id="cohort", treatment_effect=unname(fit$coefficients[1,"treatment"]),
+                     batch_effect=unname(fit$coefficients[1,"batch"]), n_patients=nrow(x))
 """,
         inputs,
         work,
@@ -80,7 +80,9 @@ b <- readLines("barcodes.tsv")
 x <- Matrix::readMM("matrix.mtx")[f$V3=="Gene Expression",,drop=FALSE]
 rownames(x) <- f$V1[f$V3=="Gene Expression"]
 colnames(x) <- b
-normalized <- LogNormalize(x, scale.factor=10000, verbose=FALSE)
+nonempty <- Matrix::colSums(x) > 0
+normalized <- x
+normalized[,nonempty] <- LogNormalize(x[,nonempty,drop=FALSE], scale.factor=10000, verbose=FALSE)
 answer <- do.call(rbind, lapply(seq_along(b), function(j) data.frame(
     id=paste(rownames(x), b[j], sep=":"), log_count=as.numeric(normalized[,j]))))
 """,

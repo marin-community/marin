@@ -141,6 +141,16 @@ scripts or environment definitions and rerun affected cases before changing thei
 status. Review VCF version compatibility and zero-count behavior explicitly;
 do not discard those inputs or relax verification to claim a pass.
 
+Corrections are prepared for the next run; the table above remains the result of
+the original execution. They preserve empty Seurat columns as zero, remove R row
+names from limma's answer, set minimap2's alignment-score threshold for the short
+control reads, and supply HTSlib's zlib development dependency, the Conda compiler,
+Nextflow's `ps`, and PLINK's minimum workspace. The VCFtools reference explicitly
+projects the supported diploid SNP/GT records to VCF 4.2 and rejects other profiles.
+The BCFtools reference now queries integer AD values and computes their exact
+ratios in Python. That checks native AD extraction; it does not validate the
+`fill-tags` plugin's floating-point VAF output. No answer tolerance was changed.
+
 ## Skills
 
 | Seed family | Skills to exercise | Independent verification |

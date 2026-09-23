@@ -10,23 +10,23 @@ from experiments.post_training.bio_tasks.solvers.formats import tab_rows
 
 
 def solve_bcftools(inputs: Path, work: Path) -> list[dict]:
-    annotated = work / "annotated.vcf"
-    execute(
-        ["bcftools", "+fill-tags", str(inputs / "variants.vcf"), "-Ov", "-o", str(annotated), "--", "-t", "FORMAT/VAF"],
+    output = execute(
+        ["bcftools", "query", "-f", "[%ID\\t%SAMPLE\\t%AD\\n]", str(inputs / "variants.vcf")],
         work,
-        "fill-tags.log",
+        "depths.tsv",
     )
-    output = execute(["bcftools", "query", "-f", "[%ID\\t%SAMPLE\\t%AD\\t%VAF\\n]", str(annotated)], work, "depths.tsv")
     answer = []
-    for name, sample, depths, fractions in tab_rows(output):
+    # Native AD extraction preserves integer counts. Text VAF output rounds to six
+    # significant digits, so this check derives the exact ratio from extracted AD.
+    for name, sample, depths in tab_rows(output):
         values = list(map(int, depths.split(",")))
-        ratios = fractions.split(",")
+        total = sum(values)
         for alt in range(1, len(values)):
             answer.append(
                 {
                     "id": f"{name}:{sample}:{alt}",
                     "alt_depth": values[alt],
-                    "fraction": None if sum(values) == 0 else float(ratios[alt - 1]),
+                    "fraction": values[alt] / total if total else None,
                 }
             )
     return answer

@@ -4,6 +4,7 @@
 """Native alignment-depth, genotype-QC, and adapter-trimming oracles."""
 
 import csv
+import re
 from pathlib import Path
 
 from experiments.post_training.bio_tasks.native.commands import execute
@@ -72,7 +73,7 @@ def solve_plink(inputs: Path, work: Path) -> list[dict]:
             "--threads",
             "1",
             "--memory",
-            "512",
+            "640",
             "--out",
             str(prefix),
         ],
@@ -93,10 +94,31 @@ def solve_plink(inputs: Path, work: Path) -> list[dict]:
 
 
 def solve_vcftools(inputs: Path, work: Path) -> list[dict]:
-    prefix = work / "missing"
-    execute(
-        ["vcftools", "--vcf", str(inputs / "variants.vcf"), "--missing-indv", "--out", str(prefix)], work, "vcftools.log"
+    # VCFtools accepts at most VCF 4.2. Project only this task's biallelic SNP/GT
+    # profile, whose record syntax is unchanged; reject unsupported records.
+    original = (inputs / "variants.vcf").read_text().splitlines()
+    header = next(line for line in original if line.startswith("#CHROM\t"))
+    records = [line for line in original if not line.startswith("#")]
+    for line in records:
+        row = line.split("\t")
+        if (
+            len(row) != len(header.split("\t"))
+            or row[3] not in {"A", "C", "G", "T"}
+            or row[4] not in {"A", "C", "G", "T"}
+            or row[6:9] != ["PASS", ".", "GT"]
+            or any(re.fullmatch(r"[01.][/|][01.]", gt) is None for gt in row[9:])
+        ):
+            raise ValueError("VCFtools sample-QC conversion requires diploid biallelic SNPs with only GT")
+    converted = work / "genotypes.vcf"
+    converted.write_text(
+        '##fileformat=VCFv4.2\n##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">\n'
+        + header
+        + "\n"
+        + "\n".join(records)
+        + "\n"
     )
+    prefix = work / "missing"
+    execute(["vcftools", "--vcf", str(converted), "--missing-indv", "--out", str(prefix)], work, "vcftools.log")
     lines = prefix.with_suffix(".imiss").read_text().splitlines()
     header = lines[0].split()
     answer = []

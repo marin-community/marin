@@ -3,6 +3,7 @@
 
 """Direct HTSlib faidx access, independent of the SAMtools executable."""
 
+import os
 import shlex
 from pathlib import Path
 
@@ -33,7 +34,8 @@ def solve_htslib(inputs: Path, work: Path) -> list[dict]:
     source.write_text(PROGRAM)
     flags = execute(["pkg-config", "--cflags", "--libs", "htslib"], work, "flags.txt")
     executable = work / "fetch"
-    execute(["cc", str(source), "-o", str(executable), *shlex.split(flags.read_text())], work, "compile.log")
+    compiler = shlex.split(os.environ["CC"])
+    execute([*compiler, str(source), "-o", str(executable), *shlex.split(flags.read_text())], work, "compile.log")
     answer = []
     for row in table(inputs / "regions.csv"):
         output = execute(
