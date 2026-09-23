@@ -266,6 +266,7 @@ def build_h100_ladder_run(
     no_eval: bool = False,
     dense: bool = False,
     save_checkpoints: bool = False,
+    router_fp32_swap_frac: float = 0.0,
 ) -> ArtifactStep[ThroughputResult]:
     """Build one H100 scaling-ladder rung.
 
@@ -280,7 +281,9 @@ def build_h100_ladder_run(
         raise ValueError("wandb_project must not be empty")
 
     rung = _h100_ladder_rung(size)
-    model = dataclasses.replace(_h100_ladder_model(rung, dense=dense), vocab_size=vocab_size)
+    model = dataclasses.replace(
+        _h100_ladder_model(rung, dense=dense), vocab_size=vocab_size, router_fp32_swap_frac=router_fp32_swap_frac
+    )
     mp_policy = "params=float32,compute=bfloat16,output=bfloat16"
     expert_axis_size = 1 if dense else rung.gpus_per_task
     replica_axis_size = 1
@@ -512,6 +515,14 @@ def _submit_to_cluster(run_id: str) -> None:
     help="Save a permanent final checkpoint to S3 (off by default; also enables recovery).",
 )
 @click.option(
+    "--router-fp32-swap-frac",
+    type=click.FloatRange(min=0.0),
+    default=0.0,
+    show_default=True,
+    help="Fraction of training after which the router logit matmul upcasts to fp32 "
+    "(0.0 = fp32 for the whole run; 0.4 = bf16 for the first 40%% then fp32).",
+)
+@click.option(
     "--submit",
     is_flag=True,
     help="Submit as an Iris H100 job (wraps this launcher in `iris job run`); without it the "
@@ -527,6 +538,7 @@ def main(
     no_eval: bool,
     dense: bool,
     save_checkpoints: bool,
+    router_fp32_swap_frac: float,
     submit: bool,
 ) -> ArtifactStep[ThroughputResult]:
     if submit:
@@ -540,6 +552,7 @@ def main(
         no_eval=no_eval,
         dense=dense,
         save_checkpoints=save_checkpoints,
+        router_fp32_swap_frac=router_fp32_swap_frac,
     )
 
 

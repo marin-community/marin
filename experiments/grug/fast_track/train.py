@@ -550,7 +550,7 @@ def _drop_metrics(
     }
 
 
-def _loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | None):
+def _loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | None, router_step_frac: jax.Array | float = 1.0):
     def loss_fn(model):
         compute_params = mp.cast_to_compute(model)
         return compute_params.next_token_loss(
@@ -560,6 +560,7 @@ def _loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | None):
             reduction="mean",
             logsumexp_weight=z_loss,
             return_router_metrics=True,
+            router_step_frac=router_step_frac,
         )
 
     return jax.value_and_grad(loss_fn, has_aux=True)(params)
@@ -603,6 +604,7 @@ def _make_train_step(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
     *,
+    num_train_steps: int,
     z_loss_weight: float,
     ema_beta: float | None = None,
     watch_config: WatchConfig | None = None,
@@ -623,7 +625,9 @@ def _make_train_step(
         # host-side kernel launches that can cause SPMD sync issues).
         qb_params = _apply_qb_betas(state.params, state.pending_qb_betas)
 
-        (loss, summarized_metrics), grads = _loss_and_grads(qb_params, batch, mp, z_loss)
+        # Progress fraction in [0, 1) for the router precision schedule (router_fp32_swap_frac).
+        router_step_frac = state.step.astype(jnp.float32) / jnp.float32(num_train_steps)
+        (loss, summarized_metrics), grads = _loss_and_grads(qb_params, batch, mp, z_loss, router_step_frac)
         metrics = {"train/loss": loss, **summarized_metrics}
         opt_state_in = state.opt_state
         if os.environ.get("GRUG_SKIP_OPTIMIZER"):
@@ -707,6 +711,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     train_step = _make_train_step(
         optimizer,
         trainer.mp,
+        num_train_steps=trainer.num_train_steps,
         z_loss_weight=config.trainer.z_loss_weight,
         watch_config=inline_watch_config,
     )

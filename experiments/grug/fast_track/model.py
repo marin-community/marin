@@ -132,6 +132,11 @@ class GrugModelConfig:
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     # Dense (no-MoE) mode: every block is a single DenseMLP(hidden, intermediate_dim) SwiGLU; the MoE fields are ignored.
     dense_mlp: bool = False
+    # Router matmul precision schedule. Fraction of training after which the router logit matmul
+    # runs in fp32 (fp32 accumulation): 0.0 = fp32 for the whole run; f in (0,1) = bf16 matmul for
+    # the first f of training then fp32; >=1.0 = bf16 for the whole run. The runtime step fraction
+    # is threaded into the forward as ``router_step_frac``.
+    router_fp32_swap_frac: float = 0.0
 
     def __post_init__(self) -> None:
         if not self.dense_mlp and self.num_experts_per_token >= self.num_experts:
@@ -531,16 +536,27 @@ class MoEMLP(eqx.Module):
     def __call__(
         self,
         x: Float[Array, "B S D"],
+        router_step_frac: jax.Array | float = 1.0,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
-        # Upcast the router inputs to fp32 *before* the matmul so the logit accumulation happens in fp32
-        # (not just the top-k / softmax / QB statistics that follow); the router matmul is tiny (d x E).
-        router_logits = jnp.einsum(
-            "td,de->te",
-            x_flat.astype(jnp.float32),
-            reshard(self.router, P(None, None)).astype(jnp.float32),
-        )
+        # Router logits kept in fp32. ``router_fp32_swap_frac`` schedules when the *matmul* upcasts to
+        # fp32: 0.0 -> always (accumulate in fp32); f in (0,1) -> bf16 matmul until step-fraction f,
+        # then fp32. The tiny d x E matmul makes the fp32 path ~free.
+        router_w = reshard(self.router, P(None, None))
+        swap_frac = self.cfg.router_fp32_swap_frac
+        if swap_frac <= 0.0:
+            router_logits = jnp.einsum("td,de->te", x_flat.astype(jnp.float32), router_w.astype(jnp.float32))
+        else:
+
+            def _fp32_matmul():
+                return jnp.einsum("td,de->te", x_flat.astype(jnp.float32), router_w.astype(jnp.float32))
+
+            def _bf16_matmul():
+                return jnp.einsum("td,de->te", x_flat, router_w).astype(jnp.float32)
+
+            use_fp32 = jnp.asarray(router_step_frac, dtype=jnp.float32) >= swap_frac
+            router_logits = jax.lax.cond(use_fp32, _fp32_matmul, _bf16_matmul)
         biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
         router_probs = jax.nn.softmax(router_logits, axis=-1)
         # Select top-(K+1) on biased logits; the (K+1)-th is the QB threshold alpha.
@@ -683,6 +699,7 @@ class Block(eqx.Module):
         mask: AttentionMask | jax.Array,
         disable_rope: bool | jax.Array = False,
         is_global: bool | jax.Array = False,
+        router_step_frac: jax.Array | float = 1.0,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         # segment_ids (packed-document boundaries) for the branch-output SConvs; None when unpacked.
         _seg = mask.segment_ids if isinstance(mask, AttentionMask) else None
@@ -698,7 +715,7 @@ class Block(eqx.Module):
             mlp_out = self.mlp(mlp_in, moe_output_reshard=False)
             router_stats: dict[str, jax.Array] = {}
         else:
-            mlp_out, router_stats = self.mlp(mlp_in)
+            mlp_out, router_stats = self.mlp(mlp_in, router_step_frac=router_step_frac)
         if self.shared is not None:
             for shared_expert in self.shared:
                 mlp_out = mlp_out + shared_expert(mlp_in, activation=ActivationFunctionEnum.silu)
@@ -774,6 +791,7 @@ class Transformer(eqx.Module):
         self,
         token_ids: Int[Array, "B S"],
         mask: AttentionMask | jax.Array | None = None,
+        router_step_frac: jax.Array | float = 1.0,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         if mask is None:
             mask = AttentionMask.causal()
@@ -819,6 +837,7 @@ class Transformer(eqx.Module):
                 layer_mask,
                 use_long,
                 use_long,
+                router_step_frac,
             )
 
         hidden, stacked_router_stats = jax.lax.scan(
@@ -869,8 +888,9 @@ class Transformer(eqx.Module):
         logsumexp_weight: float | None = None,
         loss_dtype: jnp.dtype = jnp.float32,
         return_router_metrics: bool = False,
+        router_step_frac: jax.Array | float = 1.0,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
-        hidden, router_metrics = self(token_ids, mask=mask)
+        hidden, router_metrics = self(token_ids, mask=mask, router_step_frac=router_step_frac)
         labels = jnp.pad(token_ids[:, 1:], ((0, 0), (0, 1))).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
 
