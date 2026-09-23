@@ -245,8 +245,7 @@ class ControllerDashboard:
             authorize=authorize_method,
         )
         controller_interceptors = [_ControllerDrainingInterceptor(self._draining), auth_interceptor, controller_timing]
-        # @on_loop handlers run inline on the event loop; everything else
-        # is dispatched to a thread by AsyncServiceAdapter.
+        # AsyncServiceAdapter dispatches each sync handler to a thread.
         rpc_asgi_app = ControllerServiceASGIApplication(
             service=AsyncServiceAdapter(self._service),
             interceptors=controller_interceptors,
