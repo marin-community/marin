@@ -13,14 +13,20 @@
     "overrides": [
       {
         "matcher": {
-          "id": "byNames",
-          "options": {
-            "mode": "include",
-            "names": [
-              "ranks",
-              "truncated_steps"
-            ]
+          "id": "byName",
+          "options": "ranks"
+        },
+        "properties": [
+          {
+            "id": "noValue",
+            "value": "—"
           }
+        ]
+      },
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "truncated_steps"
         },
         "properties": [
           {
