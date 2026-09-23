@@ -104,8 +104,8 @@ class HardwarePolicy:
 
 
 def default_platform(model: ModelConfig) -> Platform:
-    """Choose GPU only when the model declares GPU-only compatibility."""
-    if model.resource_hint.gpu:
+    """Choose GPU when the model or its serving mode requires it."""
+    if model.resource_hint.gpu or model.serve.speculative is not None:
         return Platform.GPU
     return Platform.TPU
 

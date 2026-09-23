@@ -442,7 +442,7 @@ vllm:spec_decode_num_accepted_tokens_total {accepted}
     assert record.model.config.serve.speculative.model.identity == "draft@2026.09.23:abc123"
 
 
-def test_eval_step_resolves_target_and_optional_draft_artifacts_at_pipeline_boundary():
+def test_eval_step_resolves_artifacts_and_selects_speculative_gpu(monkeypatch):
     target = _artifact_step("models/target")
     draft = _artifact_step("models/draft")
     model = ArtifactEvaluationModel(
@@ -452,14 +452,14 @@ def test_eval_step_resolves_target_and_optional_draft_artifacts_at_pipeline_boun
             location="<artifact-model>",
             tokenizer="org/tokenizer",
             tokenizer_revision="tokenizer-revision",
-            resource_hint=ResourceHint(gpu={"H100": 1}),
+            resource_hint=ResourceHint(hbm_gb=40),
         ),
         relative_path="hf",
     )
-    control = eval_step(model, "gsm8k", version="2026.09.23")
+    control = eval_step(model, "gsm8k-smoke", version="2026.09.23")
     drafted = eval_step(
         model,
-        "gsm8k",
+        "gsm8k-smoke",
         version="2026.09.23.1",
         speculative=ArtifactSpeculativeModel(
             step=draft,
@@ -467,34 +467,28 @@ def test_eval_step_resolves_target_and_optional_draft_artifacts_at_pipeline_boun
             num_speculative_tokens=3,
         ),
     )
-
     control_config = materialized_config(control, "s3://artifacts")
     drafted_config = materialized_config(drafted, "s3://artifacts")
-
     assert isinstance(control_config, EvalStepConfig)
     assert isinstance(drafted_config, EvalStepConfig)
-    assert control_config.model.location == "s3://artifacts/models/target/2026.09.23/hf"
-    assert control_config.model.identity == f"models/target@2026.09.23:{target.fingerprint()}"
-    assert control_config.model.serve.speculative is None
-    assert drafted_config.model.serve.speculative is not None
-    assert drafted_config.model.serve.speculative.model.uri == "s3://artifacts/models/draft/2026.09.23"
-    assert drafted_config.model.serve.speculative.model.identity == f"models/draft@2026.09.23:{draft.fingerprint()}"
 
-
-def test_eval_pipeline_result_exposes_normalized_rollout_paths(monkeypatch):
+    submitted_batches: list[EvaluationBatch] = []
     waited: list[float] = []
 
     def wait(*, timeout: float) -> None:
         waited.append(timeout)
 
-    submitted = SimpleNamespace(
-        group_id="group",
-        records_prefix="s3://evals",
-        evaluations=(SimpleNamespace(run_id="run-a"), SimpleNamespace(run_id="run-b")),
-        job=SimpleNamespace(wait=wait),
-    )
-    monkeypatch.setattr("experiments.evaluation.pipeline.prepare_evaluation_batch", lambda spec: spec)
-    monkeypatch.setattr("experiments.evaluation.pipeline.launch_group", lambda _batch, _client: submitted)
+    def launch(batch: EvaluationBatch, _client: object):
+        submitted_batches.append(batch)
+        return SimpleNamespace(
+            group_id=batch.group_id,
+            records_prefix=batch.records_prefix,
+            evaluations=tuple(SimpleNamespace(run_id=evaluation.identity.run_id) for evaluation in batch.evaluations),
+            job=SimpleNamespace(wait=wait),
+        )
+
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    monkeypatch.setattr("experiments.evaluation.pipeline.launch_group", launch)
     monkeypatch.setattr(
         "experiments.evaluation.pipeline.iris_ctx",
         lambda: SimpleNamespace(client=object()),
@@ -503,24 +497,24 @@ def test_eval_pipeline_result_exposes_normalized_rollout_paths(monkeypatch):
         "experiments.evaluation.pipeline.read_record",
         lambda path: SimpleNamespace(results_path=f"{path.removesuffix('/record.json')}/results"),
     )
-    config = EvalStepConfig(
-        model=models()["qwen3-1.7b"],
-        evals="gsm8k-smoke",
-        limit=1,
-        artifact_path="s3://artifacts/eval",
-        accelerator=None,
-        submission_cluster="marin",
-        federated_cluster=None,
-        version="2026.09.23",
+
+    control_result = run_eval_pipeline_step(control_config)
+    drafted_result = run_eval_pipeline_step(drafted_config)
+
+    assert waited == [float("inf"), float("inf")]
+    assert submitted_batches[0].accelerator.platform is Platform.TPU
+    assert submitted_batches[1].accelerator.platform is Platform.GPU
+    assert submitted_batches[1].model.location == "s3://artifacts/models/target/2026.09.23/hf"
+    assert submitted_batches[1].model.identity == f"models/target@2026.09.23:{target.fingerprint()}"
+    assert submitted_batches[1].model.serve.speculative is not None
+    assert submitted_batches[1].model.serve.speculative.model.identity == (
+        f"models/draft@2026.09.23:{draft.fingerprint()}"
     )
-
-    result = run_eval_pipeline_step(config)
-
-    assert waited == [float("inf")]
-    assert result.run_ids == ("run-a", "run-b")
-    assert result.results_paths == (
-        "s3://evals/run-a/results",
-        "s3://evals/run-b/results",
+    assert control_result.results_paths == tuple(
+        f"{control_result.records_prefix}/{run_id}/results" for run_id in control_result.run_ids
+    )
+    assert drafted_result.results_paths == tuple(
+        f"{drafted_result.records_prefix}/{run_id}/results" for run_id in drafted_result.run_ids
     )
 
 
