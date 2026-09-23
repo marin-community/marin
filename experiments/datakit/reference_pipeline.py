@@ -114,6 +114,7 @@ from dataclasses import dataclass, field, replace
 
 from fray.types import ResourceConfig
 from levanter.tokenizers import TokenizerBackend
+from marin.datakit import CPU_DATAKIT_DEPENDENCY_GROUPS
 from marin.datakit.decon import (
     DeconAttributes,
     DropSetSource,
@@ -226,9 +227,7 @@ TOKENIZER_BACKEND = TokenizerBackend.HF
 QUALITY_MODEL_VERSION = "pooled-junkgate2"
 SPLIT = "train"
 
-# The DataKit extra can otherwise resolve the CUDA Torch wheel on a CPU driver.
-# Select the CPU group with the DataKit packages for each remote CPU stage.
-CPU_DATAKIT_DEPENDENCY_GROUPS = ["cpu", "datakit"]
+DEFAULT_MAX_CONCURRENT = 8
 
 
 @dataclass(frozen=True)
@@ -236,7 +235,7 @@ class TokenizerSpec:
     """Tokenizer location and content identity for DataKit cache keys."""
 
     name: str
-    revision: str
+    identity: str
 
 
 # Decontam. Mandatory AA and best-effort lm-eval artifacts use one versioned root.
@@ -705,7 +704,7 @@ def zephyr_datakit_steps(
             train_normalize=normalize_step,
             tokenizer=tokenizer.name,
             tokenizer_backend=TOKENIZER_BACKEND,
-            tokenizer_revision=tokenizer.revision,
+            tokenizer_revision=tokenizer.identity,
             max_workers=scale.pool.n_workers,
             worker_resources=worker_resources,
             zephyr_context=zephyr_context,
@@ -1134,7 +1133,7 @@ def materialize_reference_store(
     scale: PipelineScale = DEFAULT_SCALE,
     zephyr_context: ZephyrContext | None = None,
     tokenizer: TokenizerSpec | None = None,
-    max_concurrent: int = 8,
+    max_concurrent: int = DEFAULT_MAX_CONCURRENT,
 ) -> ClusteredStoreData:
     """Run the reference DataKit DAG and return its clustered store."""
     datakit = reference_datakit_steps(
@@ -1362,7 +1361,13 @@ def main() -> None:
     parser.add_argument("--pool-task-disk", default=None, help="disk for each shared-pool task, e.g. 16g")
     parser.add_argument("--pool-coordinator-cpu", type=float, default=None, help="CPUs for the pool coordinator")
     parser.add_argument("--pool-coordinator-ram", default=None, help="RAM for the pool coordinator, e.g. 8g")
-    parser.add_argument("--max-concurrent", type=int, default=8, metavar="N", help="max steps StepRunner runs at once")
+    parser.add_argument(
+        "--max-concurrent",
+        type=int,
+        default=DEFAULT_MAX_CONCURRENT,
+        metavar="N",
+        help="max steps StepRunner runs at once",
+    )
     parser.add_argument(
         "--run-tag",
         default="",

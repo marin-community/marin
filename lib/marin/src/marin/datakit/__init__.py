@@ -9,6 +9,8 @@ The partition index lives in the filename (``part-NNNNN-of-MMMMM.parquet``)
 and is derived at reader time from sorted file order, not stamped per row.
 """
 
+CPU_DATAKIT_DEPENDENCY_GROUPS = ["cpu", "datakit"]
+
 
 def partition_filename(partition_id: int, num_partitions: int) -> str:
     """Return the standard datakit partition filename for the given index.
