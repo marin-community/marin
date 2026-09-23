@@ -413,15 +413,15 @@ def store(telemetry_table):
 # that collapses, or a join that duplicates its left side still returns rows, just not this many.
 PANEL_SERIES = {
     "Optimizer and synced policy steps": 2,
-    "Generated and consumed response tokens / s": 3,
+    "Response tokens generated and trained on / s": 3,
     "Process lifecycle": 1,
     "Driver step, preparation and policy walls": 5,
     "Generation worker await duration": 2,
     "Completed buffer depth and capacity": 2,
-    "Consumed buffer dwell": 3,
-    "Consumed policy staleness": 3,
+    "Buffer dwell of trained groups": 3,
+    "Policy staleness at training": 3,
     "Successful rollout-call latency": 3,
-    "Weight synchronization and policy offload walls": 3,
+    "Weight sync and policy offload walls": 3,
     "Driver event-loop lag": 1,
     "Signed timing residuals": 2,
     "Rollouts completing during policy training": 1,
@@ -429,7 +429,7 @@ PANEL_SERIES = {
     "Tokens by group disposition / bucket": 2,
     "Training reward and informative groups": 1,
     "Evaluation scores": 8,
-    "Consumed length stops and coverage": 2,
+    "Length stops and coverage in trained groups": 2,
     "Optimizer diagnostics": 2,
     "Megatron policy wall by rank": 1,
     "Megatron phase detail": 2,
@@ -440,7 +440,7 @@ PANEL_SERIES = {
     "Mean squared model log-ratio": 1,
     "TIS correction skips": 2,
     "Core and cycle duration": 2,
-    "Consumed loss tokens per second": 2,
+    "Loss tokens trained per second": 2,
     "Core wall fractions": 1,
     "Useful tokens per configured role GPU-second": 1,
     "Configured role GPU counts": 2,
@@ -451,12 +451,12 @@ PANEL_SERIES = {
     "Uniform-staleness diagnostic token coverage": 1,
     "Evaluation response length and stop coverage": 5,
     "Evaluation score contributions by stop class": 3,
-    "Consumed staleness — groups per step": 7,
-    "Consumed staleness — tokens per step": 4,
+    "Staleness of trained groups: groups per step": 7,
+    "Staleness of trained groups: tokens per step": 4,
     "Weight-sync stages": 3,
-    "Learner/vLLM mismatch \u03c1 (staleness 0)": 6,
-    "Learner/vLLM mismatch by staleness bucket": 4,
-    "Learner drift within the update": 4,
+    "Trainer/vLLM logprob mismatch \u03c1 (staleness 0)": 6,
+    "Trainer/vLLM logprob mismatch by staleness bucket": 4,
+    "Trainer logprob drift within the update": 4,
     "Position dependence of |log \u03c1|": 8,
     "Gradient direction persistence": 9,
     "Correction activity": 14,
@@ -544,7 +544,7 @@ def test_drift_panels_preserve_signed_values_and_do_not_invent_missing_observati
 
 
 def test_useful_work_panels_keep_core_and_cycle_denominators_separate(store):
-    rates = {row["series"]: row["value"] for row in query(store, "Consumed loss tokens per second")}
+    rates = {row["series"]: row["value"] for row in query(store, "Loss tokens trained per second")}
     assert rates == {
         "async/performance/consumed_loss_tokens_per_core_second · driver": 100,
         "async/performance/consumed_loss_tokens_per_cycle_second · driver": 40,
@@ -552,7 +552,7 @@ def test_useful_work_panels_keep_core_and_cycle_denominators_separate(store):
 
 
 def test_consumed_length_stops_distinguish_zero_from_incomplete_coverage(store):
-    title = "Consumed length stops and coverage"
+    title = "Length stops and coverage in trained groups"
     values = {row["series"]: row["value"] for row in query(store, title)}
     assert values == {
         "consumed/length_stop_fraction · driver": 0.25,
@@ -637,7 +637,7 @@ def test_health_sums_nonfinite_deltas_and_keeps_exporter_processes_separate(stor
 
 
 def test_native_work_and_residuals_are_not_clamped_or_merged_across_attempts(store):
-    rates = {row["series"]: row["value"] for row in query(store, "Generated and consumed response tokens / s")}
+    rates = {row["series"]: row["value"] for row in query(store, "Response tokens generated and trained on / s")}
     assert rates == {
         "generated_token · driver": 0.5,
         "consumed_response_token · driver": pytest.approx(1 / 3),
@@ -651,7 +651,7 @@ def test_native_work_and_residuals_are_not_clamped_or_merged_across_attempts(sto
 def test_empty_telemetry_is_unknown_and_startup_only_runs_are_discoverable(store):
     store.execute(f"DELETE FROM {TABLE} WHERE name NOT IN ('lifecycle','terminal')")
     assert store.execute(resolve(run_variable_sql())).fetchall() == [("run",)]
-    assert query(store, "Generated and consumed response tokens / s") == []
+    assert query(store, "Response tokens generated and trained on / s") == []
     assert query(store, "Rollouts completing during policy training") == []
 
 
@@ -681,7 +681,7 @@ def test_phase_service_rates_exclude_resets_boundaries_and_other_collectors(stor
 
 
 @pytest.mark.parametrize(
-    "title", ["Consumed buffer dwell", "Consumed policy staleness", "Successful rollout-call latency"]
+    "title", ["Buffer dwell of trained groups", "Policy staleness at training", "Successful rollout-call latency"]
 )
 def test_percentile_panels_separate_median_tail_and_worst_observation(store, title):
     # DuckDB's quantile_cont and finelog's t-digest disagree on the exact number, so the
@@ -901,8 +901,8 @@ def test_periodic_evaluation_metrics_logged_in_train_phase_are_visible(store):
 
 
 def test_consumed_staleness_panels_count_groups_and_sum_tokens_per_staleness(store):
-    groups = query(store, "Consumed staleness — groups per step")
-    tokens = query(store, "Consumed staleness — tokens per step")
+    groups = query(store, "Staleness of trained groups: groups per step")
+    tokens = query(store, "Staleness of trained groups: tokens per step")
     assert [row["value"] for row in groups if row["series"].startswith("staleness 0 ·")] == [1, 1, 1]
     assert [row["value"] for row in groups if row["series"].startswith("staleness 1 ·")] == [1, 2, 1]
     assert [row["value"] for row in tokens if row["series"].startswith("staleness 1 ·")] == [80, 70]
@@ -913,10 +913,10 @@ def test_consumed_staleness_panels_count_groups_and_sum_tokens_per_staleness(sto
         "(name='rollout_staleness_steps' AND value<>0) OR "
         "(name='consumed_staleness' AND json_get(body_json,'staleness')='1')"
     )
-    for title in ("Consumed staleness — groups per step", "Consumed staleness — tokens per step"):
+    for title in ("Staleness of trained groups: groups per step", "Staleness of trained groups: tokens per step"):
         assert all(row["series"].startswith("staleness 0 ·") for row in query(store, title))
     store.execute(f"DELETE FROM {TABLE} WHERE name='consumed_staleness'")
-    assert query(store, "Consumed staleness — tokens per step") == []
+    assert query(store, "Staleness of trained groups: tokens per step") == []
 
 
 def test_weight_sync_timeline_orders_training_and_sync_windows(store):
@@ -931,15 +931,17 @@ def test_weight_sync_timeline_orders_training_and_sync_windows(store):
 
 
 def test_ratio_panels_read_mismatch_and_learner_drift_families_separately(store):
-    mismatch = query(store, "Learner/vLLM mismatch \u03c1 (staleness 0)")
-    staleness = query(store, "Learner/vLLM mismatch by staleness bucket")
-    drift = query(store, "Learner drift within the update")
+    mismatch = query(store, "Trainer/vLLM logprob mismatch \u03c1 (staleness 0)")
+    staleness = query(store, "Trainer/vLLM logprob mismatch by staleness bucket")
+    drift = query(store, "Trainer logprob drift within the update")
     assert [row["value"] for row in mismatch if "/log_ratio_abs_mean ·" in row["series"]] == [0.1, 0.2]
     assert [row["value"] for row in staleness if "/staleness1/" in row["series"]] == [0.3, 0.6]
     assert [row["value"] for row in drift if row["series"].startswith("policy/log_ratio_abs_mean ·")] == [0.05, 0.1]
     assert not any("mismatch" in row["series"] for row in drift)
     store.execute(f"DELETE FROM {TABLE} WHERE json_get(attributes_json,'metric') LIKE 'policy/mismatch/staleness1/%'")
-    assert not any("/staleness1/" in row["series"] for row in query(store, "Learner/vLLM mismatch by staleness bucket"))
+    assert not any(
+        "/staleness1/" in row["series"] for row in query(store, "Trainer/vLLM logprob mismatch by staleness bucket")
+    )
 
 
 def test_position_panel_keeps_ratio_families_and_positions_separate(store):

@@ -50,7 +50,7 @@
       "asDropdown": false
     },
     {
-      "title": "Accelerators",
+      "title": "Fleet accelerators",
       "url": "/d/marin-accel",
       "type": "link",
       "icon": "dashboard",
@@ -372,7 +372,7 @@
     {
       "id": 3,
       "type": "timeseries",
-      "title": "Generated and consumed response tokens / s",
+      "title": "Response tokens generated and trained on / s",
       "description": "Per-second rate of work_completed token counts for generated_token, consumed_response_token and consumed_loss_token, summed per bucket. Generation workers record generated tokens when a group finishes; the trainer records consumed tokens after each optimizer step. The generated-token series is always on; the two consumed-token series need trainer.training_metrics.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
@@ -960,7 +960,7 @@
     {
       "id": 10,
       "type": "timeseries",
-      "title": "Consumed buffer dwell",
+      "title": "Buffer dwell of trained groups",
       "description": "p50/p95/max of rollout_buffer_dwell_seconds for groups with disposition=consumed: time from group completion to trainer admission. Recorded when a consumed group leaves the GenerationOutputGroupBuffer. Empty without trainer.async_spans.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
@@ -1072,7 +1072,7 @@
     {
       "id": 11,
       "type": "timeseries",
-      "title": "Consumed policy staleness",
+      "title": "Policy staleness at training",
       "description": "p50/p95/max of rollout_staleness_steps: how many optimizer steps behind the model was when each admitted group was consumed. The trainer records one observation per group against max_staleness_steps. Always on when telemetry is configured; rejected groups are excluded.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
@@ -1309,7 +1309,7 @@
     {
       "id": 14,
       "type": "timeseries",
-      "title": "Weight synchronization and policy offload walls",
+      "title": "Weight sync and policy offload walls",
       "description": "Mean phase_duration_seconds for sync_weights, init_weight_sync_state, offload_policy_model_to_cpu and update_ref_with_policy, split by outcome and execution. sync_weights times broadcast_to_inference_engines; the rest time the one-time sync-state setup and the optimizer offload around it. Always on when telemetry is configured; these are elapsed waits and do not measure GPU kernel time.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
@@ -2222,8 +2222,8 @@
     {
       "id": 40,
       "type": "timeseries",
-      "title": "Consumed length stops and coverage",
-      "description": "training_metric_value for consumed/length_stop_fraction and consumed/stop_reason_coverage: the share of admitted response sequences that hit a length stop, gated on full stop-reason coverage. Logged by the trainer after the learner update consumes the batch. Empty without trainer.training_metrics; the fraction is null wherever coverage is incomplete.",
+      "title": "Length stops and coverage in trained groups",
+      "description": "training_metric_value for consumed/length_stop_fraction and consumed/stop_reason_coverage: the share of admitted response sequences that hit a length stop, gated on full stop-reason coverage. Logged by the trainer after the policy update consumes the batch. Empty without trainer.training_metrics; the fraction is null wherever coverage is incomplete.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -2784,7 +2784,7 @@
     {
       "id": 29,
       "type": "row",
-      "title": "Learner versus reported behavior",
+      "title": "Trainer vs vLLM logprobs",
       "collapsed": false,
       "gridPos": {
         "x": 0,
@@ -2798,7 +2798,7 @@
       "id": 30,
       "type": "timeseries",
       "title": "Pre-update model log-ratio drift",
-      "description": "training_metric_value for policy/mismatch/pooled/log_ratio_*: the learner's pre-update logprob minus the vLLM engine's recorded logprob, over finite loss tokens. Computed by mismatch_ratio_metrics in fwd_logprobs_values_reward, before the optimizer step consumes the batch. Empty without trainer.training_metrics.",
+      "description": "training_metric_value for policy/mismatch/pooled/log_ratio_*: the trainer's pre-update logprob minus vLLM's recorded logprob, over finite loss tokens. Computed by mismatch_ratio_metrics in fwd_logprobs_values_reward, before the optimizer step consumes the batch. Empty without trainer.training_metrics.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -3020,7 +3020,7 @@
       "id": 32,
       "type": "timeseries",
       "title": "Drift coverage and token-weight concentration",
-      "description": "training_metric_value for policy/mismatch/pooled/finite_fraction, missing_behavior and ess_fraction: coverage and importance-weight concentration of the learner/vLLM mismatch. Computed by mismatch_ratio_metrics from the same batch as the drift panels. Empty without trainer.training_metrics.",
+      "description": "training_metric_value for policy/mismatch/pooled/finite_fraction, missing_behavior and ess_fraction: coverage and importance-weight concentration of the trainer/vLLM mismatch. Computed by mismatch_ratio_metrics from the same batch as the drift panels. Empty without trainer.training_metrics.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -3131,7 +3131,7 @@
       "id": 44,
       "type": "timeseries",
       "title": "Mean squared model log-ratio",
-      "description": "training_metric_value for policy/mismatch/pooled/log_ratio_mean_squared: the mean squared learner-minus-vLLM logprob difference over finite loss tokens. Computed by mismatch_ratio_metrics before the optimizer update. Empty without trainer.training_metrics.",
+      "description": "training_metric_value for policy/mismatch/pooled/log_ratio_mean_squared: the mean squared trainer-minus-vLLM logprob difference over finite loss tokens. Computed by mismatch_ratio_metrics before the optimizer update. Empty without trainer.training_metrics.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -3478,7 +3478,7 @@
     {
       "id": 35,
       "type": "timeseries",
-      "title": "Consumed loss tokens per second",
+      "title": "Loss tokens trained per second",
       "description": "training_metric_value for async/performance/consumed_loss_tokens_per_core_second and per_cycle_second: useful loss tokens divided by core or cycle wall. Computed by async_step_metrics alongside the core/cycle durations. Empty without trainer.training_metrics.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
@@ -4819,7 +4819,7 @@
     {
       "id": 51,
       "type": "timeseries",
-      "title": "Consumed staleness — groups per step",
+      "title": "Staleness of trained groups: groups per step",
       "description": "Count of rollout_staleness_steps observations per optimizer step, split by staleness value: how many admitted groups landed at each staleness. The trainer records one observation per group in record_rollout_staleness. Always on when telemetry is configured; rejected groups are excluded.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
@@ -4931,7 +4931,7 @@
     {
       "id": 52,
       "type": "timeseries",
-      "title": "Consumed staleness — tokens per step",
+      "title": "Staleness of trained groups: tokens per step",
       "description": "Sum of response_tokens on consumed_staleness events per optimizer step, split by staleness value. The trainer emits one event per consumed group, carrying its admitted staleness and token count. Empty without trainer.training_metrics.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
@@ -5198,7 +5198,7 @@
     {
       "id": 54,
       "type": "timeseries",
-      "title": "Learner/vLLM mismatch ρ (staleness 0)",
+      "title": "Trainer/vLLM logprob mismatch ρ (staleness 0)",
       "description": "training_metric_value for policy/mismatch/staleness0/*: log-ratio mean/p99/p999, the fraction outside [0.5x, 2x], ESS fraction, KL and chi-squared, for staleness-zero loss tokens only. Computed by mismatch_ratio_metrics, isolating tokens with no policy drift since generation. Empty without trainer.training_metrics.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
@@ -5309,8 +5309,8 @@
     {
       "id": 55,
       "type": "timeseries",
-      "title": "Learner/vLLM mismatch by staleness bucket",
-      "description": "training_metric_value for policy/mismatch/staleness{0,1,2,3,4-7,8+}/log_ratio_abs_mean: mean absolute learner/vLLM log-ratio by the group's staleness at consumption. Computed by mismatch_ratio_metrics from the same batch as the staleness-0 panel. Empty without trainer.training_metrics.",
+      "title": "Trainer/vLLM logprob mismatch by staleness bucket",
+      "description": "training_metric_value for policy/mismatch/staleness{0,1,2,3,4-7,8+}/log_ratio_abs_mean: mean absolute trainer/vLLM log-ratio by the group's staleness at consumption. Computed by mismatch_ratio_metrics from the same batch as the staleness-0 panel. Empty without trainer.training_metrics.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -5420,8 +5420,8 @@
     {
       "id": 56,
       "type": "timeseries",
-      "title": "Learner drift within the update",
-      "description": "training_metric_value for policy/log_ratio_*: the learner's ratio against its own logprobs recomputed at consumption, pooled over the update's microbatches. Computed by LogRatioMonitor in the policy worker's training step, independent of the rollout-time mismatch panels. Empty without trainer.training_metrics.",
+      "title": "Trainer logprob drift within the update",
+      "description": "training_metric_value for policy/log_ratio_*: the trainer's ratio against its own logprobs recomputed at consumption, pooled over the update's microbatches. Computed by LogRatioMonitor in the policy worker's training step, independent of the rollout-time mismatch panels. Empty without trainer.training_metrics.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"

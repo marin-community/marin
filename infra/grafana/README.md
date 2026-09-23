@@ -352,7 +352,7 @@ per-process ones) and the window is capped at 7 days. A request past either cap
 returns a 400 that asks the operator to narrow the filters or time range.
 
 Native token counters are summed; queue gauges use their latest observation.
-Concurrent producer waits can exceed elapsed time. Rollout completions are joined
+Concurrent generation-worker waits can exceed elapsed time. Rollout completions are joined
 to policy intervals only within the same process clock; incomplete intervals and
 absent rollout records show unknown overlap. An observed zero does not establish
 GPU idleness. Evaluation retains phase and timestamp because periodic and final
@@ -401,7 +401,7 @@ checkpoint/evaluation callbacks; both exclude startup, epoch cleanup and final
 export. Role-normalized rates divide useful tokens by cycle seconds and the
 configured GPU count for that role. Do not add overlapping role counts or infer
 whole-job billed efficiency from them. For sizing, inspect buffer-empty learner
-waits alongside producer slot/enqueue waits and completed-buffer dwell (completion
+waits alongside generation-worker slot and enqueue waits and completed-buffer dwell (completion
 to consumption). Existing inference running/waiting request counts and token rates
 describe engine demand; physical engine-to-GPU mapping is still needed for
 per-engine hardware attribution.
@@ -933,7 +933,7 @@ token is attenuated to that subset even if the app holds broader grants.
 
 ### Async RL diagnostic panels
 
-The nine panels beginning with “Consumed staleness” add per-step staleness
+The nine panels beginning with “Staleness of trained groups” add per-step staleness
 distributions, training/weight-sync intervals, separate ratio families, gradient
 persistence, and correction activity. Bars share each optimizer step's final observation time.
 The timeline uses explicit interval ends; its sync completion markers have a

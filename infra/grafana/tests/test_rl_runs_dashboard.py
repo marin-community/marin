@@ -433,7 +433,7 @@ def test_the_node_agent_joins_through_node_name_without_a_run_id(store) -> None:
 
 def test_the_engine_panels_select_by_metric_name_alone(store) -> None:
     # No other MarinSkyRL producer emits these names, so the name identifies the engine path.
-    throughput = store.execute(_panel_sql("Engine token throughput")).fetchall()
+    throughput = store.execute(_panel_sql("vLLM token throughput")).fetchall()
     # A rate over a CUMULATIVE counter: the panel takes the delta between consecutive samples,
     # so a fixture growing by 1024 per bucket per engine yields a constant rate -- and the first
     # bucket has no predecessor to difference against, so it drops out.
@@ -441,10 +441,10 @@ def test_the_engine_panels_select_by_metric_name_alone(store) -> None:
     assert rates == [round(2 * 1024.0 / 300.0, 4)] * len(rates)
     assert len(rates) == 5
 
-    queue = store.execute(_panel_sql("Engine queue and KV-cache")).fetchall()
+    queue = store.execute(_panel_sql("vLLM queue and KV-cache usage")).fetchall()
     assert [(row[1], row[2]) for row in queue] == [(48.0, 12.0)] * 6
 
-    latency = store.execute(_panel_sql("Engine request latency (mean by stage)")).fetchall()
+    latency = store.execute(_panel_sql("vLLM request latency (mean by stage)")).fetchall()
     # Prometheus histograms arrive as `_sum` and `_count`, so the panel reports a mean per stage.
     # A p90 would need bucket interpolation.
     assert {row[1] for row in latency} == {
@@ -572,7 +572,7 @@ def test_engine_rates_keep_two_actors_that_both_report_engine_zero_apart(store) 
             ),
         )
 
-    throughput = store.execute(_panel_sql("Engine token throughput")).fetchall()
+    throughput = store.execute(_panel_sql("vLLM token throughput")).fetchall()
     rates = [round(row[1], 4) for row in throughput]
 
     assert rates == [round(3 * 1024.0 / 300.0, 4)] * len(rates)
@@ -601,7 +601,7 @@ def test_engine_panels_read_the_embedded_stream_as_well_as_the_standalone_one(st
             ),
         )
 
-    rates = [round(row[1], 4) for row in store.execute(_panel_sql("Engine token throughput")).fetchall()]
+    rates = [round(row[1], 4) for row in store.execute(_panel_sql("vLLM token throughput")).fetchall()]
 
     assert rates == [round(3 * 1024.0 / 300.0, 4)] * len(rates)
     assert len(rates) == 5

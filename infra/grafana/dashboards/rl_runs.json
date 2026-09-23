@@ -64,7 +64,7 @@
       "includeVars": true,
       "keepTime": true,
       "targetBlank": false,
-      "title": "Accelerators",
+      "title": "Fleet accelerators",
       "type": "link",
       "url": "/d/marin-accel"
     }
@@ -160,7 +160,7 @@
       "id": 3,
       "type": "timeseries",
       "title": "Optimizer step and policy lag",
-      "description": "The trainer's optimizer step, and the newest policy version whose generated work was consumed in the same bucket.\n\nThe gap between the lines is the policy lag in optimizer steps. A widening gap means generation is falling behind; a flat gap means admission is clamping it.\n\nBoth lines are counters and only rise, so a flat line is the failure signal. The gap is a per-bucket maximum and reads as a best case. The measured staleness distribution is on RL Post-training (async), which charts the asynchronous loop. Data from telemetry_v1.marinskyrl.",
+      "description": "The trainer's optimizer step, and the newest policy version whose rollouts the trainer used in the same bucket.\n\nThe gap between the lines is the policy lag in optimizer steps. A widening gap means generation is falling behind.\n\nBoth lines are counters and only rise, so a flat line is the failure signal. The gap is a per-bucket maximum and reads as a best case. The measured staleness distribution is on RL Post-training (async), which charts the asynchronous loop. Data from telemetry_v1.marinskyrl.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -182,7 +182,7 @@
             "axisLabel": "step number"
           },
           "min": 0,
-          "noValue": "No policy_step rows in this window. The run picker only offers runs that emitted one, so this means the trainer stopped — check the producers table to the right.",
+          "noValue": "No policy_step rows in this window. The run picker only offers runs that emitted one, so this means the trainer stopped; check Services reporting this run to the right.",
           "unit": "none",
           "displayName": "${__field.labels.series}"
         },
@@ -379,8 +379,8 @@
     {
       "id": 1,
       "type": "table",
-      "title": "Producers reporting this run",
-      "description": "One row per service, role and metric source that stamped this run id, with the time each last reported.\n\nA healthy run shows several marinskyrl rows, one vllm row, and one harbor row. A missing row is the only evidence that a producer failed to start telemetry.\n\nThe Iris node agent never appears here, because it stamps no run id. Rows come from the marinskyrl, vllm and harbor tables in telemetry_v1.",
+      "title": "Services reporting this run",
+      "description": "One row per service, role and metric source that stamped this run id, with the time each last reported.\n\nA healthy run shows several marinskyrl rows, one vllm row, and one harbor row. A missing row is the only evidence that a service failed to start telemetry.\n\nThe Iris node agent never appears here, because it stamps no run id. Rows come from the marinskyrl, vllm and harbor tables in telemetry_v1.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -396,7 +396,7 @@
           "custom": {
             "align": "auto"
           },
-          "noValue": "No producers under this run_id in this window."
+          "noValue": "No services under this run_id in this window."
         },
         "overrides": [
           {
@@ -452,7 +452,7 @@
           "columns": [
             {
               "selector": "producer",
-              "text": "producer",
+              "text": "service",
               "type": "string"
             },
             {
@@ -722,7 +722,7 @@
     {
       "id": 9,
       "type": "timeseries",
-      "title": "Engine token throughput",
+      "title": "vLLM token throughput",
       "description": "Prompt and generated tokens per second, summed across the run's inference engines.\n\nA prompt-heavy ratio means prefill is being paid repeatedly. The prefix-cache panel says whether the cache is catching it.\n\nRates are differenced per engine from cumulative counters. Under GRPO all n samples of a group share one prompt, so a high prompt share is expected. Data from telemetry_v1.vllm, and from engines embedded in the trainer in telemetry_v1.marinskyrl.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
@@ -823,8 +823,8 @@
     {
       "id": 10,
       "type": "timeseries",
-      "title": "Engine queue and KV-cache",
-      "description": "Requests running and queued at the inference engines, with KV-cache occupancy on the right axis.\n\nA growing queue with low KV usage can suggest a scheduling or compute limit; high KV usage and preemptions support cache pressure. Neither pattern alone identifies the cause or the right concurrency setting. A draining queue may be an intentional rollout boundary, not upstream starvation.\n\nValues here are averaged across engines, unlike the fleet sums in Inference overview and diagnostics. Data from telemetry_v1.vllm, and from engines embedded in the trainer in telemetry_v1.marinskyrl.",
+      "title": "vLLM queue and KV-cache usage",
+      "description": "Requests running and queued in vLLM, with KV-cache usage on the right axis.\n\nA growing queue with low KV-cache usage can suggest a scheduling or compute limit; high KV-cache usage and preemptions support cache pressure. Neither pattern alone identifies the cause or the right concurrency setting. A draining queue may be an intentional rollout boundary, not upstream starvation.\n\nValues here are averaged across engines, unlike the fleet sums in Inference overview and diagnostics. Data from telemetry_v1.vllm, and from engines embedded in the trainer in telemetry_v1.marinskyrl.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -954,7 +954,7 @@
     {
       "id": 11,
       "type": "timeseries",
-      "title": "Engine request latency (mean by stage)",
+      "title": "vLLM request latency (mean by stage)",
       "description": "Mean seconds per finished request at each stage: queue, prefill, decode, time to first token, and end to end.\n\nA rising decode stage means generation itself slowed. A rising queue stage means requests waited to start.\n\nThis is a mean and cannot show a tail; the straggler panel carries that. End to end and time to first token contain the other stages, so these series neither stack nor sum. Data from telemetry_v1.vllm, and from engines embedded in the trainer in telemetry_v1.marinskyrl.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
@@ -1157,7 +1157,7 @@
     {
       "id": 17,
       "type": "timeseries",
-      "title": "Engine KV-cache preemptions",
+      "title": "vLLM KV-cache preemptions",
       "description": "Requests the engine evicted from its KV-cache and had to recompute, per time bucket.\n\nAny value above zero means KV-cache pressure cost real work. High KV-cache occupancy with zero here cost nothing.\n\nThis is vLLM's own scheduler preemption. It is unrelated to Kubernetes pod preemption or Iris job preemption. Data from telemetry_v1.vllm, and from engines embedded in the trainer in telemetry_v1.marinskyrl.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
@@ -1373,7 +1373,7 @@
     {
       "id": 18,
       "type": "timeseries",
-      "title": "Why engine requests finished",
+      "title": "Why vLLM requests finished",
       "description": "Finished engine requests per time bucket, split by the reason vLLM recorded.\n\nA rising length share means responses are being truncated, and the verifier scores the truncation anyway.\n\nThe reason set is open; the pinned build emits stop, length, abort, error and repetition. One rollout is several requests when a group is sampled n ways. Blank means the engines finished nothing in this window. Data from telemetry_v1.vllm, and from engines embedded in the trainer in telemetry_v1.marinskyrl.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
