@@ -660,7 +660,7 @@ def launch_store() -> duckdb.DuckDBPyConnection:
     return _store("launch")
 
 
-# The panels this branch adds live in dashboards/panels/rl_*.json and are mounted by panelRef, so
+# The shared RL panels live in dashboards/panels/rl_*.json and are mounted by panelRef, so
 # they can move between dashboards without their body moving. These tests follow the panel, not the
 # dashboard: a fragment is the single source of truth for everything except id and gridPos.
 def _stitched() -> dict:
@@ -676,10 +676,9 @@ def _rl_dashboards() -> dict:
 
 
 def _our_panels() -> list[dict]:
-    """Every panel this branch owns: the shared fragments, plus every panel on the train step and generation boards.
+    """The panels/rl_*.json fragments wherever mounted, plus every panel on the train step and generation boards.
 
-    rl_runs.json's other panels came from marin#8562 and are deliberately left alone -- holding
-    them to a rule written after they shipped would only make that PR harder to rebase onto.
+    rl_runs.json's own inline panels are not held to these rules.
     """
     ours = {path.stem for path in (DASHBOARDS / "panels").glob("rl_*.json")}
     mounted = [
@@ -1194,8 +1193,12 @@ def test_the_tail_is_reported_against_the_per_trajectory_mean(store) -> None:
 
 
 def test_every_panel_has_a_distinct_title_id_and_slot() -> None:
-    """id and gridPos are dashboard-local -- the two things a panelRef legitimately varies."""
-    for name, board in _rl_dashboards().items():
+    """id and gridPos are dashboard-local -- the two things a panelRef legitimately varies.
+
+    test_rl_runs_dashboard.py checks rl_runs.json.
+    """
+    for name in ("rl_sync_train_step.json", "rl_sync_generation.json"):
+        board = _stitched()[name]
         panels = board["panels"]
         titles = [panel["title"] for panel in panels]
         assert len(titles) == len(set(titles)), (name, titles)
