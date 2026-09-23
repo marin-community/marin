@@ -555,7 +555,6 @@ def _vllm_backend(args: argparse.Namespace) -> None:
         VLLM_DTYPE,
         "--served-model-name",
         SERVED_MODEL_NAME,
-        "--enforce-eager",
         "--max-num-seqs",
         "1",
     ]
