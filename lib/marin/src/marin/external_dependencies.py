@@ -89,6 +89,15 @@ MARIN_SKYRL = ExternalDependency(
     runtime_requirements=(),
 )
 
+SPECULATORS = ExternalDependency(
+    config_name="speculators",
+    distribution="speculators",
+    repository="https://github.com/marin-community/speculators.git",
+    version="0.9.0.dev34",
+    commit="3310d75af585fa4d5b11a3caf97eb8ece6c262b4",
+    runtime_requirements=(),
+)
+
 VLLM_GPU_RELEASE = VllmGpuRelease(
     release_tag="marin-vllm-gpu-20260920-fb02daf1d713",
     source_commit="fb02daf1d7139d2adaeb0588448649591657d1e3",
@@ -128,4 +137,5 @@ EXTERNAL_DEPENDENCIES = (
     EVALCHEMY,
     HARBOR,
     MARIN_SKYRL,
+    SPECULATORS,
 )
