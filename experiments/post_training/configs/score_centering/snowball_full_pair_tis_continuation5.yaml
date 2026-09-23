@@ -1,0 +1,140 @@
+entrypoint: fully_async
+context_budget:
+  request_window_tokens: 8192
+  max_new_tokens_per_turn: 1536
+  max_turns: 1
+environment:
+  env_class: gsm8k
+trainer:
+  strategy: megatron
+  flash_attn: true
+  use_sample_packing: false
+  gradient_checkpointing: true
+  offload_optimizer_during_rollouts: true
+  epochs: 50
+  max_steps: 20
+  update_epochs_per_batch: 1
+  train_batch_size: 128
+  policy_mini_batch_size: 128
+  micro_train_batch_size_per_gpu: 1
+  micro_forward_batch_size_per_gpu: 1
+  eval_batch_size: 256
+  eval_interval: 5
+  dump_eval_results: true
+  mismatch_decomposition:
+    enabled: false
+    sample_rows_per_step: 8
+  hf_save_interval: -1
+  resume_mode: from_path
+  max_ckpts_to_keep: 2
+  seed: 17
+  logger: wandb
+  project_name: marin-async-rl
+  tracker_commit_each_step: true
+  training_metrics: true
+  async_spans: true
+  policy_train_spans: true
+  generate_spans: false
+  optimizer_state_metrics: true
+  algorithm:
+    advantage_estimator: grpo
+    policy_loss_type: regular
+    use_kl_loss: false
+    use_kl_in_reward: false
+    use_tis: true
+    score_centering_topk: 0
+    tis_imp_ratio_cap: 1.05
+    eps_clip_low: 0.2
+    eps_clip_high: 0.2
+    ratio_diagnostics:
+      pooled: true
+      exact_quantiles: false
+    grad_cosine:
+      enabled: false
+  policy:
+    optimizer_config:
+      optimizer: AdamW
+      lr: 1.0e-06
+      weight_decay: 0.01
+      max_grad_norm: 1.0
+    megatron_config:
+      tensor_model_parallel_size: 1
+      pipeline_model_parallel_size: 2
+      context_parallel_size: 1
+      expert_model_parallel_size: 8
+      expert_tensor_parallel_size: 1
+      optimizer_checkpoint_sharding_type: dp_reshardable
+      logprob_chunk_size: 512
+  ref:
+    megatron_config:
+      tensor_model_parallel_size: 1
+      pipeline_model_parallel_size: 2
+      context_parallel_size: 1
+      expert_model_parallel_size: 8
+      expert_tensor_parallel_size: 1
+  placement:
+    colocate_all: false
+    colocate_policy_ref: true
+    policy_num_nodes: 4
+    policy_num_gpus_per_node: 8
+    ref_num_nodes: 4
+    ref_num_gpus_per_node: 8
+  fully_async:
+    max_staleness_steps: 8
+    weight_sync_interval_steps: 1
+    num_parallel_generation_workers: 192
+    max_buffered_groups: 32
+    pause_mode: abort
+    clear_kv_cache_on_weight_sync: true
+    first_token_admission: true
+  resume_path: s3://marin-us-east-02a/tmp/ttl=14d/skyrl/marin/users/romain/checkpoints/async-rl/snowball-default-set-e1183dd2/2026.09.21.7/checkpoints/global_step_5
+  eval_before_train: true
+  ckpt_interval: 5
+generator:
+  backend: vllm
+  model_dtype: bfloat16
+  vllm_attention_backend: FLASH_ATTN
+  run_engines_locally: true
+  weight_sync_backend: nccl
+  async_engine: true
+  batched: false
+  num_inference_engines: 1
+  rollout_num_nodes: 1
+  inference_engine_tensor_parallel_size: 1
+  inference_engine_pipeline_parallel_size: 1
+  inference_engine_data_parallel_size: 8
+  inference_engine_expert_parallel_size: 8
+  n_samples_per_prompt: 4
+  gpu_memory_utilization: 0.75
+  max_num_seqs: 1024
+  max_num_batched_tokens: 8192
+  enable_prefix_caching: true
+  enable_chunked_prefill: true
+  enforce_eager: false
+  enable_http_endpoint: true
+  use_conversation_multi_turn: true
+  chat_template:
+    source: name
+    name_or_path: marin_tokenizer
+  engine_init_kwargs:
+    moe_backend: triton
+  sampling_params:
+    temperature: 1.0
+    top_p: 1.0
+    logprobs: 32
+  eval_n_samples_per_prompt: 1
+  eval_sampling_params:
+    max_generate_length: 4096
+    repetition_penalty: 1.0
+    temperature: 0.0
+    top_p: 1.0
+    min_p: 0.0
+    top_k: -1
+    logprobs: null
+    stop: null
+data:
+  kind: parquet
+  train_data: []
+  val_data: []
+extra_env:
+  PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True

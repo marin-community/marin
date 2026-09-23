@@ -1,0 +1,24 @@
+{
+  "attempt": 0,
+  "completed_optimizer_updates": 2,
+  "driver_exception_s3": "s3://marin-us-east-02a/tmp/ttl=14d/skyrl/marin/users/romain/checkpoints/async-rl/snowball-default-set-4ce2cc1a/2026.09.21.1/attempts/rendezvous/debug_artifacts/rank0-g83a1bc/outcomes/skyrl-entrypoint-driver.g83a1bc.9723.1789952986502275424.exception.json",
+  "failed_update": 3,
+  "failing_actor_index": 26,
+  "failing_mesh_rank": "MeshRank(dp=10, sp=0, tp=0, pp=1, world_size=32, dp_size=16, pp_size=2)",
+  "failure": "TransformerEngine fused_attn_arbitrary_seqlen_bwd_impl returned CUDNN_STATUS_EXECUTION_FAILED_CUDA_DRIVER from shimCuLaunchKernelEx",
+  "iris_job": "/romain/users-romain-checkpoints-async-rl-snowball-default-set-4ce2cc1a-2026.09.21.1-91a8f7081d4d",
+  "reserved_h100_hours": 26.687156,
+  "state": "failed",
+  "step_zero_analysis": "score_centering_snowball_sc32_attempt0_evals.csv",
+  "task_seconds": [
+    2401.844,
+    2401.844,
+    2401.844,
+    2401.844,
+    2401.844
+  ],
+  "task_seconds_total": 12009.22,
+  "wandb_run_id": "aqvw27co",
+  "worker_stderr_s3": "s3://marin-us-east-02a/tmp/ttl=14d/skyrl/users/romain/users-romain-checkpoints-async-rl-snowball-default-set-4ce2cc1a-2026.09.21.1-91a8f7081d4d/ray_session_logs/rank0-g83a1bc/session_latest/worker-8f93b3217deb1f4d0eb6d1eb5b2bbf3e1e2a227de6f392a5f5fc8be7-06000000-14020.err",
+  "worker_stderr_sha256": "98341c60d6017fe2b1a835f42f949eb8f60d82af36dade7a7d7d061208af8c29"
+}

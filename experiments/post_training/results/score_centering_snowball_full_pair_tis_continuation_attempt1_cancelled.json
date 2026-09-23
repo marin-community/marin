@@ -1,0 +1,11 @@
+{
+  "arm": "snowball_full_pair_tis_continuation",
+  "attempt": 1,
+  "completed_optimizer_updates_after_resume": 0,
+  "iris_job": "/romain/users-romain-checkpoints-async-rl-snowball-default-set-041c320c-2026.09.21.8-8b6d1802015f",
+  "iris_task_seconds_total": 428.19,
+  "reason": "Canceled the automatic identical retry after the attempt-zero step-six policy-forward OOM.",
+  "reserved_h100_hours": 0.951533,
+  "runtime_commit": "22a37adc7135a54995cfb4f3b5cd07504af796b3",
+  "state": "cancelled"
+}

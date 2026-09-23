@@ -1,0 +1,11 @@
+{
+  "arm": "snowball_full_pair_sc32_continuation",
+  "attempt": 0,
+  "completed_optimizer_updates_after_resume": 0,
+  "iris_job": "/romain/users-romain-checkpoints-async-rl-snowball-default-set-fb6b91f4-2026.09.21.8-b8fda2e76e40",
+  "iris_task_seconds_total": 14627.295,
+  "reason": "Canceled before its first resumed policy update after the matched TIS arm hit a step-six policy-forward OOM.",
+  "reserved_h100_hours": 32.5051,
+  "runtime_commit": "22a37adc7135a54995cfb4f3b5cd07504af796b3",
+  "state": "cancelled"
+}

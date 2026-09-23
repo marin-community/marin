@@ -163,6 +163,10 @@ def test_skyrl_step_fingerprint_includes_runtime_identity_and_excludes_placement
         ),
         _execution(),
     )
+    changed_commit = skyrl_step(
+        dataclasses.replace(spec, runtime=dataclasses.replace(spec.runtime, commit="1" * 40)),
+        _execution(),
+    )
     changed_roles = skyrl_step(
         dataclasses.replace(
             spec,
@@ -177,7 +181,11 @@ def test_skyrl_step_fingerprint_includes_runtime_identity_and_excludes_placement
     assert base.fingerprint() == moved.fingerprint()
     assert base.fingerprint() == resized.fingerprint()
     assert base.fingerprint() != changed_profile.fingerprint()
+    assert base.fingerprint() != changed_commit.fingerprint()
     assert base.fingerprint() != changed_roles.fingerprint()
+
+    config = changed_commit.build_config(StepContext.for_fingerprint(changed_commit.runtime_args, changed_commit.deps))
+    assert config.launcher_requirement == (f"{MARIN_SKYRL.distribution} @ git+{MARIN_SKYRL.repository}@{'1' * 40}")
 
 
 def test_skyrl_step_declares_model_and_data_dependencies() -> None:

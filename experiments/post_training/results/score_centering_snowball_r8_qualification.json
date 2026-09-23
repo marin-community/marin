@@ -1,0 +1,26 @@
+{
+  "cluster": "cw-us-east-02a",
+  "completed_optimizer_step": 3,
+  "full_checkpoint_restore_seconds": 1698.56,
+  "full_checkpoint_save_seconds": 153.31,
+  "gpu_tasks": 5,
+  "h100s_per_task": 8,
+  "optimizer_partition_sharding_types": {
+    "0": "dp_reshardable",
+    "1": "dp_reshardable"
+  },
+  "requested_host_memory_per_task": "1980GB",
+  "reserved_h100_hours": 31.375116,
+  "runtime_commit": "cd04007912b8dc3c45258c11f1d4505672579e36",
+  "saved_full_checkpoint": "s3://marin-us-east-02a/tmp/ttl=14d/skyrl/marin/users/romain/checkpoints/async-rl/snowball-resume-smoke-01a0bb6f-r8/2026.09.20.1/checkpoints/global_step_3",
+  "source_full_checkpoint": "s3://marin-us-east-02a/tmp/ttl=14d/skyrl/marin/users/romain/checkpoints/async-rl/snowball-smoke-set-81e8344e/2026.09.20.1/checkpoints/global_step_2",
+  "task_seconds_total": 14118.8,
+  "terminal_export_gpu_tasks": 4,
+  "terminal_export_iris_job": "/romain/score-centering-snowball-resume-smoke-01a0bb6f-r8-export-3",
+  "terminal_export_policy": "s3://marin-us-east-02a/marin/users/romain/checkpoints/async-rl/snowball-resume-smoke-01a0bb6f-r8/2026.09.20.1/exports/global_step_3/policy",
+  "terminal_export_reserved_h100_hours": 18.231964,
+  "terminal_export_state": "succeeded",
+  "terminal_export_task_seconds_total": 8204.38,
+  "terminal_export_weight_shards": 39,
+  "training_iris_job": "/romain/score-centering-snowball-resume-smoke-01a0bb6f-r8"
+}

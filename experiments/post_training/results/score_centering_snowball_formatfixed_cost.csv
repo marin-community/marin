@@ -1,0 +1,9 @@
+iris_job,attempt,arm,attention_backend,state,gpu_tasks,h100_per_task,task_seconds_total,reserved_h100_hours,completed_optimizer_updates_this_attempt
+/romain/users-romain-checkpoints-async-rl-snowball-default-set-4ce2cc1a-2026.09.21.1-91a8f7081d4d,0,sc32,fused,failed,5,8,12009.22,26.687156,2
+/romain/users-romain-checkpoints-async-rl-snowball-default-set-4ce2cc1a-2026.09.21.1-91a8f7081d4d,1,sc32,fused,failed,5,8,10302.6,22.894667,1
+/romain/users-romain-checkpoints-async-rl-snowball-default-set-8a955e17-2026.09.21.1-1df146645f7a,0,tis,fused,failed,5,8,27789.07,61.753489,10
+/romain/users-romain-checkpoints-async-rl-snowball-default-set-8a955e17-2026.09.21.1-1df146645f7a,1,tis,fused,failed,5,8,3167.9,7.039778,0
+/romain/users-romain-checkpoints-async-rl-snowball-default-set-d7f4bce1-2026.09.21.2-370e4cfb7f4b,0,sc32,flash,planned_stop,5,8,13106.125,29.124722,3
+/romain/users-romain-checkpoints-async-rl-snowball-default-set-d7f4bce1-2026.09.21.3-992bcb1ba2f1,0,sc32,flash,failed,5,8,11955.03,26.566733,2
+/romain/users-romain-checkpoints-async-rl-snowball-default-set-d7f4bce1-2026.09.21.3-992bcb1ba2f1,1,sc32,flash,failed,5,8,12196.8,27.104000,2
+/romain/users-romain-checkpoints-async-rl-snowball-default-set-6f0ff39c-2026.09.21.3-6902c969a370,0,tis,flash,failed,5,8,28782.775,63.961722,10

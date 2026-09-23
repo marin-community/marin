@@ -1,0 +1,21 @@
+{
+  "completed_optimizer_updates": 3,
+  "iris_job": "/romain/users-romain-checkpoints-async-rl-snowball-default-set-d7f4bce1-2026.09.21.2-370e4cfb7f4b",
+  "purpose": "FlashAttention backend qualification through the fused-attention failure points",
+  "reserved_h100_hours": 29.124722,
+  "skyrl_runtime_commit": "cd04007912b8dc3c45258c11f1d4505672579e36",
+  "state": "killed_by_user",
+  "step_zero_analysis": "score_centering_snowball_flash_sc32_pilot_step0_evals.csv",
+  "step_zero_gsm8k_audit": "score_centering_snowball_flash_sc32_pilot_gsm8k_step0_probe.json",
+  "step_zero_math500_audit": "score_centering_snowball_flash_sc32_pilot_math500_step0_probe.json",
+  "stop_reason": "planned stop after update three; final pair uses SkyRL 26a4b7e1 with S3 retry improvements",
+  "task_seconds": [
+    2621.225,
+    2621.225,
+    2621.225,
+    2621.225,
+    2621.225
+  ],
+  "task_seconds_total": 13106.125,
+  "wandb_run_id": "swibxo17"
+}

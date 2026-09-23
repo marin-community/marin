@@ -1,0 +1,7 @@
+pass,version,tis_completed,sc32_completed,completed_sc32_minus_tis,completed_baseline_adjusted,tis_raw,sc32_raw,raw_sc32_minus_tis,raw_baseline_adjusted,tis_audited,sc32_audited,audited_sc32_minus_tis,audited_baseline_adjusted
+initial,2026.09.21.7,411,380,-31,-18,416,384,-32,-25,425,399,-26,-19
+continuation1,2026.09.21.8,405,407,2,15,406,411,5,12,426,430,4,11
+continuation2,2026.09.21.9,406,373,-33,-20,408,374,-34,-27,425,399,-26,-19
+continuation3,2026.09.21.10,391,384,-7,6,394,386,-8,-1,413,406,-7,0
+continuation4,2026.09.21.11,383,394,11,24,389,401,12,19,411,421,10,17
+continuation5,2026.09.21.12,394,401,7,20,402,405,3,10,417,432,15,22

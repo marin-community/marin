@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "marinskyrl_commit": "22a37adc7135a54995cfb4f3b5cd07504af796b3",
+  "configured_flash_attn_requirement": "flash-attn==2.8.4",
+  "configured_requirement_source": "MarinSkyRL pyproject.toml",
+  "warning_job": "/romain/users-romain-checkpoints-async-rl-snowball-default-set-e41c3859-2026.09.21.10-272554da28e5",
+  "warning_task": "/romain/users-romain-checkpoints-async-rl-snowball-default-set-e41c3859-2026.09.21.10-272554da28e5/0",
+  "warning_observed_at": "2026-09-21T08:52:24Z",
+  "compatibility_warning": "Supported flash-attn versions are >= 2.1.1, <= 2.8.3. Found flash-attn 2.8.4.",
+  "backend_warning_observed_at": "2026-09-21T09:21:05Z",
+  "backend_warning": "flash-attn may provide important feature support or performance improvement. Please install flash-attn >= 2.3, <= 2.8.3 by pip3 install flash-attn==<version>.",
+  "retrieval_command": "uv run --frozen --python 3.12 --package marin-iris iris --cluster=cw-us-east-02a job logs /romain/users-romain-checkpoints-async-rl-snowball-default-set-e41c3859-2026.09.21.10-272554da28e5",
+  "unfused_failure_records": [
+    "score_centering_snowball_full_pair_tis_continuation_attempt0_failure.json",
+    "score_centering_snowball_full_pair_tis_continuation2_attempt0_failure.json",
+    "score_centering_snowball_full_pair_tis_continuation3_attempt0_failure.json",
+    "score_centering_snowball_full_pair_tis_continuation4_attempt0_failure.json",
+    "score_centering_snowball_full_pair_tis_continuation5_attempt0_failure.json",
+    "score_centering_snowball_full_pair_sc32_continuation5_attempt0_failure.json"
+  ],
+  "interpretation": "The configs requested FlashAttention, but this runtime rejected the installed version and the retained OOM stacks executed TransformerEngine unfused attention. A future compatible-version attempt must verify the effective backend before a full matched run."
+}

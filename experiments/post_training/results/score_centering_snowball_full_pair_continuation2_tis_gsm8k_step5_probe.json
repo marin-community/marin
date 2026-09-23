@@ -1,0 +1,16 @@
+{
+  "completed": 244,
+  "completed_rewarded_or_exact_boxed": 204,
+  "completed_rewarded_or_terminal_boxed": 197,
+  "final_turn_boxed": 63,
+  "final_turn_boxed_exact_ground_truth": 61,
+  "final_turn_boxed_exact_unrewarded": 22,
+  "match_mode": "numeric",
+  "membership_sha256": "4083423960844b0cf33b1de9a413e412db755c4a4446696ba9c548b67a1ab6ea",
+  "questions": 256,
+  "responses": "/home/romain/data/sources/devbox/score-centering/2026-09-21-snowball-full-pair-continuation2-tis-step5/val-gsm8k.jsonl",
+  "rewarded_correct": 184,
+  "rewarded_correct_completed": 182,
+  "terminal_boxed_exact_ground_truth": 38,
+  "terminal_boxed_exact_unrewarded": 15
+}

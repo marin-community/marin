@@ -11,7 +11,7 @@ import sys
 import tempfile
 import uuid
 from collections import deque
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 from pathlib import PurePosixPath
 from typing import Literal, cast
@@ -60,7 +60,11 @@ class SkyRLRuntime:
     """Identity-bearing SkyRL revision and locked dependency profile."""
 
     profile: SkyRLRuntimeProfile
-    commit: str = field(init=False, default=MARIN_SKYRL.commit)
+    commit: str = MARIN_SKYRL.commit
+
+    def __post_init__(self) -> None:
+        if len(self.commit) != 40 or any(char not in "0123456789abcdef" for char in self.commit):
+            raise ValueError("SkyRL runtime commit must be a full lowercase Git SHA")
 
 
 @dataclass(frozen=True)
@@ -76,6 +80,14 @@ class SkyRLRolePlan:
     policy_mini_batch_size: int
     micro_train_batch_size_per_gpu: int
     n_samples_per_prompt: int
+    inference_engine_pipeline_parallel_size: int = 1
+    inference_engine_data_parallel_size: int = 1
+    inference_engine_expert_parallel_size: int = 1
+    rollout_num_nodes: int | None = None
+
+    @property
+    def effective_rollout_num_nodes(self) -> int:
+        return self.num_inference_engines if self.rollout_num_nodes is None else self.rollout_num_nodes
 
 
 @dataclass(frozen=True)
@@ -590,7 +602,7 @@ def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[S
         return SkyRLRunConfig(
             request=request,
             execution=cast(IrisSkyRLExecution, ctx.runtime_arg(_EXECUTION)),
-            launcher_requirement=MARIN_SKYRL.requirement(),
+            launcher_requirement=replace(MARIN_SKYRL, commit=spec.runtime.commit).requirement(),
         )
 
     return ArtifactStep(

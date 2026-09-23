@@ -1,0 +1,16 @@
+{
+  "completed": 347,
+  "completed_rewarded_or_exact_boxed": 241,
+  "completed_rewarded_or_terminal_boxed": 228,
+  "final_turn_boxed": 68,
+  "final_turn_boxed_exact_ground_truth": 42,
+  "final_turn_boxed_exact_unrewarded": 17,
+  "match_mode": "exact_string",
+  "membership_sha256": "d9ea04a7ab0747d31b186881c5cb10a597932a160241e94e6b8c12f5f26b2216",
+  "questions": 500,
+  "responses": "/home/romain/data/sources/devbox/score-centering/2026-09-21-snowball-full-pair-continuation2-tis-step5/val-math500.jsonl",
+  "rewarded_correct": 224,
+  "rewarded_correct_completed": 224,
+  "terminal_boxed_exact_ground_truth": 19,
+  "terminal_boxed_exact_unrewarded": 4
+}

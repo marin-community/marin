@@ -1,0 +1,22 @@
+{
+  "attempt": 1,
+  "checkpoint_s3": "s3://marin-us-east-02a/tmp/ttl=14d/skyrl/marin/users/romain/checkpoints/async-rl/snowball-default-set-8a955e17/2026.09.21.1/checkpoints/global_step_10",
+  "completed_optimizer_updates_after_resume": 0,
+  "driver_exception_s3": "s3://marin-us-east-02a/tmp/ttl=14d/skyrl/marin/users/romain/checkpoints/async-rl/snowball-default-set-8a955e17/2026.09.21.1/attempts/rendezvous/debug_artifacts/rank0-g83a1bc/outcomes/skyrl-entrypoint-driver.g83a1bc.9727.1789955808058088320.exception.json",
+  "failure": "S3 GetObject SlowDown while downloading the step-ten policy checkpoint; full optimizer restore did not complete",
+  "iris_job": "/romain/users-romain-checkpoints-async-rl-snowball-default-set-8a955e17-2026.09.21.1-1df146645f7a",
+  "recognized_resume_step": 10,
+  "reserved_h100_hours": 7.039778,
+  "state": "failed",
+  "task_seconds": [
+    633.58,
+    633.58,
+    633.58,
+    633.58,
+    633.58
+  ],
+  "task_seconds_total": 3167.9,
+  "wandb_run_id": "p4g0xa72",
+  "worker_stderr_s3": "s3://marin-us-east-02a/tmp/ttl=14d/skyrl/users/romain/users-romain-checkpoints-async-rl-snowball-default-set-8a955e17-2026.09.21.1-1df146645f7a/ray_session_logs/rank0-g83a1bc/session_latest/worker-92c7c28c8a565410ab159031ba943c41ebe15720bd9b88d8a86b9f19-06000000-14116.err",
+  "worker_stderr_sha256": "3f2b4f4ce34e03fecd9a214fd7f6b4b2092f89eb9a7566d88b0fdbc6ae4b6699"
+}

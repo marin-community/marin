@@ -1,0 +1,21 @@
+{
+  "arm": "flash_tis",
+  "attempt": 1,
+  "checkpoint": "s3://marin-us-east-02a/tmp/ttl=14d/skyrl/marin/users/romain/checkpoints/async-rl/snowball-default-set-6f0ff39c/2026.09.21.3/checkpoints/global_step_10",
+  "completed_optimizer_updates_after_resume": 0,
+  "error_type": "torch.OutOfMemoryError",
+  "failed_action": "initial post-restore policy weight broadcast",
+  "gpu_free_mib": 13.19,
+  "gpu_total_gib": 79.18,
+  "iris_job": "/romain/users-romain-checkpoints-async-rl-snowball-default-set-6f0ff39c-2026.09.21.3-6902c969a370",
+  "iris_task_seconds_total": 9872.49,
+  "pytorch_allocated_gib": 64.33,
+  "pytorch_reserved_unallocated_mib": 114.57,
+  "recognized_resume_step": 10,
+  "requested_mib": 32.0,
+  "reserved_h100_hours": 21.938867,
+  "runtime_commit": "26a4b7e13ab7aaa97ba9c86329d888af1ad19839",
+  "source_exception": "s3://marin-us-east-02a/tmp/ttl=14d/skyrl/marin/users/romain/checkpoints/async-rl/snowball-default-set-6f0ff39c/2026.09.21.3/attempts/rendezvous/debug_artifacts/rank0-g73a488/outcomes/skyrl-entrypoint-driver.g73a488.13872.1789965987457533598.exception.json",
+  "state": "failed",
+  "wandb_run_id": "3skpf0m2"
+}

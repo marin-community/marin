@@ -1,0 +1,21 @@
+{
+  "attempt": 0,
+  "checkpoint_s3": "s3://marin-us-east-02a/tmp/ttl=14d/skyrl/marin/users/romain/checkpoints/async-rl/snowball-default-set-8a955e17/2026.09.21.1/checkpoints/global_step_10",
+  "completed_optimizer_updates": 10,
+  "failed_action": "global_step_10 evaluation dump after successful full optimizer checkpoint",
+  "failure": "S3 PutObject SlowDown while writing evaluation results; Iris task reports a later Prometheus connection error during shutdown",
+  "iris_job": "/romain/users-romain-checkpoints-async-rl-snowball-default-set-8a955e17-2026.09.21.1-1df146645f7a",
+  "reserved_h100_hours": 61.753489,
+  "state": "failed",
+  "task_seconds": [
+    5557.814,
+    5557.814,
+    5557.814,
+    5557.814,
+    5557.814
+  ],
+  "task_seconds_total": 27789.07,
+  "wandb_run_id": "fmc3c94l",
+  "worker_stderr_s3": "s3://marin-us-east-02a/tmp/ttl=14d/skyrl/users/romain/users-romain-checkpoints-async-rl-snowball-default-set-8a955e17-2026.09.21.1-1df146645f7a/ray_session_logs/rank0-g73a488/session_latest/worker-a57a6ae4aa01f02035c86a43a768f17ec66f97b667927963ee7c0ba6-06000000-14125.err",
+  "worker_stderr_sha256": "a8bfb314e799492dcaa160e675ab1acc39d2cb5be4a9eda18b6b8b7e3219d6f6"
+}

@@ -1,0 +1,33 @@
+{
+  "arm": "tis",
+  "available_retained_records": 94,
+  "expected_training_batch_records": 128,
+  "note": "Cancellation interrupted retention publication; this describes the records preserved before teardown.",
+  "prompt_tokens": {
+    "max": 356,
+    "median": 151.0,
+    "min": 107,
+    "p90": 207,
+    "p95": 217,
+    "sum": 15181
+  },
+  "records_at_response_cap": 55,
+  "response_cap_tokens": 2560,
+  "response_tokens": {
+    "max": 2560,
+    "median": 2560.0,
+    "min": 207,
+    "p90": 2560,
+    "p95": 2560,
+    "sum": 174137
+  },
+  "source_prefix": "s3://marin-us-east-02a/tmp/ttl=14d/skyrl/marin/users/romain/checkpoints/async-rl/snowball-default-set-e41c3859/2026.09.21.10/attempts/trajectories/schema_v3/archives/phase=train/step=00000006/",
+  "total_tokens": {
+    "max": 2916,
+    "median": 2683.5,
+    "min": 335,
+    "p90": 2767,
+    "p95": 2777,
+    "sum": 189318
+  }
+}

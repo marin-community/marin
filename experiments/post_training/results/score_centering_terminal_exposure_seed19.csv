@@ -1,0 +1,2 @@
+step,epoch,run_a,run_b,consumed_a,consumed_b,intersection,union,jaccard
+40,0,r30,r31,1280,1280,1280,1280,1.0
