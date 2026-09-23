@@ -14,8 +14,10 @@ import math
 import os
 import shlex
 import sys
+from collections.abc import Sequence
 from datetime import timedelta
 from enum import StrEnum
+from typing import NoReturn
 
 import click
 import jmp
@@ -33,6 +35,7 @@ from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
+from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.training.training import temporary_checkpoint_base_path
 from rigging.filesystem.storage_path import prefix_join
 
@@ -215,7 +218,7 @@ def _active_params(cfg: GrugModelConfig) -> int:
 def _flat_cache_data_config(
     *,
     ctx: StepContext,
-    validation,
+    validation: Sequence[ArtifactStep[TokenizedCache]],
     tokenizer: str,
     train_cache_dir: str,
 ) -> LmDataConfig:
@@ -234,20 +237,39 @@ def _flat_cache_data_config(
             flat_cache=True,
         )
     }
+    training_data = LmDataConfig(
+        tokenizer=tokenizer,
+        cache_dir=None,
+        components=components,
+        train_weights={"train": 1.0},
+        auto_build_caches=False,
+    )
+    return _with_validation_components(ctx=ctx, training_data=training_data, validation=validation)
+
+
+def _with_validation_components(
+    *,
+    ctx: StepContext,
+    training_data: LmDataConfig,
+    validation: Sequence[ArtifactStep[TokenizedCache]],
+) -> LmDataConfig:
+    """Add zero-weight validation components to a training data configuration."""
     if ctx.is_fingerprint:
         val_components = {item.name: _val_component(ctx.artifact_path(item)) for item in validation}
     else:
         val_components = {item.name: ctx.resolved(item).as_component() for item in validation}
-    collisions = components.keys() & val_components.keys()
+    collisions = training_data.components.keys() & val_components.keys()
     if collisions:
-        raise ValueError(f"validation components collide with the training component: {sorted(collisions)}")
-    train_weights = {"train": 1.0, **{name: 0.0 for name in val_components}}
-    return LmDataConfig(
-        tokenizer=tokenizer,
-        cache_dir=None,
-        components={**components, **val_components},
-        train_weights=train_weights,
-        auto_build_caches=False,
+        raise ValueError(f"validation components collide with training components: {sorted(collisions)}")
+
+    zero_weights = {name: 0.0 for name in val_components}
+    weights = training_data.train_weights
+    if not isinstance(weights, dict):
+        raise ValueError("fast-track training data requires fixed dictionary weights")
+    return dataclasses.replace(
+        training_data,
+        components={**training_data.components, **val_components},
+        train_weights={**weights, **zero_weights},
     )
 
 
@@ -261,7 +283,8 @@ def build_h100_ladder_run(
     wandb_project: str = DEFAULT_WANDB_PROJECT,
     version: str | None = None,
     tokenizer: str = V16384_TOKENIZER,
-    train_cache_dir: str = V16384_CACHE_DIR,
+    train_cache_dir: str | None = None,
+    training_data: LmDataConfig | None = None,
     vocab_size: int = V16384_VOCAB,
     no_eval: bool = False,
     dense: bool = False,
@@ -278,6 +301,14 @@ def build_h100_ladder_run(
         raise ValueError("run_id must not be empty")
     if not wandb_project.strip():
         raise ValueError("wandb_project must not be empty")
+    if training_data is not None and training_data.tokenizer != tokenizer:
+        raise ValueError(
+            f"training_data tokenizer {training_data.tokenizer!r} does not match requested tokenizer {tokenizer!r}"
+        )
+    if training_data is not None and train_cache_dir is not None:
+        raise ValueError("training_data and train_cache_dir are mutually exclusive")
+    if training_data is None and train_cache_dir is None:
+        train_cache_dir = V16384_CACHE_DIR
 
     rung = _h100_ladder_rung(size)
     model = dataclasses.replace(_h100_ladder_model(rung, dense=dense), vocab_size=vocab_size)
@@ -396,9 +427,12 @@ def build_h100_ladder_run(
                 keep_last_temporary_checkpoints=1,
             ),
         )
-        data = _flat_cache_data_config(
-            ctx=ctx, validation=validation, tokenizer=tokenizer, train_cache_dir=train_cache_dir
-        )
+        if training_data is None:
+            data = _flat_cache_data_config(
+                ctx=ctx, validation=validation, tokenizer=tokenizer, train_cache_dir=train_cache_dir
+            )
+        else:
+            data = _with_validation_components(ctx=ctx, training_data=training_data, validation=validation)
         return GrugRunConfig(
             model=model,
             data=data,
@@ -438,15 +472,27 @@ _DEFAULT_TARGET_CLUSTER = "cw-rno2a"  # override with IRIS_CLUSTER; cw-rno2a and
 _WANDB_PROJECT = "marin_moe"
 
 
-def _submit_to_cluster(run_id: str) -> None:
-    """Re-exec this launcher as an Iris H100 job: wrap the same launcher args in ``iris job run ... --
-    python -m ...launch <args> --run``. Replaces the old ``irun`` shell wrapper. Never returns."""
+def submit_to_cluster(
+    run_id: str,
+    *,
+    module: str = "experiments.grug.fast_track.launch",
+    job_name: str | None = None,
+    dependency_groups: Sequence[str] = (),
+    coordinator_args: Sequence[str] = (),
+    require_wandb: bool = True,
+    allow_disabled_wandb: bool = False,
+) -> NoReturn:
+    """Run the current command in an Iris coordinator job."""
     launch_args = [a for a in sys.argv[1:] if a != "--submit"]
     if "--run" not in launch_args:
         launch_args.append("--run")
     wandb_key = os.environ.get("WANDB_API_KEY")
-    if not wandb_key:
-        raise click.ClickException("WANDB_API_KEY must be set in the environment to submit a cluster run.")
+    wandb_mode = os.environ.get("WANDB_MODE")
+    if require_wandb and not wandb_key and not (allow_disabled_wandb and wandb_mode == "disabled"):
+        message = "Set WANDB_API_KEY."
+        if allow_disabled_wandb:
+            message = "Set WANDB_API_KEY, or set WANDB_MODE=disabled for an untracked run."
+        raise click.ClickException(message)
     target_cluster = os.environ.get("IRIS_CLUSTER", _DEFAULT_TARGET_CLUSTER)
     cmd = [
         "uv",
@@ -458,25 +504,21 @@ def _submit_to_cluster(run_id: str) -> None:
         "run",
         "--no-wait",
         "--enable-extra-resources",
+        *[item for group in dependency_groups for item in ("--extra", group)],
+        *coordinator_args,
         "--target-cluster",
         target_cluster,
         "--priority",
         "interactive",
         "--job-name",
-        f"{run_id}-coord",
-        "-e",
-        "WANDB_API_KEY",
-        wandb_key,
-        "-e",
-        "WANDB_PROJECT",
-        _WANDB_PROJECT,
-        "--",
-        "python",
-        "-m",
-        "experiments.grug.fast_track.launch",
-        *launch_args,
+        job_name or f"{run_id}-coord",
     ]
-    printable = " ".join(shlex.quote("$WANDB_API_KEY" if c == wandb_key else c) for c in cmd)
+    if wandb_key:
+        cmd.extend(["-e", "WANDB_API_KEY", wandb_key, "-e", "WANDB_PROJECT", _WANDB_PROJECT])
+    elif require_wandb and wandb_mode == "disabled":
+        cmd.extend(["-e", "WANDB_MODE", wandb_mode])
+    cmd.extend(["--", "python", "-m", module, *launch_args])
+    printable = " ".join(shlex.quote("$WANDB_API_KEY" if wandb_key and c == wandb_key else c) for c in cmd)
     click.echo(f"submitting: {printable}", err=True)
     os.execvp(cmd[0], cmd)
 
@@ -530,7 +572,7 @@ def main(
     submit: bool,
 ) -> ArtifactStep[ThroughputResult]:
     if submit:
-        _submit_to_cluster(run_id)  # re-execs iris; never returns
+        submit_to_cluster(run_id)
     return build_h100_ladder_run(
         run_id=run_id,
         size=size,

@@ -8,6 +8,7 @@ below from 9.4e16 to 4.3e19 FLOPs.
 | file | contents |
 |------|----------|
 | [`launch.py`](launch.py) | ladder rungs, budget resolution (`--match`), Iris/W&B wiring |
+| [`data_pipeline.py`](data_pipeline.py) | raw data, DataKit, store mixture, training, and eval wiring |
 | [`model.py`](model.py) | the transformer: attention, GatedNorm, SConv, QB-routed MoE |
 | [`train.py`](train.py) | trainer/eval/loss wiring and runtime (XLA) defaults |
 | [`optimizer.py`](optimizer.py) | MuonH optimizer config: LR groups + hyperball step |
@@ -131,3 +132,39 @@ uv run fast-track --submit --run-id probe-d1280 --size d1280 --num-steps 20 --no
 
 Results land in W&B `marin-community/marin_moe`; eval bpb keys are `eval/paloma/macro_bpb`,
 `eval/uncheatable_eval/macro_bpb` (MoE dropless eval logs under the normal `eval/` prefix).
+
+## End-to-end data runs
+
+`fast-track-data` runs the production DataKit graph at its small scale. It then reads the
+cluster-by-quality store, builds the training mixture, and starts the same fast-track trainer and
+in-run evaluation as `fast-track`.
+
+Run a short dense experiment on the curated sample:
+
+```bash
+uv run fast-track-data --submit --run-id data-token-weighted --size d512 --dense \
+    --sources cp/arxiv_abstracts,cp/wikiteam,starcoder2/ir_python \
+    --num-steps 20 --batch-size 8 --weighting token_proportional --version 2026.09.23
+```
+
+Change only the mixture. The second command uses the same DataKit store:
+
+```bash
+uv run fast-track-data --submit --run-id data-uniform --size d512 --dense \
+    --sources cp/arxiv_abstracts,cp/wikiteam,starcoder2/ir_python \
+    --num-steps 20 --batch-size 8 --weighting uniform --version 2026.09.23
+```
+
+Test exact duplicate removal with one raw document repeated 1,000 times, then train and evaluate on
+the one surviving document:
+
+```bash
+uv run fast-track-data --submit --run-id repeated-document \
+    --source-mode repeated_document --num-steps 20 --batch-size 8 --dense
+```
+
+Use `--source-mode registry --sources <name>` to start from a registered raw source. Sample mode is
+the fast default and starts from the existing normalized sample. Use `--run` only in an Iris
+environment; without `--run` or `--submit`, the command does not start work. Set
+`WANDB_MODE=disabled` to run without a W&B record. The training mixture omits each bucket that has
+fewer tokens than one model sequence.
