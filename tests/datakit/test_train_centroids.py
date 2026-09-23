@@ -3,6 +3,7 @@
 
 import contextlib
 import io
+import sys
 from types import SimpleNamespace
 
 import numpy as np
@@ -27,12 +28,12 @@ def test_train_centroids_without_coarse_views_skips_linkage(monkeypatch):
     monkeypatch.setattr(train, "_save_npy", lambda _array, _path, name: saved.append(name))
     monkeypatch.setattr(train, "open_url", lambda *_args: contextlib.nullcontext(io.StringIO()))
     monkeypatch.setitem(
-        __import__("sys").modules,
+        sys.modules,
         "faiss",
         SimpleNamespace(Kmeans=FakeKmeans, omp_set_num_threads=lambda _threads: None),
     )
     monkeypatch.setitem(
-        __import__("sys").modules,
+        sys.modules,
         "threadpoolctl",
         SimpleNamespace(threadpool_limits=lambda **_kwargs: contextlib.nullcontext()),
     )

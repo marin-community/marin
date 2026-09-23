@@ -6,6 +6,7 @@
 import argparse
 
 from fray.types import ResourceConfig
+from marin.datakit import CPU_DATAKIT_DEPENDENCY_GROUPS
 from marin.datakit.normalize import NormalizedData
 from marin.datakit.source_key import datakit_source_path
 from marin.execution.artifact import read_artifact
@@ -63,7 +64,7 @@ def build_steps(endpoint_name: str, partition_index: int = 0, partition_count: i
                     output_path, normalized_path, endpoint_name
                 ),
                 resources=ResourceConfig(cpu=2, ram="8g", disk="8g"),
-                pip_dependency_groups=["datakit"],
+                pip_dependency_groups=CPU_DATAKIT_DEPENDENCY_GROUPS,
             ),
         )
         for source_name, normalized in sources
