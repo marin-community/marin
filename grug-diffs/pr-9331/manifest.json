@@ -1,0 +1,22 @@
+{
+  "added_variants": [
+    "fast_track"
+  ],
+  "base_sha": "a515b26321400444ae27e4ebd27db034e7794ef1",
+  "head_sha": "ffba4be30a33ba2a8c9eaecb59038a2920491e98",
+  "report_count": 1,
+  "reports": [
+    {
+      "closest_variant": "base",
+      "distance_score": 4117,
+      "report_relpath": "fast_track/index.html",
+      "status_counts": {
+        "added": 9,
+        "changed": 3,
+        "removed": 0,
+        "unchanged": 1
+      },
+      "variant": "fast_track"
+    }
+  ]
+}
