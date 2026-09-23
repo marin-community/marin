@@ -16,5 +16,4 @@ package = false
 prerelease = "allow"
 
 [tool.uv.sources]
-# Pin the trajectory-archive fix until marin-community/harbor#210 merges to main.
 harbor = { git = "https://github.com/marin-community/harbor.git", rev = "e9b1fa58b2857a0619506a9bbffbd27b3dc5a730" }
