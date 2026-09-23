@@ -21,6 +21,8 @@ NODE_POOLS = "/apis/compute.coreweave.com/v1alpha1/nodepools"
 
 def install_finelog_dialect_macros(database) -> None:
     """Teach a DuckDB connection the finelog spellings the dashboards write."""
+    # DataFusion puts NULLs first under DESC; DuckDB's default puts them last.
+    database.execute("SET default_null_order = 'nulls_last_on_asc_first_on_desc'")
     database.execute("CREATE MACRO to_timestamp_millis(value) AS to_timestamp(value / 1000.0)::TIMESTAMP")
     database.execute("CREATE MACRO date_bin(width, moment) AS time_bucket(width, moment)")
     database.execute("CREATE MACRO json_get(document, key) AS json_extract_string(document, '$.' || key)")

@@ -890,6 +890,14 @@ def test_policy_train_share_reproduces_the_measured_ninety_percent(store) -> Non
 
 
 def test_the_decomposition_reads_the_critical_rank_and_never_a_per_phase_maximum(store) -> None:
+    # A NULL policy_ppo_train on the fast rank. Finelog sorts NULLs first under DESC, so without
+    # NULLS LAST this row would make rank 0 the slowest.
+    store.execute(
+        """INSERT INTO "telemetry_v1.marinskyrl"
+           SELECT * REPLACE (CAST(NULL AS DOUBLE) AS value, seq + 1000 AS seq)
+           FROM "telemetry_v1.marinskyrl"
+           WHERE json_get(attributes_json, 'phase') = 'policy_ppo_train' AND json_get(attributes_json, 'rank') = '0'"""
+    )
     rows = _panel_rows(store, "policy_ppo_train spans on the slowest rank")
 
     bands = {series: seconds for _, series, seconds in rows}
