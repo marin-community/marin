@@ -5,9 +5,12 @@ operations inspired by the inspected source repositories plus additional computa
 Repository mappings describe the source of an operation; actual CLI/API execution is tracked separately
 in the [catalog](bio-task-catalog.md#repository-execution-coverage). See [build instructions](bio-tasks.md).
 
-All instances have construction references, independent input-reading solvers, and scientific negative
+All instances have independently checked references, input-reading solvers, and scientific negative
 controls. Host checks do not establish container execution or scientific approval. The supplied format
 profiles are bounded: text intermediates do not count as native BAM, H5AD, SRA, or OME-TIFF coverage.
+
+Real-data recipes retain full source observations and biological lineage; the remaining recipes are simulated
+correctness controls. See [provenance and limitations](bio-task-catalog.md#id-workflow-coverage-and-input-realism).
 
 ## Sequence
 
@@ -50,6 +53,10 @@ profiles are bounded: text intermediates do not count as native BAM, H5AD, SRA, 
 
 | Recipe | Difficulty | Supplied formats | Skills | Repository operations |
 |---|---|---|---|---|
+| `real-rnaseq-library-qc` | medium | gene-count-tsv, sample-metadata-tsv | sample-identifiers, biological-replicates, raw-counts, library-normalization | edgeR |
+| `real-rnaseq-cpm-filter` | medium | gene-count-tsv, sample-metadata-tsv | sample-identifiers, biological-replicates, raw-counts, library-normalization | edgeR |
+| `real-rnaseq-size-factors` | medium | gene-count-tsv, sample-metadata-tsv | sample-identifiers, biological-replicates, raw-counts, library-normalization | DESeq2 |
+| `real-rnaseq-normalized-contrast` | medium | gene-count-tsv, sample-metadata-tsv | sample-identifiers, biological-replicates, raw-counts, library-normalization | DESeq2 |
 | `donor-counts` | medium | csv-header | sample-joins, raw-counts, biological-replication | Scanpy |
 | `cell-fractions` | medium | csv-header | sample-joins, cohort-selection, denominators | Scanpy |
 | `transcript-tpm` | medium | csv-header | transcript-joins, abundance-units, decoys | Salmon, kallisto |
@@ -151,6 +158,8 @@ profiles are bounded: text intermediates do not count as native BAM, H5AD, SRA, 
 
 | Recipe | Difficulty | Supplied formats | Skills | Repository operations |
 |---|---|---|---|---|
+| `real-mmcif-chain-geometry` | medium | mmCIF | experimental-structures, author-residue-identifiers, alternate-conformers, coordinate-geometry | Biopython |
+| `real-mmcif-contact-degree` | medium | mmCIF | experimental-structures, author-residue-identifiers, alternate-conformers, coordinate-geometry | Biopython |
 | `pdb-ca-distances` | medium | pdb3.3-atom-profile | fixed-width-atoms, alternate-locations, insertion-codes | Additional domain coverage |
 | `mmcif-chain-centroids` | medium | mmcif-atom-site | atom-site-loop, author-versus-label-ids, models | Additional domain coverage |
 | `pdb-contact-map` | medium | pdb3.3-atom-profile | residue-contacts, local-neighbor-exclusion, distance-units | Additional domain coverage |

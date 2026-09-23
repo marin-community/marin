@@ -83,7 +83,9 @@
       "recipes": [
         "design-estimability",
         "bulk-size-factors",
-        "sample-sheet-lanes"
+        "sample-sheet-lanes",
+        "real-rnaseq-size-factors",
+        "real-rnaseq-normalized-contrast"
       ],
       "source_url": "https://github.com/thelovelab/DESeq2/blob/9e885b581380291797f2777145c395f50aaaa72b/tests/testthat/test_model_matrix.R",
       "tool_execution": {
@@ -342,7 +344,9 @@
       "recipes": [
         "strand-extraction",
         "gtf-splicing",
-        "gff-cds-translation"
+        "gff-cds-translation",
+        "real-mmcif-chain-geometry",
+        "real-mmcif-contact-degree"
       ],
       "source_url": "https://github.com/biopython/biopython/blob/08fc09086afe0b57215d2515660e0c032b55c0dd/Tests/test_SeqFeature.py",
       "tool_execution": {
@@ -455,7 +459,9 @@
       "index": 25,
       "name": "edgeR",
       "recipes": [
-        "bulk-cpm-filter"
+        "bulk-cpm-filter",
+        "real-rnaseq-library-qc",
+        "real-rnaseq-cpm-filter"
       ],
       "source_url": "https://github.com/bioconductor-source/edgeR/blob/8986864d8f92dac37925ef641fcd6c4161130551/R/cpm.R",
       "tool_execution": {

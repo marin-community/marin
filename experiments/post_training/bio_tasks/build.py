@@ -15,6 +15,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import zipfile
 from collections import Counter
 from dataclasses import asdict, dataclass, replace
@@ -26,7 +27,8 @@ import pyarrow.parquet as pq
 import tomlkit
 
 from experiments.post_training.bio_tasks.contract import grade_answer
-from experiments.post_training.bio_tasks.recipe_types import Instance, Recipe
+from experiments.post_training.bio_tasks.real_data import source_catalog
+from experiments.post_training.bio_tasks.recipe_types import DataOrigin, Instance, Recipe
 from experiments.post_training.bio_tasks.recipes import RECIPES
 from experiments.post_training.tasktrove.task_format import dockerfile_id, render_task_toml
 from experiments.post_training.tasktrove.taskbinary import TaskFiles, write_task_binary
@@ -154,8 +156,7 @@ def task_files(recipe: Recipe, instance: Instance, task: Identity, base_image: s
         "lineage": task.lineage,
         "split": task.split,
         "difficulty": recipe.difficulty.value,
-        "scale_profile": "small-fixture",
-        "workflow_scope": "component",
+        **instance_provenance(instance),
         "domain": recipe.domain,
         "repositories": list(recipe.repositories),
         "tool_execution": "pending",
@@ -199,12 +200,31 @@ def task_files(recipe: Recipe, instance: Instance, task: Identity, base_image: s
     return TaskFiles(files)
 
 
+def instance_provenance(instance: Instance) -> dict:
+    return {
+        "data_origin": instance.data_origin.value,
+        "biological_sources": list(instance.source_ids),
+        "biological_lineages": [source_catalog()[source]["lineage"] for source in instance.source_ids],
+        "derivation": instance.derivation,
+        "scale_profile": "small-fixture" if instance.data_origin == DataOrigin.SIMULATED else "observed-study",
+        "workflow_scope": "component",
+        "training_ready": False,
+    }
+
+
 def inspection_page(root: Path, task: Identity, instance: Instance, files: TaskFiles, validation: dict) -> None:
     inputs = "".join(
         f"<details><summary>{html.escape(name)}</summary><pre>{html.escape(text[:8000])}</pre>" "</details>"
         for name, text in instance.inputs.items()
     )
     sections = {
+        "Biological data provenance": json.dumps(
+            {
+                "instance": instance_provenance(instance),
+                "sources": {key: source_catalog()[key] for key in instance.source_ids},
+            },
+            indent=2,
+        ),
         "Exact instruction": files.text("instruction.md"),
         "Expected output (private)": json.dumps(instance.contract.answer(), indent=2),
         "Validation controls": json.dumps(validation, indent=2),
@@ -221,7 +241,8 @@ def inspection_page(root: Path, task: Identity, instance: Instance, files: TaskF
         "<style>body{max-width:1000px;margin:2rem auto;font:16px system-ui}"
         "pre{white-space:pre-wrap;background:#f4f4f4;padding:1rem}details{margin:1rem 0}</style>"
         '<a href="../index.html">Corpus</a><h1>' + html.escape(task.task_id) + "</h1>"
-        "<p>Small correctness fixture; component coverage, not an end-to-end workflow. "
+        f"<p>Data origin: <strong>{instance.data_origin.value}</strong>. "
+        f"{html.escape(instance.derivation)}</p><p>Component coverage; end-to-end workflow validation is pending. "
         "Scientific review pending. Private inspection view; never mount this directory in solver environments. "
         "Input previews are limited to 8,000 characters; complete files are in the task bundle.</p>"
         + content
@@ -229,6 +250,49 @@ def inspection_page(root: Path, task: Identity, instance: Instance, files: TaskF
         + inputs
     )
     (root / "inspect" / f"{task.task_id}.html").write_text(page)
+
+
+def benchmark_page(output: Path, registry: dict) -> None:
+    rows = []
+    for task in registry["tasks"]:
+        source = registry["benchmarks"][task["benchmark"]]
+        examples = " ".join(
+            f'<a href="inspect/{identifier}.html">{html.escape(identifier)}</a>' for identifier in task["examples"]
+        )
+        details = html.escape(json.dumps({key: value for key, value in task.items() if key != "examples"}, indent=2))
+        rows.append(
+            f'<tr data-benchmark="{html.escape(task["benchmark"])}" data-status="{task["status"]}">'
+            f'<td>{html.escape(task["benchmark"])}</td><td><a href="{html.escape(source["source_url"])}">'
+            f'{html.escape(task["task_id"])}</a></td><td>{task["status"]}</td>'
+            "<td><details><summary>Stages, gaps and evidence</summary>"
+            f"<pre>{details}</pre>{examples}</details></td></tr>"
+        )
+    summaries = Counter(task["status"] for task in registry["tasks"])
+    options = "".join(f"<option>{html.escape(name)}</option>" for name in registry["benchmarks"])
+    statuses = "".join(f"<option>{name}</option>" for name in registry["status_definitions"])
+    page = (
+        '<!doctype html><meta charset="utf-8"><title>ID task coverage</title>'
+        "<style>body{margin:2rem;font:16px system-ui}td,th{padding:.5rem;text-align:left;vertical-align:top}"
+        "pre{white-space:pre-wrap;max-width:70rem}select,input{padding:.5rem}[hidden]{display:none}</style>"
+        '<a href="index.html">Corpus</a><h1>ID task coverage</h1>'
+        f'<p>{len(registry["tasks"])} task identifiers. {html.escape(str(dict(summaries)))}</p>'
+        "<p>Component mappings identify shared operations. They do not establish benchmark workflow coverage. "
+        "Reference runtimes below measure local solver checks, not teacher attempts. "
+        "Restricted task formulations remain evaluation-only.</p>"
+        '<p><a href="benchmark_coverage.json">Download pinned registry</a></p>'
+        '<input id="search" type="search" placeholder="Search IDs, stages or gaps" aria-label="Search tasks">'
+        f'<select id="benchmark" aria-label="Benchmark"><option value="">All benchmarks</option>{options}</select>'
+        f'<select id="status" aria-label="Coverage status"><option value="">All statuses</option>{statuses}</select>'
+        "<table><thead><tr><th>Benchmark</th><th>Task</th><th>Coverage</th><th>Details</th></tr></thead><tbody>"
+        + "".join(rows)
+        + '</tbody></table><script>const q=document.querySelector("#search"),b=document.querySelector("#benchmark"),'
+        's=document.querySelector("#status");function filter(){for(const r of document.querySelectorAll("tbody tr"))'
+        "{r.hidden=!(r.textContent.toLowerCase().includes(q.value.toLowerCase())&&"
+        "(!b.value||r.dataset.benchmark===b.value)&&(!s.value||r.dataset.status===s.value));}}"
+        'q.addEventListener("input",filter);b.addEventListener("change",filter);'
+        's.addEventListener("change",filter);</script>'
+    )
+    (output / "benchmark-coverage.html").write_text(page)
 
 
 def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, tool_ref: str) -> dict:
@@ -249,15 +313,25 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
     coverage = json.loads(coverage_bytes)["repositories"]
     native_evidence = (SOURCE_DIR / "native_validation.json").read_bytes()
     (output / "native_validation.json").write_bytes(native_evidence)
+    data_sources = (SOURCE_DIR / "data_sources.json").read_bytes()
+    (output / "data_sources.json").write_bytes(data_sources)
+    benchmark_bytes = (SOURCE_DIR / "benchmark_coverage.json").read_bytes()
+    benchmark_registry = json.loads(benchmark_bytes)
+    known_recipes = {recipe.id for recipe in RECIPES}
+    for task in benchmark_registry["tasks"]:
+        if unknown := set(task["recipes"]) - known_recipes:
+            raise ValueError(f"Unknown benchmark coverage recipes: {unknown}")
     counts: Counter = Counter()
     dockerfiles = {}
     recipe_sections = []
+    examples: dict[str, list[dict]] = {}
+    origins: Counter = Counter()
     seen_inputs = set()
     seen_targets = set()
     previous_answers: dict[str, list[str]] = {}
     manifest = {
         "schema_version": 1,
-        "corpus_stage": "small-authoring-fixtures",
+        "corpus_stage": "authoring-candidates-and-controls",
         "training_ready": False,
         "seed": seed,
         "instances_per_recipe": instances_per_recipe,
@@ -274,6 +348,8 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
         "source_inventory_sha256": hashlib.sha256(inventory).hexdigest(),
         "repository_coverage_sha256": hashlib.sha256(coverage_bytes).hexdigest(),
         "native_validation_sha256": hashlib.sha256(native_evidence).hexdigest(),
+        "data_sources_sha256": hashlib.sha256(data_sources).hexdigest(),
+        "benchmark_mapping_source_sha256": hashlib.sha256(benchmark_bytes).hexdigest(),
         "repository_tool_execution": {row["name"]: row["tool_execution"] for row in coverage},
     }
     # A failed generation leaves an explicit incomplete manifest, never an apparently finished release.
@@ -303,7 +379,9 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
                     )
                 seen_inputs.add(input_hash)
                 seen_targets.add((recipe.id, target_hash))
+                validation_start = time.monotonic()
                 validation = validate_instance(recipe, instance)
+                validation_runtime = time.monotonic() - validation_start
                 if recipe.id in previous_answers:
                     if any(
                         grade_answer(instance.contract, answer).reward != 0 for answer in previous_answers[recipe.id]
@@ -332,6 +410,7 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
                         recipe.difficulty.value,
                         task.split,
                         "offline",
+                        f"data-origin:{instance.data_origin.value}",
                         f"domain:{recipe.domain}",
                         *[f"repository:{name}" for name in recipe.repositories],
                         *recipe.skills,
@@ -356,8 +435,7 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
                     "network": "offline",
                     "input_sha256": input_hash,
                     "input_bytes": sum(len(text.encode("utf-8")) for text in instance.inputs.values()),
-                    "scale_profile": "small-fixture",
-                    "workflow_scope": "component",
+                    **instance_provenance(instance),
                     "distinct_instance_draw": draw,
                     "target_sha256": target_hash,
                     "task_sha256": hashlib.sha256(blob).hexdigest(),
@@ -366,6 +444,8 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
                     "teacher_attempts": 0,
                 }
                 ledger.write(json.dumps(entry) + "\n")
+                examples.setdefault(recipe.id, []).append({**entry, "reference_validation_seconds": validation_runtime})
+                origins[instance.data_origin.value] += 1
                 inspection_page(output, task, instance, files, validation)
                 index_rows.append(
                     f'<tr><td><a href="inspect/{task.task_id}.html">{task.task_id}</a></td>'
@@ -377,9 +457,11 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
                 counts[recipe.id] += 1
             recipe_sections.append(
                 f'<section class="recipe" data-domain="{html.escape(recipe.domain)}" '
+                f'data-origin="{instance.data_origin.value}" '
                 f'id="{html.escape(recipe.id)}"><h2>{html.escape(recipe.id)}</h2>'
                 f"<p>{instances_per_recipe} examples · {recipe.difficulty.value}<br>"
                 f"Domain: {html.escape(recipe.domain)}<br>"
+                f"Data origin: <strong>{instance.data_origin.value}</strong><br>"
                 "Repository-derived operations: "
                 f"{html.escape(', '.join(recipe.repositories)) or 'Additional domain coverage'}"
                 "<br>Tool availability in generated task environment: pending<br>"
@@ -398,7 +480,27 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
         recipe_formats={recipe.id: recipe.formats for recipe in RECIPES},
         recipe_domains={recipe.id: recipe.domain for recipe in RECIPES},
         domain_counts=dict(Counter(recipe.domain for recipe in RECIPES)),
+        data_origin_counts=dict(origins),
     )
+    for task in benchmark_registry["tasks"]:
+        entries = [entry for recipe in task["recipes"] for entry in examples[recipe]]
+        task["examples"] = [entry["task_id"] for entry in entries]
+        task["validation_evidence"] = [
+            {
+                "task_id": entry["task_id"],
+                "task_sha256": entry["task_sha256"],
+                "data_origin": entry["data_origin"],
+                "sources": entry["biological_sources"],
+                "independent_solver": "passed",
+                "reference_validation_seconds": entry["reference_validation_seconds"],
+            }
+            for entry in entries
+        ]
+    registry_bytes = (json.dumps(benchmark_registry, indent=2) + "\n").encode()
+    (output / "benchmark_coverage.json").write_bytes(registry_bytes)
+    manifest["benchmark_coverage_sha256"] = hashlib.sha256(registry_bytes).hexdigest()
+    manifest["benchmark_coverage_counts"] = dict(Counter(task["status"] for task in benchmark_registry["tasks"]))
+    benchmark_page(output, benchmark_registry)
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     domain_options = "".join(
         f'<option value="{html.escape(domain)}">{html.escape(domain)} ({count} recipes)</option>'
@@ -420,8 +522,9 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
         "are pending. No teacher attempts have run.</p>"
         f"<p>{len(RECIPES)} recipes &times; {instances_per_recipe} examples = {counts['train']} tasks. "
         "All tasks belong to the train split.</p>"
-        "<p>These are small correctness fixtures for component skills. Realistic input sizes and "
-        "dependent workflows matching the ID benchmarks have not yet been validated.</p>"
+        f"<p>Data origins: {html.escape(str(dict(origins)))}. Real observations are authoring candidates; "
+        "simulated examples are small correctness controls. Benchmark data-lineage exclusion, scientific review "
+        "and end-to-end workflow validation remain pending.</p>"
         "<p>All 50 source repositories have an explicit recipe mapping below. The table tracks separately "
         "recorded package checks. Generated task environments still contain Python only; package checks "
         "do not establish tool availability in Harbor or teacher tool use.</p>"
@@ -429,6 +532,9 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
         "Newick, Matrix Market, PDB, mmCIF, SBML, MGF and PGM are supplied where labeled; H5AD, BAM, "
         "native SRA, and OME-TIFF are not covered by their text intermediates.</p>"
         '<p><a href="native_validation.json">Recorded package reference checks</a></p>'
+        '<p><a href="benchmark-coverage.html">Inspect coverage of all '
+        f'{len(benchmark_registry["tasks"])} ID tasks</a> · '
+        '<a href="data_sources.json">Biological sources and provenance</a></p>'
         "<details><summary>All 50 repositories: scientific operation and execution status</summary>"
         "<table><thead><tr><th>#</th><th>Repository</th><th>Recipes</th><th>CLI/API execution</th></tr></thead><tbody>"
         + repository_rows
@@ -437,16 +543,21 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
         'aria-label="Search recipes"><select id="domain" aria-label="Filter domain">'
         '<option value="">All domains</option>'
         + domain_options
-        + '</select><span id="visible"></span></div>'
+        + '</select><select id="origin" aria-label="Data origin"><option value="real">Real data</option>'
+        '<option value="">All origins</option><option value="simulated">Simulated controls</option>'
+        '<option value="modified-real">Modified real data</option></select><span id="visible"></span></div>'
         + "\n".join(recipe_sections)
-        + "<script>const search=document.querySelector('#search'),domain=document.querySelector('#domain');"
+        + "<script>const search=document.querySelector('#search'),domain=document.querySelector('#domain'),"
+        "origin=document.querySelector('#origin');"
         "function filter(){let n=0;for(const s of document.querySelectorAll('.recipe')){"
         "s.hidden=!(s.textContent.toLowerCase().includes(search.value.toLowerCase())&&"
-        "(!domain.value||s.dataset.domain===domain.value));if(!s.hidden)n++;}"
+        "(!domain.value||s.dataset.domain===domain.value)&&"
+        "(!origin.value||s.dataset.origin===origin.value));if(!s.hidden)n++;}"
         "document.querySelector('#visible').textContent=n+' recipes';}"
-        "search.addEventListener('input',filter);domain.addEventListener('change',filter);filter();"
+        "search.addEventListener('input',filter);domain.addEventListener('change',filter);"
+        "origin.addEventListener('change',filter);filter();"
         "document.querySelectorAll('a[href^=\"#\"]').forEach(a=>a.addEventListener('click',()=>{"
-        "search.value='';domain.value='';filter();}));</script>"
+        "search.value='';domain.value='';origin.value='';filter();}));</script>"
     )
     return manifest
 

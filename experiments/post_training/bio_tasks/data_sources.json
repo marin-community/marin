@@ -1,0 +1,126 @@
+{
+  "schema_version": 1,
+  "training_ready": false,
+  "sources": {
+    "GSE60450": {
+      "landing_page": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE60450",
+      "lineage": "GSE60450",
+      "license": "CC-BY-4.0",
+      "license_source": "https://zenodo.org/records/4249555",
+      "citation": "Fu et al., 2015, PMID:25730472, GEO:GSE60450; count-data redistribution by Helena Rasche, doi:10.5281/zenodo.4249555",
+      "retrieved_at": "2026-09-23",
+      "data_origin": "real",
+      "benchmark_screening": "No matching accession/structure IDs in the pinned BixBench, CompBioBench, BiomniBench-DA and BioAgent metadata inspected. Full artifact-lineage exclusion remains pending; not cleared for training export. BioMysteryBench data were not deanonymized.",
+      "assets": {
+        "gse60450-counts.txt.gz": {
+          "url": "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE60nnn/GSE60450/suppl/GSE60450_Lactation-GenewiseCounts.txt.gz",
+          "download_sha256": "906b6ec4c33e95ca0ba454a3e0d07ad74e9cb7528ee38b89a9b122f5674a5f0d",
+          "content_sha256": "128d2411f3169de0cac9963c30152bb5c9a3083ac80fd25651b97cf4b7304691",
+          "vendored_sha256": "7ab2ad6376df1c6bf72618c26ef30b4dc206d8edb9e98e6e7fec291697b60a1c",
+          "content_bytes": 1340161,
+          "vendored_bytes": 507914,
+          "transformation": "Content unchanged; gzip level 9, mtime 0."
+        },
+        "gse60450-series.txt.gz": {
+          "url": "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE60nnn/GSE60450/matrix/GSE60450_series_matrix.txt.gz",
+          "download_sha256": "8b3b727e7c8a7794c2bda57d62109c4cecdb9dc6eaac579a8cfa7e8921638267",
+          "content_sha256": "842c11195f5746609a601aae99f19348187da3da461785b98f7f47a44f4b6108",
+          "vendored_sha256": "0e9c986ffc5090ca79aa7ff3923eee3e822f10c17511688ccb30224f8e185b25",
+          "content_bytes": 24894,
+          "vendored_bytes": 2631,
+          "transformation": "Content unchanged; gzip level 9, mtime 0."
+        }
+      }
+    },
+    "PDB:1UBQ": {
+      "landing_page": "https://www.rcsb.org/structure/1UBQ",
+      "lineage": "PDB:1UBQ",
+      "license": "CC0-1.0",
+      "license_source": "https://www.rcsb.org/pages/usage-policy",
+      "citation": "https://doi.org/10.2210/pdb1UBQ/pdb",
+      "retrieved_at": "2026-09-23",
+      "data_origin": "real",
+      "benchmark_screening": "No matching accession/structure IDs in the pinned BixBench, CompBioBench, BiomniBench-DA and BioAgent metadata inspected. Full artifact-lineage exclusion remains pending; not cleared for training export. BioMysteryBench data were not deanonymized.",
+      "assets": {
+        "1ubq.cif.gz": {
+          "url": "https://files.rcsb.org/download/1UBQ.cif",
+          "download_sha256": "056f98710cb2b36f633c45e41902a02eb446e82871da21ff2dd44f74a56ca0f6",
+          "content_sha256": "056f98710cb2b36f633c45e41902a02eb446e82871da21ff2dd44f74a56ca0f6",
+          "vendored_sha256": "0bcbea0555fb80fbe377086937940b58a6d53ab8668d628e8b5df186086f9348",
+          "content_bytes": 103220,
+          "vendored_bytes": 26906,
+          "transformation": "Content unchanged; gzip level 9, mtime 0."
+        },
+        "1ubq.pdb.gz": {
+          "url": "https://files.rcsb.org/download/1UBQ.pdb",
+          "download_sha256": "d4a6812d8951cf6594e6a0763f089e35f5a80b62acb3c117b2c5565228a7b161",
+          "content_sha256": "d4a6812d8951cf6594e6a0763f089e35f5a80b62acb3c117b2c5565228a7b161",
+          "vendored_sha256": "c199abef72c83cda4760f3dc57a943fbbba51b154c69c459a440fa53baa2720b",
+          "content_bytes": 78570,
+          "vendored_bytes": 17924,
+          "transformation": "Content unchanged; gzip level 9, mtime 0."
+        }
+      }
+    },
+    "PDB:1CRN": {
+      "landing_page": "https://www.rcsb.org/structure/1CRN",
+      "lineage": "PDB:1CRN",
+      "license": "CC0-1.0",
+      "license_source": "https://www.rcsb.org/pages/usage-policy",
+      "citation": "https://doi.org/10.2210/pdb1CRN/pdb",
+      "retrieved_at": "2026-09-23",
+      "data_origin": "real",
+      "benchmark_screening": "No matching accession/structure IDs in the pinned BixBench, CompBioBench, BiomniBench-DA and BioAgent metadata inspected. Full artifact-lineage exclusion remains pending; not cleared for training export. BioMysteryBench data were not deanonymized.",
+      "assets": {
+        "1crn.cif.gz": {
+          "url": "https://files.rcsb.org/download/1CRN.cif",
+          "download_sha256": "23787562c427d7c1abe5420e86d5f1d0a6c7007dec1e8ce85645a6d69c32e8ba",
+          "content_sha256": "23787562c427d7c1abe5420e86d5f1d0a6c7007dec1e8ce85645a6d69c32e8ba",
+          "vendored_sha256": "e1e74a7d90b33c3091fe4724f84ef46fe0f8b53809db0e4869c7a037510c468c",
+          "content_bytes": 69506,
+          "vendored_bytes": 17571,
+          "transformation": "Content unchanged; gzip level 9, mtime 0."
+        },
+        "1crn.pdb.gz": {
+          "url": "https://files.rcsb.org/download/1CRN.pdb",
+          "download_sha256": "42199a30a0701864a2a5cc76cd7f35cc544cd0e65fbcf63e03c166543249b811",
+          "content_sha256": "42199a30a0701864a2a5cc76cd7f35cc544cd0e65fbcf63e03c166543249b811",
+          "vendored_sha256": "69b42cc6d162011c9f3cea8a6c07c2fb40124ae46062c81c7efa4d5f0e5efc13",
+          "content_bytes": 49491,
+          "vendored_bytes": 10607,
+          "transformation": "Content unchanged; gzip level 9, mtime 0."
+        }
+      }
+    },
+    "PDB:4HHB": {
+      "landing_page": "https://www.rcsb.org/structure/4HHB",
+      "lineage": "PDB:4HHB",
+      "license": "CC0-1.0",
+      "license_source": "https://www.rcsb.org/pages/usage-policy",
+      "citation": "https://doi.org/10.2210/pdb4HHB/pdb",
+      "retrieved_at": "2026-09-23",
+      "data_origin": "real",
+      "benchmark_screening": "No matching accession/structure IDs in the pinned BixBench, CompBioBench, BiomniBench-DA and BioAgent metadata inspected. Full artifact-lineage exclusion remains pending; not cleared for training export. BioMysteryBench data were not deanonymized.",
+      "assets": {
+        "4hhb.cif.gz": {
+          "url": "https://files.rcsb.org/download/4HHB.cif",
+          "download_sha256": "2d3ca1bf21ddff35af2e2bc5d331720f7bfc46a16c4829ea3ec1b41062d5f5a6",
+          "content_sha256": "2d3ca1bf21ddff35af2e2bc5d331720f7bfc46a16c4829ea3ec1b41062d5f5a6",
+          "vendored_sha256": "a77520e751acf78c4e67707582ec5a8bff08a84a532fc380a14f521a2f1346b4",
+          "content_bytes": 772198,
+          "vendored_bytes": 188746,
+          "transformation": "Content unchanged; gzip level 9, mtime 0."
+        },
+        "4hhb.pdb.gz": {
+          "url": "https://files.rcsb.org/download/4HHB.pdb",
+          "download_sha256": "abf382e0fd84b53bd4c08b373d37c0d7fe9fbe1a9a9c3851b2f5f2fbbe627101",
+          "content_sha256": "abf382e0fd84b53bd4c08b373d37c0d7fe9fbe1a9a9c3851b2f5f2fbbe627101",
+          "vendored_sha256": "1ab440874c602aee36e330f2cb8cbaf5a2e39b988cd5a1d63f7361ed1288e7e0",
+          "content_bytes": 473850,
+          "vendored_bytes": 107461,
+          "transformation": "Content unchanged; gzip level 9, mtime 0."
+        }
+      }
+    }
+  }
+}

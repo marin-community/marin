@@ -18,6 +18,8 @@ from experiments.post_training.bio_tasks.solvers.intervals import SOLVERS as INT
 from experiments.post_training.bio_tasks.solvers.networks import SOLVERS as NETWORKS_SOLVERS
 from experiments.post_training.bio_tasks.solvers.phylogeny import SOLVERS as PHYLOGENY_SOLVERS
 from experiments.post_training.bio_tasks.solvers.reads import SOLVERS as READ_SOLVERS
+from experiments.post_training.bio_tasks.solvers.real_expression import SOLVERS as REAL_EXPRESSION_SOLVERS
+from experiments.post_training.bio_tasks.solvers.real_structure import SOLVERS as REAL_STRUCTURE_SOLVERS
 from experiments.post_training.bio_tasks.solvers.repo_formats import SOLVERS as REPO_FORMATS_SOLVERS
 from experiments.post_training.bio_tasks.solvers.repo_sequences import SOLVERS as REPO_SEQUENCES_SOLVERS
 from experiments.post_training.bio_tasks.solvers.sequence import SOLVERS as SEQUENCE_SOLVERS
@@ -267,6 +269,8 @@ def solve_images(inputs: Path) -> list[dict]:
 
 
 SOLVERS = {
+    **REAL_EXPRESSION_SOLVERS,
+    **REAL_STRUCTURE_SOLVERS,
     **REPO_FORMATS_SOLVERS,
     **REPO_SEQUENCES_SOLVERS,
     **WORKFLOW_SOLVERS,

@@ -1,8 +1,8 @@
 # Synthetic biology task generation
 
-The generators in `experiments/post_training/bio_tasks/` implement 115
+The generators in `experiments/post_training/bio_tasks/` implement 121
 recipes from [the biology data program](https://github.com/marin-community/marin/issues/9257).
-They construct fresh inputs, establish exact references from construction ledgers,
+They combine independently sourced real observations with synthetic correctness controls, establish references,
 execute separate input-reading oracle solutions, and package tasks for Harbor.
 Generation and grading make no model calls. The source inventory retains all 50
 inspected repositories, including pinned evidence, verification limitations, and
@@ -11,27 +11,31 @@ the original 2026-07-28 downloads/stars/citations. The maintained
 format coverage, with the original adoption inventory preserved as a separate file.
 
 The [implemented recipe list](bio-task-recipes.md) records every operation, skill,
-format profile, and repository mapping. The 115 recipes span 13 domains:
+format profile, and repository mapping. The 121 recipes span 13 domains:
 
 | Domain | Recipes |
 |---|---:|
 | sequence | 17 |
 | genomic intervals | 10 |
-| expression | 11 |
+| expression | 15 |
 | sequencing reads | 13 |
 | variants | 9 |
 | phylogeny | 10 |
 | assembly and ecology | 8 |
 | imaging and spatial | 7 |
 | statistics | 8 |
-| structures and proteomics | 7 |
+| structures and proteomics | 9 |
 | networks | 6 |
 | assays and metabolomics | 7 |
 | workflow and identifiers | 2 |
 
-Use three instances with distinct inputs and reference targets per recipe: 345 train tasks at this checkpoint.
-The manifest marks `corpus_stage=small-authoring-fixtures` and `training_ready=false`.
-These are small correctness fixtures, not realistic workflow coverage. See the
+Use three instances with distinct inputs and reference targets per recipe: 363 train tasks at this checkpoint.
+There are 18 real-data examples and 345 simulated controls. The manifest marks
+`corpus_stage=authoring-candidates-and-controls` and `training_ready=false`.
+Real examples use the unchanged 27,179-gene, 12-sample GSE60450 count matrix and
+experimental structures 1UBQ, 1CRN and 4HHB. Source files are vendored with hashes,
+licenses and transformations in `data_sources.json`. Full benchmark lineage screening
+and end-to-end workflow validation remain pending. See the
 [ID workflow gap analysis](bio-task-catalog.md#id-workflow-coverage-and-input-realism)
 for the distinction and the requirements for realistic inputs and artifact outputs.
 These are easy and medium tasks; hard compositions and the final difficulty
@@ -83,7 +87,10 @@ generation immediately and leaves the manifest marked `incomplete`.
 
 Serve the output directory with `python -m http.server 8757 --directory /tmp/bio-tasks-example`
 and open `http://localhost:8757/`. The index groups three examples per recipe, with text search, domain filtering,
-format/skill labels, and a separate 50-repository execution-coverage table. Task pages show exact instructions, bounded input previews, expected
+format/skill labels, a data-origin filter (real data selected initially), and a separate
+50-repository execution-coverage table. A second page tracks all 455 ID task identifiers,
+with filters for benchmark and coverage status, recipe examples, explicit gaps and
+local reference-check runtimes. Task pages show exact instructions, bounded input previews, expected
 outputs, negative controls, metadata, and verifier code. These pages contain answers
 and must remain outside solver environments. The bundle contains:
 
@@ -94,6 +101,8 @@ and must remain outside solver environments. The bundle contains:
 - `manifest.json`: source hashes, pinned base image and runtime references, counts,
   and readiness status.
 - `source_inventory.json`: all 50 repository assessments and original adoption metadata.
+- `data_sources.json`: biological accessions, source licenses, content hashes and transformations.
+- `benchmark_coverage.json` and `benchmark-coverage.html`: pinned ID task inventory, mapping gaps and example evidence.
 - `native_validation.json`: retained evidence for the completed package reference checks.
 - `repository_coverage.json`: explicit recipe mappings and CLI/API execution evidence status.
 
@@ -103,7 +112,9 @@ they do not supply a TaskTrove `verifier.toml` for the generic conversion valida
 TaskTrove/EvalDash service ingestion, attempt joins, and review annotations are
 not implemented here. The local pages make the first generated examples inspectable.
 
-Lineage IDs track related tasks and support deduplication and benchmark exclusions.
+Generation lineage IDs track related tasks and support deduplication. Real examples
+also carry `biological_sources` and `biological_lineages`; changing a query or seed
+does not make the underlying study independent for benchmark exclusion.
 Recipe version changes preserve lineage and the initial input seed. Deterministic
 resampling records any replacement generation seed explicitly. Perturbations of an existing
 dataset must retain that dataset's lineage when additional generation routes are

@@ -29,6 +29,7 @@ from experiments.post_training.bio_tasks.recipes import RECIPES
 from experiments.post_training.bio_tasks.solvers.formats import reverse_complement, translate
 from experiments.post_training.bio_tasks.solvers.imaging import solve_imaging
 from experiments.post_training.bio_tasks.solvers.phylogeny import solve_phylogeny
+from experiments.post_training.bio_tasks.solvers.real_expression import solve_real_expression
 from experiments.post_training.bio_tasks.solvers.sequence import solve_sequence as solve_six_frames
 from experiments.post_training.bio_tasks.solvers.variants import solve_variants
 from experiments.post_training.tasktrove.taskbinary import read_task_binary
@@ -199,6 +200,23 @@ def test_lineage_and_seed_are_preserved_when_recipe_version_changes():
         first, second = identity(old, 100, index), identity(new, 100, index)
         assert (first.lineage, first.seed) == (second.lineage, second.seed)
         assert first.task_id != second.task_id
+
+
+def test_real_expression_joins_sample_ids_and_uses_log_median_for_even_gene_count(tmp_path):
+    (tmp_path / "counts.tsv").write_text(
+        "EntrezGeneID\tLength\tother\tsmall\tlarge\n"
+        "g1\t1000\t900\t1\t4\n"
+        "g2\t2000\t800\t1\t16\n"
+        "g3\t3000\t700\t0\t10\n"
+    )
+    (tmp_path / "samples.tsv").write_text("sample\tpopulation\nlarge\tbasal\nother\tluminal\nsmall\tbasal\n")
+    (tmp_path / "query.json").write_text('{"population":"basal"}')
+    answer = {row["id"]: row for row in solve_real_expression(tmp_path, "real-rnaseq-size-factors")}
+    # Two positive genes have small-library ratios 1/2 and 1/4. The log-space median
+    # is sqrt(1/8), whereas a linear-space median incorrectly gives 3/8.
+    assert answer["small"]["size_factor"] == pytest.approx(0.3535533905932738, abs=1e-12)
+    assert answer["large"]["size_factor"] == pytest.approx(2.8284271247461903, abs=1e-12)
+    assert answer["small"]["eligible_genes"] == answer["large"]["eligible_genes"] == 2
 
 
 def test_bed_overlap_uses_half_open_boundaries_and_chromosome_identity(tmp_path):

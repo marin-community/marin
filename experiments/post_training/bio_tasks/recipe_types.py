@@ -18,12 +18,21 @@ class Difficulty(StrEnum):
     HARD = "hard"
 
 
+class DataOrigin(StrEnum):
+    SIMULATED = "simulated"
+    REAL = "real"
+    MODIFIED_REAL = "modified-real"
+
+
 @dataclass(frozen=True)
 class Instance:
     instruction: str
     inputs: dict[str, str]
     contract: Contract
     mutations: dict[str, list[dict]]
+    data_origin: DataOrigin = DataOrigin.SIMULATED
+    source_ids: tuple[str, ...] = ()
+    derivation: str = "Synthetic correctness fixture."
 
 
 @dataclass(frozen=True)
