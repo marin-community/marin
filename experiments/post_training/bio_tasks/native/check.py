@@ -35,8 +35,10 @@ from experiments.post_training.bio_tasks.native.mapping import (
     solve_minimap,
     solve_star,
 )
+from experiments.post_training.bio_tasks.native.qc import solve_fastqc, solve_multiqc
 from experiments.post_training.bio_tasks.native.reads import solve_cutadapt, solve_plink, solve_samtools, solve_vcftools
 from experiments.post_training.bio_tasks.native.variants import solve_bcftools, solve_gatk
+from experiments.post_training.bio_tasks.native.workflow import solve_nextflow, solve_snakemake
 
 
 @dataclass(frozen=True)
@@ -59,11 +61,15 @@ OPERATIONS = {
     12: NativeOperation("matrixmarket-log-normalization", solve_seurat, ("r-jsonlite",)),
     13: NativeOperation("dna-unique-mapping", solve_minimap),
     14: NativeOperation("vcf-allelic-depth", solve_bcftools),
+    16: NativeOperation("sample-sheet-lanes", solve_snakemake),
     17: NativeOperation("fasta-indexed-regions", solve_htslib, ("c-compiler", "pkg-config")),
+    18: NativeOperation("fastqc-report-reconciliation", solve_fastqc),
     19: NativeOperation("gtf-splicing", solve_biopython),
+    20: NativeOperation("sample-sheet-lanes", solve_nextflow),
     21: NativeOperation("protein-local-search", solve_diamond),
     22: NativeOperation("vcf-sample-qc", solve_plink),
     23: NativeOperation("matrixmarket-cell-qc", solve_scanpy),
+    24: NativeOperation("fastqc-report-reconciliation", solve_multiqc),
     25: NativeOperation("bulk-cpm-filter", solve_edger, ("r-jsonlite",)),
     26: NativeOperation("adjusted-linear-effect", solve_limma, ("r-jsonlite",)),
     31: NativeOperation("fastq-adapter-trimming", solve_cutadapt),

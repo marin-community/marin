@@ -50,7 +50,7 @@ Every source repository has a scientific-operation mapping in
 `repository_coverage.json`. Actual CLI/API execution remains a distinct requirement
 for all 50 repositories. Biopython, pysam and cutadapt each passed three host
 reference checks, recorded in `native_validation.json`; 47 repositories remain
-pending. Reference scripts are implemented for 26 repositories. The current generated solver environment contains Python;
+pending. Reference scripts are implemented for 30 repositories. The current generated solver environment contains Python;
 it does not yet establish native tool execution. Repository source revisions and
 runtime package versions are different provenance fields and must remain separate.
 
@@ -144,7 +144,7 @@ The scripts in `native/` run a package CLI or API on the same public inputs and
 translate its output into the existing answer contract. A separate reporting
 process grades it against the private construction reference. This is an
 integration check, not a model judge, replacement oracle, or proof of teacher
-package use. The 26 implemented scripts include unvalidated options and version
+package use. The 30 implemented scripts include unvalidated options and version
 assumptions; only recorded passing executions count as evidence.
 
 Prepare checks from a validated corpus without installing packages:
