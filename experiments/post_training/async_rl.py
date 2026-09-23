@@ -490,6 +490,10 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
         "run_engines_locally": True,
         # Weights reach the engine over NCCL from the policy ranks at each sync.
         "weight_sync_backend": "nccl",
+        # Each expert matrix goes from a Megatron rank that holds it straight to the vLLM workers that
+        # serve it; the recipe meets its requirements (TP=1, ETP=1, one local engine with EP=DP=8).
+        "weight_sync_transport": "expert_block",
+        "expert_block_sync": {"timeout_seconds": 600, "verify": False},
         # The asynchronous engine API, which the abort pause and the HTTP route need.
         "async_engine": True,
         # Requests go one prompt at a time, as the chat route submits them.
