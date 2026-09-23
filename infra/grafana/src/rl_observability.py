@@ -4,7 +4,7 @@
 """Bounded datasets behind the synchronous RL post-training dashboard and its two drill-downs.
 
 The overview's span source holds one row per bucket and phase; the drill-downs' span sources hold
-one row per step and phase. Finelog reduces each step's worker spans to the step's critical rank,
+one row per step and phase. Finelog reduces each step's worker spans to the step's slowest rank,
 the rank with the longest ``policy_ppo_train``, and to a per-bucket spread across ranks.
 """
 
@@ -131,7 +131,7 @@ def _phase_rows_cte(bucket: str, scope: str) -> str:
 )"""
 
 
-# Worker spans tagged with their step's critical rank r*: the rank whose policy_ppo_train ran
+# Worker spans tagged with their step's slowest rank r*: the rank whose policy_ppo_train ran
 # longest, with ties going to the rank id that sorts first. parent_seconds is the step's longest
 # policy_ppo_train. covered_seconds sums the exclusive spans each rank published under
 # policy_ppo_train, except the producer's own residual. NULLS LAST because Finelog's DataFusion sorts
@@ -647,7 +647,7 @@ SELECT t, band AS series, AVG(share) AS value FROM banded GROUP BY 1, 2 ORDER BY
 def rl_sync_train_step_dataset(
     clusters: tuple[str, ...], run: str, start_ms: int, end_ms: int, requested_bucket_ms: int
 ) -> DashboardDataset:
-    """Build critical-rank worker spans, per-step worker counters, and DCGM on the run's nodes."""
+    """Build slowest-rank worker spans, per-step worker counters, and DCGM on the run's nodes."""
     bucket_ms = _rl_bucket_ms(clusters, run, start_ms, end_ms, requested_bucket_ms, "RL train step")
     bucket = _bucket_sql(start_ms, bucket_ms)
     scope = _run_scope(clusters, run, start_ms, end_ms)
