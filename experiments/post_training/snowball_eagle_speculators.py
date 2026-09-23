@@ -12,11 +12,11 @@ the matched control/initial/trained measurements:
 4. run source-disjoint evaluations with no draft, the starting draft, and the
    trained draft.
 
-Run the complete bounded experiment through the Marin controller. GPU steps
-federate to US East 02A from their resource configurations::
+Run the complete bounded experiment on the US East 02A controller::
 
     uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
-      --enable-extra-resources \
+      --enable-extra-resources --target-cluster cw-us-east-02a \
+      -e DAYTONA_API_KEY "$DAYTONA_API_KEY" \
       -- python experiments/post_training/snowball_eagle_speculators.py \
       --version 2026.09.23.3 --stage evaluations --run
 """
@@ -161,6 +161,7 @@ def _eval_step(
         speculative=speculative,
         limit=limit,
         accelerator=f"{GPU_VARIANT}x{GPU_COUNT}",
+        submission_cluster=CLUSTER,
         federated_cluster=CLUSTER,
     )
 
