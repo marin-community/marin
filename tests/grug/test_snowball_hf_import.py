@@ -10,8 +10,8 @@ from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.snowball import SnowballConfig, SnowballTransformer
 
 from experiments.grug.moe_hero_ep.model import GrugModelConfig as TrainingConfig
+from experiments.grug.moe_hero_ep.model import Transformer
 from experiments.grug.moe_hero_ep.train import _apply_qb_betas
-from experiments.grug_sft.snowball_hf_import import import_snowball_hf_weights
 
 
 def _snowball_config() -> SnowballConfig:
@@ -70,12 +70,11 @@ def test_hf_import_preserves_effective_weights_and_greedy_tokens_in_stacked_trai
         )
         exported = eqx.tree_at(lambda model: model.blocks, exported, blocks)
 
-        imported, pending_qb_betas = import_snowball_hf_weights(
-            _snowball_config(),
-            _training_config(),
-            exported.to_state_dict(),
-            key=jax.random.key(11),
-        )
+        key = jax.random.key(11)
+        source_template = eqx.filter_eval_shape(SnowballTransformer.init, _snowball_config(), key=key)
+        source = source_template.from_state_dict(exported.to_state_dict())
+        target = eqx.filter_eval_shape(Transformer.init, _training_config(), key=key)
+        imported, pending_qb_betas = target.with_snowball_weights(source)
         effective = _apply_qb_betas(imported, pending_qb_betas)
 
         imported_blocks = tuple(effective.stacked_blocks.unstacked())

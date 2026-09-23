@@ -3,6 +3,7 @@
 
 from pathlib import Path
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jmp
@@ -15,8 +16,8 @@ from levanter.models.snowball import SnowballConfig, SnowballTransformer
 
 from experiments.grug.checkpointing import init_weights_only_from_checkpoint
 from experiments.grug.moe_hero_ep.model import GrugModelConfig as CurrentConfig
+from experiments.grug.moe_hero_ep.model import Transformer
 from experiments.grug.moe_hero_ep.train import initial_state
-from experiments.grug_sft.snowball_hf_import import import_snowball_hf_weights
 
 
 def test_snowball_checkpoint_initializes_current_trainer_weights(tmp_path: Path):
@@ -36,18 +37,17 @@ def test_snowball_checkpoint_initializes_current_trainer_weights(tmp_path: Path)
         moe_implementation="ring",
     )
     snowball_config = SnowballConfig(**common)
-    current_config = CurrentConfig(**common)
+    current_config = CurrentConfig(**common, qk_mult=snowball_config.qk_mult)
     mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)
     pending_qb_betas = jnp.ones((2, 4))
 
     with set_mesh(mesh):
         snowball = SnowballTransformer.init(snowball_config, key=jax.random.key(0))
-        converted, _ = import_snowball_hf_weights(
-            snowball_config,
-            current_config,
-            snowball.to_state_dict(),
-            key=jax.random.key(2),
-        )
+        key = jax.random.key(2)
+        source_template = eqx.filter_eval_shape(SnowballTransformer.init, snowball_config, key=key)
+        source = source_template.from_state_dict(snowball.to_state_dict())
+        target = eqx.filter_eval_shape(Transformer.init, current_config, key=key)
+        converted, _ = target.with_snowball_weights(source)
         fresh = initial_state(
             current_config,
             optimizer=optax.sgd(0.1),

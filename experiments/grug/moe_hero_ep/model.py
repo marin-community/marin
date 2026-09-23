@@ -8,6 +8,7 @@ No load-balancing loss; router z-loss only. All layers are MoE (no dense layers)
 """
 
 import dataclasses
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Literal
@@ -60,6 +61,7 @@ from levanter.grug.grug_moe import (
 from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import unshard
 from levanter.kernels.pallas.short_conv import short_conv
+from levanter.models.snowball import SnowballBlock, SnowballConfig, SnowballTransformer
 from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 from transformers import PretrainedConfig as HfConfig
@@ -306,6 +308,41 @@ class GrugModelConfig:
         if self.num_shared_experts <= 0:
             raise ValueError("num_shared_experts must be positive")
         resolve_moe_implementation(self.moe_implementation)
+
+    def validate_snowball_config(self, source: SnowballConfig) -> None:
+        """Check that Snowball weights represent this trainer's model architecture."""
+        exact_fields = (
+            "vocab_size",
+            "hidden_dim",
+            "intermediate_dim",
+            "shared_expert_intermediate_dim",
+            "num_experts",
+            "num_experts_per_token",
+            "num_layers",
+            "num_heads",
+            "num_kv_heads",
+            "head_dim",
+            "sliding_window",
+            "layer_norm_eps",
+            "qk_mult",
+        )
+        mismatches = {
+            name: (getattr(source, name), getattr(self, name))
+            for name in exact_fields
+            if getattr(source, name) != getattr(self, name)
+        }
+        if mismatches:
+            raise ValueError(f"Snowball and Grug architectures differ: {mismatches}")
+        if self.max_seq_len > source.max_seq_len:
+            raise ValueError(
+                f"Training max_seq_len={self.max_seq_len} exceeds Snowball max_seq_len={source.max_seq_len}"
+            )
+        if self.num_shared_experts != 1 or self.global_every != 4 or self.latent_dim is not None or self.sconv:
+            raise ValueError("Snowball weights require one shared expert, global_every=4, and no latent MoE or SConv")
+        if self.local_kv_heads is not None or self.global_kv_heads is not None:
+            raise ValueError("Snowball weights require a uniform KV-head count")
+        if self.rope != source.rope:
+            raise ValueError(f"Snowball rope={source.rope} differs from Grug rope={self.rope}")
 
     @property
     def Embed(self) -> Axis:
@@ -1196,6 +1233,26 @@ class Block(eqx.Module):
         return x, router_stats
 
 
+def _stack_snowball_blocks(blocks: Sequence[SnowballBlock], template: ArrayStacked[Block]) -> ArrayStacked[Block]:
+    if len(blocks) != template.num_layers:
+        raise ValueError(f"Expected {template.num_layers} Snowball blocks, got {len(blocks)}")
+
+    source_leaves = [jax.tree.leaves(block) for block in blocks]
+    template_leaves, template_treedef = jax.tree.flatten(template.stacked)
+    if any(len(leaves) != len(template_leaves) for leaves in source_leaves):
+        raise ValueError("Snowball blocks do not match the stacked trainer pytree")
+
+    stacked_leaves = []
+    for leaf_index, template_leaf in enumerate(template_leaves):
+        stacked = jnp.stack([leaves[leaf_index] for leaves in source_leaves])
+        if stacked.shape != template_leaf.shape:
+            raise ValueError(f"Stacked leaf {leaf_index} has shape {stacked.shape}; expected {template_leaf.shape}")
+        stacked_leaves.append(reshard(stacked, template_leaf.sharding))
+
+    stacked_block = jax.tree.unflatten(template_treedef, stacked_leaves)
+    return eqx.tree_at(lambda value: value.stacked, template, stacked_block)
+
+
 def _long_layer_schedule(num_layers: int, global_every: int) -> jax.Array:
     # Every global_every-th layer is full-causal, and the last layer always is, so a depth that is
     # not a multiple of global_every still ends on a global-context layer.
@@ -1251,6 +1308,50 @@ class Transformer(eqx.Module):
             final_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key),
             config=cfg,
         )
+
+    def with_snowball_weights(self, snowball: SnowballTransformer) -> tuple["Transformer", jax.Array]:
+        """Load Snowball weights into the current layout and reconstruct pending QB betas.
+
+        Snowball HF exports store effective router biases after the pending update. Centering each
+        layer's bias preserves top-k selection and combine weights; its inverse becomes the next
+        step's pending beta.
+        """
+        self.config.validate_snowball_config(snowball.config)
+        stacked_blocks = _stack_snowball_blocks(snowball.blocks, self.stacked_blocks)
+        router_bias = stacked_blocks.stacked.mlp.router_bias
+        centered_router_bias = router_bias - jnp.mean(router_bias, axis=-1, keepdims=True)
+        stacked_blocks = eqx.tree_at(
+            lambda value: value.stacked.mlp.router_bias,
+            stacked_blocks,
+            centered_router_bias,
+        )
+
+        model = eqx.tree_at(
+            lambda value: (
+                value.token_embed,
+                value.embed_norm.weight,
+                value.embed_gated_norm.w_down,
+                value.embed_gated_norm.w_up,
+                value.output_proj,
+                value.stacked_blocks,
+                value.final_norm.weight,
+                value.final_gated_norm.w_down,
+                value.final_gated_norm.w_up,
+            ),
+            self,
+            (
+                reshard(snowball.token_embed, self.token_embed.sharding),
+                reshard(snowball.embed_norm.weight, self.embed_norm.weight.sharding),
+                reshard(snowball.embed_gated_norm.w_down, self.embed_gated_norm.w_down.sharding),
+                reshard(snowball.embed_gated_norm.w_up, self.embed_gated_norm.w_up.sharding),
+                reshard(snowball.output_proj, self.output_proj.sharding),
+                stacked_blocks,
+                reshard(snowball.final_norm.weight, self.final_norm.weight.sharding),
+                reshard(snowball.final_gated_norm.w_down, self.final_gated_norm.w_down.sharding),
+                reshard(snowball.final_gated_norm.w_up, self.final_gated_norm.w_up.sharding),
+            ),
+        )
+        return model, -centered_router_bias
 
     @property
     def Vocab(self) -> Axis:
