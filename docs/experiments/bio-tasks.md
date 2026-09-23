@@ -48,8 +48,8 @@ models biological/technical read routing from a CSV ledger; it does not read an 
 
 Every source repository has a scientific-operation mapping in
 `repository_coverage.json`. Actual CLI/API execution remains a distinct requirement
-for all 50 repositories. Biopython, pysam and cutadapt each passed three host
-reference checks, recorded in `native_validation.json`; 47 repositories remain
+for all 50 repositories. Biopython, pysam, cutadapt, Snakemake and MultiQC each passed three host
+reference checks, recorded in `native_validation.json`; 45 repositories remain
 pending. Reference scripts are implemented for 30 repositories. The current generated solver environment contains Python;
 it does not yet establish native tool execution. Repository source revisions and
 runtime package versions are different provenance fields and must remain separate.

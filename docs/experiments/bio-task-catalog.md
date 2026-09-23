@@ -44,11 +44,18 @@ does not satisfy that requirement. Runtime tests must execute a bounded data ope
 record the package version and environment digest, and retain the output and grading result.
 
 The current host-validated recipes use independent Python solvers. Native CLI/API
-execution is recorded separately below. Biopython, pysam and cutadapt each passed
-three small host reference checks; the remaining 47 repositories are pending.
+execution is recorded separately below. Biopython, pysam, cutadapt, Snakemake and MultiQC each passed
+three small host reference checks; the remaining 45 repositories are pending.
 The [machine-readable evidence](../../experiments/post_training/bio_tasks/native_validation.json)
 records package versions, input/output hashes, commands and grades. These checks
 do not establish tool availability in generated Harbor tasks or complete workflows.
+Snakemake executes included lanes grouped by sample; MultiQC parses supplied
+FastQC reports before comparison with raw FASTQ counts. FastQC and Nextflow
+reference scripts are also implemented but have not yet been run. API/CLI usage
+follows the [Snakemake](https://snakemake.readthedocs.io/en/stable/executing/cli.html),
+[MultiQC](https://docs.seqera.io/multiqc/usage/scripts),
+[FastQC](https://www.bioinformatics.babraham.ac.uk/projects/fastqc/Help/3%20Analysis%20Modules/1%20Basic%20Statistics.html),
+and [Nextflow](https://training.nextflow.io/latest/side_quests/splitting_and_grouping/) documentation.
 The maintained machine record is `experiments/post_training/bio_tasks/repository_coverage.json`.
 Downloads, stars, and citations remain available in the unchanged
 [original 50-package inventory](computational_biology_bioinformatics_packages.md).
@@ -70,7 +77,7 @@ Downloads, stars, and citations remain available in the unchanged
 | 13 | [minimap2](https://github.com/lh3/minimap2/blob/3c28777e7e2dcc90f825de1b9f17a89cca7d4452/example.c) | `paf-query-coverage`, `dna-unique-mapping` | Pending |
 | 14 | [BCFtools](https://github.com/samtools/bcftools/blob/edf7fd96c5da562ecfd99fb7f9e4b9eb597aeae8/test/fill-tags-VAF.out) | `vcf-allelic-depth`, `vcf-multiallelic-splitting`, `vcf-minimal-representation` | Pending |
 | 15 | [Picard](https://github.com/broadinstitute/picard/blob/c2a483d497d1b0fe6d0ab518b1b32fe98fad0741/src/test/java/picard/sam/FilterSamReadsTest.java) | `sam-fragment-counts`, `sam-pair-concordance` | Pending |
-| 16 | [Snakemake](https://github.com/snakemake/snakemake/blob/91763d644db0a6051c40014fa8ffad340f7d39a0/tests/test_expand.py) | `sample-sheet-lanes` | Pending |
+| 16 | [Snakemake](https://github.com/snakemake/snakemake/blob/91763d644db0a6051c40014fa8ffad340f7d39a0/tests/test_expand.py) | `sample-sheet-lanes` | 3 reference checks passed |
 | 17 | [HTSlib](https://github.com/samtools/htslib/blob/d3cc9553d89dc34239afb7145b06c0dd818c0219/test/faidx/faidx.tst) | `fasta-indexed-regions` | Pending |
 | 18 | [FastQC](https://github.com/s-andrews/FastQC/blob/87fb3364a2f37115833d678648926d41e184f0b1/uk/ac/babraham/FastQC/Modules/SequenceLengthDistribution.java) | `paired-read-qc`, `fastqc-report-reconciliation` | Pending |
 | 19 | [Biopython](https://github.com/biopython/biopython/blob/08fc09086afe0b57215d2515660e0c032b55c0dd/Tests/test_SeqFeature.py) | `strand-extraction`, `gtf-splicing`, `gff-cds-translation` | 3 reference checks passed |
@@ -78,7 +85,7 @@ Downloads, stars, and citations remain available in the unchanged
 | 21 | [DIAMOND](https://github.com/bbuchfink/diamond/blob/5e25acaf40e6b9883636c5c564306fe77210de53/CMakeLists.txt) | `protein-local-search` | Pending |
 | 22 | [PLINK / PLINK 2](https://github.com/chrchang/plink-ng/blob/a25a0d6438b61b1951cd6d7eb209db8b79687581/2.0/Tests/TEST_GRM_MAF/run_tests.sh) | `vcf-sample-qc`, `genotype-hwe` | Pending |
 | 23 | [Scanpy](https://github.com/scverse/scanpy/blob/0d5fd16234865619d2f5097d33fc4281900a2bc2/tests/test_qc_metrics.py) | `matrixmarket-cell-qc`, `donor-counts`, `cell-fractions` | Pending |
-| 24 | [MultiQC](https://github.com/MultiQC/MultiQC/blob/fdc68d394849f69b67b6e6e13ebe907504ed534b/multiqc/modules/samtools/tests/test_flagstat.py) | `fastqc-report-reconciliation` | Pending |
+| 24 | [MultiQC](https://github.com/MultiQC/MultiQC/blob/fdc68d394849f69b67b6e6e13ebe907504ed534b/multiqc/modules/samtools/tests/test_flagstat.py) | `fastqc-report-reconciliation` | 3 reference checks passed |
 | 25 | [edgeR](https://github.com/bioconductor-source/edgeR/blob/8986864d8f92dac37925ef641fcd6c4161130551/R/cpm.R) | `bulk-cpm-filter` | Pending |
 | 26 | [limma](https://github.com/bioconductor-source/limma/blob/14eabaeb695945b45ceb885ac8d4c61232639ea5/R/contrasts.R) | `adjusted-linear-effect`, `paired-treatment-effect` | Pending |
 | 27 | [SPAdes](https://github.com/ablab/spades/blob/808b87dade1300ecaa712429955ccba7bfb286f4/src/projects/spades/pipeline/spades_pipeline/supplemetary/check_test_script.py) | `assembly-nx`, `assembly-gap-runs` | Pending |

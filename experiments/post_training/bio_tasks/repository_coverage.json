@@ -239,8 +239,10 @@
       ],
       "source_url": "https://github.com/snakemake/snakemake/blob/91763d644db0a6051c40014fa8ffad340f7d39a0/tests/test_expand.py",
       "tool_execution": {
-        "status": "pending",
-        "evidence": null
+        "status": "passed_reference_check",
+        "evidence": "native_validation.json",
+        "instances": 3,
+        "scope": "sample-sheet-lanes"
       },
       "scope": "Repair sample/lane pairing and workflow dependencies; avoid accidental Cartesian products.",
       "limitations": "Derive expected input/output mappings from a fresh sample sheet and run a bounded biological step. The tests distinguish product from zip expansion. A correct file list or successful dry run alone does not verify downstream biology."
@@ -359,8 +361,10 @@
       ],
       "source_url": "https://github.com/MultiQC/MultiQC/blob/fdc68d394849f69b67b6e6e13ebe907504ed534b/multiqc/modules/samtools/tests/test_flagstat.py",
       "tool_execution": {
-        "status": "pending",
-        "evidence": null
+        "status": "passed_reference_check",
+        "evidence": "native_validation.json",
+        "instances": 3,
+        "scope": "fastqc-report-reconciliation"
       },
       "scope": "Combine sample QC reports while retaining sample identity and QC-passed/failed denominators.",
       "limitations": "Generate reports from a hidden count ledger; check every metric and sample mapping, including N/A and filename collisions. Parsing a report correctly does not validate the upstream alignment."

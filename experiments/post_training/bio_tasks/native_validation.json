@@ -1,633 +1,1235 @@
 {
-  "schema_version": 1,
-  "checked_at": "2026-09-23",
-  "source_revision": "c87ce544187aa97332fb9a0bf732d7daec0c5f72",
+  "schema_version": 2,
   "scope": "Three small component instances per listed package; host execution, not Harbor or ID workflow validation.",
-  "environment_kind": "uv dependency overlay on the development environment; wheels, not the Conda candidate artifacts",
-  "environment": {
-    "python": "3.12.3",
-    "packages": {
-      "cutadapt": "5.2",
-      "zlib-ng": "1.0.0",
-      "pysam": "0.24.1",
-      "backports.zstd": "1.6.0",
-      "xopen": "2.1.0",
-      "biopython": "1.88",
-      "numpy": "2.3.5",
-      "dnaio": "1.2.4",
-      "isal": "1.8.0",
-      "beautifulsoup4": "4.14.3",
-      "latex2sympy2_extended": "1.11.0",
-      "setuptools": "83.0.0",
-      "grpc-google-iam-v1": "0.14.3",
-      "annotated-doc": "0.0.4",
-      "fastembed": "0.8.0",
-      "starlette": "1.3.1",
-      "anthropic": "1.3.0",
-      "jaxopt": "0.8.5",
-      "marin-deploy": "0.0.0",
-      "flatbuffers": "25.12.19",
-      "marin-iris": "0.2.0",
-      "watchfiles": "1.1.1",
-      "equinox": "0.13.2",
-      "Authlib": "1.8.0",
-      "pgvector": "0.5.0",
-      "uvicorn": "0.40.0",
-      "aqtp": "0.9.0",
-      "google-cloud-core": "2.5.0",
-      "iniconfig": "2.3.0",
-      "cloudpickle": "3.1.2",
-      "six": "1.17.0",
-      "transformers": "5.12.1",
-      "marin-rigging": "0.2.0",
-      "httplib2": "0.32.0",
-      "multiprocess": "0.70.16",
-      "soupsieve": "2.8.4",
-      "fsspec": "2026.1.0",
-      "jsonschema-specifications": "2025.9.1",
-      "python-dotenv": "1.2.2",
-      "google-cloud-compute": "1.51.0",
-      "pydantic_core": "2.41.5",
-      "xxhash": "3.6.0",
-      "opt_einsum": "3.4.0",
-      "sentry-sdk": "2.49.0",
-      "fonttools": "4.61.1",
-      "pluggy": "1.6.0",
-      "pg8000": "1.31.5",
-      "pyasn1_modules": "0.4.2",
-      "grpcio-status": "1.76.0",
-      "watchdog": "6.0.0",
-      "jaxlib": "0.11.1",
-      "PyYAML": "6.0.3",
-      "cyclopts": "4.25.0",
-      "httpcore": "1.0.9",
-      "caio": "0.12.4",
-      "pyqwest": "0.6.1",
-      "hf-xet": "1.5.1",
-      "google-cloud-storage-control": "1.11.0",
-      "cryptography": "50.0.0",
-      "absl-py": "2.3.1",
-      "braceexpand": "0.1.7",
-      "openai-harmony": "0.0.8",
-      "tzdata": "2025.3",
-      "SQLAlchemy": "2.0.46",
-      "jmp": "0.0.4",
-      "decorator": "5.2.1",
-      "tasktrove-verify": "0.1.0",
-      "fastmcp-slim": "4.0.3",
-      "deepdiff": "9.0.0",
-      "google-crc32c": "1.8.0",
-      "marin-haliax": "0.2.0",
-      "pyarrow": "23.0.1",
-      "pyfiglet": "1.0.2",
-      "googleapis-common-protos": "1.72.0",
-      "magiccube": "0.3.0",
-      "marin-zephyr": "0.2.0",
-      "fasttext-wheel": "0.9.2",
-      "cachetools": "7.1.8",
-      "draccus": "0.11.6",
-      "nest-asyncio": "1.6.0",
-      "marin-finestore": "0.1.0",
-      "pyperclip": "1.11.0",
-      "drawsvg": "2.4.2",
-      "contourpy": "1.3.3",
-      "MarkupSafe": "3.0.3",
-      "google-resumable-media": "2.8.0",
-      "cffi": "2.0.0",
-      "pyasn1": "0.6.4",
-      "plotly": "6.5.1",
-      "resiliparse": "0.17.2",
-      "requests-oauthlib": "2.0.0",
-      "wandb": "0.26.0",
-      "frozenlist": "1.8.0",
-      "marin-marina": "0.1.0",
-      "jsonref": "1.1.0",
-      "pycparser": "2.23",
-      "lenses": "1.2.0",
-      "marin-core": "0.2.0",
-      "platformdirs": "4.5.1",
-      "beartype": "0.22.9",
-      "jaraco.functools": "4.4.0",
-      "async-lru": "2.0.5",
-      "typer": "0.21.1",
-      "certifi": "2026.1.4",
-      "tabulate": "0.9.0",
-      "openai": "2.24.0",
-      "pyee": "13.0.0",
-      "docstring_parser": "0.18.0",
-      "annotated-types": "0.7.0",
-      "referencing": "0.37.0",
-      "dataclasses-json": "0.6.7",
-      "polars-runtime-32": "1.42.1",
-      "google-api-core": "2.34.0",
-      "aiohappyeyeballs": "2.6.1",
-      "griffelib": "2.3.0",
-      "google-api-python-client": "2.188.0",
-      "greenlet": "3.3.1",
-      "google-cloud-secret-manager": "2.29.0",
-      "playwright": "1.57.0",
-      "distro": "1.9.0",
-      "packaging": "26.2",
-      "typing_extensions": "4.15.0",
-      "jiter": "0.11.1",
-      "chex": "0.1.91",
-      "PyJWT": "2.13.0",
-      "cycler": "0.12.1",
-      "asn1crypto": "1.5.1",
-      "oauthlib": "3.3.1",
-      "proto-plus": "1.27.0",
-      "aiofile": "3.12.3",
-      "yarl": "1.22.0",
-      "rpds-py": "0.30.0",
-      "marin-root": "0.1.0",
-      "marin-finelog-server": "0.2.46.dev33324331711",
-      "py_rust_stemmers": "0.1.8",
-      "sniffio": "1.3.1",
-      "arckit": "0.1.0",
-      "cellpylib": "2.4.0",
-      "einops": "0.8.1",
-      "jaraco.context": "6.1.2",
-      "kiwisolver": "1.4.9",
-      "google-cloud-tpu": "1.26.0",
-      "email-validator": "2.3.0",
-      "gitdb": "4.0.12",
-      "humanize": "4.15.0",
-      "loguru": "0.7.3",
-      "pytz": "2025.2",
-      "orbax-export": "0.0.8",
-      "aiofiles": "24.1.0",
-      "regex": "2026.1.14",
-      "tqdm-loggable": "0.2",
-      "uritemplate": "4.2.0",
-      "wrapt": "1.17.3",
-      "tokenizers": "0.22.2",
-      "tblib": "3.2.2",
-      "optax": "0.2.6",
-      "requests": "2.33.1",
-      "tomlkit": "0.13.3",
-      "mdurl": "0.1.2",
-      "multidict": "6.7.0",
-      "truststore": "0.10.4",
-      "pillow": "12.3.0",
-      "jax": "0.11.1",
-      "math-verify": "0.9.0",
-      "tqdm": "4.67.1",
-      "matplotlib": "3.10.8",
-      "google-auth": "2.47.0",
-      "protobuf": "6.33.6",
-      "wadler_lindig": "0.1.7",
-      "rich": "14.2.0",
-      "pyparsing": "3.3.1",
-      "psutil": "7.2.2",
-      "mypy_extensions": "1.1.0",
-      "keyring": "25.7.0",
-      "marin-fray": "0.2.0",
-      "zss": "1.2.0",
-      "fastapi": "0.136.3",
-      "marin-dupekit": "0.1.2",
-      "click": "8.3.1",
-      "zstandard": "0.25.0",
-      "tensorstore": "0.1.84",
-      "httpx": "0.28.1",
-      "python-multipart": "0.0.31",
-      "Pygments": "2.19.2",
-      "propcache": "0.4.1",
-      "mmh3": "5.3.0",
-      "pytest-timeout": "2.4.0",
-      "polars": "1.42.1",
-      "importlib_metadata": "8.5.0",
-      "pybind11": "3.0.1",
-      "connect-python": "0.9.0",
-      "shellingham": "1.5.4",
-      "google-cloud-storage": "3.8.0",
-      "marin-iris-native": "0.1.6.dev31131847556",
-      "flax": "0.12.4",
-      "aiobotocore": "2.26.0",
-      "toml": "0.10.2",
-      "py-key-value-aio": "0.4.5",
-      "aioitertools": "0.13.0",
-      "google-auth-oauthlib": "1.2.2",
-      "httpcore2": "2.12.0",
-      "SecretStorage": "3.5.0",
-      "orbax-checkpoint": "0.11.31",
-      "rsa": "4.9.1",
-      "duckdb": "1.5.0",
-      "pytimeparse": "1.1.8",
-      "google-auth-httplib2": "0.3.0",
-      "uncalled-for": "0.4.0",
-      "typing-inspect": "0.9.0",
-      "reasoning_gym": "0.1.25",
-      "marin-levanter": "0.2.0",
-      "onnxruntime": "1.29.0",
-      "grpcio": "1.76.0",
-      "toolz": "1.1.0",
-      "httptools": "0.7.1",
-      "pycosat": "0.6.6",
-      "dnspython": "2.8.0",
-      "openapi-pydantic": "0.5.1",
-      "marin-dupekit-native": "0.1.6.dev31131847556",
-      "jsonschema": "4.23.0",
-      "cloud-sql-python-connector": "1.22.0",
-      "sympy": "1.13.3",
-      "httpx2": "2.12.0",
-      "aiosignal": "1.4.0",
-      "python-dateutil": "2.9.0.post0",
-      "attrs": "25.4.0",
-      "jeepney": "0.9.0",
-      "jaraco.classes": "3.4.0",
-      "aiohttp": "3.14.3",
-      "marshmallow": "3.26.2",
-      "exceptiongroup": "1.3.1",
-      "treescope": "0.1.10",
-      "huggingface_hub": "1.21.0",
-      "antlr4-python3-runtime": "4.11.0",
-      "opentelemetry-api": "1.39.1",
-      "filelock": "3.20.3",
-      "charset-normalizer": "3.4.4",
-      "humanfriendly": "10.0",
-      "rich-rst": "2.1.0",
-      "mcp": "2.2.0",
-      "urllib3": "2.7.0",
-      "msgspec": "0.20.0",
-      "marin-ducky": "0.1.0",
-      "gcsfs": "2026.1.0",
-      "smmap": "5.0.2",
-      "pathable": "0.6.0",
-      "prometheus_client": "0.24.1",
-      "datasets": "4.8.5",
-      "pytest": "9.0.3",
-      "Jinja2": "3.1.6",
-      "vortex-data": "0.61.0",
-      "marin-finelog": "0.2.11",
-      "ml_dtypes": "0.5.4",
-      "importlib_resources": "6.5.2",
-      "uvloop": "0.22.1",
-      "orderly-set": "5.5.0",
-      "markdownify": "1.2.2",
-      "dill": "0.4.1",
-      "msgpack": "1.2.1",
-      "mergedeep": "1.3.4",
-      "typing-inspection": "0.4.2",
-      "jsonschema-path": "0.5.0",
-      "mpmath": "1.3.0",
-      "safetensors": "0.6.2",
-      "idna": "3.19",
-      "pydantic": "2.12.5",
-      "mcp-types": "2.2.0",
-      "zipp": "3.23.0",
-      "markdown-it-py": "4.0.0",
-      "more-itertools": "10.8.0",
-      "botocore": "1.41.5",
-      "jmespath": "1.0.1",
-      "jaxtyping": "0.3.5",
-      "anyio": "4.12.1",
-      "GitPython": "3.1.58",
-      "pandas": "2.2.2",
-      "immutabledict": "4.3.0",
-      "shellsim": "0.1.10",
-      "s3fs": "2026.1.0",
-      "substrait": "0.24.2",
-      "websockets": "15.0.1",
-      "sse-starlette": "3.1.2",
-      "simplejson": "3.20.2",
-      "seaborn": "0.13.2",
-      "pydantic-settings": "2.14.2",
-      "etils": "1.13.0",
-      "scipy": "1.17.0",
-      "bfi": "1.0.4",
-      "h11": "0.16.0",
-      "scramp": "1.4.17",
-      "narwhals": "2.15.0",
-      "joserfc": "1.7.5"
-    }
-  },
-  "environment_sha256": "3c5b3ac3025bb979e753b304de2e5f1895c331732e9ee50da4860ed99a862897",
-  "corpus_manifest_sha256": "7e3261dc4ba21bebadbcedf8c4b70e5e5cfd5be5badbec1ab4b9fee74a1d59a0",
-  "checks": [
+  "runs": [
     {
-      "repository_index": 9,
-      "repository": "pysam",
-      "status": "passed",
-      "cases": [
-        {
-          "task_id": "sam-cigar-coverage-v1-20260923-00000",
-          "recipe": "sam-cigar-coverage",
-          "input_sha256": {
-            "reads.sam": "2e64e5a652fec5fcb277e9ca7ee663c7e658d5e3923006a666e8c88f8ca649b4",
-            "windows.bed": "94fad7b951a42e4c146414710c7dec8725c8dff6cb4a742b61a43d50bfc19b3b"
-          },
-          "artifact_sha256": {
-            "answer.json": "b0194482ce74eaa3f3f45e9ee67a3a6270a31f1d76d365950811441d86d87847",
-            "operation.py": "c9cfa342a9563d211de603f72fc36c84941d7655b374f9bbec47bd47a8fbf080",
-            "api.log.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-            "api.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-          },
-          "commands": [
-            {
-              "argv": [
-                "python",
-                "<work>/operation.py",
-                "<inputs>",
-                "<work>/answer.json"
-              ],
-              "exit_code": 0,
-              "elapsed_seconds": 0.06393892702180892
-            }
-          ],
-          "verification": {
-            "status": "scored",
-            "reward": 1.0,
-            "field_checks": 6
-          }
-        },
-        {
-          "task_id": "sam-cigar-coverage-v1-20260923-00001",
-          "recipe": "sam-cigar-coverage",
-          "input_sha256": {
-            "reads.sam": "3dd7410c0583f440d1d10500df961e354f2805d31fc21127687dd3dcb2c69128",
-            "windows.bed": "94fad7b951a42e4c146414710c7dec8725c8dff6cb4a742b61a43d50bfc19b3b"
-          },
-          "artifact_sha256": {
-            "answer.json": "215ed5d1b3dc59d32766d54c352033f3985082361043fc9a0761ec07f3668fbe",
-            "operation.py": "c9cfa342a9563d211de603f72fc36c84941d7655b374f9bbec47bd47a8fbf080",
-            "api.log.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-            "api.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-          },
-          "commands": [
-            {
-              "argv": [
-                "python",
-                "<work>/operation.py",
-                "<inputs>",
-                "<work>/answer.json"
-              ],
-              "exit_code": 0,
-              "elapsed_seconds": 0.06385289900936186
-            }
-          ],
-          "verification": {
-            "status": "scored",
-            "reward": 1.0,
-            "field_checks": 6
-          }
-        },
-        {
-          "task_id": "sam-cigar-coverage-v1-20260923-00002",
-          "recipe": "sam-cigar-coverage",
-          "input_sha256": {
-            "reads.sam": "f5cf68e41775c6890b43831e2e69f673c74def145e1fe81cc86d7596997b5380",
-            "windows.bed": "94fad7b951a42e4c146414710c7dec8725c8dff6cb4a742b61a43d50bfc19b3b"
-          },
-          "artifact_sha256": {
-            "answer.json": "f73cedd392b6e100e1170d26f44c87dab5481981759081696467c7ffafdb5f10",
-            "operation.py": "c9cfa342a9563d211de603f72fc36c84941d7655b374f9bbec47bd47a8fbf080",
-            "api.log.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-            "api.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-          },
-          "commands": [
-            {
-              "argv": [
-                "python",
-                "<work>/operation.py",
-                "<inputs>",
-                "<work>/answer.json"
-              ],
-              "exit_code": 0,
-              "elapsed_seconds": 0.06383332004770637
-            }
-          ],
-          "verification": {
-            "status": "scored",
-            "reward": 1.0,
-            "field_checks": 6
-          }
+      "checked_at": "2026-09-23",
+      "source_revision": "c87ce544187aa97332fb9a0bf732d7daec0c5f72",
+      "environment_kind": "uv dependency overlay on the development environment; wheels, not the Conda candidate artifacts",
+      "environment": {
+        "python": "3.12.3",
+        "packages": {
+          "cutadapt": "5.2",
+          "zlib-ng": "1.0.0",
+          "pysam": "0.24.1",
+          "backports.zstd": "1.6.0",
+          "xopen": "2.1.0",
+          "biopython": "1.88",
+          "numpy": "2.3.5",
+          "dnaio": "1.2.4",
+          "isal": "1.8.0",
+          "beautifulsoup4": "4.14.3",
+          "latex2sympy2_extended": "1.11.0",
+          "setuptools": "83.0.0",
+          "grpc-google-iam-v1": "0.14.3",
+          "annotated-doc": "0.0.4",
+          "fastembed": "0.8.0",
+          "starlette": "1.3.1",
+          "anthropic": "1.3.0",
+          "jaxopt": "0.8.5",
+          "marin-deploy": "0.0.0",
+          "flatbuffers": "25.12.19",
+          "marin-iris": "0.2.0",
+          "watchfiles": "1.1.1",
+          "equinox": "0.13.2",
+          "Authlib": "1.8.0",
+          "pgvector": "0.5.0",
+          "uvicorn": "0.40.0",
+          "aqtp": "0.9.0",
+          "google-cloud-core": "2.5.0",
+          "iniconfig": "2.3.0",
+          "cloudpickle": "3.1.2",
+          "six": "1.17.0",
+          "transformers": "5.12.1",
+          "marin-rigging": "0.2.0",
+          "httplib2": "0.32.0",
+          "multiprocess": "0.70.16",
+          "soupsieve": "2.8.4",
+          "fsspec": "2026.1.0",
+          "jsonschema-specifications": "2025.9.1",
+          "python-dotenv": "1.2.2",
+          "google-cloud-compute": "1.51.0",
+          "pydantic_core": "2.41.5",
+          "xxhash": "3.6.0",
+          "opt_einsum": "3.4.0",
+          "sentry-sdk": "2.49.0",
+          "fonttools": "4.61.1",
+          "pluggy": "1.6.0",
+          "pg8000": "1.31.5",
+          "pyasn1_modules": "0.4.2",
+          "grpcio-status": "1.76.0",
+          "watchdog": "6.0.0",
+          "jaxlib": "0.11.1",
+          "PyYAML": "6.0.3",
+          "cyclopts": "4.25.0",
+          "httpcore": "1.0.9",
+          "caio": "0.12.4",
+          "pyqwest": "0.6.1",
+          "hf-xet": "1.5.1",
+          "google-cloud-storage-control": "1.11.0",
+          "cryptography": "50.0.0",
+          "absl-py": "2.3.1",
+          "braceexpand": "0.1.7",
+          "openai-harmony": "0.0.8",
+          "tzdata": "2025.3",
+          "SQLAlchemy": "2.0.46",
+          "jmp": "0.0.4",
+          "decorator": "5.2.1",
+          "tasktrove-verify": "0.1.0",
+          "fastmcp-slim": "4.0.3",
+          "deepdiff": "9.0.0",
+          "google-crc32c": "1.8.0",
+          "marin-haliax": "0.2.0",
+          "pyarrow": "23.0.1",
+          "pyfiglet": "1.0.2",
+          "googleapis-common-protos": "1.72.0",
+          "magiccube": "0.3.0",
+          "marin-zephyr": "0.2.0",
+          "fasttext-wheel": "0.9.2",
+          "cachetools": "7.1.8",
+          "draccus": "0.11.6",
+          "nest-asyncio": "1.6.0",
+          "marin-finestore": "0.1.0",
+          "pyperclip": "1.11.0",
+          "drawsvg": "2.4.2",
+          "contourpy": "1.3.3",
+          "MarkupSafe": "3.0.3",
+          "google-resumable-media": "2.8.0",
+          "cffi": "2.0.0",
+          "pyasn1": "0.6.4",
+          "plotly": "6.5.1",
+          "resiliparse": "0.17.2",
+          "requests-oauthlib": "2.0.0",
+          "wandb": "0.26.0",
+          "frozenlist": "1.8.0",
+          "marin-marina": "0.1.0",
+          "jsonref": "1.1.0",
+          "pycparser": "2.23",
+          "lenses": "1.2.0",
+          "marin-core": "0.2.0",
+          "platformdirs": "4.5.1",
+          "beartype": "0.22.9",
+          "jaraco.functools": "4.4.0",
+          "async-lru": "2.0.5",
+          "typer": "0.21.1",
+          "certifi": "2026.1.4",
+          "tabulate": "0.9.0",
+          "openai": "2.24.0",
+          "pyee": "13.0.0",
+          "docstring_parser": "0.18.0",
+          "annotated-types": "0.7.0",
+          "referencing": "0.37.0",
+          "dataclasses-json": "0.6.7",
+          "polars-runtime-32": "1.42.1",
+          "google-api-core": "2.34.0",
+          "aiohappyeyeballs": "2.6.1",
+          "griffelib": "2.3.0",
+          "google-api-python-client": "2.188.0",
+          "greenlet": "3.3.1",
+          "google-cloud-secret-manager": "2.29.0",
+          "playwright": "1.57.0",
+          "distro": "1.9.0",
+          "packaging": "26.2",
+          "typing_extensions": "4.15.0",
+          "jiter": "0.11.1",
+          "chex": "0.1.91",
+          "PyJWT": "2.13.0",
+          "cycler": "0.12.1",
+          "asn1crypto": "1.5.1",
+          "oauthlib": "3.3.1",
+          "proto-plus": "1.27.0",
+          "aiofile": "3.12.3",
+          "yarl": "1.22.0",
+          "rpds-py": "0.30.0",
+          "marin-root": "0.1.0",
+          "marin-finelog-server": "0.2.46.dev33324331711",
+          "py_rust_stemmers": "0.1.8",
+          "sniffio": "1.3.1",
+          "arckit": "0.1.0",
+          "cellpylib": "2.4.0",
+          "einops": "0.8.1",
+          "jaraco.context": "6.1.2",
+          "kiwisolver": "1.4.9",
+          "google-cloud-tpu": "1.26.0",
+          "email-validator": "2.3.0",
+          "gitdb": "4.0.12",
+          "humanize": "4.15.0",
+          "loguru": "0.7.3",
+          "pytz": "2025.2",
+          "orbax-export": "0.0.8",
+          "aiofiles": "24.1.0",
+          "regex": "2026.1.14",
+          "tqdm-loggable": "0.2",
+          "uritemplate": "4.2.0",
+          "wrapt": "1.17.3",
+          "tokenizers": "0.22.2",
+          "tblib": "3.2.2",
+          "optax": "0.2.6",
+          "requests": "2.33.1",
+          "tomlkit": "0.13.3",
+          "mdurl": "0.1.2",
+          "multidict": "6.7.0",
+          "truststore": "0.10.4",
+          "pillow": "12.3.0",
+          "jax": "0.11.1",
+          "math-verify": "0.9.0",
+          "tqdm": "4.67.1",
+          "matplotlib": "3.10.8",
+          "google-auth": "2.47.0",
+          "protobuf": "6.33.6",
+          "wadler_lindig": "0.1.7",
+          "rich": "14.2.0",
+          "pyparsing": "3.3.1",
+          "psutil": "7.2.2",
+          "mypy_extensions": "1.1.0",
+          "keyring": "25.7.0",
+          "marin-fray": "0.2.0",
+          "zss": "1.2.0",
+          "fastapi": "0.136.3",
+          "marin-dupekit": "0.1.2",
+          "click": "8.3.1",
+          "zstandard": "0.25.0",
+          "tensorstore": "0.1.84",
+          "httpx": "0.28.1",
+          "python-multipart": "0.0.31",
+          "Pygments": "2.19.2",
+          "propcache": "0.4.1",
+          "mmh3": "5.3.0",
+          "pytest-timeout": "2.4.0",
+          "polars": "1.42.1",
+          "importlib_metadata": "8.5.0",
+          "pybind11": "3.0.1",
+          "connect-python": "0.9.0",
+          "shellingham": "1.5.4",
+          "google-cloud-storage": "3.8.0",
+          "marin-iris-native": "0.1.6.dev31131847556",
+          "flax": "0.12.4",
+          "aiobotocore": "2.26.0",
+          "toml": "0.10.2",
+          "py-key-value-aio": "0.4.5",
+          "aioitertools": "0.13.0",
+          "google-auth-oauthlib": "1.2.2",
+          "httpcore2": "2.12.0",
+          "SecretStorage": "3.5.0",
+          "orbax-checkpoint": "0.11.31",
+          "rsa": "4.9.1",
+          "duckdb": "1.5.0",
+          "pytimeparse": "1.1.8",
+          "google-auth-httplib2": "0.3.0",
+          "uncalled-for": "0.4.0",
+          "typing-inspect": "0.9.0",
+          "reasoning_gym": "0.1.25",
+          "marin-levanter": "0.2.0",
+          "onnxruntime": "1.29.0",
+          "grpcio": "1.76.0",
+          "toolz": "1.1.0",
+          "httptools": "0.7.1",
+          "pycosat": "0.6.6",
+          "dnspython": "2.8.0",
+          "openapi-pydantic": "0.5.1",
+          "marin-dupekit-native": "0.1.6.dev31131847556",
+          "jsonschema": "4.23.0",
+          "cloud-sql-python-connector": "1.22.0",
+          "sympy": "1.13.3",
+          "httpx2": "2.12.0",
+          "aiosignal": "1.4.0",
+          "python-dateutil": "2.9.0.post0",
+          "attrs": "25.4.0",
+          "jeepney": "0.9.0",
+          "jaraco.classes": "3.4.0",
+          "aiohttp": "3.14.3",
+          "marshmallow": "3.26.2",
+          "exceptiongroup": "1.3.1",
+          "treescope": "0.1.10",
+          "huggingface_hub": "1.21.0",
+          "antlr4-python3-runtime": "4.11.0",
+          "opentelemetry-api": "1.39.1",
+          "filelock": "3.20.3",
+          "charset-normalizer": "3.4.4",
+          "humanfriendly": "10.0",
+          "rich-rst": "2.1.0",
+          "mcp": "2.2.0",
+          "urllib3": "2.7.0",
+          "msgspec": "0.20.0",
+          "marin-ducky": "0.1.0",
+          "gcsfs": "2026.1.0",
+          "smmap": "5.0.2",
+          "pathable": "0.6.0",
+          "prometheus_client": "0.24.1",
+          "datasets": "4.8.5",
+          "pytest": "9.0.3",
+          "Jinja2": "3.1.6",
+          "vortex-data": "0.61.0",
+          "marin-finelog": "0.2.11",
+          "ml_dtypes": "0.5.4",
+          "importlib_resources": "6.5.2",
+          "uvloop": "0.22.1",
+          "orderly-set": "5.5.0",
+          "markdownify": "1.2.2",
+          "dill": "0.4.1",
+          "msgpack": "1.2.1",
+          "mergedeep": "1.3.4",
+          "typing-inspection": "0.4.2",
+          "jsonschema-path": "0.5.0",
+          "mpmath": "1.3.0",
+          "safetensors": "0.6.2",
+          "idna": "3.19",
+          "pydantic": "2.12.5",
+          "mcp-types": "2.2.0",
+          "zipp": "3.23.0",
+          "markdown-it-py": "4.0.0",
+          "more-itertools": "10.8.0",
+          "botocore": "1.41.5",
+          "jmespath": "1.0.1",
+          "jaxtyping": "0.3.5",
+          "anyio": "4.12.1",
+          "GitPython": "3.1.58",
+          "pandas": "2.2.2",
+          "immutabledict": "4.3.0",
+          "shellsim": "0.1.10",
+          "s3fs": "2026.1.0",
+          "substrait": "0.24.2",
+          "websockets": "15.0.1",
+          "sse-starlette": "3.1.2",
+          "simplejson": "3.20.2",
+          "seaborn": "0.13.2",
+          "pydantic-settings": "2.14.2",
+          "etils": "1.13.0",
+          "scipy": "1.17.0",
+          "bfi": "1.0.4",
+          "h11": "0.16.0",
+          "scramp": "1.4.17",
+          "narwhals": "2.15.0",
+          "joserfc": "1.7.5"
         }
-      ]
+      },
+      "environment_sha256": "3c5b3ac3025bb979e753b304de2e5f1895c331732e9ee50da4860ed99a862897",
+      "corpus_manifest_sha256": "7e3261dc4ba21bebadbcedf8c4b70e5e5cfd5be5badbec1ab4b9fee74a1d59a0",
+      "checks": [
+        {
+          "repository_index": 9,
+          "repository": "pysam",
+          "status": "passed",
+          "cases": [
+            {
+              "task_id": "sam-cigar-coverage-v1-20260923-00000",
+              "recipe": "sam-cigar-coverage",
+              "input_sha256": {
+                "reads.sam": "2e64e5a652fec5fcb277e9ca7ee663c7e658d5e3923006a666e8c88f8ca649b4",
+                "windows.bed": "94fad7b951a42e4c146414710c7dec8725c8dff6cb4a742b61a43d50bfc19b3b"
+              },
+              "artifact_sha256": {
+                "answer.json": "b0194482ce74eaa3f3f45e9ee67a3a6270a31f1d76d365950811441d86d87847",
+                "operation.py": "c9cfa342a9563d211de603f72fc36c84941d7655b374f9bbec47bd47a8fbf080",
+                "api.log.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "api.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              "commands": [
+                {
+                  "argv": [
+                    "python",
+                    "<work>/operation.py",
+                    "<inputs>",
+                    "<work>/answer.json"
+                  ],
+                  "exit_code": 0,
+                  "elapsed_seconds": 0.06393892702180892
+                }
+              ],
+              "verification": {
+                "status": "scored",
+                "reward": 1.0,
+                "field_checks": 6
+              }
+            },
+            {
+              "task_id": "sam-cigar-coverage-v1-20260923-00001",
+              "recipe": "sam-cigar-coverage",
+              "input_sha256": {
+                "reads.sam": "3dd7410c0583f440d1d10500df961e354f2805d31fc21127687dd3dcb2c69128",
+                "windows.bed": "94fad7b951a42e4c146414710c7dec8725c8dff6cb4a742b61a43d50bfc19b3b"
+              },
+              "artifact_sha256": {
+                "answer.json": "215ed5d1b3dc59d32766d54c352033f3985082361043fc9a0761ec07f3668fbe",
+                "operation.py": "c9cfa342a9563d211de603f72fc36c84941d7655b374f9bbec47bd47a8fbf080",
+                "api.log.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "api.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              "commands": [
+                {
+                  "argv": [
+                    "python",
+                    "<work>/operation.py",
+                    "<inputs>",
+                    "<work>/answer.json"
+                  ],
+                  "exit_code": 0,
+                  "elapsed_seconds": 0.06385289900936186
+                }
+              ],
+              "verification": {
+                "status": "scored",
+                "reward": 1.0,
+                "field_checks": 6
+              }
+            },
+            {
+              "task_id": "sam-cigar-coverage-v1-20260923-00002",
+              "recipe": "sam-cigar-coverage",
+              "input_sha256": {
+                "reads.sam": "f5cf68e41775c6890b43831e2e69f673c74def145e1fe81cc86d7596997b5380",
+                "windows.bed": "94fad7b951a42e4c146414710c7dec8725c8dff6cb4a742b61a43d50bfc19b3b"
+              },
+              "artifact_sha256": {
+                "answer.json": "f73cedd392b6e100e1170d26f44c87dab5481981759081696467c7ffafdb5f10",
+                "operation.py": "c9cfa342a9563d211de603f72fc36c84941d7655b374f9bbec47bd47a8fbf080",
+                "api.log.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "api.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              "commands": [
+                {
+                  "argv": [
+                    "python",
+                    "<work>/operation.py",
+                    "<inputs>",
+                    "<work>/answer.json"
+                  ],
+                  "exit_code": 0,
+                  "elapsed_seconds": 0.06383332004770637
+                }
+              ],
+              "verification": {
+                "status": "scored",
+                "reward": 1.0,
+                "field_checks": 6
+              }
+            }
+          ]
+        },
+        {
+          "repository_index": 19,
+          "repository": "Biopython",
+          "status": "passed",
+          "cases": [
+            {
+              "task_id": "gtf-splicing-v1-20260923-00000",
+              "recipe": "gtf-splicing",
+              "input_sha256": {
+                "annotations.gtf": "fe6cced7cfa721ff3c964a3165f8d2a8ddc264e3cf32462462d925bba6ea5cd7",
+                "genome.fa": "882e901122d8dda0706245b7458835d415569b86185613a2988e7d2519e69776"
+              },
+              "artifact_sha256": {
+                "answer.json": "807a3edd54e9b334d0b6a9e65d3156250b5aa06a05a52848e604b1b3b53cd255",
+                "operation.py": "e9ce9ee52677af67df734a06e8bf23dfbc7a955960d180643b4a4fd604c3720c",
+                "api.log.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "api.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              "commands": [
+                {
+                  "argv": [
+                    "python",
+                    "<work>/operation.py",
+                    "<inputs>",
+                    "<work>/answer.json"
+                  ],
+                  "exit_code": 0,
+                  "elapsed_seconds": 0.1640147960279137
+                }
+              ],
+              "verification": {
+                "status": "scored",
+                "reward": 1.0,
+                "field_checks": 8
+              }
+            },
+            {
+              "task_id": "gtf-splicing-v1-20260923-00001",
+              "recipe": "gtf-splicing",
+              "input_sha256": {
+                "annotations.gtf": "f034ad43c5b0a6e68e1b4fe6202e97a472804dc6dbe0b9ff8ecf1bf97bbcfb60",
+                "genome.fa": "f09528262152db426dcb293a242081b408297f0aadad55ecfcc1a0bb93a1ed6c"
+              },
+              "artifact_sha256": {
+                "answer.json": "48631b7899df39048b5bee8a5516c06b0204674e593e0e3571ae50c853719b3a",
+                "operation.py": "e9ce9ee52677af67df734a06e8bf23dfbc7a955960d180643b4a4fd604c3720c",
+                "api.log.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "api.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              "commands": [
+                {
+                  "argv": [
+                    "python",
+                    "<work>/operation.py",
+                    "<inputs>",
+                    "<work>/answer.json"
+                  ],
+                  "exit_code": 0,
+                  "elapsed_seconds": 0.16421417996753007
+                }
+              ],
+              "verification": {
+                "status": "scored",
+                "reward": 1.0,
+                "field_checks": 8
+              }
+            },
+            {
+              "task_id": "gtf-splicing-v1-20260923-00002",
+              "recipe": "gtf-splicing",
+              "input_sha256": {
+                "annotations.gtf": "a60017484793c20792bd9aaf2e4be0b6c7df91762eb6fd185aadbb287f6f6c50",
+                "genome.fa": "1c10ff6d35263e3b4efe54f2580124042ca307acd58a867febfeb6cd268b5cc0"
+              },
+              "artifact_sha256": {
+                "answer.json": "96d024e413dd485b92689aa90450998ac2e6ffe0a8c14f405072001dd1d5ead7",
+                "operation.py": "e9ce9ee52677af67df734a06e8bf23dfbc7a955960d180643b4a4fd604c3720c",
+                "api.log.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "api.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              "commands": [
+                {
+                  "argv": [
+                    "python",
+                    "<work>/operation.py",
+                    "<inputs>",
+                    "<work>/answer.json"
+                  ],
+                  "exit_code": 0,
+                  "elapsed_seconds": 0.16405829205177724
+                }
+              ],
+              "verification": {
+                "status": "scored",
+                "reward": 1.0,
+                "field_checks": 8
+              }
+            }
+          ]
+        },
+        {
+          "repository_index": 31,
+          "repository": "cutadapt",
+          "status": "passed",
+          "cases": [
+            {
+              "task_id": "fastq-adapter-trimming-v1-20260923-00000",
+              "recipe": "fastq-adapter-trimming",
+              "input_sha256": {
+                "reads.fastq": "841f858473a3b4cd8655ef4b1d2e0d54bb723a9bc7b3d565bc52c0c49189e61e"
+              },
+              "artifact_sha256": {
+                "answer.json": "ffe12a72b33cfb776d6d65d11ac7181234a6b7d81a99543bc0dc30ab6f441538",
+                "cutadapt.log.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "cutadapt.log": "5f27930267fcac4a586bcfdd495c1a4a5630de345d80f2179ec15e9cbb30d474",
+                "trimmed.fastq": "e83ec1537507d0b59421c10b3e85eaf90618bb6ee6731ff26fb77c50a6ba3ba1"
+              },
+              "commands": [
+                {
+                  "argv": [
+                    "cutadapt",
+                    "-j",
+                    "1",
+                    "-a",
+                    "AGATCGGAAGAGC",
+                    "-O",
+                    "6",
+                    "-e",
+                    "0",
+                    "--no-indels",
+                    "-o",
+                    "<work>/trimmed.fastq",
+                    "<inputs>/reads.fastq"
+                  ],
+                  "exit_code": 0,
+                  "elapsed_seconds": 0.1140584220411256
+                }
+              ],
+              "verification": {
+                "status": "scored",
+                "reward": 1.0,
+                "field_checks": 15
+              }
+            },
+            {
+              "task_id": "fastq-adapter-trimming-v1-20260923-00001",
+              "recipe": "fastq-adapter-trimming",
+              "input_sha256": {
+                "reads.fastq": "2c27bd224059ea4b1a662c61861c7a32a5ea2e3f69185dbdc7b2a25b3916828a"
+              },
+              "artifact_sha256": {
+                "answer.json": "c8a2d2e8ce77ee9df0429d0f87f081c0aea1c5cc6ead000311b8e4921d25934d",
+                "cutadapt.log.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "cutadapt.log": "3bbe21be8113f2bf20a62da050ab0d4e14402b8e6586788764f4466cd41a1cb8",
+                "trimmed.fastq": "850933cad4cd2d9ab0d1d589ee05040d6519a1d24028979224d7f71c91d0e082"
+              },
+              "commands": [
+                {
+                  "argv": [
+                    "cutadapt",
+                    "-j",
+                    "1",
+                    "-a",
+                    "AGATCGGAAGAGC",
+                    "-O",
+                    "6",
+                    "-e",
+                    "0",
+                    "--no-indels",
+                    "-o",
+                    "<work>/trimmed.fastq",
+                    "<inputs>/reads.fastq"
+                  ],
+                  "exit_code": 0,
+                  "elapsed_seconds": 0.11516811291221529
+                }
+              ],
+              "verification": {
+                "status": "scored",
+                "reward": 1.0,
+                "field_checks": 15
+              }
+            },
+            {
+              "task_id": "fastq-adapter-trimming-v1-20260923-00002",
+              "recipe": "fastq-adapter-trimming",
+              "input_sha256": {
+                "reads.fastq": "def1d940cf2d7f8539e20955f645170395d131e153429ffb004adbf515aa3033"
+              },
+              "artifact_sha256": {
+                "answer.json": "7a451ac74132144e812232f522caba4e4f8e3e91a3e700d74e21a4528378c266",
+                "cutadapt.log.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "cutadapt.log": "02e7cc92c48a6b4aa77acd000a70a7fe2f5422fb1d07fab395debaa1d9b0c9ec",
+                "trimmed.fastq": "7913c8397c05703b644e570aee9fcf069eedd13658bd5555a575c23ee51fb803"
+              },
+              "commands": [
+                {
+                  "argv": [
+                    "cutadapt",
+                    "-j",
+                    "1",
+                    "-a",
+                    "AGATCGGAAGAGC",
+                    "-O",
+                    "6",
+                    "-e",
+                    "0",
+                    "--no-indels",
+                    "-o",
+                    "<work>/trimmed.fastq",
+                    "<inputs>/reads.fastq"
+                  ],
+                  "exit_code": 0,
+                  "elapsed_seconds": 0.11448447499424219
+                }
+              ],
+              "verification": {
+                "status": "scored",
+                "reward": 1.0,
+                "field_checks": 15
+              }
+            }
+          ]
+        }
+      ],
+      "environment_note": "Visible distribution versions were captured during execution; this is not a portable environment lock or a task image."
     },
     {
-      "repository_index": 19,
-      "repository": "Biopython",
-      "status": "passed",
-      "cases": [
-        {
-          "task_id": "gtf-splicing-v1-20260923-00000",
-          "recipe": "gtf-splicing",
-          "input_sha256": {
-            "annotations.gtf": "fe6cced7cfa721ff3c964a3165f8d2a8ddc264e3cf32462462d925bba6ea5cd7",
-            "genome.fa": "882e901122d8dda0706245b7458835d415569b86185613a2988e7d2519e69776"
-          },
-          "artifact_sha256": {
-            "answer.json": "807a3edd54e9b334d0b6a9e65d3156250b5aa06a05a52848e604b1b3b53cd255",
-            "operation.py": "e9ce9ee52677af67df734a06e8bf23dfbc7a955960d180643b4a4fd604c3720c",
-            "api.log.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-            "api.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-          },
-          "commands": [
-            {
-              "argv": [
-                "python",
-                "<work>/operation.py",
-                "<inputs>",
-                "<work>/answer.json"
-              ],
-              "exit_code": 0,
-              "elapsed_seconds": 0.1640147960279137
-            }
-          ],
-          "verification": {
-            "status": "scored",
-            "reward": 1.0,
-            "field_checks": 8
-          }
-        },
-        {
-          "task_id": "gtf-splicing-v1-20260923-00001",
-          "recipe": "gtf-splicing",
-          "input_sha256": {
-            "annotations.gtf": "f034ad43c5b0a6e68e1b4fe6202e97a472804dc6dbe0b9ff8ecf1bf97bbcfb60",
-            "genome.fa": "f09528262152db426dcb293a242081b408297f0aadad55ecfcc1a0bb93a1ed6c"
-          },
-          "artifact_sha256": {
-            "answer.json": "48631b7899df39048b5bee8a5516c06b0204674e593e0e3571ae50c853719b3a",
-            "operation.py": "e9ce9ee52677af67df734a06e8bf23dfbc7a955960d180643b4a4fd604c3720c",
-            "api.log.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-            "api.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-          },
-          "commands": [
-            {
-              "argv": [
-                "python",
-                "<work>/operation.py",
-                "<inputs>",
-                "<work>/answer.json"
-              ],
-              "exit_code": 0,
-              "elapsed_seconds": 0.16421417996753007
-            }
-          ],
-          "verification": {
-            "status": "scored",
-            "reward": 1.0,
-            "field_checks": 8
-          }
-        },
-        {
-          "task_id": "gtf-splicing-v1-20260923-00002",
-          "recipe": "gtf-splicing",
-          "input_sha256": {
-            "annotations.gtf": "a60017484793c20792bd9aaf2e4be0b6c7df91762eb6fd185aadbb287f6f6c50",
-            "genome.fa": "1c10ff6d35263e3b4efe54f2580124042ca307acd58a867febfeb6cd268b5cc0"
-          },
-          "artifact_sha256": {
-            "answer.json": "96d024e413dd485b92689aa90450998ac2e6ffe0a8c14f405072001dd1d5ead7",
-            "operation.py": "e9ce9ee52677af67df734a06e8bf23dfbc7a955960d180643b4a4fd604c3720c",
-            "api.log.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-            "api.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-          },
-          "commands": [
-            {
-              "argv": [
-                "python",
-                "<work>/operation.py",
-                "<inputs>",
-                "<work>/answer.json"
-              ],
-              "exit_code": 0,
-              "elapsed_seconds": 0.16405829205177724
-            }
-          ],
-          "verification": {
-            "status": "scored",
-            "reward": 1.0,
-            "field_checks": 8
-          }
+      "checked_at": "2026-09-23",
+      "source_revision": "45a03d765a19048a11e430d81249c666f4d70487",
+      "environment_kind": "Isolated uv environment from pinned snakemake==9.27.0 and multiqc==1.35 wheels; not Conda artifacts",
+      "environment": {
+        "python": "3.12.3",
+        "packages": {
+          "conda-inject": "1.3.2",
+          "snakemake-interface-storage-plugins": "4.4.1",
+          "docutils": "0.22.4",
+          "tiktoken": "0.14.0",
+          "six": "1.17.0",
+          "jsonschema-specifications": "2025.9.1",
+          "python-dotenv": "1.2.2",
+          "pydantic_core": "2.41.5",
+          "snakemake": "9.27.0",
+          "kaleido": "0.2.1",
+          "fastjsonschema": "2.22.2",
+          "PyYAML": "6.0.3",
+          "SQLAlchemy": "2.0.46",
+          "PuLP": "3.3.2",
+          "pyarrow": "23.0.1",
+          "immutables": "0.21",
+          "rich-click": "1.9.9",
+          "packaging": "26.2",
+          "snakemake-interface-logger-plugins": "2.1.0",
+          "natsort": "8.4.0",
+          "jupyter_core": "5.9.1",
+          "nbformat": "5.11.1",
+          "MarkupSafe": "3.0.3",
+          "plotly": "6.5.1",
+          "typeguard": "4.6.0",
+          "throttler": "1.2.3",
+          "boto3": "1.43.101",
+          "multiqc": "1.35",
+          "platformdirs": "4.5.1",
+          "certifi": "2026.1.4",
+          "tabulate": "0.9.0",
+          "ConfigArgParse": "1.7.7",
+          "coloredlogs": "15.0.1",
+          "annotated-types": "0.7.0",
+          "referencing": "0.37.0",
+          "polars-runtime-32": "1.42.1",
+          "s3transfer": "0.19.2",
+          "greenlet": "3.3.1",
+          "typing_extensions": "4.15.0",
+          "rpds-py": "0.30.0",
+          "gitdb": "4.0.12",
+          "humanize": "4.15.0",
+          "regex": "2026.1.14",
+          "wrapt": "1.17.3",
+          "requests": "2.33.1",
+          "mdurl": "0.1.2",
+          "pillow": "12.3.0",
+          "tqdm": "4.67.1",
+          "snakemake-interface-report-plugins": "1.3.0",
+          "tenacity": "9.1.4",
+          "rich": "14.2.0",
+          "snakemake-interface-scheduler-plugins": "2.0.2",
+          "psutil": "7.2.2",
+          "snakemake-interface-common": "1.23.0",
+          "click": "8.3.1",
+          "Pygments": "2.19.2",
+          "polars": "1.42.1",
+          "importlib_metadata": "8.5.0",
+          "argparse-dataclass": "2.0.0",
+          "spectra": "0.1.0",
+          "yte": "1.9.4",
+          "dpath": "2.2.0",
+          "jsonschema": "4.23.0",
+          "polars-runtime-compat": "1.42.1",
+          "python-dateutil": "2.9.0.post0",
+          "attrs": "25.4.0",
+          "charset-normalizer": "3.4.4",
+          "humanfriendly": "10.0",
+          "smart_open": "7.7.1",
+          "urllib3": "2.7.0",
+          "networkx": "3.7",
+          "connection_pool": "0.0.3",
+          "smmap": "5.0.2",
+          "colormath2": "3.0.3",
+          "numpy": "2.3.5",
+          "Jinja2": "3.1.6",
+          "snakemake-interface-executor-plugins": "9.4.0",
+          "Markdown": "3.10.3",
+          "typing-inspection": "0.4.2",
+          "idna": "3.19",
+          "pydantic": "2.12.5",
+          "zipp": "3.23.0",
+          "sqlmodel": "0.0.37",
+          "markdown-it-py": "4.0.0",
+          "botocore": "1.41.5",
+          "traitlets": "5.16.1",
+          "jmespath": "1.0.1",
+          "GitPython": "3.1.58",
+          "narwhals": "2.15.0",
+          "beautifulsoup4": "4.14.3",
+          "latex2sympy2_extended": "1.11.0",
+          "setuptools": "83.0.0",
+          "grpc-google-iam-v1": "0.14.3",
+          "annotated-doc": "0.0.4",
+          "fastembed": "0.8.0",
+          "starlette": "1.3.1",
+          "anthropic": "1.3.0",
+          "jaxopt": "0.8.5",
+          "marin-deploy": "0.0.0",
+          "flatbuffers": "25.12.19",
+          "marin-iris": "0.2.0",
+          "watchfiles": "1.1.1",
+          "equinox": "0.13.2",
+          "Authlib": "1.8.0",
+          "pgvector": "0.5.0",
+          "uvicorn": "0.40.0",
+          "aqtp": "0.9.0",
+          "google-cloud-core": "2.5.0",
+          "iniconfig": "2.3.0",
+          "cloudpickle": "3.1.2",
+          "transformers": "5.12.1",
+          "marin-rigging": "0.2.0",
+          "httplib2": "0.32.0",
+          "multiprocess": "0.70.16",
+          "soupsieve": "2.8.4",
+          "fsspec": "2026.1.0",
+          "google-cloud-compute": "1.51.0",
+          "xxhash": "3.6.0",
+          "opt_einsum": "3.4.0",
+          "sentry-sdk": "2.49.0",
+          "fonttools": "4.61.1",
+          "pluggy": "1.6.0",
+          "pg8000": "1.31.5",
+          "pyasn1_modules": "0.4.2",
+          "grpcio-status": "1.76.0",
+          "watchdog": "6.0.0",
+          "jaxlib": "0.11.1",
+          "cyclopts": "4.25.0",
+          "httpcore": "1.0.9",
+          "caio": "0.12.4",
+          "pyqwest": "0.6.1",
+          "hf-xet": "1.5.1",
+          "google-cloud-storage-control": "1.11.0",
+          "cryptography": "50.0.0",
+          "absl-py": "2.3.1",
+          "braceexpand": "0.1.7",
+          "openai-harmony": "0.0.8",
+          "tzdata": "2025.3",
+          "jmp": "0.0.4",
+          "decorator": "5.2.1",
+          "tasktrove-verify": "0.1.0",
+          "fastmcp-slim": "4.0.3",
+          "deepdiff": "9.0.0",
+          "google-crc32c": "1.8.0",
+          "marin-haliax": "0.2.0",
+          "pyfiglet": "1.0.2",
+          "googleapis-common-protos": "1.72.0",
+          "magiccube": "0.3.0",
+          "marin-zephyr": "0.2.0",
+          "fasttext-wheel": "0.9.2",
+          "cachetools": "7.1.8",
+          "draccus": "0.11.6",
+          "nest-asyncio": "1.6.0",
+          "marin-finestore": "0.1.0",
+          "pyperclip": "1.11.0",
+          "drawsvg": "2.4.2",
+          "contourpy": "1.3.3",
+          "google-resumable-media": "2.8.0",
+          "cffi": "2.0.0",
+          "pyasn1": "0.6.4",
+          "resiliparse": "0.17.2",
+          "requests-oauthlib": "2.0.0",
+          "wandb": "0.26.0",
+          "frozenlist": "1.8.0",
+          "marin-marina": "0.1.0",
+          "jsonref": "1.1.0",
+          "pycparser": "2.23",
+          "lenses": "1.2.0",
+          "marin-core": "0.2.0",
+          "beartype": "0.22.9",
+          "jaraco.functools": "4.4.0",
+          "async-lru": "2.0.5",
+          "typer": "0.21.1",
+          "openai": "2.24.0",
+          "pyee": "13.0.0",
+          "docstring_parser": "0.18.0",
+          "dataclasses-json": "0.6.7",
+          "google-api-core": "2.34.0",
+          "aiohappyeyeballs": "2.6.1",
+          "griffelib": "2.3.0",
+          "google-api-python-client": "2.188.0",
+          "google-cloud-secret-manager": "2.29.0",
+          "playwright": "1.57.0",
+          "backports.zstd": "1.6.0",
+          "distro": "1.9.0",
+          "jiter": "0.11.1",
+          "chex": "0.1.91",
+          "PyJWT": "2.13.0",
+          "cycler": "0.12.1",
+          "asn1crypto": "1.5.1",
+          "oauthlib": "3.3.1",
+          "proto-plus": "1.27.0",
+          "aiofile": "3.12.3",
+          "yarl": "1.22.0",
+          "marin-root": "0.1.0",
+          "marin-finelog-server": "0.2.46.dev33324331711",
+          "py_rust_stemmers": "0.1.8",
+          "sniffio": "1.3.1",
+          "arckit": "0.1.0",
+          "cellpylib": "2.4.0",
+          "einops": "0.8.1",
+          "jaraco.context": "6.1.2",
+          "kiwisolver": "1.4.9",
+          "google-cloud-tpu": "1.26.0",
+          "email-validator": "2.3.0",
+          "loguru": "0.7.3",
+          "pytz": "2025.2",
+          "orbax-export": "0.0.8",
+          "aiofiles": "24.1.0",
+          "tqdm-loggable": "0.2",
+          "uritemplate": "4.2.0",
+          "tokenizers": "0.22.2",
+          "tblib": "3.2.2",
+          "optax": "0.2.6",
+          "tomlkit": "0.13.3",
+          "multidict": "6.7.0",
+          "truststore": "0.10.4",
+          "jax": "0.11.1",
+          "math-verify": "0.9.0",
+          "matplotlib": "3.10.8",
+          "google-auth": "2.47.0",
+          "protobuf": "6.33.6",
+          "wadler_lindig": "0.1.7",
+          "pyparsing": "3.3.1",
+          "mypy_extensions": "1.1.0",
+          "keyring": "25.7.0",
+          "marin-fray": "0.2.0",
+          "zss": "1.2.0",
+          "fastapi": "0.136.3",
+          "marin-dupekit": "0.1.2",
+          "zstandard": "0.25.0",
+          "tensorstore": "0.1.84",
+          "httpx": "0.28.1",
+          "python-multipart": "0.0.31",
+          "propcache": "0.4.1",
+          "mmh3": "5.3.0",
+          "pytest-timeout": "2.4.0",
+          "pybind11": "3.0.1",
+          "connect-python": "0.9.0",
+          "shellingham": "1.5.4",
+          "google-cloud-storage": "3.8.0",
+          "marin-iris-native": "0.1.6.dev31131847556",
+          "flax": "0.12.4",
+          "aiobotocore": "2.26.0",
+          "toml": "0.10.2",
+          "py-key-value-aio": "0.4.5",
+          "aioitertools": "0.13.0",
+          "google-auth-oauthlib": "1.2.2",
+          "httpcore2": "2.12.0",
+          "SecretStorage": "3.5.0",
+          "orbax-checkpoint": "0.11.31",
+          "rsa": "4.9.1",
+          "duckdb": "1.5.0",
+          "pytimeparse": "1.1.8",
+          "google-auth-httplib2": "0.3.0",
+          "uncalled-for": "0.4.0",
+          "typing-inspect": "0.9.0",
+          "reasoning_gym": "0.1.25",
+          "marin-levanter": "0.2.0",
+          "onnxruntime": "1.29.0",
+          "grpcio": "1.76.0",
+          "toolz": "1.1.0",
+          "httptools": "0.7.1",
+          "pycosat": "0.6.6",
+          "dnspython": "2.8.0",
+          "openapi-pydantic": "0.5.1",
+          "marin-dupekit-native": "0.1.6.dev31131847556",
+          "cloud-sql-python-connector": "1.22.0",
+          "sympy": "1.13.3",
+          "httpx2": "2.12.0",
+          "aiosignal": "1.4.0",
+          "jeepney": "0.9.0",
+          "jaraco.classes": "3.4.0",
+          "aiohttp": "3.14.3",
+          "marshmallow": "3.26.2",
+          "exceptiongroup": "1.3.1",
+          "treescope": "0.1.10",
+          "huggingface_hub": "1.21.0",
+          "antlr4-python3-runtime": "4.11.0",
+          "opentelemetry-api": "1.39.1",
+          "filelock": "3.20.3",
+          "rich-rst": "2.1.0",
+          "mcp": "2.2.0",
+          "msgspec": "0.20.0",
+          "marin-ducky": "0.1.0",
+          "gcsfs": "2026.1.0",
+          "pathable": "0.6.0",
+          "prometheus_client": "0.24.1",
+          "datasets": "4.8.5",
+          "pytest": "9.0.3",
+          "vortex-data": "0.61.0",
+          "marin-finelog": "0.2.11",
+          "ml_dtypes": "0.5.4",
+          "importlib_resources": "6.5.2",
+          "uvloop": "0.22.1",
+          "orderly-set": "5.5.0",
+          "markdownify": "1.2.2",
+          "dill": "0.4.1",
+          "msgpack": "1.2.1",
+          "mergedeep": "1.3.4",
+          "jsonschema-path": "0.5.0",
+          "mpmath": "1.3.0",
+          "safetensors": "0.6.2",
+          "mcp-types": "2.2.0",
+          "more-itertools": "10.8.0",
+          "jaxtyping": "0.3.5",
+          "anyio": "4.12.1",
+          "pandas": "2.2.2",
+          "immutabledict": "4.3.0",
+          "shellsim": "0.1.10",
+          "s3fs": "2026.1.0",
+          "substrait": "0.24.2",
+          "websockets": "15.0.1",
+          "sse-starlette": "3.1.2",
+          "simplejson": "3.20.2",
+          "seaborn": "0.13.2",
+          "pydantic-settings": "2.14.2",
+          "etils": "1.13.0",
+          "scipy": "1.17.0",
+          "bfi": "1.0.4",
+          "h11": "0.16.0",
+          "scramp": "1.4.17",
+          "joserfc": "1.7.5"
         }
-      ]
-    },
-    {
-      "repository_index": 31,
-      "repository": "cutadapt",
-      "status": "passed",
-      "cases": [
+      },
+      "environment_sha256": "31cb30b2e237d9e453eb544b99520aeb1285825a3031db5244541a4e6c1dc510",
+      "corpus_manifest_sha256": "4d8189e5a33d0091b04806f069fd87ff1a515520a0befb695ef9664db3a213f9",
+      "checks": [
         {
-          "task_id": "fastq-adapter-trimming-v1-20260923-00000",
-          "recipe": "fastq-adapter-trimming",
-          "input_sha256": {
-            "reads.fastq": "841f858473a3b4cd8655ef4b1d2e0d54bb723a9bc7b3d565bc52c0c49189e61e"
-          },
-          "artifact_sha256": {
-            "answer.json": "ffe12a72b33cfb776d6d65d11ac7181234a6b7d81a99543bc0dc30ab6f441538",
-            "cutadapt.log.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-            "cutadapt.log": "5f27930267fcac4a586bcfdd495c1a4a5630de345d80f2179ec15e9cbb30d474",
-            "trimmed.fastq": "e83ec1537507d0b59421c10b3e85eaf90618bb6ee6731ff26fb77c50a6ba3ba1"
-          },
-          "commands": [
+          "repository_index": 16,
+          "repository": "Snakemake",
+          "status": "passed",
+          "cases": [
             {
-              "argv": [
-                "cutadapt",
-                "-j",
-                "1",
-                "-a",
-                "AGATCGGAAGAGC",
-                "-O",
-                "6",
-                "-e",
-                "0",
-                "--no-indels",
-                "-o",
-                "<work>/trimmed.fastq",
-                "<inputs>/reads.fastq"
+              "task_id": "sample-sheet-lanes-v1-20260923-00000",
+              "recipe": "sample-sheet-lanes",
+              "input_sha256": {
+                "excluded.csv": "6946b812076f40e48eb45cb3593b61059109d73308978c1f870d9ce9592384a1",
+                "patient_a_L1.csv": "33733f8eef3e899d6247c1e8389a9c2144723d0c15aad4a9ef0aa5199a8c2081",
+                "patient_a_L2.csv": "b0364685399e8a77d506e12a726d5f7c89a24d0e4a22f623289057777eda848d",
+                "patient_b_L2.csv": "763685102a0beb1bb5f9097ad27e7ef4e2cb0ce043def1235ccc92bf0c8a7c05",
+                "samples.csv": "02962926693dd337cb12b3b9548e296a4b4ceacf4f9b1d59e8eddcf99bdfe627"
+              },
+              "artifact_sha256": {
+                "Snakefile": "45960d5db60436aee09d7a0e5a09634cae6379fdbcdd33ec951e364c76471a2f",
+                "answer.json": "0e01a2fa8c63e479ef8b0b4d290426ab124ba4c024595b6fc43f4b798cf8fb6c",
+                "merge_lanes.py": "1caa494874ce5b1f99b07daeb6815e5d30aaaf84b59f0ed49ca9617ad1cd4ffc",
+                "parameters.json": "b03d590f65f150ac23ee2da4451a767e5e18ab2ef749d6ad84fbe81a64f54546",
+                "results/patient_a.json": "4eaef7371dccee80ac90a8f095da89af755825a263b70ec179bc06db82a42a40",
+                "results/patient_b.json": "efffbbe8e90852d222da67c87c331b94d3e27d67e2e892c94361b8efb9e7f235",
+                "snakemake.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "snakemake.log.stderr": "7af461dab1cf6c3d824f70fa3a5c5b6e5a4c0b4681b2d310257e9291aa544d59"
+              },
+              "commands": [
+                {
+                  "argv": [
+                    "snakemake",
+                    "--snakefile",
+                    "<work>/Snakefile",
+                    "--cores",
+                    "1",
+                    "--scheduler",
+                    "greedy",
+                    "--configfile",
+                    "<work>/parameters.json"
+                  ],
+                  "exit_code": 0,
+                  "elapsed_seconds": 4.337811725912616
+                }
               ],
-              "exit_code": 0,
-              "elapsed_seconds": 0.1140584220411256
+              "verification": {
+                "status": "scored",
+                "reward": 1.0,
+                "field_checks": 8
+              }
+            },
+            {
+              "task_id": "sample-sheet-lanes-v1-20260923-00001",
+              "recipe": "sample-sheet-lanes",
+              "input_sha256": {
+                "excluded.csv": "6946b812076f40e48eb45cb3593b61059109d73308978c1f870d9ce9592384a1",
+                "patient_a_L1.csv": "d5fa6dfe73d0f2c1add57a7481161ce12f819c49e4bf4401a79910aa1b57211b",
+                "patient_a_L2.csv": "bb0e0c205c90f28b95bcd860716d11fa8ddef32aee3440962a5c477e49866bc7",
+                "patient_b_L2.csv": "0c817aeae33043842ba6bdc3fd23e80a08a08a7e854246571fb0aae9bf5cf78c",
+                "samples.csv": "2080543ee7035fec97380da802c7df94689413363db038653ab97fcfa83ee3b5"
+              },
+              "artifact_sha256": {
+                "Snakefile": "45960d5db60436aee09d7a0e5a09634cae6379fdbcdd33ec951e364c76471a2f",
+                "answer.json": "073cb1cf68439a2547e14fbd72e25fd15fb8c85563cb068752a5f92761bc8b50",
+                "merge_lanes.py": "1caa494874ce5b1f99b07daeb6815e5d30aaaf84b59f0ed49ca9617ad1cd4ffc",
+                "parameters.json": "f222eb841fd68153b9367b1049512f93d497a551d432ffb9c545e841716072a4",
+                "results/patient_a.json": "9b5621a8745980c01ed2e99c6969e344c9e2bab33cf9c0f14b14469f65164c21",
+                "results/patient_b.json": "0bf9a2dc35142a970d0ef9b1c3534e9257e21a8138e03d1c48af9009395c037b",
+                "snakemake.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "snakemake.log.stderr": "ebb89d82a9e2c1f390372cccab2fe3554cb6681ffdf18f4fde7998cf8889566a"
+              },
+              "commands": [
+                {
+                  "argv": [
+                    "snakemake",
+                    "--snakefile",
+                    "<work>/Snakefile",
+                    "--cores",
+                    "1",
+                    "--scheduler",
+                    "greedy",
+                    "--configfile",
+                    "<work>/parameters.json"
+                  ],
+                  "exit_code": 0,
+                  "elapsed_seconds": 2.421796675072983
+                }
+              ],
+              "verification": {
+                "status": "scored",
+                "reward": 1.0,
+                "field_checks": 8
+              }
+            },
+            {
+              "task_id": "sample-sheet-lanes-v1-20260923-00002",
+              "recipe": "sample-sheet-lanes",
+              "input_sha256": {
+                "excluded.csv": "6946b812076f40e48eb45cb3593b61059109d73308978c1f870d9ce9592384a1",
+                "patient_a_L1.csv": "dce2f07b52db44fcac3bcfad5098d27e5b44b96e9867d785b09b1f1a7c5f26fd",
+                "patient_a_L2.csv": "dee9daa47ea2205692dec48e204088eb7f5a50adca05f110610852f847bd5ab6",
+                "patient_b_L2.csv": "5cf7d2d2c5bda091ec6a1fa070a50ec5ef345e1bf1dbdfd04215596b5cfbb9f8",
+                "samples.csv": "6ee21b5fd4225957bcb13b50cab34b87be892258f4fca269e71271959af3721a"
+              },
+              "artifact_sha256": {
+                "Snakefile": "45960d5db60436aee09d7a0e5a09634cae6379fdbcdd33ec951e364c76471a2f",
+                "answer.json": "995a63a556d1131f144d39d7633e8001b3b51760215e2489d4ddcc1208cee4e2",
+                "merge_lanes.py": "1caa494874ce5b1f99b07daeb6815e5d30aaaf84b59f0ed49ca9617ad1cd4ffc",
+                "parameters.json": "5979125285f95c950e313019908a989d24ca7b1015a39eb2a22c7c98ad45d144",
+                "results/patient_a.json": "9dcca8f8fd31a976db999055f1ac7ffa22d922a5a942299adfe80626f0e82e51",
+                "results/patient_b.json": "5d0fa36e2e9cd1b7d3e729efe19a31c3a14391fb80d32653e76dd3ff091664d3",
+                "snakemake.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "snakemake.log.stderr": "bb65525a470412a622e23d14d77b1419485d18abb1e655a959c853ab9b9aad93"
+              },
+              "commands": [
+                {
+                  "argv": [
+                    "snakemake",
+                    "--snakefile",
+                    "<work>/Snakefile",
+                    "--cores",
+                    "1",
+                    "--scheduler",
+                    "greedy",
+                    "--configfile",
+                    "<work>/parameters.json"
+                  ],
+                  "exit_code": 0,
+                  "elapsed_seconds": 2.278776371036656
+                }
+              ],
+              "verification": {
+                "status": "scored",
+                "reward": 1.0,
+                "field_checks": 8
+              }
             }
-          ],
-          "verification": {
-            "status": "scored",
-            "reward": 1.0,
-            "field_checks": 15
-          }
+          ]
         },
         {
-          "task_id": "fastq-adapter-trimming-v1-20260923-00001",
-          "recipe": "fastq-adapter-trimming",
-          "input_sha256": {
-            "reads.fastq": "2c27bd224059ea4b1a662c61861c7a32a5ea2e3f69185dbdc7b2a25b3916828a"
-          },
-          "artifact_sha256": {
-            "answer.json": "c8a2d2e8ce77ee9df0429d0f87f081c0aea1c5cc6ead000311b8e4921d25934d",
-            "cutadapt.log.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-            "cutadapt.log": "3bbe21be8113f2bf20a62da050ab0d4e14402b8e6586788764f4466cd41a1cb8",
-            "trimmed.fastq": "850933cad4cd2d9ab0d1d589ee05040d6519a1d24028979224d7f71c91d0e082"
-          },
-          "commands": [
+          "repository_index": 24,
+          "repository": "MultiQC",
+          "status": "passed",
+          "cases": [
             {
-              "argv": [
-                "cutadapt",
-                "-j",
-                "1",
-                "-a",
-                "AGATCGGAAGAGC",
-                "-O",
-                "6",
-                "-e",
-                "0",
-                "--no-indels",
-                "-o",
-                "<work>/trimmed.fastq",
-                "<inputs>/reads.fastq"
+              "task_id": "fastqc-report-reconciliation-v1-20260923-00000",
+              "recipe": "fastqc-report-reconciliation",
+              "input_sha256": {
+                "s0.fastq": "0cf839230197003bff224938cdcf311989008b834753681edf51b56c37239938",
+                "s0_fastqc_data.txt": "8cbf2d58c03c88e3c148d44a2a87a0b0f587775cf62d356d7dab33db81ac35b4",
+                "s1.fastq": "18f203476c60601f8685ce0406c7a5c4088657d50d1ba1ff56b87725b088ca38",
+                "s1_fastqc_data.txt": "8b9eb5cf62225a4194ce58a1ff37f1b6f94e3d7f224bee36676fc3e1e8918229",
+                "s2.fastq": "1bd5521e3b932160a30d42e9d8c1d276d8fce22805c891d85e10efb2bfc3a8c8",
+                "s2_fastqc_data.txt": "32954ffaf5ada47632bdbaf8b700a14caf0b42338fadc47832a1967d64493378",
+                "samples.csv": "40fecc110eaf067cf0654c20ccbfb332afc56c9577c441bf3fa76073d8c1a7ba"
+              },
+              "artifact_sha256": {
+                "answer.json": "be054eeef829e2413f1c28ce5f775d690daf110d54752c7668e217593971f1aa",
+                "api.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "api.log.stderr": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+                "operation.py": "9104ccbd0039a1ceb84649aaf04280f3e7caeb85c6e55869771f6b1a87f48ad2",
+                "parsed_reports.json": "2015a458b40cc93078eee037bfde1d4e672f05849e4714832dc5ef184305ac45",
+                "reports/s0_fastqc/fastqc_data.txt": "8cbf2d58c03c88e3c148d44a2a87a0b0f587775cf62d356d7dab33db81ac35b4",
+                "reports/s1_fastqc/fastqc_data.txt": "8b9eb5cf62225a4194ce58a1ff37f1b6f94e3d7f224bee36676fc3e1e8918229"
+              },
+              "commands": [
+                {
+                  "argv": [
+                    "python",
+                    "<work>/operation.py",
+                    "<inputs>",
+                    "<work>/answer.json"
+                  ],
+                  "exit_code": 0,
+                  "elapsed_seconds": 1.0748264989815652
+                }
               ],
-              "exit_code": 0,
-              "elapsed_seconds": 0.11516811291221529
-            }
-          ],
-          "verification": {
-            "status": "scored",
-            "reward": 1.0,
-            "field_checks": 15
-          }
-        },
-        {
-          "task_id": "fastq-adapter-trimming-v1-20260923-00002",
-          "recipe": "fastq-adapter-trimming",
-          "input_sha256": {
-            "reads.fastq": "def1d940cf2d7f8539e20955f645170395d131e153429ffb004adbf515aa3033"
-          },
-          "artifact_sha256": {
-            "answer.json": "7a451ac74132144e812232f522caba4e4f8e3e91a3e700d74e21a4528378c266",
-            "cutadapt.log.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-            "cutadapt.log": "02e7cc92c48a6b4aa77acd000a70a7fe2f5422fb1d07fab395debaa1d9b0c9ec",
-            "trimmed.fastq": "7913c8397c05703b644e570aee9fcf069eedd13658bd5555a575c23ee51fb803"
-          },
-          "commands": [
+              "verification": {
+                "status": "scored",
+                "reward": 1.0,
+                "field_checks": 8
+              }
+            },
             {
-              "argv": [
-                "cutadapt",
-                "-j",
-                "1",
-                "-a",
-                "AGATCGGAAGAGC",
-                "-O",
-                "6",
-                "-e",
-                "0",
-                "--no-indels",
-                "-o",
-                "<work>/trimmed.fastq",
-                "<inputs>/reads.fastq"
+              "task_id": "fastqc-report-reconciliation-v1-20260923-00001",
+              "recipe": "fastqc-report-reconciliation",
+              "input_sha256": {
+                "s0.fastq": "b08bd9d535b8b8ce23e94de763d01df3df1867c1b717aa31ef7e1258680b6c99",
+                "s0_fastqc_data.txt": "23dd6684980fb6cb0c4cb945920e8a48c676fb988082f2d94ee5c3bb718a6dd7",
+                "s1.fastq": "380df29733961e61f12e807bf8f35c43a96591d6d272d9ff7f4626096e248e04",
+                "s1_fastqc_data.txt": "141f87d4d29e6a1ee58350bc5974eb9369bc148b255c30fd58f8f33688116378",
+                "s2.fastq": "61cce8038da2319e397232f4b2e3f5c29ca53cedf99e990e1d2a1f5f92290b78",
+                "s2_fastqc_data.txt": "1360bd293919944768de5627f1200fa95bbf070961718ee501b69a2c6bc3256c",
+                "samples.csv": "40fecc110eaf067cf0654c20ccbfb332afc56c9577c441bf3fa76073d8c1a7ba"
+              },
+              "artifact_sha256": {
+                "answer.json": "ce680f147a8b9b61cdff86c32440d34a141cd18650cb86b08e2f335a0f0141b3",
+                "api.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "api.log.stderr": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+                "operation.py": "9104ccbd0039a1ceb84649aaf04280f3e7caeb85c6e55869771f6b1a87f48ad2",
+                "parsed_reports.json": "9c94566aae29597cbc2b11b7f559e6b387f00f7153d8f35c3346f07c9162a5dd",
+                "reports/s0_fastqc/fastqc_data.txt": "23dd6684980fb6cb0c4cb945920e8a48c676fb988082f2d94ee5c3bb718a6dd7",
+                "reports/s1_fastqc/fastqc_data.txt": "141f87d4d29e6a1ee58350bc5974eb9369bc148b255c30fd58f8f33688116378"
+              },
+              "commands": [
+                {
+                  "argv": [
+                    "python",
+                    "<work>/operation.py",
+                    "<inputs>",
+                    "<work>/answer.json"
+                  ],
+                  "exit_code": 0,
+                  "elapsed_seconds": 1.0679208290530369
+                }
               ],
-              "exit_code": 0,
-              "elapsed_seconds": 0.11448447499424219
+              "verification": {
+                "status": "scored",
+                "reward": 1.0,
+                "field_checks": 8
+              }
+            },
+            {
+              "task_id": "fastqc-report-reconciliation-v1-20260923-00002",
+              "recipe": "fastqc-report-reconciliation",
+              "input_sha256": {
+                "s0.fastq": "715ec7040f9b7ae770e35edb8009b524cb0a09ff9d79843f1d07fc84d92cd82b",
+                "s0_fastqc_data.txt": "58d1fbdeef7f8e90621a4ef24d52dde35d9b9a1b04f9b8332cfce4b286609b80",
+                "s1.fastq": "0643dcdbfe0b3538b8ebcb4d0e73350d525c0cc526c8b95293ad26d1ae108940",
+                "s1_fastqc_data.txt": "f0fc817998a452c3f6e1fd916fb933608979666332192ffcf7e020a199ca9ec3",
+                "s2.fastq": "0643dcdbfe0b3538b8ebcb4d0e73350d525c0cc526c8b95293ad26d1ae108940",
+                "s2_fastqc_data.txt": "3b1911b146526941f4180448db4ce1f69bbe3fcd106ea6f0d2f71b9a614e590e",
+                "samples.csv": "40fecc110eaf067cf0654c20ccbfb332afc56c9577c441bf3fa76073d8c1a7ba"
+              },
+              "artifact_sha256": {
+                "answer.json": "83c2db1c0cb1dbb6ed7cf046f6b038fc6b2e433e84404bb4ca65404a04c9af1f",
+                "api.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "api.log.stderr": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+                "operation.py": "9104ccbd0039a1ceb84649aaf04280f3e7caeb85c6e55869771f6b1a87f48ad2",
+                "parsed_reports.json": "afec5c44881ff39d2c0751418d95c36b4390107f507b8dbecb3dcb991a5d2e77",
+                "reports/s0_fastqc/fastqc_data.txt": "58d1fbdeef7f8e90621a4ef24d52dde35d9b9a1b04f9b8332cfce4b286609b80",
+                "reports/s1_fastqc/fastqc_data.txt": "f0fc817998a452c3f6e1fd916fb933608979666332192ffcf7e020a199ca9ec3"
+              },
+              "commands": [
+                {
+                  "argv": [
+                    "python",
+                    "<work>/operation.py",
+                    "<inputs>",
+                    "<work>/answer.json"
+                  ],
+                  "exit_code": 0,
+                  "elapsed_seconds": 1.1166221959283575
+                }
+              ],
+              "verification": {
+                "status": "scored",
+                "reward": 1.0,
+                "field_checks": 8
+              }
             }
-          ],
-          "verification": {
-            "status": "scored",
-            "reward": 1.0,
-            "field_checks": 15
-          }
+          ]
         }
-      ]
+      ],
+      "limitations": "Only sample-keyed aggregation and FastQC report accounting; no full workflow repair or sequencing pipeline."
     }
-  ],
-  "environment_note": "Visible distribution versions were captured during execution; this is not a portable environment lock or a task image."
+  ]
 }
