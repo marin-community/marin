@@ -88,9 +88,7 @@ def test_fast_track_keeps_store_mixture_when_it_adds_validation_data():
     assert isinstance(weights, dict)
     assert weights["c01q0"] == 100.0
     assert weights["c07q2"] == 300.0
-    assert all(
-        weight == 0.0 for name, weight in weights.items() if name not in {"c01q0", "c07q2"}
-    )
+    assert all(weight == 0.0 for name, weight in weights.items() if name not in {"c01q0", "c07q2"})
 
 
 def test_fast_track_rejects_two_training_sources():
