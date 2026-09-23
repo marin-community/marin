@@ -400,7 +400,7 @@ def _candidate_block_sizes(
     return deduped
 
 
-def _benchmark_block_sizes_candidate(
+def _compile_block_sizes_candidate(
     *,
     fn: ArrayImpl,
     candidate: BlockSizes,
@@ -411,7 +411,7 @@ def _benchmark_block_sizes_candidate(
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
     return_argmax: bool,
-) -> float:
+) -> tuple[Callable[..., jax.Array], float]:
     def _loss_only(x_value: jax.Array, labels_value: jax.Array, w_value: jax.Array) -> jax.Array:
         kwargs = dict(
             block_sizes=candidate,
@@ -442,6 +442,16 @@ def _benchmark_block_sizes_candidate(
             compile_time,
         )
 
+    return benchmark_fn, compile_time
+
+
+def _run_block_sizes_candidate(
+    benchmark_fn: Callable[..., jax.Array],
+    compile_time: float,
+    x: jax.Array,
+    labels: jax.Array,
+    w: jax.Array,
+) -> float:
     if autotune_utils.contains_tracer(x, labels, w):
         return compile_time
 
@@ -451,6 +461,32 @@ def _benchmark_block_sizes_candidate(
     jax.block_until_ready(out)
     run_time = time.perf_counter() - start
     return run_time
+
+
+def _benchmark_block_sizes_candidate(
+    *,
+    fn: ArrayImpl,
+    candidate: BlockSizes,
+    x: jax.Array,
+    labels: jax.Array,
+    w: jax.Array,
+    dtype: Optional[jnp.dtype],
+    logit_soft_cap: Optional[float],
+    precision: jax.lax.PrecisionLike,
+    return_argmax: bool,
+) -> float:
+    benchmark_fn, compile_time = _compile_block_sizes_candidate(
+        fn=fn,
+        candidate=candidate,
+        x=x,
+        labels=labels,
+        w=w,
+        dtype=dtype,
+        logit_soft_cap=logit_soft_cap,
+        precision=precision,
+        return_argmax=return_argmax,
+    )
+    return _run_block_sizes_candidate(benchmark_fn, compile_time, x, labels, w)
 
 
 def _autotune_block_sizes_on_miss(
@@ -523,46 +559,65 @@ def _autotune_block_sizes_on_miss(
     best: BlockSizes | None = None
     best_score = float("inf")
     errors: list[Exception] = []
-    scores: list[float | None] = []
     for candidate in candidates:
-        try:
-            score = _benchmark_block_sizes_candidate(
-                fn=fn,
-                candidate=candidate,
-                x=x,
-                labels=labels,
-                w=w,
-                dtype=dtype,
-                logit_soft_cap=logit_soft_cap,
-                precision=precision,
-                return_argmax=return_argmax,
-            )
-        except Exception as exc:
-            errors.append(exc)
-            scores.append(None)
-            continue
-        scores.append(score if math.isfinite(score) else None)
-        if not distributed and score < best_score:
-            best_score = score
-            best = candidate
+        if distributed:
+            try:
+                prepared = _compile_block_sizes_candidate(
+                    fn=fn,
+                    candidate=candidate,
+                    x=x,
+                    labels=labels,
+                    w=w,
+                    dtype=dtype,
+                    logit_soft_cap=logit_soft_cap,
+                    precision=precision,
+                    return_argmax=return_argmax,
+                )
+            except Exception as exc:
+                errors.append(exc)
+                prepared = None
 
-    if distributed:
-        rank_scores = multihost_allgather_sync(scores)
-        for index, candidate in enumerate(candidates):
-            timings = [rank[index] for rank in rank_scores]
+            # No rank may execute the candidate until every rank has compiled it.
+            if not all(multihost_allgather_sync(prepared is not None)):
+                continue
+            assert prepared is not None
+            benchmark_fn, compile_time = prepared
+            try:
+                score = _run_block_sizes_candidate(benchmark_fn, compile_time, x, labels, w)
+            except Exception as exc:
+                errors.append(exc)
+                score = None
+            timings = multihost_allgather_sync(score if score is not None and math.isfinite(score) else None)
             if any(timing is None for timing in timings):
                 continue
-            mean_score = math.fsum(cast(float, timing) for timing in timings) / len(timings)
-            if mean_score < best_score:
-                best_score = mean_score
-                best = candidate
+            score = math.fsum(cast(float, timing) for timing in timings) / len(timings)
+        else:
+            try:
+                score = _benchmark_block_sizes_candidate(
+                    fn=fn,
+                    candidate=candidate,
+                    x=x,
+                    labels=labels,
+                    w=w,
+                    dtype=dtype,
+                    logit_soft_cap=logit_soft_cap,
+                    precision=precision,
+                    return_argmax=return_argmax,
+                )
+            except Exception as exc:
+                errors.append(exc)
+                continue
+
+        if score < best_score:
+            best_score = score
+            best = candidate
 
     if best is None:
         if shared_key:
             _AUTOTUNE_CACHE.put(cache_key, _NO_VIABLE_CANDIDATE)
         raise ExceptionGroup(
             f"Fused CE autotune found no viable block-size candidates for {impl_name}",
-            errors or [RuntimeError(f"No candidates generated for {impl_name}.")],
+            errors or [RuntimeError(f"No viable candidate for {impl_name}.")],
         )
 
     if shared_key:

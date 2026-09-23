@@ -1597,7 +1597,7 @@ def test_pallas_autotune_cache_reuses_winner(monkeypatch: pytest.MonkeyPatch):
     assert calls["bench"] == 3
 
 
-def test_distributed_fused_ce_autotune_chooses_lowest_mean_viable_candidate(monkeypatch: pytest.MonkeyPatch):
+def test_distributed_fused_ce_autotune_skips_failed_compile_and_chooses_lowest_mean(monkeypatch: pytest.MonkeyPatch):
     x = jnp.ones((4, 8), dtype=jnp.float32)
     w = jnp.ones((8, 16), dtype=jnp.float32)
     labels = jnp.zeros((4,), dtype=jnp.int32)
@@ -1606,6 +1606,7 @@ def test_distributed_fused_ce_autotune_chooses_lowest_mean_viable_candidate(monk
     context = threading.local()
     condition = threading.Condition()
     exchanged: dict[int, dict[int, object]] = {}
+    executed: dict[int, list[BlockSizes]] = {0: [], 1: []}
 
     def allgather(value):
         sequence = context.sequence
@@ -1617,12 +1618,16 @@ def test_distributed_fused_ce_autotune_chooses_lowest_mean_viable_candidate(monk
             assert condition.wait_for(lambda: len(round_values) == 2, timeout=5)
             return [round_values[index] for index in range(2)]
 
-    def benchmark(*, candidate, **kwargs):
+    def compile_candidate(*, candidate, **kwargs):
         del kwargs
-        score = rank_timings[context.rank][candidates.index(candidate)]
-        if score is None:
+        if rank_timings[context.rank][candidates.index(candidate)] is None:
             raise RuntimeError("candidate failed on this rank")
-        return score
+        return candidate, 0.0
+
+    def run_candidate(candidate, compile_time, *args):
+        del compile_time, args
+        executed[context.rank].append(candidate)
+        return rank_timings[context.rank][candidates.index(candidate)]
 
     def fake_impl(x_value, labels_value, w_value, **kwargs):
         del labels_value, w_value, kwargs
@@ -1632,7 +1637,8 @@ def test_distributed_fused_ce_autotune_chooses_lowest_mean_viable_candidate(monk
     monkeypatch.setattr(fused_api, "_autotune_enabled", lambda: True)
     monkeypatch.setattr(fused_api, "_autotune_cache_key", lambda **kwargs: None)
     monkeypatch.setattr(fused_api, "_candidate_block_sizes", lambda *args, **kwargs: candidates)
-    monkeypatch.setattr(fused_api, "_benchmark_block_sizes_candidate", benchmark)
+    monkeypatch.setattr(fused_api, "_compile_block_sizes_candidate", compile_candidate)
+    monkeypatch.setattr(fused_api, "_run_block_sizes_candidate", run_candidate)
     monkeypatch.setattr(fused_api, "multihost_allgather_sync", allgather)
 
     def run_rank(rank):
@@ -1655,6 +1661,7 @@ def test_distributed_fused_ce_autotune_chooses_lowest_mean_viable_candidate(monk
         winners = list(executor.map(run_rank, range(2)))
 
     assert winners == [candidates[1], candidates[1]]
+    assert executed == {0: candidates[:2], 1: candidates[:2]}
 
 
 def _run_autotune_miss(impl_name: str = "pallas_tpu", *, vocab: int = 16):
