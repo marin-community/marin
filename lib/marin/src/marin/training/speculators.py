@@ -315,7 +315,7 @@ def _capture_vllm_args(config: HiddenStateCaptureConfig, hidden_states_path: Pat
     ]
 
 
-def _download_tokenizer(source: str, destination: Path) -> None:
+def _download_model_metadata(source: str, destination: Path) -> None:
     """Materialize model metadata without staging the target weights."""
     source_path = StoragePath(source)
     destination.mkdir()
@@ -389,7 +389,7 @@ def capture_hidden_states(config: HiddenStateCaptureConfig) -> None:
         connector_staging = work_path / "connector"
         tokenizer = work_path / "tokenizer"
         StoragePath(config.dataset_path).download_to(str(raw_data))
-        _download_tokenizer(config.tokenizer, tokenizer)
+        _download_model_metadata(config.tokenizer, tokenizer)
         _restore_directory(config.output_path, prepared_data)
         connector_staging.mkdir()
 

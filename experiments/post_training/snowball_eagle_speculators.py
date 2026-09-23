@@ -109,8 +109,7 @@ def _artifact_name(suffix: str) -> str:
     return user_owned_name(f"snowball-eagle3-{suffix}")
 
 
-def _target_config(name: str, max_generation_tokens: int, *, sample: bool) -> ModelConfig:
-    generation_args = {"temperature": "1.0", "top_p": "1.0"} if sample else {"temperature": "0.0"}
+def _target_config(name: str, generation: GenerationConfig) -> ModelConfig:
     return ModelConfig(
         name=f"{username_segment()}-{name}",
         location=TARGET_MODEL_URI,
@@ -126,17 +125,14 @@ def _target_config(name: str, max_generation_tokens: int, *, sample: bool) -> Mo
             max_num_seqs=16,
             vllm_extra_args=SNOWBALL_VLLM_ARGS,
         ),
-        generation=GenerationConfig(
-            max_gen_toks=max_generation_tokens,
-            extra_gen_kwargs=generation_args,
-        ),
+        generation=generation,
     )
 
 
-def _evaluation_model(name: str, max_generation_tokens: int, *, sample: bool) -> ArtifactEvaluationModel:
+def _evaluation_model(name: str, generation: GenerationConfig) -> ArtifactEvaluationModel:
     return ArtifactEvaluationModel(
         step=TARGET_MODEL,
-        model=_target_config(name, max_generation_tokens, sample=sample),
+        model=_target_config(name, generation),
     )
 
 
@@ -171,8 +167,10 @@ def _eval_step(
 def _corpus_rollouts() -> tuple[ArtifactStep[EvaluationResult], ...]:
     model = _evaluation_model(
         "snowball-eagle3-corpus-target",
-        CORPUS_MAX_GENERATION_TOKENS,
-        sample=True,
+        GenerationConfig(
+            max_gen_toks=CORPUS_MAX_GENERATION_TOKENS,
+            extra_gen_kwargs={"temperature": "1.0", "top_p": "1.0"},
+        ),
     )
     return tuple(
         _eval_step(model=model, evaluation=evaluation, limit=limit, label="corpus") for evaluation, limit in CORPUS_EVALS
@@ -343,8 +341,10 @@ def _benchmark_steps(
 ) -> dict[str, ArtifactStep[EvaluationResult]]:
     model = _evaluation_model(
         f"snowball-eagle3-{label}",
-        BENCHMARK_MAX_GENERATION_TOKENS,
-        sample=False,
+        GenerationConfig(
+            max_gen_toks=BENCHMARK_MAX_GENERATION_TOKENS,
+            extra_gen_kwargs={"temperature": "0.0"},
+        ),
     )
     return {
         f"{label}-{evaluation}": _eval_step(
