@@ -144,7 +144,6 @@ def _eval_step(
     model: ArtifactEvaluationModel,
     evaluation: str,
     limit: int,
-    label: str,
     draft: ArtifactStep[EagleDraftArtifact] | None = None,
 ) -> ArtifactStep[EvaluationResult]:
     speculative = None
@@ -154,7 +153,7 @@ def _eval_step(
             method=SpeculativeMethod.EAGLE3,
             num_speculative_tokens=NUM_SPECULATIVE_TOKENS,
         )
-    name = f"evals/{model.model.name}/{evaluation}-{label}"
+    name = f"evals/{model.model.name}/{evaluation}"
     return eval_step(
         model,
         evaluation,
@@ -174,9 +173,7 @@ def _corpus_rollouts() -> tuple[ArtifactStep[EvaluationResult], ...]:
             extra_gen_kwargs={"temperature": "1.0", "top_p": "1.0"},
         ),
     )
-    return tuple(
-        _eval_step(model=model, evaluation=evaluation, limit=limit, label="corpus") for evaluation, limit in CORPUS_EVALS
-    )
+    return tuple(_eval_step(model=model, evaluation=evaluation, limit=limit) for evaluation, limit in CORPUS_EVALS)
 
 
 def _conversation_step(
@@ -353,7 +350,6 @@ def _benchmark_steps(
             model=model,
             evaluation=evaluation,
             limit=limit,
-            label=label,
             draft=draft,
         )
         for evaluation, limit in BENCHMARK_EVALS
