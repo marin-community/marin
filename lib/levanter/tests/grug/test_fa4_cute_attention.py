@@ -20,7 +20,7 @@ from levanter.grug.attention import (
     reference_attention,
 )
 from levanter.grug.attention._fa4_cute import _segmented_kernel_config, _simple_causal_lower_bounds
-from levanter.grug.attention._fa4_cute_config import SM100_GQA_RATIOS, SM100_HEAD_DIM
+from levanter.grug.attention._fa4_cute_config import SM100_GQA_RATIOS, SM100_HEAD_DIM, sm100_flash4_cute_kernel_config
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.testing.cpu_devices import run_on_cpu_devices
 
@@ -353,6 +353,34 @@ def test_fa4_sm100_attention_rejects_unsupported_layouts(monkeypatch, arch, q_he
 
     with pytest.raises(ValueError, match="gpu_fa4_cute_sm100"):
         attention(q, kv, kv, AttentionMask.causal(), implementation="gpu_fa4_cute_sm100")
+
+
+@pytest.mark.parametrize(
+    ("q_heads", "head_dim", "dtype"), [(2, 128, jnp.bfloat16), (8, 64, jnp.bfloat16), (8, 128, jnp.float16)]
+)
+def test_fa4_sm100_backward_rejects_unsupported_layouts(q_heads, head_dim, dtype):
+    # The native SM100 config must not fall back to the port backward, whose fields it leaves unset.
+    seq_len = 4
+    q = jnp.zeros((1, seq_len, q_heads, head_dim), dtype=dtype)
+    kv = jnp.zeros((1, seq_len, 1, head_dim), dtype=dtype)
+    lower_bounds = jnp.zeros((1, seq_len), dtype=jnp.int32)
+    valid = jnp.ones((1, seq_len), dtype=jnp.bool_)
+    lse = jnp.zeros((1, q_heads, seq_len), dtype=jnp.float32)
+
+    with pytest.raises(ValueError, match="gpu_fa4_cute_sm100"):
+        fa4_cute_backend.segmented_flash_attention_backward(
+            q,
+            kv,
+            kv,
+            q,
+            q,
+            lse,
+            lower_bounds,
+            valid,
+            softmax_scale=1.0,
+            kernel_config=sm100_flash4_cute_kernel_config(),
+            q_offset=jnp.zeros((1,), dtype=jnp.int32),
+        )
 
 
 def _assert_real_gpu_fa4_cute_matches_reference(

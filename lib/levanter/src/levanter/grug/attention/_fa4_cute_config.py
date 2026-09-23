@@ -107,6 +107,8 @@ def flash4_cute_kernel_config(
 
 def sm100_flash4_cute_kernel_config() -> Flash4CuteKernelConfig:
     """Return the native SM100 forward and backward configuration for BF16 D128 GQA."""
+    # The port fields are required by Flash4CuteKernelConfig but unused: the backend always runs
+    # sm100_forward and sm100_backward and rejects layouts they do not support.
     return Flash4CuteKernelConfig(
         forward_tile=(128, 64),
         backward_tile=(64, 64),

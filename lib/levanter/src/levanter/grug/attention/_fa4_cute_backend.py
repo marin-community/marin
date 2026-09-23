@@ -123,6 +123,8 @@ def segmented_flash_attention_forward(
         shape [B, Hq, Sq]. The backward kernel consumes both tensors.
     """
     _validate_forward_inputs(q, k, v, lower_bounds, valid, softmax_scale=softmax_scale, q_offset=q_offset)
+    if kernel_config.sm100_forward is not None:
+        validate_sm100_layout(q, k, v)
     try:
         modules = _import_cutlass_cute()
     except Exception as exc:
@@ -218,20 +220,15 @@ def segmented_flash_attention_backward(
     """Return gradients for FA4/CuTe packed-segment attention."""
     _validate_forward_inputs(q, k, v, lower_bounds, valid, softmax_scale=softmax_scale, q_offset=q_offset)
     _validate_backward_inputs(q, k, v, out, dout, lse)
+    if kernel_config.sm100_backward is not None:
+        validate_sm100_layout(q, k, v)
     try:
         modules = _import_cutlass_cute()
     except Exception as exc:
         raise _optional_dependency_error() from exc
 
     qhead_per_kvhead = q.shape[2] // k.shape[2]
-    # Keep the native path within the BF16 D128 GQA shapes validated on GB200.
-    if (
-        q.dtype == jnp.bfloat16
-        and q.shape[-1] == SM100_HEAD_DIM
-        and v.shape[-1] == SM100_HEAD_DIM
-        and qhead_per_kvhead in SM100_GQA_RATIOS
-        and kernel_config.sm100_backward is not None
-    ):
+    if kernel_config.sm100_backward is not None:
         return _segmented_flash_attention_backward_sm100(
             q,
             k,
@@ -943,6 +940,19 @@ _segmented_flash_attention_custom_vjp.defvjp(
     _segmented_flash_attention_custom_vjp_fwd,
     _segmented_flash_attention_custom_vjp_bwd,
 )
+
+
+def validate_sm100_layout(q: jax.Array, k: jax.Array, v: jax.Array) -> None:
+    """Reject layouts outside the BF16 D128 GQA shapes the native SM100 kernels were validated on."""
+    if q.dtype != jnp.bfloat16 or q.shape[-1] != SM100_HEAD_DIM or v.shape[-1] != SM100_HEAD_DIM:
+        raise ValueError(
+            f"gpu_fa4_cute_sm100 requires BF16 with D == Dv == {SM100_HEAD_DIM}, "
+            f"got {q.dtype} D={q.shape[-1]} Dv={v.shape[-1]}."
+        )
+    if q.shape[2] % k.shape[2] or q.shape[2] // k.shape[2] not in SM100_GQA_RATIOS:
+        raise ValueError(
+            f"gpu_fa4_cute_sm100 requires a GQA ratio in {SM100_GQA_RATIOS}, got {q.shape[2]}/{k.shape[2]} heads."
+        )
 
 
 def _validate_forward_inputs(
