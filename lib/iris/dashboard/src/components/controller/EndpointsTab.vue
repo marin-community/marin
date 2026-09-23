@@ -7,11 +7,11 @@ import type { EndpointInfo, ListEndpointsResponse } from '@/types/rpc'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import CopyButton from '@/components/shared/CopyButton.vue'
 import EndpointLink from '@/components/shared/EndpointLink.vue'
+import { filterEndpoints, groupEndpointsByOwner, sortEndpointsByName } from '@/utils/endpoints'
 
 const SHOW_ALL_THRESHOLD = 100
 
-const prefix = ref('')
-const localPrefix = ref('')
+const query = ref('')
 const showAll = ref(false)
 
 const {
@@ -19,34 +19,25 @@ const {
   loading,
   error,
   refresh: fetchEndpoints,
-} = useEndpointRpc<ListEndpointsResponse>('ListEndpoints', () => ({
-  prefix: prefix.value || undefined,
-}))
+} = useEndpointRpc<ListEndpointsResponse>('ListEndpoints')
 
 const endpoints = computed(() => listResponse.value?.endpoints ?? [])
+const matchingEndpoints = computed(() => sortEndpointsByName(filterEndpoints(endpoints.value, query.value)))
 
-watch(listResponse, () => { showAll.value = false })
+watch(() => matchingEndpoints.value.length, () => { showAll.value = false })
 
 onMounted(fetchEndpoints)
 useAutoRefresh(fetchEndpoints, DEFAULT_REFRESH_MS)
 
-function handleFilterSubmit() {
-  prefix.value = localPrefix.value
-}
-
-function handleFilterClear() {
-  localPrefix.value = ''
-  prefix.value = ''
-}
-
 const visibleEndpoints = computed(() => {
-  if (showAll.value || endpoints.value.length <= SHOW_ALL_THRESHOLD) {
-    return endpoints.value
+  if (showAll.value || matchingEndpoints.value.length <= SHOW_ALL_THRESHOLD) {
+    return matchingEndpoints.value
   }
-  return endpoints.value.slice(0, SHOW_ALL_THRESHOLD)
+  return matchingEndpoints.value.slice(0, SHOW_ALL_THRESHOLD)
 })
 
-const hasMore = computed(() => endpoints.value.length > SHOW_ALL_THRESHOLD && !showAll.value)
+const groupedEndpoints = computed(() => groupEndpointsByOwner(visibleEndpoints.value))
+const hasMore = computed(() => matchingEndpoints.value.length > SHOW_ALL_THRESHOLD && !showAll.value)
 
 function metadataString(metadata?: Record<string, string>): string {
   if (!metadata) return '-'
@@ -55,42 +46,34 @@ function metadataString(metadata?: Record<string, string>): string {
   return entries.map(([k, v]) => `${k}=${v}`).join(', ')
 }
 
-function jobIdFromTaskId(taskId?: string): string | null {
-  if (!taskId) return null
-  // taskId format: jobId/taskIndex or jobId
-  const slash = taskId.lastIndexOf('/')
-  return slash > 0 ? taskId.slice(0, slash) : taskId
-}
 </script>
 
 <template>
   <!-- Filter bar -->
   <div class="mb-4 flex items-center gap-3">
-    <form class="flex gap-2" @submit.prevent="handleFilterSubmit">
+    <div class="flex gap-2">
       <input
-        v-model="localPrefix"
+        v-model="query"
         type="text"
-        placeholder="Filter by prefix..."
-        class="w-52 px-3 py-1.5 text-sm border border-surface-border rounded
+        placeholder="Search endpoints..."
+        aria-label="Search endpoints"
+        class="w-64 px-3 py-1.5 text-sm border border-surface-border rounded
                bg-surface placeholder:text-text-muted
                focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent"
       />
       <button
-        type="submit"
-        class="px-3 py-1.5 text-sm border border-surface-border rounded hover:bg-surface-raised"
-      >
-        Filter
-      </button>
-      <button
-        v-if="prefix"
+        v-if="query"
         type="button"
         class="px-3 py-1.5 text-sm border border-surface-border rounded hover:bg-surface-raised text-status-danger"
-        @click="handleFilterClear"
+        @click="query = ''"
       >
         Clear
       </button>
-    </form>
+    </div>
     <span class="text-[13px] text-text-secondary">
+      <template v-if="query.trim()">
+        {{ matchingEndpoints.length }} of
+      </template>
       {{ endpoints.length }} endpoint{{ endpoints.length !== 1 ? 's' : '' }}
     </span>
   </div>
@@ -114,9 +97,9 @@ function jobIdFromTaskId(taskId?: string): string | null {
 
   <!-- Empty state -->
   <EmptyState
-    v-else-if="!loading && endpoints.length === 0"
+    v-else-if="!loading && matchingEndpoints.length === 0"
     icon="⬛"
-    :message="prefix ? 'No endpoints matching prefix' : 'No endpoints registered'"
+    :message="query.trim() ? 'No endpoints match this search' : 'No endpoints registered'"
   />
 
   <!-- Endpoints table -->
@@ -131,49 +114,65 @@ function jobIdFromTaskId(taskId?: string): string | null {
             Address
           </th>
           <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">
-            Job
-          </th>
-          <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-text-secondary">
             Metadata
           </th>
         </tr>
       </thead>
       <tbody>
-        <tr
-          v-for="ep in visibleEndpoints"
-          :key="ep.endpointId ?? ep.name"
-          class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors"
-        >
-          <td class="px-3 py-2 text-[13px] font-mono">
-            <EndpointLink :name="ep.name" />
-          </td>
-          <td class="px-3 py-2 text-[13px] font-mono text-text-secondary">
-            <span v-if="ep.address" class="group/addr inline-flex items-center gap-1">
-              {{ ep.address }}
-              <CopyButton :value="ep.address" />
-            </span>
-            <span v-else>-</span>
-          </td>
-          <td class="px-3 py-2 text-[13px]">
-            <RouterLink
-              v-if="ep.taskId && jobIdFromTaskId(ep.taskId)"
-              :to="'/job/' + encodeURIComponent(jobIdFromTaskId(ep.taskId)!)"
-              class="font-mono text-accent hover:underline text-xs"
+        <template v-for="userGroup in groupedEndpoints" :key="userGroup.user ?? 'system'">
+          <tr class="border-b border-surface-border bg-surface-sunken">
+            <th colspan="3" class="px-3 py-2 text-left text-xs font-semibold text-text">
+              <RouterLink
+                v-if="userGroup.user"
+                :to="{ path: '/', query: { user: userGroup.user } }"
+                class="text-accent hover:underline"
+              >
+                {{ userGroup.user }}
+              </RouterLink>
+              <span v-else>System</span>
+              <span class="ml-1 font-normal text-text-muted">
+                {{ userGroup.endpointCount }} endpoint{{ userGroup.endpointCount !== 1 ? 's' : '' }}
+              </span>
+            </th>
+          </tr>
+          <template v-for="jobGroup in userGroup.jobs" :key="jobGroup.jobId ?? 'system'">
+            <tr v-if="jobGroup.jobId" class="border-b border-surface-border-subtle bg-surface-raised/40">
+              <th colspan="3" class="py-1.5 pl-6 pr-3 text-left text-xs font-normal">
+                <RouterLink
+                  :to="'/job/' + encodeURIComponent(jobGroup.jobId)"
+                  class="font-mono text-accent hover:underline"
+                >
+                  {{ jobGroup.jobId }}
+                </RouterLink>
+              </th>
+            </tr>
+            <tr
+              v-for="ep in jobGroup.endpoints"
+              :key="ep.endpointId ?? ep.name"
+              class="border-b border-surface-border-subtle hover:bg-surface-raised transition-colors"
             >
-              {{ jobIdFromTaskId(ep.taskId) }}
-            </RouterLink>
-            <span v-else class="text-text-muted">-</span>
-          </td>
-          <td class="px-3 py-2 text-xs text-text-muted font-mono max-w-xs truncate" :title="metadataString(ep.metadata)">
-            {{ metadataString(ep.metadata) }}
-          </td>
-        </tr>
+              <td :class="['py-2 pr-3 text-[13px] font-mono', jobGroup.jobId ? 'pl-9' : 'pl-3']">
+                <EndpointLink :name="ep.name" />
+              </td>
+              <td class="px-3 py-2 text-[13px] font-mono text-text-secondary">
+                <span v-if="ep.address" class="group/addr inline-flex items-center gap-1">
+                  {{ ep.address }}
+                  <CopyButton :value="ep.address" />
+                </span>
+                <span v-else>-</span>
+              </td>
+              <td class="px-3 py-2 text-xs text-text-muted font-mono max-w-xs truncate" :title="metadataString(ep.metadata)">
+                {{ metadataString(ep.metadata) }}
+              </td>
+            </tr>
+          </template>
+        </template>
       </tbody>
     </table>
 
     <!-- Show all toggle -->
-    <div v-if="hasMore || (endpoints.length > SHOW_ALL_THRESHOLD && showAll)" class="px-3 py-2 text-xs text-text-secondary border-t border-surface-border">
-      <span>Showing {{ visibleEndpoints.length }} of {{ endpoints.length }}</span>
+    <div v-if="hasMore || (matchingEndpoints.length > SHOW_ALL_THRESHOLD && showAll)" class="px-3 py-2 text-xs text-text-secondary border-t border-surface-border">
+      <span>Showing {{ visibleEndpoints.length }} of {{ matchingEndpoints.length }}</span>
       <button
         class="ml-3 text-accent hover:underline"
         @click="showAll = !showAll"
