@@ -936,7 +936,7 @@ def _stage_tokenizer(name_or_path: str) -> str:
     os.makedirs(local_dir, exist_ok=True)
 
     with _STAGE_LOCK:
-        # 1. Local cache hit (also the double-checked fast path for threads that
+        # Local cache hit (also the double-checked fast path for threads that
         #    waited on the lock while another thread staged this same ref).
         if _try_load_tokenizer_from_dir(local_dir):
             return local_dir
@@ -947,11 +947,11 @@ def _stage_tokenizer(name_or_path: str) -> str:
                 return local_dir
             raise ValueError(f"No valid tokenizer.json found under {name_or_path}")
 
-        # 2. Mirror: copy whatever files are present, then try loading.
+        # Mirror: copy whatever files are present, then try loading.
         if _stage_from_mirror(name_or_path, local_dir) and _try_load_tokenizer_from_dir(local_dir):
             return local_dir
 
-        # 3. HF Hub: full download, populate mirror as side-effect.
+        # HF Hub: full download, populate mirror as side-effect.
         _stage_from_hf(name_or_path, local_dir)
         return local_dir
 

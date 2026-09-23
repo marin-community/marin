@@ -43,12 +43,6 @@ class SnowballHfToGrugConfig:
     resources: ResourceConfig
 
 
-@dataclass(frozen=True)
-class SnowballHfToGrugCheckpoint:
-    step: ArtifactStep[LevanterCheckpoint]
-    model: GrugModelConfig
-
-
 def _run_snowball_hf_to_grug(config: SnowballHfToGrugConfig) -> None:
     model_config = draccus.decode(GrugModelConfig, config.model_config)
     ref = RepoRef(config.hf_id, config.hf_revision)
@@ -68,8 +62,7 @@ def _run_snowball_hf_to_grug(config: SnowballHfToGrugConfig) -> None:
             {"params": model, "pending_qb_betas": pending_qb_betas},
             step=_CHECKPOINT_STEP,
             checkpoint_path=prefix_join(
-                prefix_join(config.output_path, "checkpoints"),
-                f"step-{_CHECKPOINT_STEP}",
+                LevanterCheckpoint(path=config.output_path).checkpoint_dir, f"step-{_CHECKPOINT_STEP}"
             ),
             manager=manager,
             is_temporary=False,
@@ -95,7 +88,7 @@ def snowball_hf_to_grug(
     model: GrugModelConfig,
     version: str,
     resources: ResourceConfig,
-) -> SnowballHfToGrugCheckpoint:
+) -> ArtifactStep[LevanterCheckpoint]:
     """Materialize one immutable HF export as a native stacked Grug weights checkpoint."""
     name = f"checkpoints/hf-to-stacked-grug/{get_directory_friendly_name(hf_id)}"
 
@@ -116,4 +109,4 @@ def snowball_hf_to_grug(
         build_config=build_config,
         runtime_args={"convert_resources": resources},
     )
-    return SnowballHfToGrugCheckpoint(step=step, model=model)
+    return step

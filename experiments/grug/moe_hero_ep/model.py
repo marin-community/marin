@@ -1310,14 +1310,11 @@ class Transformer(eqx.Module):
         )
 
     def with_snowball_weights(self, snowball: SnowballTransformer) -> tuple["Transformer", jax.Array]:
-        """Load Snowball weights into the current layout and reconstruct pending QB betas.
-
-        Snowball HF exports store effective router biases after the pending update. Centering each
-        layer's bias preserves top-k selection and combine weights; its inverse becomes the next
-        step's pending beta.
-        """
+        """Return the trainer model and pending QB betas for Snowball weights."""
         self.config.validate_snowball_config(snowball.config)
         stacked_blocks = _stack_snowball_blocks(snowball.blocks, self.stacked_blocks)
+        # HF exports store effective router biases. Centering preserves top-k and combine weights;
+        # the inverse restores the trainer's pending QB update.
         router_bias = stacked_blocks.stacked.mlp.router_bias
         centered_router_bias = router_bias - jnp.mean(router_bias, axis=-1, keepdims=True)
         stacked_blocks = eqx.tree_at(

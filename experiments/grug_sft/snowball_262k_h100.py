@@ -38,6 +38,7 @@ from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize.attributes import tokenize_attributes_step
 from marin.processing.tokenize.store_builder import LevanterStoreData, build_levanter_store_step
+from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.grug.moe.optimizer import GrugMoeMuonHConfig
@@ -53,12 +54,13 @@ from experiments.grug_sft.snowball_hf_import import snowball_hf_to_grug
 HF_MODEL = "open-athena/snowball-67b-a2b-base-262k-qk175-skew8"
 HF_REVISION = "058ecaf27b9e4f37219df221a51e7d490d58ec3d"
 DATA_SOURCE = "openthoughts-agent-sft-100k"
-CONVERSION_VERSION = "2026.09.22-native"
+CONVERSION_VERSION = "2026.09.22.1"
 DEFAULT_RUN_ID = "snowball-67b-262k-h100-demo"
 WANDB_PROJECT = "snowball_sft_demo"
 
 CONTEXT_LENGTH = 262_144
 CONTEXT_SHARDS = 8
+GPU_COUNT = 8
 BATCH_SIZE = 1
 DEFAULT_STEPS = 10
 DEFAULT_SAMPLE_COUNT = 256
@@ -180,7 +182,7 @@ def run_config(
             context_axis_size=CONTEXT_SHARDS,
         ),
         eval=None,
-        processes_per_task=8,
+        processes_per_task=GPU_COUNT,
         max_retries_failure=3,
         max_task_failures=3,
     )
@@ -253,8 +255,8 @@ def build_demo(
         version=CONVERSION_VERSION,
         resources=ResourceConfig.with_cpu(cpu=64, ram="768g", disk="384g"),
     )
-    conversion_step = conversion.step.lower()
-    tokenizer = conversion.step.path()
+    conversion_step = conversion.lower()
+    tokenizer = conversion.path()
     source = all_sft_sources()[DATA_SOURCE]
     tokenized = tokenize_attributes_step(
         name=f"datakit/tokenize/sft-demo/{DATA_SOURCE}",
@@ -274,7 +276,7 @@ def build_demo(
     )
     resources = ResourceConfig.with_gpu(
         "H100",
-        count=8,
+        count=GPU_COUNT,
         cpu=64,
         ram="768g",
         disk="384g",
@@ -290,7 +292,7 @@ def build_demo(
             steps=steps,
             store_path=store.output_path,
             tokenizer=tokenizer,
-            base_checkpoint=prefix_join(tokenizer, "checkpoints"),
+            base_checkpoint=LevanterCheckpoint(path=tokenizer).checkpoint_dir,
             resources=resources,
         ),
         hash_attrs={
