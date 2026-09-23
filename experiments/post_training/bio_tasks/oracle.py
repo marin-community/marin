@@ -8,6 +8,7 @@ import csv
 import json
 from collections import Counter, defaultdict
 from pathlib import Path
+from urllib.parse import unquote
 
 
 def table(path: Path) -> list[dict[str, str]]:
@@ -16,13 +17,25 @@ def table(path: Path) -> list[dict[str, str]]:
 
 
 def solve_sequence(inputs: Path) -> list[dict]:
-    genome = "".join(line for line in (inputs / "genome.fa").read_text().splitlines() if not line.startswith(">"))
+    genome = {}
+    for line in (inputs / "genome.fa").read_text().splitlines():
+        if line.startswith(">"):
+            record_id = line[1:].split()[0]
+            genome[record_id] = ""
+        else:
+            genome[record_id] += line
     answer = []
-    for row in table(inputs / "transcripts.csv"):
-        sequence = genome[int(row["start"]) - 1 : int(row["end"])]
-        if row["strand"] == "-":
+    for line in (inputs / "annotations.gff3").read_text().splitlines():
+        if line.startswith("#"):
+            continue
+        fields = line.split("\t")
+        if fields[2] != "exon":
+            continue
+        attributes = {key: unquote(value) for key, value in (item.split("=", 1) for item in fields[8].split(";"))}
+        sequence = genome[unquote(fields[0])][int(fields[3]) - 1 : int(fields[4])]
+        if fields[6] == "-":
             sequence = sequence.translate(str.maketrans("ACGT", "TGCA"))[::-1]
-        answer.append({"id": row["id"], "sequence": sequence, "length": len(sequence)})
+        answer.append({"id": attributes["Parent"], "sequence": sequence, "length": len(sequence)})
     return answer
 
 

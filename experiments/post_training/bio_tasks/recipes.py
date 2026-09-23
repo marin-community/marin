@@ -66,6 +66,32 @@ def sequence_extraction(seed: int) -> Instance:
         wrong_strand.append({"id": record_id, "sequence": "".join(bases), "length": length})
         wrong_coordinate.append({"id": record_id, "sequence": sequence[1:], "length": length - 1})
     rng.shuffle(transcripts)
+    annotations = ["##gff-version 3", "##sequence-region synthetic_chromosome 1 300"]
+    for transcript in transcripts:
+        record_id = transcript["id"]
+        attributes = (
+            ("gene", f"ID=gene_{record_id};Name=shared%3Blabel"),
+            ("mRNA", f"Name=shared%3Blabel;Parent=gene_{record_id};ID={record_id}"),
+            ("exon", f"Parent={record_id};ID=exon_{record_id}"),
+        )
+        for feature_type, feature_attributes in attributes:
+            annotations.append(
+                "\t".join(
+                    [
+                        "synthetic_chromosome",
+                        "synthetic",
+                        feature_type,
+                        str(transcript["start"]),
+                        str(transcript["end"]),
+                        ".",
+                        transcript["strand"],
+                        ".",
+                        feature_attributes,
+                    ]
+                )
+            )
+    fasta = ">unannotated_contig\n" + "N" * 300 + "\n>synthetic_chromosome\n"
+    fasta += "\n".join(genome[offset : offset + 60] for offset in range(0, len(genome), 60)) + "\n"
     contract = Contract(
         columns={
             "sequence": Column(kind="text", unit="DNA bases", description="uppercase transcript-oriented sequence"),
@@ -74,12 +100,20 @@ def sequence_extraction(seed: int) -> Instance:
         expected=expected,
     )
     return Instance(
-        "Extract every single-exon transcript in transcripts.csv from genome.fa. Coordinates are 1-based, "
+        "Extract every single-exon mRNA in annotations.gff3 from genome.fa. These GFF3 annotations contain "
+        "gene, mRNA, and exon features; each mRNA has exactly one exon with a single Parent. Join the exon's "
+        "Parent to the mRNA ID and match the GFF3 seqid to the FASTA record ID. Coordinates are 1-based, "
         "closed on both ends. For minus-strand transcripts return the reverse complement. "
-        "Use each transcript id as the output id. Inputs are in /app/inputs.",
-        {"genome.fa": f">synthetic_chromosome\n{genome}\n", "transcripts.csv": csv_text(transcripts)},
+        "Use the decoded mRNA ID as output id, not the gene/exon ID or nonunique Name. Ignore unannotated "
+        "FASTA records. Inputs are in /app/inputs.",
+        {"genome.fa": fasta, "annotations.gff3": "\n".join(annotations) + "\n"},
         contract,
-        {"ignored_strand": wrong_strand, "off_by_one": wrong_coordinate},
+        {
+            "ignored_strand": wrong_strand,
+            "off_by_one": wrong_coordinate,
+            "used_exon_ids": [{**row, "id": f"exon_{row['id']}"} for row in contract.answer()],
+            "ignored_seqid": [{**row, "sequence": "N" * row["length"]} for row in contract.answer()],
+        },
     )
 
 
@@ -776,10 +810,10 @@ def image_measurements(seed: int) -> Instance:
 RECIPES = (
     Recipe(
         "strand-extraction",
-        "1",
+        "2",
         Difficulty.EASY,
-        ("coordinates", "strand", "sequence-extraction"),
-        ("fasta-dna", "csv-header"),
+        ("coordinates", "strand", "sequence-extraction", "feature-parent-joins", "sequence-identifiers"),
+        ("fasta-dna", "gff3-single-exon"),
         (
             "https://github.com/biopython/biopython/blob/08fc09086afe0b57215d2515660e0c032b55c0dd/Tests/test_SeqFeature.py",
         ),

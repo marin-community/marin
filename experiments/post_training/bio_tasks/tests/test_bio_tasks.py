@@ -143,18 +143,26 @@ def test_fraction_preserves_patients_with_zero_denominator_and_local_barcode_ide
     ]
 
 
-def test_sequence_respects_closed_coordinates_and_reverse_complement(tmp_path):
-    (tmp_path / "genome.fa").write_text(">synthetic\nAACG\nTCCA\n")
-    (tmp_path / "transcripts.csv").write_text("id,start,end,strand\nfirst,1,1,+\nminus,3,8,-\n")
+def test_gff_sequence_matches_parent_and_contig_with_closed_coordinates_and_reverse_complement(tmp_path):
+    (tmp_path / "genome.fa").write_text(">decoy\nNNNNNNNN\n>synthetic description\nAACG\nTCCA\n")
+    (tmp_path / "annotations.gff3").write_text(
+        "##gff-version 3\n##sequence-region synthetic 1 8\n"
+        "synthetic\t.\tgene\t1\t8\t.\t+\t.\tID=g1\n"
+        "synthetic\t.\tmRNA\t1\t1\t.\t+\t.\tID=first;Parent=g1\n"
+        "synthetic\t.\texon\t1\t1\t.\t+\t.\tName=shared;ID=e1;Parent=first\n"
+        "synthetic\t.\tgene\t3\t8\t.\t-\t.\tID=g2\n"
+        "synthetic\t.\tmRNA\t3\t8\t.\t-\t.\tID=minus%3B1;Parent=g2\n"
+        "synthetic\t.\texon\t3\t8\t.\t-\t.\tParent=minus%3B1;Name=shared;ID=e2\n"
+    )
     assert solve_sequence(tmp_path) == [
         {"id": "first", "sequence": "A", "length": 1},
-        {"id": "minus", "sequence": "TGGACG", "length": 6},
+        {"id": "minus;1", "sequence": "TGGACG", "length": 6},
     ]
 
 
 def test_lineage_and_seed_are_preserved_when_recipe_version_changes():
     old = RECIPES[0]
-    new = dataclasses.replace(old, version="2")
+    new = dataclasses.replace(old, version=str(int(old.version) + 1))
     for index in range(30):
         first, second = identity(old, 100, index), identity(new, 100, index)
         assert (first.lineage, first.seed) == (second.lineage, second.seed)

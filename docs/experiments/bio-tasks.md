@@ -12,7 +12,7 @@ format coverage, with the original adoption inventory preserved as a separate fi
 
 | Recipe | Difficulty | Native input profiles | Required distinctions |
 |---|---|---|---|
-| `strand-extraction` | Easy | FASTA + CSV annotations | Closed coordinates, reverse complement, sequence identity |
+| `strand-extraction` | Easy | FASTA + GFF3 (single exon) | Sequence-ID and exon-parent joins, closed coordinates, reverse complement |
 | `interval-overlap` | Easy | BED4 | Half-open coordinates, chromosome identity, overlap threshold, distinct peaks |
 | `donor-counts` | Medium | CSV | Cell-ID joins, raw counts, donor replication, type/QC filters, empty donors |
 | `cell-fractions` | Medium | CSV | Patient/specimen joins, cohort/QC selection, local barcodes, zero denominators |
@@ -32,6 +32,12 @@ tasks belong to one train split. Evaluation uses the separate benchmarks in the
 program plan. CSV/JSON intermediates do not establish native H5AD, Newick,
 BUSCO-output, Kraken-report, or OME-TIFF coverage. Format profiles describe the
 specific inputs generated here, not general-purpose parser support.
+
+`strand-extraction` v2 supplies native GFF3 gene, mRNA, and exon records with
+`ID`/`Parent` attributes and a multirecord FASTA. It replaces v1's CSV annotations;
+lineage and generated transcript sequences are preserved. The profile has one
+exon per mRNA. GTF attributes, multi-exon splicing, and CDS phase remain separate
+coverage requirements.
 
 ## Build and inspect
 

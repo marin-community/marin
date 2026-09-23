@@ -10,7 +10,8 @@ The catalogs below contain candidate capabilities, not claims of implementation.
 Source inspection establishes plausible seeds and verification constraints; it does
 not establish runtime validity or training benefit. The current implementation has
 12 recipes with three examples each. Native inputs include FASTA, FASTQ (Phred+33),
-BED4, and VCF 4.3; other recipes currently use explicit CSV/JSON intermediates.
+BED4, GFF3 (single-exon annotations), and VCF 4.3; other recipes currently use
+explicit CSV/JSON intermediates.
 Scientific review and container validation are pending.
 
 Update this catalog when a source assessment, required skill, or format profile
