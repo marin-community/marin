@@ -29,7 +29,7 @@ model/train config).
 Submit on iris (datakit fans out its own Zephyr fleets; the driver is a small CPU job)::
 
     uv run iris --cluster=cw-rno2a job run --cpu 2 --memory 8GB \\
-        --enable-extra-resources --extra datakit \\
+        --enable-extra-resources --extra cpu --extra datakit \\
         -- python -m experiments.references.reference_training_pipeline \\
             --version dev --stop-after datakit
 """
@@ -41,15 +41,11 @@ from enum import StrEnum
 
 from fray.cluster import ResourceConfig
 from fray.types import ANY_REGION
-from levanter.data.text.datasets import DatasetComponent, LmDataConfig
-from levanter.data.text.formats import TextLmDatasetFormat
 from levanter.optim.config import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from marin.evaluation.hardware import AcceleratorChoice, Platform
-from marin.execution.artifact import read_artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext, run
-from marin.execution.step_runner import StepRunner
 from marin.experiment.evaluation import eval_report, eval_steps
 from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import LevanterCheckpoint
@@ -61,11 +57,12 @@ from experiments.datakit.reference_pipeline import (
     SAMPLE_SOURCES,
     SMOKE_SCALE,
     PoolConfig,
+    materialize_reference_store,
     quality_model_path,
-    reference_datakit_steps,
     sample_sources,
 )
 from experiments.datakit.store.datakit_store import ClusteredStoreData
+from experiments.datakit.store.mixture import MixtureWeighting, log_store_summary, store_mixture
 from experiments.evals.evals import core_evals
 from experiments.grug.base.launch import GrugBaseLaunchConfig, run_grug_base_trial
 from experiments.grug.base.model import GrugModelConfig
@@ -105,71 +102,6 @@ REFERENCE_TRAIN_RESOURCES = ResourceConfig.with_gpu("H100", count=1, cpu=8, disk
 REFERENCE_EVAL_ACCELERATOR = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=1)
 
 
-class MixtureWeighting(StrEnum):
-    """How :func:`store_mixture` weights the per-(cluster, quality) buckets."""
-
-    TOKEN_PROPORTIONAL = "token_proportional"
-    UNIFORM = "uniform"
-
-
-def _bucket_name(cluster_id: int, quality_bucket: int) -> str:
-    """The ``cXXqY`` component key, matching the datakit-store bucket convention."""
-    return f"c{cluster_id:02d}q{quality_bucket}"
-
-
-def store_mixture(
-    store: ClusteredStoreData,
-    *,
-    weighting: MixtureWeighting = MixtureWeighting.TOKEN_PROPORTIONAL,
-) -> LmDataConfig:
-    """One ``DatasetComponent`` per non-empty store bucket, as the Levanter training data config.
-
-    Weights are token-proportional (``bucket.total_tokens``) or uniform; Levanter renormalizes.
-    Raises ``ValueError`` if the store has no non-empty buckets, or (under ``TOKEN_PROPORTIONAL``)
-    if any bucket has ``total_tokens <= 0``.
-    """
-    if not store.buckets:
-        raise ValueError(f"store at {store.cache_path} has no non-empty buckets; datakit produced no data")
-
-    components: dict[str, DatasetComponent] = {}
-    weights: dict[str, float] = {}
-    for bucket in store.buckets:
-        name = _bucket_name(bucket.cluster_id, bucket.quality_bucket)
-        components[name] = DatasetComponent(
-            source=None,
-            # Absolute s3:// path: Levanter resolves a relative cache_dir against the worker CWD
-            # (/app), not the object store, so a relativized path fails to load.
-            cache_dir=bucket.path,
-            format=TextLmDatasetFormat(),
-            tags=[name],
-            # The store writes flat caches (part-* + shard_ledger.json at the bucket root, no
-            # train/ subdir); TokenizedCache.as_component omits flat_cache, so Levanter would look
-            # for <bucket>/train/ and silently drop the component.
-            flat_cache=True,
-        )
-        if weighting is MixtureWeighting.TOKEN_PROPORTIONAL:
-            if bucket.total_tokens <= 0:
-                # A 0-weight component is silently dropped by Levanter -> a broken store, not a mixture.
-                raise ValueError(f"bucket {name} at {bucket.path} has total_tokens={bucket.total_tokens}; expected > 0")
-            weights[name] = float(bucket.total_tokens)
-        else:
-            weights[name] = 1.0
-
-    logger.info(
-        "store_mixture: %d buckets, %s weighting, tokenizer=%s",
-        len(components),
-        weighting.value,
-        store.tokenizer,
-    )
-    return LmDataConfig(
-        tokenizer=store.tokenizer,
-        cache_dir=None,
-        components=components,
-        train_weights=weights,
-        auto_build_caches=False,
-    )
-
-
 def reference_train_on_store(
     store: ClusteredStoreData,
     *,
@@ -189,7 +121,11 @@ def reference_train_on_store(
     def build_config(ctx: StepContext) -> GrugBaseLaunchConfig:
         return GrugBaseLaunchConfig(
             model=model,
-            data=store_mixture(store, weighting=weighting),
+            data=store_mixture(
+                store,
+                weighting=weighting,
+                min_tokens_per_component=model.max_seq_len,
+            ),
             output_path=ctx.output_path,
             run_id="reference-pipeline",
             resources=ctx.runtime_arg("train_resources"),
@@ -230,27 +166,6 @@ class Stage(StrEnum):
     DATAKIT = "datakit"
     TRAIN = "train"
     EVAL = "eval"
-
-
-def _log_store_summary(store: ClusteredStoreData) -> None:
-    total_docs = sum(b.total_elements for b in store.buckets)
-    total_tokens = sum(b.total_tokens for b in store.buckets)
-    logger.info(
-        "datakit store: %d non-empty buckets, %d docs, %d tokens, sources=%s, tokenizer=%s",
-        len(store.buckets),
-        total_docs,
-        total_tokens,
-        store.source_names,
-        store.tokenizer,
-    )
-    for bucket in sorted(store.buckets, key=lambda b: (b.cluster_id, b.quality_bucket)):
-        logger.info(
-            "  %s: docs=%d tokens=%d shards=%d",
-            _bucket_name(bucket.cluster_id, bucket.quality_bucket),
-            bucket.total_elements,
-            bucket.total_tokens,
-            bucket.n_shards,
-        )
 
 
 def main() -> None:
@@ -300,15 +215,14 @@ def main() -> None:
     sources = sample_sources(args.sample_prefix, names)
 
     # --- Pass 1: datakit ----------------------------------------------------------------
-    datakit = reference_datakit_steps(
+    store = materialize_reference_store(
         sources,
         quality_model=args.quality_model,
         quality_model_version=args.quality_model_version,
         scale=scale,
+        max_concurrent=args.max_concurrent,
     )
-    StepRunner().run(datakit.all_steps, max_concurrent=args.max_concurrent)
-    store = read_artifact(datakit.output_buckets.output_path, ClusteredStoreData)
-    _log_store_summary(store)
+    log_store_summary(store)
     if args.stop_after is Stage.DATAKIT:
         logger.info("stop-after=datakit; store at %s", store.cache_path)
         return
