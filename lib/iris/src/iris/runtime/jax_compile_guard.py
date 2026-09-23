@@ -3,20 +3,21 @@
 
 """Check distributed GPU compile identities before XLA's autotuner rendezvous."""
 
+from __future__ import annotations
+
 import itertools
 import logging
 import threading
 from collections import defaultdict
 from collections.abc import Sequence
+from dataclasses import dataclass, field
 from functools import wraps
-from typing import Any, Protocol
+from typing import Protocol
 
 logger = logging.getLogger(__name__)
 
 _COMPILE_FINGERPRINT_TIMEOUT_MS = 60_000
 _COMPILE_FINGERPRINT_PREFIX = "iris/compile-fingerprint/v1"
-_exchange_locks: dict[tuple[int, ...], threading.Lock] = defaultdict(threading.Lock)
-_sequences: dict[tuple[int, ...], itertools.count] = defaultdict(itertools.count)
 
 
 class _Coordinator(Protocol):
@@ -65,24 +66,47 @@ def _observed_fingerprints(client: _Coordinator, prefix: str) -> dict[int, str]:
     return {int(key.removeprefix(prefix)): value for key, value in client.key_value_dir_get(prefix)}
 
 
+@dataclass
+class _CompileGuardState:
+    client: _Coordinator | None = None
+    locks: dict[tuple[int, ...], threading.Lock] = field(default_factory=lambda: defaultdict(threading.Lock))
+    sequences: dict[tuple[int, ...], itertools.count] = field(default_factory=lambda: defaultdict(itertools.count))
+    mutex: threading.Lock = field(default_factory=threading.Lock)
+
+    def check(self, client: _Coordinator, process_ids: tuple[int, ...], process_id: int, fingerprint: str) -> None:
+        with self.mutex:
+            if client is not self.client:
+                self.client = client
+                self.locks.clear()
+                self.sequences.clear()
+            lock = self.locks[process_ids]
+        with lock:
+            sequence = next(self.sequences[process_ids])
+            check_distributed_compile_fingerprint(client, process_ids, process_id, sequence, fingerprint)
+
+
 def install_gpu_compile_guard() -> None:
     """Guard JAX's shared compile entry point after Iris joins a distributed world."""
-    from jax._src import cache_key, compiler, distributed  # noqa: PLC0415 - optional Iris dependency
+    import numpy as np  # noqa: PLC0415 - optional Iris dependency
+    from jax._src import cache_key, compiler, distributed, profiler  # noqa: PLC0415 - optional Iris dependency
+    from jax._src.lib import xla_client as xc  # noqa: PLC0415 - optional Iris dependency
+    from jax._src.lib.mlir import ir  # noqa: PLC0415 - optional Iris dependency
 
     original = compiler.compile_or_get_cached
     if getattr(original, "_iris_compile_guard", False):
         return
+    state = _CompileGuardState()
 
     @wraps(original)
     def guarded_compile_or_get_cached(
-        backend: Any,
-        computation: Any,
-        devices: Any,
-        compile_options: Any,
-        host_callbacks: Any,
-        executable_devices: Any,
-        pgle_profiler: Any = None,
-    ) -> Any:
+        backend: xc.Client,
+        computation: ir.Module,
+        devices: np.ndarray,
+        compile_options: xc.CompileOptions,
+        host_callbacks: Sequence[object],
+        executable_devices: xc.DeviceList,
+        pgle_profiler: profiler.PGLEProfiler | None = None,
+    ) -> xc.LoadedExecutable:
         process_ids = tuple(sorted({device.process_index for device in devices.flat}))
         if backend.platform == "gpu" and len(process_ids) > 1:
             client = distributed.global_state.client
@@ -90,9 +114,7 @@ def install_gpu_compile_guard() -> None:
                 raise RuntimeError("multi-process GPU compile has no JAX coordinator")
             process_id = distributed.global_state.process_id
             fingerprint = cache_key.get(computation, devices, compile_options, backend)
-            with _exchange_locks[process_ids]:
-                sequence = next(_sequences[process_ids])
-                check_distributed_compile_fingerprint(client, process_ids, process_id, sequence, fingerprint)
+            state.check(client, process_ids, process_id, fingerprint)
             logger.debug("GPU compile fingerprint matched across processes %s: %s", process_ids, fingerprint)
 
         return original(
