@@ -11,6 +11,7 @@ ASYNC_RL_MAX_POINTS = 360
 ASYNC_RL_MIN_BUCKET_MS = 30_000
 ASYNC_RL_MAX_CLUSTERS = 16
 ASYNC_RL_MAX_EXECUTIONS = 32
+ASYNC_RL_MAX_IDENTITY_LENGTH = 512
 ASYNC_RL_MAX_CORE_ROWS = 100_000
 ASYNC_RL_MAX_METRIC_ROWS = 100_000
 ASYNC_RL_MAX_SPAN_ROWS = 50_000
@@ -19,6 +20,8 @@ ASYNC_RL_MAX_PROCESS_ROWS = 10_000
 ASYNC_RL_MAX_RESULT_ROWS = 200_000
 MEGATRON_DETAIL_ROWS = 5_000
 GIB = 1073741824
+FINITE_VALUE_LIMIT_SQL = "1e308"
+M2_REFERENCE = 0.04
 MARINSKYRL_TABLE = '"telemetry_v1.marinskyrl"'
 
 # Loop events aggregated per display bucket and execution. Gauges keep their latest observation
@@ -206,36 +209,43 @@ WITH observed AS (
            SUM(CASE WHEN minimum <> maximum OR samples <> values_present THEN 1 ELSE 0 END) AS conflicts,
            SUM(CASE WHEN metric = 'async/performance/consumed_loss_tokens'
                      AND (samples <> values_present OR minimum <> maximum OR minimum < 0
-                          OR maximum >= 1e308 OR maximum <> FLOOR(maximum))
+                          OR maximum >= {FINITE_VALUE_LIMIT_SQL} OR maximum <> FLOOR(maximum))
                     THEN 1 ELSE 0 END) AS loss_conflicts
     FROM observed GROUP BY 1, 2, 3
 ), classified AS (
     SELECT *,
            CASE WHEN conflicts = 0 AND staleness_min = staleness_max AND staleness_min >= 0
                      AND staleness_min = FLOOR(staleness_min)
-                     AND loss_tokens > 0 AND loss_tokens < 1e308 AND loss_tokens = FLOOR(loss_tokens)
-                     AND response_tokens >= 0 AND response_tokens < 1e308
+                     AND loss_tokens > 0 AND loss_tokens < {FINITE_VALUE_LIMIT_SQL}
+                     AND loss_tokens = FLOOR(loss_tokens)
+                     AND response_tokens >= 0 AND response_tokens < {FINITE_VALUE_LIMIT_SQL}
                      AND response_tokens = FLOOR(response_tokens)
-                     AND sequences > 0 AND sequences < 1e308 AND sequences = FLOOR(sequences)
-                     AND mslr >= 0 AND mslr < 1e308 AND ess > 0 AND ess <= 1
+                     AND sequences > 0 AND sequences < {FINITE_VALUE_LIMIT_SQL}
+                     AND sequences = FLOOR(sequences)
+                     AND mslr >= 0 AND mslr < {FINITE_VALUE_LIMIT_SQL} AND ess > 0 AND ess <= 1
                      AND finite_fraction = 1 AND missing_behavior = 0
-                     AND reward BETWEEN -1e308 AND 1e308 AND policy_loss BETWEEN -1e308 AND 1e308
+                     AND reward BETWEEN -{FINITE_VALUE_LIMIT_SQL} AND {FINITE_VALUE_LIMIT_SQL}
+                     AND policy_loss BETWEEN -{FINITE_VALUE_LIMIT_SQL} AND {FINITE_VALUE_LIMIT_SQL}
                 THEN 1 ELSE 0 END AS eligible
     FROM batches
 )
 """.strip()
 
 
-def _metric_points(predicate: str, *, series_names_payload: bool = False) -> str:
-    """One point per training_metric_value row matching predicate, labelled by metric and execution."""
-    series = (
-        "metric || ' ' || payload_kind || ' · ' || execution_uid"
-        if series_names_payload
-        else "metric || ' · ' || execution_uid"
-    )
+def _metric_points_with_series(predicate: str, series: str) -> str:
     return (
         f"SELECT timestamp_ms AS t, {series} AS series, value FROM metrics WHERE {predicate} ORDER BY timestamp_ms, seq"
     )
+
+
+def _metric_points(predicate: str) -> str:
+    """Return training metric points labelled by metric and execution."""
+    return _metric_points_with_series(predicate, "metric || ' · ' || execution_uid")
+
+
+def _payload_metric_points(predicate: str) -> str:
+    """Return training metric points labelled by metric, payload kind, and execution."""
+    return _metric_points_with_series(predicate, "metric || ' ' || payload_kind || ' · ' || execution_uid")
 
 
 def _train_metric_points(metrics: tuple[str, ...]) -> str:
@@ -268,9 +278,14 @@ def async_rl_overview_dataset(
 ) -> DashboardDataset:
     """Build the bounded sources behind every panel of the asynchronous RL dashboard."""
     validate_values("clusters", clusters, max_values=ASYNC_RL_MAX_CLUSTERS, max_length=128)
-    validate_value("run", run, max_length=512)
-    validate_value("job", job, max_length=512)
-    validate_values("executions", executions, max_values=ASYNC_RL_MAX_EXECUTIONS, max_length=512)
+    validate_value("run", run, max_length=ASYNC_RL_MAX_IDENTITY_LENGTH)
+    validate_value("job", job, max_length=ASYNC_RL_MAX_IDENTITY_LENGTH)
+    validate_values(
+        "executions",
+        executions,
+        max_values=ASYNC_RL_MAX_EXECUTIONS,
+        max_length=ASYNC_RL_MAX_IDENTITY_LENGTH,
+    )
     bucket_ms = bounded_bucket_ms(
         start_ms,
         end_ms,
@@ -717,8 +732,8 @@ GROUP BY 1, 2 ORDER BY 1
             "SELECT t, disposition || ' · ' || execution_uid AS series, SUM(sum_value) AS value "
             "FROM core WHERE statistic = 'aggregate' AND name = 'rollout_group_tokens' GROUP BY 1, 2 ORDER BY 1"
         ),
-        "reward": _metric_points(f"metric IN ({sql_values(_REWARD_METRICS)})", series_names_payload=True),
-        "evaluation": _metric_points("metric LIKE 'eval/%'", series_names_payload=True),
+        "reward": _payload_metric_points(f"metric IN ({sql_values(_REWARD_METRICS)})"),
+        "evaluation": _payload_metric_points("metric LIKE 'eval/%'"),
         "length_stops": (
             f"""
 WITH s AS (
@@ -736,7 +751,7 @@ FROM s CROSS JOIN (VALUES ('consumed/length_stop_fraction'), ('consumed/stop_rea
 ORDER BY t, series
 """.strip()
         ),
-        "optimizer": _metric_points(f"metric IN ({sql_values(_OPTIMIZER_METRICS)})", series_names_payload=True),
+        "optimizer": _payload_metric_points(f"metric IN ({sql_values(_OPTIMIZER_METRICS)})"),
         "megatron_policy_wall": (
             """
 SELECT timestamp_ms AS t, 'rank ' || rank || ' ' || outcome || ' · ' || execution_uid AS series, seconds AS value
@@ -874,8 +889,9 @@ WITH m AS (
     WHERE metric IN ({sql_values(_CORRECTION_METRICS)}) AND payload_kind = 'train'
 )
 SELECT timestamp_ms AS t,
-       CASE WHEN kind = 'reference' THEN 'M2 reference 0.04' ELSE metric END || ' · ' || execution_uid AS series,
-       CASE WHEN kind = 'reference' THEN 0.04 ELSE value END AS value
+       CASE WHEN kind = 'reference' THEN 'M2 reference {M2_REFERENCE}' ELSE metric END
+            || ' · ' || execution_uid AS series,
+       CASE WHEN kind = 'reference' THEN {M2_REFERENCE} ELSE value END AS value
 FROM m CROSS JOIN (VALUES ('observation'), ('reference')) AS kinds(kind)
 WHERE kind = 'observation' OR metric = 'policy/m2_mask/m2_before'
 ORDER BY t, series

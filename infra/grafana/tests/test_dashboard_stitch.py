@@ -48,6 +48,16 @@ def test_stitch_dashboard_resolves_shared_links(
     assert link["includeVars"] is expected_include_vars
 
 
+def test_stitch_dashboard_returns_independent_shared_links():
+    source = {"links": [{"linkRef": "async_rl"}], "panels": []}
+    first = stitch_dashboard(source, {})
+    first["links"][0]["title"] = "changed"
+
+    second = stitch_dashboard(source, {})
+
+    assert second["links"][0]["title"] == "RL Post-training (async)"
+
+
 def test_stitch_dashboard_rejects_an_unknown_fragment_name():
     source = {"panels": [{"id": 7, "gridPos": {}, "panelRef": "missing"}]}
     with pytest.raises(KeyError, match="missing"):

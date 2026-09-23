@@ -408,9 +408,9 @@ def store(telemetry_table):
     return database
 
 
-# Series each panel returns from the fixture. A GROUP BY that drops a dimension, a fan-out
+# Rows each panel returns from the fixture. A GROUP BY that drops a dimension, a fan-out
 # that collapses, or a join that duplicates its left side still returns rows, just not this many.
-PANEL_SERIES = {
+PANEL_ROWS = {
     "Optimizer and synced policy steps": 2,
     "Response tokens generated and trained on / s": 3,
     "Process lifecycle": 1,
@@ -464,7 +464,7 @@ PANEL_SERIES = {
 
 @pytest.mark.parametrize("title", PANELS)
 def test_every_panel_view_returns_declared_fields_for_selected_attempt(store, title):
-    assert len(query(store, title)) == PANEL_SERIES[title]
+    assert len(query(store, title)) == PANEL_ROWS[title]
 
 
 def _bridge(database, *, max_rows=1000):

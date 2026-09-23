@@ -506,7 +506,7 @@
       "id": 2,
       "type": "timeseries",
       "title": "Rollout wait vs train step (critical path)",
-      "description": "Mean seconds per optimizer step the trainer spent waiting for rollouts, and inside the step itself.\n\nRollout wait above train step means generation is the bottleneck. The rollout buffer occupancy panel says whether the buffer is full.\n\nBoth spans contain everything inside them, so they never stack. Each series is split by outcome, because a phase that failed recorded only how long it ran before failing. Blank means no critical-path spans arrived. Data from telemetry_v1.marinskyrl.",
+      "description": "Mean seconds per optimizer step the trainer spent waiting for rollouts, and inside the step itself.\n\nRollout wait above train step means generation is the bottleneck.\n\nBoth spans contain everything inside them, so they never stack. Each series is split by outcome, because a phase that failed recorded only how long it ran before failing. Blank means no critical-path spans arrived. Data from telemetry_v1.marinskyrl.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"

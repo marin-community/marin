@@ -120,7 +120,7 @@ def _stitch_links(links: list[dict]) -> list[dict]:
             continue
         if ref not in _SHARED_LINKS:
             raise KeyError(f"unknown dashboard link fragment {ref!r}")
-        resolved.append(_SHARED_LINKS[ref])
+        resolved.append(dict(_SHARED_LINKS[ref]))
     return resolved
 
 
