@@ -719,6 +719,23 @@ def test_iris_serve_no_wait_is_an_explicit_opt_out_of_minting(monkeypatch):
     assert "Submitted" in result.output
 
 
+def test_iris_serve_proxy_timeout_covers_broker_worker_and_lease(monkeypatch):
+    result, _client, services, _mint = _invoke_iris_serve(
+        monkeypatch,
+        "--instances",
+        "4",
+        "--proxy-timeout",
+        "3600",
+        "--no-wait",
+    )
+
+    assert result.exit_code == 0, result.output
+    broker = services[0].broker
+    assert broker.proxy.request_timeout_seconds == 3600
+    assert broker.worker.request_timeout_seconds == 3240
+    assert broker.request_lease_timeout_seconds == 3420
+
+
 def test_iris_serve_resolves_additive_metric_families_before_submission(monkeypatch, tmp_path):
     config = tmp_path / "metrics.toml"
     config.write_text('families = ["vllm:custom_scheduler_pressure"]\n')
