@@ -4,6 +4,8 @@
 """Build a Levanter training mixture from a DataKit clustered store."""
 
 import logging
+from collections.abc import Mapping
+from dataclasses import dataclass
 from enum import StrEnum
 
 from levanter.data.text.datasets import DatasetComponent, LmDataConfig
@@ -19,6 +21,14 @@ class MixtureWeighting(StrEnum):
 
     TOKEN_PROPORTIONAL = "token_proportional"
     UNIFORM = "uniform"
+
+
+@dataclass(frozen=True)
+class FlatCacheComponent:
+    """One named flat cache and its fixed training weight."""
+
+    cache_dir: str
+    weight: float
 
 
 def bucket_name(cluster_id: int, quality_bucket: int) -> str:
@@ -49,6 +59,27 @@ def log_store_summary(store: ClusteredStoreData) -> None:
         )
 
 
+def flat_cache_mixture(*, tokenizer: str, caches: Mapping[str, FlatCacheComponent]) -> LmDataConfig:
+    """Build a fixed training mixture from named flat-cache directories."""
+    components = {
+        name: DatasetComponent(
+            source=None,
+            cache_dir=cache.cache_dir,
+            format=TextLmDatasetFormat(),
+            tags=[name],
+            flat_cache=True,
+        )
+        for name, cache in caches.items()
+    }
+    return LmDataConfig(
+        tokenizer=tokenizer,
+        cache_dir=None,
+        components=components,
+        train_weights={name: cache.weight for name, cache in caches.items()},
+        auto_build_caches=False,
+    )
+
+
 def store_mixture(
     store: ClusteredStoreData,
     *,
@@ -59,7 +90,7 @@ def store_mixture(
 
     Raises:
         ValueError: If the store has no buckets, has invalid token counts, or
-            has no bucket large enough for one training sequence.
+            has no bucket that meets ``min_tokens_per_component``.
     """
     if min_tokens_per_component < 1:
         raise ValueError(f"min_tokens_per_component must be positive, got {min_tokens_per_component}")
@@ -75,40 +106,25 @@ def store_mixture(
     if not usable_buckets:
         raise ValueError(
             f"store at {store.cache_path} has no bucket with at least {min_tokens_per_component} tokens; "
-            "each mixture component must contain one full training sequence"
+            "each mixture component must meet the minimum token count"
         )
 
-    components: dict[str, DatasetComponent] = {}
-    weights: dict[str, float] = {}
+    caches: dict[str, FlatCacheComponent] = {}
     for bucket in usable_buckets:
         name = bucket_name(bucket.cluster_id, bucket.quality_bucket)
-        components[name] = DatasetComponent(
-            source=None,
-            # Store artifacts resolve this to an absolute object-store path when loaded.
-            cache_dir=bucket.path,
-            format=TextLmDatasetFormat(),
-            tags=[name],
-            # DataKit writes the ledger and shards at the bucket root. Without
-            # flat_cache, Levanter looks under <bucket>/train and drops the data.
-            flat_cache=True,
-        )
         if weighting is MixtureWeighting.TOKEN_PROPORTIONAL:
-            weights[name] = float(bucket.total_tokens)
+            weight = float(bucket.total_tokens)
         else:
-            weights[name] = 1.0
+            weight = 1.0
+        # Loaded store artifacts resolve bucket.path to an absolute object-store path.
+        caches[name] = FlatCacheComponent(cache_dir=bucket.path, weight=weight)
 
     logger.info(
         "store_mixture: %d of %d buckets, minimum_tokens=%d, %s weighting, tokenizer=%s",
-        len(components),
+        len(caches),
         len(store.buckets),
         min_tokens_per_component,
         weighting.value,
         store.tokenizer,
     )
-    return LmDataConfig(
-        tokenizer=store.tokenizer,
-        cache_dir=None,
-        components=components,
-        train_weights=weights,
-        auto_build_caches=False,
-    )
+    return flat_cache_mixture(tokenizer=store.tokenizer, caches=caches)

@@ -17,9 +17,9 @@ datakit runs:
    DAG over ``sample_sources(SAMPLE_PREFIX)`` at ``SMOKE_SCALE``; the driver runs it and reads
    the terminal :class:`ClusteredStoreData`.
 2. Train + eval pass -- :func:`store_mixture` turns that store into the Levanter
-   ``LmDataConfig`` (one ``flat_cache=True`` component per non-empty bucket), the Grug launch
-   trainer produces an ``ArtifactStep[LevanterCheckpoint]``, and ``eval_steps`` / ``eval_report``
-   produce the readout.
+   ``LmDataConfig`` (one ``flat_cache=True`` component per bucket with one model
+   sequence), the Grug launch trainer produces an ``ArtifactStep[LevanterCheckpoint]``,
+   and ``eval_steps`` / ``eval_report`` produce the readout.
 
 Both passes resume from their own caches: a training-config edit re-fingerprints only
 train+eval and reuses the datakit store; a repeated run with unchanged config mints no new
@@ -52,6 +52,7 @@ from marin.training.training import LevanterCheckpoint
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.reference_pipeline import (
+    DEFAULT_MAX_CONCURRENT,
     QUALITY_MODEL_VERSION,
     SAMPLE_PREFIX,
     SAMPLE_SOURCES,
@@ -195,7 +196,12 @@ def main() -> None:
         "checkpoint does not yet produce -- pass '--stop-after eval' once that is wired)",
     )
     parser.add_argument("--pool-workers", type=int, default=None, help="datakit per-stage worker count (override scale)")
-    parser.add_argument("--max-concurrent", type=int, default=8, help="max steps a StepRunner walks at once")
+    parser.add_argument(
+        "--max-concurrent",
+        type=int,
+        default=DEFAULT_MAX_CONCURRENT,
+        help="max steps a StepRunner walks at once",
+    )
     args = parser.parse_args()
 
     configure_logging(logging.INFO)
