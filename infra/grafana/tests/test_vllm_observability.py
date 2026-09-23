@@ -169,6 +169,8 @@ def _assert_dashboard_panels(client, dashboards, params):
     for filename in ("inference.json", "inference_overview.json"):
         for panel in dashboards[filename]["panels"]:
             for target in panel.get("targets", []):
+                if target["url"] != "/v1/vllm/overview":
+                    continue
                 target_params = {param["key"]: param["value"] for param in target["url_options"]["params"]}
                 view = target_params["view"]
                 result = client.get(
@@ -179,6 +181,18 @@ def _assert_dashboard_panels(client, dashboards, params):
                 for row in result.json():
                     assert row["section"] == view
                     assert all(column["selector"] in row for column in target["columns"])
+
+
+def test_inference_dashboard_exposes_one_optional_baseline():
+    dashboard_dir = Path(__file__).parents[1] / "dashboards"
+    dashboards = stitch_all(dashboard_dir, dashboard_dir / "panels")
+    diagnostics = dashboards["inference.json"]
+
+    assert diagnostics["uid"] == "marin-inference"
+    variables = {variable["name"]: variable for variable in diagnostics["templating"]["list"]}
+    assert variables["baseline"]["type"] == "textbox"
+    comparison = next(panel for panel in diagnostics["panels"] if panel.get("title") == "Selected job vs baseline")
+    assert comparison["targets"][0]["url"] == "/v1/vllm/comparison"
 
 
 def _assert_overview_rows(rows, invalid_histogram):
@@ -460,3 +474,200 @@ def test_finelog_timeout_is_visible_and_reuses_cached_failure():
     assert [row["status"] for row in status.json()] == ["query_timeout", "unavailable"]
     assert tokens.json() == []
     assert len(queries) == 1
+
+
+def _comparison_app(
+    *,
+    selected_model="allenai/SERA-8B",
+    include_selected_tpot=True,
+    selected_prompt_tokens_per_request=1024,
+    selected_extra_producer=False,
+    selected_structured_histogram=False,
+):
+    database = duckdb.connect()
+    metric_columns = """cluster VARCHAR, service VARCHAR, job_id VARCHAR, name VARCHAR, kind VARCHAR,
+        value DOUBLE, resource_attributes_json VARCHAR, attributes_json VARCHAR, timestamp_ms BIGINT, seq BIGINT"""
+    for table in ("telemetry_v1.vllm", "telemetry_v1.marinskyrl"):
+        database.execute(f'CREATE TABLE "{table}"({metric_columns})')
+    database.execute(
+        'CREATE TABLE "telemetry_v1.node_agent"(cluster VARCHAR, service VARCHAR, node_name VARCHAR, '
+        "name VARCHAR, attributes_json VARCHAR, timestamp_ms BIGINT)"
+    )
+    database.execute("CREATE MACRO json_get(d, f) AS json_extract_string(d, concat('$.', f))")
+
+    def add_job(job_id, model, node, start, generated, tpot_sum, prompt_tokens_per_request, request_count=50):
+        resource = json.dumps({"node_name": node})
+        snapshot = json.dumps({"model_name": model, "source_temporality": "current_snapshot"})
+        cumulative = json.dumps({"model_name": model, "source_temporality": "cumulative_snapshot"})
+        rows = []
+        for offset, running in ((0, 1), (60_000, 1), (120_000, 0)):
+            rows.append(("num_requests_running", running, snapshot, start + offset))
+        for name, final in (
+            ("generation_tokens_total", generated),
+            ("prompt_tokens_total", request_count * prompt_tokens_per_request),
+            ("request_generation_tokens_sum", request_count * 256),
+            ("request_generation_tokens_count", request_count),
+            ("request_time_per_output_token_seconds_count", request_count),
+        ):
+            rows.extend((name, value, cumulative, start + offset) for offset, value in ((0, 0), (120_000, final)))
+        if job_id != "/selected" or include_selected_tpot:
+            rows.extend(
+                ("request_time_per_output_token_seconds_sum", value, cumulative, start + offset)
+                for offset, value in ((0, 0), (120_000, tpot_sum))
+            )
+        database.executemany(
+            'INSERT INTO "telemetry_v1.vllm" ' "VALUES ('cw-a', 'vllm', ?, ?, 'gauge', ?, ?, ?, ?, ?)",
+            [
+                (job_id, name, value, resource, attributes, timestamp, seq)
+                for seq, (name, value, attributes, timestamp) in enumerate(rows)
+            ],
+        )
+        database.execute(
+            'INSERT INTO "telemetry_v1.node_agent" ' "VALUES ('cw-a', 'iris-node-agent', ?, 'hardware_inventory', ?, ?)",
+            [node, json.dumps({"gpu_model": "NVIDIA H100 80GB HBM3"}), start + 60_000],
+        )
+
+    add_job("/baseline", "allenai/SERA-8B", "node-a", 100_000, 10_000, 0.6, 1024)
+    add_job(
+        "/selected",
+        selected_model,
+        "node-b",
+        1_000_000,
+        17_500,
+        0.34,
+        selected_prompt_tokens_per_request,
+    )
+    if selected_extra_producer:
+        database.execute(
+            'INSERT INTO "telemetry_v1.vllm" '
+            "VALUES ('cw-a', 'vllm', '/selected', 'num_requests_running', 'gauge', 1, ?, ?, 1060000, 99)",
+            [
+                json.dumps({"node_name": "node-b-extra"}),
+                json.dumps({"model_name": selected_model, "source_temporality": "current_snapshot"}),
+            ],
+        )
+    if selected_structured_histogram:
+        database.execute(
+            'INSERT INTO "telemetry_v1.vllm" '
+            "VALUES ('cw-a', 'vllm', '/selected', 'request_generation_tokens', "
+            "'histogram', NULL, ?, ?, 1060000, 100)",
+            [
+                json.dumps({"node_name": "node-b"}),
+                json.dumps({"model_name": selected_model, "source_temporality": "cumulative_snapshot"}),
+            ],
+        )
+    queries = []
+
+    def query(sql, *, max_rows):
+        queries.append(sql)
+        return database.execute(sql).fetch_arrow_table()
+
+    source = Record(target=ClusterTarget("marin", "project", "zone", "fleet", "cluster"), query=query)
+    return create_app(bridge_config(), {"marin": source}, {}, None, None, None), queries
+
+
+def test_vllm_comparison_uses_each_jobs_observed_window_and_skips_an_empty_baseline():
+    app, queries = _comparison_app()
+    params = {
+        "identity_kind": "job_id",
+        "identity": "/selected",
+        "from": 950_000,
+        "to": 1_200_000,
+    }
+    with TestClient(app) as client:
+        empty = client.get("/finelog/marin/v1/vllm/comparison", params={**params, "baseline": ""})
+        compared = client.get("/finelog/marin/v1/vllm/comparison", params={**params, "baseline": "/baseline"})
+
+    assert empty.status_code == compared.status_code == 200
+    assert empty.json() == []
+    assert len(queries) == 2
+    rows = {row["metric"]: row for row in compared.json()}
+    assert rows["time per output token"]["selected_value"] == pytest.approx(6.8)
+    assert rows["time per output token"]["baseline_value"] == pytest.approx(12)
+    assert rows["time per output token"]["direction"] == "better"
+    assert rows["generated tokens/s"]["selected_value"] == pytest.approx(145.833333)
+    assert rows["generated tokens/s"]["baseline_value"] == pytest.approx(83.333333)
+    assert rows["generated tokens/s"]["direction"] == "better"
+    assert rows["generated tokens/s"]["selected_first_ms"] == 1_000_000
+    assert rows["generated tokens/s"]["baseline_first_ms"] == 100_000
+
+
+@pytest.mark.parametrize(
+    ("selected_model", "include_selected_tpot", "expected_status"),
+    [
+        ("different/model", True, "not_comparable"),
+        ("allenai/SERA-8B", False, "missing_telemetry"),
+    ],
+)
+def test_vllm_comparison_marks_mismatched_context_and_missing_telemetry(
+    selected_model, include_selected_tpot, expected_status
+):
+    app, _ = _comparison_app(selected_model=selected_model, include_selected_tpot=include_selected_tpot)
+    with TestClient(app) as client:
+        response = client.get(
+            "/finelog/marin/v1/vllm/comparison",
+            params={
+                "identity_kind": "job_id",
+                "identity": "/selected",
+                "baseline": "/baseline",
+                "from": 950_000,
+                "to": 1_200_000,
+            },
+        )
+    assert response.status_code == 200
+    statuses = {row["status"] for row in response.json()}
+    if expected_status == "not_comparable":
+        assert statuses == {expected_status}
+        assert all(row["ratio"] is None for row in response.json())
+        assert all(row["direction"] is None for row in response.json())
+    else:
+        tpot = next(row for row in response.json() if row["metric"] == "time per output token")
+        assert tpot["status"] == expected_status
+
+
+@pytest.mark.parametrize(
+    ("app_kwargs", "reason"),
+    [
+        ({"selected_prompt_tokens_per_request": 4096}, "prompt-length mix differs"),
+        ({"selected_extra_producer": True}, "serving producer count differs"),
+        (
+            {"selected_structured_histogram": True},
+            "structured or mixed histogram history requires the canonical reader from Marin #9363",
+        ),
+    ],
+)
+def test_vllm_comparison_withholds_direction_for_incomplete_context(app_kwargs, reason):
+    app, _ = _comparison_app(**app_kwargs)
+    with TestClient(app) as client:
+        response = client.get(
+            "/finelog/marin/v1/vllm/comparison",
+            params={
+                "identity_kind": "job_id",
+                "identity": "/selected",
+                "baseline": "/baseline",
+                "from": 950_000,
+                "to": 1_200_000,
+            },
+        )
+
+    assert response.status_code == 200
+    assert {row["status"] for row in response.json()} == {"not_comparable"}
+    assert {row["reason"] for row in response.json()} == {reason}
+    assert all(row["ratio"] is None and row["direction"] is None for row in response.json())
+
+
+def test_vllm_comparison_reports_a_missing_baseline():
+    app, _ = _comparison_app()
+    with TestClient(app) as client:
+        response = client.get(
+            "/finelog/marin/v1/vllm/comparison",
+            params={
+                "identity_kind": "job_id",
+                "identity": "/selected",
+                "baseline": "/absent",
+                "from": 950_000,
+                "to": 1_200_000,
+            },
+        )
+    assert response.status_code == 200
+    assert response.json()[0]["status"] == "baseline_missing"

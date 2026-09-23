@@ -20,6 +20,7 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /finelog/{cluster}/v1/accelerator/overview bounded shared accelerator dataset
     GET /finelog/{cluster}/v1/jobs/overview       five namespace-bounded Jobs sources
     GET /finelog/{cluster}/v1/vllm/overview       bounded per-job/run vLLM telemetry
+    GET /finelog/{cluster}/v1/vllm/comparison     exact selected job plus one baseline
     GET /finelog/{cluster}/v1/zephyr/overview     bounded ranked shuffle snapshot
     GET /finelog/marin/fleet_health              hub query health + k8s mirror readiness
     GET /finelog/{cluster}/alerts/query          alert SQL; no data when Finelog is unavailable
@@ -159,15 +160,21 @@ from starlette.routing import Route
 from training_observability import training_overview_dataset
 from training_stalls import telemetry_query, training_stall_alert_rows
 from vllm_observability import (
+    VLLM_COMPARISON_MAX_ROWS,
     VLLM_DETAIL_MAX_WINDOW_MS,
     VLLM_MAX_RESULT_ROWS,
     VLLM_MAX_SERIES,
     VLLM_OVERVIEW_SECTIONS,
     VllmIdentityField,
+    vllm_comparison_rows,
+    vllm_comparison_window,
+    vllm_job_inventory_query,
+    vllm_job_summary_query,
     vllm_overview_query,
     vllm_overview_table,
     vllm_run_summary_samples_query,
     vllm_run_summary_table,
+    vllm_summaries_with_inventory,
 )
 from wandb_source import WandbSource
 from zephyr_observability import zephyr_overview_dataset
@@ -717,6 +724,71 @@ def create_app(
             "recent RL runs",
             lambda _params, start_ms, end_ms: recent_rl_runs_dataset(start_ms, end_ms),
         )
+
+    def vllm_comparison(request: Request) -> JSONResponse:
+        try:
+            target = _target_for(request.path_params["cluster"], finelog_sources)
+            params = request.query_params
+            baseline_job = params.get("baseline", "")
+            if not baseline_job:
+                return JSONResponse([])
+            if _require(params, "identity_kind") != VllmIdentityField.JOB_ID:
+                return JSONResponse(
+                    [
+                        {
+                            "section": "comparison",
+                            "metric": "comparison",
+                            "status": "job_id_required",
+                            "reason": "Choose job_id to compare jobs",
+                        }
+                    ]
+                )
+            selected_job = params.get("identity_override") or _require(params, "identity")
+            start_ms = round(_require_time(params, "from").timestamp() * 1000)
+            end_ms = round(_require_time(params, "to").timestamp() * 1000)
+            try:
+                search_start_ms, search_end_ms = vllm_comparison_window(start_ms, end_ms)
+                sql = vllm_job_summary_query(search_start_ms, search_end_ms, (selected_job, baseline_job))
+            except ValueError as err:
+                raise _BadRequest(str(err)) from err
+            key = (
+                target.name,
+                "vllm_comparison",
+                selected_job,
+                baseline_job,
+                search_start_ms,
+                search_end_ms,
+            )
+
+            def run() -> list[dict[str, object]]:
+                source = finelog_sources[target.name]
+                table = source.query(sql, max_rows=VLLM_COMPARISON_MAX_ROWS)
+                validate_table_budget("vLLM comparison", table, max_rows=VLLM_COMPARISON_MAX_ROWS)
+                inventory_sql = vllm_job_inventory_query(table)
+                inventory = (
+                    source.query(inventory_sql, max_rows=VLLM_COMPARISON_MAX_ROWS) if inventory_sql is not None else None
+                )
+                if inventory is not None:
+                    validate_table_budget("vLLM comparison inventory", inventory, max_rows=VLLM_COMPARISON_MAX_ROWS)
+                table = vllm_summaries_with_inventory(table, inventory)
+                return vllm_comparison_rows(table, selected_job, baseline_job)
+
+            try:
+                rows = finelog_cache.get_or_compute(key, run)
+            except StatsError as err:
+                logger.warning("vLLM comparison query failed: %s", err)
+                status = "query_timeout" if _vllm_query_timed_out(err) else "query_error"
+                rows = [
+                    {
+                        "section": "comparison",
+                        "metric": "comparison",
+                        "status": status,
+                        "reason": f"Finelog {status.replace('_', ' ')}; retry later",
+                    }
+                ]
+            return JSONResponse(rows)
+        except _BadRequest as err:
+            return JSONResponse({"error": str(err)}, status_code=400)
 
     def vllm_overview(request: Request) -> JSONResponse:
         try:
@@ -1326,6 +1398,7 @@ def create_app(
             Route("/finelog/{cluster}/v1/rl/recent", recent_rl_runs),
             Route("/finelog/{cluster}/v1/runs/overview", runs_overview),
             Route("/finelog/{cluster}/v1/training/overview", training_overview),
+            Route("/finelog/{cluster}/v1/vllm/comparison", vllm_comparison),
             Route("/finelog/{cluster}/v1/vllm/overview", vllm_overview),
             Route("/finelog/{cluster}/v1/zephyr/overview", zephyr_overview),
             Route("/finelog/{cluster}/v1/rl/producers", rl_producers),

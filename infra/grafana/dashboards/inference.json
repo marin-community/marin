@@ -1,7 +1,7 @@
 {
   "uid": "marin-inference",
   "title": "Inference diagnostics",
-  "description": "Why is inference slow? Request scheduling, token throughput, engine differences, latency stages and tails, workload length, and telemetry trust. The original inference UID and panel IDs are retained.",
+  "description": "Compare one job with one optional baseline, then investigate the selected job's scheduling, throughput, latency, workload and telemetry trust. The original inference UID and panel IDs are retained.",
   "tags": [
     "marin",
     "inference",
@@ -115,6 +115,17 @@
         }
       },
       {
+        "name": "baseline",
+        "label": "Baseline job ID (optional)",
+        "type": "textbox",
+        "description": "Paste one exact job ID or follow a comparison link from Inference overview. Empty keeps the existing single-job query cost.",
+        "query": "",
+        "current": {
+          "text": "",
+          "value": ""
+        }
+      },
+      {
         "name": "output_cap",
         "label": "Output token cap (annotation)",
         "type": "textbox",
@@ -132,7 +143,7 @@
       "title": "",
       "options": {
         "mode": "markdown",
-        "content": "Select a serve and range. **Run triage** shows query health and a selected-range server count cue. A count gap needs range and evaluator checks. Zoom to seven hours or less for engine and latency detail. Use **Manual serve ID** if the picker omits a later session."
+        "content": "Select one serve. Optionally paste one exact **Baseline job ID**; the compact comparison uses each job's own observed window, while every detailed panel remains scoped to the selected serve. Ratios are withheld when model, GPU, request mix or telemetry is not comparable. This is a symptom cue, not a causal diagnosis."
       },
       "id": 12,
       "gridPos": {
@@ -140,6 +151,133 @@
         "y": 0,
         "w": 24,
         "h": 4
+      }
+    },
+    {
+      "type": "table",
+      "title": "Selected job vs baseline",
+      "description": "Time per output token is lower-is-better; generated tokens/s is higher-is-better. Each job is summarized over its own request-state window inside a centered seven-day search. Ratios and directions appear only for matching model, GPU, serving size, prompt/output lengths and observed load with enough completed-request samples. Empty baseline performs no Finelog query.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "Choose one baseline job ID to compare",
+          "custom": {
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ratio"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/v1/vllm/comparison",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "identity_kind",
+                "value": "${identity_kind}"
+              },
+              {
+                "key": "identity",
+                "value": "${identity}"
+              },
+              {
+                "key": "identity_override",
+                "value": "${identity_override}"
+              },
+              {
+                "key": "baseline",
+                "value": "${baseline}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "metric",
+              "text": "signal",
+              "type": "string"
+            },
+            {
+              "selector": "selected_value",
+              "text": "selected",
+              "type": "number"
+            },
+            {
+              "selector": "baseline_value",
+              "text": "baseline",
+              "type": "number"
+            },
+            {
+              "selector": "unit",
+              "text": "unit",
+              "type": "string"
+            },
+            {
+              "selector": "ratio",
+              "text": "ratio",
+              "type": "number"
+            },
+            {
+              "selector": "direction",
+              "text": "direction",
+              "type": "string"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "string"
+            },
+            {
+              "selector": "reason",
+              "text": "evidence",
+              "type": "string"
+            }
+          ]
+        }
+      ],
+      "id": 21,
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 24,
+        "h": 8
       }
     },
     {
@@ -162,7 +300,7 @@
       "id": 20,
       "gridPos": {
         "x": 0,
-        "y": 8,
+        "y": 16,
         "w": 24,
         "h": 4
       }
@@ -172,7 +310,7 @@
       "id": 3,
       "gridPos": {
         "x": 0,
-        "y": 12,
+        "y": 20,
         "w": 12,
         "h": 7
       }
@@ -182,7 +320,7 @@
       "id": 2,
       "gridPos": {
         "x": 12,
-        "y": 12,
+        "y": 20,
         "w": 12,
         "h": 7
       }
@@ -289,7 +427,7 @@
       "id": 13,
       "gridPos": {
         "x": 0,
-        "y": 19,
+        "y": 27,
         "w": 8,
         "h": 7
       }
@@ -299,7 +437,7 @@
       "id": 11,
       "gridPos": {
         "x": 8,
-        "y": 19,
+        "y": 27,
         "w": 8,
         "h": 7
       }
@@ -411,7 +549,7 @@
       "id": 14,
       "gridPos": {
         "x": 16,
-        "y": 19,
+        "y": 27,
         "w": 8,
         "h": 7
       }
@@ -603,7 +741,7 @@
       "id": 15,
       "gridPos": {
         "x": 0,
-        "y": 26,
+        "y": 34,
         "w": 24,
         "h": 8
       }
@@ -613,7 +751,7 @@
       "id": 5,
       "gridPos": {
         "x": 0,
-        "y": 34,
+        "y": 42,
         "w": 12,
         "h": 7
       }
@@ -629,7 +767,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 34,
+        "y": 42,
         "w": 8,
         "h": 7
       },
@@ -708,7 +846,7 @@
       "id": 4,
       "gridPos": {
         "x": 20,
-        "y": 34,
+        "y": 42,
         "w": 4,
         "h": 7
       }
@@ -815,7 +953,7 @@
       "id": 7,
       "gridPos": {
         "x": 0,
-        "y": 41,
+        "y": 49,
         "w": 12,
         "h": 8
       }
@@ -903,7 +1041,7 @@
       "id": 16,
       "gridPos": {
         "x": 12,
-        "y": 41,
+        "y": 49,
         "w": 6,
         "h": 8
       }
@@ -913,7 +1051,7 @@
       "id": 8,
       "gridPos": {
         "x": 18,
-        "y": 41,
+        "y": 49,
         "w": 6,
         "h": 8
       }
@@ -923,7 +1061,7 @@
       "id": 1,
       "gridPos": {
         "x": 0,
-        "y": 57,
+        "y": 65,
         "w": 8,
         "h": 6
       }
@@ -933,7 +1071,7 @@
       "id": 10,
       "gridPos": {
         "x": 8,
-        "y": 57,
+        "y": 65,
         "w": 8,
         "h": 6
       }
@@ -949,7 +1087,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 57,
+        "y": 65,
         "w": 8,
         "h": 6
       },
@@ -1126,7 +1264,7 @@
       "id": 17,
       "gridPos": {
         "x": 0,
-        "y": 49,
+        "y": 57,
         "w": 16,
         "h": 8
       }
@@ -1212,7 +1350,7 @@
       "id": 18,
       "gridPos": {
         "x": 16,
-        "y": 49,
+        "y": 57,
         "w": 8,
         "h": 8
       }

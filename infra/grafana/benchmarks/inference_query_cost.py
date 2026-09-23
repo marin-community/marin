@@ -43,8 +43,7 @@ class QueryRecord:
 class PanelRequest:
     title: str
     path: str
-    view: str
-    bucket_ms: str
+    params: tuple[tuple[str, str], ...]
 
 
 class RecordingSource:
@@ -82,9 +81,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--grafana-dir", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--identity", required=True)
     parser.add_argument("--identity-kind", default="run_id", choices=["job_id", "run_id", "execution_uid"])
+    parser.add_argument("--baseline", default="", help="Optional exact baseline job ID")
     parser.add_argument("--from-ms", type=int, required=True)
     parser.add_argument("--to-ms", type=int, required=True)
     parser.add_argument("--bucket-ms", type=int, default=15_000)
+    parser.add_argument(
+        "--page",
+        choices=("both", "overview", "diagnostics"),
+        default="both",
+        help="Replay both pages or isolate one page's cost",
+    )
     parser.add_argument("--first-page", choices=["overview", "diagnostics"], default="overview")
     parser.add_argument(
         "--refresh-after", type=int, default=0, help="Wait this many seconds, then advance the window and refresh"
@@ -131,22 +137,29 @@ def panel_requests(dashboard: dict) -> list[PanelRequest]:
     for panel in dashboard["panels"]:
         for target in panel.get("targets", []):
             target_params = {param["key"]: param["value"] for param in target["url_options"]["params"]}
-            requests.append(
-                PanelRequest(panel["title"], target["url"], target_params["view"], target_params["bucket_ms"])
-            )
+            requests.append(PanelRequest(panel["title"], target["url"], tuple(target_params.items())))
     return requests
 
 
 def fetch_panel(client: TestClient, params: dict[str, str | int], request: PanelRequest) -> dict:
-    bucket_ms = int(params["bucket_ms"]) if request.bucket_ms == "${__interval_ms}" else int(request.bucket_ms)
+    substitutions = {
+        "${identity_kind}": str(params["identity_kind"]),
+        "${identity}": str(params["identity"]),
+        "${identity_override}": "",
+        "${baseline}": str(params["baseline"]),
+        "${__from}": str(params["from"]),
+        "${__to}": str(params["to"]),
+        "${__interval_ms}": str(params["bucket_ms"]),
+    }
+    request_params = {}
+    for key, value in request.params:
+        request_params[key] = substitutions.get(value, value)
     started = time.monotonic()
-    response = client.get(
-        f"/finelog/{FINELOG_CLUSTER}{request.path}", params={**params, "view": request.view, "bucket_ms": bucket_ms}
-    )
+    response = client.get(f"/finelog/{FINELOG_CLUSTER}{request.path}", params=request_params)
     return {
         "title": request.title,
-        "view": request.view,
-        "bucket_ms": bucket_ms,
+        "view": request_params.get("view"),
+        "bucket_ms": request_params.get("bucket_ms"),
         "status": response.status_code,
         "seconds": time.monotonic() - started,
         "rows": response.json() if response.status_code == 200 else response.text,
@@ -188,11 +201,17 @@ def run_replay(args: argparse.Namespace) -> None:
     params = {
         "identity_kind": args.identity_kind,
         "identity": args.identity,
+        "baseline": args.baseline,
         "from": args.from_ms,
         "to": args.to_ms,
         "bucket_ms": args.bucket_ms,
     }
-    filenames = INFERENCE_DASHBOARDS if args.first_page == "overview" else INFERENCE_DASHBOARDS[::-1]
+    if args.page == "overview":
+        filenames = ("inference_overview.json",)
+    elif args.page == "diagnostics":
+        filenames = ("inference.json",)
+    else:
+        filenames = INFERENCE_DASHBOARDS if args.first_page == "overview" else INFERENCE_DASHBOARDS[::-1]
     pages = []
     config = load_finelog_config(FINELOG_CLUSTER)
     with open_client(config, FINELOG_CLUSTER, tunnel_timeout=30, request_timeout=20) as upstream:
