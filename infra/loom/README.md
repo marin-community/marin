@@ -62,6 +62,30 @@ uv run --all-packages --extra deploy marin-deploy loom rollout \
   --config buildContext=/path/to/loom
 ```
 
+### Model and ACP upgrade handoff
+
+The GPT-6 Sol profile change and the Loom runtime upgrade must be deployed
+together. Merge the Loom adapter PR first, then the Marin profile PR. Before
+rollout, record the current Marin and Loom commits, the stack's `artifactImage`
+output, and the `github` profile's model and effort. Use the normal rollout
+command above from the merged Marin commit. Its default image source is Loom's
+merged default branch; do not point `buildContext` at an unreviewed worktree.
+
+After activation, check the container's `codex --version` and `claude --version`,
+the globally installed ACP package versions, and `loom profile show github`.
+Confirm `github.profile=github`, `github` uses `gpt-6-sol` at `xhigh`, and a new
+test session reports GPT-6 Sol from Codex's provider output. Test a new Claude
+session without a model override and confirm the provider reports Opus 5.5 and
+1M context; also check one tool call, permission mode, and resume for each ACP
+adapter. Leave existing sessions running while checking new ones.
+
+If startup or those checks fail, roll back from isolated checkouts of the
+recorded Marin and Loom commits with `marin-deploy loom rollout --config
+buildContext=/path/to/previous/loom`. The prior Marin stack declaration restores
+the profiles; the prior Loom image restores the adapter pins on the persistent
+home volume. Recheck readiness, runtime versions, and the `github` profile after
+rollback. Do not remove the persistent volumes.
+
 Pulumi renders the Compose and Caddy configuration into VM metadata. The GCE
 startup unit stores Docker state on the persistent root disk, reads one numbered
 `LOOM_DOTENV` version, pulls the digest-pinned image, runs
