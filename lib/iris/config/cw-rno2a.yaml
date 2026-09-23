@@ -112,6 +112,7 @@ auth:
   allowed_submitters:
     - "*@openathena.ai"
     - github-iris@hai-gcp-models.iam.gserviceaccount.com
+    - contractor@hai-gcp-models.iam.gserviceaccount.com
     - ravwojdyla@rav-openathena.iam.gserviceaccount.com
 
 kubernetes_provider:
