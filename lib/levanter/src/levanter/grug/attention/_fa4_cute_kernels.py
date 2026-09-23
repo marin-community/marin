@@ -1081,9 +1081,8 @@ def segmented_flash_attention_backward_launcher(
         score_mod_bwd=None,
     )
 
-    support = _native_segmented_backward_support(modules, num_threads=postprocess_threads)
-    zero_fill = support.zero_fill
-    _as_gmem_tensor = support.as_gmem_tensor
+    zero_fill = _float32_zero_fill(modules, num_threads=postprocess_threads)
+    _as_gmem_tensor = _native_gmem_tensor_view(modules)
 
     @cute.jit
     def _launch_segmented_flash_attention_backward(
@@ -1269,13 +1268,6 @@ def segmented_flash_attention_forward_sm100_launcher(
     return _launch
 
 
-@dataclass(frozen=True)
-class _NativeSegmentedBackwardSupport:
-    mask_mod: Any
-    zero_fill: Any
-    as_gmem_tensor: Any
-
-
 def _native_broadcast_heads(modules: Any) -> Any:
     """Share sparse metadata across heads without materializing copies."""
     deps = _import_cute_dependencies(modules)
@@ -1323,8 +1315,8 @@ def _native_segment_mask_mod(modules: Any) -> Any:
     return _grug_segment_mask_mod
 
 
-def _native_segmented_backward_support(modules: Any, *, num_threads: int) -> _NativeSegmentedBackwardSupport:
-    """Build the mask, zero-fill kernel, and gmem views shared by native backward."""
+def _float32_zero_fill(modules: Any, *, num_threads: int) -> Any:
+    """Build a kernel that zeroes a float32 accumulator buffer before the backward launch."""
     deps = _import_cute_dependencies(modules)
     cutlass, cute, cuda = deps.cutlass, deps.cute, deps.cuda
 
@@ -1349,10 +1341,7 @@ def _native_segmented_backward_support(modules: Any, *, num_threads: int) -> _Na
             if idx < cute.size(flat):
                 flat[idx] = cutlass.Float32(0.0)
 
-    zero_fill = _Float32ZeroFill(num_threads)
-    return _NativeSegmentedBackwardSupport(
-        _native_segment_mask_mod(modules), zero_fill, _native_gmem_tensor_view(modules)
-    )
+    return _Float32ZeroFill(num_threads)
 
 
 def _native_gmem_tensor_view(modules: Any) -> Any:
@@ -1413,10 +1402,9 @@ def segmented_flash_attention_backward_sm90_launcher(
     AuxData = utils_module.AuxData
     _patch_jax_array_list_tvm_ffi_converter()
 
-    support = _native_segmented_backward_support(modules, num_threads=config.num_threads)
-    _grug_segment_mask_mod = support.mask_mod
-    zero_fill = support.zero_fill
-    _as_gmem_tensor = support.as_gmem_tensor
+    _grug_segment_mask_mod = _native_segment_mask_mod(modules)
+    zero_fill = _float32_zero_fill(modules, num_threads=config.num_threads)
+    _as_gmem_tensor = _native_gmem_tensor_view(modules)
 
     tile_m, tile_n = config.tile
     backward = FlashAttentionBackwardSm90(
@@ -1539,10 +1527,9 @@ def segmented_flash_attention_backward_sm100_launcher(
     _patch_jax_array_list_tvm_ffi_converter()
     AuxData = utils_module.AuxData
 
-    support = _native_segmented_backward_support(modules, num_threads=config.zero_fill_threads)
-    _grug_segment_mask_mod = support.mask_mod
-    zero_fill = support.zero_fill
-    _as_gmem_tensor = support.as_gmem_tensor
+    _grug_segment_mask_mod = _native_segment_mask_mod(modules)
+    zero_fill = _float32_zero_fill(modules, num_threads=config.zero_fill_threads)
+    _as_gmem_tensor = _native_gmem_tensor_view(modules)
 
     backward = FlashAttentionBackwardSm100(
         head_dim,
