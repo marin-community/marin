@@ -19,7 +19,7 @@
       "linkRef": "rl_post_training"
     },
     {
-      "linkRef": "rl_sync_training_step"
+      "linkRef": "rl_sync_train_step"
     },
     {
       "asDropdown": false,

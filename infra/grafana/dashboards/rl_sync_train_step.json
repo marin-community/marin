@@ -1,6 +1,6 @@
 {
-  "uid": "marin-rl-sync-training-step",
-  "title": "RL Post-training (sync): training step",
+  "uid": "marin-rl-sync-train-step",
+  "title": "RL Post-training (sync): train step",
   "description": "Why the training half of an RL step takes as long as it does: the per-rank spans MarinSkyRL publishes from inside the policy worker, and the DCGM occupancy of the same nodes. Training is 21-27% of the step; generation is the larger half and has its own board.",
   "tags": [
     "marin",
@@ -167,7 +167,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/rl/training-step",
+          "url": "/v1/rl/train-step",
           "url_options": {
             "method": "GET",
             "params": [
@@ -268,7 +268,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/rl/training-step",
+          "url": "/v1/rl/train-step",
           "url_options": {
             "method": "GET",
             "params": [
@@ -400,7 +400,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/rl/training-step",
+          "url": "/v1/rl/train-step",
           "url_options": {
             "method": "GET",
             "params": [
@@ -501,7 +501,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/rl/training-step",
+          "url": "/v1/rl/train-step",
           "url_options": {
             "method": "GET",
             "params": [
@@ -597,7 +597,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/rl/training-step",
+          "url": "/v1/rl/train-step",
           "url_options": {
             "method": "GET",
             "params": [
@@ -715,7 +715,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/rl/training-step",
+          "url": "/v1/rl/train-step",
           "url_options": {
             "method": "GET",
             "params": [
@@ -837,7 +837,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/rl/training-step",
+          "url": "/v1/rl/train-step",
           "url_options": {
             "method": "GET",
             "params": [
@@ -963,7 +963,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/rl/training-step",
+          "url": "/v1/rl/train-step",
           "url_options": {
             "method": "GET",
             "params": [
@@ -1064,7 +1064,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/rl/training-step",
+          "url": "/v1/rl/train-step",
           "url_options": {
             "method": "GET",
             "params": [
@@ -1166,7 +1166,7 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/v1/rl/training-step",
+          "url": "/v1/rl/train-step",
           "url_options": {
             "method": "GET",
             "params": [
@@ -1246,7 +1246,7 @@
           "source": "url",
           "format": "table",
           "parser": "backend",
-          "url": "/v1/rl/training-step",
+          "url": "/v1/rl/train-step",
           "url_options": {
             "method": "GET",
             "params": [

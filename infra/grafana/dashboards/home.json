@@ -135,7 +135,7 @@
       "linkRef": "rl_sync_generation"
     },
     {
-      "linkRef": "rl_sync_training_step"
+      "linkRef": "rl_sync_train_step"
     },
     {
       "linkRef": "async_rl"

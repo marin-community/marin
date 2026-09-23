@@ -32,7 +32,7 @@ fetch server-side, so nothing outside the container reaches it.
 GET /finelog/{cluster}/query?sql=&from=&to=      finelog SQL
 GET /finelog/{cluster}/v1/{node,training,runs,rl,async-rl,accelerator,jobs}/overview
                                                     bounded shared dashboard datasets
-GET /finelog/{cluster}/v1/rl/{generation,training-step}
+GET /finelog/{cluster}/v1/rl/{generation,train-step}
                                                     bounded sync RL drill-down datasets
 GET /finelog/{cluster}/v1/zephyr/overview        bounded ranked shuffle snapshot
 GET /finelog/{cluster}/v1/rl/recent              bounded recent RL runs
@@ -154,7 +154,7 @@ identity and time input, runs a small fixed set of domain queries, and projects 
 panel views locally. Concurrent panel requests coalesce on one logical cache key;
 the `view` parameter only filters the cached result. A cold traversal uses one
 Finelog source for Node and Zephyr, three for Training, two for Runs, four for RL,
-one and three for the sync RL generation and training-step boards, nine for async RL,
+one and three for the sync RL generation and train-step boards, nine for async RL,
 three for Accelerators, and five for Jobs. Those boundaries are intentional:
 crossing namespaces or mixing fleet-wide per-device data with compact summaries
 just to reach one RPC would make the query less predictable.
@@ -317,7 +317,7 @@ of repeating the Kubernetes object name.
 | Workload | Runs | `runs.json` | How is each Levanter training run doing? | cluster, run |
 | Workload | RL Post-training (sync) | `rl_runs.json` | How is one reinforcement-learning run doing? | cluster, run |
 | Workload | RL Post-training (sync): generation | `rl_sync_generation.json` | Why is generation slow, and is it the tail or the whole batch? | cluster, run |
-| Workload | RL Post-training (sync): training step | `rl_sync_training_step.json` | Why is the policy update slow, and were the accelerators doing arithmetic? | cluster, run |
+| Workload | RL Post-training (sync): train step | `rl_sync_train_step.json` | Why is the policy update slow, and were the accelerators doing arithmetic? | cluster, run |
 | Workload | RL Post-training (async) | `async_rl.json` | Is concurrent rollout work useful, fresh, and keeping the policy trainer busy? | cluster, run, job, execution |
 | Workload | Training run | `training.json` | Is one training run on track? | run |
 | Workload | Inference overview | `inference_overview.json` | Is inference progressing, and are responses slow or queues growing? | identity kind, serve |
@@ -333,7 +333,7 @@ RL Post-training (sync) and its two drill-downs read datasets built in `src/rl_o
 `/v1/rl/overview` holds `core`, `engine`, `gpu` and `spans`. The generation board reads
 `/v1/rl/generation` (`driver`: the driver's step spans and rollout counters) and, for its engine
 panels, the run's `/v1/vllm/overview` result, which carries engine detail only for windows of 7
-hours or less. The training-step board reads `/v1/rl/training-step` (`spans`, `counters` and `gpu`).
+hours or less. The train-step board reads `/v1/rl/train-step` (`spans`, `counters` and `gpu`).
 Span and counter sources keep one row per step and phase. Finelog reduces each step's worker spans
 to its critical rank, the rank with the longest `policy_ppo_train`, and to a per-bucket spread
 across ranks, so their row counts do not grow with the rank count. Each is capped at 50,000 rows;

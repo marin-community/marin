@@ -648,11 +648,11 @@ SELECT t, band AS series, AVG(share) AS value FROM banded GROUP BY 1, 2 ORDER BY
     )
 
 
-def rl_sync_training_step_dataset(
+def rl_sync_train_step_dataset(
     clusters: tuple[str, ...], run: str, start_ms: int, end_ms: int, requested_bucket_ms: int
 ) -> DashboardDataset:
     """Build critical-rank worker spans, per-step worker counters, and DCGM on the run's nodes."""
-    bucket_ms = _rl_bucket_ms(clusters, run, start_ms, end_ms, requested_bucket_ms, "RL training step")
+    bucket_ms = _rl_bucket_ms(clusters, run, start_ms, end_ms, requested_bucket_ms, "RL train step")
     bucket = _bucket_sql(start_ms, bucket_ms)
     scope = _run_scope(clusters, run, start_ms, end_ms)
     clusters_sql = sql_values(clusters)
@@ -916,7 +916,7 @@ ORDER BY 4 DESC, 5 DESC
         ),
     }
     return DashboardDataset(
-        name="RL training step",
+        name="RL train step",
         cache_key=(clusters, run, start_ms, end_ms, bucket_ms),
         sources=(
             SourceQuery("spans", spans_sql, RL_MAX_SPAN_ROWS),

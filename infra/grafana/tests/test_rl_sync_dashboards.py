@@ -33,7 +33,7 @@ from rl_observability import (
     RL_MAX_RESULT_ROWS,
     rl_overview_dataset,
     rl_sync_generation_dataset,
-    rl_sync_training_step_dataset,
+    rl_sync_train_step_dataset,
 )
 from server import create_app
 from starlette.testclient import TestClient
@@ -667,14 +667,12 @@ def _stitched() -> dict:
     return stitch_all(DASHBOARDS, DASHBOARDS / "panels")
 
 
-def _dashboard(name: str = "rl_sync_training_step.json") -> dict:
+def _dashboard(name: str = "rl_sync_train_step.json") -> dict:
     return _stitched()[name]
 
 
 def _rl_dashboards() -> dict:
-    return {
-        name: _stitched()[name] for name in ("rl_sync_training_step.json", "rl_sync_generation.json", "rl_runs.json")
-    }
+    return {name: _stitched()[name] for name in ("rl_sync_train_step.json", "rl_sync_generation.json", "rl_runs.json")}
 
 
 def _our_panels() -> list[dict]:
@@ -689,7 +687,7 @@ def _our_panels() -> list[dict]:
         for name, board in _rl_dashboards().items()
         for panel, source in zip(board["panels"], json.loads((DASHBOARDS / name).read_text())["panels"], strict=True)
         if source.get("panelRef") in ours
-        or (name in ("rl_sync_training_step.json", "rl_sync_generation.json") and panel["type"] != "row")
+        or (name in ("rl_sync_train_step.json", "rl_sync_generation.json") and panel["type"] != "row")
     ]
     assert len(mounted) >= len(ours), (len(mounted), len(ours))
     return mounted
@@ -728,7 +726,7 @@ BUCKET_MS = 5 * 60 * 1000
 _DATASETS = {
     "/v1/rl/overview": rl_overview_dataset,
     "/v1/rl/generation": rl_sync_generation_dataset,
-    "/v1/rl/training-step": rl_sync_training_step_dataset,
+    "/v1/rl/train-step": rl_sync_train_step_dataset,
 }
 _VLLM_OVERVIEW = "/v1/vllm/overview"
 _TEMPLATE = {
@@ -1355,7 +1353,7 @@ def test_the_memory_panel_reads_the_instrument_the_byte_gauges_moved_to(store) -
     assert rows[0][1] == pytest.approx(max(m["peak_reserved_bytes"] for m in WORKER_MEMORY.values()))
 
 
-@pytest.mark.parametrize("board", ["rl_runs.json", "rl_sync_generation.json", "rl_sync_training_step.json"])
+@pytest.mark.parametrize("board", ["rl_runs.json", "rl_sync_generation.json", "rl_sync_train_step.json"])
 def test_a_board_reads_finelog_once_per_source_for_every_panel(store, board) -> None:
     """Every target of one endpoint on a board shares a dataset key, so a cold page load costs one
     Finelog query per source however many panels read it."""
