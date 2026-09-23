@@ -6,6 +6,7 @@
 The fixture dataclasses carry only the columns the app queries.
 """
 
+import importlib
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -15,8 +16,10 @@ from urllib.parse import quote
 
 import pytest
 import zephyr
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from fastapi.testclient import TestClient
-from finelog.client import LogClient
+from finelog.client import LogClient, StatsError
 from finelog.embedded import require_embedded_server
 from marina.apps import Services, create_api
 from marina.manifest import load_manifest
@@ -179,6 +182,27 @@ def test_health_reports_source_and_namespaces(api, finelog):
     assert body["plan_records"] is True
     assert {"zephyr.execution", "zephyr.stage", "zephyr.shuffle", "zephyr.worker"} <= set(body["namespaces"])
     assert body["finelog"].startswith(finelog)
+
+
+def test_finelog_read_retries_after_log_client_invalidates_its_transport():
+    create_api(load_manifest(APP), Services(name="zephyr", data_url="file:///tmp/zephyr", database=None))
+    backend = importlib.import_module("_marina_app_zephyr.app")
+    finelog = backend._Finelog(url="http://finelog.invalid", iap_cluster=None)
+    attempts = 0
+
+    def read(_client: LogClient) -> str:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            connect_error = ConnectError(Code.UNAVAILABLE, "down")
+            raise StatsError("down") from connect_error
+        return "available"
+
+    try:
+        assert finelog._call(read) == "available"
+        assert attempts == 2
+    finally:
+        finelog._client.close()
 
 
 def test_marina_mount_serves_zephyr_api(finelog, monkeypatch, tmp_path):

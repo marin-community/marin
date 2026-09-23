@@ -343,7 +343,7 @@ class ExecutionStage:
 
 @dataclass(frozen=True)
 class PlanNode:
-    """Safe physical-plan node shared by live and historical dashboards."""
+    """Serializable physical-plan node without source values or callables."""
 
     node_id: str
     label: str
@@ -465,7 +465,7 @@ def plan_nodes(plan: PhysicalPlan) -> tuple[PlanNode, ...]:
 
 
 def execution_stages(plan: PhysicalPlan) -> list[ExecutionStage]:
-    """Return historical stage records from the shared safe plan graph."""
+    """Return executable stage metadata in dependency order."""
     return [
         ExecutionStage(
             stage_name=node.stage_name,

@@ -17,15 +17,16 @@ import os
 import threading
 import time
 from collections.abc import Callable
-from contextlib import closing
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from connectrpc.errors import ConnectError
 from fastapi import FastAPI, HTTPException, Query
 from finelog.client import LogClient
-from google.cloud import compute_v1
+from finelog.types import is_retryable_error
 from marina.apps import RegisteredApi, Services, registered_api
+from marina.discovery import resolve_internal_ip
 from rigging.connect import IapAuth
 from rigging.credentials import iap_provider_for
 
@@ -112,74 +113,78 @@ PROJECT = os.environ.get("ZEPHYR_GCP_PROJECT", "hai-gcp-models")
 ZONE = os.environ.get("ZEPHYR_GCP_ZONE", "us-central1-a")
 FINELOG_FILTER = "name = finelog-marin"
 FINELOG_PORT = 10001
-ADDRESS_CACHE_TTL = 300.0
 QUERY_TIMEOUT_MS = 12_000
 MAX_ROWS = 20_000
 NAMESPACE_CACHE_TTL = 60.0
 
 
+@dataclass(frozen=True)
+class ExecutionPlanStage:
+    stage_name: str
+    label: str
+    stage_type: str
+    has_reduce: bool
+    dependencies: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ExecutionRecord:
+    execution_id: str
+    root_job_id: str
+    coordinator_job_id: str
+    ts: int
+    input_shards: int
+    stages: tuple[ExecutionPlanStage, ...]
+    plan_error: str | None = None
+
+
 class _Finelog:
-    """Cached Finelog address; one short-lived client per call."""
+    """Process-wide Finelog client with GCE-backed endpoint resolution."""
 
     def __init__(self, *, url: str | None, iap_cluster: str | None) -> None:
         self._url = url
-        self._iap_cluster = iap_cluster
         self._lock = threading.Lock()
-        self._address: str | tuple[str, int] | None = None
-        self._interceptors: tuple[Any, ...] = ()
         self._source = ""
-        self._resolved_at = 0.0
         self._namespaces: list[str] = []
         self._namespaces_at = 0.0
+        interceptors = tuple(IapAuth(iap_provider_for(iap_cluster)).interceptors()) if iap_cluster else ()
+        self._client = LogClient.connect(
+            url or FINELOG_FILTER,
+            resolver=self._resolve,
+            timeout_ms=QUERY_TIMEOUT_MS,
+            interceptors=interceptors,
+        )
 
     @property
     def source(self) -> str:
         return self._source
 
-    def _resolve_explicit(self) -> bool:
+    def _resolve(self, _endpoint: str) -> str:
         url = self._url
-        if not url:
-            return False
-        cluster = self._iap_cluster
-        self._interceptors = tuple(IapAuth(iap_provider_for(cluster)).interceptors()) if cluster else ()
-        self._address = url
-        self._source = f"{url} ({'IAP ' + cluster if cluster else 'direct'})"
-        return True
-
-    def _resolve_internal(self) -> None:
-        request = compute_v1.ListInstancesRequest(project=PROJECT, zone=ZONE, filter=FINELOG_FILTER)
-        for instance in compute_v1.InstancesClient().list(request=request, timeout=5.0):
-            for interface in instance.network_interfaces:
-                if interface.network_i_p:
-                    self._address = (interface.network_i_p, FINELOG_PORT)
-                    self._interceptors = ()
-                    self._source = f"{instance.name} internal {interface.network_i_p}:{FINELOG_PORT}"
-                    return
-        raise RuntimeError(f"no VM with an internal IP for filter {FINELOG_FILTER!r} in {ZONE}")
-
-    def _connect(self) -> LogClient:
+        if url:
+            source = url
+            address = url
+        else:
+            ip = resolve_internal_ip(PROJECT, ZONE, FINELOG_FILTER, timeout=5.0)
+            source = f"finelog-marin internal {ip}:{FINELOG_PORT}"
+            address = f"http://{ip}:{FINELOG_PORT}"
         with self._lock:
-            if self._address is None or time.monotonic() - self._resolved_at >= ADDRESS_CACHE_TTL:
-                if not self._resolve_explicit():
-                    self._resolve_internal()
-                self._resolved_at = time.monotonic()
-            address, interceptors = self._address, self._interceptors
-        assert address is not None
-        return LogClient.connect(address, timeout_ms=QUERY_TIMEOUT_MS, interceptors=interceptors)
-
-    def invalidate(self) -> None:
-        with self._lock:
-            self._address = None
+            self._source = source
+        return address
 
     def _call[Result](self, operation: Callable[[LogClient], Result]) -> Result:
-        """Run one operation on a fresh client, re-resolving once after a transport failure."""
+        """Retry one idempotent read after LogClient invalidates its transport."""
         for attempt in range(2):
             try:
-                with closing(self._connect()) as client:
-                    return operation(client)
-            except ConnectError:
-                self.invalidate()
-                if attempt == 1:
+                return operation(self._client)
+            except Exception as error:
+                cause = error.__cause__
+                retryable = (
+                    isinstance(error, (ConnectionError, OSError, TimeoutError))
+                    or (isinstance(error, ConnectError) and is_retryable_error(error))
+                    or (isinstance(cause, ConnectError) and is_retryable_error(cause))
+                )
+                if attempt == 1 or not retryable:
                     raise
         raise AssertionError("unreachable")
 
@@ -212,25 +217,51 @@ def _json_row(row: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _plan_row(row: dict[str, Any]) -> dict[str, Any]:
-    stages_json = row.pop("stages_json", None) or "[]"
+def _execution_plan_stage(value: object) -> ExecutionPlanStage:
+    if not isinstance(value, dict):
+        raise ValueError("stage is not an object")
+    stage_name = value.get("stage_name")
+    label = value.get("label")
+    stage_type = value.get("stage_type")
+    has_reduce = value.get("has_reduce")
+    dependencies = value.get("dependencies")
+    if not isinstance(stage_name, str) or not isinstance(label, str) or not isinstance(stage_type, str):
+        raise ValueError("stage names, labels, and types must be strings")
+    if not isinstance(has_reduce, bool):
+        raise ValueError("stage has_reduce must be a boolean")
+    if not isinstance(dependencies, list) or not all(isinstance(dependency, str) for dependency in dependencies):
+        raise ValueError("stage dependencies must be a list of strings")
+    return ExecutionPlanStage(stage_name, label, stage_type, has_reduce, tuple(dependencies))
+
+
+def _execution_record(row: dict[str, Any]) -> ExecutionRecord:
+    stages_json = row.get("stages_json") or "[]"
+    plan_error = None
     try:
-        stages = json.loads(stages_json)
-        if not isinstance(stages, list):
+        stage_values = json.loads(stages_json)
+        if not isinstance(stage_values, list):
             raise ValueError("stages_json is not a list")
-    except ValueError as error:
-        row["plan_error"] = f"Cannot read execution plan: {error}"
-        stages = []
-    row["stages"] = stages
-    return row
+        stages = tuple(_execution_plan_stage(value) for value in stage_values)
+    except (TypeError, ValueError) as error:
+        plan_error = f"Cannot read execution plan: {error}"
+        stages = ()
+    return ExecutionRecord(
+        execution_id=row["execution_id"],
+        root_job_id=row["root_job_id"],
+        coordinator_job_id=row["coordinator_job_id"],
+        ts=row["ts"],
+        input_shards=row["input_shards"],
+        stages=stages,
+        plan_error=plan_error,
+    )
 
 
 def _now() -> datetime:
     return datetime.now(UTC)
 
 
-def _stage_start(plan: dict[str, Any]) -> datetime:
-    return datetime.fromtimestamp(plan["ts"] / 1000, UTC) - timedelta(seconds=STAGE_LOOKBACK_SECONDS)
+def _execution_window_start(record: ExecutionRecord) -> datetime:
+    return datetime.fromtimestamp(record.ts / 1000, UTC) - timedelta(seconds=STAGE_LOOKBACK_SECONDS)
 
 
 def create_api(_services: Services) -> RegisteredApi:
@@ -256,11 +287,11 @@ def create_api(_services: Services) -> RegisteredApi:
         except Exception as error:
             raise unavailable(error) from error
 
-    def plan_or_404(execution_id: str) -> dict[str, Any]:
+    def plan_or_404(execution_id: str) -> ExecutionRecord:
         rows = run(execution_sql(execution_id)) if EXECUTION_NAMESPACE in run_namespaces() else []
         if not rows:
             raise HTTPException(status_code=404, detail=f"No plan record for execution {execution_id}")
-        return _plan_row(rows[0])
+        return _execution_record(rows[0])
 
     @api.get("/health")
     def health() -> dict[str, Any]:
@@ -272,32 +303,32 @@ def create_api(_services: Services) -> RegisteredApi:
         days: int = Query(14, ge=1, le=90),
         limit: int = Query(EXECUTION_LIMIT, ge=1, le=500),
         root_job: str | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> list[ExecutionRecord]:
         if EXECUTION_NAMESPACE not in run_namespaces():
             return []
         since = _now() - timedelta(days=days)
         rows = run(executions_sql(since=since, root_job=root_job or None, limit=limit))
-        return [_plan_row(row) for row in rows]
+        return [_execution_record(row) for row in rows]
 
     @api.get("/executions/{execution_id}")
-    def execution(execution_id: str) -> dict[str, Any]:
+    def execution(execution_id: str) -> ExecutionRecord:
         return plan_or_404(execution_id)
 
     @api.get("/executions/{execution_id}/stages")
     def stages(execution_id: str) -> list[dict[str, Any]]:
         plan = plan_or_404(execution_id)
-        return run(stage_stats_sql(execution_id, _stage_start(plan)))
+        return run(stage_stats_sql(execution_id, _execution_window_start(plan)))
 
     @api.get("/executions/{execution_id}/stages/{stage}/summary")
     def summary(execution_id: str, stage: str) -> dict[str, Any]:
         plan = plan_or_404(execution_id)
-        rows = run(shuffle_summary_sql(execution_id, stage, _stage_start(plan)))
+        rows = run(shuffle_summary_sql(execution_id, stage, _execution_window_start(plan)))
         return rows[0] if rows else {"persisted_targets": 0, "observed_targets": 0, "expected_targets": None}
 
     @api.get("/executions/{execution_id}/stages/{stage}/reducers")
     def reducers(execution_id: str, stage: str, page: int = Query(0, ge=0)) -> list[dict[str, Any]]:
         plan = plan_or_404(execution_id)
-        start = _stage_start(plan)
+        start = _execution_window_start(plan)
         builder = reducer_task_stats_sql if "zephyr.worker" in run_namespaces() else reducer_stats_sql
         return run(builder(execution_id, stage, start, page))
 
