@@ -29,7 +29,7 @@ from config import ClusterTarget
 from conftest import bridge_config, install_finelog_dialect_macros
 from dashboard_dataset import projection_database
 from dashboard_stitch import stitch_all
-from rl_observability import RL_MAX_RESULT_ROWS, rl_overview_dataset
+from rl_observability import RL_MAX_RESULT_ROWS, rl_overview_dataset, rl_sync_generation_dataset
 from server import create_app
 from starlette.testclient import TestClient
 
@@ -726,6 +726,7 @@ def _resolve(sql: str) -> str:
 BUCKET_MS = 5 * 60 * 1000
 _DATASETS = {
     "/v1/rl/overview": rl_overview_dataset,
+    "/v1/rl/generation": rl_sync_generation_dataset,
 }
 _VLLM_OVERVIEW = "/v1/vllm/overview"
 _TEMPLATE = {
@@ -1283,23 +1284,31 @@ def test_no_panel_plots_a_concurrent_await_sum_undivided(store) -> None:
     design -- 23,656 s against a 4,210 s step in this fixture -- so any panel reading these counters
     has to divide before plotting. Banding one is the single easiest way for this dashboard to
     publish a number nobody should believe."""
-    readers = [
-        panel
+    targets = [
+        (panel["title"], target)
         for board in _rl_dashboards().values()
         for panel in board["panels"]
         for target in panel.get("targets", [])
-        for param in target["url_options"]["params"]
-        if param["key"] == "sql" and "rollout_wait_seconds" in param["value"]
+        if target["url"] in _DATASETS
     ]
+
+    def rendered(target: dict) -> list[tuple]:
+        # Sorted and rounded, because series order within a bucket and float summation order vary.
+        rows = _target_rows(store, target)
+        return sorted((tuple(round(c, 6) if isinstance(c, float) else c for c in row) for row in rows), key=repr)
+
+    before = [rendered(target) for _, target in targets]
+    store.execute("""DELETE FROM "telemetry_v1.marinskyrl" WHERE name = 'rollout_wait_seconds'""")
+    readers = [(title, rows) for (title, target), rows in zip(targets, before, strict=True) if rendered(target) != rows]
     # The per-trajectory wait, the environment split, and the tail ratio.
-    assert len(readers) == 3, [panel["title"] for panel in readers]
+    assert len(readers) == 3, [title for title, _ in readers]
     assert ENGINE_AWAIT_SUM > STEP_SECONDS, "the fixture no longer makes the raw sum implausible"
 
-    for panel in readers:
-        for row in _panel_rows(store, panel["title"]):
+    for title, rows in readers:
+        for row in rows:
             plotted = [cell for cell in row[1:] if isinstance(cell, float)]
-            assert plotted, panel["title"]
-            assert max(plotted) < STEP_SECONDS, f"{panel['title']} plots {max(plotted)}"
+            assert plotted, title
+            assert max(plotted) < STEP_SECONDS, f"{title} plots {max(plotted)}"
 
 
 def test_the_environment_split_is_a_partition_with_an_audit_band(store) -> None:

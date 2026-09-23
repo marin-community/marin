@@ -41,13 +41,17 @@
       "source": "url",
       "format": "timeseries",
       "parser": "backend",
-      "url": "/query",
+      "url": "/v1/rl/generation",
       "url_options": {
         "method": "GET",
         "params": [
           {
-            "key": "sql",
-            "value": "WITH counters AS ( SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS bucket, json_get(attributes_json, 'step') AS s, json_get(attributes_json, 'counter') AS counter, MAX(value) AS value FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name IN ('rollout_wait_seconds', 'rollout_count') AND json_get(attributes_json, 'role') = 'trainer' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3 ), per_step AS ( SELECT bucket, s, MAX(CASE WHEN counter = 'rollout_trajectory_count' THEN value END) AS trajectories, MAX(CASE WHEN counter = 'rollout_engine_await_seconds_sum' THEN value END) AS engine_seconds, MAX(CASE WHEN counter = 'rollout_env_await_seconds_sum' THEN value END) AS env_seconds, MAX(CASE WHEN counter = 'rollout_engine_await_seconds_max' THEN value END) AS slowest FROM counters GROUP BY 1, 2 ) SELECT bucket AS t, AVG(engine_seconds / NULLIF(trajectories, 0)) AS engine_wait_per_trajectory, AVG(env_seconds / NULLIF(trajectories, 0)) AS env_wait_per_trajectory, AVG(slowest) AS slowest_single_trajectory FROM per_step GROUP BY 1 ORDER BY 1"
+            "key": "clusters",
+            "value": "${cluster:csv}"
+          },
+          {
+            "key": "run",
+            "value": "${run}"
           },
           {
             "key": "from",
@@ -56,6 +60,14 @@
           {
             "key": "to",
             "value": "${__to}"
+          },
+          {
+            "key": "bucket_ms",
+            "value": "${__interval_ms}"
+          },
+          {
+            "key": "view",
+            "value": "trajectory_wait"
           }
         ]
       },

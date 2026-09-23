@@ -16,6 +16,7 @@ Routes, grouped by source (cluster is a path segment where it applies):
     GET /finelog/{cluster}/v1/training/overview   bounded shared Training dataset
     GET /finelog/{cluster}/v1/runs/overview       bounded shared multi-run dataset
     GET /finelog/{cluster}/v1/rl/overview         bounded shared RL dataset
+    GET /finelog/{cluster}/v1/rl/generation       bounded sync RL generation dataset
     GET /finelog/{cluster}/v1/rl/recent           bounded recent RL runs
     GET /finelog/{cluster}/v1/async-rl/overview   bounded shared async RL dataset
     GET /finelog/{cluster}/v1/accelerator/overview bounded shared accelerator dataset
@@ -151,7 +152,7 @@ from loss_spikes import loss_spike_alert_rows, loss_window_query
 from nightly_config import NIGHTLY_LANES
 from node_observability import node_overview_dataset
 from relay_health import relay_alert_rows
-from rl_observability import recent_rl_runs_dataset, rl_overview_dataset
+from rl_observability import recent_rl_runs_dataset, rl_overview_dataset, rl_sync_generation_dataset
 from rl_producers import check_window, collect_producers
 from runs_observability import runs_overview_dataset
 from starlette.applications import Starlette
@@ -705,6 +706,19 @@ def create_app(
             request,
             "RL overview",
             lambda params, start_ms, end_ms: rl_overview_dataset(
+                _csv_values(params, "clusters"),
+                _require(params, "run"),
+                start_ms,
+                end_ms,
+                int(_require(params, "bucket_ms")),
+            ),
+        )
+
+    def rl_sync_generation(request: Request) -> JSONResponse:
+        return dashboard_dataset_response(
+            request,
+            "RL generation",
+            lambda params, start_ms, end_ms: rl_sync_generation_dataset(
                 _csv_values(params, "clusters"),
                 _require(params, "run"),
                 start_ms,
@@ -1339,6 +1353,7 @@ def create_app(
             Route("/finelog/{cluster}/v1/accelerator/overview", accelerator_overview),
             Route("/finelog/{cluster}/v1/jobs/overview", jobs_overview),
             Route("/finelog/{cluster}/v1/rl/overview", rl_overview),
+            Route("/finelog/{cluster}/v1/rl/generation", rl_sync_generation),
             Route("/finelog/{cluster}/v1/async-rl/overview", async_rl_overview),
             Route("/finelog/{cluster}/v1/rl/recent", recent_rl_runs),
             Route("/finelog/{cluster}/v1/runs/overview", runs_overview),

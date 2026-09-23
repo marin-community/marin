@@ -16,7 +16,7 @@ from dashboard_dataset import DashboardDataset
 from dashboard_stitch import stitch_all
 from jobs_observability import jobs_overview_dataset
 from node_observability import node_overview_dataset
-from rl_observability import recent_rl_runs_dataset, rl_overview_dataset
+from rl_observability import recent_rl_runs_dataset, rl_overview_dataset, rl_sync_generation_dataset
 from runs_observability import runs_overview_dataset
 from server import create_app
 from starlette.testclient import TestClient
@@ -274,6 +274,7 @@ def test_domain_source_counts_stay_within_the_declared_budget() -> None:
         "training": training_overview_dataset("run", start_ms, end_ms, 15_000),
         "runs": runs_overview_dataset(("cw-a",), ("run",), start_ms, end_ms, 15_000),
         "rl": rl_overview_dataset(("cw-a",), "run", start_ms, end_ms, 15_000),
+        "rl_sync_generation": rl_sync_generation_dataset(("cw-a",), "run", start_ms, end_ms, 15_000),
         "accelerator": accelerator_overview_dataset(("cw-a",), start_ms, end_ms, 15_000),
         "jobs": jobs_overview_dataset(("cw-a",), ("job",), start_ms, end_ms, 15_000),
         "recent_rl": recent_rl_runs_dataset(start_ms, end_ms),
@@ -285,6 +286,7 @@ def test_domain_source_counts_stay_within_the_declared_budget() -> None:
         "training": 3,
         "runs": 2,
         "rl": 4,
+        "rl_sync_generation": 1,
         "accelerator": 3,
         "jobs": 5,
         "recent_rl": 1,

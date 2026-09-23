@@ -47,13 +47,17 @@
       "source": "url",
       "format": "timeseries",
       "parser": "backend",
-      "url": "/query",
+      "url": "/v1/rl/generation",
       "url_options": {
         "method": "GET",
         "params": [
           {
-            "key": "sql",
-            "value": "WITH gen AS ( SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS bucket, json_get(attributes_json, 'step') AS s, json_get(attributes_json, 'phase') AS phase, json_get(attributes_json, 'parent') AS parent, value FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'phase_duration_seconds' AND json_get(attributes_json, 'role') = 'trainer' AND json_get(attributes_json, 'clock_domain') = 'inclusive_wall' AND json_get(attributes_json, 'root') = 'step' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) ), per_step AS ( SELECT bucket, s, MAX(CASE WHEN phase = 'generate' THEN value END) AS generate_seconds, SUM(CASE WHEN parent = 'generate' THEN value END) AS child_seconds FROM gen GROUP BY 1, 2 ), banded AS ( SELECT gen.bucket AS bucket, gen.phase AS band, gen.value / NULLIF(per_step.generate_seconds, 0) AS share FROM gen JOIN per_step ON per_step.bucket = gen.bucket AND per_step.s = gen.s WHERE gen.parent = 'generate' UNION ALL SELECT bucket, 'unaccounted', (generate_seconds - child_seconds) / NULLIF(generate_seconds, 0) FROM per_step WHERE child_seconds IS NOT NULL ) SELECT bucket AS t, band AS series, AVG(share) AS value FROM banded GROUP BY 1, 2 ORDER BY 1"
+            "key": "clusters",
+            "value": "${cluster:csv}"
+          },
+          {
+            "key": "run",
+            "value": "${run}"
           },
           {
             "key": "from",
@@ -62,6 +66,14 @@
           {
             "key": "to",
             "value": "${__to}"
+          },
+          {
+            "key": "bucket_ms",
+            "value": "${__interval_ms}"
+          },
+          {
+            "key": "view",
+            "value": "generate_breakdown"
           }
         ]
       },

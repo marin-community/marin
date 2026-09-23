@@ -47,13 +47,17 @@
       "source": "url",
       "format": "timeseries",
       "parser": "backend",
-      "url": "/query",
+      "url": "/v1/rl/generation",
       "url_options": {
         "method": "GET",
         "params": [
           {
-            "key": "sql",
-            "value": "WITH counters AS ( SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS bucket, json_get(attributes_json, 'step') AS s, json_get(attributes_json, 'counter') AS counter, MAX(value) AS value FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name IN ('rollout_wait_seconds', 'rollout_count') AND json_get(attributes_json, 'role') = 'trainer' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3 ), per_step AS ( SELECT bucket, s, MAX(CASE WHEN counter = 'rollout_env_await_seconds_sum' THEN value END) AS awaited, MAX(CASE WHEN counter = 'rollout_env_queue_seconds_sum' THEN value END) AS queued, MAX(CASE WHEN counter = 'rollout_env_exec_seconds_sum' THEN value END) AS executed, MAX(CASE WHEN counter = 'rollout_env_resume_seconds_sum' THEN value END) AS resumed FROM counters GROUP BY 1, 2 ), banded AS ( SELECT bucket, 'queued for the executor' AS band, queued / NULLIF(awaited, 0) AS share FROM per_step UNION ALL SELECT bucket, 'running the environment', executed / NULLIF(awaited, 0) FROM per_step UNION ALL SELECT bucket, 'resuming on the event loop', resumed / NULLIF(awaited, 0) FROM per_step UNION ALL SELECT bucket, 'unaccounted', (awaited - queued - executed - resumed) / NULLIF(awaited, 0) FROM per_step ) SELECT bucket AS t, band AS series, AVG(share) AS value FROM banded GROUP BY 1, 2 ORDER BY 1"
+            "key": "clusters",
+            "value": "${cluster:csv}"
+          },
+          {
+            "key": "run",
+            "value": "${run}"
           },
           {
             "key": "from",
@@ -62,6 +66,14 @@
           {
             "key": "to",
             "value": "${__to}"
+          },
+          {
+            "key": "bucket_ms",
+            "value": "${__interval_ms}"
+          },
+          {
+            "key": "view",
+            "value": "environment_split"
           }
         ]
       },

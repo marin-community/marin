@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bounded datasets behind the synchronous RL post-training dashboard.
+"""Bounded datasets behind the synchronous RL post-training dashboard and its generation board.
 
 The span sources hold one row per step and phase. Finelog reduces each step's worker spans to the
 step's critical rank, the rank with the longest ``policy_ppo_train``, and to a per-bucket spread
@@ -42,6 +42,7 @@ _CORE_NAMES = (
 )
 _INCLUSIVE_CLOCKS = "('inclusive_wall', 'inclusive_launch')"
 _EXCLUSIVE_CLOCKS = "('exclusive_wall', 'exclusive_launch')"
+_ROLLOUT_COUNTER_NAMES = ("rollout_wait_seconds", "rollout_count")
 
 
 def _rl_bucket_ms(
@@ -502,6 +503,124 @@ FROM per_step GROUP BY 1 ORDER BY 1
             SourceQuery("spans", spans_sql, RL_MAX_SPAN_ROWS),
         ),
         setup_sql=(),
+        views=views,
+        max_result_rows=RL_MAX_RESULT_ROWS,
+    )
+
+
+def rl_sync_generation_dataset(
+    clusters: tuple[str, ...], run: str, start_ms: int, end_ms: int, requested_bucket_ms: int
+) -> DashboardDataset:
+    """Build the driver's step spans and rollout counters, one row per step and phase or counter."""
+    bucket_ms = _rl_bucket_ms(clusters, run, start_ms, end_ms, requested_bucket_ms, "RL generation")
+    names = sql_values(("phase_duration_seconds", *_ROLLOUT_COUNTER_NAMES))
+    driver_sql = f"""
+WITH selected AS (
+    SELECT {_bucket_sql(start_ms, bucket_ms)} AS t,
+           name,
+           json_get(attributes_json, 'step') AS step,
+           json_get(attributes_json, 'phase') AS phase,
+           json_get(attributes_json, 'parent') AS parent,
+           json_get(attributes_json, 'root') AS root,
+           json_get(attributes_json, 'clock_domain') AS clock_domain,
+           json_get(attributes_json, 'counter') AS counter,
+           value
+    FROM "telemetry_v1.marinskyrl"
+    WHERE {_run_scope(clusters, run, start_ms, end_ms)}
+      AND name IN ({names})
+      AND json_get(attributes_json, 'role') = 'trainer'
+)
+SELECT t, step, name, phase, parent, counter,
+       SUM(value) AS sum_value,
+       COUNT(value) AS sample_count,
+       MAX(value) AS max_value
+FROM selected
+WHERE name <> 'phase_duration_seconds' OR (clock_domain = 'inclusive_wall' AND root = 'step')
+GROUP BY t, step, name, phase, parent, counter
+ORDER BY t, step, name
+LIMIT {RL_MAX_SPAN_ROWS + 1}
+""".strip()
+    # The rollout counters are sums over concurrent coroutines and exceed the step itself, so
+    # every view divides them before plotting.
+    setup_sql = (
+        f"""
+CREATE VIEW rollout_steps AS
+SELECT t, step,
+       MAX(CASE WHEN counter = 'rollout_trajectory_count' THEN max_value END) AS trajectories,
+       MAX(CASE WHEN counter = 'rollout_engine_await_seconds_sum' THEN max_value END) AS engine_seconds,
+       MAX(CASE WHEN counter = 'rollout_engine_await_seconds_max' THEN max_value END) AS slowest,
+       MAX(CASE WHEN counter = 'rollout_env_await_seconds_sum' THEN max_value END) AS env_seconds,
+       MAX(CASE WHEN counter = 'rollout_env_queue_seconds_sum' THEN max_value END) AS queued,
+       MAX(CASE WHEN counter = 'rollout_env_exec_seconds_sum' THEN max_value END) AS executed,
+       MAX(CASE WHEN counter = 'rollout_env_resume_seconds_sum' THEN max_value END) AS resumed
+FROM driver WHERE name IN ({sql_values(_ROLLOUT_COUNTER_NAMES)})
+GROUP BY 1, 2
+""".strip(),
+    )
+    views = {
+        "generation_vs_training": (
+            "SELECT t, phase AS series, SUM(sum_value) / SUM(sample_count) AS value FROM driver "
+            "WHERE name = 'phase_duration_seconds' AND phase IN ('generate', 'policy_train') "
+            "GROUP BY 1, 2 ORDER BY 1"
+        ),
+        "generate_breakdown": (
+            """
+WITH spans AS (
+    SELECT * FROM driver WHERE name = 'phase_duration_seconds'
+), per_step AS (
+    SELECT t, step,
+           MAX(CASE WHEN phase = 'generate' THEN max_value END) AS generate_seconds,
+           SUM(CASE WHEN parent = 'generate' THEN sum_value END) AS child_seconds
+    FROM spans GROUP BY 1, 2
+), banded AS (
+    SELECT spans.t, spans.phase AS band,
+           spans.sum_value / NULLIF(per_step.generate_seconds, 0) AS share_sum,
+           spans.sample_count AS samples
+    FROM spans JOIN per_step ON per_step.t = spans.t AND per_step.step = spans.step
+    WHERE spans.parent = 'generate'
+    UNION ALL
+    SELECT t, 'unaccounted', (generate_seconds - child_seconds) / NULLIF(generate_seconds, 0), 1
+    FROM per_step WHERE child_seconds IS NOT NULL
+)
+SELECT t, band AS series,
+       SUM(share_sum) / SUM(CASE WHEN share_sum IS NOT NULL THEN samples END) AS value
+FROM banded GROUP BY 1, 2 ORDER BY 1
+""".strip()
+        ),
+        "trajectory_wait": (
+            """
+SELECT t,
+       AVG(engine_seconds / NULLIF(trajectories, 0)) AS engine_wait_per_trajectory,
+       AVG(env_seconds / NULLIF(trajectories, 0)) AS env_wait_per_trajectory,
+       AVG(slowest) AS slowest_single_trajectory
+FROM rollout_steps GROUP BY 1 ORDER BY 1
+""".strip()
+        ),
+        "tail_over_mean": (
+            "SELECT t, AVG(slowest / NULLIF(engine_seconds / NULLIF(trajectories, 0), 0)) AS tail_over_mean "
+            "FROM rollout_steps GROUP BY 1 ORDER BY 1"
+        ),
+        "environment_split": (
+            """
+WITH banded AS (
+    SELECT t, 'queued for the executor' AS band, queued / NULLIF(env_seconds, 0) AS share FROM rollout_steps
+    UNION ALL
+    SELECT t, 'running the environment', executed / NULLIF(env_seconds, 0) FROM rollout_steps
+    UNION ALL
+    SELECT t, 'resuming on the event loop', resumed / NULLIF(env_seconds, 0) FROM rollout_steps
+    UNION ALL
+    SELECT t, 'unaccounted', (env_seconds - queued - executed - resumed) / NULLIF(env_seconds, 0)
+    FROM rollout_steps
+)
+SELECT t, band AS series, AVG(share) AS value FROM banded GROUP BY 1, 2 ORDER BY 1
+""".strip()
+        ),
+    }
+    return DashboardDataset(
+        name="RL generation",
+        cache_key=(clusters, run, start_ms, end_ms, bucket_ms),
+        sources=(SourceQuery("driver", driver_sql, RL_MAX_SPAN_ROWS),),
+        setup_sql=setup_sql,
         views=views,
         max_result_rows=RL_MAX_RESULT_ROWS,
     )
