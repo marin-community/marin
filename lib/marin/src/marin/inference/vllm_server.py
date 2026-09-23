@@ -72,10 +72,10 @@ _NATIVE_ERROR_SUMMARY_LINES = 40
 _NATIVE_STDOUT_LOG = "stdout.log"
 _NATIVE_STDERR_LOG = "stderr.log"
 _CUDA_NVCC_DISTRIBUTION = "nvidia-cuda-nvcc"
-_CUDA_NVRTC_DISTRIBUTION = "nvidia-cuda-nvrtc"
 # CoreWeave task images provide the NVIDIA driver but not nvcc. FlashInfer JIT-compiles SM100
 # attention, MoE, sampling, and all-reduce kernels even when vLLM itself comes from a native wheel.
-_CUDA_TOOLCHAIN_PACKAGES = (_CUDA_NVCC_DISTRIBUTION, "nvidia-cuda-crt", _CUDA_NVRTC_DISTRIBUTION, "nvidia-nvvm")
+# CUDA torch's cuda-toolkit dependency selects NVRTC for both vLLM variants.
+_CUDA_TOOLCHAIN_PACKAGES = (_CUDA_NVCC_DISTRIBUTION, "nvidia-cuda-crt", "nvidia-nvvm")
 _CUDA_NVCC_BOOTSTRAP = f"""\
 import importlib.metadata
 import os
@@ -267,9 +267,6 @@ class IsolatedCudaVllm:
             # The promoted release records the CUDA torch build; pin it so a conflict cannot select CPU torch.
             command.extend(("--with", f"torch=={VLLM_GPU_RELEASE.torch_version}"))
         for package in _CUDA_TOOLCHAIN_PACKAGES:
-            # CUDA torch's cuda-toolkit dependency selects the compatible NVRTC patch version.
-            if self.source is VllmType.MARIN_FORK and package == _CUDA_NVRTC_DISTRIBUTION:
-                continue
             requirement = f"{package}=={install.toolchain_version}"
             command.extend(("--with", requirement))
         command.extend(("--python", self.python_version))

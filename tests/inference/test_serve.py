@@ -366,9 +366,9 @@ def test_isolated_cuda_vllm_bootstrap_exposes_wheel_nvcc(tmp_path):
     assert set(requirements) >= {
         "nvidia-cuda-nvcc==13.0.88",
         "nvidia-cuda-crt==13.0.88",
-        "nvidia-cuda-nvrtc==13.0.88",
         "nvidia-nvvm==13.0.88",
     }
+    assert not any(requirement.startswith("nvidia-cuda-nvrtc==") for requirement in requirements)
     assert "addressing_style = virtual" in Path(launcher.env()["AWS_CONFIG_FILE"]).read_text()
     bootstrap_index = command.index("-c")
     bootstrap = command[bootstrap_index + 1]
