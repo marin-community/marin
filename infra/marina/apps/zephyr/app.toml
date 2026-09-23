@@ -1,0 +1,4 @@
+title = "Zephyr"
+description = "Execution plans and reducer telemetry."
+connect_src = []
+build_command = "cd web && npm ci && npm run build"

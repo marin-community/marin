@@ -1,15 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Zephyr executions applet backend against an embedded Finelog server.
+"""Zephyr checked-in app against an embedded Finelog server.
 
-The fixture dataclasses carry only the columns the applet queries.
+The fixture dataclasses carry only the columns the app queries.
 """
 
-import importlib.util
 import json
-import sys
-import types
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -17,27 +14,18 @@ from typing import ClassVar
 from urllib.parse import quote
 
 import pytest
+import zephyr
 from fastapi.testclient import TestClient
 from finelog.client import LogClient
-from finelog.embedded import EmbeddedServer
+from finelog.embedded import require_embedded_server
+from marina.apps import Services, create_api
+from marina.manifest import load_manifest
+from marina.server import MarinaConfig, create_app
 
-APPLET = Path(__file__).resolve().parents[1] / "applets" / "zephyr-executions"
+APP = Path(__file__).resolve().parents[1]
 EXECUTION = "20260910-195311-32c9cebb"
 STAGE = "stage2-Reduce → Write"
 T0 = datetime(2026, 9, 10, 19, 53)
-
-
-def _load(name: str):
-    package = sys.modules.get("zephyr_applet_server")
-    if package is None:
-        package = types.ModuleType("zephyr_applet_server")
-        package.__path__ = [str(APPLET / "server")]
-        sys.modules["zephyr_applet_server"] = package
-    spec = importlib.util.spec_from_file_location(f"zephyr_applet_server.{name}", APPLET / "server" / f"{name}.py")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
 
 
 @dataclass
@@ -126,7 +114,7 @@ def _shuffle(target: int, attempt: int, rows: int | None, seconds: float, job: s
 
 @pytest.fixture(scope="module")
 def finelog(tmp_path_factory):
-    server = EmbeddedServer(log_dir=str(tmp_path_factory.mktemp("finelog")))
+    server = require_embedded_server()(log_dir=str(tmp_path_factory.mktemp("finelog")))
     url = f"http://127.0.0.1:{server.port}"
     client = LogClient.connect(url)
     executions = client.get_table("zephyr.execution", ExecutionRow)
@@ -172,12 +160,14 @@ def finelog(tmp_path_factory):
 
 @pytest.fixture()
 def api(finelog, monkeypatch):
-    monkeypatch.setenv("ZEPHYR_APPLET_FINELOG_URL", finelog)
-    monkeypatch.delenv("ZEPHYR_APPLET_IAP_CLUSTER", raising=False)
-    app = _load("app")
+    monkeypatch.setenv("ZEPHYR_FINELOG_URL", finelog)
+    monkeypatch.delenv("ZEPHYR_IAP_CLUSTER", raising=False)
+    app = create_api(load_manifest(APP), Services(name="zephyr", data_url="file:///tmp/zephyr", database=None))
+    assert Path(zephyr.__file__).resolve() == APP.parents[3] / "lib/zephyr/src/zephyr/__init__.py"
     # Pin "now" one hour after the seeded rows so the listing window is stable.
-    monkeypatch.setattr(app, "_now", lambda: (T0 + timedelta(hours=1)).replace(tzinfo=UTC))
-    return TestClient(app.create_api(None))
+    executions = next(route for route in app.app.routes if getattr(route, "path", None) == "/executions")
+    monkeypatch.setitem(executions.endpoint.__globals__, "_now", lambda: (T0 + timedelta(hours=1)).replace(tzinfo=UTC))
+    return TestClient(app.app)
 
 
 def _stage_url(suffix: str) -> str:
@@ -189,6 +179,18 @@ def test_health_reports_source_and_namespaces(api, finelog):
     assert body["plan_records"] is True
     assert {"zephyr.execution", "zephyr.stage", "zephyr.shuffle", "zephyr.worker"} <= set(body["namespaces"])
     assert body["finelog"].startswith(finelog)
+
+
+def test_marina_mount_serves_zephyr_api(finelog, monkeypatch, tmp_path):
+    monkeypatch.setenv("ZEPHYR_FINELOG_URL", finelog)
+    apps_dir = tmp_path / "apps"
+    apps_dir.mkdir()
+    (apps_dir / "zephyr").symlink_to(APP, target_is_directory=True)
+    config = MarinaConfig(apps_dir=apps_dir, data_root=str(tmp_path / "data"), iap_audience=None)
+
+    with TestClient(create_app(config), client=("127.0.0.1", 40000)) as client:
+        assert client.get("/zephyr/api/health").json()["plan_records"] is True
+        assert client.get("/api/marina/apps").json()["apps"][0]["path"] == "/zephyr/"
 
 
 def test_executions_dedupe_by_execution_and_filter_by_root_job(api):

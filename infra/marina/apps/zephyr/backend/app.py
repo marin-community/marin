@@ -1,12 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Finelog-backed API for the Zephyr executions applet.
+"""Finelog-backed API for the Zephyr Marina app.
 
-Finelog is the stats endpoint named by ``ZEPHYR_APPLET_FINELOG_URL`` (with
-``ZEPHYR_APPLET_IAP_CLUSTER`` for IAP credentials), or else the
-``finelog-marin`` VM found through GCE and reached by internal IP. The applet
-only reads; it never writes to Finelog or to its own schema.
+Finelog is the stats endpoint named by ``ZEPHYR_FINELOG_URL`` (with
+``ZEPHYR_IAP_CLUSTER`` for IAP credentials), or else the ``finelog-marin`` VM
+found through GCE and reached by internal IP. The app only reads Finelog.
 """
 
 from __future__ import annotations
@@ -26,26 +25,92 @@ from connectrpc.errors import ConnectError
 from fastapi import FastAPI, HTTPException, Query
 from finelog.client import LogClient
 from google.cloud import compute_v1
-from marina.applets import AppletServices
+from marina.apps import RegisteredApi, Services, registered_api
 from rigging.connect import IapAuth
 from rigging.credentials import iap_provider_for
 
-from .queries import (
-    EXECUTION_LIMIT,
-    EXECUTION_NAMESPACE,
-    STAGE_LOOKBACK_SECONDS,
-    execution_sql,
-    executions_sql,
-    reducer_stats_sql,
-    reducer_task_stats_sql,
-    shuffle_summary_sql,
-    stage_stats_sql,
+
+REDUCER_PAGE_SIZE = 20
+EXECUTION_LIMIT = 100
+EXECUTION_NAMESPACE = "zephyr.execution"
+STAGE_LOOKBACK_SECONDS = 60
+
+
+def sql_string(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def time_predicate(start: datetime) -> str:
+    return f"ts >= TIMESTAMP {sql_string(start.isoformat())} AND ts <= now()"
+
+
+def executions_sql(*, since: datetime, root_job: str | None, limit: int) -> str:
+    where = [time_predicate(since)]
+    if root_job:
+        where.append(f"root_job_id = {sql_string(root_job)}")
+    return f"""SELECT execution_id, root_job_id, coordinator_job_id, ts, input_shards, stages_json
+FROM "{EXECUTION_NAMESPACE}"
+WHERE {" AND ".join(where)}
+QUALIFY ROW_NUMBER() OVER (PARTITION BY execution_id ORDER BY ts DESC, seq DESC) = 1
+ORDER BY ts DESC LIMIT {int(limit)}"""
+
+
+def execution_sql(execution_id: str) -> str:
+    return f"""SELECT execution_id, root_job_id, coordinator_job_id, ts, input_shards, stages_json
+FROM "{EXECUTION_NAMESPACE}"
+WHERE execution_id = {sql_string(execution_id)}
+QUALIFY ROW_NUMBER() OVER (PARTITION BY execution_id ORDER BY ts DESC, seq DESC) = 1"""
+
+
+def stage_stats_sql(execution_id: str, start: datetime) -> str:
+    return f"""SELECT stage_name, status, elapsed, items, total_shards, mem_peak_bytes_max
+FROM "zephyr.stage" WHERE execution_id = {sql_string(execution_id)} AND {time_predicate(start)}
+QUALIFY ROW_NUMBER() OVER (PARTITION BY stage_name ORDER BY ts DESC, seq DESC) = 1"""
+
+
+def shuffle_snapshots_sql(execution_id: str, stage: str, start: datetime) -> str:
+    """Keep each target's highest attempt, preferring measurements over placeholders."""
+    return f"""WITH snapshots AS (
+SELECT *, ROW_NUMBER() OVER (
+PARTITION BY target_shard ORDER BY attempt DESC, (input_rows IS NOT NULL) DESC, ts DESC, seq DESC
+) AS sample_rank
+FROM "zephyr.shuffle" WHERE execution_id = {sql_string(execution_id)}
+AND stage_name = {sql_string(stage)} AND {time_predicate(start)}
+)"""
+
+
+def reducer_stats_sql(execution_id: str, stage: str, start: datetime, page: int) -> str:
+    return f"""{shuffle_snapshots_sql(execution_id, stage, start)}
+SELECT target_shard, input_rows, payload_bytes, num_sources, attempt FROM snapshots
+WHERE sample_rank = 1 ORDER BY payload_bytes DESC NULLS LAST, target_shard
+LIMIT {REDUCER_PAGE_SIZE} OFFSET {int(page) * REDUCER_PAGE_SIZE}"""
+
+
+def reducer_task_stats_sql(execution_id: str, stage: str, start: datetime, page: int) -> str:
+    return f"""WITH targets AS ({reducer_stats_sql(execution_id, stage, start, page)}),
+task_states AS (
+SELECT shard_idx, status FROM "zephyr.worker"
+WHERE execution_id = {sql_string(execution_id)} AND stage_name = {sql_string(stage)} AND {time_predicate(start)}
+AND shard_idx IN (SELECT target_shard FROM targets)
+QUALIFY ROW_NUMBER() OVER (PARTITION BY shard_idx ORDER BY ts DESC, seq DESC) = 1
 )
+SELECT targets.*, task_states.status AS task_status FROM targets
+LEFT JOIN task_states ON targets.target_shard = task_states.shard_idx
+ORDER BY payload_bytes DESC NULLS LAST, target_shard"""
+
+
+def shuffle_summary_sql(execution_id: str, stage: str, start: datetime) -> str:
+    return f"""{shuffle_snapshots_sql(execution_id, stage, start)}
+SELECT COUNT(*) AS persisted_targets, COUNT(input_rows) AS observed_targets,
+MAX(num_targets) AS expected_targets, MEDIAN(CAST(input_rows AS DOUBLE)) AS median_rows,
+MAX(input_rows) AS max_rows, MEDIAN(CAST(payload_bytes AS DOUBLE)) AS median_bytes,
+MAX(payload_bytes) AS max_bytes FROM snapshots WHERE sample_rank = 1"""
+
 
 logger = logging.getLogger(__name__)
 
-PROJECT = os.environ.get("ZEPHYR_APPLET_GCP_PROJECT", "hai-gcp-models")
-ZONE = os.environ.get("ZEPHYR_APPLET_GCP_ZONE", "us-central1-a")
+PROJECT = os.environ.get("ZEPHYR_GCP_PROJECT", "hai-gcp-models")
+ZONE = os.environ.get("ZEPHYR_GCP_ZONE", "us-central1-a")
 FINELOG_FILTER = "name = finelog-marin"
 FINELOG_PORT = 10001
 ADDRESS_CACHE_TTL = 300.0
@@ -169,11 +234,11 @@ def _stage_start(plan: dict[str, Any]) -> datetime:
     return datetime.fromtimestamp(plan["ts"] / 1000, UTC) - timedelta(seconds=STAGE_LOOKBACK_SECONDS)
 
 
-def create_api(_services: AppletServices | None = None) -> FastAPI:
+def create_api(_services: Services) -> RegisteredApi:
     api = FastAPI()
     finelog = _Finelog(
-        url=os.environ.get("ZEPHYR_APPLET_FINELOG_URL"),
-        iap_cluster=os.environ.get("ZEPHYR_APPLET_IAP_CLUSTER"),
+        url=os.environ.get("ZEPHYR_FINELOG_URL"),
+        iap_cluster=os.environ.get("ZEPHYR_IAP_CLUSTER"),
     )
 
     def unavailable(error: Exception) -> HTTPException:
@@ -237,4 +302,4 @@ def create_api(_services: AppletServices | None = None) -> FastAPI:
         builder = reducer_task_stats_sql if "zephyr.worker" in run_namespaces() else reducer_stats_sql
         return run(builder(execution_id, stage, start, page))
 
-    return api
+    return registered_api(api)

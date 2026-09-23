@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useJson } from "./api.js";
 import { EXECUTION_LIMIT, irisJobUrl } from "./zephyr.js";
 import ExecutionStages from "./components/ExecutionStages.vue";
+import Shell from "@marina/Shell.vue";
 
 const DAYS = 14;
 const rootJobFilter = ref("");
@@ -78,7 +79,8 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <main>
+  <Shell app="zephyr">
+  <div class="zephyr-page">
     <h1>Zephyr</h1>
     <div class="row">
       <h2>Execution Data</h2>
@@ -125,5 +127,6 @@ onBeforeUnmount(() => {
       </div>
       <ExecutionStages :key="execution.execution_id" :execution="execution" :namespaces="namespaces" />
     </section>
-  </main>
+  </div>
+  </Shell>
 </template>

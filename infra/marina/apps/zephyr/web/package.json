@@ -1,5 +1,5 @@
 {
-  "name": "zephyr-executions-applet",
+  "name": "zephyr",
   "private": true,
   "type": "module",
   "scripts": {

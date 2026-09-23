@@ -1,4 +1,4 @@
-:root {
+.zephyr-page {
   --bg: #f5f6f8;
   --surface: #ffffff;
   --sunken: #eceef2;
@@ -11,7 +11,7 @@
   --danger: #b3261e;
 }
 @media (prefers-color-scheme: dark) {
-  :root {
+  .zephyr-page {
     --bg: #14171d;
     --surface: #1c2028;
     --sunken: #262b35;
@@ -24,9 +24,8 @@
     --danger: #f2857b;
   }
 }
-* { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
-main { max-width: 1180px; margin: 0 auto; padding: 24px 20px 64px; }
+.zephyr-page { box-sizing: border-box; background: var(--bg); color: var(--ink); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; max-width: 1180px; margin: 0 auto; padding: 24px 20px 64px; }
+.zephyr-page * { box-sizing: border-box; }
 h1 { font-size: 24px; font-weight: 600; margin: 0 0 20px; }
 h2 { font-size: 18px; font-weight: 600; margin: 0; }
 h4 { font-size: 14px; font-weight: 600; margin: 0; font-family: ui-monospace, Menlo, monospace; }
