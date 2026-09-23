@@ -133,8 +133,10 @@
       ],
       "source_url": "https://github.com/pysam-developers/pysam/blob/ba2e6c124398bdcd963db741d6f01164fed4f9b7/tests/AlignmentFilePileup_test.py",
       "tool_execution": {
-        "status": "pending",
-        "evidence": null
+        "status": "passed_reference_check",
+        "evidence": "native_validation.json",
+        "instances": 3,
+        "scope": "sam-cigar-coverage"
       },
       "scope": "Count eligible bases or alleles at specified loci with explicit read and base filters.",
       "limitations": "Use a generated per-read ledger and CIGAR interpreter. Inspect overlapping mates, orphans, deletions, and BAQ policy. pysam and SAMtools share underlying code; their agreement is not independent validation."
@@ -282,8 +284,10 @@
       ],
       "source_url": "https://github.com/biopython/biopython/blob/08fc09086afe0b57215d2515660e0c032b55c0dd/Tests/test_SeqFeature.py",
       "tool_execution": {
-        "status": "pending",
-        "evidence": null
+        "status": "passed_reference_check",
+        "evidence": "native_validation.json",
+        "instances": 3,
+        "scope": "gtf-splicing"
       },
       "scope": "Extract compound, strand-aware features and translate explicitly defined coding sequences.",
       "limitations": "Use direct slicing, complementing, exon concatenation, and a frozen codon table. Check source-record IDs, frame, and alternative genetic codes. Reject unresolved remote references under an explicit input contract."
@@ -458,8 +462,10 @@
       ],
       "source_url": "https://github.com/marcelm/cutadapt/blob/4927632f7c546dd290c53501c8417f909252befe/tests/test_trim.py",
       "tool_execution": {
-        "status": "pending",
-        "evidence": null
+        "status": "passed_reference_check",
+        "evidence": "native_validation.json",
+        "instances": 3,
+        "scope": "fastq-adapter-trimming"
       },
       "scope": "Trim declared adapters and synchronize sequence/quality strings, including partial matches and paired reads.",
       "limitations": "Generate insert-plus-adapter reads and independently compute allowed cut positions under an explicit error/overlap rule. Test unchanged reads and boundaries. Upstream tests expose deletion-versus-substitution cases; a simple substring oracle cannot grade every fuzzy match."

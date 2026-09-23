@@ -44,7 +44,11 @@ does not satisfy that requirement. Runtime tests must execute a bounded data ope
 record the package version and environment digest, and retain the output and grading result.
 
 The current host-validated recipes use independent Python solvers. Native CLI/API
-execution is still pending for every row below; these are not 50 completed integration tests.
+execution is recorded separately below. Biopython, pysam and cutadapt each passed
+three small host reference checks; the remaining 47 repositories are pending.
+The [machine-readable evidence](../../experiments/post_training/bio_tasks/native_validation.json)
+records package versions, input/output hashes, commands and grades. These checks
+do not establish tool availability in generated Harbor tasks or complete workflows.
 The maintained machine record is `experiments/post_training/bio_tasks/repository_coverage.json`.
 Downloads, stars, and citations remain available in the unchanged
 [original 50-package inventory](computational_biology_bioinformatics_packages.md).
@@ -59,7 +63,7 @@ Downloads, stars, and citations remain available in the unchanged
 | 6 | [STAR](https://github.com/alexdobin/STAR/blob/b1edc1208d91a53bf40ebae8669f71d50b994851/extras/tests/scripts/checkCellReadsStats_vsMatrix.awk) | `matrixmarket-cell-qc`, `sam-junction-support`, `umi-deduplication` | Pending |
 | 7 | [BEDTools](https://github.com/arq5x/bedtools2/blob/614e9a5c5935ab86e873dab9072fbbaf003c1b7e/test/bed12tobed6/test-bed12tobed6.sh) | `bed12-exons`, `bed-union-coverage`, `bed-complement` | Pending |
 | 8 | [GATK](https://github.com/broadinstitute/gatk/blob/0cde69eed30339f5978cbb1ac6e5cf3662f9e1f8/src/test/java/org/broadinstitute/hellbender/tools/walkers/filters/VariantFiltrationIntegrationTest.java) | `vcf-site-filtering`, `vcf-genotype-masking` | Pending |
-| 9 | [pysam](https://github.com/pysam-developers/pysam/blob/ba2e6c124398bdcd963db741d6f01164fed4f9b7/tests/AlignmentFilePileup_test.py) | `sam-allele-pileup`, `sam-inclusion` | Pending |
+| 9 | [pysam](https://github.com/pysam-developers/pysam/blob/ba2e6c124398bdcd963db741d6f01164fed4f9b7/tests/AlignmentFilePileup_test.py) | `sam-allele-pileup`, `sam-inclusion` | 3 reference checks passed |
 | 10 | [MAFFT](https://github.com/GSLBiotech/mafft/blob/26ecaba0130b533cf06a29200f0fb40829c00101/test/script) | `alignment-sum-of-pairs`, `alignment-column-filter` | Pending |
 | 11 | [HMMER](https://github.com/EddyRivasLab/hmmer/blob/9acd8b6758a0ca5d21db6d167e0277484341929b/testsuite/i13-msa-integrity.pl) | `hmmer-domain-extraction` | Pending |
 | 12 | [Seurat](https://github.com/satijalab/seurat/blob/586015abde10618ecb32d3fe632267a83317a08d/tests/testthat/test_data_manipulation.R) | `matrixmarket-log-normalization`, `matrixmarket-feature-filtering` | Pending |
@@ -69,7 +73,7 @@ Downloads, stars, and citations remain available in the unchanged
 | 16 | [Snakemake](https://github.com/snakemake/snakemake/blob/91763d644db0a6051c40014fa8ffad340f7d39a0/tests/test_expand.py) | `sample-sheet-lanes` | Pending |
 | 17 | [HTSlib](https://github.com/samtools/htslib/blob/d3cc9553d89dc34239afb7145b06c0dd818c0219/test/faidx/faidx.tst) | `fasta-indexed-regions` | Pending |
 | 18 | [FastQC](https://github.com/s-andrews/FastQC/blob/87fb3364a2f37115833d678648926d41e184f0b1/uk/ac/babraham/FastQC/Modules/SequenceLengthDistribution.java) | `paired-read-qc`, `fastqc-report-reconciliation` | Pending |
-| 19 | [Biopython](https://github.com/biopython/biopython/blob/08fc09086afe0b57215d2515660e0c032b55c0dd/Tests/test_SeqFeature.py) | `strand-extraction`, `gtf-splicing`, `gff-cds-translation` | Pending |
+| 19 | [Biopython](https://github.com/biopython/biopython/blob/08fc09086afe0b57215d2515660e0c032b55c0dd/Tests/test_SeqFeature.py) | `strand-extraction`, `gtf-splicing`, `gff-cds-translation` | 3 reference checks passed |
 | 20 | [Nextflow](https://github.com/nextflow-io/nextflow/blob/17f18779266767b16bca51af71522e28adf5cff6/modules/nextflow/src/test/groovy/nextflow/extension/GroupTupleOpTest.groovy) | `sample-sheet-lanes` | Pending |
 | 21 | [DIAMOND](https://github.com/bbuchfink/diamond/blob/5e25acaf40e6b9883636c5c564306fe77210de53/CMakeLists.txt) | `protein-local-search` | Pending |
 | 22 | [PLINK / PLINK 2](https://github.com/chrchang/plink-ng/blob/a25a0d6438b61b1951cd6d7eb209db8b79687581/2.0/Tests/TEST_GRM_MAF/run_tests.sh) | `vcf-sample-qc`, `genotype-hwe` | Pending |
@@ -81,7 +85,7 @@ Downloads, stars, and citations remain available in the unchanged
 | 28 | [IQ-TREE](https://github.com/iqtree/iqtree2/blob/a00094e03d1ae984e1497e16738f91514df8c366/example/example.nex) | `alignment-partitions` | Pending |
 | 29 | [FastTree](https://github.com/morgannprice/fasttree/blob/a5a2723ea1e64faf3da7ea514521cfa348891add/CompareTree.pl) | `newick-distances`, `newick-monophyly`, `newick-split-support` | Pending |
 | 30 | [RAxML](https://github.com/stamatak/standard-RAxML/blob/36ec36110631c34692abcd4f24ca7b3e2fea742a/usefulScripts/bsBranchLengths.pl) | `newick-split-support` | Pending |
-| 31 | [cutadapt](https://github.com/marcelm/cutadapt/blob/4927632f7c546dd290c53501c8417f909252befe/tests/test_trim.py) | `fastq-adapter-trimming`, `fastq-quality-trimming` | Pending |
+| 31 | [cutadapt](https://github.com/marcelm/cutadapt/blob/4927632f7c546dd290c53501c8417f909252befe/tests/test_trim.py) | `fastq-adapter-trimming`, `fastq-quality-trimming` | 3 reference checks passed |
 | 32 | [Salmon](https://github.com/COMBINE-lab/salmon/blob/5515b7f05a90341b6652adfdb807e7cf14295518/crates/salmon-cli/tests/output_contract.rs) | `transcript-tpm` | Pending |
 | 33 | [kallisto](https://github.com/pachterlab/kallisto/blob/4e9f29cf3b021260415430c057a22469ca081391/test/Snakefile) | `transcript-tpm`, `sample-sheet-lanes` | Pending |
 | 34 | [StringTie](https://github.com/gpertea/stringtie/blob/d1dc38ddb681089b2e8faaabdcfee772af6fb033/prepDE.py3) | `gtf-coverage-counts` | Pending |
@@ -130,6 +134,61 @@ Downloads, stars, and citations remain available in the unchanged
 
 The [scikit-image example](https://scikit-image.org/docs/stable/auto_examples/segmentation/plot_regionprops.html)
 supplies imaging operations. Distinguish measuring supplied masks from segmenting images.
+
+## ID workflow coverage and input realism
+
+The 115 recipes are small component exercises. They do **not** establish coverage
+of complete ID benchmark workflows. Repository count, format count, and successful
+package checks measure different things from workflow coverage. The following
+assessment uses public benchmark descriptions and the program's prior source
+inspection; it is a qualitative gap analysis, not a benchmark coverage score.
+
+| Provisional ID benchmark | Current relevant components | Missing dependent workflow behavior |
+|---|---|---|
+| [BixBench](https://github.com/Future-House/BixBench) | Cohort selection, expression summaries, enrichment, phylogeny and image measurements | Discover and join files, choose the eligible biological population, perform the analysis, and derive a requested result from its outputs. Current tasks usually prescribe each operation separately. |
+| [BioMysteryBench](https://huggingface.co/datasets/Anthropic/BioMysteryBench-full/blob/main/README.md) | Format interpretation and biological data analysis primitives | Open-ended identification and investigative reasoning over connected evidence. No item-level training mapping: questions, rubrics, and task formulations remain evaluation-only. |
+| [CompBioBench](https://github.com/Genentech/compbiobench-runner) | Common sequence, interval and expression operations | Broader tool selection, data acquisition and multi-step analyses. The offline corpus does not claim coverage of internet-dependent tasks. |
+| [BiomniBench-DA](https://huggingface.co/datasets/phylobio/BiomniBench-DA) | Patient/sample joins, composition, adjusted effects, expression and variant summaries | Connect raw/layer selection, QC, biological replication, contrast/model fitting, multiple testing, and the final association or composition result. |
+| [BioAgent Bench](https://arxiv.org/abs/2601.21800) | Read QC, mapping conventions, transcript arithmetic, variant filtering, taxonomy and assembly summaries | Actual RNA-seq, variant-calling and metagenomics pipelines, including dependency repair and distractor/corrupt-input handling. Supplied alignments, domain hits and taxonomy assignments omit their upstream inference. |
+
+Track workflow coverage with a fresh-data recipe, a dependency graph, independently
+checked intermediate/final artifacts, actual tool execution, and measured attempt
+time. Composing outputs must change the downstream answer: running independent
+small commands in sequence does not establish workflow reasoning. No current row
+above has been certified as an end-to-end workflow match.
+
+Keep tiny corner-case inputs as correctness controls. The inspected HMMER example
+has one 65-residue protein and two supplied domain hits; its purpose is coordinate
+extraction, not HMM search. Matrix Market examples have five features and four
+cells. Such fixtures make errors inspectable but permit shortcuts and do not
+exercise realistic data handling. In the 2026-09-23 reviewed 345-task build,
+supplied inputs have a median size of 231 bytes, a 95th percentile of 1,829 bytes,
+and a maximum of 7,835 bytes, excluding instructions and private references.
+This is an authoring fixture corpus, not an approved training release.
+
+For exported training instances, choose sizes appropriate to each operation and
+include realistic sample structure, sparsity, noise, ambiguity, missingness and
+file joins. Three examples should vary the scientific decision, not only rename
+records, multiply counts or shift scores. Size and reasoning difficulty are
+separate axes; more bytes alone do not make a better task. Maintain the single
+train split and the 30-minute attempt limit. Size targets remain uncalibrated
+until measured on the selected task environment.
+
+Large matrices, alignments and call sets require native output artifacts with
+streaming or bounded deterministic checks. The current record-array verifier has
+a 2 MiB answer limit and normalization emits every gene–cell pair, so simply
+increasing dimensions would produce an unsuitable task. Preserve the small JSON
+contract for compact summaries; add an artifact contract before scaling full
+matrix outputs. Do not silently truncate results or relax scientific checks.
+
+An independent read-only review on 2026-09-23 identified the component/workflow
+gap, small inputs, insufficient method discrimination, and repeated targets across
+seeds. It inspected representative code and examples; it did not scientifically
+certify all recipes or run all packages. Review-driven fixture changes add
+complete coding annotations with consistent reference lengths, asymmetric
+normalization outliers, rank-deficient estimable designs, unequal
+technical replication, and varying filtering/topology/FDR/mapping decisions.
+Native package execution and biological workflow review remain separate gates.
 
 ## Biological data formats
 

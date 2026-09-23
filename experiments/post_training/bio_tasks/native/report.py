@@ -30,6 +30,8 @@ def report(bundle: Path, results: Path) -> dict:
                 continue
             directory = results / attempt["output"]
             evidence = json.loads((directory / "execution.json").read_text())
+            if evidence["repository_index"] != index or evidence["recipe"] != repository["recipe"]:
+                raise ValueError(f"Native operation identity mismatch for {index}/{case['task_id']}")
             inputs = bundle / case["inputs"]
             expected_hashes = {
                 str(p.relative_to(inputs)): hashlib.sha256(p.read_bytes()).hexdigest()

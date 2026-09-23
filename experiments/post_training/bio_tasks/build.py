@@ -33,7 +33,7 @@ from experiments.post_training.tasktrove.taskbinary import TaskFiles, write_task
 
 SOURCE_DIR = Path(__file__).parent
 HARBOR_REVISION = "d072bef08e54050880b484eb81d892944d1d82fb"
-MAX_DISTINCT_INPUT_ATTEMPTS = 64
+MAX_DISTINCT_INSTANCE_ATTEMPTS = 64
 PARQUET_SCHEMA = pa.schema(
     [
         ("path", pa.string()),
@@ -154,6 +154,8 @@ def task_files(recipe: Recipe, instance: Instance, task: Identity, base_image: s
         "lineage": task.lineage,
         "split": task.split,
         "difficulty": recipe.difficulty.value,
+        "scale_profile": "small-fixture",
+        "workflow_scope": "component",
         "domain": recipe.domain,
         "repositories": list(recipe.repositories),
         "tool_execution": "pending",
@@ -219,7 +221,8 @@ def inspection_page(root: Path, task: Identity, instance: Instance, files: TaskF
         "<style>body{max-width:1000px;margin:2rem auto;font:16px system-ui}"
         "pre{white-space:pre-wrap;background:#f4f4f4;padding:1rem}details{margin:1rem 0}</style>"
         '<a href="../index.html">Corpus</a><h1>' + html.escape(task.task_id) + "</h1>"
-        "<p>Scientific review pending. Private inspection view; never mount this directory in solver environments. "
+        "<p>Small correctness fixture; component coverage, not an end-to-end workflow. "
+        "Scientific review pending. Private inspection view; never mount this directory in solver environments. "
         "Input previews are limited to 8,000 characters; complete files are in the task bundle.</p>"
         + content
         + "<h2>Inputs</h2>"
@@ -244,13 +247,18 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
     coverage_bytes = (SOURCE_DIR / "repository_coverage.json").read_bytes()
     (output / "repository_coverage.json").write_bytes(coverage_bytes)
     coverage = json.loads(coverage_bytes)["repositories"]
+    native_evidence = (SOURCE_DIR / "native_validation.json").read_bytes()
+    (output / "native_validation.json").write_bytes(native_evidence)
     counts: Counter = Counter()
     dockerfiles = {}
     recipe_sections = []
     seen_inputs = set()
-    previous_answers: dict[str, str] = {}
+    seen_targets = set()
+    previous_answers: dict[str, list[str]] = {}
     manifest = {
         "schema_version": 1,
+        "corpus_stage": "small-authoring-fixtures",
+        "training_ready": False,
         "seed": seed,
         "instances_per_recipe": instances_per_recipe,
         "base_image": base_image,
@@ -265,6 +273,7 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
         },
         "source_inventory_sha256": hashlib.sha256(inventory).hexdigest(),
         "repository_coverage_sha256": hashlib.sha256(coverage_bytes).hexdigest(),
+        "native_validation_sha256": hashlib.sha256(native_evidence).hexdigest(),
         "repository_tool_execution": {row["name"]: row["tool_execution"] for row in coverage},
     }
     # A failed generation leaves an explicit incomplete manifest, never an apparently finished release.
@@ -277,25 +286,31 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
             index_rows = []
             for index in range(instances_per_recipe):
                 task = identity(recipe, seed, index)
-                for draw in range(MAX_DISTINCT_INPUT_ATTEMPTS):
+                for draw in range(MAX_DISTINCT_INSTANCE_ATTEMPTS):
                     if draw:
                         digest = hashlib.sha256(f"{task.lineage}:distinct-input:{draw}".encode()).digest()
                         task = replace(task, seed=int.from_bytes(digest[:8], "big"))
                     instance = recipe.generate(task.seed)
                     input_hash = hashlib.sha256(json.dumps(instance.inputs, sort_keys=True).encode()).hexdigest()
-                    if input_hash not in seen_inputs:
+                    target_hash = hashlib.sha256(
+                        json.dumps(instance.contract.expected, sort_keys=True).encode()
+                    ).hexdigest()
+                    if input_hash not in seen_inputs and (recipe.id, target_hash) not in seen_targets:
                         break
                 else:
-                    raise ValueError(f"No distinct input after {MAX_DISTINCT_INPUT_ATTEMPTS} draws: {task.task_id}")
+                    raise ValueError(
+                        f"No distinct inputs and target after {MAX_DISTINCT_INSTANCE_ATTEMPTS} draws: {task.task_id}"
+                    )
                 seen_inputs.add(input_hash)
+                seen_targets.add((recipe.id, target_hash))
                 validation = validate_instance(recipe, instance)
                 if recipe.id in previous_answers:
-                    different_target = json.loads(previous_answers[recipe.id]) != instance.contract.answer()
-                    if different_target and grade_answer(instance.contract, previous_answers[recipe.id]).reward != 0:
+                    if any(
+                        grade_answer(instance.contract, answer).reward != 0 for answer in previous_answers[recipe.id]
+                    ):
                         raise ValueError(f"copied answer from another instance passes: {task.task_id}")
-                    if different_target:
-                        validation["copied_other_instance"] = 0
-                previous_answers[recipe.id] = json.dumps(instance.contract.answer())
+                    validation["copied_other_instance"] = 0
+                previous_answers.setdefault(recipe.id, []).append(json.dumps(instance.contract.answer()))
                 files = task_files(recipe, instance, task, base_image, tool_ref)
                 task_dir = output / "harbor" / task.split / task.task_id
                 files.write_to(task_dir)
@@ -340,7 +355,11 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
                     "sources": recipe.sources,
                     "network": "offline",
                     "input_sha256": input_hash,
-                    "distinct_input_draw": draw,
+                    "input_bytes": sum(len(text.encode("utf-8")) for text in instance.inputs.values()),
+                    "scale_profile": "small-fixture",
+                    "workflow_scope": "component",
+                    "distinct_instance_draw": draw,
+                    "target_sha256": target_hash,
                     "task_sha256": hashlib.sha256(blob).hexdigest(),
                     "validation": validation,
                     "scientific_review": "pending",
@@ -351,6 +370,7 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
                 index_rows.append(
                     f'<tr><td><a href="inspect/{task.task_id}.html">{task.task_id}</a></td>'
                     f"<td>{recipe.difficulty.value}</td>"
+                    f"<td>{entry['input_bytes']:,} bytes</td>"
                     f"<td>{len(validation)}</td></tr>"
                 )
                 counts[task.split] += 1
@@ -362,10 +382,11 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
                 f"Domain: {html.escape(recipe.domain)}<br>"
                 "Repository-derived operations: "
                 f"{html.escape(', '.join(recipe.repositories)) or 'Additional domain coverage'}"
-                "<br>Actual repository execution: pending<br>"
+                "<br>Tool availability in generated task environment: pending<br>"
                 f"Input formats: {html.escape(', '.join(recipe.formats))}<br>"
                 f"Skills: {html.escape(', '.join(recipe.skills))}</p>"
-                "<table><thead><tr><th>Task</th><th>Difficulty</th><th>Validation controls</th></tr></thead>"
+                "<table><thead><tr><th>Task</th><th>Difficulty</th><th>Input size</th>"
+                "<th>Validation controls</th></tr></thead>"
                 "<tbody>" + "\n".join(index_rows) + "</tbody></table></section>"
             )
     manifest.update(
@@ -399,11 +420,15 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
         "are pending. No teacher attempts have run.</p>"
         f"<p>{len(RECIPES)} recipes &times; {instances_per_recipe} examples = {counts['train']} tasks. "
         "All tasks belong to the train split.</p>"
-        "<p>All 50 source repositories have an explicit recipe mapping below. Actual CLI/API execution is pending; "
-        "the current environment contains Python only. Host oracle checks do not establish tool coverage.</p>"
+        "<p>These are small correctness fixtures for component skills. Realistic input sizes and "
+        "dependent workflows matching the ID benchmarks have not yet been validated.</p>"
+        "<p>All 50 source repositories have an explicit recipe mapping below. The table tracks separately "
+        "recorded package checks. Generated task environments still contain Python only; package checks "
+        "do not establish tool availability in Harbor or teacher tool use.</p>"
         "<p>Format labels describe supplied inputs. Generic CSV/JSON summaries do not establish native format coverage. "
         "Newick, Matrix Market, PDB, mmCIF, SBML, MGF and PGM are supplied where labeled; H5AD, BAM, "
         "native SRA, and OME-TIFF are not covered by their text intermediates.</p>"
+        '<p><a href="native_validation.json">Recorded package reference checks</a></p>'
         "<details><summary>All 50 repositories: scientific operation and execution status</summary>"
         "<table><thead><tr><th>#</th><th>Repository</th><th>Recipes</th><th>CLI/API execution</th></tr></thead><tbody>"
         + repository_rows

@@ -6,10 +6,12 @@
 import argparse
 import hashlib
 import json
+import signal
 import traceback
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from types import FrameType
 
 from experiments.post_training.bio_tasks.native.api import (
     solve_biopython,
@@ -104,7 +106,13 @@ def run_operation(repository: int, inputs: Path, output: Path) -> None:
         (output / "execution.json").write_text(json.dumps(status, indent=2) + "\n")
 
 
+def interrupt_operation(signum: int, frame: FrameType | None) -> None:
+    """Unwind command scopes so worker timeouts also reap the tool subprocesses."""
+    raise TimeoutError(f"Native check interrupted by signal {signum}")
+
+
 def main() -> None:
+    signal.signal(signal.SIGTERM, interrupt_operation)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repository", type=int, choices=sorted(OPERATIONS), required=True)
     parser.add_argument("--inputs", type=Path, required=True)

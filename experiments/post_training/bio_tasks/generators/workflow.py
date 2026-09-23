@@ -61,15 +61,30 @@ def generate_workflow(seed: int, operation: str) -> Instance:
             {"symbol": "AMBIG", "ensembl": identifiers[3]},
             {"symbol": "ALIAS_ALPHA", "ensembl": identifiers[0]},
         ]
+        include_beta = rng.choice([True, False])
+        unknown_count = rng.randint(1, 3)
+        universe = [identifiers[0], identifiers[2], *([identifiers[1]] if include_beta else [])]
         inputs = {
             "mapping.csv": csv_text(mapping),
-            "query.txt": "ALPHA\nALIAS_ALPHA\nBETA\nAMBIG\nUNKNOWN\nALPHA\n",
-            "universe.txt": "\n".join(identifiers[:3]) + "\n",
+            "query.txt": (
+                "ALPHA\nALIAS_ALPHA\nBETA\nAMBIG\nALPHA\n" + "".join(f"UNKNOWN{i}\n" for i in range(unknown_count))
+            ),
+            "universe.txt": "\n".join(universe) + "\n",
             "terms.gmt": f"term1\tna\t{identifiers[0]}\t{identifiers[1]}\nterm2\tna\t{identifiers[2]}\n",
         }
         expected = {
-            "term1": {"overlap": 2, "mapped_query_size": 2, "ambiguous_symbols": 1, "unmapped_symbols": 1},
-            "term2": {"overlap": 0, "mapped_query_size": 2, "ambiguous_symbols": 1, "unmapped_symbols": 1},
+            "term1": {
+                "overlap": 1 + int(include_beta),
+                "mapped_query_size": 1 + int(include_beta),
+                "ambiguous_symbols": 1,
+                "unmapped_symbols": unknown_count,
+            },
+            "term2": {
+                "overlap": 0,
+                "mapped_query_size": 1 + int(include_beta),
+                "ambiguous_symbols": 1,
+                "unmapped_symbols": unknown_count,
+            },
         }
         columns = {
             name: Column(
@@ -92,7 +107,7 @@ def generate_workflow(seed: int, operation: str) -> Instance:
             "distinct ambiguous-symbol count and distinct unmapped-symbol count. Use term id. Do not "
             "resolve ambiguity merely because one target is outside the universe."
         )
-        wrong = [{"id": k, **v, "mapped_query_size": 3} for k, v in expected.items()]
+        wrong = [{"id": k, **v, "mapped_query_size": v["mapped_query_size"] + 1} for k, v in expected.items()]
         reason = "resolved_ambiguity_after_universe_filtering"
     return Instance(
         prompt + " Inputs are in /app/inputs.", inputs, Contract(columns=columns, expected=expected), {reason: wrong}
@@ -106,7 +121,7 @@ SKILLS = {
 RECIPES = tuple(
     Recipe(
         name,
-        "1",
+        "2" if name in ["enrichment-identifier-mapping"] else "1",
         Difficulty.MEDIUM,
         skills,
         ("csv-header",) if name == "sample-sheet-lanes" else ("csv-header", "gmt", "gene-lists"),

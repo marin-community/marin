@@ -57,6 +57,7 @@ def generate_structure(seed: int, operation: str) -> Instance:
         )
         inputs = {"structure.pdb": "".join(lines)}
         distances = [3, 5, 12, 4, math.sqrt(153), 13]
+        cutoff = rng.choice([5, 12, 13]) * scale
         if operation == "pdb-radius-gyration":
             expected = {"structure": {"radius": math.sqrt(32.25) * scale, "n_atoms": 4}}
             columns = {
@@ -80,7 +81,9 @@ def generate_structure(seed: int, operation: str) -> Instance:
                 if operation == "pdb-ca-distances":
                     expected[identifiers[i] + "|" + identifiers[j]] = {"distance": distance * scale}
                 else:
-                    expected[identifiers[i] + "|" + identifiers[j]] = {"contact": int(i == 0 and j == 2)}
+                    expected[identifiers[i] + "|" + identifiers[j]] = {
+                        "contact": int((j == 3 or j - i > 1) and distance * scale <= cutoff)
+                    }
             if operation == "pdb-ca-distances":
                 columns = {
                     "distance": Column(
@@ -95,7 +98,7 @@ def generate_structure(seed: int, operation: str) -> Instance:
                 wrong = [{"id": k, "distance": v["distance"] / 10} for k, v in expected.items()]
                 reason = "reported_nanometers_as_angstroms"
             else:
-                inputs["cutoff.txt"] = str(5 * scale) + "\n"
+                inputs["cutoff.txt"] = str(cutoff) + "\n"
                 columns = {
                     "contact": Column(
                         kind="integer", unit="decision", description="1 if nonlocal CA pair within inclusive cutoff"
@@ -117,13 +120,15 @@ def generate_structure(seed: int, operation: str) -> Instance:
         )
     elif operation == "pdb-backbone-dihedrals":
         sign = rng.choice([-1, 1])
+        tilt = rng.choice([-1, 0, 1])
+        phi = math.degrees(math.atan2(sign, tilt))
         shift = rng.randint(-4, 4)
         atoms = [
             (1, "C", (0, 1, 0)),
             (2, "N", (0, 0, 0)),
             (2, "CA", (1, 0, 0)),
-            (2, "C", (1, 0, sign)),
-            (3, "N", (2, 0, sign)),
+            (2, "C", (1, tilt, sign)),
+            (3, "N", (2, tilt, sign)),
         ]
         inputs = {
             "backbone.pdb": (
@@ -134,7 +139,7 @@ def generate_structure(seed: int, operation: str) -> Instance:
                 + "END\n"
             )
         }
-        expected = {"A:2": {"phi": 90.0 * sign, "psi": 180.0}}
+        expected = {"A:2": {"phi": phi, "psi": 180.0}}
         columns = {
             name: Column(kind="number", unit="degrees", description=description, atol=1e-8, rtol=1e-8)
             for name, description in [
@@ -148,7 +153,7 @@ def generate_structure(seed: int, operation: str) -> Instance:
             "project b0,b2 perpendicular to b1 as v,w; angle=atan2(dot(cross(b1,v),w),dot(v,w)). Report"
             " degrees in (-180,180], mapping -180 to 180. Use id=A:2."
         )
-        wrong = [{"id": "A:2", "phi": -90.0 * sign, "psi": 180.0}]
+        wrong = [{"id": "A:2", "phi": -phi, "psi": 180.0}]
         reason = "reversed_dihedral_handedness"
     elif operation == "mmcif-chain-centroids":
         shift = rng.randint(-5, 5)
@@ -209,9 +214,15 @@ def generate_structure(seed: int, operation: str) -> Instance:
         reason = "used_label_chain_instead_of_author_chain"
     elif operation == "peptide-target-decoy-fdr":
         shift = rng.randint(0, 20)
-        types = ["target", "target", "decoy", "target", "target", "decoy", "target", "target"]
+        pattern, expected_values = rng.choice(
+            [
+                ("TTDTTDTT", [0, 0, 1 / 4, 1 / 4, 1 / 4, 1 / 3, 1 / 3, 1 / 3]),
+                ("TDTDTTTT", [0, 1 / 3, 1 / 3, 1 / 3, 1 / 3, 1 / 3, 1 / 3, 1 / 3]),
+                ("DTTTTTDT", [1 / 5, 1 / 5, 1 / 5, 1 / 5, 1 / 5, 1 / 5, 1 / 3, 1 / 3]),
+            ]
+        )
+        types = ["target" if kind == "T" else "decoy" for kind in pattern]
         rows = [{"psm": f"p{i}", "score": 100 - i + shift, "type": kind} for i, kind in enumerate(types)]
-        expected_values = [0, 0, 1 / 4, 1 / 4, 1 / 4, 1 / 3, 1 / 3, 1 / 3]
         expected = {
             f"p{i}": {
                 "qvalue": float(expected_values[i]),
@@ -290,7 +301,7 @@ SKILLS = {
 RECIPES = tuple(
     Recipe(
         name,
-        "1",
+        "2" if name in ["peptide-target-decoy-fdr", "pdb-contact-map", "pdb-backbone-dihedrals"] else "1",
         Difficulty.MEDIUM,
         skills,
         (

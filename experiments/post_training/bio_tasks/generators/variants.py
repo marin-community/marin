@@ -341,7 +341,7 @@ SKILLS = {
 RECIPES = tuple(
     Recipe(
         name,
-        "1",
+        "2" if name in ["variant-coding-consequences"] else "1",
         Difficulty.MEDIUM,
         skills,
         (

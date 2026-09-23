@@ -14,6 +14,7 @@ from experiments.post_training.bio_tasks.recipe_types import Difficulty, Instanc
 def generate_expression(seed: int, operation: str) -> Instance:
     rng = random.Random(seed)
     inputs, expected = {}, {}
+    extra_mutations = {}
     if operation.startswith("matrixmarket"):
         a, b, c = [rng.randint(3, 9) for _ in range(3)]
         dense = [[a, 0, 1, 0], [b, 2, 0, 0], [0, c, 2, 0], [9, 9, 9, 0], [0, 0, 0, 0]]
@@ -161,10 +162,16 @@ def generate_expression(seed: int, operation: str) -> Instance:
             {"gene": f"g{i}", **{f"s{j}": count * scale for j, scale in enumerate(factors)}}
             for i, count in enumerate(base)
         ]
+        # Five central genes determine the median despite two asymmetric outliers.
+        outliers = [
+            {"gene": "outlier_a", **{f"s{j}": 4 * scale * (64 if j == 0 else 1) for j, scale in enumerate(factors)}},
+            {"gene": "outlier_b", **{f"s{j}": 6 * scale * (8 if j == 1 else 1) for j, scale in enumerate(factors)}},
+        ]
+        rows = [*outliers, *rows]
         rows.append({"gene": "partial", "s0": 0, "s1": 99, "s2": 99})
         inputs = {"counts.csv": csv_text(rows)}
         expected = {
-            f"s{i}": {"size_factor": scale / ratio, "eligible_genes": len(base)} for i, scale in enumerate(factors)
+            f"s{i}": {"size_factor": scale / ratio, "eligible_genes": len(base) + 2} for i, scale in enumerate(factors)
         }
         columns = {
             "size_factor": Column(
@@ -184,14 +191,30 @@ def generate_expression(seed: int, operation: str) -> Instance:
         )
         wrong = [{"id": k, **v, "eligible_genes": v["eligible_genes"] + 1} for k, v in expected.items()]
         reason = "included_zero_geometric_mean_gene"
+        outlier_ratios = [(16, 0.5), (0.25, 4), (0.25, 0.5)]
+        extra_mutations["used_mean_instead_of_median"] = [
+            {"id": f"s{i}", "eligible_genes": 7, "size_factor": scale / ratio * (5 + sum(outlier_ratios[i])) / 7}
+            for i, scale in enumerate(factors)
+        ]
+        extra_mutations["used_first_gene_instead_of_median"] = [
+            {"id": f"s{i}", "eligible_genes": 7, "size_factor": scale / ratio * outlier_ratios[i][0]}
+            for i, scale in enumerate(factors)
+        ]
     elif operation == "bulk-cpm-filter":
         n = rng.randint(4, 8)
-        counts = {"g0": [n, n, 0], "g1": [n * 8, n * 8, n * 9], "g2": [0, 0, n], "g3": [n, n, 0]}
+        positive_a = set(rng.sample(range(3), rng.choice([2, 3])))
+        positive_b = set(rng.sample(range(3), rng.randrange(4)))
+        counts = {
+            "g0": [n * int(i in positive_a) for i in range(3)],
+            "g2": [0, 0, n],
+            "g3": [n * int(i in positive_b) for i in range(3)],
+        }
+        counts["g1"] = [10 * n - sum(values[i] for values in counts.values()) for i in range(3)]
         rows = [{"gene": name, **{f"s{i}": value for i, value in enumerate(values)}} for name, values in counts.items()]
         inputs = {"counts.csv": csv_text(rows), "threshold.txt": "100000\n"}
         expected = {
             name: {"n_samples": number, "keep": int(number >= 2)}
-            for name, number in [("g0", 2), ("g1", 3), ("g2", 1), ("g3", 2)]
+            for name, number in [("g0", len(positive_a)), ("g1", 3), ("g2", 1), ("g3", len(positive_b))]
         }
         columns = {
             "n_samples": Column(kind="integer", unit="samples", description="samples with CPM >= threshold"),
@@ -239,7 +262,10 @@ def generate_expression(seed: int, operation: str) -> Instance:
         wrong = [{"id": k, **v, "upregulated": 1 if k == "g1" else v["upregulated"]} for k, v in expected.items()]
         reason = "used_absolute_effect_for_upregulation"
     return Instance(
-        prompt + " Inputs are in /app/inputs.", inputs, Contract(columns=columns, expected=expected), {reason: wrong}
+        prompt + " Inputs are in /app/inputs.",
+        inputs,
+        Contract(columns=columns, expected=expected),
+        {reason: wrong, **extra_mutations},
     )
 
 
@@ -255,7 +281,7 @@ SKILLS = {
 RECIPES = tuple(
     Recipe(
         name,
-        "1",
+        "2" if name in ["bulk-cpm-filter", "bulk-size-factors"] else "1",
         Difficulty.MEDIUM,
         skills,
         (

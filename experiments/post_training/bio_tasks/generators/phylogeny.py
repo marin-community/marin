@@ -63,15 +63,20 @@ def generate_phylogeny(seed: int, operation: str) -> Instance:
             inputs["groups.csv"] = csv_text(
                 [{"group": name, "tip": tip} for name, tips in groups.items() for tip in tips]
             )
-            for name, size, status in [
-                ("ab", 2, "monophyletic"),
-                ("ac", 5, "non_monophyletic"),
-                ("cd", 2, "monophyletic"),
-                ("abcd", 5, "non_monophyletic"),
-                ("all", 5, "monophyletic"),
-                ("missing", None, "unknown_taxa"),
-            ]:
-                expected[name] = {"status": status, "mrca_tips": size}
+            tips = rng.sample(list("abcde"), 5)
+            a, b, c, d, solitary = tips
+            inputs["tree.nwk"] = f"(({a}:{x},{b}:{y})AB:{u},({c}:{z},{d}:{w})CD:{v},{solitary}:{e})ROOT;\n"
+            clades = [set(tips[:2]), set(tips[2:4]), set(tips)]
+            for name, members in groups.items():
+                query = set(members)
+                if not query <= set(tips):
+                    expected[name] = {"status": "unknown_taxa", "mrca_tips": None}
+                    continue
+                ancestral = min((clade for clade in clades if query <= clade), key=len)
+                expected[name] = {
+                    "status": "monophyletic" if query == ancestral else "non_monophyletic",
+                    "mrca_tips": len(ancestral),
+                }
             columns = {
                 "status": Column(
                     kind="text", unit="classification", description="monophyletic, non_monophyletic, or unknown_taxa"
@@ -228,7 +233,7 @@ SKILLS = {
 RECIPES = tuple(
     Recipe(
         name,
-        "1",
+        "2" if name in ["newick-monophyly"] else "1",
         Difficulty.MEDIUM,
         skills,
         ("newick",) if name.startswith("newick") else ("aligned-fasta",),

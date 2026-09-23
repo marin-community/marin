@@ -3,6 +3,7 @@
 
 import dataclasses
 import json
+import re
 import subprocess
 import sys
 from collections import Counter
@@ -25,6 +26,7 @@ from experiments.post_training.bio_tasks.oracle import (
     solve_taxonomy,
 )
 from experiments.post_training.bio_tasks.recipes import RECIPES
+from experiments.post_training.bio_tasks.solvers.formats import reverse_complement, translate
 from experiments.post_training.bio_tasks.solvers.imaging import solve_imaging
 from experiments.post_training.bio_tasks.solvers.phylogeny import solve_phylogeny
 from experiments.post_training.bio_tasks.solvers.sequence import solve_sequence as solve_six_frames
@@ -41,6 +43,32 @@ def test_generated_reference_accepts_independent_solver_and_rejects_scientific_e
     checks = validate_instance(recipe, recipe.generate(seed))
     assert checks["oracle"] == checks["row_permutation"] == 1
     assert all(value == 0 for name, value in checks.items() if name not in {"oracle", "row_permutation"})
+
+
+@pytest.mark.parametrize("seed", [0, 1, 20260923])
+def test_coding_variants_use_complete_cds_and_consistent_reference_coordinates(seed):
+    recipe = next(recipe for recipe in RECIPES if recipe.id == "variant-coding-consequences")
+    instance = recipe.generate(seed)
+    genome = "".join(instance.inputs["genome.fa"].splitlines()[1:])
+    vcf = instance.inputs["variants.vcf"]
+    assert int(re.search(r"##contig=<ID=chr1,length=(\d+)>", vcf).group(1)) == len(genome)
+    for line in vcf.splitlines():
+        if not line.startswith("#"):
+            fields = line.split("\t")
+            assert genome[int(fields[1]) - 1] == fields[3]
+    for line in instance.inputs["cds.gff3"].splitlines():
+        if line.startswith("#"):
+            continue
+        row = line.split("\t")
+        if row[2] != "CDS":
+            continue
+        coding = genome[int(row[3]) - 1 : int(row[4])]
+        if row[6] == "-":
+            coding = reverse_complement(coding)
+        protein = translate(coding)
+        assert coding.startswith("ATG")
+        assert len(coding) % 3 == 0
+        assert protein.endswith("*") and "*" not in protein[:-1]
 
 
 def test_wrong_construction_reference_blocks_task_admission():

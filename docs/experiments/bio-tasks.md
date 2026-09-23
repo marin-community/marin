@@ -29,7 +29,11 @@ format profile, and repository mapping. The 115 recipes span 13 domains:
 | assays and metabolomics | 7 |
 | workflow and identifiers | 2 |
 
-Use three distinct-input instances per recipe: 345 train tasks at this checkpoint.
+Use three instances with distinct inputs and reference targets per recipe: 345 train tasks at this checkpoint.
+The manifest marks `corpus_stage=small-authoring-fixtures` and `training_ready=false`.
+These are small correctness fixtures, not realistic workflow coverage. See the
+[ID workflow gap analysis](bio-task-catalog.md#id-workflow-coverage-and-input-realism)
+for the distinction and the requirements for realistic inputs and artifact outputs.
 These are easy and medium tasks; hard compositions and the final difficulty
 mixture remain separate work. Evaluation uses the independent benchmarks in the
 program issue. No development or test split is generated.
@@ -44,7 +48,9 @@ models biological/technical read routing from a CSV ledger; it does not read an 
 
 Every source repository has a scientific-operation mapping in
 `repository_coverage.json`. Actual CLI/API execution remains a distinct requirement
-for all 50 repositories. The current generated solver environment contains Python;
+for all 50 repositories. Biopython, pysam and cutadapt each passed three host
+reference checks, recorded in `native_validation.json`; 47 repositories remain
+pending. Reference scripts are implemented for 26 repositories. The current generated solver environment contains Python;
 it does not yet establish native tool execution. Repository source revisions and
 runtime package versions are different provenance fields and must remain separate.
 
@@ -86,6 +92,7 @@ and must remain outside solver environments. The bundle contains:
 - `manifest.json`: source hashes, pinned base image and runtime references, counts,
   and readiness status.
 - `source_inventory.json`: all 50 repository assessments and original adoption metadata.
+- `native_validation.json`: retained evidence for the completed package reference checks.
 - `repository_coverage.json`: explicit recipe mappings and CLI/API execution evidence status.
 
 The Parquet export can be opened with TaskTrove's file browser. These tasks use
@@ -130,3 +137,38 @@ failures produce `infra_error`. Solver answer errors receive reward 0.
 Teacher collection and successful-trace export are not part of this command.
 The program's five-attempt GLM-5.3 protocol remains in the issue. No teacher or
 training job is launched when building or inspecting this corpus.
+
+## Real-package reference checks
+
+The scripts in `native/` run a package CLI or API on the same public inputs and
+translate its output into the existing answer contract. A separate reporting
+process grades it against the private construction reference. This is an
+integration check, not a model judge, replacement oracle, or proof of teacher
+package use. The 26 implemented scripts include unvalidated options and version
+assumptions; only recorded passing executions count as evidence.
+
+Prepare checks from a validated corpus without installing packages:
+
+```bash
+uv run python -m experiments.post_training.bio_tasks.native.prepare \
+  --corpus /path/to/validated-corpus --output /path/to/native-checks
+```
+
+On an explicitly provisioned worker, `native.remote` accepts `--bundle`,
+`--output` and `--micromamba`. It creates one isolated package environment at a
+time, retains its explicit dependency list and command logs, and makes no model
+calls. Missing scripts remain pending. This worker command is not suitable for
+the shared development VM. The currently published environment candidates are
+not dependency locks or verified task images; retain resolved environments and
+build reproducible solver images after validation.
+
+Grade returned results with:
+
+```bash
+uv run python -m experiments.post_training.bio_tasks.native.report \
+  --bundle /path/to/native-checks --results /path/to/results \
+  --output /path/to/native-report.json
+```
+
+The report preserves the denominator of 50 repositories and requires three
+completed, distinct-input executions with passing biological answers per repo.

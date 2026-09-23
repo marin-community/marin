@@ -131,18 +131,21 @@ def generate_imaging(seed: int, operation: str) -> Instance:
         reason = "lost_negative_colocalization"
     elif operation == "spatial-neighbor-enrichment":
         scale = rng.choice([1, 2, 3])
+        kinds = rng.choice(["AABBA", "ABABA", "ABBAB"])
         rows = [
             {"cell": f"c{i}", "x": x * scale, "y": y * scale, "type": kind}
-            for i, (x, y, kind) in enumerate([(0, 0, "A"), (1, 0, "A"), (2, 0, "B"), (8, 0, "B"), (9, 0, "A")])
+            for i, ((x, y), kind) in enumerate(zip([(0, 0), (1, 0), (2, 0), (8, 0), (9, 0)], kinds, strict=True))
         ]
         rng.shuffle(rows)
         inputs = {"cells.csv": csv_text(rows), "radius_um.txt": str(scale) + "\n"}
-        # Edges: c0-c1, c1-c2, c3-c4. Directed A->B=2 of A outgoing=4.
+        # The geometry plants exactly three undirected edges; cell labels vary independently.
+        counts = {a + ":" + b: 0 for a in "AB" for b in "AB"}
+        for left, right in [(0, 1), (1, 2), (3, 4)]:
+            counts[kinds[left] + ":" + kinds[right]] += 1
+            counts[kinds[right] + ":" + kinds[left]] += 1
         expected = {
-            "A:A": {"edges": 2, "fraction": 0.5},
-            "A:B": {"edges": 2, "fraction": 0.5},
-            "B:A": {"edges": 2, "fraction": 1.0},
-            "B:B": {"edges": 0, "fraction": 0.0},
+            key: {"edges": count, "fraction": count / sum(counts[key[0] + ":" + b] for b in "AB")}
+            for key, count in counts.items()
         }
         columns = {
             "edges": Column(
@@ -171,13 +174,17 @@ def generate_imaging(seed: int, operation: str) -> Instance:
         shift = rng.randint(0, 10)
         cells = [("c0", shift, 0, "A"), ("c1", shift + 2, 1, "B"), ("c2", shift + 4, 1, "A"), ("c3", shift + 1, 2, "B")]
         regions = [("left", shift, shift + 2, 0, 2), ("right", shift + 2, shift + 4, 0, 2)]
+        expected = {"left:A": {"count": 1}, "left:B": {"count": 0}, "right:A": {"count": 0}, "right:B": {"count": 1}}
+        for region, x in [("left", shift + 0.5), ("right", shift + 2.5)]:
+            kind, number = rng.choice("AB"), rng.randint(1, 3)
+            expected[region + ":" + kind]["count"] += number
+            cells.extend((f"{region}{i}", x, 0.5, kind) for i in range(number))
         inputs = {
             "cells.csv": csv_text([{"cell": name, "x": x, "y": y, "type": kind} for name, x, y, kind in cells]),
             "regions.csv": csv_text(
                 [{"region": name, "xmin": a, "xmax": b, "ymin": c, "ymax": d} for name, a, b, c, d in regions]
             ),
         }
-        expected = {"left:A": {"count": 1}, "left:B": {"count": 0}, "right:A": {"count": 0}, "right:B": {"count": 1}}
         columns = {
             "count": Column(kind="integer", unit="cells", description="cells of requested type in half-open rectangle")
         }
@@ -187,7 +194,7 @@ def generate_imaging(seed: int, operation: str) -> Instance:
             "boundary belongs only to the region whose lower boundary it matches. Return every "
             "region:type combination, including zeros. Use region:type id."
         )
-        wrong = [{"id": k, "count": 1} for k in expected]
+        wrong = [{"id": k, "count": v["count"] + int(k == "right:A")} for k, v in expected.items()]
         reason = "double_counted_shared_or_upper_boundaries"
     else:
         assert operation == "image-dice-iou"
@@ -243,7 +250,7 @@ SKILLS = {
 RECIPES = tuple(
     Recipe(
         name,
-        "1",
+        "2" if name in {"spatial-neighbor-enrichment", "spatial-region-counts"} else "1",
         Difficulty.MEDIUM,
         skills,
         (

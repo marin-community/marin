@@ -69,13 +69,17 @@ def generate_statistics(seed: int, operation: str) -> Instance:
         mutation = {"reported_uncorrected_pvalues": [{"id": k, **v, "padj": v["pvalue"]} for k, v in expected.items()]}
     elif operation == "design-estimability":
         rows = []
-        kinds = rng.sample(["full", "confounded", "constant"], 3)
+        kinds = rng.sample(["full", "confounded", "constant_treatment", "constant_batch"], 4)
         for i, kind in enumerate(kinds):
             replicates = rng.randint(2, 4)
             pairs = (
                 [(0, 0), (0, 1), (1, 0), (1, 1)]
                 if kind == "full"
-                else [(0, 0), (1, 1)] if kind == "confounded" else [(0, 0), (0, 1)]
+                else (
+                    [(0, 0), (1, 1)]
+                    if kind == "confounded"
+                    else [(0, 0), (0, 1)] if kind == "constant_treatment" else [(0, 0), (1, 0)]
+                )
             )
             for treatment, batch in pairs:
                 rows.extend(
@@ -86,7 +90,7 @@ def generate_statistics(seed: int, operation: str) -> Instance:
                 )
             expected[f"c{i}"] = {
                 "rank": 3 if kind == "full" else 2,
-                "estimable": int(kind == "full"),
+                "estimable": int(kind in {"full", "constant_batch"}),
                 "n_patients": len(pairs) * replicates,
             }
         rng.shuffle(rows)
@@ -104,20 +108,27 @@ def generate_statistics(seed: int, operation: str) -> Instance:
             "coefficient is estimable from that design. Do not drop batch or change the contrast to "
             "force estimability. No outcome data are needed. Use cohort as id."
         )
-        mutation = {"dropped_batch_to_force_fit": [{"id": k, **v, "estimable": 1} for k, v in expected.items()]}
+        mutation = {
+            "dropped_batch_to_force_fit": [{"id": k, **v, "estimable": 1} for k, v in expected.items()],
+            "equated_estimability_with_full_rank": [
+                {"id": k, **v, "estimable": int(v["rank"] == 3)} for k, v in expected.items()
+            ],
+        }
     elif operation == "paired-treatment-effect":
         rows = []
         changes = []
         for patient in range(5):
             base = rng.randint(10, 30)
-            change = rng.randint(2, 8)
+            change = 2 + patient + rng.randint(0, 1)
             if patient < 4:
                 changes.append(change)
             for visit, value in [("baseline", base), ("post", base + change)]:
                 if patient == 4 and visit == "post":
                     continue
                 noise = rng.randint(1, 3)
-                for replicate, measurement in enumerate([value - noise, value + noise]):
+                # Deliberately unequal technical replication; every patient mean remains planted.
+                measurements = [value - noise, value + noise] * (patient + 1)
+                for replicate, measurement in enumerate(measurements):
                     rows.append({"patient": f"p{patient}", "visit": visit, "replicate": replicate, "value": measurement})
         rng.shuffle(rows)
         inputs = {"measurements.csv": csv_text(rows)}
@@ -140,7 +151,14 @@ def generate_statistics(seed: int, operation: str) -> Instance:
         mutation = {
             "reversed_treatment_direction": [
                 {"id": "cohort", "mean_delta": -expected["cohort"]["mean_delta"], "n_pairs": 4}
-            ]
+            ],
+            "weighted_patients_by_technical_replicates": [
+                {
+                    "id": "cohort",
+                    "n_pairs": 4,
+                    "mean_delta": sum((i + 1) * change for i, change in enumerate(changes)) / 10,
+                }
+            ],
         }
     elif operation == "adjusted-linear-effect":
         intercept, treatment_effect, batch_effect = rng.randint(5, 12), rng.randint(2, 6), rng.randint(-6, -2)
@@ -302,8 +320,8 @@ def generate_statistics(seed: int, operation: str) -> Instance:
         }
     else:
         assert operation == "permutation-mean-test"
-        n, total_success = 4, rng.choice([3, 5])
-        observed_success = rng.choice([max(0, total_success - 4), min(4, total_success)])
+        n, total_success = 4, rng.choice([2, 3, 4, 5, 6])
+        observed_success = rng.randint(max(0, total_success - 4), min(4, total_success))
         a = [1] * observed_success + [0] * (n - observed_success)
         b = [1] * (total_success - observed_success) + [0] * (4 - total_success + observed_success)
         rows = [{"sample": f"s{i}", "group": "A" if i < 4 else "B", "value": v} for i, v in enumerate(a + b)]
@@ -366,7 +384,7 @@ SKILLS = {
 RECIPES = tuple(
     Recipe(
         name,
-        "1",
+        "2" if name in ["design-estimability", "paired-treatment-effect", "permutation-mean-test"] else "1",
         Difficulty.MEDIUM,
         skills,
         ("gmt", "gene-lists") if name == "enrichment-universe" else ("csv-header",),
