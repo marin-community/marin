@@ -16,7 +16,12 @@ from dashboard_dataset import DashboardDataset
 from dashboard_stitch import stitch_all
 from jobs_observability import jobs_overview_dataset
 from node_observability import node_overview_dataset
-from rl_observability import recent_rl_runs_dataset, rl_overview_dataset, rl_sync_generation_dataset
+from rl_observability import (
+    recent_rl_runs_dataset,
+    rl_overview_dataset,
+    rl_sync_generation_dataset,
+    rl_sync_training_step_dataset,
+)
 from runs_observability import runs_overview_dataset
 from server import create_app
 from starlette.testclient import TestClient
@@ -218,6 +223,9 @@ def test_priority_dashboards_use_only_bounded_panel_endpoints() -> None:
         "runs": frozenset(runs_overview_dataset(("cw-a",), ("run",), start_ms, end_ms, 15_000).views),
         "rl": frozenset(rl_overview_dataset(("cw-a",), "run", start_ms, end_ms, 15_000).views),
         "rl_sync_generation": frozenset(rl_sync_generation_dataset(("cw-a",), "run", start_ms, end_ms, 15_000).views),
+        "rl_sync_training_step": frozenset(
+            rl_sync_training_step_dataset(("cw-a",), "run", start_ms, end_ms, 15_000).views
+        ),
         "vllm": VLLM_OVERVIEW_SECTIONS,
         "accelerator": frozenset(accelerator_overview_dataset(("cw-a",), start_ms, end_ms, 15_000).views),
         "jobs": frozenset(jobs_overview_dataset(("cw-a",), ("job",), start_ms, end_ms, 15_000).views),
@@ -236,6 +244,7 @@ def test_priority_dashboards_use_only_bounded_panel_endpoints() -> None:
             "/v1/rl/generation": (5, sections["rl_sync_generation"]),
             "/v1/vllm/overview": (6, sections["vllm"]),
         },
+        "rl_sync_training_step.json": {"/v1/rl/training-step": (11, sections["rl_sync_training_step"])},
         "async_rl.json": {"/v1/async-rl/overview": (48, sections["async_rl"])},
         "jobs.json": {"/v1/jobs/overview": (17, sections["jobs"])},
         "accelerators.json": {"/v1/accelerator/overview": (18, sections["accelerator"])},
@@ -282,6 +291,7 @@ def test_domain_source_counts_stay_within_the_declared_budget() -> None:
         "runs": runs_overview_dataset(("cw-a",), ("run",), start_ms, end_ms, 15_000),
         "rl": rl_overview_dataset(("cw-a",), "run", start_ms, end_ms, 15_000),
         "rl_sync_generation": rl_sync_generation_dataset(("cw-a",), "run", start_ms, end_ms, 15_000),
+        "rl_sync_training_step": rl_sync_training_step_dataset(("cw-a",), "run", start_ms, end_ms, 15_000),
         "accelerator": accelerator_overview_dataset(("cw-a",), start_ms, end_ms, 15_000),
         "jobs": jobs_overview_dataset(("cw-a",), ("job",), start_ms, end_ms, 15_000),
         "recent_rl": recent_rl_runs_dataset(start_ms, end_ms),
@@ -294,6 +304,7 @@ def test_domain_source_counts_stay_within_the_declared_budget() -> None:
         "runs": 2,
         "rl": 4,
         "rl_sync_generation": 1,
+        "rl_sync_training_step": 3,
         "accelerator": 3,
         "jobs": 5,
         "recent_rl": 1,

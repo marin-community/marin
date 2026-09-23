@@ -167,13 +167,17 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/rl/training-step",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "WITH spans AS ( SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS bucket, json_get(attributes_json, 'step') AS s, json_get(attributes_json, 'rank') AS worker_rank, json_get(attributes_json, 'phase') AS phase, json_get(attributes_json, 'parent') AS parent, json_get(attributes_json, 'clock_domain') AS domain, value FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'phase_duration_seconds' AND json_get(attributes_json, 'role') = 'worker' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) ), tagged AS ( SELECT bucket, s, worker_rank, phase, parent, domain, value, FIRST_VALUE(worker_rank) OVER ( PARTITION BY s ORDER BY CASE WHEN phase = 'policy_ppo_train' AND domain IN ('inclusive_wall', 'inclusive_launch') THEN value ELSE -1 END DESC, worker_rank ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING ) AS critical_rank, MAX(CASE WHEN phase = 'policy_ppo_train' AND domain IN ('inclusive_wall', 'inclusive_launch') THEN value END) OVER (PARTITION BY s) AS parent_seconds, SUM(CASE WHEN parent = 'policy_ppo_train' AND domain IN ('exclusive_wall', 'exclusive_launch') AND phase <> 'policy_span_residual' THEN value END) OVER (PARTITION BY s, worker_rank) AS covered_seconds FROM spans ), banded AS ( SELECT bucket, CASE WHEN domain IN ('inclusive_wall', 'inclusive_launch') THEN 'unattributed' ELSE phase END AS band, CASE WHEN domain IN ('inclusive_wall', 'inclusive_launch') THEN parent_seconds - covered_seconds ELSE value END AS seconds FROM tagged WHERE worker_rank = critical_rank AND ((parent = 'policy_ppo_train' AND domain IN ('exclusive_wall', 'exclusive_launch') AND phase <> 'policy_span_residual') OR (domain IN ('inclusive_wall', 'inclusive_launch') AND phase = 'policy_ppo_train')) ) SELECT bucket AS t, band AS series, AVG(seconds) AS value FROM banded GROUP BY 1, 2 ORDER BY 1"
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
               },
               {
                 "key": "from",
@@ -182,6 +186,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "ppo_decomposition"
               }
             ]
           },
@@ -256,13 +268,17 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/rl/training-step",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "WITH ppo AS ( SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS bucket, value FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'phase_duration_seconds' AND json_get(attributes_json, 'role') = 'worker' AND json_get(attributes_json, 'phase') = 'policy_ppo_train' AND json_get(attributes_json, 'clock_domain') IN ('inclusive_wall', 'inclusive_launch') AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) ) SELECT bucket AS t, MAX(value) AS slowest_rank, approx_percentile_cont(value, 0.95) AS p95, approx_percentile_cont(value, 0.50) AS p50, MIN(value) AS fastest_rank FROM ppo GROUP BY 1 ORDER BY 1"
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
               },
               {
                 "key": "from",
@@ -271,6 +287,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "rank_skew"
               }
             ]
           },
@@ -376,13 +400,17 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/rl/training-step",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "WITH driver AS ( SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS bucket, json_get(attributes_json, 'step') AS s, MAX(value) AS seconds FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'phase_duration_seconds' AND json_get(attributes_json, 'role') = 'trainer' AND json_get(attributes_json, 'clock_domain') = 'inclusive_wall' AND json_get(attributes_json, 'phase') = 'policy_train' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ), micro AS ( SELECT json_get(attributes_json, 'step') AS s, MAX(value) AS micro_steps FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'policy_train_count' AND json_get(attributes_json, 'counter') = 'micro_step_count' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ), joined AS ( SELECT driver.bucket AS bucket, driver.seconds AS seconds, micro.micro_steps AS micro_steps FROM driver LEFT JOIN micro ON driver.s = micro.s ) SELECT bucket AS t, AVG(seconds / NULLIF(micro_steps, 0)) AS seconds_per_micro_step, AVG(micro_steps) AS micro_steps FROM joined GROUP BY 1 ORDER BY 1"
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
               },
               {
                 "key": "from",
@@ -391,6 +419,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "micro_steps"
               }
             ]
           },
@@ -465,13 +501,17 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/rl/training-step",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "WITH spans AS ( SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS bucket, json_get(attributes_json, 'step') AS s, json_get(attributes_json, 'rank') AS worker_rank, json_get(attributes_json, 'phase') AS phase, json_get(attributes_json, 'clock_domain') AS domain, value FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'phase_duration_seconds' AND json_get(attributes_json, 'role') = 'worker' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) ), tagged AS ( SELECT bucket, s, worker_rank, phase, domain, value, FIRST_VALUE(worker_rank) OVER ( PARTITION BY s ORDER BY CASE WHEN phase = 'policy_ppo_train' AND domain IN ('inclusive_wall', 'inclusive_launch') THEN value ELSE -1 END DESC, worker_rank ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING ) AS critical_rank, MAX(CASE WHEN phase = 'policy_ppo_train' AND domain IN ('inclusive_wall', 'inclusive_launch') THEN value END) OVER (PARTITION BY s) AS parent_seconds FROM spans ), per_step AS ( SELECT bucket, s, MAX(CASE WHEN phase = 'policy_forward' THEN value END) AS forward_seconds, MAX(CASE WHEN phase = 'policy_backward' THEN value END) AS backward_seconds FROM tagged WHERE worker_rank = critical_rank AND domain IN ('exclusive_wall', 'exclusive_launch') GROUP BY 1, 2 ) SELECT bucket AS t, AVG(backward_seconds / NULLIF(forward_seconds, 0)) AS backward_over_forward FROM per_step GROUP BY 1 ORDER BY 1"
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
               },
               {
                 "key": "from",
@@ -480,6 +520,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "backward_over_forward"
               }
             ]
           },
@@ -549,13 +597,17 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/rl/training-step",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "WITH spans AS ( SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS bucket, json_get(attributes_json, 'step') AS s, json_get(attributes_json, 'rank') AS worker_rank, json_get(attributes_json, 'phase') AS phase, json_get(attributes_json, 'clock_domain') AS domain, value FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'phase_duration_seconds' AND json_get(attributes_json, 'role') = 'worker' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) ), tagged AS ( SELECT bucket, s, worker_rank, phase, domain, value, FIRST_VALUE(worker_rank) OVER ( PARTITION BY s ORDER BY CASE WHEN phase = 'policy_ppo_train' AND domain IN ('inclusive_wall', 'inclusive_launch') THEN value ELSE -1 END DESC, worker_rank ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING ) AS critical_rank, MAX(CASE WHEN phase = 'policy_ppo_train' AND domain IN ('inclusive_wall', 'inclusive_launch') THEN value END) OVER (PARTITION BY s) AS parent_seconds FROM spans ), per_step AS ( SELECT bucket, s, SUM(CASE WHEN phase IN ('policy_entry_barrier', 'policy_final_barrier', 'policy_metric_allreduce', 'policy_entropy_allreduce') THEN value END) AS waiting_seconds, MAX(parent_seconds) AS total_seconds FROM tagged WHERE worker_rank = critical_rank AND domain IN ('exclusive_wall', 'exclusive_launch') GROUP BY 1, 2 ) SELECT bucket AS t, AVG(waiting_seconds / NULLIF(total_seconds, 0)) AS waiting_share FROM per_step GROUP BY 1 ORDER BY 1"
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
               },
               {
                 "key": "from",
@@ -564,6 +616,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "waiting_share"
               }
             ]
           },
@@ -655,13 +715,17 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/rl/training-step",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "WITH counters AS ( SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS bucket, json_get(attributes_json, 'step') AS s, json_get(attributes_json, 'rank') AS worker_rank, json_get(attributes_json, 'counter') AS counter, value FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'policy_train_count' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) ), per_rank AS ( SELECT bucket, s, worker_rank, MAX(CASE WHEN counter IN ('rank_tokens_real', 'tokens_real') THEN value END) AS tokens_real, MAX(CASE WHEN counter IN ('rank_tokens_padded', 'tokens_padded') THEN value END) AS tokens_padded, MAX(CASE WHEN counter = 'attention_work_ratio' THEN value END) AS attention_work FROM counters GROUP BY 1, 2, 3 ) SELECT bucket AS t, AVG(1.0 - tokens_real / NULLIF(tokens_padded, 0)) AS padded_fraction, AVG(attention_work) AS attention_work_ratio FROM per_rank GROUP BY 1 ORDER BY 1"
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
               },
               {
                 "key": "from",
@@ -670,6 +734,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "padding"
               }
             ]
           },
@@ -765,13 +837,17 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/rl/training-step",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "WITH counters AS ( SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS bucket, json_get(attributes_json, 'step') AS s, json_get(attributes_json, 'rank') AS worker_rank, json_get(attributes_json, 'counter') AS counter, MAX(value) AS value FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name IN ('policy_train_bytes', 'policy_train_count') AND json_get(attributes_json, 'role') = 'worker' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3, 4 ) SELECT bucket AS t, MAX(CASE WHEN counter = 'peak_reserved_bytes' THEN value END) AS peak_reserved_bytes, MAX(CASE WHEN counter = 'peak_allocated_bytes' THEN value END) AS peak_allocated_bytes, SUM(CASE WHEN counter = 'alloc_retries' THEN value END) AS alloc_retries, SUM(CASE WHEN counter = 'alloc_ooms' THEN value END) AS alloc_ooms FROM counters GROUP BY 1 ORDER BY 1"
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
               },
               {
                 "key": "from",
@@ -780,6 +856,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "allocator"
               }
             ]
           },
@@ -879,13 +963,17 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/rl/training-step",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "WITH gpu AS ( SELECT COALESCE(NULLIF(\"cluster\", ''), 'marin') AS cl, date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS bucket, node_name AS node, json_get(attributes_json, 'gpu_uuid') AS gpu_uuid, name, AVG(value) AS rate, MAX(value) AS peak, MIN(value) AS first_value, MAX(value) AS last_value FROM \"telemetry_v1.node_agent\" WHERE name IN ('gpu_sm_active_ratio', 'gpu_tensor_active_ratio') AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3, 4, 5 ), run_node AS ( SELECT cl, bucket, node, run FROM ( SELECT COALESCE(NULLIF(\"cluster\", ''), 'marin') AS cl, date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS bucket, node_name AS node, run_id AS run, ROW_NUMBER() OVER ( PARTITION BY COALESCE(NULLIF(\"cluster\", ''), 'marin'), date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)), node_name ORDER BY COUNT(*) DESC ) AS rn FROM \"telemetry_v1.marinskyrl\" WHERE node_name IS NOT NULL AND node_name <> '' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3, 4 ) WHERE rn = 1 ) SELECT gpu.bucket AS t, CASE gpu.name WHEN 'gpu_sm_active_ratio' THEN 'SM active' ELSE 'tensor pipe active' END AS series, AVG(gpu.rate) * 100.0 AS value FROM gpu JOIN run_node ON gpu.cl = run_node.cl AND gpu.bucket = run_node.bucket AND gpu.node = run_node.node GROUP BY 1, 2 ORDER BY 1"
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
               },
               {
                 "key": "from",
@@ -894,6 +982,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "sm_activity"
               }
             ]
           },
@@ -968,13 +1064,17 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/rl/training-step",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "WITH gpu AS ( SELECT COALESCE(NULLIF(\"cluster\", ''), 'marin') AS cl, date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS bucket, node_name AS node, json_get(attributes_json, 'gpu_uuid') AS gpu_uuid, name, AVG(value) AS rate, MAX(value) AS peak, MIN(value) AS first_value, MAX(value) AS last_value FROM \"telemetry_v1.node_agent\" WHERE name IN ('gpu_memory_used_bytes') AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3, 4, 5 ), run_node AS ( SELECT cl, bucket, node, run FROM ( SELECT COALESCE(NULLIF(\"cluster\", ''), 'marin') AS cl, date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS bucket, node_name AS node, run_id AS run, ROW_NUMBER() OVER ( PARTITION BY COALESCE(NULLIF(\"cluster\", ''), 'marin'), date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)), node_name ORDER BY COUNT(*) DESC ) AS rn FROM \"telemetry_v1.marinskyrl\" WHERE node_name IS NOT NULL AND node_name <> '' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3, 4 ) WHERE rn = 1 ) SELECT gpu.bucket AS t, AVG(gpu.rate) AS mean_used_bytes, MAX(gpu.peak) AS peak_used_bytes FROM gpu JOIN run_node ON gpu.cl = run_node.cl AND gpu.bucket = run_node.bucket AND gpu.node = run_node.node GROUP BY 1 ORDER BY 1"
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
               },
               {
                 "key": "from",
@@ -983,6 +1083,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "gpu_memory"
               }
             ]
           },
@@ -1058,13 +1166,17 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/rl/training-step",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "WITH gpu AS ( SELECT COALESCE(NULLIF(\"cluster\", ''), 'marin') AS cl, date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS bucket, node_name AS node, json_get(attributes_json, 'gpu_uuid') AS gpu_uuid, name, AVG(value) AS rate, MAX(value) AS peak, MIN(value) AS first_value, MAX(value) AS last_value FROM \"telemetry_v1.node_agent\" WHERE name IN ('gpu_nvlink_receive_bytes_per_second', 'gpu_pcie_receive_bytes_per_second') AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3, 4, 5 ), run_node AS ( SELECT cl, bucket, node, run FROM ( SELECT COALESCE(NULLIF(\"cluster\", ''), 'marin') AS cl, date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS bucket, node_name AS node, run_id AS run, ROW_NUMBER() OVER ( PARTITION BY COALESCE(NULLIF(\"cluster\", ''), 'marin'), date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)), node_name ORDER BY COUNT(*) DESC ) AS rn FROM \"telemetry_v1.marinskyrl\" WHERE node_name IS NOT NULL AND node_name <> '' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3, 4 ) WHERE rn = 1 ) SELECT gpu.bucket AS t, CASE gpu.name WHEN 'gpu_nvlink_receive_bytes_per_second' THEN 'NVLink receive' ELSE 'PCIe receive' END AS series, SUM(gpu.rate) AS value FROM gpu JOIN run_node ON gpu.cl = run_node.cl AND gpu.bucket = run_node.bucket AND gpu.node = run_node.node GROUP BY 1, 2 ORDER BY 1"
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
               },
               {
                 "key": "from",
@@ -1073,6 +1185,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "fabric_receive"
               }
             ]
           },
@@ -1126,13 +1246,17 @@
           "source": "url",
           "format": "table",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/rl/training-step",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "WITH gpu AS ( SELECT COALESCE(NULLIF(\"cluster\", ''), 'marin') AS cl, date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS bucket, node_name AS node, json_get(attributes_json, 'gpu_uuid') AS gpu_uuid, name, AVG(value) AS rate, MAX(value) AS peak, MIN(value) AS first_value, MAX(value) AS last_value FROM \"telemetry_v1.node_agent\" WHERE name IN ('gpu_power_watts', 'gpu_nvlink_errors', 'gpu_pcie_replay_errors') AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3, 4, 5 ), run_node AS ( SELECT cl, bucket, node, run FROM ( SELECT COALESCE(NULLIF(\"cluster\", ''), 'marin') AS cl, date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS bucket, node_name AS node, run_id AS run, ROW_NUMBER() OVER ( PARTITION BY COALESCE(NULLIF(\"cluster\", ''), 'marin'), date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)), node_name ORDER BY COUNT(*) DESC ) AS rn FROM \"telemetry_v1.marinskyrl\" WHERE node_name IS NOT NULL AND node_name <> '' AND run_id IN (${run:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3, 4 ) WHERE rn = 1 ), attributed AS ( SELECT gpu.node AS node, gpu.gpu_uuid AS gpu_uuid, gpu.name AS name, MIN(gpu.first_value) AS first_value, MAX(gpu.last_value) AS last_value FROM gpu JOIN run_node ON gpu.cl = run_node.cl AND gpu.bucket = run_node.bucket AND gpu.node = run_node.node GROUP BY 1, 2, 3 ) SELECT node AS node, gpu_uuid AS gpu, MAX(CASE WHEN name = 'gpu_power_watts' THEN last_value END) AS peak_power_watts, MAX(CASE WHEN name = 'gpu_nvlink_errors' THEN last_value - first_value END) AS nvlink_error_increase, MAX(CASE WHEN name = 'gpu_pcie_replay_errors' THEN last_value - first_value END) AS pcie_replay_increase FROM attributed GROUP BY 1, 2 HAVING MAX(CASE WHEN name IN ('gpu_nvlink_errors', 'gpu_pcie_replay_errors') THEN last_value - first_value END) > 0 ORDER BY 4 DESC, 5 DESC"
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
               },
               {
                 "key": "from",
@@ -1141,6 +1265,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "link_faults"
               }
             ]
           },

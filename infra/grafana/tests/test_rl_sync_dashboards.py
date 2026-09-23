@@ -29,7 +29,12 @@ from config import ClusterTarget
 from conftest import bridge_config, install_finelog_dialect_macros
 from dashboard_dataset import projection_database
 from dashboard_stitch import stitch_all
-from rl_observability import RL_MAX_RESULT_ROWS, rl_overview_dataset, rl_sync_generation_dataset
+from rl_observability import (
+    RL_MAX_RESULT_ROWS,
+    rl_overview_dataset,
+    rl_sync_generation_dataset,
+    rl_sync_training_step_dataset,
+)
 from server import create_app
 from starlette.testclient import TestClient
 
@@ -614,7 +619,7 @@ def _run_rows(clock: str) -> list[tuple]:
     return rows
 
 
-def _store(clock: str) -> duckdb.DuckDBPyConnection:
+def _empty_store() -> duckdb.DuckDBPyConnection:
     database = duckdb.connect()
     for stream in sorted(set(_SEMANTIC_STREAM.values())):
         database.execute(f'CREATE TABLE "{stream}"{_SCHEMA}')
@@ -624,6 +629,11 @@ def _store(clock: str) -> duckdb.DuckDBPyConnection:
         """CREATE MACRO named_struct(k1, v1, k2, v2, k3, v3)
                    AS struct_pack(timestamp_ms := v1, seq := v2, value := v3)"""
     )
+    return database
+
+
+def _store(clock: str) -> duckdb.DuckDBPyConnection:
+    database = _empty_store()
     service_index = _COLUMNS.index("service")
     routed: dict[str, list] = {}
     for row in _run_rows(clock):
@@ -718,6 +728,7 @@ BUCKET_MS = 5 * 60 * 1000
 _DATASETS = {
     "/v1/rl/overview": rl_overview_dataset,
     "/v1/rl/generation": rl_sync_generation_dataset,
+    "/v1/rl/training-step": rl_sync_training_step_dataset,
 }
 _VLLM_OVERVIEW = "/v1/vllm/overview"
 _TEMPLATE = {
@@ -781,9 +792,6 @@ def _responses(database: duckdb.DuckDBPyConnection, targets: list[dict]) -> list
 
 def _target_rows(database: duckdb.DuckDBPyConnection, target: dict) -> list[tuple]:
     """What one target renders: its rows, in the columns it declares."""
-    if target["url"] == "/query":
-        (sql,) = [param["value"] for param in target["url_options"]["params"] if param["key"] == "sql"]
-        return database.execute(_resolve(sql)).fetchall()
     (rows,) = _responses(database, [target])
     return [tuple(row[column["selector"]] for column in target["columns"]) for row in rows]
 
@@ -1134,10 +1142,7 @@ def test_every_timeseries_panel_returns_the_columns_it_declares(store) -> None:
             continue
         for target in panel["targets"]:
             declared = [column["selector"] for column in target["columns"]]
-            if target["url"] == "/query":
-                (sql,) = [param["value"] for param in target["url_options"]["params"] if param["key"] == "sql"]
-                returned = [column[0] for column in store.execute(_resolve(sql)).description]
-            elif target["url"] == _VLLM_OVERVIEW:
+            if target["url"] == _VLLM_OVERVIEW:
                 (rows,) = _responses(store, [target])
                 assert rows, panel["title"]
                 returned = [column for column in declared if column in rows[0]]
@@ -1348,3 +1353,130 @@ def test_the_memory_panel_reads_the_instrument_the_byte_gauges_moved_to(store) -
 
     assert all(row[1] is not None for row in rows)
     assert rows[0][1] == pytest.approx(max(m["peak_reserved_bytes"] for m in WORKER_MEMORY.values()))
+
+
+@pytest.mark.parametrize("board", ["rl_runs.json", "rl_sync_generation.json", "rl_sync_training_step.json"])
+def test_a_board_reads_finelog_once_per_source_for_every_panel(store, board) -> None:
+    """Every target of one endpoint on a board shares a dataset key, so a cold page load costs one
+    Finelog query per source however many panels read it."""
+    targets = [
+        target
+        for panel in _stitched()[board]["panels"]
+        for target in panel.get("targets", [])
+        if target["url"] in (*_DATASETS, _VLLM_OVERVIEW)
+    ]
+    app, queries = _bridge(store)
+
+    with TestClient(app) as client:
+        statuses = [
+            client.get(f"/finelog/marin{target['url']}", params=_params(target)).status_code for target in targets
+        ]
+
+    assert statuses == [200] * len(targets)
+    assert len(queries) == sum(
+        1 if url == _VLLM_OVERVIEW else len(_dataset(url).sources) for url in {target["url"] for target in targets}
+    )
+
+
+LONG_RUN_STEPS = 500
+LONG_RUN_RANKS = 64
+RANKS_PER_NODE = 8
+GPUS_PER_NODE = 8
+LONG_RUN_STEP_MS = 60_000
+
+
+def _long_run_store(ranks: int) -> duckdb.DuckDBPyConnection:
+    """LONG_RUN_STEPS steps, one a minute, across `ranks` worker ranks eight to a node.
+
+    The first step of this suite's run is the template: its worker rows are copied onto every rank
+    of the same parity, its node agent rows onto every GPU, and everything onto every step. Copied
+    in SQL, because a million rows built in Python would dominate the suite.
+    """
+    database = _empty_store()
+    template = [row for row in _run_rows("wall") if row[_COLUMNS.index("seq")] == 0]
+    database.register(
+        "template_rows", pa.table([list(column) for column in zip(*template, strict=True)], schema=_ARROW_SCHEMA)
+    )
+    columns = ", ".join(_COLUMNS)
+    for stream, predicate, copies, node, attributes in (
+        # The driver, the engines and the run's other rows: one copy per step.
+        (
+            "telemetry_v1.marinskyrl",
+            "service = 'marinskyrl' AND json_get(attributes_json, 'rank') IS NULL",
+            "range(0)",
+            "node_name",
+            """CASE WHEN json_get(attributes_json, 'step') IS NULL THEN attributes_json
+                    ELSE json_merge_patch(attributes_json, json_object('step', CAST(step AS VARCHAR))) END""",
+        ),
+        (
+            "telemetry_v1.vllm",
+            "service = 'vllm'",
+            "range(0)",
+            "node_name",
+            "attributes_json",
+        ),
+        # A worker's spans and counters: one copy per rank of the template rank's parity.
+        (
+            "telemetry_v1.marinskyrl",
+            f"json_get(attributes_json, 'rank') = CAST(copy % 2 AS VARCHAR) AND copy < {ranks}",
+            f"range({ranks})",
+            f"'long-node-' || CAST(copy // {RANKS_PER_NODE} AS VARCHAR)",
+            """json_merge_patch(attributes_json, json_object(
+                   'step', CAST(step AS VARCHAR), 'rank', CAST(copy AS VARCHAR)))""",
+        ),
+        # DCGM on every GPU of every node the ranks occupy.
+        (
+            "telemetry_v1.node_agent",
+            f"node_name = '{NODES[0]}' AND json_get(attributes_json, 'gpu_index') = '0'",
+            f"range({ranks // RANKS_PER_NODE * GPUS_PER_NODE})",
+            f"'long-node-' || CAST(copy // {GPUS_PER_NODE} AS VARCHAR)",
+            f"""json_merge_patch(attributes_json, json_object(
+                   'gpu_uuid', 'GPU-' || CAST(copy AS VARCHAR),
+                   'gpu_index', CAST(copy % {GPUS_PER_NODE} AS VARCHAR)))""",
+        ),
+    ):
+        single = copies == "range(0)"
+        database.execute(
+            f"""INSERT INTO "{stream}" ({columns})
+                SELECT cluster, service, run_id, job_id, execution_uid, {node}, process_index, name, value,
+                       timestamp_ms + step * {LONG_RUN_STEP_MS}, step, resource_attributes_json,
+                       CAST({attributes} AS VARCHAR), body_json, kind
+                FROM template_rows,
+                     (SELECT range AS step FROM range({LONG_RUN_STEPS})) AS steps,
+                     (SELECT range AS copy FROM {"range(1)" if single else copies}) AS copies
+                WHERE {predicate}"""
+        )
+    return database
+
+
+def test_no_source_grows_with_the_rank_count_on_a_long_run() -> None:
+    """Span data is steps x ranks x phases x clock domains, so every source reduces the ranks in
+    Finelog. At 500 steps across 64 ranks, each source holds under its cap, and a span or counter
+    source returns exactly as many rows as it does across eight."""
+    wide, narrow = _long_run_store(LONG_RUN_RANKS), _long_run_store(RANKS_PER_NODE)
+    start_ms = _millis(WINDOW_START)
+    end_ms = start_ms + (LONG_RUN_STEPS + 1) * LONG_RUN_STEP_MS
+
+    for build in _DATASETS.values():
+        dataset = build((CLUSTER,), RUN_ID, start_ms, end_ms, BUCKET_MS)
+        for source in dataset.sources:
+            rows = wide.execute(source.sql).fetch_arrow_table().num_rows
+            assert 0 < rows <= source.max_rows, (dataset.name, source.name, rows)
+            if source.name != "gpu":
+                assert rows == narrow.execute(source.sql).fetch_arrow_table().num_rows, (dataset.name, source.name)
+
+    targets = [
+        target
+        for board in _rl_dashboards().values()
+        for panel in board["panels"]
+        for target in panel.get("targets", [])
+        if target["url"] in _DATASETS
+    ]
+    app, _ = _bridge(wide)
+    window = {"from": str(start_ms), "to": str(end_ms)}
+    with TestClient(app) as client:
+        statuses = {
+            client.get(f"/finelog/marin{target['url']}", params={**_params(target), **window}).status_code
+            for target in targets
+        }
+    assert statuses == {200}
