@@ -9,7 +9,13 @@ from enum import StrEnum
 
 import duckdb
 import pyarrow as pa
-from dashboard_dataset import bounded_bucket_ms, projection_database, validate_table_budget, validate_value
+from dashboard_dataset import (
+    bounded_bucket_ms,
+    projection_database,
+    validate_table_budget,
+    validate_time_window,
+    validate_value,
+)
 from finelog.errors import QueryResultTooLargeError
 
 VLLM_MAX_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
@@ -27,6 +33,16 @@ VLLM_SNAPSHOT_LOOKBACK_MS = 3 * VLLM_SCRAPE_INTERVAL_MS
 VLLM_FRESHNESS_THRESHOLD_MS = 3 * VLLM_SCRAPE_INTERVAL_MS
 VLLM_MAX_FRESHNESS_DETAILS = 128
 VLLM_MAX_IDENTITY_LENGTH = 512
+VLLM_COMPARISON_MAX_ROWS = 2
+VLLM_COMPARISON_MIN_REQUESTS = 5
+VLLM_COMPARISON_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
+VLLM_COMPARISON_MAX_WINDOW_ERROR = "vLLM comparison range must not exceed 7 days"
+VLLM_COMPARISON_SECTION = "comparison"
+VLLM_COMPARISON_NOT_COMPARABLE = "not_comparable"
+VLLM_COMPARISON_MISSING_TELEMETRY = "missing_telemetry"
+VLLM_COMPARISON_LENGTH_RATIO_MIN = 0.8
+VLLM_COMPARISON_LENGTH_RATIO_MAX = 1.25
+VLLM_UNKNOWN_GPU_MODEL = "unknown"
 VLLM_OVERVIEW_SECTIONS = frozenset(
     {
         "counter_total",
@@ -121,6 +137,21 @@ _SUMMARY_METRIC_NAMES = (
     "kv_cache_usage_perc",
     "gpu_cache_usage_perc",
 )
+_JOB_COMPARISON_METRIC_NAMES = (
+    "generation_tokens_total",
+    "prompt_tokens_total",
+    "num_requests_running",
+    "request_generation_tokens",
+    "request_generation_tokens_sum",
+    "request_generation_tokens_count",
+    "request_time_per_output_token_seconds",
+    "request_time_per_output_token_seconds_sum",
+    "request_time_per_output_token_seconds_count",
+)
+_CUMULATIVE_DELTA_SQL = """CASE
+    WHEN previous_value IS NULL OR value < previous_value THEN NULL
+    ELSE value - previous_value
+END"""
 
 
 def sql_string(value: str) -> str:
@@ -262,10 +293,7 @@ WITH base AS MATERIALIZED (
            resource_attributes_json,
            attributes_json,
            timestamp_ms,
-           CASE
-               WHEN previous_value IS NULL OR value < previous_value THEN NULL
-               ELSE value - previous_value
-           END AS delta
+           {_CUMULATIVE_DELTA_SQL} AS delta
     FROM cumulative_samples
     WHERE timestamp_ms >= {start_ms}
 
@@ -1202,8 +1230,7 @@ WITH base AS MATERIALIZED (
     WHERE json_get(attributes_json, 'source_temporality') = 'cumulative_snapshot'
 ), increments AS MATERIALIZED (
     SELECT origin_cluster, service, name, resource_attributes_json, attributes_json, timestamp_ms,
-           CASE WHEN previous_value IS NULL OR value < previous_value
-                THEN NULL ELSE value - previous_value END AS delta
+           {_CUMULATIVE_DELTA_SQL} AS delta
     FROM cumulative
     WHERE timestamp_ms >= {overview.start_ms}
     UNION ALL
@@ -1306,3 +1333,345 @@ def vllm_run_summary_table(
     return _vllm_project_table(
         vllm_run_summary_query(overview), series, projection_lock, max_rows=min(max_rows, VLLM_MAX_SUMMARY_ROWS)
     )
+
+
+def vllm_comparison_window(start_ms: int, end_ms: int) -> tuple[int, int]:
+    """Center a seven-day discovery window on the selected job range."""
+    validate_time_window(
+        start_ms,
+        end_ms,
+        max_window_ms=VLLM_COMPARISON_WINDOW_MS,
+        max_window_error=VLLM_COMPARISON_MAX_WINDOW_ERROR,
+    )
+    spare_ms = VLLM_COMPARISON_WINDOW_MS - (end_ms - start_ms)
+    before_ms = spare_ms // 2
+    comparison_start_ms = max(0, start_ms - before_ms)
+    return comparison_start_ms, comparison_start_ms + VLLM_COMPARISON_WINDOW_MS
+
+
+def vllm_job_summary_query(start_ms: int, end_ms: int, job_ids: tuple[str, ...]) -> str:
+    """Return compact, reset-aware summaries for at most two exact vLLM jobs."""
+    validate_time_window(
+        start_ms,
+        end_ms,
+        max_window_ms=VLLM_COMPARISON_WINDOW_MS,
+        max_window_error=VLLM_COMPARISON_MAX_WINDOW_ERROR,
+    )
+    if not 1 <= len(job_ids) <= 2:
+        raise ValueError("vLLM summary accepts one or two exact jobs")
+    for job_id in job_ids:
+        validate_value("job_id", job_id, max_length=VLLM_MAX_IDENTITY_LENGTH)
+    job_filter = f" AND job_id IN ({sql_values(job_ids)})"
+    candidate_limit = len(job_ids)
+    metric_names = sql_values(_JOB_COMPARISON_METRIC_NAMES)
+    scan_start_ms = max(0, start_ms - VLLM_SNAPSHOT_LOOKBACK_MS)
+    return f"""
+WITH session_samples AS (
+    SELECT job_id, COALESCE(NULLIF(cluster, ''), 'local') AS origin_cluster,
+           timestamp_ms, json_get(attributes_json, 'model_name') AS model_name
+    FROM "telemetry_v1.vllm"
+    WHERE service = 'vllm' AND name = 'num_requests_running'
+      AND job_id IS NOT NULL{job_filter}
+      AND timestamp_ms >= {start_ms} AND timestamp_ms < {end_ms}
+    UNION ALL
+    SELECT job_id, COALESCE(NULLIF(cluster, ''), 'local') AS origin_cluster,
+           timestamp_ms, json_get(attributes_json, 'model_name') AS model_name
+    FROM "telemetry_v1.marinskyrl"
+    WHERE service = 'marinskyrl' AND name = 'num_requests_running'
+      AND json_get(attributes_json, 'metric_source') = 'vllm'
+      AND job_id IS NOT NULL{job_filter}
+      AND timestamp_ms >= {start_ms} AND timestamp_ms < {end_ms}
+), candidates AS (
+    SELECT job_id, MAX(origin_cluster) AS origin_cluster, MAX(model_name) AS model_name,
+           COUNT(DISTINCT model_name) AS models,
+           MIN(timestamp_ms) AS first_ms, MAX(timestamp_ms) AS last_ms
+    FROM session_samples
+    GROUP BY job_id
+    ORDER BY last_ms DESC, job_id
+    LIMIT {candidate_limit}
+), metric_samples AS (
+    SELECT source.job_id, source.origin_cluster, source.service, source.name, source.kind,
+           source.value, source.resource_attributes_json, source.attributes_json,
+           source.timestamp_ms, source.seq
+    FROM (
+        SELECT job_id, COALESCE(NULLIF(cluster, ''), 'local') AS origin_cluster,
+               service, name, kind, value, resource_attributes_json, attributes_json, timestamp_ms, seq
+        FROM "telemetry_v1.vllm"
+        WHERE service = 'vllm' AND name IN ({metric_names}){job_filter}
+          AND timestamp_ms >= {scan_start_ms} AND timestamp_ms < {end_ms}
+        UNION ALL
+        SELECT job_id, COALESCE(NULLIF(cluster, ''), 'local') AS origin_cluster,
+               service, name, kind, value, resource_attributes_json, attributes_json, timestamp_ms, seq
+        FROM "telemetry_v1.marinskyrl"
+        WHERE service = 'marinskyrl' AND json_get(attributes_json, 'metric_source') = 'vllm'
+          AND name IN ({metric_names}){job_filter}
+          AND timestamp_ms >= {scan_start_ms} AND timestamp_ms < {end_ms}
+    ) AS source
+    JOIN candidates AS jobs ON source.job_id = jobs.job_id
+    WHERE source.timestamp_ms >= jobs.first_ms - {VLLM_SNAPSHOT_LOOKBACK_MS}
+      AND source.timestamp_ms <= jobs.last_ms
+), cumulative AS (
+    SELECT *,
+           LAG(value) OVER (
+        PARTITION BY job_id, origin_cluster, service, name, resource_attributes_json, attributes_json
+        ORDER BY timestamp_ms, seq) AS previous_value,
+           LAG(timestamp_ms) OVER (
+        PARTITION BY job_id, origin_cluster, service, name, resource_attributes_json, attributes_json
+        ORDER BY timestamp_ms, seq) AS previous_timestamp_ms
+    FROM metric_samples
+    WHERE json_get(attributes_json, 'source_temporality') = 'cumulative_snapshot'
+), increments AS (
+    SELECT samples.job_id, samples.origin_cluster, samples.service, samples.name,
+           samples.resource_attributes_json, samples.attributes_json, samples.timestamp_ms,
+           samples.timestamp_ms - samples.previous_timestamp_ms AS interval_ms,
+           {_CUMULATIVE_DELTA_SQL} AS delta
+    FROM cumulative AS samples
+    JOIN candidates AS jobs ON samples.job_id = jobs.job_id
+    WHERE samples.timestamp_ms >= jobs.first_ms AND samples.timestamp_ms <= jobs.last_ms
+), raw_counter_stats AS (
+    SELECT job_id,
+           SUM(CASE WHEN name = 'generation_tokens_total' THEN delta END) AS generated_tokens,
+           SUM(CASE WHEN name = 'prompt_tokens_total' THEN delta END) AS prompt_tokens,
+           SUM(CASE WHEN name = 'request_time_per_output_token_seconds_sum' THEN delta END)
+             / NULLIF(SUM(CASE WHEN name = 'request_time_per_output_token_seconds_count' THEN delta END), 0)
+             AS tpot_seconds,
+           SUM(CASE WHEN name = 'request_generation_tokens_sum' THEN delta END)
+             / NULLIF(SUM(CASE WHEN name = 'request_generation_tokens_count' THEN delta END), 0)
+             AS output_tokens_mean,
+           SUM(CASE WHEN name = 'request_time_per_output_token_seconds_count' THEN delta END) AS request_count
+    FROM increments
+    GROUP BY job_id
+), counter_stats AS (
+    SELECT *, COALESCE(
+               output_tokens_mean,
+               generated_tokens / NULLIF(request_count, 0)
+           ) AS comparable_output_tokens_mean,
+           prompt_tokens / NULLIF(request_count, 0) AS prompt_tokens_mean
+    FROM raw_counter_stats
+), generation_rate_bins AS (
+    SELECT samples.job_id,
+           jobs.first_ms + (samples.timestamp_ms - jobs.first_ms)
+               - (samples.timestamp_ms - jobs.first_ms) % {VLLM_SCRAPE_INTERVAL_MS} AS t,
+           SUM(samples.delta * 1000.0 / NULLIF(samples.interval_ms, 0)) AS generated_tokens_per_second
+    FROM increments AS samples
+    JOIN candidates AS jobs ON samples.job_id = jobs.job_id
+    WHERE samples.name = 'generation_tokens_total' AND samples.delta > 0 AND samples.interval_ms > 0
+    GROUP BY samples.job_id, jobs.first_ms, t
+), rate_stats AS (
+    SELECT job_id, MEDIAN(generated_tokens_per_second) AS generated_tokens_per_second
+    FROM generation_rate_bins
+    GROUP BY job_id
+), snapshot_stats AS (
+    SELECT samples.job_id,
+           MAX(CASE WHEN samples.name = 'num_requests_running' THEN samples.value END) AS peak_running,
+           COUNT(DISTINCT CASE WHEN samples.name = 'num_requests_running'
+                              THEN COALESCE(
+                                  json_get(samples.attributes_json, 'engine'),
+                                  samples.resource_attributes_json
+                              ) END) AS producers,
+           COUNT(DISTINCT CASE WHEN samples.name = 'num_requests_running'
+                              THEN json_get(samples.resource_attributes_json, 'node_name') END) AS nodes,
+           MIN(json_get(samples.resource_attributes_json, 'node_name')) AS node_name,
+           MAX(CASE WHEN samples.kind = 'histogram'
+                         AND samples.name IN (
+                             'request_generation_tokens',
+                             'request_time_per_output_token_seconds'
+                         )
+                    THEN 1 ELSE 0 END) AS has_structured_histograms
+    FROM metric_samples AS samples
+    JOIN candidates AS jobs ON samples.job_id = jobs.job_id
+    WHERE samples.timestamp_ms >= jobs.first_ms AND samples.timestamp_ms <= jobs.last_ms
+    GROUP BY samples.job_id
+)
+SELECT jobs.job_id, jobs.origin_cluster, jobs.model_name, jobs.models,
+       {sql_string(VLLM_UNKNOWN_GPU_MODEL)} AS gpu_model, snapshots.node_name,
+       jobs.first_ms, jobs.last_ms,
+       GREATEST(0, jobs.first_ms - {VLLM_SCRAPE_INTERVAL_MS}) AS window_from_ms,
+       jobs.last_ms + {VLLM_SCRAPE_INTERVAL_MS} AS window_to_ms,
+       (jobs.last_ms - jobs.first_ms) / 1000.0 AS duration_seconds,
+       rates.generated_tokens_per_second,
+       counters.tpot_seconds,
+       counters.prompt_tokens_mean,
+       counters.comparable_output_tokens_mean AS output_tokens_mean,
+       counters.request_count,
+       snapshots.peak_running, snapshots.producers, snapshots.nodes,
+       snapshots.has_structured_histograms
+FROM candidates AS jobs
+LEFT JOIN counter_stats AS counters ON counters.job_id = jobs.job_id
+LEFT JOIN rate_stats AS rates ON rates.job_id = jobs.job_id
+LEFT JOIN snapshot_stats AS snapshots ON snapshots.job_id = jobs.job_id
+ORDER BY jobs.last_ms DESC, jobs.job_id
+LIMIT {candidate_limit}
+""".strip()
+
+
+def vllm_job_inventory_query(summaries: pa.Table) -> str | None:
+    """Look up one representative node's GPU during each discovered job window."""
+    jobs = [
+        row
+        for row in summaries.to_pylist()
+        if row.get("node_name") and isinstance(row.get("first_ms"), int) and isinstance(row.get("last_ms"), int)
+    ]
+    if not jobs:
+        return None
+    values = ",\n        ".join(
+        "("
+        + ", ".join(
+            (
+                sql_string(str(row["job_id"])),
+                sql_string(str(row["origin_cluster"])),
+                sql_string(str(row["node_name"])),
+                str(row["first_ms"]),
+                str(row["last_ms"] + VLLM_SCRAPE_INTERVAL_MS),
+            )
+        )
+        + ")"
+        for row in jobs
+    )
+    start_ms = min(int(row["first_ms"]) for row in jobs)
+    end_ms = max(int(row["last_ms"]) + VLLM_SCRAPE_INTERVAL_MS for row in jobs)
+    return f"""
+WITH jobs(job_id, origin_cluster, node_name, first_ms, last_ms) AS (
+    VALUES {values}
+)
+SELECT jobs.job_id, MAX(json_get(metrics.attributes_json, 'gpu_model')) AS gpu_model
+FROM "telemetry_v1.node_agent" AS metrics
+JOIN jobs
+  ON COALESCE(NULLIF(metrics.cluster, ''), 'local') = jobs.origin_cluster
+ AND metrics.node_name = jobs.node_name
+WHERE metrics.service = 'iris-node-agent' AND metrics.name = 'hardware_inventory'
+  AND metrics.timestamp_ms >= {start_ms} AND metrics.timestamp_ms < {end_ms}
+  AND metrics.timestamp_ms >= jobs.first_ms AND metrics.timestamp_ms < jobs.last_ms
+GROUP BY jobs.job_id
+LIMIT {VLLM_COMPARISON_MAX_ROWS}
+""".strip()
+
+
+def vllm_summaries_with_inventory(summaries: pa.Table, inventory: pa.Table | None) -> pa.Table:
+    """Attach observed GPU models to job summaries."""
+    gpu_by_job = {} if inventory is None else {row["job_id"]: row["gpu_model"] for row in inventory.to_pylist()}
+    gpu_models = pa.array([gpu_by_job.get(job_id.as_py(), VLLM_UNKNOWN_GPU_MODEL) for job_id in summaries["job_id"]])
+    return summaries.set_column(summaries.schema.get_field_index("gpu_model"), "gpu_model", gpu_models)
+
+
+def _comparison_context(selected: dict[str, object], baseline: dict[str, object]) -> tuple[str, str]:
+    if selected.get("has_structured_histograms") or baseline.get("has_structured_histograms"):
+        return (
+            VLLM_COMPARISON_NOT_COMPARABLE,
+            "structured or mixed histogram history is not supported",
+        )
+    if selected.get("models") != 1 or baseline.get("models") != 1:
+        return VLLM_COMPARISON_NOT_COMPARABLE, "model is missing or changed during a job"
+    if selected.get("model_name") != baseline.get("model_name"):
+        return VLLM_COMPARISON_NOT_COMPARABLE, "model differs or is missing"
+    if selected.get("gpu_model") in (None, VLLM_UNKNOWN_GPU_MODEL) or selected.get("gpu_model") != baseline.get(
+        "gpu_model"
+    ):
+        return VLLM_COMPARISON_NOT_COMPARABLE, "GPU differs or is missing"
+    for field, label in (("producers", "serving producer"), ("nodes", "serving node")):
+        if selected.get(field) != 1 or baseline.get(field) != 1:
+            return VLLM_COMPARISON_NOT_COMPARABLE, f"comparison requires one {label} per job"
+    selected_prompt = selected.get("prompt_tokens_mean")
+    baseline_prompt = baseline.get("prompt_tokens_mean")
+    if not isinstance(selected_prompt, (int, float)) or not isinstance(baseline_prompt, (int, float)):
+        return VLLM_COMPARISON_NOT_COMPARABLE, "prompt-length mix is missing"
+    prompt_ratio = selected_prompt / baseline_prompt if baseline_prompt else None
+    if prompt_ratio is None or not VLLM_COMPARISON_LENGTH_RATIO_MIN <= prompt_ratio <= VLLM_COMPARISON_LENGTH_RATIO_MAX:
+        return VLLM_COMPARISON_NOT_COMPARABLE, "prompt-length mix differs"
+    selected_output = selected.get("output_tokens_mean")
+    baseline_output = baseline.get("output_tokens_mean")
+    if not isinstance(selected_output, (int, float)) or not isinstance(baseline_output, (int, float)):
+        return VLLM_COMPARISON_NOT_COMPARABLE, "output-length mix is missing"
+    output_ratio = selected_output / baseline_output if baseline_output else None
+    if output_ratio is None or not VLLM_COMPARISON_LENGTH_RATIO_MIN <= output_ratio <= VLLM_COMPARISON_LENGTH_RATIO_MAX:
+        return VLLM_COMPARISON_NOT_COMPARABLE, "output-length mix differs"
+    selected_peak = selected.get("peak_running")
+    baseline_peak = baseline.get("peak_running")
+    if not isinstance(selected_peak, (int, float)) or not isinstance(baseline_peak, (int, float)):
+        return VLLM_COMPARISON_NOT_COMPARABLE, "request concurrency is missing"
+
+    if selected_peak != 1 or baseline_peak != 1:
+        return VLLM_COMPARISON_NOT_COMPARABLE, "comparison requires peak request concurrency of one"
+    for job in (selected, baseline):
+        count = job.get("request_count")
+        if not isinstance(count, (int, float)) or count < VLLM_COMPARISON_MIN_REQUESTS:
+            return VLLM_COMPARISON_NOT_COMPARABLE, "too few completed-request observations"
+    return "comparable", "same model, GPU, serving size, and observed prompt/output/load group"
+
+
+def vllm_comparison_rows(table: pa.Table, selected_job: str, baseline_job: str) -> list[dict[str, object]]:
+    """Compare two exact jobs, keeping values visible when a ratio is not credible."""
+    by_job = {row["job_id"]: row for row in table.to_pylist()}
+    selected = by_job.get(selected_job)
+    baseline = by_job.get(baseline_job)
+    if selected is None or baseline is None:
+        missing = selected_job if selected is None else baseline_job
+        status = "selected_missing" if selected is None else "baseline_missing"
+        return [
+            {
+                "section": VLLM_COMPARISON_SECTION,
+                "metric": VLLM_COMPARISON_SECTION,
+                "selected_value": None,
+                "baseline_value": None,
+                "ratio": None,
+                "direction": None,
+                "status": status,
+                "reason": f"No vLLM telemetry found for {missing} in the comparison window",
+            }
+        ]
+
+    status, reason = _comparison_context(selected, baseline)
+    metrics = (
+        ("time per output token", "tpot_seconds", "ms", 1000.0, False),
+        ("generated tokens/s", "generated_tokens_per_second", "tokens/s", 1.0, True),
+    )
+    rows = []
+    for label, field, unit, scale, higher_is_better in metrics:
+        selected_value = selected.get(field)
+        baseline_value = baseline.get(field)
+        metric_status, metric_reason = status, reason
+        if field == "tpot_seconds" and (
+            selected.get("has_structured_histograms") or baseline.get("has_structured_histograms")
+        ):
+            selected_value = baseline_value = None
+        ratio = None
+        direction = None
+        if metric_status == "comparable":
+            if not isinstance(selected_value, (int, float)) or not isinstance(baseline_value, (int, float)):
+                metric_status, metric_reason = VLLM_COMPARISON_MISSING_TELEMETRY, f"{label} is missing for one job"
+            elif baseline_value == 0:
+                metric_status, metric_reason = VLLM_COMPARISON_MISSING_TELEMETRY, f"{label} baseline is zero"
+            else:
+                ratio = selected_value / baseline_value
+                if 0.95 <= ratio <= 1.05:
+                    direction = "similar"
+                elif (ratio > 1) == higher_is_better:
+                    direction = "better"
+                else:
+                    direction = "worse"
+        rows.append(
+            {
+                "section": VLLM_COMPARISON_SECTION,
+                "metric": label,
+                "unit": unit,
+                "selected_value": selected_value * scale if isinstance(selected_value, (int, float)) else None,
+                "baseline_value": baseline_value * scale if isinstance(baseline_value, (int, float)) else None,
+                "ratio": ratio,
+                "direction": direction,
+                "status": metric_status,
+                "reason": metric_reason,
+                "selected_job": selected_job,
+                "baseline_job": baseline_job,
+                "selected_first_ms": selected["first_ms"],
+                "selected_last_ms": selected["last_ms"],
+                "baseline_first_ms": baseline["first_ms"],
+                "baseline_last_ms": baseline["last_ms"],
+                "model_name": selected.get("model_name"),
+                "gpu_model": selected.get("gpu_model"),
+                "selected_prompt_tokens_mean": selected.get("prompt_tokens_mean"),
+                "baseline_prompt_tokens_mean": baseline.get("prompt_tokens_mean"),
+                "selected_output_tokens_mean": selected.get("output_tokens_mean"),
+                "baseline_output_tokens_mean": baseline.get("output_tokens_mean"),
+            }
+        )
+    return rows
