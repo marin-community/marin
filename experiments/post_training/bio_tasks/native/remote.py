@@ -64,7 +64,7 @@ def run(bundle: Path, output: Path, micromamba: Path) -> None:
     output.mkdir(parents=True, exist_ok=False)
     plan = json.loads((bundle / "plan.json").read_text())
     # Keep package caches out of captured result artifacts; remove them on exit.
-    with TemporaryDirectory(prefix="bio-native-", dir=output.parent) as temporary:
+    with TemporaryDirectory(prefix="bio-native-") as temporary:
         environment = dict(os.environ)
         environment.update(dict.fromkeys(THREAD_VARIABLES, "1"))
         environment["MAMBA_ROOT_PREFIX"] = str(Path(temporary) / "mamba")
