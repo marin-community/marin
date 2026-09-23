@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from collections.abc import Iterator, Sequence
+from dataclasses import replace
 
 import pytest
 import requests
@@ -157,6 +158,75 @@ def test_metric_snapshot_publisher_caps_processor_output(monkeypatch: pytest.Mon
     bounded_records = (record for record in transport.records if record["name"] == "bounded_metric")
     indices = sorted(record["attributes"]["index"] for record in bounded_records)
     assert indices == ["0", "1"]
+
+
+def test_histogram_snapshot_publisher_preserves_exact_bins_and_raw_observations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = _transport(monkeypatch)
+    first_bin = (1 << 53) + 1
+    snapshot = metrics.HistogramSnapshot(
+        name="request_queue_time_seconds",
+        explicit_bounds=(0.01, 0.1),
+        bucket_counts=(first_bin, 2, 3),
+        count=first_bin + 5,
+        total=42.5,
+        unit="s",
+        attributes={"engine": "engine-a", "engine_index": "0"},
+        timestamp_ms=1_700_000_000_000,
+        producer_epoch="engine-incarnation-1",
+        sequence=7,
+    )
+
+    result = metrics.HistogramSnapshotPublisher(max_records=8, attributes={"metric_source": "vllm"}).publish((snapshot,))
+    telemetry.histogram("ras_poll_duration_seconds", unit="s").record(0.25)
+
+    assert result.enqueued_records == 1
+    assert result.telemetry_lost_records == 0
+    transport.wait_for(2)
+    structured = transport.record("request_queue_time_seconds", {"engine": "engine-a"})
+    assert structured["kind"] == "histogram"
+    assert structured["timestamp_ms"] == 1_700_000_000_000
+    assert "value" not in structured
+    assert structured["unit"] == "s"
+    assert structured["attributes"]["metric_source"] == "vllm"
+    assert structured["body"] == {
+        "encoding": "explicit_bucket_v1",
+        "aggregation_temporality": "cumulative",
+        "explicit_bounds": [0.01, 0.1],
+        "bucket_counts": [first_bin, 2, 3],
+        "count": first_bin + 5,
+        "sum": 42.5,
+        "producer_epoch": "engine-incarnation-1",
+        "sequence": 7,
+    }
+    raw = transport.record("ras_poll_duration_seconds", {})
+    assert raw["kind"] == "histogram"
+    assert raw["value"] == 0.25
+    assert "body" not in raw
+
+
+def test_invalid_histogram_family_does_not_poison_valid_family(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = _transport(monkeypatch)
+    valid = metrics.HistogramSnapshot(
+        name="request_queue_time_seconds",
+        explicit_bounds=(0.1,),
+        bucket_counts=(2, 1),
+        count=3,
+        total=0.2,
+        unit="s",
+        attributes={"engine": "engine-a"},
+        timestamp_ms=1_700_000_000_000,
+        producer_epoch="engine-incarnation-1",
+        sequence=1,
+    )
+
+    result = metrics.HistogramSnapshotPublisher(max_records=2).publish((replace(valid, count=4), valid))
+
+    assert result.enqueued_records == 1
+    assert result.telemetry_lost_records == 1
+    assert telemetry.runtime_status().lost_records == 1
+    assert transport.wait_for(1)[0]["body"]["count"] == 3
 
 
 def test_processor_failure_does_not_hide_successful_scrape(monkeypatch: pytest.MonkeyPatch) -> None:
