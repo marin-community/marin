@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run-scoped cumulative metrics from a shared vLLM inference lifecycle."""
+"""Run-scoped metrics from cumulative counters in a shared vLLM lifecycle."""
 
 import time
 from dataclasses import dataclass

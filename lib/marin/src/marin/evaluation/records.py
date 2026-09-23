@@ -365,7 +365,7 @@ class ServingParams(BaseModel):
 
 
 class SpeculativeDecodingMetrics(BaseModel):
-    """Cumulative vLLM speculative counters and their run-level ratios."""
+    """Per-evaluation deltas of vLLM speculative counters and their ratios."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -377,7 +377,7 @@ class SpeculativeDecodingMetrics(BaseModel):
 
 
 class InferenceMetrics(BaseModel):
-    """Cumulative inference work observed during one evaluation."""
+    """Inference work observed during one evaluation from counter deltas."""
 
     model_config = ConfigDict(frozen=True)
 
