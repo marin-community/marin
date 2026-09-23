@@ -6,6 +6,8 @@ dependencies = ["marinskyrl"]
 
 [tool.uv]
 package = false
+prerelease = "allow"
+required-environments = ["sys_platform == 'linux'"]
 
 [tool.uv.sources]
 # Keep this branch-based: uv.lock pins the runtime commit, and the external dependency updater advances it.
