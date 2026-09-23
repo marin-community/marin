@@ -29,7 +29,6 @@ from marina.apps import RegisteredApi, Services, registered_api
 from rigging.connect import IapAuth
 from rigging.credentials import iap_provider_for
 
-
 REDUCER_PAGE_SIZE = 20
 EXECUTION_LIMIT = 100
 EXECUTION_NAMESPACE = "zephyr.execution"
