@@ -81,20 +81,20 @@ CLUSTER = "cw-us-east-02a"
 GPU_VARIANT = "H100"
 GPU_COUNT = 8
 
-# A 512-trajectory pilot stays cheap while adding tool-use behavior that the
-# earlier question-answer-only corpus omitted.
-CORPUS_EVALS = (("gsm8k", 384), ("bfcl", 128))
+# This 2,048-trajectory pilot matches the scale of the strongest prior Snowball
+# adaptation while adding tool-use behavior that the earlier corpus omitted.
+CORPUS_EVALS = (("gsm8k", 1024), ("olympiadbench", 768), ("bfcl", 256))
 CORPUS_EXPECTED_CONVERSATIONS = sum(limit for _, limit in CORPUS_EVALS)
 CORPUS_MAX_GENERATION_TOKENS = 4096
 CORPUS_MINIMUM_VALID_TOKENS = 32
 
 # Evaluation sources are disjoint from the SFT sources. The smaller agentic arm
 # bounds Daytona cost while still measuring multi-turn drafting behavior.
-BENCHMARK_EVALS = (("aime24", 64), ("tb2", 16))
+BENCHMARK_EVALS = (("aime24", 64), ("tb2", 32))
 BENCHMARK_MAX_GENERATION_TOKENS = 8192
 NUM_SPECULATIVE_TOKENS = 3
 
-DRAFT_EPOCHS = 32
+DRAFT_EPOCHS = 8
 DRAFT_TASK_CPU = 96
 DRAFT_TASK_MEMORY = "512g"
 DRAFT_TASK_DISK = "1t"
