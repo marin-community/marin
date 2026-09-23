@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import re
+import threading
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from typing import cast
 
 import jax
@@ -1593,6 +1595,66 @@ def test_pallas_autotune_cache_reuses_winner(monkeypatch: pytest.MonkeyPatch):
     assert winner_1 == faster
     assert winner_2 == faster
     assert calls["bench"] == 3
+
+
+def test_distributed_fused_ce_autotune_chooses_lowest_mean_viable_candidate(monkeypatch: pytest.MonkeyPatch):
+    x = jnp.ones((4, 8), dtype=jnp.float32)
+    w = jnp.ones((8, 16), dtype=jnp.float32)
+    labels = jnp.zeros((4,), dtype=jnp.int32)
+    candidates = [BlockSizes(128, 128, v) for v in (128, 256, 512)]
+    rank_timings = ((1.0, 2.0, 0.1), (10.0, 2.0, None))
+    context = threading.local()
+    condition = threading.Condition()
+    exchanged: dict[int, dict[int, object]] = {}
+
+    def allgather(value):
+        sequence = context.sequence
+        context.sequence += 1
+        with condition:
+            round_values = exchanged.setdefault(sequence, {})
+            round_values[context.rank] = value
+            condition.notify_all()
+            assert condition.wait_for(lambda: len(round_values) == 2, timeout=5)
+            return [round_values[index] for index in range(2)]
+
+    def benchmark(*, candidate, **kwargs):
+        del kwargs
+        score = rank_timings[context.rank][candidates.index(candidate)]
+        if score is None:
+            raise RuntimeError("candidate failed on this rank")
+        return score
+
+    def fake_impl(x_value, labels_value, w_value, **kwargs):
+        del labels_value, w_value, kwargs
+        return x_value, x_value
+
+    monkeypatch.setattr(jax, "process_count", lambda: 2)
+    monkeypatch.setattr(fused_api, "_autotune_enabled", lambda: True)
+    monkeypatch.setattr(fused_api, "_autotune_cache_key", lambda **kwargs: None)
+    monkeypatch.setattr(fused_api, "_candidate_block_sizes", lambda *args, **kwargs: candidates)
+    monkeypatch.setattr(fused_api, "_benchmark_block_sizes_candidate", benchmark)
+    monkeypatch.setattr(fused_api, "multihost_allgather_sync", allgather)
+
+    def run_rank(rank):
+        context.rank = rank
+        context.sequence = 0
+        return fused_api._autotune_block_sizes_on_miss(
+            impl_name="batched_xla",
+            fn=fake_impl,
+            x=x,
+            labels=labels,
+            w=w,
+            inferred=candidates[0],
+            dtype=jnp.float32,
+            logit_soft_cap=None,
+            precision=None,
+            return_argmax=False,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        winners = list(executor.map(run_rank, range(2)))
+
+    assert winners == [candidates[1], candidates[1]]
 
 
 def _run_autotune_miss(impl_name: str = "pallas_tpu", *, vocab: int = 16):

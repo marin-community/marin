@@ -6,6 +6,7 @@ from functools import lru_cache, partial
 import hashlib
 import json
 import logging
+import math
 import pathlib
 import time
 from typing import Literal, Optional, TypeAlias, cast, overload
@@ -24,6 +25,7 @@ from rigging.cache import (
 )
 
 from levanter.kernels.pallas import autotune_utils
+from levanter.utils.jax_utils import multihost_allgather_sync
 
 from .config import BlockSizes
 from .tuned_block_sizes import (
@@ -75,7 +77,7 @@ _SELECTED_IMPL_LOGGED: set[str] = set()
 _AUTOTUNE_ON_MISS_ENV_VAR = "LEVANTER_PALLAS_CE_AUTOTUNE_ON_MISS"
 # Bump the trailing version when the entry encoding changes so stale entries are ignored.
 _AUTOTUNE_BLOCK_SIZE_PREFIX = "levanter_kernel_autotune/fused_cross_entropy_loss/block_sizes_v2"
-_AUTOTUNE_SOURCE_SCHEMA = "fused-cross-entropy-autotune-v3"
+_AUTOTUNE_SOURCE_SCHEMA = "fused-cross-entropy-autotune-v4"
 
 
 class _NoViableCandidate:
@@ -464,6 +466,7 @@ def _autotune_block_sizes_on_miss(
     precision: jax.lax.PrecisionLike,
     return_argmax: bool,
 ) -> BlockSizes:
+    """Select one candidate by mean timing across all ranks when distributed."""
     if not _autotune_enabled():
         return inferred
     cache_key = _autotune_cache_key(
@@ -479,6 +482,25 @@ def _autotune_block_sizes_on_miss(
         return_argmax=return_argmax,
     )
     cached = _AUTOTUNE_CACHE.get(cache_key) if cache_key is not None else None
+    distributed = jax.process_count() > 1
+    candidates = _candidate_block_sizes(impl_name, inferred, x=x, w=w, dtype=dtype)
+    if distributed:
+        # Every rank must enter the same rendezvous, even when only some ranks
+        # have a local cache hit or can construct a persistent cache key.
+        states = multihost_allgather_sync(
+            {
+                "key": cache_key,
+                "cached": _encode_autotune_entry(cached) if cached is not None else None,
+                "candidates": [_encode_autotune_entry(candidate) for candidate in candidates],
+            }
+        )
+        if any(state["candidates"] != states[0]["candidates"] for state in states[1:]):
+            raise RuntimeError("Fused CE autotune candidates differ across JAX processes")
+        shared_key = cache_key is not None and all(state["key"] == cache_key for state in states)
+        cached = _decode_autotune_entry(states[0]["cached"]) if shared_key and states[0]["cached"] else None
+    else:
+        shared_key = cache_key is not None
+
     if cached is not None:
         if isinstance(cached, _NoViableCandidate):
             logger.info(
@@ -493,7 +515,6 @@ def _autotune_block_sizes_on_miss(
         logger.info("Fused CE autotune cache hit for %s. Using cached block sizes %s.", impl_name, cached)
         return cached
 
-    candidates = _candidate_block_sizes(impl_name, inferred, x=x, w=w, dtype=dtype)
     logger.info(
         "Fused CE autotune miss for %s. Sweeping %d block-size candidates.",
         impl_name,
@@ -502,6 +523,7 @@ def _autotune_block_sizes_on_miss(
     best: BlockSizes | None = None
     best_score = float("inf")
     errors: list[Exception] = []
+    scores: list[float | None] = []
     for candidate in candidates:
         try:
             score = _benchmark_block_sizes_candidate(
@@ -517,20 +539,33 @@ def _autotune_block_sizes_on_miss(
             )
         except Exception as exc:
             errors.append(exc)
+            scores.append(None)
             continue
-        if score < best_score:
+        scores.append(score if math.isfinite(score) else None)
+        if not distributed and score < best_score:
             best_score = score
             best = candidate
 
+    if distributed:
+        rank_scores = multihost_allgather_sync(scores)
+        for index, candidate in enumerate(candidates):
+            timings = [rank[index] for rank in rank_scores]
+            if any(timing is None for timing in timings):
+                continue
+            mean_score = math.fsum(cast(float, timing) for timing in timings) / len(timings)
+            if mean_score < best_score:
+                best_score = mean_score
+                best = candidate
+
     if best is None:
-        if cache_key is not None:
+        if shared_key:
             _AUTOTUNE_CACHE.put(cache_key, _NO_VIABLE_CANDIDATE)
         raise ExceptionGroup(
             f"Fused CE autotune found no viable block-size candidates for {impl_name}",
             errors or [RuntimeError(f"No candidates generated for {impl_name}.")],
         )
 
-    if cache_key is not None:
+    if shared_key:
         _AUTOTUNE_CACHE.put(cache_key, best)
     logger.info("Fused CE autotune selected block sizes %s for %s.", best, impl_name)
     return best
