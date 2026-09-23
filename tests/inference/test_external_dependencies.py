@@ -59,6 +59,22 @@ def _promoted_manifest() -> dict:
     }
 
 
+def _staged_candidate_manifest() -> dict:
+    manifest = _promoted_manifest()
+    manifest["release"] |= {
+        "status": "candidate",
+        "tag": "marin-vllm-gpu-staged-candidate-aaaaaaaaaaaa",
+    }
+    manifest["validation"] = {"status": "pending", "targets": []}
+    manifest["workflow"] = {
+        "commit": "a" * 40,
+        "ref": "refs/heads/main-next",
+        "run_id": "123",
+        "run_url": "https://github.com/marin-community/vllm/actions/runs/123",
+    }
+    return manifest
+
+
 def test_tpu_vllm_requirements_match_fork_descriptor():
     assert VLLM_FORK_REQUIREMENT == _descriptor_requirement("vllm")
     assert TPU_INFERENCE_FORK_REQUIREMENT == _descriptor_requirement("tpu-inference")
@@ -97,6 +113,19 @@ def test_render_gpu_release_toml_reencodes_the_wheel_url_and_round_trips(tmp_pat
     assert [wheel.architecture for wheel in release.wheels] == ["x86_64"]
 
 
+def test_render_gpu_release_toml_explicitly_pins_a_staged_candidate(tmp_path):
+    update_external = _update_external()
+    rendered = update_external.render_gpu_release_toml(_staged_candidate_manifest(), allow_staged_candidate=True)
+
+    path = tmp_path / "gpu.toml"
+    path.write_text(rendered)
+    release = update_external.load_vllm_gpu_release(path)
+
+    assert release.release_tag == "marin-vllm-gpu-staged-candidate-aaaaaaaaaaaa"
+    assert release.source_commit == "a" * 40
+    assert release.wheels[0].sha256 == "b" * 64
+
+
 @pytest.mark.parametrize(
     "mutation",
     [
@@ -112,6 +141,15 @@ def test_render_gpu_release_toml_refuses_an_unpromoted_manifest(mutation):
     mutation(manifest)
     with pytest.raises(ValueError):
         update_external.render_gpu_release_toml(manifest)
+
+
+def test_staged_candidate_pin_rejects_untrusted_workflow_provenance():
+    update_external = _update_external()
+    manifest = _staged_candidate_manifest()
+    manifest["workflow"]["ref"] = "refs/heads/feature"
+
+    with pytest.raises(ValueError, match="workflow provenance"):
+        update_external.render_gpu_release_toml(manifest, allow_staged_candidate=True)
 
 
 def test_promote_gpu_release_keeps_the_pin_when_the_rendered_wheel_fails_validation(tmp_path, monkeypatch):

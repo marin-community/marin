@@ -107,28 +107,52 @@ build and qualify the exact candidate:
 
 ```sh
 gh workflow run marin-gpu-candidate.yaml \
-  --repo marin-community/vllm --ref main-next -f lane=gpu
+  --repo marin-community/vllm --ref main-next -f lane=gpu -f gpu_mode=stage
 
 gh workflow run marin-gpu-release.yaml \
-  --repo marin-community/vllm --ref main-next \
-  -f lane=gpu -f candidate_tag=<exact-gpu-candidate-tag>
+  --repo marin-community/vllm --ref main \
+  -f lane=gpu -f candidate_tag=<exact-staged-candidate-tag> \
+  -f qualification_only=true
 ```
 
-The release job validates the wheel on the configured GPU hardware and
-publishes `marin-vllm-gpu-manifest.json`. Download that manifest and re-pin
-without hand-editing `gpu.toml`:
+The first workflow publishes exact staged wheel bytes outside the scheduled
+candidate pool. The second validates those bytes on the configured GPU hardware
+without publishing a final release. Download the staged candidate manifest and
+temporarily re-pin Marin before Snowball so the parity job resolves the same
+x86_64 wheel instead of the old stable release:
 
 ```sh
-gh release download <release-tag> \
+gh release download <exact-staged-candidate-tag> \
+  --repo marin-community/vllm \
+  --pattern marin-vllm-gpu-manifest.json
+uv run config/update-external.py \
+  --stage-gpu-candidate marin-vllm-gpu-manifest.json
+uv run pytest tests/cluster/vllm/test_snowball_backend_parity.py \
+  -m cluster -o addopts= --import-mode=importlib -vv -s
+```
+
+Record the candidate tag, source SHA, x86_64 URL, digest, and Snowball run with
+the qualification evidence. Promote `main-next` to protected `main` only after
+the GPU gates and review, using the rollback tags and lease in
+`promotion-protocol.md`. Then reuse the successful qualification run from the
+trusted `main` workflow to publish the final release without another GPU wave:
+
+```sh
+gh workflow run marin-gpu-release.yaml \
+  --repo marin-community/vllm --ref main \
+  -f lane=gpu -f candidate_tag=<same-exact-staged-candidate-tag> \
+  -f qualification_run_id=<successful-qualification-run-id>
+
+gh release download <final-release-tag> \
   --repo marin-community/vllm \
   --pattern marin-vllm-gpu-manifest.json
 uv run config/update-external.py \
   --promote-gpu-release marin-vllm-gpu-manifest.json
 ```
 
-Promote `main-next` to protected `main` only after the GPU gate and review,
-using the rollback tags and lease in `promotion-protocol.md`. A later TPU
-refresh selects that main-line source independently.
+Complete source promotion and final publication within the qualification
+artifacts' 14-day retention window. A later TPU refresh selects the promoted
+main-line source independently.
 
 ## Fork suite caveat
 
