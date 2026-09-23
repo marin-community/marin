@@ -1,6 +1,6 @@
 # Fine-tune Snowball with Levanter on H100s
 
-The [Snowball SFT recipe](../../experiments/sft/configs/snowball_h100.py) trains Levanter's `SnowballLMHeadModel` directly from the pinned Snowball Hugging Face weights. It uses the shared chat SFT launcher to transform OpenThoughts Agent conversations, supervise assistant tokens, and save native Levanter checkpoints. There is no Grug trainer checkpoint or model-specific conversion job.
+The [Snowball SFT recipe](https://github.com/marin-community/marin/blob/main/experiments/sft/configs/snowball_h100.py) trains Levanter's `SnowballLMHeadModel` directly from the pinned Snowball Hugging Face weights. It uses the shared chat SFT launcher to transform OpenThoughts Agent conversations, supervise assistant tokens, and save native Levanter checkpoints. There is no Grug trainer checkpoint or model-specific conversion job.
 
 This is a 4,096-token, ten-step starting recipe. It requests 32 H100s because a prior [Snowball training run](https://github.com/marin-community/marin/pull/9144) demonstrated the 67B model on 32 learner H100s at this length. That run was GRPO, not this SFT recipe; this exact end-to-end SFT job has not been measured. The model supports longer positions, but the current Levanter training path does not shard context for the 262K setting.
 
