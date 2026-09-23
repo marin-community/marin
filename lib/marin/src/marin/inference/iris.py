@@ -108,6 +108,7 @@ class RemoteInferenceSession:
     tensor_parallel_size: int
     backend_name: str
     effective_serving: EffectiveServing | None = None
+    metrics_url: str | None = None
 
     def check_alive(self) -> None:
         """Raise when any inference worker has reached a terminal state."""
@@ -243,6 +244,27 @@ def _resolved_model(model: ServedModelConfig, iris: IrisConfig) -> tuple[ServedM
     )
 
 
+def _resolved_engine(
+    engine: VllmEngineConfig | LevanterEngineConfig,
+    iris: IrisConfig,
+) -> VllmEngineConfig | LevanterEngineConfig:
+    """Resolve model locators owned by an inference engine inside its worker."""
+    if not isinstance(engine, VllmEngineConfig) or engine.speculative is None:
+        return engine
+
+    from marin.inference.model_preparation import resolve_model_path  # noqa: PLC0415
+
+    speculative = engine.speculative
+    resolved_uri = resolve_model_path(speculative.model.uri, iris.cache_ttl_days)
+    return replace(
+        engine,
+        speculative=replace(
+            speculative,
+            model=replace(speculative.model, uri=resolved_uri),
+        ),
+    )
+
+
 @contextlib.contextmanager
 def _prepared_local_inference(
     model: ServedModelConfig,
@@ -250,7 +272,8 @@ def _prepared_local_inference(
     iris: IrisConfig,
 ) -> Iterator[LocalInferenceSession]:
     resolved_model, num_chips = _resolved_model(model, iris)
-    with local_inference(resolved_model, engine, num_chips=num_chips) as session:
+    resolved_engine = _resolved_engine(engine, iris)
+    with local_inference(resolved_model, resolved_engine, num_chips=num_chips) as session:
         yield session
 
 
@@ -485,7 +508,7 @@ def _run_pipeline_service(service: IrisServiceConfig) -> None:
         revision=model.revision,
         tokenizer_revision=model.effective_tokenizer_revision,
     )
-    backend = VllmBackend(service.engine)
+    backend = VllmBackend(cast(VllmEngineConfig, _resolved_engine(service.engine, service.iris)))
     with iris_vllm_launch(
         pipeline_parallel_size=geometry.pipeline_parallel_size,
         tensor_parallel_size=geometry.tensor_parallel_size,
@@ -621,12 +644,13 @@ def _start_direct_inference(
             endpoint=OpenAIEndpoint(base_url=f"{address.rstrip('/')}{OPENAI_API_SUFFIX}", model=model.model_id),
             tokenizer=model.tokenizer,
         )
+        exposed_model = (
+            _capability_model(running_model, endpoint_name, config.capability_origin)
+            if config.capability_origin is not None
+            else running_model
+        )
         yield RemoteInferenceSession(
-            model=(
-                _capability_model(running_model, endpoint_name, config.capability_origin)
-                if config.capability_origin is not None
-                else running_model
-            ),
+            model=exposed_model,
             jobs=(job,),
             endpoint_name=endpoint_name,
             endpoint_health_timeout_seconds=iris.endpoint_health_timeout_seconds,
@@ -634,6 +658,7 @@ def _start_direct_inference(
             tensor_parallel_size=tensor_parallel_size,
             backend_name=backend_name,
             effective_serving=effective_serving,
+            metrics_url=f"{_server_root(exposed_model)}/metrics" if backend_name == "vllm" else None,
         )
     finally:
         _terminate_job(job)

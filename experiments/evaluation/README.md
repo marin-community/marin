@@ -140,6 +140,12 @@ and on failure, so a failed run is still accounted for -- and a failure carries 
 last 100 log lines (`log_tails`), so most failures are diagnosable straight from the record (or the
 dashboard) without cluster access.
 
+For vLLM runs, `inference_metrics` contains the cumulative counter delta for that evaluator's window
+on the shared server. It includes prompt tokens, generation tokens, elapsed time, and generation
+tokens per second. A speculative run also includes draft count, proposed and accepted token counts,
+mean acceptance length, and draft acceptance rate. The normalized model configuration in the same
+record pins the target identity, tokenizer identity, and optional draft identity.
+
 Within its FineStore archive, each evaluator writes individually scored questions to the `samples`
 table using `EvalSample`, the shared schema in `finestore.eval`. Evalchemy writes its native
 aggregate JSON and `--log_samples` JSONL directly as FineStore source artifacts. Harbor preserves
@@ -159,6 +165,16 @@ versioned handle. The step submits the same CPU orchestrator used by the CLI and
 to the launcher's shared `evals` root; its artifact path contains the pipeline cache record. The slice
 override is a runtime arg, so changing it does not change the artifact identity. Produced-model
 adapters such as `SkyRLEvaluationModel` use the same `eval_step` entry point.
+
+Use `ArtifactEvaluationModel` for an HF-format target produced by another step. Pass an
+`ArtifactSpeculativeModel` through `eval_step(..., speculative=draft)` to evaluate an artifact-backed
+draft. The control arm omits `speculative`; initial and trained draft arms pass different artifact
+handles to the same function. Artifact paths are resolved in `pipeline.py` before the generic
+evaluation runner starts.
+
+The resulting `EvaluationResult.results_paths` tuple points at the sealed FineStore archives in run
+order. Downstream offline rollout processing should depend on this typed result instead of rebuilding
+archive paths from run IDs.
 
 ## Evalchemy config files
 

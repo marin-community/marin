@@ -197,6 +197,7 @@ def build_dashboard_app(
             Route("/tools/{name}", invoke_tool_response, methods=["POST"]),
             Route("/shell", shell_workspace_response, methods=["POST"]),
             Route("/shell/repository", repository_snapshot_response, methods=["POST"]),
+            Route("/metrics", proxy, methods=["GET"]),
             Route("/v1/{path:path}", proxy, methods=["GET", "POST", "OPTIONS"]),
         ],
         lifespan=lifespan,

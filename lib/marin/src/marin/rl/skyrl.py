@@ -25,7 +25,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.artifact import Artifact
-from marin.execution.lazy import ArtifactStep, StepContext
+from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
 from marin.execution.remote import sanitize_job_name
 from marin.external_dependencies import MARIN_SKYRL
 from marin.rollouts.catalog import RolloutRunKind, record_rollout_run, rollout_run_record
@@ -172,10 +172,6 @@ class ResolvedTaskTroveDataSource:
 type ResolvedDataSource = ResolvedDirectoryDataSource | ResolvedTaskTroveDataSource
 
 
-def _artifact_identity(step: ArtifactStep) -> str:
-    return f"{step.name}@{step.version}:{step.fingerprint()}"
-
-
 def _artifact_local_path(category: str, step: ArtifactStep) -> str:
     return str(_MARINSKYRL_STAGING_ROOT / category / PurePosixPath(step.name).name)
 
@@ -211,7 +207,7 @@ class ArtifactHfModel:
             uri = checkpoints[-1]
         return ResolvedModelLocator(
             uri=uri,
-            identity=_artifact_identity(self.step),
+            identity=artifact_identity(self.step),
             local_path=_artifact_local_path("models", self.step),
             tokenizer_uri=self.tokenizer_uri,
             tokenizer_revision=self.tokenizer_revision,
@@ -232,7 +228,7 @@ class ArtifactDataSource:
         artifact_path = ctx.artifact_path(self.step)
         return ResolvedDirectoryDataSource(
             uri=artifact_path,
-            identity=_artifact_identity(self.step),
+            identity=artifact_identity(self.step),
             local_path=_artifact_local_path("data", self.step),
             relative_path=self.relative_path,
         )
@@ -265,7 +261,7 @@ class TaskTroveDataSource:
                 raise ValueError("TaskTrove manifest verify_tool_ref must be a non-empty string")
         return ResolvedTaskTroveDataSource(
             uri=prefix_join(artifact_path, self.relative_path),
-            identity=f"{_artifact_identity(self.step)}/{self.relative_path}",
+            identity=f"{artifact_identity(self.step)}/{self.relative_path}",
             local_path=_artifact_local_path("data", self.step),
             relative_path=PurePosixPath(self.relative_path).name,
             verifier_ref=verifier_ref,
@@ -422,13 +418,13 @@ class SkyRLEvaluationModel:
 
     def resolve(self, ctx: StepContext) -> ModelConfig:
         if ctx.is_fingerprint:
-            location = f"{_artifact_identity(self.step)}/policy"
+            location = f"{artifact_identity(self.step)}/policy"
             tokenizer = self.model.tokenizer
         else:
             terminal = ctx.resolved(self.step)
             location = terminal.policy_export_uri
             tokenizer = terminal.tokenizer_uri
-        return replace(self.model, location=location, tokenizer=tokenizer)
+        return replace(self.model, location=location, identity=artifact_identity(self.step), tokenizer=tokenizer)
 
 
 def _launcher_command(requirement: str, request_path: str) -> list[str]:

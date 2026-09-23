@@ -17,12 +17,14 @@ from rigging.secrets import SecretSpec, resolve_secret_spec
 
 from marin.evaluation.eval_env import EVAL_ENV_KEYS, EVAL_RUNTIME_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.hardware import AcceleratorChoice
+from marin.evaluation.inference_metrics import InferenceMetricWindow
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.records import (
     EvalRef,
     EvalRunRecord,
     EvalTaskRef,
     HardwareRef,
+    InferenceMetrics,
     ModelConfigRef,
     ModelRef,
     Provenance,
@@ -154,6 +156,7 @@ def _record(
     canonical_metrics: dict[str, dict[str, float]] | None = None,
     tasks: tuple[EvalTaskRef, ...] | None = None,
     serving: ServingParams | None = None,
+    inference_metrics: InferenceMetrics | None = None,
 ) -> str:
     evaluation = identity.eval_ref
     if tasks is not None:
@@ -196,6 +199,7 @@ def _record(
         ),
         status=status,
         serving=serving,
+        inference_metrics=inference_metrics,
         error=error,
         results_path=identity.output_dir,
         metrics=metrics,
@@ -293,8 +297,22 @@ def _run_one_evaluation(
     status = RunStatus.SUCCEEDED
     error: str | None = None
     inference_failure: Exception | None = None
+    inference_metrics: InferenceMetrics | None = None
+    metric_window: InferenceMetricWindow | None = None
     try:
         session.check_alive()
+        if session.metrics_url is not None:
+            try:
+                metric_window = InferenceMetricWindow.start(
+                    session,
+                    speculative=batch.model.serve.speculative is not None,
+                )
+            except Exception:
+                logger.warning(
+                    "could not start inference metric capture for evaluation %s",
+                    evaluation.identity.eval_ref.name,
+                    exc_info=True,
+                )
         allowed_env_keys = (*EVAL_RUNTIME_ENV_KEYS, *evaluation.secret_env_keys)
         evaluation_env = {key: env_vars[key] for key in allowed_env_keys if key in env_vars}
         outcome = evaluation.executor(session, evaluation.identity.output_dir, evaluation_env)
@@ -321,6 +339,16 @@ def _run_one_evaluation(
             tails |= _session_tail(session)
             inference_failure = serve_exc
 
+    if metric_window is not None:
+        try:
+            inference_metrics = metric_window.finish()
+        except Exception:
+            logger.warning(
+                "could not preserve inference metrics for evaluation %s",
+                evaluation.identity.eval_ref.name,
+                exc_info=True,
+            )
+
     effective = session.effective_serving
     serving = ServingParams(**asdict(effective), effective=True) if effective is not None else None
     path = _record(
@@ -335,6 +363,7 @@ def _run_one_evaluation(
         canonical_metrics,
         tasks,
         serving=serving,
+        inference_metrics=inference_metrics,
     )
     record_rollout_run(
         rollout_run_record(

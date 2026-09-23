@@ -22,16 +22,19 @@ The demo pipeline below runs the smoke suite for one small model.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Protocol
 
 from iris.client.client import iris_ctx
 from iris.rpc import job_pb2
 from marin.evaluation.hardware import default_platform
 from marin.evaluation.model_config import ModelConfig
+from marin.evaluation.records import read_record, record_path
 from marin.execution.artifact import Artifact
-from marin.execution.lazy import ArtifactStep, StepContext
+from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
 from marin.execution.step_runner import StepRunner
+from marin.inference.config import ResolvedModelLocator, SpeculativeMethod, SpeculativeServingConfig
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.evaluation.evals import resolve_eval_keys
 from experiments.evaluation.launch import (
@@ -62,11 +65,12 @@ class EvalStepConfig:
 
 
 class EvaluationResult(Artifact):
-    """Submitted evaluation group and its durable run-record locations."""
+    """Submitted evaluation group and its durable records and rollout archives."""
 
     group_id: str
     records_prefix: str
     run_ids: tuple[str, ...]
+    results_paths: tuple[str, ...]
 
 
 class EvaluationModelSource(Protocol):
@@ -75,6 +79,14 @@ class EvaluationModelSource(Protocol):
     def deps(self) -> tuple[ArtifactStep, ...]: ...
 
     def resolve(self, ctx: StepContext) -> ModelConfig: ...
+
+
+class EvaluationSpeculativeSource(Protocol):
+    """An optional draft resolved before the generic evaluation runner starts."""
+
+    def deps(self) -> tuple[ArtifactStep, ...]: ...
+
+    def resolve(self, ctx: StepContext) -> SpeculativeServingConfig: ...
 
 
 @dataclass(frozen=True)
@@ -88,6 +100,47 @@ class CatalogEvaluationModel:
 
     def resolve(self, _ctx: StepContext) -> ModelConfig:
         return models()[self.name]
+
+
+@dataclass(frozen=True)
+class ArtifactEvaluationModel:
+    """An HF-format model artifact adapted to the shared evaluation contract."""
+
+    step: ArtifactStep
+    model: ModelConfig
+    relative_path: str = ""
+
+    def deps(self) -> tuple[ArtifactStep, ...]:
+        return (self.step,)
+
+    def resolve(self, ctx: StepContext) -> ModelConfig:
+        location = ctx.artifact_path(self.step)
+        if self.relative_path:
+            location = prefix_join(location, self.relative_path)
+        return replace(self.model, location=location, identity=artifact_identity(self.step))
+
+
+@dataclass(frozen=True)
+class ArtifactSpeculativeModel:
+    """A draft artifact resolved into the generic speculative-serving contract."""
+
+    step: ArtifactStep
+    method: SpeculativeMethod
+    num_speculative_tokens: int
+    relative_path: str = ""
+
+    def deps(self) -> tuple[ArtifactStep, ...]:
+        return (self.step,)
+
+    def resolve(self, ctx: StepContext) -> SpeculativeServingConfig:
+        uri = ctx.artifact_path(self.step)
+        if self.relative_path:
+            uri = prefix_join(uri, self.relative_path)
+        return SpeculativeServingConfig(
+            method=self.method,
+            model=ResolvedModelLocator(uri=uri, identity=artifact_identity(self.step)),
+            num_speculative_tokens=self.num_speculative_tokens,
+        )
 
 
 def run_eval_pipeline_step(config: EvalStepConfig) -> EvaluationResult:
@@ -108,11 +161,15 @@ def run_eval_pipeline_step(config: EvalStepConfig) -> EvaluationResult:
     )
     submitted = launch_group(prepare_evaluation_batch(spec), iris_ctx().client)
     submitted.job.wait(timeout=float("inf"))
+    run_ids = tuple(evaluation.run_id for evaluation in submitted.evaluations)
     return EvaluationResult(
         path=config.artifact_path,
         group_id=submitted.group_id,
         records_prefix=submitted.records_prefix,
-        run_ids=tuple(evaluation.run_id for evaluation in submitted.evaluations),
+        run_ids=run_ids,
+        results_paths=tuple(
+            read_record(record_path(submitted.records_prefix, run_id)).results_path for run_id in run_ids
+        ),
     )
 
 
@@ -121,6 +178,7 @@ def eval_step(
     evals: str,
     *,
     version: str,
+    speculative: EvaluationSpeculativeSource | None = None,
     limit: int | None = None,
     accelerator: str | None = None,
     submission_cluster: str = EVALUATION_CONTROLLER_CLUSTER,
@@ -128,10 +186,15 @@ def eval_step(
 ) -> ArtifactStep[EvaluationResult]:
     """Evaluate a static or upstream-produced model with Evalchemy and Harbor."""
 
-    deps = model.deps()
+    deps = tuple(dict.fromkeys((*model.deps(), *(speculative.deps() if speculative is not None else ()))))
 
     def build_config(ctx: StepContext) -> EvalStepConfig:
         resolved_model = model.resolve(ctx)
+        if speculative is not None:
+            resolved_model = replace(
+                resolved_model,
+                serve=replace(resolved_model.serve, speculative=speculative.resolve(ctx)),
+            )
         return EvalStepConfig(
             model=resolved_model,
             evals=evals,
