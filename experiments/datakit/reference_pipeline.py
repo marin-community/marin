@@ -222,7 +222,22 @@ TOKENIZER = "marin-community/marin-tokenizer"
 # loader.
 TOKENIZER_REVISION = "a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2"
 TOKENIZER_BACKEND = TokenizerBackend.HF
+# Stable recipe identity for the quality-model files at QUALITY_MODEL.
+QUALITY_MODEL_VERSION = "pooled-junkgate2"
 SPLIT = "train"
+
+# The DataKit extra can otherwise resolve the CUDA Torch wheel on a CPU driver.
+# Select the CPU group with the DataKit packages for each remote CPU stage.
+CPU_DATAKIT_DEPENDENCY_GROUPS = ["cpu", "datakit"]
+
+
+@dataclass(frozen=True)
+class TokenizerSpec:
+    """Tokenizer location and content identity for DataKit cache keys."""
+
+    name: str
+    revision: str
+
 
 # Decontam. Mandatory AA and best-effort lm-eval artifacts use one versioned root.
 # Bloom capacity -- unique ngram hashes the filter must hold: ~21.78M unique
@@ -468,7 +483,7 @@ def _build_embed_step(name: str, normalize_step: StepSpec, scale: PipelineScale)
                 max_workers=scale.pool.n_workers,
             ),
             resources=DRIVER_RESOURCES,
-            pip_dependency_groups=["datakit"],
+            pip_dependency_groups=CPU_DATAKIT_DEPENDENCY_GROUPS,
         ),
     )
 
@@ -515,7 +530,7 @@ def build_train_centroids_step(embed_steps: dict[str, StepSpec], scale: Pipeline
                 parallel_sources=scale.sample_parallel_sources,
             ),
             resources=DRIVER_RESOURCES,
-            pip_dependency_groups=["datakit"],
+            pip_dependency_groups=CPU_DATAKIT_DEPENDENCY_GROUPS,
         ),
     )
     # Pin the K-means/BLAS thread count to the allocated CPUs so centroid training
@@ -546,7 +561,7 @@ def build_train_centroids_step(embed_steps: dict[str, StepSpec], scale: Pipeline
                 seed=cluster.train_seed,
             ),
             resources=scale.train_centroids_resources,
-            pip_dependency_groups=["datakit"],
+            pip_dependency_groups=CPU_DATAKIT_DEPENDENCY_GROUPS,
         ),
     )
 
@@ -660,8 +675,12 @@ def zephyr_datakit_steps(
     sources: dict[str, StepSpec],
     scale: PipelineScale = DEFAULT_SCALE,
     zephyr_context: ZephyrContext | None = None,
+    *,
+    tokenizer: TokenizerSpec | None = None,
 ) -> ZephyrDatakitSteps:
     """Build exact-dedup, tokenize, MinHash, and fuzzy-dedup stages."""
+    if tokenizer is None:
+        tokenizer = TokenizerSpec(TOKENIZER, TOKENIZER_REVISION)
     source_names = sorted(sources)
     worker_resources = scale.pool.task if zephyr_context is not None else scale.pool.worker
     exact_dedup = StepSpec(
@@ -684,9 +703,9 @@ def zephyr_datakit_steps(
         tokenize_steps[name] = tokenize_attributes_step(
             name=f"datakit/tokenize/{name}",
             train_normalize=normalize_step,
-            tokenizer=TOKENIZER,
+            tokenizer=tokenizer.name,
             tokenizer_backend=TOKENIZER_BACKEND,
-            tokenizer_revision=TOKENIZER_REVISION,
+            tokenizer_revision=tokenizer.revision,
             max_workers=scale.pool.n_workers,
             worker_resources=worker_resources,
             zephyr_context=zephyr_context,
@@ -841,6 +860,7 @@ def reference_datakit_steps(
     centroids_version: str | None = None,
     scale: PipelineScale = DEFAULT_SCALE,
     zephyr_context: ZephyrContext | None = None,
+    tokenizer: TokenizerSpec | None = None,
 ) -> DatakitSteps:
     """Build the reference Datakit DAG over the given normalize steps.
 
@@ -878,6 +898,8 @@ def reference_datakit_steps(
             ``DEFAULT_SCALE`` is the production full-fleet shape; ``SMOKE_SCALE``
             runs the same DAG end-to-end on a testbed sample.
         zephyr_context: Optional shared context for subprocess-compatible stages.
+        tokenizer: Tokenizer location and stable content identity. Uses the
+            pinned reference tokenizer by default.
     """
     cluster = scale.cluster
     fuzzy = scale.fuzzy
@@ -889,7 +911,12 @@ def reference_datakit_steps(
     unknown_exempt = set(scale.store.fuzzy_exempt_sources) - (all_sources().keys() | sources.keys())
     if unknown_exempt:
         raise ValueError(f"Unknown fuzzy-exempt sources: {sorted(unknown_exempt)!r}")
-    zephyr_steps = zephyr_datakit_steps(sources, scale, zephyr_context)
+    zephyr_steps = zephyr_datakit_steps(
+        sources,
+        scale,
+        zephyr_context,
+        tokenizer=tokenizer,
+    )
     exact_dedup = zephyr_steps.exact_dedup
     embed_steps = build_per_source_embed_steps(sources, scale)
     if domain_centroids is None:
@@ -924,7 +951,7 @@ def reference_datakit_steps(
                     scale=scale,
                 ),
                 resources=DRIVER_RESOURCES,
-                pip_dependency_groups=["datakit"],
+                pip_dependency_groups=CPU_DATAKIT_DEPENDENCY_GROUPS,
             ),
         )
 
@@ -1095,6 +1122,33 @@ def reference_datakit_steps(
         all_steps += list(s.values())
     all_steps += [dedup, cluster_plan, cluster_text, verified_dedup, store, *reports]
     return DatakitSteps(sources=sources, output_buckets=store, all_steps=all_steps)
+
+
+def materialize_reference_store(
+    sources: dict[str, StepSpec],
+    *,
+    quality_model: str,
+    quality_model_version: str,
+    domain_centroids: str | StepSpec | None = None,
+    centroids_version: str | None = None,
+    scale: PipelineScale = DEFAULT_SCALE,
+    zephyr_context: ZephyrContext | None = None,
+    tokenizer: TokenizerSpec | None = None,
+    max_concurrent: int = 8,
+) -> ClusteredStoreData:
+    """Run the reference DataKit DAG and return its clustered store."""
+    datakit = reference_datakit_steps(
+        sources,
+        quality_model=quality_model,
+        quality_model_version=quality_model_version,
+        domain_centroids=domain_centroids,
+        centroids_version=centroids_version,
+        scale=scale,
+        zephyr_context=zephyr_context,
+        tokenizer=tokenizer,
+    )
+    StepRunner().run(datakit.all_steps, max_concurrent=max_concurrent)
+    return read_artifact(datakit.output_buckets.output_path, ClusteredStoreData)
 
 
 SAMPLE_PREFIX = "s3://marin-us-east-02a/marin/datakit/sample_0.1b_7d7d8fd7"

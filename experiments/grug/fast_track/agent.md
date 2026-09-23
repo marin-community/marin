@@ -83,6 +83,7 @@ Most promotable changes land in one of these files:
 - `adamh.py` — AdamH scale transform (the `adamh` LR group).
 - `router_metrics.py` — routing-stats telemetry (logging-only; never feeds the loss).
 - `launch.py` — ladder rungs, budget resolution (`--match`), Iris/W&B wiring.
+- `data_pipeline.py` — DataKit source, store mixture, and fast-track training wiring.
 
 ## Documentation & GitHub Issues
 
@@ -101,8 +102,9 @@ a shell variable. No `gcloud` / TPU auth is needed; this variant runs on H100.
 
 ## Job Submission
 
-Jobs run on **Iris**, one 8×H100 node per run. `fast-track` is the single entry point: run it locally
-to print the lowered plan, or add `--submit` to launch it as a cluster job.
+Jobs run on **Iris**, one 8×H100 node per run. Use `fast-track` for a model-only run and
+`fast-track-data` for a DataKit-to-model run. Run either command locally to inspect it, or add
+`--submit` to launch it as a cluster job.
 
 ```bash
 uv run fast-track --submit --run-id <name> --size <size> [--dense] --version <v>
