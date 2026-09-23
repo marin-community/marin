@@ -34,6 +34,7 @@ from iris.hooks.multigpu import (
     IRIS_MULTIGPU_PROCESS_COUNT_ENV,
     IRIS_MULTIGPU_PROCESS_INDEX_ENV,
 )
+from iris.runtime.jax_compile_guard import install_gpu_compile_guard
 
 logger = logging.getLogger(__name__)
 
@@ -443,6 +444,8 @@ def initialize_jax(
             poll_interval=poll_interval,
             heartbeat_timeout=heartbeat_timeout,
         )
+        if int(os.environ[IRIS_MULTIGPU_PROCESS_COUNT_ENV]) > 1 and jax.distributed.is_initialized():
+            install_gpu_compile_guard()
         return
 
     if job_info is None:
@@ -486,3 +489,5 @@ def initialize_jax(
             heartbeat_timeout_seconds=heartbeat_timeout,
             shutdown_timeout_seconds=_JAX_DIST_SHUTDOWN_TIMEOUT,
         )
+    if jax.distributed.is_initialized():
+        install_gpu_compile_guard()
