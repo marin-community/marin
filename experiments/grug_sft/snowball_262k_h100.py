@@ -45,7 +45,6 @@ from experiments.grug.moe_hero_ep.model import GrugModelConfig
 from experiments.grug.moe_hero_ep.train import (
     GrugRunConfig,
     GrugTrainerConfig,
-    WeightInitialization,
     grug_trainer_mesh_config,
     run_grug,
 )
@@ -179,7 +178,6 @@ def run_config(
             expert_axis_size=1,
             replica_axis_size=1,
             context_axis_size=CONTEXT_SHARDS,
-            weight_initialization=WeightInitialization.NATIVE,
         ),
         eval=None,
         processes_per_task=8,

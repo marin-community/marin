@@ -137,12 +137,6 @@ class TrainingDataMode(StrEnum):
     SYNTHETIC = "synthetic"
 
 
-class WeightInitialization(StrEnum):
-    """External checkpoint layouts supported for fresh optimizer initialization."""
-
-    NATIVE = "native"
-
-
 def restore_template_from(state):
     """ShapeDtypeStructs carrying each leaf's concrete sharding, releasing the leaves.
 
@@ -305,9 +299,6 @@ class GrugTrainerConfig:
     # restores from the latest committed checkpoint, so without a writer an interrupted run
     # restarts at step 0.
     save_checkpoints: bool = False
-    weight_initialization: WeightInitialization | None = None
-    """Load model weights from ``TrainerConfig.initialize_from`` after own-run resume."""
-
     # Grug builds its own compact (replica_dcn, data, context, expert, model) mesh instead of using
     # the Trainer's logical axis mapping; `data` absorbs whatever these leave free.
     # Defaults reproduce the historical layout: no expert parallelism and full replication
@@ -1031,23 +1022,17 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             state = take_master_as_params(state)
         if released_initial_state and any(isinstance(leaf, jax.ShapeDtypeStruct) for leaf in jax.tree.leaves(state)):
             state = _init_state(model_key)
-        initialization = config.trainer.weight_initialization
-        if initialization is not None:
-            if trainer.initialize_from is None:
-                raise ValueError("Weight initialization requires TrainerConfig.initialize_from")
+        if trainer.initialize_from is not None:
             if config.trainer.master_param_mode != MasterParamMode.DEVICE:
                 raise ValueError("External weight initialization currently requires device parameters")
             if int(state.step) == 0:
-                if initialization == WeightInitialization.NATIVE:
-                    state = init_weights_only_from_checkpoint(
-                        state,
-                        trainer.initialize_from,
-                        mesh=mesh,
-                        allow_partial=False,
-                        additional_weight_fields=("pending_qb_betas",),
-                    )
-                else:
-                    raise ValueError(f"Unsupported weight initialization: {initialization}")
+                state = init_weights_only_from_checkpoint(
+                    state,
+                    trainer.initialize_from,
+                    mesh=mesh,
+                    allow_partial=False,
+                    additional_weight_fields=("pending_qb_betas",),
+                )
                 params = trainer.mp.cast_to_param(state.params)
                 ema_params = None if state.ema_params is None else trainer.mp.cast_to_param(state.ema_params)
                 state = dataclasses.replace(state, params=params, ema_params=ema_params)
@@ -1381,7 +1366,6 @@ __all__ = [
     "GrugTrainState",
     "GrugTrainerConfig",
     "MasterParamMode",
-    "WeightInitialization",
     "initial_state",
     "run_grug",
 ]

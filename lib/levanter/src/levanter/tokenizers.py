@@ -738,8 +738,8 @@ def load_tokenizer(
 ) -> MarinTokenizer:
     """Load a tokenizer by HF model name, local path, or object-store path.
 
-    Files are staged once via mirror://tokenizers/ (GCS/S3) before falling back
-    to HF Hub. Cached per (name_or_path, backend).
+    Object-store paths stage directly. HF model names use mirror://tokenizers/
+    before falling back to HF Hub. Cached per (name_or_path, backend).
     """
     local_dir = _stage_tokenizer(name_or_path) if not os.path.isdir(name_or_path) else name_or_path
     if backend == TokenizerBackend.HF:
@@ -941,18 +941,17 @@ def _stage_tokenizer(name_or_path: str) -> str:
         if _try_load_tokenizer_from_dir(local_dir):
             return local_dir
 
-        # 2. Explicit object-store directory.
         if "://" in name_or_path:
             _stage_from_storage(name_or_path, local_dir)
             if _try_load_tokenizer_from_dir(local_dir):
                 return local_dir
             raise ValueError(f"No valid tokenizer.json found under {name_or_path}")
 
-        # 3. Mirror: copy whatever files are present, then try loading.
+        # 2. Mirror: copy whatever files are present, then try loading.
         if _stage_from_mirror(name_or_path, local_dir) and _try_load_tokenizer_from_dir(local_dir):
             return local_dir
 
-        # 4. HF Hub: full download, populate mirror as side-effect.
+        # 3. HF Hub: full download, populate mirror as side-effect.
         _stage_from_hf(name_or_path, local_dir)
         return local_dir
 

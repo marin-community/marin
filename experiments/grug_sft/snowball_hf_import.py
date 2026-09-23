@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import os
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -18,6 +18,7 @@ import jax.numpy as jnp
 from fray.types import ResourceConfig
 from haliax.nn import ArrayStacked
 from haliax.partitioning import set_mesh
+from haliax.state_dict import StateDict
 from jax.experimental.array_serialization.serialization import GlobalAsyncCheckpointManager
 from levanter.checkpoint import save_checkpoint
 from levanter.compat.hf_checkpoints import RepoRef, load_tokenizer
@@ -60,7 +61,7 @@ def _stack_blocks(blocks: Sequence[SnowballBlock], template: ArrayStacked[Block]
 def import_snowball_hf_weights(
     snowball_config: SnowballConfig,
     trainer_config: GrugModelConfig,
-    state_dict: Mapping[str, Any],
+    state_dict: StateDict,
     *,
     key: jax.Array,
 ) -> tuple[Transformer, jax.Array]:
@@ -72,7 +73,7 @@ def import_snowball_hf_weights(
     per-layer scalar to every expert logit changes neither top-k selection nor combine weights.
     """
     load_template = eqx.filter_eval_shape(SnowballTransformer.init, snowball_config, key=key)
-    loaded = load_template.from_state_dict(dict(state_dict))
+    loaded = load_template.from_state_dict(state_dict)
 
     target = eqx.filter_eval_shape(Transformer.init, trainer_config, key=key)
     stacked_blocks = _stack_blocks(loaded.blocks, target.stacked_blocks)
