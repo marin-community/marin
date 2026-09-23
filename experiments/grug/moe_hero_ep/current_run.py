@@ -3,7 +3,7 @@
 
 """The current production hero run. Update this ID at each handoff or rollback."""
 
-CURRENT_HERO_RUN_ID = "hero-main-stepREPLACE_BEFORE_DEPLOYMENT"
+CURRENT_HERO_RUN_ID = "hero-main-step145754"
 
 if __name__ == "__main__":
     print(CURRENT_HERO_RUN_ID)
