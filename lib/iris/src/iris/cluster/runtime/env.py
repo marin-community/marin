@@ -82,6 +82,32 @@ def cache_host_dirname(container_path: str) -> str:
 # Heredoc delimiter for materializing a setup script to disk. Distinctive enough
 # that a real setup script will not contain it as a standalone line.
 _SETUP_STEP_DELIMITER = "__IRIS_SETUP_STEP__"
+_UV_WRAPPER_DELIMITER = "__IRIS_UV_WRAPPER__"
+_UV_WRAPPER_DIR = "/tmp/iris-uv-wrapper"
+_UV_WRAPPER_PATH = f"{_UV_WRAPPER_DIR}/uv"
+
+_UV_WRAPPER_SCRIPT = r"""#!/bin/bash
+set -u
+recovery_cache="$IRIS_WORKDIR/.uv-recovery-cache"
+recovery_marker="$IRIS_WORKDIR/.iris-uv-cache-recovery"
+
+case "${1:-} ${2:-}" in
+  "sync "*|"pip install") ;;
+  *) exec "$IRIS_UV_EXECUTABLE" "$@" ;;
+esac
+
+if [ -f "$recovery_marker" ]; then
+  exec env UV_CACHE_DIR="$recovery_cache" "$IRIS_UV_EXECUTABLE" "$@"
+fi
+
+if "$IRIS_UV_EXECUTABLE" "$@"; then
+  exit 0
+fi
+
+printf '%s\n' "${UV_CACHE_DIR:-}" > "$recovery_marker"
+echo 'uv install failed; retrying with task-local cache' >&2
+  exec env UV_CACHE_DIR="$recovery_cache" "$IRIS_UV_EXECUTABLE" "$@" --reinstall
+"""
 
 
 def render_setup_steps(scripts: Sequence[str]) -> list[str]:
@@ -91,7 +117,18 @@ def render_setup_steps(scripts: Sequence[str]) -> list[str]:
     banner, rather than concatenated, so a failure points at the exact step. The
     caller's ``set -e`` stops the sequence on the first non-zero step.
     """
-    lines: list[str] = []
+    if not scripts:
+        return []
+
+    lines = [
+        'export IRIS_UV_EXECUTABLE="$(command -v uv)"',
+        f'mkdir -p "{_UV_WRAPPER_DIR}"',
+        f"cat > {_UV_WRAPPER_PATH} <<'{_UV_WRAPPER_DELIMITER}'",
+        _UV_WRAPPER_SCRIPT.rstrip("\n"),
+        _UV_WRAPPER_DELIMITER,
+        f'chmod +x "{_UV_WRAPPER_PATH}"',
+        f'export PATH="{_UV_WRAPPER_DIR}:$PATH"',
+    ]
     total = len(scripts)
     for index, script in enumerate(scripts, start=1):
         step_file = f"/tmp/iris-setup-step-{index}.sh"
@@ -217,8 +254,8 @@ def build_common_iris_env(
     # custom setup script does not have to depend on uv's cwd-relative default.
     env["IRIS_VENV"] = VENV_PATH
     env["UV_PROJECT_ENVIRONMENT"] = VENV_PATH
-    # Point each tool at its STANDARD_MOUNTS cache. Set here rather than in the
-    # task image so a task running its own image still hits the shared caches.
+    # Point long-lived downloads at their STANDARD_MOUNTS caches. Set these
+    # paths here so tasks that bring their own images use the same cache policy.
     # HF_HOME is left alone on purpose: it holds the submitter's HF_TOKEN, which
     # must not land on a node directory every other task can read. HF_HUB_CACHE
     # covers the part worth sharing -- the content-addressed model/dataset blobs.
