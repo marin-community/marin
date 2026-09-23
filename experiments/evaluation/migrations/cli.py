@@ -6,9 +6,8 @@
 ``upgrade-format`` moves sealed FineStore v1 archives onto transactional manifests;
 ``backfill-samples`` brings archives up to the current contract from each run's kept
 ``samples_*.jsonl``; ``rebuild-samples`` re-derives them from the sources preserved inside the
-archive, for a run whose results tree is gone. ``backfill-harbor-trajectories`` restores missing
-trajectory blobs from kept Harbor jobs for explicitly named archives. These are operator tools, not
-part of launching an evaluation.
+archive, for a run whose results tree is gone. These are operator tools, not part of launching an
+evaluation.
 """
 
 from __future__ import annotations
@@ -50,7 +49,6 @@ from experiments.evaluation.migrations.format_smoke import (
     smoke_upgrade,
     smoke_upgrade_fleet,
 )
-from experiments.evaluation.migrations.harbor_trajectories import backfill_harbor_trajectories
 
 logger = logging.getLogger(__name__)
 
@@ -58,17 +56,6 @@ logger = logging.getLogger(__name__)
 @click.group()
 def cli() -> None:
     """Fleet-wide maintenance of eval sample archives."""
-
-
-@cli.command("backfill-harbor-trajectories")
-@click.argument("results_paths", nargs=-1, required=True)
-def backfill_harbor_trajectories_command(results_paths: tuple[str, ...]) -> None:
-    """Restore missing trajectories from kept Harbor jobs in named archives."""
-    if any(path.startswith("s3://") for path in results_paths):
-        configure_coreweave_s3()
-    for results_path in results_paths:
-        result = backfill_harbor_trajectories(results_path)
-        click.echo(json.dumps({"results_path": results_path, **asdict(result)}, sort_keys=True))
 
 
 # One worker holds a run's whole sample file in memory while normalizing it, and the largest are a
