@@ -1195,11 +1195,7 @@ def _scale_group_region_attributes(scale_groups: Mapping[str, ScaleGroupConfig])
 
 
 def _scale_group_resource_attributes(scale_groups: Mapping[str, ScaleGroupConfig]) -> dict[str, set[str]]:
-    """Collect configured device, availability, and preemptibility attributes.
-
-    Availability markers identify configured accelerator variants. They do not
-    measure free capacity. CPU groups contribute only preemptibility.
-    """
+    """Collect configured routing attributes, independent of free capacity."""
     derived: dict[str, set[str]] = {}
     for sg in scale_groups.values():
         resources = sg.resources

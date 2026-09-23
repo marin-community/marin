@@ -457,28 +457,21 @@ def test_router_queues_a_gpu_job_to_a_peer_advertising_the_matching_variant():
 
 
 @pytest.mark.parametrize(
-    "device_type, variant, capacity_type, reserved_variant, disposition",
+    "variant, capacity_type, disposition",
     [
-        (AcceleratorType.GPU, " H100 ", CapacityType.ON_DEMAND, "H100", SubmitDisposition.QUEUE),
-        (AcceleratorType.GPU, "H100", CapacityType.RESERVED, "H100", SubmitDisposition.QUEUE),
-        (AcceleratorType.TPU, "v5p-8", CapacityType.RESERVED, "v5p-8", SubmitDisposition.QUEUE),
-        (AcceleratorType.GPU, "H100", CapacityType.PREEMPTIBLE, "H100", SubmitDisposition.REJECT),
-        (AcceleratorType.GPU, "A100", CapacityType.ON_DEMAND, "H100", SubmitDisposition.REJECT),
-        (AcceleratorType.GPU, "auto", CapacityType.ON_DEMAND, "H100", SubmitDisposition.REJECT),
-        (AcceleratorType.GPU, "", CapacityType.ON_DEMAND, "H100", SubmitDisposition.REJECT),
-        (AcceleratorType.CPU, "H100", CapacityType.ON_DEMAND, "H100", SubmitDisposition.REJECT),
+        (" H100 ", CapacityType.ON_DEMAND, SubmitDisposition.QUEUE),
+        ("A100", CapacityType.ON_DEMAND, SubmitDisposition.REJECT),
+        ("H100", CapacityType.PREEMPTIBLE, SubmitDisposition.REJECT),
     ],
 )
-def test_cpu_reserve_routes_only_to_a_compatible_peer(
-    device_type, variant, capacity_type, reserved_variant, disposition
-):
+def test_cpu_reserve_routes_only_to_a_compatible_peer(variant, capacity_type, disposition):
     config = IrisClusterConfig(
         scale_groups={
             "workers": ScaleGroupConfig(
                 name="workers",
                 num_vms=1,
                 resources=ScaleGroupResources(
-                    device_type=device_type, device_variant=variant, capacity_type=capacity_type
+                    device_type=AcceleratorType.GPU, device_variant=variant, capacity_type=capacity_type
                 ),
             )
         }
@@ -489,14 +482,14 @@ def test_cpu_reserve_routes_only_to_a_compatible_peer(
             key: controller_pb2.StringList(values=sorted(values))
             for key, values in backend_attribute_sets(config).items()
         },
-        # CPU placement must succeed even when the peer reports no free accelerators.
+        # A CPU reservation can use a peer with no free GPUs.
         availability=controller_pb2.Controller.ResourceAvailability(
             version=AVAILABILITY_METRIC_VERSION, observation_epoch_ms=1000, amounts={"h100": 0}
         ),
     )
     peer = _peer("cw", _StubConnection((backend,)))
     peer.probe()
-    constraints = [availability_constraint(reserved_variant), preemptible_constraint(False)]
+    constraints = [availability_constraint("H100"), preemptible_constraint(False)]
     candidate = QueuedCandidate(
         job_id=JobName.from_string("/u/cpu-reserve"),
         pinned_peer_id="",

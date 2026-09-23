@@ -349,26 +349,15 @@ def availability_constraint(variant: str) -> Constraint:
 
 
 # ---------------------------------------------------------------------------
-# Federated availability: numeric "how much of a resource is free right now".
-#
-# The boolean ``availability:<variant>`` marker denotes configured capability
-# for submission and federation, and observed zone capability for local scheduling.
-# The ``available:<token>`` gate here is NUMERIC and means
-# "a federation peer has >= N of this resource free right now". The parent gates
-# a queued federated job on it (see federation.availability) so jobs wait for and
-# spread across peers with real idle capacity instead of piling onto the first.
+# availability:<variant> marks configured capability for peer routing and
+# observed zone capability for local scheduling. available:<token> counts free
+# resources and gates peer placement (see federation.availability).
 # ---------------------------------------------------------------------------
 
 AVAILABLE_PREFIX = "available:"
 
 
 def available_key(token: str) -> str:
-    """Composite attribute key naming a free-capacity resource token.
-
-    The numeric parallel of :func:`availability_key`: ``available:h100`` names the
-    count of free H100 chips a peer advertises. The token is lowercased to match the
-    canonical ``device-variant`` string (``available:v5p-8``, ``available:h100``).
-    """
     return f"{AVAILABLE_PREFIX}{token.strip().lower()}"
 
 

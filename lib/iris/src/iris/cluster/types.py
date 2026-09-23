@@ -103,7 +103,6 @@ AVAILABILITY_PREFIX = "availability:"
 
 
 def availability_key(variant: str) -> str:
-    """Return a capability marker with the same normalization as device variants."""
     return f"{AVAILABILITY_PREFIX}{variant.strip().lower()}"
 
 

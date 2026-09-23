@@ -82,30 +82,24 @@ Routing constraints are the subset of constraints marked `routing=True` in
 `preemptible`, `region`, `zone`. The router also matches `availability:<variant>`
 constraints from `--reserve`.
 
-Peer attributes include configured accelerator variants, `availability:<variant>`
-markers, preemptibility, and regions. On-demand and reserved groups advertise
-`preemptible=false`. Preemptible groups advertise `preemptible=true`.
-Blank and `auto` values in `resources.device_variant` do not produce availability markers.
+Peers advertise configured accelerator variants, availability markers,
+preemptibility, and regions. A CPU job with `--reserve H100` can use an H100 peer
+without a cluster pin or free GPUs. A `preemptible=false` constraint requires
+on-demand or reserved capacity. CPU jobs with one task, at most one core, and at
+most 4 GiB default to `preemptible=false`.
 
-A CPU job with `--reserve H100` can route to an H100 peer without a cluster pin.
-The default `preemptible=false` constraint still applies to CPU jobs with one task,
-at most one CPU core, and at most 4 GiB of memory.
-The `--reserve H100` constraint does not allocate GPUs or require free GPU capacity.
-
-Peer attributes combine all scaling groups. They do not preserve relationships
-between variant, region, and preemptibility. A match permits a handoff but does
-not guarantee that the peer can schedule the job.
-The peer matcher currently applies preferred routing constraints as filters.
+Peer attributes combine all scaling groups, so a match does not guarantee that
+one group can satisfy every constraint. Preferred routing constraints also act
+as filters.
 
 Two consequences catch people out:
 
 - **`gpu-count` is not a routing constraint.** It is a consumable, checked against a worker's
   free GPUs when the peer schedules the job. `H100x1` and `H100x8` route identically. GPUs
   pack: several tasks share one 8-GPU node, unlike a TPU VM, which is atomic.
-- **A peer that advertises no `region` satisfies no `region` constraint.** An advertised
-  attribute that the peer omits cannot satisfy equality or existence constraints.
-  CoreWeave backends advertise their configured region. Backends do not advertise
-  zones, so a zone constraint prevents automatic federation.
+- **Region constraints require a matching advertised region.** CoreWeave backends
+  advertise their configured region. Backends do not advertise zones, so a zone
+  constraint prevents automatic federation.
 
 That second point bites sub-jobs specifically. `IrisClient.submit` (`iris/client/client.py`)
 gives a child job its parent worker's region unless the child names a region itself, which
