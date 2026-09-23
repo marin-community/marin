@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Import canonical Snowball HF weights into the current stacked Grug trainer model."""
+"""Materialize Snowball HF weights as a native checkpoint for this Grug model."""
 
 from __future__ import annotations
 

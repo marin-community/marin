@@ -43,13 +43,13 @@ from rigging.filesystem.storage_path import prefix_join
 
 from experiments.grug.moe.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe_hero_ep.model import GrugModelConfig
+from experiments.grug.moe_hero_ep.snowball_checkpoint import snowball_hf_to_grug
 from experiments.grug.moe_hero_ep.train import (
     GrugRunConfig,
     GrugTrainerConfig,
     grug_trainer_mesh_config,
     run_grug,
 )
-from experiments.grug_sft.snowball_hf_import import snowball_hf_to_grug
 
 HF_MODEL = "open-athena/snowball-67b-a2b-base-262k-qk175-skew8"
 HF_REVISION = "058ecaf27b9e4f37219df221a51e7d490d58ec3d"
