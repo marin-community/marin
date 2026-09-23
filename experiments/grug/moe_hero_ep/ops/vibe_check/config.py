@@ -25,8 +25,8 @@ from experiments.grug.moe_hero_ep.train import DEFAULT_DROPLESS_MOE_IMPLEMENTATI
 CONFIG_DIRECTORY = Path(__file__).parent
 STORE_ROOT = "s3://marin-us-east-02a/marin/users/rav/hero-completions/"
 TARGET_CLUSTER = "cw-us-east-08a"
-# One NVL72 rack block. The sampler puts one prompt row on each GPU, so 64 rows cover the whole
-# prompt bank in a single pass per sample instead of two.
+# One NVL72 rack block. The sampler puts one prompt row on each GPU, so the rack covers the whole
+# prompt bank in a single pass per sample.
 SAMPLING_NODES = 16
 SAMPLING_GPUS_PER_NODE = 4
 
