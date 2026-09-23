@@ -21,7 +21,7 @@ kernel's own ``can_implement``.
 Lifting the allowlist is a benchmark-only affordance. Measured on GB200 at head dimension 128,
 every backward outside it is slower, wrong, or unlaunchable: 192x64 and 256x64 pass
 ``can_implement`` and return gradients off by four orders of magnitude, and 256 threads does the
-same at 128x64 and 128x128. Read the correctness column before any timing column.
+same at 128x64 and 128x128.
 
 The two backward paths differ in more than tiles. ``path_arch=120`` runs
 ``SegmentedFlashAttentionBackwardSm120`` with ``num_stages_Q = num_stages_dO = 1`` at head
