@@ -3397,14 +3397,32 @@
         "['Phylogenetics and Evolutionary Analysis'",
         "'Genomics']"
       ],
-      "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
-      "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
-      "required_tools": [],
-      "independent_data_sources": [],
+      "status": "component-only",
+      "assessment": "Public task metadata inspected; alignment construction is exercised on independent curated proteins. No benchmark data or target reused.",
+      "recipes": [
+        "real-protein-alignment",
+        "alignment-column-filter"
+      ],
+      "required_stages": [
+        "identify input protein groups",
+        "multiple-sequence alignment",
+        "aggregate gap characters over all alignment positions"
+      ],
+      "remaining_gaps": [
+        "Compose group-level alignment and aggregate gap accounting",
+        "Use independent ortholog groups; mixed globin paralogs are not an ortholog benchmark substitute",
+        "Match the declared alignment policy when a downstream scalar depends on gap placement"
+      ],
+      "required_formats": [
+        "FASTA",
+        "aligned FASTA"
+      ],
+      "required_tools": [
+        "MAFFT"
+      ],
+      "independent_data_sources": [
+        "UniProt:globins-20260923"
+      ],
       "validation_evidence": [],
       "runtime_seconds": null
     },
@@ -6884,7 +6902,8 @@
         "alignment-column-filter",
         "newick-distances",
         "real-genome-cds-extraction",
-        "real-genome-translation"
+        "real-genome-translation",
+        "real-protein-alignment"
       ],
       "required_stages": [
         "protein extraction",
@@ -6893,8 +6912,8 @@
         "phylogeny"
       ],
       "remaining_gaps": [
-        "Real four-genome ortholog pipeline",
-        "Tree inference rather than only tree measurements"
+        "An ortholog pipeline on independent related genomes; the globin alignment includes paralogs and does not establish orthology",
+        "Tree inference and cross-genome interpretation, beyond CDS extraction and alignment"
       ],
       "required_formats": [
         "FASTA",
@@ -6909,7 +6928,8 @@
       "independent_data_sources": [
         "RefSeq:NC_001422.1",
         "RefSeq:NC_001416.1",
-        "RefSeq:NC_001604.1"
+        "RefSeq:NC_001604.1",
+        "UniProt:globins-20260923"
       ],
       "validation_evidence": [],
       "runtime_seconds": null

@@ -17,10 +17,11 @@ from experiments.post_training.bio_tasks.solvers.imaging import SOLVERS as IMAGI
 from experiments.post_training.bio_tasks.solvers.intervals import SOLVERS as INTERVAL_SOLVERS
 from experiments.post_training.bio_tasks.solvers.networks import SOLVERS as NETWORKS_SOLVERS
 from experiments.post_training.bio_tasks.solvers.phylogeny import SOLVERS as PHYLOGENY_SOLVERS
+from experiments.post_training.bio_tasks.solvers.protein_alignment import OUTPUT_SOLVERS as ALIGNMENT_OUTPUT_SOLVERS
 from experiments.post_training.bio_tasks.solvers.reads import SOLVERS as READ_SOLVERS
 from experiments.post_training.bio_tasks.solvers.real_expression import SOLVERS as REAL_EXPRESSION_SOLVERS
 from experiments.post_training.bio_tasks.solvers.real_genomes import SOLVERS as REAL_GENOMES_SOLVERS
-from experiments.post_training.bio_tasks.solvers.real_reads import OUTPUT_SOLVERS
+from experiments.post_training.bio_tasks.solvers.real_reads import OUTPUT_SOLVERS as READ_OUTPUT_SOLVERS
 from experiments.post_training.bio_tasks.solvers.real_structure import SOLVERS as REAL_STRUCTURE_SOLVERS
 from experiments.post_training.bio_tasks.solvers.repo_formats import SOLVERS as REPO_FORMATS_SOLVERS
 from experiments.post_training.bio_tasks.solvers.repo_sequences import SOLVERS as REPO_SEQUENCES_SOLVERS
@@ -29,6 +30,8 @@ from experiments.post_training.bio_tasks.solvers.statistics import SOLVERS as ST
 from experiments.post_training.bio_tasks.solvers.structure import SOLVERS as STRUCTURE_SOLVERS
 from experiments.post_training.bio_tasks.solvers.variants import SOLVERS as VARIANTS_SOLVERS
 from experiments.post_training.bio_tasks.solvers.workflow import SOLVERS as WORKFLOW_SOLVERS
+
+OUTPUT_SOLVERS = {**READ_OUTPUT_SOLVERS, **ALIGNMENT_OUTPUT_SOLVERS}
 
 
 def solve_sequence(inputs: Path) -> list[dict]:

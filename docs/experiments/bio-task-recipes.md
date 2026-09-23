@@ -117,6 +117,7 @@ correctness controls. See [provenance and limitations](bio-task-catalog.md#id-wo
 
 | Recipe | Difficulty | Supplied formats | Skills | Repository operations |
 |---|---|---|---|---|
+| `real-protein-alignment` | medium | FASTA, TSV, JSON | protein multiple-sequence alignment, affine-gap scoring, paralog awareness | MAFFT, MUSCLE |
 | `alignment-sites` | easy | fasta-alignment, csv-header | site-states, missing-bases, parsimony-informative-sites | Additional domain coverage |
 | `tree-branches` | easy | csv-header | root-conventions, branch-lengths, treeness | Additional domain coverage |
 | `newick-distances` | medium | newick | newick, patristic-distance, shared-ancestry | FastTree |

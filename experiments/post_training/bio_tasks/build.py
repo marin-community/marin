@@ -156,6 +156,19 @@ def validate_instance(
                 artifact.write_bytes(b"".join(lines))
                 artifact_checks[f"changed_base:{name}"] = grade_files(reference, answer).reward
             artifact.write_bytes(original)
+        for name in instance.contract.alignments:
+            artifact = root / name
+            original = artifact.read_text()
+            artifact.unlink()
+            artifact_checks[f"missing_artifact:{name}"] = grade_files(reference, answer).reward
+            lines = original.splitlines()
+            index = next(i for i, line in enumerate(lines) if line and not line.startswith(">"))
+            lines[index] = ("A" if lines[index][0] != "A" else "C") + lines[index][1:]
+            artifact.write_text("\n".join(lines) + "\n")
+            artifact_checks[f"changed_residue:{name}"] = grade_files(reference, answer).reward
+            artifact.write_text(original + ">duplicate\nX\n")
+            artifact_checks[f"malformed_artifact:{name}"] = grade_files(reference, answer).reward
+            artifact.write_text(original)
         if any(value != 0 for value in artifact_checks.values()):
             raise ValueError(f"{recipe.id}: invalid native artifact passed: {artifact_checks}")
         if previous_outputs:
@@ -166,7 +179,7 @@ def validate_instance(
             artifact_checks["copied_other_instance"] = 0
         if reference_output is not None:
             reference_output.mkdir(parents=True, exist_ok=False)
-            for name in ("answer.json", *instance.contract.fastq):
+            for name in ("answer.json", *instance.contract.artifacts()):
                 shutil.copyfile(root / name, reference_output / name)
     candidates = {"oracle": solved, "row_permutation": list(reversed(solved))}
     rejected = {"empty": [], "missing_id": solved[:-1], "duplicate_id": [*solved, solved[0]], **instance.mutations}
@@ -207,7 +220,7 @@ def task_files(recipe: Recipe, instance: Instance, task: Identity, base_image: s
         "scientific_review": "pending",
     }
     config = tomlkit.parse(render_task_toml(1800, 60, metadata))
-    config["artifacts"] = ["/app/answer.json", *(f"/app/{name}" for name in instance.contract.fastq)]
+    config["artifacts"] = ["/app/answer.json", *(f"/app/{name}" for name in instance.contract.artifacts())]
     # A fresh verifier environment receives only the declared submitted artifacts.
     config["verifier"] = {
         "timeout_sec": 60,
@@ -267,7 +280,11 @@ def inspection_page(root: Path, task: Identity, instance: Instance, files: TaskF
         "Exact instruction": files.text("instruction.md"),
         "Expected output (private)": json.dumps(instance.contract.answer(), indent=2),
         "Native artifact contracts (private)": json.dumps(
-            {name: target.model_dump() for name, target in instance.contract.fastq.items()}, indent=2
+            {
+                "fastq": {name: target.model_dump() for name, target in instance.contract.fastq.items()},
+                "alignments": {name: target.model_dump() for name, target in instance.contract.alignments.items()},
+            },
+            indent=2,
         ),
         "Validation controls": json.dumps(validation, indent=2),
         "Scientific negative controls": json.dumps(instance.mutations, indent=2),
@@ -280,7 +297,7 @@ def inspection_page(root: Path, task: Identity, instance: Instance, files: TaskF
     )
     output_links = " ".join(
         f'<a href="../reference-outputs/{task.task_id}/{name}">{html.escape(name)}</a>'
-        for name in ("answer.json", *instance.contract.fastq)
+        for name in ("answer.json", *instance.contract.artifacts())
     )
     page = (
         '<!doctype html><meta charset="utf-8"><title>' + html.escape(task.task_id) + "</title>"
@@ -434,6 +451,9 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
                             {
                                 "answer": instance.contract.expected,
                                 "fastq": {name: target.sha256 for name, target in instance.contract.fastq.items()},
+                                "alignments": {
+                                    name: target.model_dump() for name, target in instance.contract.alignments.items()
+                                },
                             },
                             sort_keys=True,
                         ).encode()

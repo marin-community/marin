@@ -35,6 +35,7 @@ from experiments.post_training.bio_tasks.native.mapping import (
     solve_minimap,
     solve_star,
 )
+from experiments.post_training.bio_tasks.native.proteins import solve_mafft, solve_muscle
 from experiments.post_training.bio_tasks.native.qc import solve_fastqc, solve_multiqc
 from experiments.post_training.bio_tasks.native.reads import solve_cutadapt, solve_plink, solve_samtools, solve_vcftools
 from experiments.post_training.bio_tasks.native.real_reads import solve_fastp, solve_picard
@@ -59,6 +60,7 @@ OPERATIONS = {
     7: NativeOperation("bed12-exons", solve_bedtools),
     8: NativeOperation("vcf-site-filtering", solve_gatk),
     9: NativeOperation("sam-cigar-coverage", solve_pysam),
+    10: NativeOperation("real-protein-alignment", solve_mafft),
     12: NativeOperation("matrixmarket-log-normalization", solve_seurat, ("r-jsonlite",)),
     13: NativeOperation("dna-unique-mapping", solve_minimap),
     14: NativeOperation("vcf-allelic-depth", solve_bcftools),
@@ -78,6 +80,7 @@ OPERATIONS = {
     35: NativeOperation("real-fastq-pair-filter", solve_fastp),
     38: NativeOperation("vcf-sample-qc", solve_vcftools),
     41: NativeOperation("bedgraph-threshold-peaks", solve_macs),
+    43: NativeOperation("real-protein-alignment", solve_muscle),
     46: NativeOperation("bedgraph-weighted-signal", solve_kent),
     47: NativeOperation("interval-overlap", solve_genomicranges, ("r-jsonlite",)),
     48: NativeOperation("fasta-six-frame-translation", solve_biostrings, ("r-jsonlite",)),

@@ -6,7 +6,7 @@ program decisions, collection policy, and results; this file holds the detailed
 coverage and source evidence. [Generator documentation](bio-tasks.md) lists the
 implemented recipes and how to inspect their examples.
 
-The implementation has **121 recipes across 13 domains**, with three instances per
+The implementation has **134 recipes across 13 domains**, with three instances per
 recipe and one train split. The [implemented recipe matrix](bio-task-recipes.md)
 records the supplied formats, skills, and source-repository mappings. Sections below
 also retain candidate capabilities beyond the current implementation. Source inspection
@@ -47,7 +47,8 @@ The current authoring recipes use independent Python solvers. Native CLI/API
 execution is recorded separately below. **32 of 50 packages now pass all three
 reference cases**. The first CoreWeave run passed 22 packages; correction batches
 on an existing reserved TRC host in `us-central2` passed 10 more, with outputs
-retrieved from regional GCS. Eighteen repositories still need reference scripts. Picard and fastp passed on
+retrieved from regional GCS. MAFFT and MUSCLE reference scripts are implemented but await execution; sixteen
+repositories still need scripts. Picard and fastp passed on
 observed ENA ERR266411 read pairs; fastp verification checks complete output FASTQ
 records as well as the JSON selection summary.
 The [machine-readable evidence](../../experiments/post_training/bio_tasks/native_validation.json)
@@ -77,7 +78,7 @@ Downloads, stars, and citations remain available in the unchanged
 | 7 | [BEDTools](https://github.com/arq5x/bedtools2/blob/614e9a5c5935ab86e873dab9072fbbaf003c1b7e/test/bed12tobed6/test-bed12tobed6.sh) | `bed12-exons`, `bed-union-coverage`, `bed-complement`, `real-genome-overlap`, `real-genome-promoters` | 3 reference checks passed (`bed12-exons`) |
 | 8 | [GATK](https://github.com/broadinstitute/gatk/blob/0cde69eed30339f5978cbb1ac6e5cf3662f9e1f8/src/test/java/org/broadinstitute/hellbender/tools/walkers/filters/VariantFiltrationIntegrationTest.java) | `vcf-site-filtering`, `vcf-genotype-masking` | 3 reference checks passed (`vcf-site-filtering`) |
 | 9 | [pysam](https://github.com/pysam-developers/pysam/blob/ba2e6c124398bdcd963db741d6f01164fed4f9b7/tests/AlignmentFilePileup_test.py) | `sam-allele-pileup`, `sam-inclusion` | 3 reference checks passed (`sam-cigar-coverage`) |
-| 10 | [MAFFT](https://github.com/GSLBiotech/mafft/blob/26ecaba0130b533cf06a29200f0fb40829c00101/test/script) | `alignment-sum-of-pairs`, `alignment-column-filter` | Pending |
+| 10 | [MAFFT](https://github.com/GSLBiotech/mafft/blob/26ecaba0130b533cf06a29200f0fb40829c00101/test/script) | `alignment-sum-of-pairs`, `alignment-column-filter`, `real-protein-alignment` | Script implemented; execution pending |
 | 11 | [HMMER](https://github.com/EddyRivasLab/hmmer/blob/9acd8b6758a0ca5d21db6d167e0277484341929b/testsuite/i13-msa-integrity.pl) | `hmmer-domain-extraction` | Pending |
 | 12 | [Seurat](https://github.com/satijalab/seurat/blob/586015abde10618ecb32d3fe632267a83317a08d/tests/testthat/test_data_manipulation.R) | `matrixmarket-log-normalization`, `matrixmarket-feature-filtering` | 3 reference checks passed (`matrixmarket-log-normalization`) |
 | 13 | [minimap2](https://github.com/lh3/minimap2/blob/3c28777e7e2dcc90f825de1b9f17a89cca7d4452/example.c) | `paf-query-coverage`, `dna-unique-mapping` | 3 reference checks passed (`dna-unique-mapping`) |
@@ -110,7 +111,7 @@ Downloads, stars, and citations remain available in the unchanged
 | 40 | [Ensembl VEP](https://github.com/Ensembl/ensembl-vep/blob/cee181c2a1bb31900a0b7526168c67577fb23928/t/AnnotationSource_File_GTF.t) | `variant-coding-consequences`, `gtf-splicing` | Pending |
 | 41 | [MACS2 / MACS3](https://github.com/macs3-project/MACS/blob/ece08963b6a30f4de0c5a5e684513f876b788d2c/test/test_Pileup.py) | `bedgraph-threshold-peaks` | 3 reference checks passed (`bedgraph-threshold-peaks`) |
 | 42 | [MMseqs2](https://github.com/soedinglab/MMseqs2/blob/d401e78c2d18a822cdb1527d7464a043f6035a15/data/workflow/easycluster.sh) | `sequence-identity-clusters` | Pending |
-| 43 | [MUSCLE](https://github.com/rcedgar/muscle/blob/29aa0671d0e46c862457749c7f2d87f29007b8eb/test_scripts/check_results.py) | `alignment-sum-of-pairs`, `alignment-consensus` | Pending |
+| 43 | [MUSCLE](https://github.com/rcedgar/muscle/blob/29aa0671d0e46c862457749c7f2d87f29007b8eb/test_scripts/check_results.py) | `alignment-sum-of-pairs`, `alignment-consensus`, `real-protein-alignment` | Script implemented; execution pending |
 | 44 | [Kraken 2](https://github.com/DerrickWood/kraken2/blob/8c190b1b668825935dbf6dee5f969227dc8269bb/src/reports.cc) | `taxonomy-counts`, `taxonomic-lca` | Pending |
 | 45 | [BUSCO](https://gitlab.com/ezlab/busco/-/blob/cd071053c38c5060f75d0b370cb66c4edc8e59a1/src/busco/busco_tools/hmmer.py) | `busco-summary` | Pending |
 | 46 | [UCSC Kent utilities](https://github.com/ucscGenomeBrowser/kent/blob/0f58b0eef93be6d6d3b26b9e2b99261d558d67df/src/utils/bedGraphToBigWig/tests/makefile) | `bedgraph-weighted-signal`, `bed12-exons` | 3 reference checks passed (`bedgraph-weighted-signal`) |
@@ -118,8 +119,6 @@ Downloads, stars, and citations remain available in the unchanged
 | 48 | [Biostrings](https://github.com/Bioconductor/Biostrings/blob/fb0cd89830abd054cf2681d6bc6c929981e07b21/tests/testthat/test-translate.R) | `fasta-six-frame-translation`, `gff-cds-translation`, `fasta-motif-hits`, `real-genome-cds-extraction`, `real-genome-translation`, `real-genome-gc3`, `real-genome-codon-counts`, `real-genome-promoters` | 3 reference checks passed (`fasta-six-frame-translation`) |
 | 49 | [pybedtools](https://github.com/daler/pybedtools/blob/efb8534c11ca6b45a6cd173ff3b3d1bf754e34a1/pybedtools/test/test_1.py) | `strand-extraction`, `interval-overlap`, `real-genome-cds-extraction`, `real-genome-overlap`, `real-genome-promoters` | 3 reference checks passed (`strand-extraction`) |
 | 50 | [nf-core/tools](https://github.com/nf-core/tools/blob/eb2f709090f4054f45437c34049ea2068567c339/tests/pipelines/test_schema.py) | `sample-sheet-lanes` | Pending |
-
-
 
 
 ## Package reference run
@@ -194,7 +193,7 @@ supplies imaging operations. Distinguish measuring supplied masks from segmentin
 
 ## ID workflow coverage and input realism
 
-The 133 recipes include eighteen using real observations and 115 simulated component
+The 134 recipes include nineteen using real observations and 115 simulated component
 controls. They do **not** establish coverage of complete ID benchmark workflows. Repository count, format count, and successful
 package checks measure different things from workflow coverage. The following
 assessment uses public benchmark descriptions and the program's prior source
@@ -202,13 +201,13 @@ inspection; it is a qualitative gap analysis, not a benchmark coverage score.
 
 The [task-level registry](../../experiments/post_training/bio_tasks/benchmark_coverage.json)
 retains 455 identifiers at pinned dataset revisions: 205 BixBench, 100 CompBioBench,
-50 BiomniBench-DA, 10 BioAgent and 90 BioMysteryBench. Seventeen have manually assessed
-component mappings, 348 are unmapped, and the 90 BioMysteryBench task formulations
+50 BiomniBench-DA, 10 BioAgent and 90 BioMysteryBench. Eighteen have manually assessed
+component mappings, 347 are unmapped, and the 90 BioMysteryBench task formulations
 remain excluded from training authoring. None is marked workflow-validated.
 The inspection browser binds mappings to generated examples and their local reference
 results. These timings are solver-check runtimes, not teacher latency measurements.
 
-Eighteen recipes supply unchanged biological observations or declared observed subsets:
+Nineteen recipes supply unchanged biological observations or declared observed subsets:
 
 - **GSE60450:** 27,179 genes and 12 libraries from mouse mammary basal/luminal cells,
   with two biological replicates per population and stage. Tasks cover library QC,
@@ -231,9 +230,16 @@ Eighteen recipes supply unchanged biological observations or declared observed s
   with exact ordered IDs, bases and qualities. These technical subsets do not
   establish biological replication or mixed-community metagenomic coverage.
 
+- **UniProt globins:** six full-length proteins per task selected from ten reviewed
+  alpha/beta globin entries, with species and sequence versions retained. Produce
+  an aligned FASTA under an explicit affine-gap BLOSUM62 objective. Independent
+  Biopython pairwise scores bound the objective; a separate center-star solution
+  checks feasibility. Different qualifying alignments pass. This does not establish
+  orthology or a species phylogeny. UniProt data are [CC-BY-4.0](https://www.uniprot.org/help/license).
+
 [Source provenance](../../experiments/post_training/bio_tasks/data_sources.json)
 records retrieval URLs, checksums, licenses and unchanged-content recompression.
-Accession checks found no matches in inspected permitted benchmark metadata;
+Earlier genome/read accession checks found no matches in inspected permitted benchmark metadata;
 full artifact-lineage screening is still pending, so these are authoring candidates.
 No claim of independence is made merely because a query uses a different seed.
 

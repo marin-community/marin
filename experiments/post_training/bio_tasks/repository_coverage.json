@@ -184,12 +184,14 @@
       "name": "MAFFT",
       "recipes": [
         "alignment-sum-of-pairs",
-        "alignment-column-filter"
+        "alignment-column-filter",
+        "real-protein-alignment"
       ],
       "source_url": "https://github.com/GSLBiotech/mafft/blob/26ecaba0130b533cf06a29200f0fb40829c00101/test/script",
       "tool_execution": {
-        "status": "pending",
-        "evidence": null
+        "status": "implemented_unvalidated",
+        "evidence": null,
+        "scope": "real-protein-alignment"
       },
       "scope": "Construct or repair a small multiple alignment under a specified scoring or correspondence rule.",
       "limitations": "Check residue preservation plus independently established aligned residue pairs or a small exact scoring objective; allow equivalent alignments. The supplied repository is a 2020 snapshot; its bytewise regression diffs do not establish biological optimality."
@@ -766,12 +768,14 @@
       "name": "MUSCLE",
       "recipes": [
         "alignment-sum-of-pairs",
-        "alignment-consensus"
+        "alignment-consensus",
+        "real-protein-alignment"
       ],
       "source_url": "https://github.com/rcedgar/muscle/blob/29aa0671d0e46c862457749c7f2d87f29007b8eb/test_scripts/check_results.py",
       "tool_execution": {
-        "status": "pending",
-        "evidence": null
+        "status": "implemented_unvalidated",
+        "evidence": null,
+        "scope": "real-protein-alignment"
       },
       "scope": "Score or repair a small multiple alignment using known residue correspondences.",
       "limitations": "Check residue preservation and independently specified pair/column correspondence scores. The inspected regression accepts relative Q/TC thresholds on benchmark alignments; do not reuse those fixtures or treat those thresholds as universal biological truth."

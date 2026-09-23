@@ -421,8 +421,8 @@ def test_corpus_roundtrip_separates_oracles_and_grades_packaged_answers(tmp_path
         submission.mkdir(parents=True)
         answer = submission / "answer.json"
         contract = Contract.model_validate_json(files.text("tests/reference.json"))
-        assert set(config["artifacts"]) == {"/app/answer.json", *(f"/app/{name}" for name in contract.fastq)}
-        if contract.fastq:
+        assert set(config["artifacts"]) == {"/app/answer.json", *(f"/app/{name}" for name in contract.artifacts())}
+        if contract.artifacts():
             subprocess.run(
                 [
                     sys.executable,

@@ -370,6 +370,39 @@
           "transformation": "Consecutive original complete FASTQ records; no changes to names, sequences or qualities. The three blocks are disjoint technical subsets, not biological replicates. Gzip level 9, mtime 0."
         }
       }
+    },
+    "UniProt:globins-20260923": {
+      "landing_page": "https://www.uniprot.org/uniprotkb?query=family%3Aglobin",
+      "lineage": "UniProt:vertebrate-globins",
+      "license": "CC-BY-4.0",
+      "license_source": "https://www.uniprot.org/help/license",
+      "citation": "UniProt Consortium; accession, entry version and sequence version retained per protein.",
+      "retrieved_at": "2026-09-23",
+      "data_origin": "real",
+      "benchmark_screening": "Candidate curated sequences; full benchmark-lineage screening pending.",
+      "accessions": [
+        "P01942",
+        "P01958",
+        "P01966",
+        "P01994",
+        "P02062",
+        "P02070",
+        "P02088",
+        "P02112",
+        "P68871",
+        "P69905"
+      ],
+      "assets": {
+        "uniprot-globins.json.gz": {
+          "url": "https://rest.uniprot.org/uniprotkb/search?query=accession:P01942%20OR%20accession:P01958%20OR%20accession:P01966%20OR%20accession:P01994%20OR%20accession:P02062%20OR%20accession:P02070%20OR%20accession:P02088%20OR%20accession:P02112%20OR%20accession:P68871%20OR%20accession:P69905&format=json&size=100",
+          "download_sha256": "2d3eb486a4a49bb0ebc6d260223fabe7d25428b05965cddd4a85c363e40f0641",
+          "content_sha256": "93a2ce49622af049fd07672202109174ffa0065fbe6ae1029d9e0e0f2875c234",
+          "vendored_sha256": "3a8bc3220b15c438d4b5b14aa6ef52a54ae8f4074ed0bf483dc7a21b5ff35fc0",
+          "content_bytes": 10330,
+          "vendored_bytes": 2523,
+          "transformation": "Sequences unchanged. Selected accession/version/taxonomy/name metadata; added BLOSUM62 and independent optimal pairwise scores. gzip mtime 0."
+        }
+      }
     }
   }
 }

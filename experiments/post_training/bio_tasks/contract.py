@@ -8,6 +8,7 @@ import hashlib
 import json
 import math
 import re
+from itertools import combinations
 from pathlib import Path
 from typing import Literal
 
@@ -16,6 +17,81 @@ from tasktrove_verify.grade import Reward, infra_error, invalid_task, scored, wr
 
 MAX_ANSWER_BYTES = 2 * 1024 * 1024
 Scalar = int | float | str | None
+
+
+class AlignmentContract(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    sequences: dict[str, str]
+    scoring: dict[str, int]
+    gap_open: int = Field(gt=0)
+    gap_extend: int = Field(gt=0)
+    minimum_score: int
+    max_columns: int = Field(gt=0, le=4096)
+    max_bytes: int = Field(gt=0, le=2 * 1024 * 1024)
+
+    @model_validator(mode="after")
+    def validate_sequences(self) -> "AlignmentContract":
+        amino_acids = "ACDEFGHIKLMNPQRSTVWY"
+        if not 2 <= len(self.sequences) <= 64:
+            raise ValueError("Alignment needs 2 to 64 protein sequences")
+        if set(self.scoring) != {a + b for a in amino_acids for b in amino_acids}:
+            raise ValueError("Alignment scoring must cover all amino-acid pairs")
+        for key, sequence in self.sequences.items():
+            if not key or any(c.isspace() for c in key) or not sequence or len(sequence) > self.max_columns:
+                raise ValueError("Invalid alignment input identity or length")
+            if not set(sequence) <= set(amino_acids):
+                raise ValueError("Alignment inputs must use canonical amino acids")
+        return self
+
+
+def alignment_score(sequences: list[str], scoring: dict[str, int], opening: int, extension: int) -> int:
+    """Sum affine-gap pair scores after removing each pair's double-gap columns."""
+    total = 0
+    for left, right in combinations(sequences, 2):
+        gap = 0
+        for a, b in zip(left, right, strict=True):
+            if a == b == "-":
+                continue
+            current = 1 if a == "-" else 2 if b == "-" else 0
+            if current:
+                total -= extension if current == gap else opening
+            else:
+                total += scoring[a + b]
+            gap = current
+    return total
+
+
+def check_alignment(path: Path, target: AlignmentContract) -> dict:
+    with path.open("rb") as handle:
+        raw = handle.read(target.max_bytes + 1)
+    if len(raw) > target.max_bytes:
+        raise ValueError("alignment_too_large")
+    sequences = {}
+    current = None
+    for line in raw.decode("ascii").splitlines():
+        line = line.strip()
+        if line.startswith(">"):
+            fields = line[1:].split()
+            if not fields or fields[0] in sequences:
+                raise ValueError("alignment_duplicate_or_empty_id")
+            current = fields[0]
+            sequences[current] = ""
+        elif line:
+            if current is None or not set(line.upper()) <= set("ACDEFGHIKLMNPQRSTVWY-"):
+                raise ValueError("malformed_alignment")
+            sequences[current] += line.upper()
+    if set(sequences) != set(target.sequences):
+        raise ValueError("alignment_identity")
+    widths = {len(sequence) for sequence in sequences.values()}
+    if len(widths) != 1 or not 0 < next(iter(widths)) <= target.max_columns:
+        raise ValueError("alignment_shape")
+    if any(sequence.replace("-", "") != target.sequences[key] for key, sequence in sequences.items()):
+        raise ValueError("alignment_changed_residues")
+    if any(set(column) == {"-"} for column in zip(*sequences.values(), strict=True)):
+        raise ValueError("alignment_all_gap_column")
+    score = alignment_score(list(sequences.values()), target.scoring, target.gap_open, target.gap_extend)
+    return {"score": score, "minimum_score": target.minimum_score, "passed": score >= target.minimum_score}
 
 
 class FastqContract(BaseModel):
@@ -82,13 +158,16 @@ class Contract(BaseModel):
     columns: dict[str, Column]
     expected: dict[str, dict[str, Scalar]]
     fastq: dict[str, FastqContract] = Field(default_factory=dict)
+    alignments: dict[str, AlignmentContract] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_reference(self) -> "Contract":
         if not self.columns or not self.expected or "id" in self.columns:
             raise ValueError("a contract needs columns, expected records, and a separate id field")
-        if any(not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name) for name in self.fastq):
-            raise ValueError("FASTQ artifacts must use simple filenames")
+        if any(not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name) for name in self.artifacts()):
+            raise ValueError("Artifacts must use simple filenames")
+        if set(self.fastq) & set(self.alignments) or "answer.json" in self.artifacts():
+            raise ValueError("Artifact filenames must be distinct")
         for record_id, row in self.expected.items():
             if not record_id or set(row) != set(self.columns):
                 raise ValueError("reference IDs must be nonempty and every record must have every column")
@@ -103,6 +182,9 @@ class Contract(BaseModel):
 
     def answer(self) -> list[dict]:
         return [{"id": key, **value} for key, value in self.expected.items()]
+
+    def artifacts(self) -> tuple[str, ...]:
+        return (*self.fastq, *self.alignments)
 
     def instructions(self) -> str:
         lines = [
@@ -122,6 +204,18 @@ class Contract(BaseModel):
                 f"Also write /app/{name} as four-line FASTQ. Preserve retained input-record order, first-token "
                 "read IDs, bases and qualities exactly as specified. Header comments and '+' comments are ignored. "
                 "Complete records and identities are verified; a correct JSON summary alone does not pass."
+            )
+        for name, target in self.alignments.items():
+            lines.append(
+                f"Also write /app/{name} as aligned protein FASTA. Preserve each input ID and all residues in order; "
+                f"insert only '-' gaps. All rows must have equal width, at most {target.max_columns} columns, "
+                "with no all-gap columns. Letter case, line wrapping and record order are ignored. "
+                f"The sum-of-pairs score must be at least {target.minimum_score}, using query.json's integer "
+                "substitution matrix and gap penalties. For each unordered pair remove double-gap columns, "
+                "charge gap_open for the first residue of each gap run and gap_extend for later residues, "
+                "including terminal gaps. Switching the gapped sequence starts a new run. "
+                "Different qualifying alignments are accepted; this objective does not establish "
+                "true biological homology."
             )
         return "\n".join(lines)
 
@@ -187,7 +281,7 @@ def grade_files(reference: Path, answer: Path) -> Reward:
         if len(raw) > MAX_ANSWER_BYTES:
             return scored(0, reason="answer_too_large")
         verdict = grade_answer(contract, raw.decode("utf-8"))
-        if verdict.reward != 1 or not contract.fastq:
+        if verdict.reward != 1 or not contract.artifacts():
             return verdict
         checks = {}
         for name, target in contract.fastq.items():
@@ -203,6 +297,14 @@ def grade_files(reference: Path, answer: Path) -> Reward:
                 "sha256": digest,
                 "passed": records == target.records and digest == target.sha256,
             }
+        for name, target in contract.alignments.items():
+            path = answer.parent / name
+            if path.is_symlink() or not path.is_file():
+                return scored(0, reason="missing_or_nonregular_alignment", artifact=name)
+            try:
+                checks[name] = check_alignment(path, target)
+            except ValueError as error:
+                return scored(0, reason=str(error), artifact=name)
         return scored(float(all(check["passed"] for check in checks.values())), **verdict.detail, artifact_checks=checks)
     except UnicodeDecodeError:
         return scored(0, reason="malformed_utf8")
