@@ -86,9 +86,12 @@ GPU_COUNT = 8
 # tripling the distinct examples in the strongest prior Snowball adaptation.
 # BFCL adds tool-use behavior that the earlier corpus omitted. Launcher limits
 # are upper bounds: failed or unanswered trials can produce no SFT conversation.
-CORPUS_EVALS = (("gsm8k", 1024), ("math500", 500), ("bfcl", 512))
+CORPUS_EVALS = (("gsm8k", 1024), ("math500", 500), ("bfcl", 123))
 CORPUS_MINIMUM_CONVERSATIONS = 1500
 CORPUS_MAXIMUM_CONVERSATIONS = sum(limit for _, limit in CORPUS_EVALS)
+# The sealed 1,507-conversation corpus expands at assistant-turn boundaries to
+# 2,036 Speculators sequences. Keep this separate from the raw rollout bound.
+CAPTURE_MAXIMUM_SEQUENCES = 2036
 CORPUS_MAX_GENERATION_TOKENS = 4096
 CORPUS_MINIMUM_VALID_TOKENS = 32
 
@@ -272,7 +275,7 @@ def _capture_step(conversations: ArtifactStep[Artifact]) -> ArtifactStep[Artifac
             sequence_length=SEQUENCE_LENGTH,
             data_parallel_size=GPU_COUNT,
             concurrency=64,
-            max_samples=CORPUS_MAXIMUM_CONVERSATIONS,
+            max_samples=CAPTURE_MAXIMUM_SEQUENCES,
             minimum_valid_tokens=CORPUS_MINIMUM_VALID_TOKENS,
             gpu_memory_utilization=0.9,
             vllm_extra_args=SNOWBALL_VLLM_ARGS,
