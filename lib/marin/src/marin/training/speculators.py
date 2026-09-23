@@ -82,7 +82,6 @@ class VerifierViewConfig:
 class HiddenStateCaptureConfig:
     dataset_path: str
     target_model: str
-    processor_model: str
     output_path: str
     target_layer_ids: tuple[int, ...]
     verifier_num_hidden_layers: int
@@ -309,7 +308,11 @@ def _capture_vllm_args(config: HiddenStateCaptureConfig, hidden_states_path: Pat
 
 
 def _prepare_capture_data(
-    config: HiddenStateCaptureConfig, raw_data: Path, prepared_data: Path, render_endpoint: str
+    config: HiddenStateCaptureConfig,
+    raw_data: Path,
+    prepared_data: Path,
+    processor_model: Path,
+    render_endpoint: str,
 ) -> None:
     command = [
         sys.executable,
@@ -317,7 +320,7 @@ def _prepare_capture_data(
         "speculators",
         "prepare-data",
         "--model",
-        config.processor_model,
+        str(processor_model),
         "--data",
         str(raw_data),
         "--output",
@@ -401,7 +404,7 @@ def capture_hidden_states(config: HiddenStateCaptureConfig) -> None:
             ) as environment:
                 environment.wait_until_ready()
                 render_endpoint = environment.server_url.removesuffix(OPENAI_API_SUFFIX)
-                _prepare_capture_data(config, raw_data, prepared_data, render_endpoint)
+                _prepare_capture_data(config, raw_data, prepared_data, target_model, render_endpoint)
                 prepared_complete = True
                 hidden_states.mkdir(exist_ok=True)
                 _generate_hidden_states(config, prepared_data, hidden_states, environment.server_url)

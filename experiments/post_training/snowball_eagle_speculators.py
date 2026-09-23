@@ -83,8 +83,8 @@ CORPUS_MINIMUM_VALID_TOKENS = 32
 _EVALCHEMY_CONFIG_DIR = Path(__file__).parents[1] / "evaluation" / "configs" / "evalchemy"
 TARGET_MODEL_NAME = "snowball-67b-a2b-sft-s3-agentic-step1903"
 TARGET_MODEL_URI = "s3://marin-us-east-02a/marin/exports/grug/june-67b-a2b-sft-s3-agentic/step-1903/hf-bf16-vllm/"
-TARGET_TOKENIZER = "penfever/grug-67b-a2b-sft-s2-thinking-step630-tok"
-TARGET_TOKENIZER_REVISION = "f0eac008b7fcd67025266a260d8722dbfd36e819"
+TARGET_TOKENIZER = TARGET_MODEL_URI
+TARGET_TOKENIZER_REVISION = "sha256:b0087e5879a34abaf3af83bca94462474ccded2a248852eb2d049237b9a0092e"
 TARGET_MODEL = ArtifactStep.adopt(
     f"models/{TARGET_MODEL_NAME}",
     "2026.09.21",
@@ -374,7 +374,6 @@ def _capture_step(
         return HiddenStateCaptureConfig(
             dataset_path=prefix_join(ctx.artifact_path(dataset), SPECULATORS_DATA_FILENAME),
             target_model=ctx.artifact_path(target_model),
-            processor_model=TARGET_TOKENIZER,
             output_path=ctx.output_path,
             target_layer_ids=TARGET_LAYER_IDS,
             verifier_num_hidden_layers=VERIFIER_NUM_HIDDEN_LAYERS,

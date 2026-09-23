@@ -83,7 +83,6 @@ def _capture_config(*, output_path: str = "published") -> HiddenStateCaptureConf
     return HiddenStateCaptureConfig(
         dataset_path="dataset.jsonl",
         target_model="target",
-        processor_model="tokenizer",
         output_path=output_path,
         target_layer_ids=(2, 13, 23),
         verifier_num_hidden_layers=26,
@@ -267,6 +266,7 @@ def test_capture_publishes_after_vllm_teardown_failure(monkeypatch, tmp_path: Pa
     def fake_command(command, *, environment=None):
         del environment
         if "prepare-data" in command:
+            assert Path(command[command.index("--model") + 1]).name == "target_model"
             prepared_data = Path(command[command.index("--output") + 1])
             prepared_data.mkdir()
             (prepared_data / "dataset_info.json").write_text("{}")
