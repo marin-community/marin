@@ -926,8 +926,10 @@ def test_the_skew_panel_reports_the_spread_and_names_the_same_slowest_rank(store
     rows = _panel_rows(store, "policy_ppo_train spread across ranks")
 
     slowest, fastest = PPO_TRAIN[CRITICAL_RANK], min(PPO_TRAIN.values())
-    spread = (slowest, fastest + 0.95 * (slowest - fastest), fastest + 0.5 * (slowest - fastest), fastest)
-    assert rows == [(t, *map(pytest.approx, spread)) for t in BUCKET_TIMES]
+    # Over two ranks, DuckDB interpolates p95 to 1995 s and Finelog's DataFusion reports 2000 s.
+    p95 = pytest.approx(slowest, abs=0.05 * (slowest - fastest))
+    median = pytest.approx((slowest + fastest) / 2)
+    assert rows == [(t, pytest.approx(slowest), p95, median, pytest.approx(fastest)) for t in BUCKET_TIMES]
 
 
 def test_the_derived_ratios_divide_the_quantities_they_name(store) -> None:
