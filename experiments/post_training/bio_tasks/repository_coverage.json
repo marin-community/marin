@@ -276,8 +276,12 @@
       ],
       "source_url": "https://github.com/broadinstitute/picard/blob/c2a483d497d1b0fe6d0ab518b1b32fe98fad0741/src/test/java/picard/sam/FilterSamReadsTest.java",
       "tool_execution": {
-        "status": "pending",
-        "evidence": null
+        "status": "passed_reference_check",
+        "evidence": "native_validation_runs/fd1f4c3a31f1.json",
+        "source_revision": "fd1f4c3a31f1f96e2bde2d6f5809eeda9df75de4",
+        "instances": 3,
+        "passing_instances": 3,
+        "scope": "real-fastq-quality-yield"
       },
       "scope": "Select or exclude read pairs using a manifest while retaining correct records and metadata.",
       "limitations": "Compare the full multiset of retained SAM records against a fresh ledger; check mates and counts. The upstream test constructs paired reads. Define inclusion by read name explicitly; duplicate marking would require its own tie-breaking policy."
@@ -637,8 +641,12 @@
       ],
       "source_url": "https://github.com/OpenGene/fastp/blob/8a2397b6628ae14127efdb7566f67fc05f9aea56/src/filter.cpp",
       "tool_execution": {
-        "status": "pending",
-        "evidence": null
+        "status": "passed_reference_check",
+        "evidence": "native_validation_runs/fd1f4c3a31f1.json",
+        "source_revision": "fd1f4c3a31f1f96e2bde2d6f5809eeda9df75de4",
+        "instances": 3,
+        "passing_instances": 3,
+        "scope": "real-fastq-pair-filter"
       },
       "scope": "Apply explicit quality, N-content, length, and complexity filters to fresh FASTQ.",
       "limitations": "Compute per-read predicates and retained IDs independently, preserving paired-read policy. Check strict versus inclusive boundaries and filter ordering. Automatic adapter detection adds ambiguity, so use declared adapters for exact trimming tasks."

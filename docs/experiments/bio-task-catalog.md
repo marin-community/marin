@@ -44,10 +44,12 @@ does not satisfy that requirement. Runtime tests must execute a bounded data ope
 record the package version and environment digest, and retain the output and grading result.
 
 The current authoring recipes use independent Python solvers. Native CLI/API
-execution is recorded separately below. **30 of 50 packages now pass all three
+execution is recorded separately below. **32 of 50 packages now pass all three
 reference cases**. The first CoreWeave run passed 22 packages; correction batches
-on an existing reserved TRC host in `us-central2` passed 8 more, with outputs
-retrieved from regional GCS. Twenty repositories still need reference scripts.
+on an existing reserved TRC host in `us-central2` passed 10 more, with outputs
+retrieved from regional GCS. Eighteen repositories still need reference scripts. Picard and fastp passed on
+observed ENA ERR266411 read pairs; fastp verification checks complete output FASTQ
+records as well as the JSON selection summary.
 The [machine-readable evidence](../../experiments/post_training/bio_tasks/native_validation.json)
 indexes checksum-pinned files under `native_validation_runs/`, retaining resolved
 package artifacts, input/output hashes, commands, grades and failures. Earlier host
@@ -80,7 +82,7 @@ Downloads, stars, and citations remain available in the unchanged
 | 12 | [Seurat](https://github.com/satijalab/seurat/blob/586015abde10618ecb32d3fe632267a83317a08d/tests/testthat/test_data_manipulation.R) | `matrixmarket-log-normalization`, `matrixmarket-feature-filtering` | 3 reference checks passed (`matrixmarket-log-normalization`) |
 | 13 | [minimap2](https://github.com/lh3/minimap2/blob/3c28777e7e2dcc90f825de1b9f17a89cca7d4452/example.c) | `paf-query-coverage`, `dna-unique-mapping` | 3 reference checks passed (`dna-unique-mapping`) |
 | 14 | [BCFtools](https://github.com/samtools/bcftools/blob/edf7fd96c5da562ecfd99fb7f9e4b9eb597aeae8/test/fill-tags-VAF.out) | `vcf-allelic-depth`, `vcf-multiallelic-splitting`, `vcf-minimal-representation` | 3 reference checks passed (`vcf-allelic-depth`) |
-| 15 | [Picard](https://github.com/broadinstitute/picard/blob/c2a483d497d1b0fe6d0ab518b1b32fe98fad0741/src/test/java/picard/sam/FilterSamReadsTest.java) | `sam-fragment-counts`, `sam-pair-concordance`, `real-fastq-quality-yield` | Script implemented; execution pending |
+| 15 | [Picard](https://github.com/broadinstitute/picard/blob/c2a483d497d1b0fe6d0ab518b1b32fe98fad0741/src/test/java/picard/sam/FilterSamReadsTest.java) | `sam-fragment-counts`, `sam-pair-concordance`, `real-fastq-quality-yield` | 3 reference checks passed (`real-fastq-quality-yield`) |
 | 16 | [Snakemake](https://github.com/snakemake/snakemake/blob/91763d644db0a6051c40014fa8ffad340f7d39a0/tests/test_expand.py) | `sample-sheet-lanes` | 3 reference checks passed (`sample-sheet-lanes`) |
 | 17 | [HTSlib](https://github.com/samtools/htslib/blob/d3cc9553d89dc34239afb7145b06c0dd818c0219/test/faidx/faidx.tst) | `fasta-indexed-regions`, `real-genome-promoters` | 3 reference checks passed (`fasta-indexed-regions`) |
 | 18 | [FastQC](https://github.com/s-andrews/FastQC/blob/87fb3364a2f37115833d678648926d41e184f0b1/uk/ac/babraham/FastQC/Modules/SequenceLengthDistribution.java) | `paired-read-qc`, `fastqc-report-reconciliation`, `real-fastq-cycle-quality`, `real-fastq-quality-yield` | 3 reference checks passed (`fastqc-report-reconciliation`) |
@@ -100,7 +102,7 @@ Downloads, stars, and citations remain available in the unchanged
 | 32 | [Salmon](https://github.com/COMBINE-lab/salmon/blob/5515b7f05a90341b6652adfdb807e7cf14295518/crates/salmon-cli/tests/output_contract.rs) | `transcript-tpm` | Pending |
 | 33 | [kallisto](https://github.com/pachterlab/kallisto/blob/4e9f29cf3b021260415430c057a22469ca081391/test/Snakefile) | `transcript-tpm`, `sample-sheet-lanes` | Pending |
 | 34 | [StringTie](https://github.com/gpertea/stringtie/blob/d1dc38ddb681089b2e8faaabdcfee772af6fb033/prepDE.py3) | `gtf-coverage-counts` | Pending |
-| 35 | [fastp](https://github.com/OpenGene/fastp/blob/8a2397b6628ae14127efdb7566f67fc05f9aea56/src/filter.cpp) | `paired-read-qc`, `fastq-adapter-trimming`, `real-fastq-pair-filter`, `real-fastq-fixed-trim`, `real-fastq-cycle-quality`, `real-fastq-quality-yield` | Script implemented; execution pending |
+| 35 | [fastp](https://github.com/OpenGene/fastp/blob/8a2397b6628ae14127efdb7566f67fc05f9aea56/src/filter.cpp) | `paired-read-qc`, `fastq-adapter-trimming`, `real-fastq-pair-filter`, `real-fastq-fixed-trim`, `real-fastq-cycle-quality`, `real-fastq-quality-yield` | 3 reference checks passed (`real-fastq-pair-filter`) |
 | 36 | [SRA Toolkit](https://github.com/ncbi/sra-tools/blob/434ae787c86e32e7faa5e80417a342c365fa03b0/test/external/fasterq-dump/fq_tests/split3.sh) | `sra-spot-export` | Pending |
 | 37 | [deepTools](https://github.com/deeptools/deepTools/blob/cde2aa7938cb4af6fe28de1504f94f6928344342/pydeeptools/deeptools/test/test_countReadsPerBin.py) | `bedgraph-weighted-signal`, `sam-cigar-coverage`, `sam-fragment-counts` | Pending |
 | 38 | [VCFtools](https://github.com/vcftools/vcftools/blob/1f87a83402ffd17ea2723a456b7edf5d80b4a22c/src/perl/fill-an-ac) | `genotype-alleles`, `vcf-sample-qc` | 3 reference checks passed (`vcf-sample-qc`) |
@@ -116,6 +118,8 @@ Downloads, stars, and citations remain available in the unchanged
 | 48 | [Biostrings](https://github.com/Bioconductor/Biostrings/blob/fb0cd89830abd054cf2681d6bc6c929981e07b21/tests/testthat/test-translate.R) | `fasta-six-frame-translation`, `gff-cds-translation`, `fasta-motif-hits`, `real-genome-cds-extraction`, `real-genome-translation`, `real-genome-gc3`, `real-genome-codon-counts`, `real-genome-promoters` | 3 reference checks passed (`fasta-six-frame-translation`) |
 | 49 | [pybedtools](https://github.com/daler/pybedtools/blob/efb8534c11ca6b45a6cd173ff3b3d1bf754e34a1/pybedtools/test/test_1.py) | `strand-extraction`, `interval-overlap`, `real-genome-cds-extraction`, `real-genome-overlap`, `real-genome-promoters` | 3 reference checks passed (`strand-extraction`) |
 | 50 | [nf-core/tools](https://github.com/nf-core/tools/blob/eb2f709090f4054f45437c34049ea2068567c339/tests/pipelines/test_schema.py) | `sample-sheet-lanes` | Pending |
+
+
 
 
 ## Package reference run

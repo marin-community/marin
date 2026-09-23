@@ -1,6 +1,6 @@
 {
   "schema_version": 3,
-  "scope": "Three small component instances per implemented package; reference execution, not Harbor or ID workflow validation.",
+  "scope": "Three component instances per implemented package, including observed read data; reference execution, not Harbor or full ID workflow validation.",
   "runs": [
     {
       "checked_at": "2026-09-23",
@@ -806,6 +806,38 @@
       "checks_file": "native_validation_runs/873bf55b231f.json",
       "checks_sha256": "ecceb6a141e85a8734ddad1790794e96739dff40e91acaff9aea1e075dc43ef6",
       "limitations": "Small component fixtures; no Harbor task-image validation or teacher calls. Corrections were submitted as new runs; earlier failed evidence is retained. No contract or tolerance changes."
+    },
+    {
+      "checked_at": "2026-09-23",
+      "source_revision": "fd1f4c3a31f1f96e2bde2d6f5809eeda9df75de4",
+      "environment_kind": "CPU-only task on an existing reserved TRC v4 host; serial isolated Conda environments",
+      "region": "us-central2",
+      "storage_backend": "GCS",
+      "base_image": "python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c",
+      "resources": {
+        "cpu": 1,
+        "memory_gib": 16,
+        "disk_gib": 48,
+        "concurrent_workers": 1,
+        "timeout_seconds": 3600,
+        "automatic_retries": 0
+      },
+      "corpus_manifest_sha256": "627aaba3732d727ad6fa493e2b9c48e65684f568b676cc0565dd1bfb3529a4b8",
+      "input_bundle_sha256": "a5faf13c5f0efbecc771e63467e1673a4f5c41c11b16a75b7fe8cd77377ab0b4",
+      "output_archive_sha256": "0297730e353c333c088fa36370f18981614a7a06f2ebc9f0c42fcc6ea9291643",
+      "output_archive_bytes": 1685937,
+      "summary": {
+        "expected_repositories": 50,
+        "attempted_repositories": 2,
+        "passed_repositories": 2,
+        "execution_failed_repositories": 0,
+        "planned_cases": 6,
+        "completed_cases": 6,
+        "passing_cases": 6
+      },
+      "checks_file": "native_validation_runs/fd1f4c3a31f1.json",
+      "checks_sha256": "9a3ea2a1acb13d31a957ebded136984fc79a8e96cc4af1c18b2ebcf0b3c3a803",
+      "limitations": "Observed ENA ERR266411 paired reads, three disjoint 2,000-pair blocks per operation. Fastp outputs verified against complete FASTQ contracts. No Harbor task-image validation or teacher calls; full benchmark-lineage screening pending. No contract or tolerance changes."
     }
   ]
 }
