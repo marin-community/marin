@@ -3,8 +3,8 @@
 
 """Direct HTSlib faidx access, independent of the SAMtools executable."""
 
-import os
 import shlex
+import sys
 from pathlib import Path
 
 from experiments.post_training.bio_tasks.native.commands import execute
@@ -34,8 +34,11 @@ def solve_htslib(inputs: Path, work: Path) -> list[dict]:
     source.write_text(PROGRAM)
     flags = execute(["pkg-config", "--cflags", "--libs", "htslib"], work, "flags.txt")
     executable = work / "fetch"
-    compiler = shlex.split(os.environ["CC"])
-    execute([*compiler, str(source), "-o", str(executable), *shlex.split(flags.read_text())], work, "compile.log")
+    execute(
+        ["gcc", str(source), "-o", str(executable), f"-Wl,-rpath,{sys.prefix}/lib", *shlex.split(flags.read_text())],
+        work,
+        "compile.log",
+    )
     answer = []
     for row in table(inputs / "regions.csv"):
         output = execute(

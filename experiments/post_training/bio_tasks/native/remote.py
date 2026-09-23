@@ -65,7 +65,7 @@ def run(bundle: Path, output: Path, micromamba: Path) -> None:
     plan = json.loads((bundle / "plan.json").read_text())
     # Keep package caches out of captured result artifacts; remove them on exit.
     # Iris's Docker runtime mounts /tmp as tmpfs. Keep executable package
-    # environments beside the staged bundle on the worker's regular filesystem.
+    # environments beside the staged bundle on its executable work mount.
     with TemporaryDirectory(prefix="bio-native-", dir=bundle.parent) as temporary:
         environment = dict(os.environ)
         environment.update(dict.fromkeys(THREAD_VARIABLES, "1"))
