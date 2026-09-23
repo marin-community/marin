@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace as Record
 
@@ -16,7 +17,15 @@ from dashboard_stitch import stitch_all
 from finelog.errors import StatsError
 from server import create_app
 from starlette.testclient import TestClient
-from vllm_observability import VLLM_DETAIL_MAX_WINDOW_MS, VLLM_OVERVIEW_SECTIONS
+from vllm_observability import (
+    VLLM_DETAIL_MAX_WINDOW_MS,
+    VLLM_OVERVIEW_SECTIONS,
+    VllmIdentityField,
+    vllm_overview_query,
+    vllm_overview_table,
+    vllm_run_summary_samples_query,
+    vllm_run_summary_table,
+)
 
 
 @pytest.mark.parametrize("filename", ["inference.json", "inference_overview.json"])
@@ -59,16 +68,241 @@ def test_inference_identity_selector_reads_request_state_rows(filename: str) -> 
 def _vllm_projection_database():
     database = duckdb.connect()
     columns = """cluster VARCHAR, service VARCHAR, job_id VARCHAR, name VARCHAR, kind VARCHAR,
-        value DOUBLE, resource_attributes_json VARCHAR, attributes_json VARCHAR, timestamp_ms BIGINT, seq BIGINT"""
+        value DOUBLE, resource_attributes_json VARCHAR, attributes_json VARCHAR, timestamp_ms BIGINT, seq BIGINT,
+        body_json VARCHAR"""
     for table in ("telemetry_v1.marinskyrl", "telemetry_v1.vllm"):
         database.execute(f'CREATE TABLE "{table}"({columns})')
     database.execute("CREATE MACRO json_get(d, f) AS json_extract_string(d, concat('$.', f))")
     # Finelog and DuckDB name the same struct constructor differently.
     database.execute(
-        """CREATE MACRO named_struct(k1, v1, k2, v2, k3, v3)
-                     AS struct_pack(timestamp_ms := v1, seq := v2, value := v3)"""
+        """CREATE MACRO named_struct(k1, v1, k2, v2, k3, v3, k4, v4, k5, v5,
+                                     k6 := NULL, v6 := NULL, k7 := NULL, v7 := NULL,
+                                     k8 := NULL, v8 := NULL, k9 := NULL, v9 := NULL,
+                                     k10 := NULL, v10 := NULL)
+                     AS struct_pack(timestamp_ms := v1, seq := v2, value := v3,
+                                    body_json := v4, publication_id := v5,
+                                    histogram_count := v6, histogram_sum := v7,
+                                    histogram_bounds := v8, producer_epoch := v9,
+                                    source_sequence := v10)"""
     )
     return database
+
+
+@pytest.mark.parametrize("format_name", ["scalar", "structured", "mixed", "dual", "dual_missing"])
+@pytest.mark.parametrize(
+    ("family", "metric"),
+    [("time_to_first_token_seconds", "ttft"), ("inter_token_latency_seconds", "inter_token_latency")],
+)
+def test_vllm_histogram_dashboard_format_parity(format_name: str, family: str, metric: str) -> None:
+    database = _vllm_projection_database()
+
+    def canonical(attributes: dict[str, str]) -> str:
+        return json.dumps(attributes, sort_keys=True, separators=(",", ":"))
+
+    bounds = (0.1, 1.0)
+    snapshots = (
+        (0, 0, (0, 0, 0), 0.0),
+        (15_000, 1, (1, 2, 0), 0.3),
+        (30_000, 2, (2, 3, 0), 0.8),
+    )
+    rows = []
+    for timestamp, sequence, bins, total in snapshots:
+        count = sum(bins)
+        common = {
+            "engine": "engine-a",
+            "engine_index": "0",
+            "metric_source": "vllm",
+            "source_kind": "histogram",
+            "source_temporality": "cumulative_snapshot",
+        }
+        scalar = format_name in ("scalar", "dual", "dual_missing") or (format_name == "mixed" and sequence < 2)
+        structured = (
+            format_name in ("structured", "dual")
+            or (format_name == "dual_missing" and sequence != 1)
+            or (format_name == "mixed" and sequence > 0)
+        )
+        if scalar:
+            labels = {
+                **common,
+                **({"histogram_publication_id": f"engine-a:{sequence}"} if format_name.startswith("dual") else {}),
+            }
+            running = 0
+            for bound, bin_count in zip((*bounds, float("inf")), bins, strict=True):
+                running += bin_count
+                rows.append(
+                    (
+                        f"{family}_bucket",
+                        "gauge",
+                        float(running),
+                        None,
+                        canonical({**labels, "le": "+Inf" if bound == float("inf") else str(bound)}),
+                        timestamp,
+                    )
+                )
+            rows.extend(
+                (
+                    (f"{family}_count", "gauge", float(count), None, canonical(labels), timestamp),
+                    (f"{family}_sum", "gauge", total, None, canonical(labels), timestamp),
+                )
+            )
+        if structured:
+            body = {
+                "encoding": "explicit_bucket_v1",
+                "aggregation_temporality": "cumulative",
+                "explicit_bounds": list(bounds),
+                "bucket_counts": list(bins),
+                "count": count,
+                "sum": total,
+                "producer_epoch": "engine-a",
+                "sequence": sequence,
+            }
+            rows.append((family, "histogram", None, json.dumps(body), canonical(common), timestamp))
+    database.executemany(
+        """INSERT INTO "telemetry_v1.marinskyrl"
+           (cluster, service, job_id, name, kind, value, body_json,
+            resource_attributes_json, attributes_json, timestamp_ms, seq)
+           VALUES ('cw-a', 'marinskyrl', '/train', ?, ?, ?, ?, '{}', ?, ?, ?)""",
+        [(*row, seq) for seq, row in enumerate(rows)],
+    )
+    overview = vllm_overview_query(VllmIdentityField.JOB_ID, "/train", 0, 45_000, 15_000)
+    series = database.execute(overview.samples_sql).fetch_arrow_table()
+    result = vllm_overview_table(overview, series, nullcontext(), max_rows=10_000).to_pylist()
+    statistics = {
+        row["stat"]: (row["value"], row["samples"])
+        for row in result
+        if row["section"] == "latency" and row["metric"] == metric and row["t"] is None
+    }
+    assert statistics["mean"] == pytest.approx((0.16, 5))
+    assert statistics["p50"] == (1.0, 5)
+    assert statistics["p90"] == (1.0, 5)
+    assert statistics["p99"] == (1.0, 5)
+    summary_series = database.execute(vllm_run_summary_samples_query(overview)).fetch_arrow_table()
+    summary = vllm_run_summary_table(overview, summary_series, nullcontext(), max_rows=1_000).to_pylist()
+    if metric == "ttft":
+        # Untagged overlap during a format switch adds a zero-delta sample, not observations.
+        expected_samples = 3 if format_name == "mixed" else 2
+        assert [(row["value"], row["samples"]) for row in summary if row["metric"] == "ttft_observations"] == [
+            (5, expected_samples)
+        ]
+    else:
+        assert [(row["value"], row["samples"]) for row in summary if row["metric"] == "inter_token_latency"] == [
+            (pytest.approx(0.16), 5)
+        ]
+
+
+@pytest.mark.parametrize("conflicting", [False, True])
+def test_structured_histogram_exact_large_counts_duplicate_loss_and_reset(conflicting: bool) -> None:
+    database = _vllm_projection_database()
+    first = (1 << 53) + 1
+    samples = (
+        (0, 0, first, 0.0, 5),
+        (15_000, 1, first + 2, 0.2, 2),
+        (15_000, 1, first + (4 if conflicting else 2), 0.4 if conflicting else 0.2, 8),
+        (45_000, 3, first + 5, 0.5, 1),  # publication 2 was lost; cumulative count recovers
+        (60_000, 4, 1, 0.1, 7),  # counter reset
+        (75_000, 5, 3, 0.3, 3),
+    )
+    attributes = json.dumps(
+        {
+            "engine": "engine-a",
+            "engine_index": "0",
+            "metric_source": "vllm",
+            "source_kind": "histogram",
+            "source_temporality": "cumulative_snapshot",
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    database.executemany(
+        """INSERT INTO "telemetry_v1.marinskyrl"
+           (cluster, service, job_id, name, kind, value, body_json,
+            resource_attributes_json, attributes_json, timestamp_ms, seq)
+           VALUES ('cw-a', 'marinskyrl', '/train', 'time_to_first_token_seconds',
+                   'histogram', NULL, ?, '{}', ?, ?, ?)""",
+        [
+            (
+                json.dumps(
+                    {
+                        "encoding": "explicit_bucket_v1",
+                        "aggregation_temporality": "cumulative",
+                        "explicit_bounds": [0.1],
+                        "bucket_counts": [count, 0],
+                        "count": count,
+                        "sum": total,
+                        "producer_epoch": "engine-a",
+                        "sequence": sequence,
+                    }
+                ),
+                attributes,
+                timestamp,
+                arrival_seq,
+            )
+            for timestamp, sequence, count, total, arrival_seq in samples
+        ],
+    )
+    overview = vllm_overview_query(VllmIdentityField.JOB_ID, "/train", 0, 90_000, 15_000)
+    series = database.execute(overview.samples_sql).fetch_arrow_table()
+    result = vllm_overview_table(overview, series, nullcontext(), max_rows=10_000).to_pylist()
+    means = [row for row in result if row["section"] == "latency" and row["metric"] == "ttft" and row["stat"] == "mean"]
+    assert [(row["value"], row["samples"]) for row in means] == [(pytest.approx(0.1), 7)]
+    time_samples = {
+        row["t"]: row["samples"]
+        for row in result
+        if row["section"] == "latency" and row["metric"] == "ttft" and row["stat"] == "mean_over_time"
+    }
+    assert time_samples == ({45_000: 5, 75_000: 2} if conflicting else {15_000: 2, 45_000: 3, 75_000: 2})
+    summary_series = database.execute(vllm_run_summary_samples_query(overview)).fetch_arrow_table()
+    summary = vllm_run_summary_table(overview, summary_series, nullcontext(), max_rows=1_000).to_pylist()
+    assert [row["value"] for row in summary if row["metric"] == "ttft_observations"] == [7]
+
+
+def test_structured_histogram_bound_change_keeps_means_and_withholds_mixed_schema_tails() -> None:
+    database = _vllm_projection_database()
+    attributes = json.dumps(
+        {
+            "engine": "engine-a",
+            "engine_index": "0",
+            "metric_source": "vllm",
+            "source_kind": "histogram",
+            "source_temporality": "cumulative_snapshot",
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    rows = []
+    for sequence, (bound, count, total) in enumerate(((0.1, 0, 0.0), (0.1, 2, 0.2), (0.2, 3, 0.3), (0.2, 5, 0.7))):
+        body = {
+            "encoding": "explicit_bucket_v1",
+            "aggregation_temporality": "cumulative",
+            "explicit_bounds": [bound],
+            "bucket_counts": [count, 0],
+            "count": count,
+            "sum": total,
+            "producer_epoch": "engine-a",
+            "sequence": sequence,
+        }
+        rows.append((json.dumps(body), attributes, sequence * 15_000, sequence))
+    database.executemany(
+        """INSERT INTO "telemetry_v1.marinskyrl"
+           (cluster, service, job_id, name, kind, value, body_json,
+            resource_attributes_json, attributes_json, timestamp_ms, seq)
+           VALUES ('cw-a', 'marinskyrl', '/schema-change', 'time_to_first_token_seconds',
+                   'histogram', NULL, ?, '{}', ?, ?, ?)""",
+        rows,
+    )
+    overview = vllm_overview_query(VllmIdentityField.JOB_ID, "/schema-change", 0, 60_000, 15_000)
+    series = database.execute(overview.samples_sql).fetch_arrow_table()
+    result = vllm_overview_table(overview, series, nullcontext(), max_rows=10_000).to_pylist()
+    stats = {
+        row["stat"]: (row["value"], row["samples"])
+        for row in result
+        if row["section"] == "latency" and row["metric"] == "ttft" and row["t"] is None
+    }
+    assert stats["mean"] == pytest.approx((0.15, 4))
+    assert stats["p50"] == (None, 4)
+    summary_series = database.execute(vllm_run_summary_samples_query(overview)).fetch_arrow_table()
+    summary = vllm_run_summary_table(overview, summary_series, nullcontext(), max_rows=1_000).to_pylist()
+    assert [row["value"] for row in summary if row["metric"] == "ttft_observations"] == [4]
 
 
 def _embedded_overview_app(invalid_histogram):
@@ -144,6 +378,8 @@ def _embedded_overview_app(invalid_histogram):
     ]
     database.executemany(
         """INSERT INTO "telemetry_v1.marinskyrl"
+           (cluster, service, job_id, name, kind, value, resource_attributes_json,
+            attributes_json, timestamp_ms, seq)
            VALUES ('cw-a', 'marinskyrl', '/train', ?, 'gauge', ?, '{"worker":"driver"}', ?, ?, ?)""",
         [(*row, seq) for seq, row in enumerate(samples)],
     )
@@ -271,7 +507,9 @@ def _standalone_overview_app():
     for cluster, values in (("cw-a", (100, 250, 10)), ("cw-b", (100, 160, 220))):
         for timestamp, value in zip((0, 60_000, 120_000), values, strict=True):
             database.execute(
-                """INSERT INTO "telemetry_v1.vllm" VALUES
+                """INSERT INTO "telemetry_v1.vllm"
+                (cluster, service, job_id, name, kind, value, resource_attributes_json,
+                 attributes_json, timestamp_ms, seq) VALUES
                 (?, 'vllm', '/serve', 'generation_tokens_total', 'gauge', ?, '{}',
                  '{"source_temporality":"cumulative_snapshot"}', ?, 0),
                 (?, 'vllm', '/serve', 'num_requests_waiting', 'gauge', 0, '{}',
@@ -363,7 +601,9 @@ def test_run_triage_count_gap_can_be_a_partial_window_without_a_failed_request()
         for timestamp, value in zip((0, 60_000, 5 * 3_600_000, 9 * 3_600_000), values, strict=True)
     ]
     database.executemany(
-        """INSERT INTO "telemetry_v1.vllm" VALUES
+        """INSERT INTO "telemetry_v1.vllm"
+           (cluster, service, job_id, name, kind, value, resource_attributes_json,
+            attributes_json, timestamp_ms, seq) VALUES
            ('cw-a', 'vllm', '/other-serve', ?, 'gauge', ?, '{}', ?, ?, 0)""",
         [
             (

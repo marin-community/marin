@@ -13,6 +13,7 @@ import pytest
 import requests
 import zstandard
 from rigging import telemetry
+from rigging.telemetry.metrics import HistogramSnapshot, HistogramSnapshotPublisher
 
 
 @dataclass
@@ -267,6 +268,40 @@ def test_pending_and_queued_records_share_hard_caps(
     assert status.queued_records <= queue_records
     assert status.queued_bytes <= queue_bytes
     assert status.lost_records > 0
+    transport.release.set()
+
+
+def test_histogram_queue_pressure_loses_a_whole_family(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = BlockingTransport()
+    configure(monkeypatch, transport, max_queue_records=1, max_batch_records=1)
+    publisher = HistogramSnapshotPublisher(max_records=2)
+
+    def sample(sequence: int) -> HistogramSnapshot:
+        return HistogramSnapshot(
+            name="request_queue_time_seconds",
+            explicit_bounds=(0.01,),
+            bucket_counts=(sequence, 0),
+            count=sequence,
+            total=0.0,
+            unit="s",
+            attributes={"engine": "engine-a"},
+            timestamp_ms=1_700_000_000_000 + sequence,
+            producer_epoch="engine-incarnation-1",
+            sequence=sequence,
+        )
+
+    first = publisher.publish((sample(1),))
+    assert transport.started.wait(1)
+    second = publisher.publish((sample(2),))
+
+    assert first.enqueued_records == 1
+    assert second.enqueued_records == 0
+    assert second.telemetry_lost_records == 1
+    assert telemetry.runtime_status().lost_records == 1
+    assert telemetry.runtime_status().queued_records == 1
+    sent = json.loads(transport.requests[0][1])["records"]
+    assert len(sent) == 1
+    assert sent[0]["body"]["bucket_counts"] == [1, 0]
     transport.release.set()
 
 

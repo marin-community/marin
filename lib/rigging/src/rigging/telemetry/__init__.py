@@ -668,6 +668,35 @@ def _emit_to_runtime(
         return False
 
 
+def _emit_histogram_to_runtime(
+    runtime: _Runtime,
+    name: str,
+    *,
+    body: Mapping[str, object],
+    timestamp_ms: int,
+    unit: str,
+    attributes: Mapping[str, str],
+) -> bool:
+    """Admit one complete explicit-bucket histogram as one bounded queue record."""
+    try:
+        serialization.validate_string(name, "name")
+        if unit:
+            serialization.validate_string(unit, "unit")
+        serialization.validate_attributes(attributes)
+        record = {
+            "attributes": dict(attributes),
+            "body": dict(body),
+            "kind": "histogram",
+            "name": name,
+            "timestamp_ms": timestamp_ms,
+            "unit": unit,
+        }
+        return runtime.emit(serialization.json_bytes_bounded(record, runtime.max_record_bytes()))
+    except Exception:
+        runtime.count_lost()
+        return False
+
+
 def _valid_ack(response: _Response, batch_id: str) -> bool:
     try:
         payload = response.json()
