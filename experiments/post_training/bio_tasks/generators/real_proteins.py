@@ -65,9 +65,11 @@ def generate_alignment(seed: int) -> Instance:
         {"counted_initiator_twice": [{**row, "residues": row["residues"] + 1} for row in contract.answer()]},
         data_origin=DataOrigin.REAL,
         source_ids=(SOURCE,),
-        derivation=("Six full-length proteins selected from ten curated UniProt entries; sequence bytes unchanged. "
-                    "Independent pairwise bounds from pinned Biopython. A separate center-star solver demonstrates "
-                    "feasibility for every admitted instance."),
+        derivation=(
+            "Six full-length proteins selected from ten curated UniProt entries; sequence bytes unchanged. "
+            "Independent pairwise bounds from pinned Biopython. A separate center-star solver demonstrates "
+            "feasibility for every admitted instance."
+        ),
     )
 
 
