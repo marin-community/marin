@@ -11,15 +11,15 @@ import optax
 from haliax.partitioning import set_mesh
 from levanter.checkpoint import save_checkpoint
 from levanter.grug.sharding import compact_grug_mesh
+from levanter.models.snowball import SnowballConfig, SnowballTransformer
 
-from experiments.grug.moe_hero_ep import train as hero_train
+from experiments.grug.checkpointing import init_weights_only_from_checkpoint
 from experiments.grug.moe_hero_ep.model import GrugModelConfig as CurrentConfig
 from experiments.grug.moe_hero_ep.train import initial_state
-from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig as LegacyConfig
-from experiments.june_tpu_67b_a2b.moe.model import Transformer as LegacyTransformer
+from experiments.grug_sft.snowball_hf_import import import_snowball_hf_weights
 
 
-def test_legacy_initializer_remaps_the_single_shared_expert(tmp_path: Path):
+def test_snowball_checkpoint_initializes_current_trainer_weights(tmp_path: Path):
     common = dict(
         vocab_size=24,
         hidden_dim=12,
@@ -35,18 +35,19 @@ def test_legacy_initializer_remaps_the_single_shared_expert(tmp_path: Path):
         sliding_window=4,
         moe_implementation="ring",
     )
-    legacy_config = LegacyConfig(
-        **common,
-        use_array_stacked_blocks=True,
-        disable_pko=True,
-        disable_long_rope=True,
-    )
+    snowball_config = SnowballConfig(**common)
     current_config = CurrentConfig(**common)
     mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)
     pending_qb_betas = jnp.ones((2, 4))
 
     with set_mesh(mesh):
-        legacy = LegacyTransformer.init(legacy_config, key=jax.random.key(0))
+        snowball = SnowballTransformer.init(snowball_config, key=jax.random.key(0))
+        converted, _ = import_snowball_hf_weights(
+            snowball_config,
+            current_config,
+            snowball.to_state_dict(),
+            key=jax.random.key(2),
+        )
         fresh = initial_state(
             current_config,
             optimizer=optax.sgd(0.1),
@@ -55,22 +56,24 @@ def test_legacy_initializer_remaps_the_single_shared_expert(tmp_path: Path):
             ema_beta=None,
         )
         save_checkpoint(
-            {"params": legacy, "pending_qb_betas": pending_qb_betas},
+            {"params": converted, "pending_qb_betas": pending_qb_betas},
             step=0,
             checkpoint_path=str(tmp_path),
         )
-        initialized = hero_train.initialize_legacy_single_shared_expert_weights(
+        initialized = init_weights_only_from_checkpoint(
             fresh,
             str(tmp_path),
             mesh=mesh,
+            allow_partial=False,
+            additional_weight_fields=("pending_qb_betas",),
         )
 
-    np.testing.assert_array_equal(initialized.params.token_embed, legacy.token_embed)
+    np.testing.assert_array_equal(initialized.params.token_embed, snowball.token_embed)
     initialized_shared = initialized.params.stacked_blocks.stacked.shared
     assert initialized_shared is not None
     np.testing.assert_array_equal(
         initialized_shared[0].w_gate,
-        legacy.stacked_blocks.stacked.shared.w_gate,
+        converted.stacked_blocks.stacked.shared[0].w_gate,
     )
     np.testing.assert_array_equal(initialized.pending_qb_betas, pending_qb_betas)
     assert int(initialized.step) == 0

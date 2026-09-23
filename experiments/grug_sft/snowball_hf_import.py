@@ -1,11 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Import canonical Snowball HF weights into the vendored stacked Grug trainer model."""
+"""Import canonical Snowball HF weights into the current stacked Grug trainer model."""
 
 from __future__ import annotations
 
-import dataclasses
 import os
 import tempfile
 from collections.abc import Mapping, Sequence
@@ -23,7 +22,7 @@ from jax.experimental.array_serialization.serialization import GlobalAsyncCheckp
 from levanter.checkpoint import save_checkpoint
 from levanter.compat.hf_checkpoints import RepoRef, load_tokenizer
 from levanter.grug.sharding import compact_grug_mesh
-from levanter.models.snowball import SnowballConfig, snowball_from_state_dict
+from levanter.models.snowball import SnowballBlock, SnowballConfig, SnowballTransformer
 from levanter.utils.jax_utils import use_cpu_device
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
@@ -31,13 +30,13 @@ from marin.training.training import LevanterCheckpoint
 from marin.utils import get_directory_friendly_name
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-from experiments.june_tpu_67b_a2b.moe.model import Block, GrugModelConfig, Transformer
+from experiments.grug.moe_hero_ep.model import Block, GrugModelConfig, Transformer
 
 _CHECKPOINT_STEP = 0
 _CONVERSION_ENV = {"XLA_PYTHON_CLIENT_PREALLOCATE": "false"}
 
 
-def _stack_blocks(blocks: Sequence[Block], template: ArrayStacked[Block]) -> ArrayStacked[Block]:
+def _stack_blocks(blocks: Sequence[SnowballBlock], template: ArrayStacked[Block]) -> ArrayStacked[Block]:
     """Stack loaded per-layer leaves while retaining the trainer template's static metadata."""
     if len(blocks) != template.num_layers:
         raise ValueError(f"Expected {template.num_layers} blocks, got {len(blocks)}")
@@ -45,7 +44,7 @@ def _stack_blocks(blocks: Sequence[Block], template: ArrayStacked[Block]) -> Arr
     source_leaves = [jax.tree.leaves(block) for block in blocks]
     template_leaves, template_treedef = jax.tree.flatten(template.stacked)
     if any(len(leaves) != len(template_leaves) for leaves in source_leaves):
-        raise ValueError("HF-loaded blocks do not match the vendored stacked trainer pytree")
+        raise ValueError("Snowball blocks do not match the stacked trainer pytree")
 
     stacked_leaves = []
     for leaf_index, template_leaf in enumerate(template_leaves):
@@ -59,30 +58,23 @@ def _stack_blocks(blocks: Sequence[Block], template: ArrayStacked[Block]) -> Arr
 
 
 def import_snowball_hf_weights(
-    config: GrugModelConfig,
+    snowball_config: SnowballConfig,
+    trainer_config: GrugModelConfig,
     state_dict: Mapping[str, Any],
     *,
     key: jax.Array,
 ) -> tuple[Transformer, jax.Array]:
-    """Build the historical stacked Grug model and its QB state from canonical HF tensors.
+    """Build current Grug weights and QB state from canonical Snowball HF tensors.
 
     Snowball HF exports contain the *effective* router biases after the source checkpoint's pending
-    QB update was applied. The historical trainer applies ``pending_qb_betas`` at the start of every
+    QB update was applied. The trainer applies ``pending_qb_betas`` at the start of every
     step, so the inverse bias is reconstructed here. Centering is functionally exact because adding a
     per-layer scalar to every expert logit changes neither top-k selection nor combine weights.
     """
-    if not config.use_array_stacked_blocks:
-        raise ValueError("Snowball SFT import requires use_array_stacked_blocks=True")
+    load_template = eqx.filter_eval_shape(SnowballTransformer.init, snowball_config, key=key)
+    loaded = load_template.from_state_dict(dict(state_dict))
 
-    unstacked_config = dataclasses.replace(config, use_array_stacked_blocks=False)
-    load_template = eqx.filter_eval_shape(Transformer.init, unstacked_config, key=key)
-    loaded = snowball_from_state_dict(load_template, dict(state_dict))
-    if loaded.blocks is None:
-        raise ValueError("HF import did not produce unstacked blocks")
-
-    target = eqx.filter_eval_shape(Transformer.init, config, key=key)
-    if target.stacked_blocks is None:
-        raise ValueError("Stacked trainer template did not produce stacked blocks")
+    target = eqx.filter_eval_shape(Transformer.init, trainer_config, key=key)
     stacked_blocks = _stack_blocks(loaded.blocks, target.stacked_blocks)
 
     router_bias = stacked_blocks.stacked.mlp.router_bias
@@ -94,16 +86,30 @@ def import_snowball_hf_weights(
     )
     pending_qb_betas = -centered_router_bias
 
-    model = Transformer(
-        token_embed=loaded.token_embed,
-        embed_norm=loaded.embed_norm,
-        embed_gated_norm=loaded.embed_gated_norm,
-        output_proj=loaded.output_proj,
-        blocks=None,
-        stacked_blocks=stacked_blocks,
-        final_norm=loaded.final_norm,
-        final_gated_norm=loaded.final_gated_norm,
-        config=config,
+    model = eqx.tree_at(
+        lambda value: (
+            value.token_embed,
+            value.embed_norm.weight,
+            value.embed_gated_norm.w_down,
+            value.embed_gated_norm.w_up,
+            value.output_proj,
+            value.stacked_blocks,
+            value.final_norm.weight,
+            value.final_gated_norm.w_down,
+            value.final_gated_norm.w_up,
+        ),
+        target,
+        (
+            jax.sharding.reshard(loaded.token_embed, target.token_embed.sharding),
+            jax.sharding.reshard(loaded.embed_norm.weight, target.embed_norm.weight.sharding),
+            jax.sharding.reshard(loaded.embed_gated_norm.w_down, target.embed_gated_norm.w_down.sharding),
+            jax.sharding.reshard(loaded.embed_gated_norm.w_up, target.embed_gated_norm.w_up.sharding),
+            jax.sharding.reshard(loaded.output_proj, target.output_proj.sharding),
+            stacked_blocks,
+            jax.sharding.reshard(loaded.final_norm.weight, target.final_norm.weight.sharding),
+            jax.sharding.reshard(loaded.final_gated_norm.w_down, target.final_gated_norm.w_down.sharding),
+            jax.sharding.reshard(loaded.final_gated_norm.w_up, target.final_gated_norm.w_up.sharding),
+        ),
     )
     return model, pending_qb_betas
 
@@ -159,6 +165,7 @@ def _run_snowball_hf_to_grug(config: SnowballHfToGrugConfig) -> None:
     with use_cpu_device(), set_mesh(compact_grug_mesh(expert_axis_size=1)):
         state_dict = converter.load_state_dict(ref, dtype=jnp.bfloat16)
         model, pending_qb_betas = import_snowball_hf_weights(
+            source_config,
             model_config,
             state_dict,
             key=jax.random.key(0),

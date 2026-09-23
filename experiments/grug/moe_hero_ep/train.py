@@ -32,7 +32,6 @@ from jax.tree_util import register_dataclass
 from jaxtyping import PRNGKeyArray
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
-from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
 from levanter.checkpoint_manifest import read_manifest
 from levanter.data.dataset import AsyncDataset
 from levanter.data.loader import DataLoader
@@ -142,7 +141,6 @@ class WeightInitialization(StrEnum):
     """External checkpoint layouts supported for fresh optimizer initialization."""
 
     NATIVE = "native"
-    LEGACY_SINGLE_SHARED_EXPERT = "legacy_single_shared_expert"
 
 
 def restore_template_from(state):
@@ -758,34 +756,6 @@ def initial_state(
     )
 
 
-def initialize_legacy_single_shared_expert_weights(
-    state: GrugTrainState,
-    checkpoint_path: str,
-    *,
-    mesh: Mesh,
-) -> GrugTrainState:
-    """Load a pre tuple shared-expert checkpoint into the current model layout."""
-    state = init_weights_only_from_checkpoint(
-        state,
-        checkpoint_path,
-        mesh=mesh,
-        allow_partial=True,
-        additional_weight_fields=("pending_qb_betas",),
-    )
-    concrete_path = latest_checkpoint_path(checkpoint_path)
-    shared = state.params.stacked_blocks.stacked.shared
-    if shared is None or len(shared) != 1:
-        raise ValueError("Legacy single shared-expert initialization requires exactly one shared expert")
-    exemplar = {"params": {"stacked_blocks": {"stacked": {"shared": shared[0]}}}}
-    loaded = load_checkpoint(exemplar, concrete_path, mesh=mesh, allow_partial=True)
-    legacy_shared = loaded["params"]["stacked_blocks"]["stacked"]["shared"]
-    params = eqx.tree_at(lambda model: model.stacked_blocks.stacked.shared[0], state.params, legacy_shared)
-    ema_params = state.ema_params
-    if ema_params is not None:
-        ema_params = eqx.tree_at(lambda model: model.stacked_blocks.stacked.shared[0], ema_params, legacy_shared)
-    return dataclasses.replace(state, params=params, ema_params=ema_params)
-
-
 def _drop_metrics(
     dropped_assignments: jax.Array,
     sender_dropped_assignments: jax.Array,
@@ -1075,12 +1045,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         mesh=mesh,
                         allow_partial=False,
                         additional_weight_fields=("pending_qb_betas",),
-                    )
-                elif initialization == WeightInitialization.LEGACY_SINGLE_SHARED_EXPERT:
-                    state = initialize_legacy_single_shared_expert_weights(
-                        state,
-                        trainer.initialize_from,
-                        mesh=mesh,
                     )
                 else:
                     raise ValueError(f"Unsupported weight initialization: {initialization}")
@@ -1419,6 +1383,5 @@ __all__ = [
     "MasterParamMode",
     "WeightInitialization",
     "initial_state",
-    "initialize_legacy_single_shared_expert_weights",
     "run_grug",
 ]

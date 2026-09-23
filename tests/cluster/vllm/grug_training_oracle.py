@@ -20,7 +20,7 @@ from jax.sharding import AxisType, Mesh
 from jax.sharding import PartitionSpec as P
 from levanter.grug.attention import AttentionMask
 from levanter.grug.sharding import _GRUG_MESH_AXIS_NAMES, unshard
-from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel, snowball_to_state_dict
+from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 from safetensors.numpy import save_file
 
 TINY_CONFIG = MappingProxyType(
@@ -244,7 +244,7 @@ def emit_oracle(output_dir: Path) -> None:
         model = SnowballLMHeadModel.init(Axis("vocab", config.vocab_size), config, key=jax.random.key(7))
         state = {
             key: np.ascontiguousarray(np.asarray(jax.device_get(value)))
-            for key, value in snowball_to_state_dict(model.transformer).items()
+            for key, value in model.transformer.to_state_dict().items()
         }
         save_file(state, output_dir / "model.safetensors")
         del state

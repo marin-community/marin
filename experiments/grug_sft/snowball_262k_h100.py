@@ -50,12 +50,11 @@ from experiments.grug.moe_hero_ep.train import (
     run_grug,
 )
 from experiments.grug_sft.snowball_hf_import import snowball_hf_to_grug
-from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig as LegacyGrugModelConfig
 
 HF_MODEL = "open-athena/snowball-67b-a2b-base-262k-qk175-skew8"
 HF_REVISION = "058ecaf27b9e4f37219df221a51e7d490d58ec3d"
 DATA_SOURCE = "openthoughts-agent-sft-100k"
-CONVERSION_VERSION = "2026.09.22"
+CONVERSION_VERSION = "2026.09.22-native"
 DEFAULT_RUN_ID = "snowball-67b-262k-h100-demo"
 WANDB_PROJECT = "snowball_sft_demo"
 
@@ -67,33 +66,6 @@ DEFAULT_SAMPLE_COUNT = 256
 TENSORSTORE_CACHE_BYTES = 2 * 1024**3
 TOKENIZE_WORKERS = 32
 STORE_WORKERS = 32
-
-
-def legacy_model_config() -> LegacyGrugModelConfig:
-    """Architecture used only while converting the canonical HF tensors."""
-    return LegacyGrugModelConfig(
-        vocab_size=128_256,
-        hidden_dim=2_560,
-        intermediate_dim=1_280,
-        shared_expert_intermediate_dim=2_560,
-        num_experts=256,
-        num_experts_per_token=4,
-        num_layers=26,
-        num_heads=20,
-        num_kv_heads=5,
-        head_dim=128,
-        max_seq_len=CONTEXT_LENGTH,
-        sliding_window=2_048,
-        layer_norm_eps=1e-5,
-        initializer_std=0.009882117688026186,
-        qk_mult=1.75,
-        disable_pko=True,
-        disable_long_rope=True,
-        attention_implementation="gpu_fa4_cute",
-        moe_implementation="ring",
-        ce_implementation="batched_xla",
-        use_array_stacked_blocks=True,
-    )
 
 
 def model_config() -> GrugModelConfig:
@@ -207,7 +179,7 @@ def run_config(
             expert_axis_size=1,
             replica_axis_size=1,
             context_axis_size=CONTEXT_SHARDS,
-            weight_initialization=WeightInitialization.LEGACY_SINGLE_SHARED_EXPERT,
+            weight_initialization=WeightInitialization.NATIVE,
         ),
         eval=None,
         processes_per_task=8,
@@ -279,7 +251,7 @@ def build_demo(
     conversion = snowball_hf_to_grug(
         HF_MODEL,
         hf_revision=HF_REVISION,
-        model=legacy_model_config(),
+        model=model_config(),
         version=CONVERSION_VERSION,
         resources=ResourceConfig.with_cpu(cpu=64, ram="768g", disk="384g"),
     )

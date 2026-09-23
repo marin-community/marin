@@ -645,6 +645,14 @@ class SnowballTransformer(eqx.Module):
             config=cfg,
         )
 
+    def to_state_dict(self, prefix: Optional[str] = None) -> StateDict:
+        """Export Snowball weights with canonical Hugging Face tensor names."""
+        return _snowball_to_state_dict(self, prefix=prefix)
+
+    def from_state_dict(self, state_dict: StateDict, prefix: Optional[str] = None) -> "SnowballTransformer":
+        """Load canonical Hugging Face tensors into this Snowball template."""
+        return _snowball_from_state_dict(self, state_dict, prefix=prefix)
+
     @named_call
     def __call__(self, token_ids: Int[Array, "B S"], mask: Optional[AttentionMask] = None) -> Float[Array, "B S D"]:
         cfg = self.config
@@ -736,10 +744,10 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
 
     # --- state dict (bidirectional HF serialization) ---
     def to_state_dict(self, prefix: Optional[str] = None) -> StateDict:
-        return snowball_to_state_dict(self.transformer, prefix=prefix)
+        return self.transformer.to_state_dict(prefix=prefix)
 
     def from_state_dict(self, state_dict: StateDict, prefix: Optional[str] = None) -> "SnowballLMHeadModel":
-        new_tf = snowball_from_state_dict(self.transformer, state_dict, prefix=prefix)
+        new_tf = self.transformer.from_state_dict(state_dict, prefix=prefix)
         return SnowballLMHeadModel(new_tf, self._config)
 
 
@@ -769,7 +777,7 @@ def _T(value: jax.Array) -> jax.Array:
     return jnp.swapaxes(value, -1, -2)
 
 
-def snowball_to_state_dict(model: SnowballTransformer, prefix: Optional[str] = None) -> StateDict:
+def _snowball_to_state_dict(model: SnowballTransformer, prefix: Optional[str] = None) -> StateDict:
     tensors: dict[str, jax.Array] = {
         "model.embed_tokens.weight": model.token_embed,
         "model.embed_norm.weight": model.embed_norm.weight,
@@ -812,7 +820,7 @@ def _get(state_dict: StateDict, prefix: Optional[str], name: str) -> jax.Array:
     return jnp.asarray(state_dict[_with_prefix(prefix, name)])
 
 
-def snowball_from_state_dict(
+def _snowball_from_state_dict(
     template: SnowballTransformer, state_dict: StateDict, prefix: Optional[str] = None
 ) -> SnowballTransformer:
     """Populate the template's leaves from canonical HF keys, resharding each to its Grug spec.
@@ -937,6 +945,4 @@ __all__ = [
     "GrugMoeHfConfig",
     "SnowballConfig",
     "SnowballLMHeadModel",
-    "snowball_from_state_dict",
-    "snowball_to_state_dict",
 ]
