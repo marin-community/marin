@@ -121,6 +121,15 @@ def run(bundle: Path, output: Path, micromamba: Path) -> None:
                     60,
                     environment,
                 )
+                packages = []
+                for metadata in sorted((prefix / "conda-meta").glob("*.json")):
+                    package = json.loads(metadata.read_text())
+                    if not package.get("url") or not (package.get("sha256") or package.get("md5")):
+                        raise ValueError(f"Installed package lacks an artifact URL/checksum: {metadata.name}")
+                    packages.append(
+                        {key: package.get(key) for key in ("name", "version", "build", "subdir", "url", "sha256", "md5")}
+                    )
+                (repo_dir / "environment.lock.json").write_text(json.dumps(packages, indent=2) + "\n")
                 result["execution"] = "completed"
                 for case in repository["cases"]:
                     target = repo_dir / case["task_id"]
