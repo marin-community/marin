@@ -103,7 +103,8 @@ NUM_SPECULATIVE_TOKENS = 3
 
 DRAFT_EPOCHS = 8
 DRAFT_TASK_CPU = 96
-DRAFT_TASK_MEMORY = "512g"
+DRAFT_CAPTURE_MEMORY = "512g"
+DRAFT_TRAINING_MEMORY = "768g"
 DRAFT_TASK_DISK = "1t"
 TORCHAUDIO_CU128_REQUIREMENT = (
     "torchaudio @ https://download.pytorch.org/whl/cu128/"
@@ -260,7 +261,7 @@ def _capture_step(conversations: ArtifactStep[Artifact]) -> ArtifactStep[Artifac
                 GPU_VARIANT,
                 count=GPU_COUNT,
                 cpu=DRAFT_TASK_CPU,
-                ram=DRAFT_TASK_MEMORY,
+                ram=DRAFT_CAPTURE_MEMORY,
                 disk=DRAFT_TASK_DISK,
             ),
             pip_packages=[SPECULATORS.requirement(), TORCHAUDIO_CU128_REQUIREMENT],
@@ -300,7 +301,7 @@ def _draft_step(
                 GPU_VARIANT,
                 count=GPU_COUNT,
                 cpu=DRAFT_TASK_CPU,
-                ram=DRAFT_TASK_MEMORY,
+                ram=DRAFT_TRAINING_MEMORY,
                 disk=DRAFT_TASK_DISK,
             ),
             pip_packages=[SPECULATORS.requirement(), TORCHAUDIO_CU128_REQUIREMENT],
