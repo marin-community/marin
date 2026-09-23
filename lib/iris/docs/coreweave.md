@@ -372,11 +372,13 @@ some memory-mapped reads do not refresh them. The node-agent atomically renames
 an expired entry before recursive deletion so another task can refill the
 original path. Durable outputs belong in object storage.
 
-Iris installs cached packages into task environments with uv's `clone` link
+Iris installs cached packages into task environments with uv's `copy` link
 mode. CoreWeave's task workdirs and shared cache use the same node-local XFS
-filesystem, where clone mode uses copy-on-write reflinks. uv falls back to a
-full copy when reflinks are unavailable. Unlike symlink mode, either result
-keeps an environment usable after its cache entries are removed.
+filesystem, where the copy shares extents with the cache: a 4.3 GB PyTorch
+install added 44 MB of used space. Unlike symlink mode, a copied environment stays
+usable after its cache entries are removed. Clone mode would behave the same, but
+the task image's uv 0.10.3 drops executable bits when it makes XFS reflinks,
+which leaves wheel binaries such as `ptxas` unrunnable.
 
 If a uv install fails against the shared cache but succeeds with a task-local
 cache, Iris records that recovery on the node. Three distinct recoveries within
