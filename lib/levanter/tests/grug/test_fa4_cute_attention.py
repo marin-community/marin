@@ -338,7 +338,7 @@ def test_context_sharded_segment_ids_preserve_global_bounds():
     ("arch", "q_heads", "head_dim", "dtype"),
     [
         (90, 8, 128, jnp.bfloat16),
-        (103, 8, 128, jnp.bfloat16),
+        (120, 8, 128, jnp.bfloat16),
         (100, 2, 128, jnp.bfloat16),
         (100, 8, 64, jnp.bfloat16),
         (100, 8, 128, jnp.float16),
@@ -353,6 +353,19 @@ def test_fa4_sm100_attention_rejects_unsupported_layouts(monkeypatch, arch, q_he
 
     with pytest.raises(ValueError, match="gpu_fa4_cute_sm100"):
         attention(q, kv, kv, AttentionMask.causal(), implementation="gpu_fa4_cute_sm100")
+
+
+@pytest.mark.parametrize("arch", [100, 103])
+def test_fa4_sm100_attention_accepts_blackwell_compute_capabilities(monkeypatch, arch):
+    q = jnp.zeros((1, 1, 8, 128), dtype=jnp.bfloat16)
+    kv = jnp.zeros((1, 1, 1, 128), dtype=jnp.bfloat16)
+    monkeypatch.setattr(jax, "default_backend", lambda: "gpu")
+    monkeypatch.setattr(fa4_cute, "gpu_compute_capability", lambda: arch)
+    monkeypatch.setattr(fa4_cute, "fa4_cute_attention_forward", lambda q, *_args, **_kwargs: q)
+
+    out = attention(q, kv, kv, AttentionMask.causal(), implementation="gpu_fa4_cute_sm100")
+
+    assert out.shape == q.shape
 
 
 @pytest.mark.parametrize(

@@ -10,6 +10,11 @@ SM100_GQA_RATIOS = (4, 6, 8)
 SM100_HEAD_DIM = 128
 
 
+def runs_sm100_kernels(arch: int) -> bool:
+    """Return whether upstream FA4 runs its SM100 kernels on this compute capability (any 10.x)."""
+    return arch // 10 == 10
+
+
 @dataclass(frozen=True)
 class Flash4CuteSm100ForwardConfig:
     """Upstream Blackwell tile and number of pipelined query stages."""

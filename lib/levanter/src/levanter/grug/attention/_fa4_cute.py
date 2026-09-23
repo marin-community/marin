@@ -18,6 +18,7 @@ from levanter.grug.attention._fa4_cute_backend import fa4_cute_attention_forward
 from levanter.grug.attention._fa4_cute_config import (
     Flash4CuteKernelConfig,
     flash4_cute_kernel_config,
+    runs_sm100_kernels,
     sm100_flash4_cute_kernel_config,
 )
 from levanter.sharding import partitioning_axes, partition_spec_of
@@ -380,8 +381,9 @@ def gpu_fa4_cute_sm100_attention(
         raise RuntimeError("gpu_fa4_cute_sm100_attention requires the JAX GPU backend.")
     arch = gpu_compute_capability()
     _validate_head_layout(q, k, backend_name="gpu_fa4_cute_sm100")
-    if arch != 100:
-        raise ValueError(f"gpu_fa4_cute_sm100 requires SM100, got SM{arch}.")
+    # Only SM100 itself has been validated on hardware.
+    if not runs_sm100_kernels(arch):
+        raise ValueError(f"gpu_fa4_cute_sm100 requires compute capability 10.x, got SM{arch}.")
     validate_sm100_layout(q, k, v)
     config = sm100_flash4_cute_kernel_config()
     return _gpu_fa4_cute_attention(q, k, v, mask, kernel_config=config)

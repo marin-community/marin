@@ -65,6 +65,7 @@ from levanter.grug.attention._fa4_cute_config import (
     Flash4CuteKernelConfig,
     Flash4CuteSm100ForwardConfig,
     flash4_cute_kernel_config,
+    runs_sm100_kernels,
     sm100_flash4_cute_kernel_config,
 )
 
@@ -374,9 +375,10 @@ def _run_sweep(args: argparse.Namespace) -> None:
     base = flash4_cute_kernel_config(args.head_dim, arch=arch)
     if args.backend == "native-sm100":
         ratio, remainder = divmod(args.q_heads, args.kv_heads)
-        if arch != 100 or args.head_dim != SM100_HEAD_DIM or remainder or ratio not in SM100_GQA_RATIOS:
+        if not runs_sm100_kernels(arch) or args.head_dim != SM100_HEAD_DIM or remainder or ratio not in SM100_GQA_RATIOS:
             raise ValueError(
-                f"Native sweep requires SM100, head dimension {SM100_HEAD_DIM}, and a GQA ratio in {SM100_GQA_RATIOS}."
+                f"Native sweep requires compute capability 10.x, head dimension {SM100_HEAD_DIM}, "
+                f"and a GQA ratio in {SM100_GQA_RATIOS}."
             )
         base = sm100_flash4_cute_kernel_config()
     else:
