@@ -136,7 +136,9 @@ def _phase_rows_cte(bucket: str, scope: str) -> str:
 # policy_ppo_train. covered_seconds sums the exclusive spans each rank published under
 # policy_ppo_train, except the producer's own residual. NULLS LAST because Finelog's DataFusion sorts
 # NULLs first under DESC, where DuckDB sorts them last.
-_CRITICAL_RANK_CTE = f"""tagged AS (
+def _critical_rank_cte(phases: tuple[str, ...] = ()) -> str:
+    only = f" AND phase IN ({sql_values(phases)})" if phases else ""
+    return f"""tagged AS (
     SELECT t, step, worker_rank, phase, parent, clock_domain, value,
            FIRST_VALUE(worker_rank) OVER (
                PARTITION BY step
@@ -151,7 +153,7 @@ _CRITICAL_RANK_CTE = f"""tagged AS (
                          AND phase <> 'policy_span_residual' THEN value END)
                OVER (PARTITION BY step, worker_rank) AS covered_seconds
     FROM phase_rows
-    WHERE role = 'worker'
+    WHERE role = 'worker'{only}
 )"""
 
 
@@ -277,12 +279,12 @@ LIMIT {RL_MAX_GPU_ROWS + 1}
 """.strip()
     scope = _run_scope(clusters, run, start_ms, end_ms)
     spans_sql = f"""
-WITH {_phase_rows_cte(bucket, scope)}, {_CRITICAL_RANK_CTE}, terminal AS (
+WITH {_phase_rows_cte(bucket, scope)}, {_critical_rank_cte(("policy_ppo_train", "policy_span_residual"))}, terminal AS (
     SELECT json_get(attributes_json, 'role') AS role,
            json_get(body_json, 'status') AS status,
            json_get(body_json, 'reason') AS reason,
-           MAX(CAST(json_get(body_json, 'export_lost_records') AS BIGINT)) AS lost_records,
-           MAX(CAST(json_get(body_json, 'export_queued_records') AS BIGINT)) AS queued_records
+           MAX(TRY_CAST(json_get(body_json, 'export_lost_records') AS BIGINT)) AS lost_records,
+           MAX(TRY_CAST(json_get(body_json, 'export_queued_records') AS BIGINT)) AS queued_records
     FROM "telemetry_v1.marinskyrl"
     WHERE {scope}
       AND name = 'terminal'
@@ -651,7 +653,7 @@ def rl_sync_train_step_dataset(
     scope = _run_scope(clusters, run, start_ms, end_ms)
     clusters_sql = sql_values(clusters)
     spans_sql = f"""
-WITH {_phase_rows_cte(bucket, scope)}, {_CRITICAL_RANK_CTE}
+WITH {_phase_rows_cte(bucket, scope)}, {_critical_rank_cte()}
 SELECT 'critical_rank' AS statistic, t, step, phase, parent, clock_domain,
        SUM(value) AS sum_value,
        COUNT(value) AS sample_count,

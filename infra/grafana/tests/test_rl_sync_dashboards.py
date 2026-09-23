@@ -1243,6 +1243,16 @@ def test_the_outcome_table_reports_each_process_terminal_event(store) -> None:
         ("trainer", "completed", "normal_exit", 0, 3),
         ("worker", "failed", "normal_exit", 12, 3),
     ]
+    # A count that is not an integer is unknown. A CAST would raise and fail the overview's whole
+    # span source, taking every panel on it down with this one.
+    store.execute(
+        """UPDATE "telemetry_v1.marinskyrl" SET body_json = replace(body_json, ': 12', ': "unknown"')
+           WHERE name = 'terminal'"""
+    )
+    assert _panel_rows(store, title) == [
+        ("trainer", "completed", "normal_exit", 0, 3),
+        ("worker", "failed", "normal_exit", None, 3),
+    ]
     store.execute("""DELETE FROM "telemetry_v1.marinskyrl" WHERE name = 'terminal'""")
     assert _panel_rows(store, title) == []
 
