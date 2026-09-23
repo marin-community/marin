@@ -534,8 +534,13 @@ class MoEMLP(eqx.Module):
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
-        # Keep the router path in fp32 before top-k, softmax, and QB statistics.
-        router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
+        # Upcast the router inputs to fp32 *before* the matmul so the logit accumulation happens in fp32
+        # (not just the top-k / softmax / QB statistics that follow); the router matmul is tiny (d x E).
+        router_logits = jnp.einsum(
+            "td,de->te",
+            x_flat.astype(jnp.float32),
+            reshard(self.router, P(None, None)).astype(jnp.float32),
+        )
         biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
         router_probs = jax.nn.softmax(router_logits, axis=-1)
         # Select top-(K+1) on biased logits; the (K+1)-th is the QB threshold alpha.
