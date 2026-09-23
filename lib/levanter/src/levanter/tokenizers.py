@@ -17,10 +17,10 @@ Usage:
 import contextlib
 import dataclasses
 import functools
-import hashlib
 import json
 import logging
 import os
+import pathlib
 import re
 import shutil
 import tempfile
@@ -35,6 +35,7 @@ import jinja2.sandbox
 from huggingface_hub import __version__ as _hf_hub_version
 from huggingface_hub import hf_hub_download, snapshot_download
 from huggingface_hub.utils import EntryNotFoundError, RepositoryNotFoundError
+from rigging.cache import directory_content_hash
 from rigging.filesystem.atomic import fetch_file_atomic
 from rigging.filesystem.factory import filesystem, open_url
 from tokenizers import Encoding as HfEncoding
@@ -730,6 +731,12 @@ class TokenizerBackend(StrEnum):
     HF = "hf"
 
 
+def _local_tokenizer_path(name_or_path: str) -> str:
+    if os.path.isdir(name_or_path):
+        return name_or_path
+    return _stage_tokenizer(name_or_path)
+
+
 @functools.lru_cache(maxsize=32)
 def load_tokenizer(
     name_or_path: str,
@@ -741,7 +748,7 @@ def load_tokenizer(
     Files are staged once via mirror://tokenizers/ (GCS/S3) before falling back
     to HF Hub. Cached per (name_or_path, backend).
     """
-    local_dir = _stage_tokenizer(name_or_path) if not os.path.isdir(name_or_path) else name_or_path
+    local_dir = _local_tokenizer_path(name_or_path)
     if backend == TokenizerBackend.HF:
         tok = _load_hf_tokenizer(local_dir)
         return dataclasses.replace(tok, _name_or_path=name_or_path)
@@ -750,27 +757,10 @@ def load_tokenizer(
 
 def tokenizer_content_hash(
     name_or_path: str,
-    *,
-    backend: TokenizerBackend = TokenizerBackend.HF,
 ) -> str:
     """Return a SHA-256 identity for the tokenizer files used by the loader."""
-    if backend != TokenizerBackend.HF:
-        raise ValueError(f"Unknown backend: {backend}")
-
-    local_dir = _stage_tokenizer(name_or_path) if not os.path.isdir(name_or_path) else name_or_path
-    digest = hashlib.sha256()
-    for root, dirnames, filenames in os.walk(local_dir):
-        dirnames.sort()
-        for filename in sorted(filenames):
-            path = os.path.join(root, filename)
-            relative_path = os.path.relpath(path, local_dir).replace(os.sep, "/")
-            digest.update(relative_path.encode())
-            digest.update(b"\0")
-            digest.update(os.path.getsize(path).to_bytes(8, "big"))
-            with open(path, "rb") as tokenizer_file:
-                for chunk in iter(lambda: tokenizer_file.read(1024 * 1024), b""):
-                    digest.update(chunk)
-    return f"sha256:{digest.hexdigest()}"
+    local_dir = _local_tokenizer_path(name_or_path)
+    return f"sha256:{directory_content_hash(pathlib.Path(local_dir))}"
 
 
 def _collect_special_ids(

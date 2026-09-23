@@ -131,7 +131,7 @@ _LIBDEVICE_FILE = "libdevice.10.bc"
 # XLA's built-in default --xla_gpu_cuda_data_dir, resolved relative to the workdir.
 _XLA_CUDA_DATA_DIR = "cuda_sdk_lib"
 # The wheel that owns ptxas and nvlink in the CUDA 13 JAX environment.
-_CUDA_TOOLCHAIN_PACKAGE = "nvidia-cuda-nvcc"
+CUDA_TOOLCHAIN_PACKAGE = "nvidia-cuda-nvcc"
 # These are the only CUDA 12/13 distributions in the resolved GPU environment
 # that both install files under the same nvidia namespace.  Reinstalling them
 # last makes the requested CUDA 13 wheel own its shared-library paths again.
@@ -182,7 +182,7 @@ find_cuda_bin() {{
 cuda_bin="$(find_cuda_bin)"
 if [ -z "$cuda_bin" ] && [ -x "$IRIS_VENV/bin/python" ]; then
   _toolchain_version="$(
-    "$IRIS_VENV/bin/python" - "{_CUDA_TOOLCHAIN_PACKAGE}" <<'PY'
+    "$IRIS_VENV/bin/python" - "{CUDA_TOOLCHAIN_PACKAGE}" <<'PY'
 import importlib.metadata as md
 import sys
 
@@ -197,9 +197,13 @@ PY
     uv pip install --python "$IRIS_VENV/bin/python" \
       --no-cache \
       {_UV_LINK_MODE_FLAG} \
-      --reinstall-package "{_CUDA_TOOLCHAIN_PACKAGE}" \
-      "{_CUDA_TOOLCHAIN_PACKAGE}==$_toolchain_version"
+      --reinstall-package "{CUDA_TOOLCHAIN_PACKAGE}" \
+      "{CUDA_TOOLCHAIN_PACKAGE}==$_toolchain_version"
     cuda_bin="$(find_cuda_bin)"
+    if [ -z "$cuda_bin" ]; then
+      echo 'CUDA toolchain repair did not restore ptxas' >&2
+      exit 1
+    fi
   fi
 fi
 if [ -z "$cuda_bin" ]; then echo 'no CUDA toolchain to stage'; exit 0; fi

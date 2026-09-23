@@ -13,6 +13,7 @@ import dataclasses
 import json
 
 import pytest
+from marin.datakit import CPU_DATAKIT_DEPENDENCY_GROUPS
 from marin.execution.remote import RemoteCallable
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.fuzzy_dups import compute_fuzzy_dups_attrs_step
@@ -86,7 +87,7 @@ def test_no_region_path_in_hash_attrs_except_known_bloom_gap():
         assert "gs://" not in json.dumps(step.hash_attrs, default=str), f"{step.name} leaks a gs:// path into its hash"
 
 
-def test_remote_datakit_drivers_select_cpu_dependencies():
+def test_explicit_datakit_dependencies_include_cpu():
     result = _build()
 
     def dependencies(step: StepSpec):
@@ -94,21 +95,15 @@ def test_remote_datakit_drivers_select_cpu_dependencies():
         for dependency in step.deps:
             yield from dependencies(dependency)
 
-    remote_datakit_steps = {
-        step.name
+    explicit_dependency_groups = {
+        step.name: step.fn.pip_dependency_groups
         for root in result.all_steps
         for step in dependencies(root)
-        if isinstance(step.fn, RemoteCallable) and step.fn.pip_dependency_groups == ["cpu", "datakit"]
+        if isinstance(step.fn, RemoteCallable) and step.fn.pip_dependency_groups is not None
     }
 
-    assert remote_datakit_steps == {
-        "datakit/embed/a",
-        "datakit/embed/b",
-        "datakit/cluster/sample_centroids",
-        "datakit/cluster/train_centroids",
-        "datakit/cluster_assign/a",
-        "datakit/cluster_assign/b",
-    }
+    assert explicit_dependency_groups
+    assert set(map(tuple, explicit_dependency_groups.values())) == {tuple(CPU_DATAKIT_DEPENDENCY_GROUPS)}
 
 
 def test_store_hash_tracks_content_not_resources():
