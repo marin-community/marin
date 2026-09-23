@@ -81,7 +81,8 @@ def solve_plink(inputs: Path, work: Path) -> list[dict]:
         "plink.log",
     )
     with prefix.with_suffix(".smiss").open() as handle:
-        reader = csv.DictReader(handle, delimiter="\t")
+        header = next(handle).rstrip("\n").removeprefix("#").split("\t")
+        reader = csv.DictReader(handle, fieldnames=header, delimiter="\t")
         return [
             {
                 "id": row["IID"],

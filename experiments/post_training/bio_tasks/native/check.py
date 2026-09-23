@@ -62,7 +62,7 @@ OPERATIONS = {
     13: NativeOperation("dna-unique-mapping", solve_minimap),
     14: NativeOperation("vcf-allelic-depth", solve_bcftools),
     16: NativeOperation("sample-sheet-lanes", solve_snakemake),
-    17: NativeOperation("fasta-indexed-regions", solve_htslib, ("c-compiler", "pkg-config", "zlib")),
+    17: NativeOperation("fasta-indexed-regions", solve_htslib, ("c-compiler", "pkg-config", "zlib", "liblzma-devel")),
     18: NativeOperation("fastqc-report-reconciliation", solve_fastqc),
     19: NativeOperation("gtf-splicing", solve_biopython),
     20: NativeOperation("sample-sheet-lanes", solve_nextflow, ("procps-ng",)),
