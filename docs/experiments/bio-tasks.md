@@ -48,9 +48,11 @@ models biological/technical read routing from a CSV ledger; it does not read an 
 
 Every source repository has a scientific-operation mapping in
 `repository_coverage.json`. Actual CLI/API execution remains a distinct requirement
-for all 50 repositories. Biopython, pysam, cutadapt, Snakemake and MultiQC each passed three host
-reference checks, recorded in `native_validation.json`; 45 repositories remain
-pending. Reference scripts are implemented for 30 repositories. The current generated solver environment contains Python;
+for all 50 repositories. A remote CPU run checked 30 packages on three instances
+each: 22 passed all three, four had answer mismatches, and four failed execution.
+Across the 90 cases, 68 passed, 10 produced mismatching answers, and 12 failed
+execution. The other 20 repositories still need reference scripts. Results,
+including failures, are recorded in `native_validation.json`. The current generated solver environment contains Python;
 it does not yet establish native tool execution. Repository source revisions and
 runtime package versions are different provenance fields and must remain separate.
 
@@ -162,6 +164,13 @@ the shared development VM. The currently published environment candidates are
 not dependency locks or verified task images; retain resolved environments and
 build reproducible solver images after validation.
 
+Prefer available TRC/GCP host CPUs for subsequent package-validation batches,
+with bounded CPU, memory, disk, and runtime requests. Use GCS in the worker's
+region for staged inputs and retained outputs. Iris can place CPU-only work on
+TPU hosts, but its GCP configuration also has an on-demand CPU fallback; record
+actual placement before attributing a run to TRC capacity. The first 30-package
+batch ran on CoreWeave and its captured outputs were retrieved from S3.
+
 Grade returned results with:
 
 ```bash
@@ -172,3 +181,11 @@ uv run python -m experiments.post_training.bio_tasks.native.report \
 
 The report preserves the denominator of 50 repositories and requires three
 completed, distinct-input executions with passing biological answers per repo.
+
+The 2026-09-23 run installed all 30 environments and completed 78 of 90 cases.
+It used one CPU worker, serial environments, and no automatic retries or model
+calls. Private expected answers remained local. The frozen contract rejected
+10 completed cases; tolerances were unchanged. See the
+[catalog's failure table](bio-task-catalog.md#package-reference-run) for the eight
+packages that did not pass all three cases. The earlier five host-package checks
+remain in the evidence file as separate runs with their original environments.
