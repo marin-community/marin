@@ -36,6 +36,13 @@ VLLM_MAX_IDENTITY_LENGTH = 512
 VLLM_COMPARISON_MAX_ROWS = 2
 VLLM_COMPARISON_MIN_REQUESTS = 5
 VLLM_COMPARISON_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
+VLLM_COMPARISON_MAX_WINDOW_ERROR = "vLLM comparison range must not exceed 7 days"
+VLLM_COMPARISON_SECTION = "comparison"
+VLLM_COMPARISON_NOT_COMPARABLE = "not_comparable"
+VLLM_COMPARISON_MISSING_TELEMETRY = "missing_telemetry"
+VLLM_COMPARISON_LENGTH_RATIO_MIN = 0.8
+VLLM_COMPARISON_LENGTH_RATIO_MAX = 1.25
+VLLM_UNKNOWN_GPU_MODEL = "unknown"
 VLLM_OVERVIEW_SECTIONS = frozenset(
     {
         "counter_total",
@@ -141,6 +148,10 @@ _JOB_COMPARISON_METRIC_NAMES = (
     "request_time_per_output_token_seconds_sum",
     "request_time_per_output_token_seconds_count",
 )
+_CUMULATIVE_DELTA_SQL = """CASE
+    WHEN previous_value IS NULL OR value < previous_value THEN NULL
+    ELSE value - previous_value
+END"""
 
 
 def sql_string(value: str) -> str:
@@ -282,10 +293,7 @@ WITH base AS MATERIALIZED (
            resource_attributes_json,
            attributes_json,
            timestamp_ms,
-           CASE
-               WHEN previous_value IS NULL OR value < previous_value THEN NULL
-               ELSE value - previous_value
-           END AS delta
+           {_CUMULATIVE_DELTA_SQL} AS delta
     FROM cumulative_samples
     WHERE timestamp_ms >= {start_ms}
 
@@ -1222,8 +1230,7 @@ WITH base AS MATERIALIZED (
     WHERE json_get(attributes_json, 'source_temporality') = 'cumulative_snapshot'
 ), increments AS MATERIALIZED (
     SELECT origin_cluster, service, name, resource_attributes_json, attributes_json, timestamp_ms,
-           CASE WHEN previous_value IS NULL OR value < previous_value
-                THEN NULL ELSE value - previous_value END AS delta
+           {_CUMULATIVE_DELTA_SQL} AS delta
     FROM cumulative
     WHERE timestamp_ms >= {overview.start_ms}
     UNION ALL
@@ -1334,7 +1341,7 @@ def vllm_comparison_window(start_ms: int, end_ms: int) -> tuple[int, int]:
         start_ms,
         end_ms,
         max_window_ms=VLLM_COMPARISON_WINDOW_MS,
-        max_window_error="vLLM comparison range must not exceed 7 days",
+        max_window_error=VLLM_COMPARISON_MAX_WINDOW_ERROR,
     )
     spare_ms = VLLM_COMPARISON_WINDOW_MS - (end_ms - start_ms)
     before_ms = spare_ms // 2
@@ -1348,7 +1355,7 @@ def vllm_job_summary_query(start_ms: int, end_ms: int, job_ids: tuple[str, ...])
         start_ms,
         end_ms,
         max_window_ms=VLLM_COMPARISON_WINDOW_MS,
-        max_window_error="vLLM comparison range must not exceed 7 days",
+        max_window_error=VLLM_COMPARISON_MAX_WINDOW_ERROR,
     )
     if not 1 <= len(job_ids) <= 2:
         raise ValueError("vLLM summary accepts one or two exact jobs")
@@ -1376,6 +1383,7 @@ WITH session_samples AS (
       AND timestamp_ms >= {start_ms} AND timestamp_ms < {end_ms}
 ), candidates AS (
     SELECT job_id, MAX(origin_cluster) AS origin_cluster, MAX(model_name) AS model_name,
+           COUNT(DISTINCT model_name) AS models,
            MIN(timestamp_ms) AS first_ms, MAX(timestamp_ms) AS last_ms
     FROM session_samples
     GROUP BY job_id
@@ -1416,8 +1424,7 @@ WITH session_samples AS (
     SELECT samples.job_id, samples.origin_cluster, samples.service, samples.name,
            samples.resource_attributes_json, samples.attributes_json, samples.timestamp_ms,
            samples.timestamp_ms - samples.previous_timestamp_ms AS interval_ms,
-           CASE WHEN samples.previous_value IS NULL OR samples.value < samples.previous_value
-                THEN NULL ELSE samples.value - samples.previous_value END AS delta
+           {_CUMULATIVE_DELTA_SQL} AS delta
     FROM cumulative AS samples
     JOIN candidates AS jobs ON samples.job_id = jobs.job_id
     WHERE samples.timestamp_ms >= jobs.first_ms AND samples.timestamp_ms <= jobs.last_ms
@@ -1473,8 +1480,8 @@ WITH session_samples AS (
     WHERE samples.timestamp_ms >= jobs.first_ms AND samples.timestamp_ms <= jobs.last_ms
     GROUP BY samples.job_id
 )
-SELECT jobs.job_id, jobs.origin_cluster, jobs.model_name,
-       'unknown' AS gpu_model, snapshots.node_name,
+SELECT jobs.job_id, jobs.origin_cluster, jobs.model_name, jobs.models,
+       {sql_string(VLLM_UNKNOWN_GPU_MODEL)} AS gpu_model, snapshots.node_name,
        jobs.first_ms, jobs.last_ms,
        GREATEST(0, jobs.first_ms - {VLLM_SCRAPE_INTERVAL_MS}) AS window_from_ms,
        jobs.last_ms + {VLLM_SCRAPE_INTERVAL_MS} AS window_to_ms,
@@ -1533,62 +1540,66 @@ WHERE metrics.service = 'iris-node-agent' AND metrics.name = 'hardware_inventory
   AND metrics.timestamp_ms >= {start_ms} AND metrics.timestamp_ms < {end_ms}
   AND metrics.timestamp_ms >= jobs.first_ms AND metrics.timestamp_ms < jobs.last_ms
 GROUP BY jobs.job_id
-    LIMIT {VLLM_COMPARISON_MAX_ROWS}
+LIMIT {VLLM_COMPARISON_MAX_ROWS}
 """.strip()
 
 
 def vllm_summaries_with_inventory(summaries: pa.Table, inventory: pa.Table | None) -> pa.Table:
-    """Attach GPU models without asking Finelog to dynamically join metric namespaces."""
+    """Attach observed GPU models to job summaries."""
     gpu_by_job = {} if inventory is None else {row["job_id"]: row["gpu_model"] for row in inventory.to_pylist()}
-    gpu_models = pa.array([gpu_by_job.get(job_id.as_py(), "unknown") for job_id in summaries["job_id"]])
+    gpu_models = pa.array([gpu_by_job.get(job_id.as_py(), VLLM_UNKNOWN_GPU_MODEL) for job_id in summaries["job_id"]])
     return summaries.set_column(summaries.schema.get_field_index("gpu_model"), "gpu_model", gpu_models)
 
 
 def _comparison_context(selected: dict[str, object], baseline: dict[str, object]) -> tuple[str, str]:
     if selected.get("has_structured_histograms") or baseline.get("has_structured_histograms"):
         return (
-            "not_comparable",
-            "structured or mixed histogram history requires the canonical reader from Marin #9363",
+            VLLM_COMPARISON_NOT_COMPARABLE,
+            "structured or mixed histogram history is not supported",
         )
-    if not selected.get("model_name") or selected.get("model_name") != baseline.get("model_name"):
-        return "not_comparable", "model differs or is missing"
-    if selected.get("gpu_model") in (None, "unknown") or selected.get("gpu_model") != baseline.get("gpu_model"):
-        return "not_comparable", "GPU differs or is missing"
+    if selected.get("models") != 1 or baseline.get("models") != 1:
+        return VLLM_COMPARISON_NOT_COMPARABLE, "model is missing or changed during a job"
+    if selected.get("model_name") != baseline.get("model_name"):
+        return VLLM_COMPARISON_NOT_COMPARABLE, "model differs or is missing"
+    if selected.get("gpu_model") in (None, VLLM_UNKNOWN_GPU_MODEL) or selected.get("gpu_model") != baseline.get(
+        "gpu_model"
+    ):
+        return VLLM_COMPARISON_NOT_COMPARABLE, "GPU differs or is missing"
     for field, label in (("producers", "serving producer count"), ("nodes", "serving node count")):
         selected_value = selected.get(field)
         baseline_value = baseline.get(field)
         if not isinstance(selected_value, (int, float)) or not isinstance(baseline_value, (int, float)):
-            return "not_comparable", f"{label} is missing"
+            return VLLM_COMPARISON_NOT_COMPARABLE, f"{label} is missing"
         if selected_value <= 0 or selected_value != baseline_value:
-            return "not_comparable", f"{label} differs"
+            return VLLM_COMPARISON_NOT_COMPARABLE, f"{label} differs"
     selected_prompt = selected.get("prompt_tokens_mean")
     baseline_prompt = baseline.get("prompt_tokens_mean")
     if not isinstance(selected_prompt, (int, float)) or not isinstance(baseline_prompt, (int, float)):
-        return "not_comparable", "prompt-length mix is missing"
+        return VLLM_COMPARISON_NOT_COMPARABLE, "prompt-length mix is missing"
     prompt_ratio = selected_prompt / baseline_prompt if baseline_prompt else None
-    if prompt_ratio is None or not 0.8 <= prompt_ratio <= 1.25:
-        return "not_comparable", "prompt-length mix differs"
+    if prompt_ratio is None or not VLLM_COMPARISON_LENGTH_RATIO_MIN <= prompt_ratio <= VLLM_COMPARISON_LENGTH_RATIO_MAX:
+        return VLLM_COMPARISON_NOT_COMPARABLE, "prompt-length mix differs"
     selected_output = selected.get("output_tokens_mean")
     baseline_output = baseline.get("output_tokens_mean")
     if not isinstance(selected_output, (int, float)) or not isinstance(baseline_output, (int, float)):
-        return "not_comparable", "output-length mix is missing"
+        return VLLM_COMPARISON_NOT_COMPARABLE, "output-length mix is missing"
     output_ratio = selected_output / baseline_output if baseline_output else None
-    if output_ratio is None or not 0.8 <= output_ratio <= 1.25:
-        return "not_comparable", "output-length mix differs"
+    if output_ratio is None or not VLLM_COMPARISON_LENGTH_RATIO_MIN <= output_ratio <= VLLM_COMPARISON_LENGTH_RATIO_MAX:
+        return VLLM_COMPARISON_NOT_COMPARABLE, "output-length mix differs"
     selected_peak = selected.get("peak_running")
     baseline_peak = baseline.get("peak_running")
     if not isinstance(selected_peak, (int, float)) or not isinstance(baseline_peak, (int, float)):
-        return "not_comparable", "request concurrency is missing"
+        return VLLM_COMPARISON_NOT_COMPARABLE, "request concurrency is missing"
 
     def concurrency_bucket(value: float) -> str:
         return "1" if value <= 1 else "2-4" if value <= 4 else "5+"
 
     if concurrency_bucket(selected_peak) != concurrency_bucket(baseline_peak):
-        return "not_comparable", "request concurrency differs"
+        return VLLM_COMPARISON_NOT_COMPARABLE, "request concurrency differs"
     for job in (selected, baseline):
         count = job.get("request_count")
         if not isinstance(count, (int, float)) or count < VLLM_COMPARISON_MIN_REQUESTS:
-            return "not_comparable", "too few completed-request observations"
+            return VLLM_COMPARISON_NOT_COMPARABLE, "too few completed-request observations"
     return "comparable", "same model, GPU, serving size, and observed prompt/output/load group"
 
 
@@ -1602,8 +1613,8 @@ def vllm_comparison_rows(table: pa.Table, selected_job: str, baseline_job: str) 
         status = "selected_missing" if selected is None else "baseline_missing"
         return [
             {
-                "section": "comparison",
-                "metric": "comparison",
+                "section": VLLM_COMPARISON_SECTION,
+                "metric": VLLM_COMPARISON_SECTION,
                 "selected_value": None,
                 "baseline_value": None,
                 "ratio": None,
@@ -1627,9 +1638,9 @@ def vllm_comparison_rows(table: pa.Table, selected_job: str, baseline_job: str) 
         direction = None
         if metric_status == "comparable":
             if not isinstance(selected_value, (int, float)) or not isinstance(baseline_value, (int, float)):
-                metric_status, metric_reason = "missing_telemetry", f"{label} is missing for one job"
+                metric_status, metric_reason = VLLM_COMPARISON_MISSING_TELEMETRY, f"{label} is missing for one job"
             elif baseline_value == 0:
-                metric_status, metric_reason = "missing_telemetry", f"{label} baseline is zero"
+                metric_status, metric_reason = VLLM_COMPARISON_MISSING_TELEMETRY, f"{label} baseline is zero"
             else:
                 ratio = selected_value / baseline_value
                 if 0.95 <= ratio <= 1.05:
@@ -1640,7 +1651,7 @@ def vllm_comparison_rows(table: pa.Table, selected_job: str, baseline_job: str) 
                     direction = "worse"
         rows.append(
             {
-                "section": "comparison",
+                "section": VLLM_COMPARISON_SECTION,
                 "metric": label,
                 "unit": unit,
                 "selected_value": selected_value * scale if isinstance(selected_value, (int, float)) else None,

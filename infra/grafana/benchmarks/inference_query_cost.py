@@ -25,7 +25,9 @@ from finelog.deploy.connect import open_client
 from starlette.testclient import TestClient
 
 FINELOG_CLUSTER = "marin"
-INFERENCE_DASHBOARDS = ("inference_overview.json", "inference.json")
+INFERENCE_OVERVIEW_DASHBOARD = "inference_overview.json"
+INFERENCE_DIAGNOSTICS_DASHBOARD = "inference.json"
+INFERENCE_DASHBOARDS = (INFERENCE_OVERVIEW_DASHBOARD, INFERENCE_DIAGNOSTICS_DASHBOARD)
 
 
 @dataclass
@@ -207,9 +209,9 @@ def run_replay(args: argparse.Namespace) -> None:
         "bucket_ms": args.bucket_ms,
     }
     if args.page == "overview":
-        filenames = ("inference_overview.json",)
+        filenames = (INFERENCE_OVERVIEW_DASHBOARD,)
     elif args.page == "diagnostics":
-        filenames = ("inference.json",)
+        filenames = (INFERENCE_DIAGNOSTICS_DASHBOARD,)
     else:
         filenames = INFERENCE_DASHBOARDS if args.first_page == "overview" else INFERENCE_DASHBOARDS[::-1]
     pages = []

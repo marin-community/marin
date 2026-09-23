@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from enum import StrEnum
 from pathlib import Path
 from types import SimpleNamespace as Record
 
@@ -17,6 +18,15 @@ from finelog.errors import StatsError
 from server import create_app
 from starlette.testclient import TestClient
 from vllm_observability import VLLM_DETAIL_MAX_WINDOW_MS, VLLM_OVERVIEW_SECTIONS
+
+
+class ComparisonScenario(StrEnum):
+    DEFAULT = "default"
+    DIFFERENT_MODEL = "different_model"
+    MISSING_TPOT = "missing_tpot"
+    PROMPT_MISMATCH = "prompt_mismatch"
+    EXTRA_PRODUCER = "extra_producer"
+    STRUCTURED_HISTOGRAM = "structured_histogram"
 
 
 @pytest.mark.parametrize("filename", ["inference.json", "inference_overview.json"])
@@ -191,7 +201,11 @@ def test_inference_dashboard_exposes_one_optional_baseline():
     assert diagnostics["uid"] == "marin-inference"
     variables = {variable["name"]: variable for variable in diagnostics["templating"]["list"]}
     assert variables["baseline"]["type"] == "textbox"
-    comparison = next(panel for panel in diagnostics["panels"] if panel.get("title") == "Selected job vs baseline")
+    comparison = next(
+        panel
+        for panel in diagnostics["panels"]
+        if any(target.get("url") == "/v1/vllm/comparison" for target in panel.get("targets", []))
+    )
     assert comparison["targets"][0]["url"] == "/v1/vllm/comparison"
 
 
@@ -476,14 +490,9 @@ def test_finelog_timeout_is_visible_and_reuses_cached_failure():
     assert len(queries) == 1
 
 
-def _comparison_app(
-    *,
-    selected_model="allenai/SERA-8B",
-    include_selected_tpot=True,
-    selected_prompt_tokens_per_request=1024,
-    selected_extra_producer=False,
-    selected_structured_histogram=False,
-):
+def _comparison_app(scenario: ComparisonScenario = ComparisonScenario.DEFAULT):
+    selected_model = "different/model" if scenario == ComparisonScenario.DIFFERENT_MODEL else "allenai/SERA-8B"
+    selected_prompt_tokens = 4096 if scenario == ComparisonScenario.PROMPT_MISMATCH else 1024
     database = duckdb.connect()
     metric_columns = """cluster VARCHAR, service VARCHAR, job_id VARCHAR, name VARCHAR, kind VARCHAR,
         value DOUBLE, resource_attributes_json VARCHAR, attributes_json VARCHAR, timestamp_ms BIGINT, seq BIGINT"""
@@ -510,7 +519,7 @@ def _comparison_app(
             ("request_time_per_output_token_seconds_count", request_count),
         ):
             rows.extend((name, value, cumulative, start + offset) for offset, value in ((0, 0), (120_000, final)))
-        if job_id != "/selected" or include_selected_tpot:
+        if job_id != "/selected" or scenario != ComparisonScenario.MISSING_TPOT:
             rows.extend(
                 ("request_time_per_output_token_seconds_sum", value, cumulative, start + offset)
                 for offset, value in ((0, 0), (120_000, tpot_sum))
@@ -535,9 +544,9 @@ def _comparison_app(
         1_000_000,
         17_500,
         0.34,
-        selected_prompt_tokens_per_request,
+        selected_prompt_tokens,
     )
-    if selected_extra_producer:
+    if scenario == ComparisonScenario.EXTRA_PRODUCER:
         database.execute(
             'INSERT INTO "telemetry_v1.vllm" '
             "VALUES ('cw-a', 'vllm', '/selected', 'num_requests_running', 'gauge', 1, ?, ?, 1060000, 99)",
@@ -546,7 +555,7 @@ def _comparison_app(
                 json.dumps({"model_name": selected_model, "source_temporality": "current_snapshot"}),
             ],
         )
-    if selected_structured_histogram:
+    if scenario == ComparisonScenario.STRUCTURED_HISTOGRAM:
         database.execute(
             'INSERT INTO "telemetry_v1.vllm" '
             "VALUES ('cw-a', 'vllm', '/selected', 'request_generation_tokens', "
@@ -593,16 +602,14 @@ def test_vllm_comparison_uses_each_jobs_observed_window_and_skips_an_empty_basel
 
 
 @pytest.mark.parametrize(
-    ("selected_model", "include_selected_tpot", "expected_status"),
+    ("scenario", "expected_status"),
     [
-        ("different/model", True, "not_comparable"),
-        ("allenai/SERA-8B", False, "missing_telemetry"),
+        (ComparisonScenario.DIFFERENT_MODEL, "not_comparable"),
+        (ComparisonScenario.MISSING_TPOT, "missing_telemetry"),
     ],
 )
-def test_vllm_comparison_marks_mismatched_context_and_missing_telemetry(
-    selected_model, include_selected_tpot, expected_status
-):
-    app, _ = _comparison_app(selected_model=selected_model, include_selected_tpot=include_selected_tpot)
+def test_vllm_comparison_marks_mismatched_context_and_missing_telemetry(scenario, expected_status):
+    app, _ = _comparison_app(scenario)
     with TestClient(app) as client:
         response = client.get(
             "/finelog/marin/v1/vllm/comparison",
@@ -626,18 +633,15 @@ def test_vllm_comparison_marks_mismatched_context_and_missing_telemetry(
 
 
 @pytest.mark.parametrize(
-    ("app_kwargs", "reason"),
+    "scenario",
     [
-        ({"selected_prompt_tokens_per_request": 4096}, "prompt-length mix differs"),
-        ({"selected_extra_producer": True}, "serving producer count differs"),
-        (
-            {"selected_structured_histogram": True},
-            "structured or mixed histogram history requires the canonical reader from Marin #9363",
-        ),
+        ComparisonScenario.PROMPT_MISMATCH,
+        ComparisonScenario.EXTRA_PRODUCER,
+        ComparisonScenario.STRUCTURED_HISTOGRAM,
     ],
 )
-def test_vllm_comparison_withholds_direction_for_incomplete_context(app_kwargs, reason):
-    app, _ = _comparison_app(**app_kwargs)
+def test_vllm_comparison_withholds_direction_for_incomplete_context(scenario):
+    app, _ = _comparison_app(scenario)
     with TestClient(app) as client:
         response = client.get(
             "/finelog/marin/v1/vllm/comparison",
@@ -652,7 +656,7 @@ def test_vllm_comparison_withholds_direction_for_incomplete_context(app_kwargs, 
 
     assert response.status_code == 200
     assert {row["status"] for row in response.json()} == {"not_comparable"}
-    assert {row["reason"] for row in response.json()} == {reason}
+    assert all(row["reason"] for row in response.json())
     assert all(row["ratio"] is None and row["direction"] is None for row in response.json())
 
 

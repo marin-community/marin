@@ -161,6 +161,7 @@ from training_observability import training_overview_dataset
 from training_stalls import telemetry_query, training_stall_alert_rows
 from vllm_observability import (
     VLLM_COMPARISON_MAX_ROWS,
+    VLLM_COMPARISON_SECTION,
     VLLM_DETAIL_MAX_WINDOW_MS,
     VLLM_MAX_RESULT_ROWS,
     VLLM_MAX_SERIES,
@@ -736,8 +737,8 @@ def create_app(
                 return JSONResponse(
                     [
                         {
-                            "section": "comparison",
-                            "metric": "comparison",
+                            "section": VLLM_COMPARISON_SECTION,
+                            "metric": VLLM_COMPARISON_SECTION,
                             "status": "job_id_required",
                             "reason": "Choose job_id to compare jobs",
                         }
@@ -780,8 +781,8 @@ def create_app(
                 status = "query_timeout" if _vllm_query_timed_out(err) else "query_error"
                 rows = [
                     {
-                        "section": "comparison",
-                        "metric": "comparison",
+                        "section": VLLM_COMPARISON_SECTION,
+                        "metric": VLLM_COMPARISON_SECTION,
                         "status": status,
                         "reason": f"Finelog {status.replace('_', ' ')}; retry later",
                     }
