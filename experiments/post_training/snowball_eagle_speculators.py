@@ -82,12 +82,13 @@ CLUSTER = "cw-us-east-02a"
 GPU_VARIANT = "H100"
 GPU_COUNT = 8
 
-# This 2,036-trajectory pilot matches the example-presentation budget of the
-# strongest prior Snowball adaptation while making a quarter of the corpus
-# tool-use behavior that the earlier corpus omitted. MATH-500 has 500 distinct
-# documents; OlympiadBench has only 30, regardless of a larger launcher limit.
+# This pilot requires at least 1,500 retained target trajectories, roughly
+# tripling the distinct examples in the strongest prior Snowball adaptation.
+# BFCL adds tool-use behavior that the earlier corpus omitted. Launcher limits
+# are upper bounds: failed or unanswered trials can produce no SFT conversation.
 CORPUS_EVALS = (("gsm8k", 1024), ("math500", 500), ("bfcl", 512))
-CORPUS_EXPECTED_CONVERSATIONS = sum(limit for _, limit in CORPUS_EVALS)
+CORPUS_MINIMUM_CONVERSATIONS = 1500
+CORPUS_MAXIMUM_CONVERSATIONS = sum(limit for _, limit in CORPUS_EVALS)
 CORPUS_MAX_GENERATION_TOKENS = 4096
 CORPUS_MINIMUM_VALID_TOKENS = 32
 
@@ -190,7 +191,8 @@ def _conversation_step(
         return RolloutConversationConfig(
             source_archives=archives,
             output_path=ctx.output_path,
-            expected_conversations=CORPUS_EXPECTED_CONVERSATIONS,
+            minimum_conversations=CORPUS_MINIMUM_CONVERSATIONS,
+            maximum_conversations=CORPUS_MAXIMUM_CONVERSATIONS,
         )
 
     return ArtifactStep(
@@ -270,7 +272,7 @@ def _capture_step(conversations: ArtifactStep[Artifact]) -> ArtifactStep[Artifac
             sequence_length=SEQUENCE_LENGTH,
             data_parallel_size=GPU_COUNT,
             concurrency=64,
-            max_samples=CORPUS_EXPECTED_CONVERSATIONS,
+            max_samples=CORPUS_MAXIMUM_CONVERSATIONS,
             minimum_valid_tokens=CORPUS_MINIMUM_VALID_TOKENS,
             gpu_memory_utilization=0.9,
             vllm_extra_args=SNOWBALL_VLLM_ARGS,

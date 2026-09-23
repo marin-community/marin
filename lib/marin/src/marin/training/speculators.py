@@ -66,7 +66,8 @@ class EagleDraftArtifact(Artifact):
 class RolloutConversationConfig:
     source_archives: tuple[str, ...]
     output_path: str
-    expected_conversations: int
+    minimum_conversations: int
+    maximum_conversations: int
 
 
 @dataclass(frozen=True)
@@ -196,10 +197,10 @@ def write_rollout_conversations(config: RolloutConversationConfig) -> None:
             output.write(json.dumps(record, separators=(",", ":")))
             output.write("\n")
             count += 1
-    if count == 0:
-        raise ValueError("evaluation archives contain no assistant responses")
-    if count != config.expected_conversations:
-        raise ValueError(f"expected {config.expected_conversations} conversations, wrote {count}")
+    if count < config.minimum_conversations:
+        raise ValueError(f"expected at least {config.minimum_conversations} conversations, wrote {count}")
+    if count > config.maximum_conversations:
+        raise ValueError(f"expected at most {config.maximum_conversations} conversations, wrote {count}")
     logger.info("Wrote %d on-policy conversations to %s", count, destination)
 
 
