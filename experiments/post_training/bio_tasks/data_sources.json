@@ -121,6 +121,255 @@
           "transformation": "Content unchanged; gzip level 9, mtime 0."
         }
       }
+    },
+    "RefSeq:NC_001422.1": {
+      "landing_page": "https://www.ncbi.nlm.nih.gov/nuccore/NC_001422.1",
+      "lineage": "RefSeq:NC_001422.1",
+      "license": "NCBI molecular-data reuse policy",
+      "license_source": "https://www.ncbi.nlm.nih.gov/home/about/policies/#data",
+      "citation": "Escherichia phage phiX174, complete genome",
+      "retrieved_at": "2026-09-23",
+      "data_origin": "real",
+      "source_role": "reference genome and deposited annotations",
+      "benchmark_screening": "Candidate reference data; full biological-lineage screening pending.",
+      "assets": {
+        "nc_001422-1.gb.gz": {
+          "url": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&id=NC_001422.1&rettype=gbwithparts&retmode=text",
+          "download_sha256": "0a8099e207633f8c3ba998bfe2a198518e1de356c7956691101b2512324b807c",
+          "content_sha256": "0a8099e207633f8c3ba998bfe2a198518e1de356c7956691101b2512324b807c",
+          "vendored_sha256": "cad091e48738214291f8db205b1701d9016030b36bf5c2c012fb5ead1093f077",
+          "content_bytes": 26238,
+          "vendored_bytes": 8520,
+          "transformation": "Original GenBank retained; FASTA sequence unchanged. GFF3 and private CDS references derived with sources/prepare_genbank.py and Biopython 1.86. Complete CDSs must reproduce deposited translations; excluded annotations are recorded in the private reference. Gzip level 9, mtime 0."
+        },
+        "nc_001422-1.fa.gz": {
+          "url": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&id=NC_001422.1&rettype=gbwithparts&retmode=text",
+          "download_sha256": "0a8099e207633f8c3ba998bfe2a198518e1de356c7956691101b2512324b807c",
+          "content_sha256": "40dd9d40fc58436300e0584a4d0916879c71e4d642344a8a5208761aaa9dda85",
+          "vendored_sha256": "084411f193e11c5056519aadc729c3d05491a487f8c5b06957aa59510baca862",
+          "content_bytes": 5476,
+          "vendored_bytes": 1818,
+          "transformation": "Original GenBank retained; FASTA sequence unchanged. GFF3 and private CDS references derived with sources/prepare_genbank.py and Biopython 1.86. Complete CDSs must reproduce deposited translations; excluded annotations are recorded in the private reference. Gzip level 9, mtime 0."
+        },
+        "nc_001422-1.gff3.gz": {
+          "url": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&id=NC_001422.1&rettype=gbwithparts&retmode=text",
+          "download_sha256": "0a8099e207633f8c3ba998bfe2a198518e1de356c7956691101b2512324b807c",
+          "content_sha256": "18374ec6b1db80a4032d04427c8bed529f62c55a4c5f0708e13a272f1e6705f1",
+          "vendored_sha256": "e350904ec14b586c83c95bdab81dcd9bc62ce6c10e68bc81d253a881f709c9f1",
+          "content_bytes": 1135,
+          "vendored_bytes": 255,
+          "transformation": "Original GenBank retained; FASTA sequence unchanged. GFF3 and private CDS references derived with sources/prepare_genbank.py and Biopython 1.86. Complete CDSs must reproduce deposited translations; excluded annotations are recorded in the private reference. Gzip level 9, mtime 0."
+        },
+        "nc_001422-1-reference.json.gz": {
+          "url": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&id=NC_001422.1&rettype=gbwithparts&retmode=text",
+          "download_sha256": "0a8099e207633f8c3ba998bfe2a198518e1de356c7956691101b2512324b807c",
+          "content_sha256": "d47c2ab89640ab91306a874e74e0761d21d5fed9be31ff71b725f851d7327042",
+          "vendored_sha256": "d9174a26db4ec54ff550693b47320839a8b76f5cabeed89fc995ad91c60bed83",
+          "content_bytes": 12453,
+          "vendored_bytes": 3722,
+          "transformation": "Original GenBank retained; FASTA sequence unchanged. GFF3 and private CDS references derived with sources/prepare_genbank.py and Biopython 1.86. Complete CDSs must reproduce deposited translations; excluded annotations are recorded in the private reference. Gzip level 9, mtime 0."
+        }
+      }
+    },
+    "RefSeq:NC_001416.1": {
+      "landing_page": "https://www.ncbi.nlm.nih.gov/nuccore/NC_001416.1",
+      "lineage": "RefSeq:NC_001416.1",
+      "license": "NCBI molecular-data reuse policy",
+      "license_source": "https://www.ncbi.nlm.nih.gov/home/about/policies/#data",
+      "citation": "Enterobacteria phage lambda, complete genome",
+      "retrieved_at": "2026-09-23",
+      "data_origin": "real",
+      "source_role": "reference genome and deposited annotations",
+      "benchmark_screening": "Candidate reference data; full biological-lineage screening pending.",
+      "assets": {
+        "nc_001416-1.gb.gz": {
+          "url": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&id=NC_001416.1&rettype=gbwithparts&retmode=text",
+          "download_sha256": "3c624302adeeb3c00649f549903ab781b9e75bab16069ae655833d536407367f",
+          "content_sha256": "3c624302adeeb3c00649f549903ab781b9e75bab16069ae655833d536407367f",
+          "vendored_sha256": "022025ff73836148eb3029a28ec48797dd7b9ebe5c35089e19071c7c26e43e04",
+          "content_bytes": 176721,
+          "vendored_bytes": 48638,
+          "transformation": "Original GenBank retained; FASTA sequence unchanged. GFF3 and private CDS references derived with sources/prepare_genbank.py and Biopython 1.86. Complete CDSs must reproduce deposited translations; excluded annotations are recorded in the private reference. Gzip level 9, mtime 0."
+        },
+        "nc_001416-1.fa.gz": {
+          "url": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&id=NC_001416.1&rettype=gbwithparts&retmode=text",
+          "download_sha256": "3c624302adeeb3c00649f549903ab781b9e75bab16069ae655833d536407367f",
+          "content_sha256": "114a5132635eebe0580d19fe13724763c3b2fefaf04da8c55b68727d1650c026",
+          "vendored_sha256": "df6b4f55e21d90555b0dd09a7673717d4ce699e56a13d70ac4230d16db7ed820",
+          "content_bytes": 49208,
+          "vendored_bytes": 15298,
+          "transformation": "Original GenBank retained; FASTA sequence unchanged. GFF3 and private CDS references derived with sources/prepare_genbank.py and Biopython 1.86. Complete CDSs must reproduce deposited translations; excluded annotations are recorded in the private reference. Gzip level 9, mtime 0."
+        },
+        "nc_001416-1.gff3.gz": {
+          "url": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&id=NC_001416.1&rettype=gbwithparts&retmode=text",
+          "download_sha256": "3c624302adeeb3c00649f549903ab781b9e75bab16069ae655833d536407367f",
+          "content_sha256": "287c400a0e1ee90e11ef863dc9d30ca29f065c96e2fb3531f754a023883e9e7b",
+          "vendored_sha256": "079c692cee7220473e89ed31f12bf5085a7d20b4828bb3ad60206c78c65290b4",
+          "content_bytes": 5943,
+          "vendored_bytes": 859,
+          "transformation": "Original GenBank retained; FASTA sequence unchanged. GFF3 and private CDS references derived with sources/prepare_genbank.py and Biopython 1.86. Complete CDSs must reproduce deposited translations; excluded annotations are recorded in the private reference. Gzip level 9, mtime 0."
+        },
+        "nc_001416-1-reference.json.gz": {
+          "url": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&id=NC_001416.1&rettype=gbwithparts&retmode=text",
+          "download_sha256": "3c624302adeeb3c00649f549903ab781b9e75bab16069ae655833d536407367f",
+          "content_sha256": "34435bbbef9a452c4cee88009a75c166e5dbf60d1c9cddc6a39a86cf0c8c1662",
+          "vendored_sha256": "544cc8db4fec8e961896683e1900af47f5c2b17d1b643149c6f0e38ddfb2666a",
+          "content_bytes": 78078,
+          "vendored_bytes": 26074,
+          "transformation": "Original GenBank retained; FASTA sequence unchanged. GFF3 and private CDS references derived with sources/prepare_genbank.py and Biopython 1.86. Complete CDSs must reproduce deposited translations; excluded annotations are recorded in the private reference. Gzip level 9, mtime 0."
+        }
+      }
+    },
+    "RefSeq:NC_001604.1": {
+      "landing_page": "https://www.ncbi.nlm.nih.gov/nuccore/NC_001604.1",
+      "lineage": "RefSeq:NC_001604.1",
+      "license": "NCBI molecular-data reuse policy",
+      "license_source": "https://www.ncbi.nlm.nih.gov/home/about/policies/#data",
+      "citation": "Enterobacteria phage T7, complete genome",
+      "retrieved_at": "2026-09-23",
+      "data_origin": "real",
+      "source_role": "reference genome and deposited annotations",
+      "benchmark_screening": "Candidate reference data; full biological-lineage screening pending.",
+      "assets": {
+        "nc_001604-1.gb.gz": {
+          "url": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&id=NC_001604.1&rettype=gbwithparts&retmode=text",
+          "download_sha256": "96d4200c2410f4ac0195dfd43f7daf78456ed61e72600b223cace24123f37273",
+          "content_sha256": "96d4200c2410f4ac0195dfd43f7daf78456ed61e72600b223cace24123f37273",
+          "vendored_sha256": "b9ece1a62288fb3cdf21bef59b79b25a54b03f2ff113bd3f6dacd02d25719d97",
+          "content_bytes": 129057,
+          "vendored_bytes": 36349,
+          "transformation": "Original GenBank retained; FASTA sequence unchanged. GFF3 and private CDS references derived with sources/prepare_genbank.py and Biopython 1.86. Complete CDSs must reproduce deposited translations; excluded annotations are recorded in the private reference. Gzip level 9, mtime 0."
+        },
+        "nc_001604-1.fa.gz": {
+          "url": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&id=NC_001604.1&rettype=gbwithparts&retmode=text",
+          "download_sha256": "96d4200c2410f4ac0195dfd43f7daf78456ed61e72600b223cace24123f37273",
+          "content_sha256": "d4ee84e20cee69a643bf0f24ac251bc182c2384a34b86ac1c76c040a5a9891a1",
+          "vendored_sha256": "b83eea50c707d5d5fc0a3364bb415a23ea82456d0a1703977eb63c6884c52d99",
+          "content_bytes": 40521,
+          "vendored_bytes": 12632,
+          "transformation": "Original GenBank retained; FASTA sequence unchanged. GFF3 and private CDS references derived with sources/prepare_genbank.py and Biopython 1.86. Complete CDSs must reproduce deposited translations; excluded annotations are recorded in the private reference. Gzip level 9, mtime 0."
+        },
+        "nc_001604-1.gff3.gz": {
+          "url": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&id=NC_001604.1&rettype=gbwithparts&retmode=text",
+          "download_sha256": "96d4200c2410f4ac0195dfd43f7daf78456ed61e72600b223cace24123f37273",
+          "content_sha256": "9545669b71c88133ffc7108f89c98ee1f42e7f4eb32d95ca3be5044411d9b93d",
+          "vendored_sha256": "02a4fda81172c89f18f1e5b81f8f039049d974afacfb5ac42feca037fd1754f1",
+          "content_bytes": 5119,
+          "vendored_bytes": 738,
+          "transformation": "Original GenBank retained; FASTA sequence unchanged. GFF3 and private CDS references derived with sources/prepare_genbank.py and Biopython 1.86. Complete CDSs must reproduce deposited translations; excluded annotations are recorded in the private reference. Gzip level 9, mtime 0."
+        },
+        "nc_001604-1-reference.json.gz": {
+          "url": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nuccore&id=NC_001604.1&rettype=gbwithparts&retmode=text",
+          "download_sha256": "96d4200c2410f4ac0195dfd43f7daf78456ed61e72600b223cace24123f37273",
+          "content_sha256": "de7714e6cfc92bf003d82bb2531c8d8af5b7ee7becbfc194f98f1d4ef48b27dc",
+          "vendored_sha256": "d760f6c2cd8e0492c48be1a93c81adfb34959618ada11a11b0eea88b1ae9da52",
+          "content_bytes": 70575,
+          "vendored_bytes": 22418,
+          "transformation": "Original GenBank retained; FASTA sequence unchanged. GFF3 and private CDS references derived with sources/prepare_genbank.py and Biopython 1.86. Complete CDSs must reproduce deposited translations; excluded annotations are recorded in the private reference. Gzip level 9, mtime 0."
+        }
+      }
+    },
+    "ENA:ERR266411": {
+      "landing_page": "https://www.ebi.ac.uk/ena/browser/view/ERR266411",
+      "lineage": "BioSample:SAMEA1879783",
+      "study": "BioProject:PRJEB1861",
+      "license": "EMBL-EBI Terms of Use",
+      "license_source": "https://www.ebi.ac.uk/about/terms-of-use/",
+      "citation": "ERX240907 / ERR266411: observed PhiX sequencing, Illumina HiSeq 2000",
+      "retrieved_at": "2026-09-23",
+      "data_origin": "real",
+      "source_role": "observed paired-end sequencing reads from a reference sequencing sample",
+      "sampling_limits": "First 6000 pairs in archive order, split into three disjoint 2000-pair blocks. Preserves observed bases/qualities; not a random sample and not biological replication.",
+      "benchmark_screening": "Independent candidate sequencing run; full biological-lineage screening pending.",
+      "run_metadata": {
+        "run_accession": "ERR266411",
+        "scientific_name": "Sinsheimervirus phiX174",
+        "study_accession": "PRJEB1861",
+        "sample_accession": "SAMEA1879783",
+        "experiment_accession": "ERX240907",
+        "instrument_model": "Illumina HiSeq 2000",
+        "read_count": "1450130",
+        "base_count": "145013000",
+        "fastq_ftp": "ftp.sra.ebi.ac.uk/vol1/fastq/ERR266/ERR266411/ERR266411_1.fastq.gz;ftp.sra.ebi.ac.uk/vol1/fastq/ERR266/ERR266411/ERR266411_2.fastq.gz",
+        "fastq_md5": "ce582793f8d9546aa70b083ab01cebaa;32ff6b1fcdc71ab40f139399deb98d01",
+        "fastq_bytes": "48886255;50617870",
+        "library_strategy": "WGS",
+        "library_layout": "PAIRED"
+      },
+      "assets": {
+        "err266411-block1-r1.fastq.gz": {
+          "url": "https://ftp.sra.ebi.ac.uk/vol1/fastq/ERR266/ERR266411/ERR266411_1.fastq.gz",
+          "download_sha256": "3e8d52e4d81356492d56484b1dd9e1bbca66d7e0366af54ad1cab958054eb0ba",
+          "download_scope": "First 2097152 compressed bytes, HTTP Range request; not the complete remote archive.",
+          "content_sha256": "5e99c87ffd48b9f94adf814b3e9a38b63ea6356e56051bf2404f9146be98f949",
+          "vendored_sha256": "b0f694323435b3df516976e928bb0bab3d3e2fcaf1e58d26ef86138850a69716",
+          "content_bytes": 509884,
+          "vendored_bytes": 133461,
+          "first_record_1based": 1,
+          "last_record_1based": 2000,
+          "transformation": "Consecutive original complete FASTQ records; no changes to names, sequences or qualities. The three blocks are disjoint technical subsets, not biological replicates. Gzip level 9, mtime 0."
+        },
+        "err266411-block2-r1.fastq.gz": {
+          "url": "https://ftp.sra.ebi.ac.uk/vol1/fastq/ERR266/ERR266411/ERR266411_1.fastq.gz",
+          "download_sha256": "3e8d52e4d81356492d56484b1dd9e1bbca66d7e0366af54ad1cab958054eb0ba",
+          "download_scope": "First 2097152 compressed bytes, HTTP Range request; not the complete remote archive.",
+          "content_sha256": "95954a779dc8334624c4d6f0c644a8e8e7530c649e8210248d7931e3d4295f34",
+          "vendored_sha256": "31c5ab6e3479f72839d0aa89630a436a040e26507330374593004c833c4362a5",
+          "content_bytes": 511034,
+          "vendored_bytes": 131978,
+          "first_record_1based": 2001,
+          "last_record_1based": 4000,
+          "transformation": "Consecutive original complete FASTQ records; no changes to names, sequences or qualities. The three blocks are disjoint technical subsets, not biological replicates. Gzip level 9, mtime 0."
+        },
+        "err266411-block3-r1.fastq.gz": {
+          "url": "https://ftp.sra.ebi.ac.uk/vol1/fastq/ERR266/ERR266411/ERR266411_1.fastq.gz",
+          "download_sha256": "3e8d52e4d81356492d56484b1dd9e1bbca66d7e0366af54ad1cab958054eb0ba",
+          "download_scope": "First 2097152 compressed bytes, HTTP Range request; not the complete remote archive.",
+          "content_sha256": "21b60664a20be205691236b2a86224ba33146cb72f47634d17d55faff368fa48",
+          "vendored_sha256": "b5391c1ce05ba75a1bde6b381a774e08ee1504eebb15c9c26983a63277dc1c04",
+          "content_bytes": 511012,
+          "vendored_bytes": 131520,
+          "first_record_1based": 4001,
+          "last_record_1based": 6000,
+          "transformation": "Consecutive original complete FASTQ records; no changes to names, sequences or qualities. The three blocks are disjoint technical subsets, not biological replicates. Gzip level 9, mtime 0."
+        },
+        "err266411-block1-r2.fastq.gz": {
+          "url": "https://ftp.sra.ebi.ac.uk/vol1/fastq/ERR266/ERR266411/ERR266411_2.fastq.gz",
+          "download_sha256": "e2ec31e72b8cfbdf9571327091e1a8a92a09ef6d3ce59b46d49e6018dd524ee7",
+          "download_scope": "First 2097152 compressed bytes, HTTP Range request; not the complete remote archive.",
+          "content_sha256": "9f1a613c6436552dff12374676fb89eadb33fe054cb1d6f5c8c9b53548dcdb48",
+          "vendored_sha256": "88fe67319b2e7e051c1d7c6bed591e4be1843d61f5a7dbd246e09da75f401f72",
+          "content_bytes": 509884,
+          "vendored_bytes": 134604,
+          "first_record_1based": 1,
+          "last_record_1based": 2000,
+          "transformation": "Consecutive original complete FASTQ records; no changes to names, sequences or qualities. The three blocks are disjoint technical subsets, not biological replicates. Gzip level 9, mtime 0."
+        },
+        "err266411-block2-r2.fastq.gz": {
+          "url": "https://ftp.sra.ebi.ac.uk/vol1/fastq/ERR266/ERR266411/ERR266411_2.fastq.gz",
+          "download_sha256": "e2ec31e72b8cfbdf9571327091e1a8a92a09ef6d3ce59b46d49e6018dd524ee7",
+          "download_scope": "First 2097152 compressed bytes, HTTP Range request; not the complete remote archive.",
+          "content_sha256": "34b235c555031f0e26770a8acdc84c0697ed3d3b576807b704de7ec23bcdd3c7",
+          "vendored_sha256": "1744e841958a668cf7689f4dcb272d7069b75e711711f8aeefd41caee57e363f",
+          "content_bytes": 511034,
+          "vendored_bytes": 134246,
+          "first_record_1based": 2001,
+          "last_record_1based": 4000,
+          "transformation": "Consecutive original complete FASTQ records; no changes to names, sequences or qualities. The three blocks are disjoint technical subsets, not biological replicates. Gzip level 9, mtime 0."
+        },
+        "err266411-block3-r2.fastq.gz": {
+          "url": "https://ftp.sra.ebi.ac.uk/vol1/fastq/ERR266/ERR266411/ERR266411_2.fastq.gz",
+          "download_sha256": "e2ec31e72b8cfbdf9571327091e1a8a92a09ef6d3ce59b46d49e6018dd524ee7",
+          "download_scope": "First 2097152 compressed bytes, HTTP Range request; not the complete remote archive.",
+          "content_sha256": "543dca18b91e8d981dfcc646b3bdf2e9cc702068b3da96ddc46707cac72c184d",
+          "vendored_sha256": "fc5d7d43248d2ba4087c4e2e0225ed28dab527e884715ebffdd3c6dabc0616cc",
+          "content_bytes": 511012,
+          "vendored_bytes": 135018,
+          "first_record_1based": 4001,
+          "last_record_1based": 6000,
+          "transformation": "Consecutive original complete FASTQ records; no changes to names, sequences or qualities. The three blocks are disjoint technical subsets, not biological replicates. Gzip level 9, mtime 0."
+        }
+      }
     }
   }
 }

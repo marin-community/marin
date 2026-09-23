@@ -4,8 +4,10 @@
 """Trusted, record-level verification; copied into Harbor's private tests directory."""
 
 import argparse
+import hashlib
 import json
 import math
+import re
 from pathlib import Path
 from typing import Literal
 
@@ -14,6 +16,38 @@ from tasktrove_verify.grade import Reward, infra_error, invalid_task, scored, wr
 
 MAX_ANSWER_BYTES = 2 * 1024 * 1024
 Scalar = int | float | str | None
+
+
+class FastqContract(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    records: int = Field(ge=0)
+    max_bytes: int = Field(gt=0, le=128 * 1024 * 1024)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+def fastq_digest(path: Path, max_bytes: int) -> tuple[int, str]:
+    """Stream an ordered FASTQ profile, hashing IDs, bases and qualities exactly."""
+    digest = hashlib.sha256()
+    identifiers = set()
+    consumed = 0
+    with path.open("rb") as handle:
+        while header := handle.readline(max_bytes + 1):
+            lines = [header, *(handle.readline(max_bytes + 1) for _ in range(3))]
+            consumed += sum(map(len, lines))
+            if consumed > max_bytes:
+                raise ValueError("fastq_too_large")
+            header, sequence, separator, qualities = (line.rstrip(b"\r\n") for line in lines)
+            if not header.startswith(b"@") or not separator.startswith(b"+"):
+                raise ValueError("malformed_fastq")
+            identifier = header[1:].split()[0] if header[1:].split() else b""
+            if not identifier or identifier in identifiers or not sequence or len(sequence) != len(qualities):
+                raise ValueError("fastq_identity_or_length")
+            if any(base not in b"ACGTRYMKSWBDHVN" for base in sequence) or any(q < 33 or q > 126 for q in qualities):
+                raise ValueError("fastq_sequence_or_quality")
+            identifiers.add(identifier)
+            digest.update(identifier + b"\n" + sequence + b"\n" + qualities + b"\n")
+    return len(identifiers), digest.hexdigest()
 
 
 class Column(BaseModel):
@@ -47,11 +81,14 @@ class Contract(BaseModel):
     version: Literal["1"] = "1"
     columns: dict[str, Column]
     expected: dict[str, dict[str, Scalar]]
+    fastq: dict[str, FastqContract] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_reference(self) -> "Contract":
         if not self.columns or not self.expected or "id" in self.columns:
             raise ValueError("a contract needs columns, expected records, and a separate id field")
+        if any(not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name) for name in self.fastq):
+            raise ValueError("FASTQ artifacts must use simple filenames")
         for record_id, row in self.expected.items():
             if not record_id or set(row) != set(self.columns):
                 raise ValueError("reference IDs must be nonempty and every record must have every column")
@@ -80,6 +117,12 @@ class Contract(BaseModel):
             nullable = "; use null when specified" if column.nullable else ""
             lines.append(f"- {name}: {column.kind} ({column.unit}); {column.description}{nullable}{tolerance}.")
         lines.append("Numeric tolerance is abs(actual - reference) <= atol + rtol * abs(reference).")
+        for name in self.fastq:
+            lines.append(
+                f"Also write /app/{name} as four-line FASTQ. Preserve retained input-record order, first-token "
+                "read IDs, bases and qualities exactly as specified. Header comments and '+' comments are ignored. "
+                "Complete records and identities are verified; a correct JSON summary alone does not pass."
+            )
         return "\n".join(lines)
 
 
@@ -143,7 +186,24 @@ def grade_files(reference: Path, answer: Path) -> Reward:
             raw = handle.read(MAX_ANSWER_BYTES + 1)
         if len(raw) > MAX_ANSWER_BYTES:
             return scored(0, reason="answer_too_large")
-        return grade_answer(contract, raw.decode("utf-8"))
+        verdict = grade_answer(contract, raw.decode("utf-8"))
+        if verdict.reward != 1 or not contract.fastq:
+            return verdict
+        checks = {}
+        for name, target in contract.fastq.items():
+            path = answer.parent / name
+            if path.is_symlink() or not path.is_file():
+                return scored(0, reason="missing_or_nonregular_fastq", artifact=name)
+            try:
+                records, digest = fastq_digest(path, target.max_bytes)
+            except ValueError as error:
+                return scored(0, reason=str(error), artifact=name)
+            checks[name] = {
+                "records": records,
+                "sha256": digest,
+                "passed": records == target.records and digest == target.sha256,
+            }
+        return scored(float(all(check["passed"] for check in checks.values())), **verdict.detail, artifact_checks=checks)
     except UnicodeDecodeError:
         return scored(0, reason="malformed_utf8")
     except OSError as error:

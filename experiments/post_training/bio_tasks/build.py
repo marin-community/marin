@@ -12,6 +12,7 @@ import html
 import io
 import json
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -26,7 +27,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import tomlkit
 
-from experiments.post_training.bio_tasks.contract import grade_answer
+from experiments.post_training.bio_tasks.contract import grade_answer, grade_files
 from experiments.post_training.bio_tasks.real_data import source_catalog
 from experiments.post_training.bio_tasks.recipe_types import DataOrigin, Instance, Recipe
 from experiments.post_training.bio_tasks.recipes import RECIPES
@@ -106,7 +107,12 @@ def oracle_files(recipe: Recipe) -> TaskFiles:
     )
 
 
-def validate_instance(recipe: Recipe, instance: Instance) -> dict:
+def validate_instance(
+    recipe: Recipe,
+    instance: Instance,
+    reference_output: Path | None = None,
+    previous_outputs: tuple[Path, ...] = (),
+) -> dict:
     """Require an independently executed solver and discriminating negative controls."""
     with tempfile.TemporaryDirectory(prefix="bio-reference-") as directory:
         root = Path(directory)
@@ -132,14 +138,47 @@ def validate_instance(recipe: Recipe, instance: Instance) -> dict:
             timeout=30,
         )
         solved = json.loads(answer.read_text())
+        reference = root / "reference.json"
+        reference.write_text(instance.contract.model_dump_json())
+        if grade_files(reference, answer).reward != 1:
+            raise ValueError(f"{recipe.id}: validation oracle outputs failed verification")
+        artifact_checks = {}
+        for name in instance.contract.fastq:
+            artifact = root / name
+            original = artifact.read_bytes()
+            artifact.unlink()
+            artifact_checks[f"missing_artifact:{name}"] = grade_files(reference, answer).reward
+            artifact.write_bytes(original + b"@truncated\n")
+            artifact_checks[f"malformed_artifact:{name}"] = grade_files(reference, answer).reward
+            if original:
+                lines = original.splitlines(keepends=True)
+                lines[1] = (b"A" if lines[1][:1] != b"A" else b"C") + lines[1][1:]
+                artifact.write_bytes(b"".join(lines))
+                artifact_checks[f"changed_base:{name}"] = grade_files(reference, answer).reward
+            artifact.write_bytes(original)
+        if any(value != 0 for value in artifact_checks.values()):
+            raise ValueError(f"{recipe.id}: invalid native artifact passed: {artifact_checks}")
+        if previous_outputs:
+            for previous in previous_outputs:
+                verdict = grade_files(reference, previous / "answer.json")
+                if verdict.reward != 0 or verdict.status.value != "scored":
+                    raise ValueError(f"{recipe.id}: copied outputs from another instance were not rejected")
+            artifact_checks["copied_other_instance"] = 0
+        if reference_output is not None:
+            reference_output.mkdir(parents=True, exist_ok=False)
+            for name in ("answer.json", *instance.contract.fastq):
+                shutil.copyfile(root / name, reference_output / name)
     candidates = {"oracle": solved, "row_permutation": list(reversed(solved))}
     rejected = {"empty": [], "missing_id": solved[:-1], "duplicate_id": [*solved, solved[0]], **instance.mutations}
-    checks = {}
+    checks = dict(artifact_checks)
     for name, candidate in {**candidates, **rejected}.items():
         verdict = grade_answer(instance.contract, json.dumps(candidate, allow_nan=False))
         expected_reward = float(name in candidates)
         if verdict.reward != expected_reward:
-            raise ValueError(f"{recipe.id}: validation {name} expected {expected_reward}, got {verdict}")
+            raise ValueError(
+                f"{recipe.id}: validation {name} expected {expected_reward}, "
+                f"got reward={verdict.reward}, status={verdict.status}"
+            )
         checks[name] = verdict.reward
     malformed = grade_answer(instance.contract, "not json")
     if malformed.reward != 0:
@@ -168,8 +207,8 @@ def task_files(recipe: Recipe, instance: Instance, task: Identity, base_image: s
         "scientific_review": "pending",
     }
     config = tomlkit.parse(render_task_toml(1800, 60, metadata))
-    config["artifacts"] = ["/app/answer.json"]
-    # A fresh verifier environment receives only the submitted answer artifact.
+    config["artifacts"] = ["/app/answer.json", *(f"/app/{name}" for name in instance.contract.fastq)]
+    # A fresh verifier environment receives only the declared submitted artifacts.
     config["verifier"] = {
         "timeout_sec": 60,
         "environment_mode": "separate",
@@ -227,6 +266,9 @@ def inspection_page(root: Path, task: Identity, instance: Instance, files: TaskF
         ),
         "Exact instruction": files.text("instruction.md"),
         "Expected output (private)": json.dumps(instance.contract.answer(), indent=2),
+        "Native artifact contracts (private)": json.dumps(
+            {name: target.model_dump() for name, target in instance.contract.fastq.items()}, indent=2
+        ),
         "Validation controls": json.dumps(validation, indent=2),
         "Scientific negative controls": json.dumps(instance.mutations, indent=2),
         "Task metadata": files.text("task.toml"),
@@ -235,6 +277,10 @@ def inspection_page(root: Path, task: Identity, instance: Instance, files: TaskF
     content = "".join(
         f"<details><summary>{title}</summary><pre>{html.escape(text)}</pre></details>"
         for title, text in sections.items()
+    )
+    output_links = " ".join(
+        f'<a href="../reference-outputs/{task.task_id}/{name}">{html.escape(name)}</a>'
+        for name in ("answer.json", *instance.contract.fastq)
     )
     page = (
         '<!doctype html><meta charset="utf-8"><title>' + html.escape(task.task_id) + "</title>"
@@ -246,6 +292,9 @@ def inspection_page(root: Path, task: Identity, instance: Instance, files: TaskF
         "Scientific review pending. Private inspection view; never mount this directory in solver environments. "
         "Input previews are limited to 8,000 characters; complete files are in the task bundle.</p>"
         + content
+        + "<p>Verified reference outputs (private): "
+        + output_links
+        + "</p>"
         + "<h2>Inputs</h2>"
         + inputs
     )
@@ -339,7 +388,7 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
     origins: Counter = Counter()
     seen_inputs = set()
     seen_targets = set()
-    previous_answers: dict[str, list[str]] = {}
+    previous_outputs: dict[str, list[Path]] = {}
     manifest = {
         "schema_version": 1,
         "corpus_stage": "authoring-candidates-and-controls",
@@ -381,7 +430,13 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
                     instance = recipe.generate(task.seed)
                     input_hash = hashlib.sha256(json.dumps(instance.inputs, sort_keys=True).encode()).hexdigest()
                     target_hash = hashlib.sha256(
-                        json.dumps(instance.contract.expected, sort_keys=True).encode()
+                        json.dumps(
+                            {
+                                "answer": instance.contract.expected,
+                                "fastq": {name: target.sha256 for name, target in instance.contract.fastq.items()},
+                            },
+                            sort_keys=True,
+                        ).encode()
                     ).hexdigest()
                     if input_hash not in seen_inputs and (recipe.id, target_hash) not in seen_targets:
                         break
@@ -392,15 +447,12 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
                 seen_inputs.add(input_hash)
                 seen_targets.add((recipe.id, target_hash))
                 validation_start = time.monotonic()
-                validation = validate_instance(recipe, instance)
+                reference_output = output / "reference-outputs" / task.task_id
+                validation = validate_instance(
+                    recipe, instance, reference_output, tuple(previous_outputs.get(recipe.id, ()))
+                )
                 validation_runtime = time.monotonic() - validation_start
-                if recipe.id in previous_answers:
-                    if any(
-                        grade_answer(instance.contract, answer).reward != 0 for answer in previous_answers[recipe.id]
-                    ):
-                        raise ValueError(f"copied answer from another instance passes: {task.task_id}")
-                    validation["copied_other_instance"] = 0
-                previous_answers.setdefault(recipe.id, []).append(json.dumps(instance.contract.answer()))
+                previous_outputs.setdefault(recipe.id, []).append(reference_output)
                 files = task_files(recipe, instance, task, base_image, tool_ref)
                 task_dir = output / "harbor" / task.split / task.task_id
                 files.write_to(task_dir)

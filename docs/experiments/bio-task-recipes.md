@@ -9,13 +9,20 @@ All instances have independently checked references, input-reading solvers, and 
 controls. Host checks do not establish container execution or scientific approval. The supplied format
 profiles are bounded: text intermediates do not count as native BAM, H5AD, SRA, or OME-TIFF coverage.
 
-Real-data recipes retain full source observations and biological lineage; the remaining recipes are simulated
+Real-data recipes retain full matrices, structures and genomes or explicitly bounded observed read subsets, with biological lineage; the remaining recipes are simulated
 correctness controls. See [provenance and limitations](bio-task-catalog.md#id-workflow-coverage-and-input-realism).
 
 ## Sequence
 
 | Recipe | Difficulty | Supplied formats | Skills | Repository operations |
 |---|---|---|---|---|
+| `real-genome-cds-extraction` | medium | FASTA, GFF3 | strand, compound-cds, circular-coordinates | Biopython, Biostrings, pybedtools |
+| `real-genome-translation` | medium | FASTA, GFF3 | compound-cds, genetic-code, alternative-start-codons | Biopython, Biostrings |
+| `real-genome-gc3` | medium | FASTA, GFF3 | reading-frame, coding-composition, denominators | Biopython, Biostrings |
+| `real-genome-codon-counts` | medium | FASTA, GFF3 | reading-frame, overlapping-genes, stop-codon-exclusion | Biopython, Biostrings |
+| `real-genome-overlap` | medium | FASTA, GFF3 | interval-union, overlapping-genes, coordinate-conventions | BEDTools, GenomicRanges, pybedtools |
+| `real-genome-promoters` | medium | FASTA, GFF3 | strand, circular-coordinates, boundary-clipping | BEDTools, HTSlib, Biopython, GenomicRanges, Biostrings, pybedtools |
+| `real-genome-restriction-digest` | medium | FASTA, GFF3 | restriction-sites, circular-coordinates, fragment-lengths | Biopython |
 | `strand-extraction` | easy | fasta-dna, gff3-single-exon | coordinates, strand, sequence-extraction, feature-parent-joins, sequence-identifiers | Biopython, pybedtools |
 | `fasta-iupac-gc` | easy | fasta | ambiguity, wrapped-fasta, denominators | Additional domain coverage |
 | `fasta-six-frame-translation` | easy | fasta | reading-frames, reverse-complement, genetic-code | Biostrings |
@@ -73,6 +80,11 @@ correctness controls. See [provenance and limitations](bio-task-catalog.md#id-wo
 
 | Recipe | Difficulty | Supplied formats | Skills | Repository operations |
 |---|---|---|---|---|
+| `real-fastq-pair-filter` | medium | FASTQ | paired-read-qc, threshold-boundaries, native-fastq-output | fastp |
+| `real-fastq-fixed-trim` | easy | FASTQ | paired-reads, sequence-quality-synchronization, native-fastq-output | cutadapt, fastp |
+| `real-fastq-cycle-quality` | easy | FASTQ | phred-encoding, sequencing-cycles, quality-denominators | FastQC, MultiQC, fastp |
+| `real-fastq-expected-errors` | medium | FASTQ | phred-probabilities, paired-read-qc, nonlinear-aggregation | Additional domain coverage |
+| `real-fastq-quality-yield` | easy | FASTQ | phred-encoding, read-pair-denominators, quality-yield | Picard, FastQC, MultiQC, fastp |
 | `paired-read-qc` | medium | fastq-phred33, json | read-quality, mate-identity, thresholds | FastQC, fastp |
 | `sam-inclusion` | medium | sam1.6 | sam-flags, mapping-quality, unknown-quality | SAMtools, pysam |
 | `sam-fragment-counts` | medium | sam1.6 | mate-identity, fragment-filtering, primary-alignments | Picard, deepTools |

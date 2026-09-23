@@ -72,7 +72,7 @@ Downloads, stars, and citations remain available in the unchanged
 | 4 | [Bowtie 2](https://github.com/BenLangmead/bowtie2/blob/58e34bffd389d7ead6542b439784d9def92c6172/scripts/test/regressions.py) | `sam-pair-concordance`, `dna-unique-mapping` | 3 reference checks passed (`dna-unique-mapping`) |
 | 5 | [DESeq2](https://github.com/thelovelab/DESeq2/blob/9e885b581380291797f2777145c395f50aaaa72b/tests/testthat/test_model_matrix.R) | `design-estimability`, `bulk-size-factors`, `sample-sheet-lanes`, `real-rnaseq-size-factors`, `real-rnaseq-normalized-contrast` | 3 reference checks passed (`bulk-size-factors`) |
 | 6 | [STAR](https://github.com/alexdobin/STAR/blob/b1edc1208d91a53bf40ebae8669f71d50b994851/extras/tests/scripts/checkCellReadsStats_vsMatrix.awk) | `matrixmarket-cell-qc`, `sam-junction-support`, `umi-deduplication` | 3 reference checks passed (`dna-unique-mapping`) |
-| 7 | [BEDTools](https://github.com/arq5x/bedtools2/blob/614e9a5c5935ab86e873dab9072fbbaf003c1b7e/test/bed12tobed6/test-bed12tobed6.sh) | `bed12-exons`, `bed-union-coverage`, `bed-complement` | 3 reference checks passed (`bed12-exons`) |
+| 7 | [BEDTools](https://github.com/arq5x/bedtools2/blob/614e9a5c5935ab86e873dab9072fbbaf003c1b7e/test/bed12tobed6/test-bed12tobed6.sh) | `bed12-exons`, `bed-union-coverage`, `bed-complement`, `real-genome-overlap`, `real-genome-promoters` | 3 reference checks passed (`bed12-exons`) |
 | 8 | [GATK](https://github.com/broadinstitute/gatk/blob/0cde69eed30339f5978cbb1ac6e5cf3662f9e1f8/src/test/java/org/broadinstitute/hellbender/tools/walkers/filters/VariantFiltrationIntegrationTest.java) | `vcf-site-filtering`, `vcf-genotype-masking` | 3 reference checks passed (`vcf-site-filtering`) |
 | 9 | [pysam](https://github.com/pysam-developers/pysam/blob/ba2e6c124398bdcd963db741d6f01164fed4f9b7/tests/AlignmentFilePileup_test.py) | `sam-allele-pileup`, `sam-inclusion` | 3 reference checks passed (`sam-cigar-coverage`) |
 | 10 | [MAFFT](https://github.com/GSLBiotech/mafft/blob/26ecaba0130b533cf06a29200f0fb40829c00101/test/script) | `alignment-sum-of-pairs`, `alignment-column-filter` | Pending |
@@ -80,27 +80,27 @@ Downloads, stars, and citations remain available in the unchanged
 | 12 | [Seurat](https://github.com/satijalab/seurat/blob/586015abde10618ecb32d3fe632267a83317a08d/tests/testthat/test_data_manipulation.R) | `matrixmarket-log-normalization`, `matrixmarket-feature-filtering` | 3 reference checks passed (`matrixmarket-log-normalization`) |
 | 13 | [minimap2](https://github.com/lh3/minimap2/blob/3c28777e7e2dcc90f825de1b9f17a89cca7d4452/example.c) | `paf-query-coverage`, `dna-unique-mapping` | 3 reference checks passed (`dna-unique-mapping`) |
 | 14 | [BCFtools](https://github.com/samtools/bcftools/blob/edf7fd96c5da562ecfd99fb7f9e4b9eb597aeae8/test/fill-tags-VAF.out) | `vcf-allelic-depth`, `vcf-multiallelic-splitting`, `vcf-minimal-representation` | 3 reference checks passed (`vcf-allelic-depth`) |
-| 15 | [Picard](https://github.com/broadinstitute/picard/blob/c2a483d497d1b0fe6d0ab518b1b32fe98fad0741/src/test/java/picard/sam/FilterSamReadsTest.java) | `sam-fragment-counts`, `sam-pair-concordance` | Pending |
+| 15 | [Picard](https://github.com/broadinstitute/picard/blob/c2a483d497d1b0fe6d0ab518b1b32fe98fad0741/src/test/java/picard/sam/FilterSamReadsTest.java) | `sam-fragment-counts`, `sam-pair-concordance`, `real-fastq-quality-yield` | Script implemented; execution pending |
 | 16 | [Snakemake](https://github.com/snakemake/snakemake/blob/91763d644db0a6051c40014fa8ffad340f7d39a0/tests/test_expand.py) | `sample-sheet-lanes` | 3 reference checks passed (`sample-sheet-lanes`) |
-| 17 | [HTSlib](https://github.com/samtools/htslib/blob/d3cc9553d89dc34239afb7145b06c0dd818c0219/test/faidx/faidx.tst) | `fasta-indexed-regions` | 3 reference checks passed (`fasta-indexed-regions`) |
-| 18 | [FastQC](https://github.com/s-andrews/FastQC/blob/87fb3364a2f37115833d678648926d41e184f0b1/uk/ac/babraham/FastQC/Modules/SequenceLengthDistribution.java) | `paired-read-qc`, `fastqc-report-reconciliation` | 3 reference checks passed (`fastqc-report-reconciliation`) |
-| 19 | [Biopython](https://github.com/biopython/biopython/blob/08fc09086afe0b57215d2515660e0c032b55c0dd/Tests/test_SeqFeature.py) | `strand-extraction`, `gtf-splicing`, `gff-cds-translation`, `real-mmcif-chain-geometry`, `real-mmcif-contact-degree` | 3 reference checks passed (`gtf-splicing`) |
+| 17 | [HTSlib](https://github.com/samtools/htslib/blob/d3cc9553d89dc34239afb7145b06c0dd818c0219/test/faidx/faidx.tst) | `fasta-indexed-regions`, `real-genome-promoters` | 3 reference checks passed (`fasta-indexed-regions`) |
+| 18 | [FastQC](https://github.com/s-andrews/FastQC/blob/87fb3364a2f37115833d678648926d41e184f0b1/uk/ac/babraham/FastQC/Modules/SequenceLengthDistribution.java) | `paired-read-qc`, `fastqc-report-reconciliation`, `real-fastq-cycle-quality`, `real-fastq-quality-yield` | 3 reference checks passed (`fastqc-report-reconciliation`) |
+| 19 | [Biopython](https://github.com/biopython/biopython/blob/08fc09086afe0b57215d2515660e0c032b55c0dd/Tests/test_SeqFeature.py) | `strand-extraction`, `gtf-splicing`, `gff-cds-translation`, `real-mmcif-chain-geometry`, `real-mmcif-contact-degree`, `real-genome-cds-extraction`, `real-genome-translation`, `real-genome-gc3`, `real-genome-codon-counts`, `real-genome-promoters`, `real-genome-restriction-digest` | 3 reference checks passed (`gtf-splicing`) |
 | 20 | [Nextflow](https://github.com/nextflow-io/nextflow/blob/17f18779266767b16bca51af71522e28adf5cff6/modules/nextflow/src/test/groovy/nextflow/extension/GroupTupleOpTest.groovy) | `sample-sheet-lanes` | 3 reference checks passed (`sample-sheet-lanes`) |
 | 21 | [DIAMOND](https://github.com/bbuchfink/diamond/blob/5e25acaf40e6b9883636c5c564306fe77210de53/CMakeLists.txt) | `protein-local-search` | 3 reference checks passed (`protein-local-search`) |
 | 22 | [PLINK / PLINK 2](https://github.com/chrchang/plink-ng/blob/a25a0d6438b61b1951cd6d7eb209db8b79687581/2.0/Tests/TEST_GRM_MAF/run_tests.sh) | `vcf-sample-qc`, `genotype-hwe` | 3 reference checks passed (`vcf-sample-qc`) |
 | 23 | [Scanpy](https://github.com/scverse/scanpy/blob/0d5fd16234865619d2f5097d33fc4281900a2bc2/tests/test_qc_metrics.py) | `matrixmarket-cell-qc`, `donor-counts`, `cell-fractions` | 3 reference checks passed (`matrixmarket-cell-qc`) |
-| 24 | [MultiQC](https://github.com/MultiQC/MultiQC/blob/fdc68d394849f69b67b6e6e13ebe907504ed534b/multiqc/modules/samtools/tests/test_flagstat.py) | `fastqc-report-reconciliation` | 3 reference checks passed (`fastqc-report-reconciliation`) |
+| 24 | [MultiQC](https://github.com/MultiQC/MultiQC/blob/fdc68d394849f69b67b6e6e13ebe907504ed534b/multiqc/modules/samtools/tests/test_flagstat.py) | `fastqc-report-reconciliation`, `real-fastq-cycle-quality`, `real-fastq-quality-yield` | 3 reference checks passed (`fastqc-report-reconciliation`) |
 | 25 | [edgeR](https://github.com/bioconductor-source/edgeR/blob/8986864d8f92dac37925ef641fcd6c4161130551/R/cpm.R) | `bulk-cpm-filter`, `real-rnaseq-library-qc`, `real-rnaseq-cpm-filter` | 3 reference checks passed (`bulk-cpm-filter`) |
 | 26 | [limma](https://github.com/bioconductor-source/limma/blob/14eabaeb695945b45ceb885ac8d4c61232639ea5/R/contrasts.R) | `adjusted-linear-effect`, `paired-treatment-effect` | 3 reference checks passed (`adjusted-linear-effect`) |
 | 27 | [SPAdes](https://github.com/ablab/spades/blob/808b87dade1300ecaa712429955ccba7bfb286f4/src/projects/spades/pipeline/spades_pipeline/supplemetary/check_test_script.py) | `assembly-nx`, `assembly-gap-runs` | Pending |
 | 28 | [IQ-TREE](https://github.com/iqtree/iqtree2/blob/a00094e03d1ae984e1497e16738f91514df8c366/example/example.nex) | `alignment-partitions` | Pending |
 | 29 | [FastTree](https://github.com/morgannprice/fasttree/blob/a5a2723ea1e64faf3da7ea514521cfa348891add/CompareTree.pl) | `newick-distances`, `newick-monophyly`, `newick-split-support` | Pending |
 | 30 | [RAxML](https://github.com/stamatak/standard-RAxML/blob/36ec36110631c34692abcd4f24ca7b3e2fea742a/usefulScripts/bsBranchLengths.pl) | `newick-split-support` | Pending |
-| 31 | [cutadapt](https://github.com/marcelm/cutadapt/blob/4927632f7c546dd290c53501c8417f909252befe/tests/test_trim.py) | `fastq-adapter-trimming`, `fastq-quality-trimming` | 3 reference checks passed (`fastq-adapter-trimming`) |
+| 31 | [cutadapt](https://github.com/marcelm/cutadapt/blob/4927632f7c546dd290c53501c8417f909252befe/tests/test_trim.py) | `fastq-adapter-trimming`, `fastq-quality-trimming`, `real-fastq-fixed-trim` | 3 reference checks passed (`fastq-adapter-trimming`) |
 | 32 | [Salmon](https://github.com/COMBINE-lab/salmon/blob/5515b7f05a90341b6652adfdb807e7cf14295518/crates/salmon-cli/tests/output_contract.rs) | `transcript-tpm` | Pending |
 | 33 | [kallisto](https://github.com/pachterlab/kallisto/blob/4e9f29cf3b021260415430c057a22469ca081391/test/Snakefile) | `transcript-tpm`, `sample-sheet-lanes` | Pending |
 | 34 | [StringTie](https://github.com/gpertea/stringtie/blob/d1dc38ddb681089b2e8faaabdcfee772af6fb033/prepDE.py3) | `gtf-coverage-counts` | Pending |
-| 35 | [fastp](https://github.com/OpenGene/fastp/blob/8a2397b6628ae14127efdb7566f67fc05f9aea56/src/filter.cpp) | `paired-read-qc`, `fastq-adapter-trimming` | Pending |
+| 35 | [fastp](https://github.com/OpenGene/fastp/blob/8a2397b6628ae14127efdb7566f67fc05f9aea56/src/filter.cpp) | `paired-read-qc`, `fastq-adapter-trimming`, `real-fastq-pair-filter`, `real-fastq-fixed-trim`, `real-fastq-cycle-quality`, `real-fastq-quality-yield` | Script implemented; execution pending |
 | 36 | [SRA Toolkit](https://github.com/ncbi/sra-tools/blob/434ae787c86e32e7faa5e80417a342c365fa03b0/test/external/fasterq-dump/fq_tests/split3.sh) | `sra-spot-export` | Pending |
 | 37 | [deepTools](https://github.com/deeptools/deepTools/blob/cde2aa7938cb4af6fe28de1504f94f6928344342/pydeeptools/deeptools/test/test_countReadsPerBin.py) | `bedgraph-weighted-signal`, `sam-cigar-coverage`, `sam-fragment-counts` | Pending |
 | 38 | [VCFtools](https://github.com/vcftools/vcftools/blob/1f87a83402ffd17ea2723a456b7edf5d80b4a22c/src/perl/fill-an-ac) | `genotype-alleles`, `vcf-sample-qc` | 3 reference checks passed (`vcf-sample-qc`) |
@@ -112,10 +112,11 @@ Downloads, stars, and citations remain available in the unchanged
 | 44 | [Kraken 2](https://github.com/DerrickWood/kraken2/blob/8c190b1b668825935dbf6dee5f969227dc8269bb/src/reports.cc) | `taxonomy-counts`, `taxonomic-lca` | Pending |
 | 45 | [BUSCO](https://gitlab.com/ezlab/busco/-/blob/cd071053c38c5060f75d0b370cb66c4edc8e59a1/src/busco/busco_tools/hmmer.py) | `busco-summary` | Pending |
 | 46 | [UCSC Kent utilities](https://github.com/ucscGenomeBrowser/kent/blob/0f58b0eef93be6d6d3b26b9e2b99261d558d67df/src/utils/bedGraphToBigWig/tests/makefile) | `bedgraph-weighted-signal`, `bed12-exons` | 3 reference checks passed (`bedgraph-weighted-signal`) |
-| 47 | [GenomicRanges](https://github.com/Bioconductor/GenomicRanges/blob/44c311c711b9a5a5d6db070a8f3210819e4bc9de/inst/unitTests/test_findOverlaps-methods.R) | `interval-overlap`, `bed-nearest-features`, `bed-stranded-promoters` | 3 reference checks passed (`interval-overlap`) |
-| 48 | [Biostrings](https://github.com/Bioconductor/Biostrings/blob/fb0cd89830abd054cf2681d6bc6c929981e07b21/tests/testthat/test-translate.R) | `fasta-six-frame-translation`, `gff-cds-translation`, `fasta-motif-hits` | 3 reference checks passed (`fasta-six-frame-translation`) |
-| 49 | [pybedtools](https://github.com/daler/pybedtools/blob/efb8534c11ca6b45a6cd173ff3b3d1bf754e34a1/pybedtools/test/test_1.py) | `strand-extraction`, `interval-overlap` | 3 reference checks passed (`strand-extraction`) |
+| 47 | [GenomicRanges](https://github.com/Bioconductor/GenomicRanges/blob/44c311c711b9a5a5d6db070a8f3210819e4bc9de/inst/unitTests/test_findOverlaps-methods.R) | `interval-overlap`, `bed-nearest-features`, `bed-stranded-promoters`, `real-genome-overlap`, `real-genome-promoters` | 3 reference checks passed (`interval-overlap`) |
+| 48 | [Biostrings](https://github.com/Bioconductor/Biostrings/blob/fb0cd89830abd054cf2681d6bc6c929981e07b21/tests/testthat/test-translate.R) | `fasta-six-frame-translation`, `gff-cds-translation`, `fasta-motif-hits`, `real-genome-cds-extraction`, `real-genome-translation`, `real-genome-gc3`, `real-genome-codon-counts`, `real-genome-promoters` | 3 reference checks passed (`fasta-six-frame-translation`) |
+| 49 | [pybedtools](https://github.com/daler/pybedtools/blob/efb8534c11ca6b45a6cd173ff3b3d1bf754e34a1/pybedtools/test/test_1.py) | `strand-extraction`, `interval-overlap`, `real-genome-cds-extraction`, `real-genome-overlap`, `real-genome-promoters` | 3 reference checks passed (`strand-extraction`) |
 | 50 | [nf-core/tools](https://github.com/nf-core/tools/blob/eb2f709090f4054f45437c34049ea2068567c339/tests/pipelines/test_schema.py) | `sample-sheet-lanes` | Pending |
+
 
 ## Package reference run
 
@@ -189,7 +190,7 @@ supplies imaging operations. Distinguish measuring supplied masks from segmentin
 
 ## ID workflow coverage and input realism
 
-The 121 recipes include six using real observations and 115 simulated component
+The 133 recipes include eighteen using real observations and 115 simulated component
 controls. They do **not** establish coverage of complete ID benchmark workflows. Repository count, format count, and successful
 package checks measure different things from workflow coverage. The following
 assessment uses public benchmark descriptions and the program's prior source
@@ -203,7 +204,7 @@ remain excluded from training authoring. None is marked workflow-validated.
 The inspection browser binds mappings to generated examples and their local reference
 results. These timings are solver-check runtimes, not teacher latency measurements.
 
-Six recipes now supply unchanged biological observations:
+Eighteen recipes supply unchanged biological observations or declared observed subsets:
 
 - **GSE60450:** 27,179 genes and 12 libraries from mouse mammary basal/luminal cells,
   with two biological replicates per population and stage. Tasks cover library QC,
@@ -215,6 +216,16 @@ Six recipes now supply unchanged biological observations:
   and residue contact degree. Construction references parse the paired PDB deposits;
   independent solvers parse mmCIF. Model, alternate-conformer and author-ID rules
   are explicit.
+- **NC_001422.1, NC_001416.1 and NC_001604.1:** complete PhiX, lambda and T7 genomes.
+  Seven recipes exercise CDS parts, overlapping genes, alternative starts, codon
+  composition, upstream windows and circular restriction fragments. All 144 CDSs
+  reproduce deposited protein translations using Biopython 1.86; independent solvers
+  read the converted GFF3 and unchanged FASTA.
+- **ERR266411:** 6,000 observed PhiX read pairs in three disjoint archive-order
+  blocks. Five recipes cover paired filtering, fixed trimming, cycle quality,
+  expected errors and yield. Filtering and trimming require native FASTQ outputs
+  with exact ordered IDs, bases and qualities. These technical subsets do not
+  establish biological replication or mixed-community metagenomic coverage.
 
 [Source provenance](../../experiments/post_training/bio_tasks/data_sources.json)
 records retrieval URLs, checksums, licenses and unchanged-content recompression.

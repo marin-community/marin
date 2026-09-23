@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import hashlib
 import json
 import re
 import subprocess
@@ -14,7 +15,7 @@ import tomlkit
 from tasktrove_verify.grade import Status
 
 from experiments.post_training.bio_tasks.build import build, identity, validate_instance
-from experiments.post_training.bio_tasks.contract import Column, Contract, grade_answer
+from experiments.post_training.bio_tasks.contract import Column, Contract, FastqContract, grade_answer, grade_files
 from experiments.post_training.bio_tasks.oracle import (
     solve_counts,
     solve_fractions,
@@ -30,12 +31,81 @@ from experiments.post_training.bio_tasks.solvers.formats import reverse_compleme
 from experiments.post_training.bio_tasks.solvers.imaging import solve_imaging
 from experiments.post_training.bio_tasks.solvers.phylogeny import solve_phylogeny
 from experiments.post_training.bio_tasks.solvers.real_expression import solve_real_expression
+from experiments.post_training.bio_tasks.solvers.real_genomes import solve_real_genome
 from experiments.post_training.bio_tasks.solvers.sequence import solve_sequence as solve_six_frames
 from experiments.post_training.bio_tasks.solvers.variants import solve_variants
 from experiments.post_training.tasktrove.taskbinary import read_task_binary
 
 BASE_IMAGE = "python:3.12-slim@sha256:" + "0" * 64
 TOOL_REF = "12bbd5d45b1b176167ab3cfe905e06004c2f02e3"
+
+
+def test_native_fastq_output_requires_correct_records_even_when_summary_passes(tmp_path):
+    content = b"@a instrument\nACGT\n+\n!I#J\n@b\nTTAA\n+\nIIII\n"
+    digest = hashlib.sha256(b"a\nACGT\n!I#J\nb\nTTAA\nIIII\n").hexdigest()
+    contract = Contract(
+        columns={"reads": Column(kind="integer", description="retained reads", unit="reads")},
+        expected={"sample": {"reads": 2}},
+        fastq={"reads.fastq": FastqContract(records=2, max_bytes=128, sha256=digest)},
+    )
+    reference, answer, artifact = (tmp_path / name for name in ("reference.json", "answer.json", "reads.fastq"))
+    reference.write_text(contract.model_dump_json())
+    answer.write_text(json.dumps(contract.answer()))
+    assert grade_files(reference, answer).reward == 0
+    artifact.write_bytes(content)
+    assert grade_files(reference, answer).reward == 1
+    artifact.write_bytes(content.replace(b"\n", b"\r\n").replace(b"+\r\n", b"+ignored\r\n"))
+    assert grade_files(reference, answer).reward == 1
+    for corrupted in (
+        content.replace(b"ACGT", b"ACGA"),
+        content.replace(b"!I#J", b"IIII"),
+        content.replace(b"@b", b"@a"),
+        content + b"@truncated\n",
+        content.replace(b"instrument", b"x" * 128),
+        b"@b\nTTAA\n+\nIIII\n@a\nACGT\n+\n!I#J\n",
+    ):
+        artifact.write_bytes(corrupted)
+        assert grade_files(reference, answer).reward == 0
+    artifact.unlink()
+    outside = tmp_path / "other.fastq"
+    outside.write_bytes(content)
+    artifact.symlink_to(outside)
+    assert grade_files(reference, answer).reward == 0
+
+
+def test_compound_cds_keeps_phase_bases_and_translates_alternative_start(tmp_path):
+    (tmp_path / "genome.fa").write_text(">g\nGTGACTTAA\n")
+    (tmp_path / "query.json").write_text('{"topology":"linear"}')
+    (tmp_path / "annotations.gff3").write_text(
+        "##gff-version 3\n"
+        "g\tRefSeq\tCDS\t1\t4\t.\t+\t0\tID=p;part=1/2;transl_table=11\n"
+        "g\tRefSeq\tCDS\t5\t9\t.\t+\t2\tID=p;part=2/2;transl_table=11\n"
+    )
+    assert solve_real_genome(tmp_path, "real-genome-cds-extraction") == [
+        {"id": "p", "sequence": "GTGACTTAA", "length": 9}
+    ]
+    assert solve_real_genome(tmp_path, "real-genome-translation") == [{"id": "p", "protein": "MT", "length": 2}]
+
+
+def test_copied_fastq_fails_even_with_identical_summary_counts(tmp_path):
+    recipe = next(recipe for recipe in RECIPES if recipe.id == "real-fastq-fixed-trim")
+    first = recipe.generate(0)
+    for seed in range(1, 100):
+        second = recipe.generate(seed)
+        query = json.loads(second.inputs["query.json"])
+        if (
+            first.contract.expected == second.contract.expected
+            and query["source_block"] != json.loads(first.inputs["query.json"])["source_block"]
+        ):
+            break
+    else:
+        pytest.fail("No same-summary, different-read instance found")
+    previous = tmp_path / "first"
+    validate_instance(recipe, first, previous)
+    checks = validate_instance(recipe, second, previous_outputs=(previous,))
+    assert checks["copied_other_instance"] == 0
+    with pytest.raises(ValueError, match="copied outputs"):
+        validate_instance(recipe, first, previous_outputs=(previous,))
 
 
 @pytest.mark.parametrize("recipe", RECIPES, ids=lambda recipe: recipe.id)
@@ -340,7 +410,6 @@ def test_corpus_roundtrip_separates_oracles_and_grades_packaged_answers(tmp_path
         assert "train" in row["tags"] and not {"dev", "test"}.intersection(row["tags"])
         assert config["environment"]["allow_internet"] is False
         assert config["verifier"]["environment_mode"] == "separate"
-        assert config["artifacts"] == ["/app/answer.json"]
         assert not files.under("solution/")
         assert set(files.under("environment/")) == {
             "environment/Dockerfile",
@@ -348,9 +417,29 @@ def test_corpus_roundtrip_separates_oracles_and_grades_packaged_answers(tmp_path
         }
         assert "solution/oracle.pyz" in read_task_binary(row["solution_binary"]).files
         task_dir = output / "harbor" / str(config["metadata"]["split"]) / row["path"]
-        answer = tmp_path / "answer.json"
+        submission = tmp_path / "submissions" / row["path"]
+        submission.mkdir(parents=True)
+        answer = submission / "answer.json"
         contract = Contract.model_validate_json(files.text("tests/reference.json"))
-        answer.write_text(json.dumps(contract.answer()))
+        assert set(config["artifacts"]) == {"/app/answer.json", *(f"/app/{name}" for name in contract.fastq)}
+        if contract.fastq:
+            subprocess.run(
+                [
+                    sys.executable,
+                    "-I",
+                    str(output / "oracles" / row["path"] / "solution" / "oracle.pyz"),
+                    config["metadata"]["recipe"],
+                    "--inputs",
+                    str(task_dir / "environment" / "inputs"),
+                    "--answer",
+                    str(answer),
+                ],
+                check=True,
+                capture_output=True,
+                timeout=30,
+            )
+        else:
+            answer.write_text(json.dumps(contract.answer()))
         logs = tmp_path / "verifier"
         command = [
             sys.executable,

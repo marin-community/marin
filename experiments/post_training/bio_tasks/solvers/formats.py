@@ -4,6 +4,7 @@
 """Readers for the explicitly declared small input profiles used by the oracles."""
 
 import csv
+from collections.abc import Iterator
 from itertools import product
 from pathlib import Path
 
@@ -30,6 +31,16 @@ def fasta(path: Path) -> dict[str, str]:
         elif line:
             records[name] += line.strip()
     return records
+
+
+def fastq(path: Path) -> Iterator[tuple[str, str, str]]:
+    """Yield read ID, bases and qualities from the declared four-line profile."""
+    with path.open() as handle:
+        while header := handle.readline():
+            sequence, separator, qualities = (handle.readline().rstrip("\r\n") for _ in range(3))
+            if not header.startswith("@") or not separator.startswith("+") or len(sequence) != len(qualities):
+                raise ValueError("Malformed FASTQ input")
+            yield header[1:].split()[0], sequence, qualities
 
 
 def tab_rows(path: Path) -> list[list[str]]:

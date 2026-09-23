@@ -1,6 +1,6 @@
 # Synthetic biology task generation
 
-The generators in `experiments/post_training/bio_tasks/` implement 121
+The generators in `experiments/post_training/bio_tasks/` implement 133
 recipes from [the biology data program](https://github.com/marin-community/marin/issues/9257).
 They combine independently sourced real observations with synthetic correctness controls, establish references,
 execute separate input-reading oracle solutions, and package tasks for Harbor.
@@ -11,14 +11,14 @@ the original 2026-07-28 downloads/stars/citations. The maintained
 format coverage, with the original adoption inventory preserved as a separate file.
 
 The [implemented recipe list](bio-task-recipes.md) records every operation, skill,
-format profile, and repository mapping. The 121 recipes span 13 domains:
+format profile, and repository mapping. The 133 recipes span 13 domains:
 
 | Domain | Recipes |
 |---|---:|
-| sequence | 17 |
+| sequence | 24 |
 | genomic intervals | 10 |
 | expression | 15 |
-| sequencing reads | 13 |
+| sequencing reads | 18 |
 | variants | 9 |
 | phylogeny | 10 |
 | assembly and ecology | 8 |
@@ -29,11 +29,14 @@ format profile, and repository mapping. The 121 recipes span 13 domains:
 | assays and metabolomics | 7 |
 | workflow and identifiers | 2 |
 
-Use three instances with distinct inputs and reference targets per recipe: 363 train tasks at this checkpoint.
-There are 18 real-data examples and 345 simulated controls. The manifest marks
+Use three instances with distinct inputs and reference targets per recipe: 399 train tasks at this checkpoint.
+There are 54 real-data examples and 345 simulated controls. The manifest marks
 `corpus_stage=authoring-candidates-and-controls` and `training_ready=false`.
 Real examples use the unchanged 27,179-gene, 12-sample GSE60450 count matrix and
-experimental structures 1UBQ, 1CRN and 4HHB. Source files are vendored with hashes,
+experimental structures 1UBQ, 1CRN and 4HHB, complete annotated phage genomes
+NC_001422.1/NC_001416.1/NC_001604.1, and 6,000 observed paired reads from ERR266411.
+The read source retains varying per-base qualities in three disjoint 2,000-pair
+blocks; these are technical subsets, not biological replicates. Source files are vendored with hashes,
 licenses and transformations in `data_sources.json`. Full benchmark lineage screening
 and end-to-end workflow validation remain pending. See the
 [ID workflow gap analysis](bio-task-catalog.md#id-workflow-coverage-and-input-realism)
@@ -54,8 +57,8 @@ Every source repository has a scientific-operation mapping in
 `repository_coverage.json`. Actual CLI/API execution remains a distinct requirement
 for all 50 repositories. 30 packages now pass three reference cases each. The
 first CoreWeave run passed 22 packages; corrections on an existing TRC host passed
-8 more, with captured outputs downloaded from regional GCS. Twenty repositories
-still need reference scripts. `native_validation.json` indexes separate checksum-pinned
+8 more, with captured outputs downloaded from regional GCS. Picard quality-yield and fastp paired-filter scripts are implemented on the real reads
+and await native execution; eighteen other repositories still need scripts. `native_validation.json` indexes separate checksum-pinned
 files under `native_validation_runs/`; earlier failures and resolved environments
 remain in that history. The current generated solver environment contains Python;
 it does not yet establish native tool execution. Repository source revisions and
@@ -81,8 +84,12 @@ uv run python -m experiments.post_training.bio_tasks.build \
 The output directory must not exist. Generation runs one small reference process
 at a time. Each instance must pass its independent oracle, preserve row-order
 invariance, and reject empty, malformed, duplicate-ID, missing-ID, and recipe-specific
-scientifically wrong answers. Where adjacent instances have different targets,
-copied answers must fail. Duplicate input draws are deterministically resampled, with the actual seed and draw
+scientifically wrong answers. FASTQ-producing tasks additionally check complete
+ordered read IDs, sequences and qualities in submitted native files. Missing,
+truncated and altered artifacts fail even when the JSON summary is correct. The
+trusted verifier streams files under per-artifact byte limits and rejects symlinks.
+Where adjacent instances have different targets,
+copied JSON and native output files must fail against the next instance's contract. Target deduplication includes native artifact content. Duplicate input draws are deterministically resampled, with the actual seed and draw
 number recorded; 64 unsuccessful draws stop generation. A reference mismatch stops
 generation immediately and leaves the manifest marked `incomplete`.
 
@@ -97,6 +104,7 @@ and must remain outside solver environments. The bundle contains:
 
 - `harbor/train/{task_id}/`: instructions, environment inputs, and private tests.
 - `oracles/{task_id}/solution/`: independent input-reading solutions, stored separately.
+- `reference-outputs/{task_id}/`: verified private JSON and native outputs for inspection; never mount for solvers.
 - `tasks/part-00000.parquet`: TaskTrove browser columns and task/solution archives.
 - `ledger.jsonl`: task identity, lineage, split, input formats, input/archive hashes, and validation results.
 - `manifest.json`: source hashes, pinned base image and runtime references, counts,

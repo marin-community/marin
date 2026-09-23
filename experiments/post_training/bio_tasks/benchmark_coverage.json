@@ -6878,11 +6878,13 @@
       "task_id": "comparative-genomics",
       "source_tags": [],
       "status": "component-only",
-      "assessment": "Manual workflow decomposition; shared operations only. No reproduction of benchmark inputs or expected outputs.",
+      "assessment": "Component mapping: deposited phage annotations now exercise protein extraction from complete real genomes. These genomes are not a substitute for the multi-genome ortholog, alignment and tree-inference workflow.",
       "recipes": [
         "sequence-identity-clusters",
         "alignment-column-filter",
-        "newick-distances"
+        "newick-distances",
+        "real-genome-cds-extraction",
+        "real-genome-translation"
       ],
       "required_stages": [
         "protein extraction",
@@ -6904,7 +6906,11 @@
         "aligner",
         "tree inference"
       ],
-      "independent_data_sources": [],
+      "independent_data_sources": [
+        "RefSeq:NC_001422.1",
+        "RefSeq:NC_001416.1",
+        "RefSeq:NC_001604.1"
+      ],
       "validation_evidence": [],
       "runtime_seconds": null
     },
@@ -7145,11 +7151,14 @@
       "task_id": "viral-metagenomics",
       "source_tags": [],
       "status": "component-only",
-      "assessment": "Manual workflow decomposition; shared operations only. No reproduction of benchmark inputs or expected outputs.",
+      "assessment": "Component mapping: observed PhiX sequencing now exercises read QC and paired FASTQ filtering. A single-virus reference sample does not reproduce metagenomic diversity, assembly or taxonomic inference.",
       "recipes": [
         "assembly-nx",
         "protein-local-search",
-        "taxonomic-lca"
+        "taxonomic-lca",
+        "real-fastq-pair-filter",
+        "real-fastq-cycle-quality",
+        "real-fastq-quality-yield"
       ],
       "required_stages": [
         "read QC",
@@ -7170,7 +7179,9 @@
         "assembler",
         "similarity search"
       ],
-      "independent_data_sources": [],
+      "independent_data_sources": [
+        "ENA:ERR266411"
+      ],
       "validation_evidence": [],
       "runtime_seconds": null
     },

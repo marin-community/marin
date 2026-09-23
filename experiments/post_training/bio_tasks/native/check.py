@@ -37,6 +37,7 @@ from experiments.post_training.bio_tasks.native.mapping import (
 )
 from experiments.post_training.bio_tasks.native.qc import solve_fastqc, solve_multiqc
 from experiments.post_training.bio_tasks.native.reads import solve_cutadapt, solve_plink, solve_samtools, solve_vcftools
+from experiments.post_training.bio_tasks.native.real_reads import solve_fastp, solve_picard
 from experiments.post_training.bio_tasks.native.variants import solve_bcftools, solve_gatk
 from experiments.post_training.bio_tasks.native.workflow import solve_nextflow, solve_snakemake
 
@@ -61,6 +62,7 @@ OPERATIONS = {
     12: NativeOperation("matrixmarket-log-normalization", solve_seurat, ("r-jsonlite",)),
     13: NativeOperation("dna-unique-mapping", solve_minimap),
     14: NativeOperation("vcf-allelic-depth", solve_bcftools),
+    15: NativeOperation("real-fastq-quality-yield", solve_picard),
     16: NativeOperation("sample-sheet-lanes", solve_snakemake),
     17: NativeOperation("fasta-indexed-regions", solve_htslib, ("c-compiler", "pkg-config", "zlib", "liblzma-devel")),
     18: NativeOperation("fastqc-report-reconciliation", solve_fastqc),
@@ -73,6 +75,7 @@ OPERATIONS = {
     25: NativeOperation("bulk-cpm-filter", solve_edger, ("r-jsonlite",)),
     26: NativeOperation("adjusted-linear-effect", solve_limma, ("r-jsonlite",)),
     31: NativeOperation("fastq-adapter-trimming", solve_cutadapt),
+    35: NativeOperation("real-fastq-pair-filter", solve_fastp),
     38: NativeOperation("vcf-sample-qc", solve_vcftools),
     41: NativeOperation("bedgraph-threshold-peaks", solve_macs),
     46: NativeOperation("bedgraph-weighted-signal", solve_kent),
