@@ -72,6 +72,7 @@ def deployment_config() -> DeploymentConfig:
         boot_disk_throughput=140,
         boot_disk_snapshot="loom-pre-c4d-hyperdisk-20260816",
         dotenv_secret_version=3,
+        deployment_token_secret_version=1,
         prune_deployment=True,
         remote_mcps=(
             RemoteMcpConfig.parse(
@@ -347,6 +348,8 @@ def test_deployment_models_durable_resources_without_secret_payloads():
         assert field(scheduling, "provisioning_model", "provisioningModel") == "STANDARD"
         metadata = vm.inputs["metadata"]
         assert metadata["dotenv-secret-version"] == "3"
+        assert metadata["deployment-token-secret-id"] == "LOOM_DEPLOYMENT_TOKEN"
+        assert metadata["deployment-token-secret-version"] == "1"
         assert json.loads(metadata["docker-daemon-config"]) == {
             "data-root": "/var/lib/docker",
             "default-ulimits": {"core": {"Name": "core", "Hard": 0, "Soft": 0}},

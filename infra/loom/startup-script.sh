@@ -10,6 +10,8 @@ LOOM_DOMAIN="$(meta instance/attributes/loom-domain)"
 LOOM_IMAGE="$(meta instance/attributes/loom-image)"
 DOTENV_SECRET_VERSION="$(meta instance/attributes/dotenv-secret-version)"
 DOTENV_SECRET_ID="$(meta instance/attributes/dotenv-secret-id)"
+DEPLOYMENT_TOKEN_SECRET_ID="$(meta instance/attributes/deployment-token-secret-id)"
+DEPLOYMENT_TOKEN_SECRET_VERSION="$(meta instance/attributes/deployment-token-secret-version)"
 LOOM_PORT="$(meta instance/attributes/loom-port)"
 RUNTIME_DIR=/opt/loom
 COMPOSE_FILE="${RUNTIME_DIR}/docker-compose.yml"
@@ -119,9 +121,16 @@ curl -fsS "$HEALTH_URL" >/dev/null
 
 DEPLOYMENT_FILE=/run/loom-deployment.json
 meta instance/attributes/loom-deployment >"$DEPLOYMENT_FILE"
-docker compose -f "$COMPOSE_FILE" exec -T \
-  -e "WEAVER_API=http://127.0.0.1:${LOOM_PORT}" loom \
-  loom deployment apply --file - <"$DEPLOYMENT_FILE"
+deployment_token="$(gcloud secrets versions access "$DEPLOYMENT_TOKEN_SECRET_VERSION" \
+  --project="$PROJECT" --secret="$DEPLOYMENT_TOKEN_SECRET_ID")"
+if [ -z "$deployment_token" ]; then
+  echo "loom startup-script: deployment token secret is empty" >&2
+  exit 1
+fi
+printf 'header = "Authorization: Bearer %s"\n' "$deployment_token" | \
+  curl --config - -fsS -H 'Content-Type: application/json' \
+    --data-binary @"$DEPLOYMENT_FILE" "http://127.0.0.1:${LOOM_PORT}/api/deployment/reconcile" >/dev/null
+unset deployment_token
 rm -f "$DEPLOYMENT_FILE"
 touch "$STARTUP_SUCCESS"
 echo "== loom startup-script done =="

@@ -16,6 +16,7 @@ config:
   marin-loom:bootDiskThroughput: "140"
   marin-loom:bootDiskSnapshot: loom-pre-c4d-hyperdisk-20260816
   marin-loom:dotenvSecretVersion: "4"
+  marin-loom:deploymentTokenSecretVersion: "1"
   marin-loom:pruneDeployment: "true"
   marin-loom:settings:
     auth.github_organizations: "Open-Athena:188075292"
