@@ -134,13 +134,14 @@ def _phase_rows_cte(bucket: str, scope: str) -> str:
 # Worker spans tagged with their step's critical rank r*: the rank whose policy_ppo_train ran
 # longest, with ties going to the rank id that sorts first. parent_seconds is the step's longest
 # policy_ppo_train. covered_seconds sums the exclusive spans each rank published under
-# policy_ppo_train, except the producer's own residual.
+# policy_ppo_train, except the producer's own residual. NULLS LAST because Finelog's DataFusion sorts
+# NULLs first under DESC, where DuckDB sorts them last.
 _CRITICAL_RANK_CTE = f"""tagged AS (
     SELECT t, step, worker_rank, phase, parent, clock_domain, value,
            FIRST_VALUE(worker_rank) OVER (
                PARTITION BY step
                ORDER BY CASE WHEN phase = 'policy_ppo_train' AND clock_domain IN {_INCLUSIVE_CLOCKS}
-                             THEN value ELSE -1 END DESC,
+                             THEN value ELSE -1 END DESC NULLS LAST,
                         worker_rank
                ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
            ) AS critical_rank,
