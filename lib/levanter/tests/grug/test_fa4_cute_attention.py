@@ -460,7 +460,15 @@ def test_real_gpu_fa4_cute_attention_matches_reference_with_leading_padding(slid
     _assert_real_gpu_fa4_cute_matches_reference(q, k, v, mask, cotangent, valid_tokens=valid)
 
 
-@pytest.mark.parametrize("implementation", ["gpu_fa4_cute", "gpu_fa4_cute_sm100"])
+_SEQUENCE_SHARDED_LAYOUTS = [(4, 1, 64), (8, 2, 128), (4, 4, 128), (6, 1, 128), (8, 1, 128)]
+_SEQUENCE_SHARDED_CASES = [("gpu_fa4_cute", *layout) for layout in _SEQUENCE_SHARDED_LAYOUTS] + [
+    ("gpu_fa4_cute_sm100", q_heads, kv_heads, head_dim)
+    for q_heads, kv_heads, head_dim in _SEQUENCE_SHARDED_LAYOUTS
+    if head_dim == SM100_HEAD_DIM and q_heads // kv_heads in SM100_GQA_RATIOS
+]
+
+
+@pytest.mark.parametrize(("implementation", "q_heads", "kv_heads", "head_dim"), _SEQUENCE_SHARDED_CASES)
 @pytest.mark.parametrize(
     ("context_size", "sequence_axes"),
     [
@@ -472,21 +480,14 @@ def test_real_gpu_fa4_cute_attention_matches_reference_with_leading_padding(slid
         (4, ("data", "context")),
     ],
 )
-@pytest.mark.parametrize(
-    ("q_heads", "kv_heads", "head_dim"), [(4, 1, 64), (8, 2, 128), (4, 4, 128), (6, 1, 128), (8, 1, 128)]
-)
 @pytest.mark.parametrize("mask_kind", ["causal", "window", "packed"])
 def test_real_gpu_fa4_cute_attention_matches_reference_with_sequence_sharded_queries(
     q_heads, kv_heads, head_dim, context_size, sequence_axes, implementation, mask_kind
 ):
     if jax.default_backend() != "gpu":
         pytest.skip("FA4/CuTe correctness requires a GPU backend.")
-    if implementation == "gpu_fa4_cute_sm100" and (
-        head_dim != SM100_HEAD_DIM
-        or q_heads // kv_heads not in SM100_GQA_RATIOS
-        or fa4_cute.gpu_compute_capability() != 100
-    ):
-        pytest.skip("Native SM100 requires SM100, D128, and a supported GQA ratio.")
+    if implementation == "gpu_fa4_cute_sm100" and fa4_cute.gpu_compute_capability() != 100:
+        pytest.skip("Native SM100 requires SM100.")
     if jax.device_count() < context_size:
         pytest.skip(f"Context-parallel FA4/CuTe needs at least {context_size} devices.")
     pytest.importorskip("cutlass")
