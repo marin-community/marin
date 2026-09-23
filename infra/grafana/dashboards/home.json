@@ -132,12 +132,6 @@
       "linkRef": "rl_post_training"
     },
     {
-      "linkRef": "rl_sync_generation"
-    },
-    {
-      "linkRef": "rl_sync_train_step"
-    },
-    {
       "linkRef": "async_rl"
     },
     {
