@@ -576,16 +576,14 @@ def regenerate_generated_pins(dependencies: tuple[LockedDependency, ...], *, che
     )
 
 
-def pin_gpu_manifest(manifest_path: Path, *, allow_staged_candidate: bool) -> None:
-    """Re-pin gpu.toml from an allowed manifest and regenerate external_dependencies.py.
+def _install_gpu_manifest(manifest_path: Path, manifest: dict, rendered: str, *, kind: str) -> None:
+    """Validate and install rendered gpu.toml, then regenerate external_dependencies.py.
 
     ``manifest_path`` is a ``marin-vllm-gpu-manifest.json`` downloaded from the fork release;
     the fork's release pipeline is the only writer of that artifact. The rendered pin is
     validated on a staging file before it atomically replaces the canonical one, so a manifest
     that renders but violates a loader invariant leaves the existing pin in place.
     """
-    manifest = json.loads(manifest_path.read_text())
-    rendered = render_gpu_release_toml(manifest, allow_staged_candidate=allow_staged_candidate)
     directory = VLLM_GPU_RELEASE_CONFIG.parent
     with tempfile.NamedTemporaryFile("w", dir=directory, prefix="gpu.", suffix=".toml.tmp", delete=False) as handle:
         handle.write(rendered)
@@ -597,18 +595,19 @@ def pin_gpu_manifest(manifest_path: Path, *, allow_staged_candidate: bool) -> No
         staging.unlink(missing_ok=True)
     dependencies = tuple(locked_dependency(project) for project in EXTERNAL_PROJECTS)
     regenerate_generated_pins(dependencies, check=False)
-    kind = "staged candidate" if allow_staged_candidate else "release"
     print(f"re-pinned vllm GPU {kind} {manifest['release']['tag']} from {manifest_path}")
 
 
 def promote_gpu_release(manifest_path: Path) -> None:
-    """Re-pin from a promoted release manifest."""
-    pin_gpu_manifest(manifest_path, allow_staged_candidate=False)
+    manifest = json.loads(manifest_path.read_text())
+    rendered = render_gpu_release_toml(manifest)
+    _install_gpu_manifest(manifest_path, manifest, rendered, kind="release")
 
 
 def stage_gpu_candidate(manifest_path: Path) -> None:
-    """Temporarily re-pin from an exact staged candidate for pre-promotion parity."""
-    pin_gpu_manifest(manifest_path, allow_staged_candidate=True)
+    manifest = json.loads(manifest_path.read_text())
+    rendered = render_gpu_release_toml(manifest, allow_staged_candidate=True)
+    _install_gpu_manifest(manifest_path, manifest, rendered, kind="staged candidate")
 
 
 def parse_args() -> argparse.Namespace:
