@@ -25,6 +25,10 @@ from experiments.post_training.bio_tasks.oracle import (
     solve_taxonomy,
 )
 from experiments.post_training.bio_tasks.recipes import RECIPES
+from experiments.post_training.bio_tasks.solvers.imaging import solve_imaging
+from experiments.post_training.bio_tasks.solvers.phylogeny import solve_phylogeny
+from experiments.post_training.bio_tasks.solvers.sequence import solve_sequence as solve_six_frames
+from experiments.post_training.bio_tasks.solvers.variants import solve_variants
 from experiments.post_training.tasktrove.taskbinary import read_task_binary
 
 BASE_IMAGE = "python:3.12-slim@sha256:" + "0" * 64
@@ -229,6 +233,51 @@ def test_image_labels_keep_disconnected_pixels_and_use_physical_pixel_centers(tm
     ]
 
 
+def test_six_frames_keep_stop_codons_and_reverse_complement_before_offset(tmp_path):
+    (tmp_path / "sequences.fa").write_text(">x\nATGATG\n")
+    assert solve_six_frames(tmp_path, "fasta-six-frame-translation") == [
+        {"id": "x:+1", "protein": "MM"},
+        {"id": "x:+2", "protein": "*"},
+        {"id": "x:+3", "protein": "D"},
+        {"id": "x:-1", "protein": "HH"},
+        {"id": "x:-2", "protein": "I"},
+        {"id": "x:-3", "protein": "S"},
+    ]
+
+
+def test_newick_pruning_preserves_incoming_length_when_suppressing_unary_node(tmp_path):
+    (tmp_path / "tree.nwk").write_text("((a:1,b:2)ab:3,c:4)root;\n")
+    (tmp_path / "keep.txt").write_text("a\nc\n")
+    assert solve_phylogeny(tmp_path, "newick-pruning") == [
+        {"id": "a,c", "length": 0},
+        {"id": "a", "length": 4},
+        {"id": "c", "length": 4},
+    ]
+
+
+def test_pgm_diagonal_pixels_are_distinct_components_with_squared_area_scale(tmp_path):
+    (tmp_path / "image.pgm").write_text("P2\n# two diagonal cells\n2 2\n255\n100 0\n0 100\n")
+    (tmp_path / "metadata.json").write_text('{"pixel_size_um": 2, "threshold": 100}')
+    assert solve_imaging(tmp_path, "image-threshold-components") == [
+        {"id": "1", "pixels": 1, "area": 4, "centroid_x": 1, "centroid_y": 1},
+        {"id": "2", "pixels": 1, "area": 4, "centroid_x": 3, "centroid_y": 3},
+    ]
+
+
+def test_vcf_minimization_trims_suffix_first_and_preserves_an_anchor(tmp_path):
+    (tmp_path / "variants.vcf").write_text(
+        "##fileformat=VCFv4.3\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tsample\n"
+        "chr1\t10\tinsertion\tGTA\tGTTA\t60\tPASS\t.\tGT\t0/1\n"
+        "chr1\t20\tsnv\tAAC\tACC\t60\tPASS\t.\tGT\t0/1\n"
+    )
+    assert solve_variants(tmp_path, "vcf-minimal-representation") == [
+        {"id": "insertion", "pos": 10, "ref": "G", "alt": "GT"},
+        {"id": "snv", "pos": 21, "ref": "A", "alt": "C"},
+    ]
+
+
+@pytest.mark.timeout(300)
 def test_corpus_roundtrip_separates_oracles_and_grades_packaged_answers(tmp_path):
     output = tmp_path / "corpus"
     manifest = build(output, 3, 20260923, BASE_IMAGE, TOOL_REF)
@@ -251,7 +300,7 @@ def test_corpus_roundtrip_separates_oracles_and_grades_packaged_answers(tmp_path
             "environment/Dockerfile",
             *[p for p in files.files if p.startswith("environment/inputs/")],
         }
-        assert "solution/oracle.py" in read_task_binary(row["solution_binary"]).files
+        assert "solution/oracle.pyz" in read_task_binary(row["solution_binary"]).files
         task_dir = output / "harbor" / str(config["metadata"]["split"]) / row["path"]
         answer = tmp_path / "answer.json"
         contract = Contract.model_validate_json(files.text("tests/reference.json"))

@@ -1,6 +1,6 @@
 # Synthetic biology task generation
 
-The generators in `experiments/post_training/bio_tasks/` implement 12
+The generators in `experiments/post_training/bio_tasks/` implement 115
 recipes from [the biology data program](https://github.com/marin-community/marin/issues/9257).
 They construct fresh inputs, establish exact references from construction ledgers,
 execute separate input-reading oracle solutions, and package tasks for Harbor.
@@ -10,34 +10,47 @@ the original 2026-07-28 downloads/stars/citations. The maintained
 [task catalog](bio-task-catalog.md) contains all source assessments, skills, and
 format coverage, with the original adoption inventory preserved as a separate file.
 
-| Recipe | Difficulty | Native input profiles | Required distinctions |
-|---|---|---|---|
-| `strand-extraction` | Easy | FASTA + GFF3 (single exon) | Sequence-ID and exon-parent joins, closed coordinates, reverse complement |
-| `interval-overlap` | Easy | BED4 | Half-open coordinates, chromosome identity, overlap threshold, distinct peaks |
-| `donor-counts` | Medium | CSV | Cell-ID joins, raw counts, donor replication, type/QC filters, empty donors |
-| `cell-fractions` | Medium | CSV | Patient/specimen joins, cohort/QC selection, local barcodes, zero denominators |
-| `paired-read-qc` | Medium | FASTQ (Phred+33) + JSON settings | Mate-ID joins, per-mate thresholds, inclusive boundaries |
-| `genotype-alleles` | Medium | VCF 4.3 + CSV sample selection | FORMAT/GT, named sample columns, partial missingness, ploidy, called-allele denominator |
-| `transcript-tpm` | Medium | CSV | Effective lengths, transcript/gene joins, decoys, TPM versus CPM |
-| `alignment-sites` | Easy | Aligned FASTA + CSV inventory | Missing states, eligible sites, variable versus informative columns |
-| `tree-branches` | Easy | CSV edge list | Root conventions, internal/terminal edges, branch lengths |
-| `busco-summary` | Medium | CSV supplied hits | Ortholog identity, duplicate hit rows, complete/fragmented precedence |
-| `taxonomy-counts` | Medium | CSV taxonomy/assignments | Direct/clade counts, ancestor overlap, unclassified denominator |
-| `image-measurements` | Medium | JSON arrays | Supplied labels, disconnected pixels, physical pixel centers, axis order |
+The [implemented recipe list](bio-task-recipes.md) records every operation, skill,
+format profile, and repository mapping. The 115 recipes span 13 domains:
 
-Author three instances per recipe and expand recipe breadth before repetitions.
-These recipes are an initial authoring batch. They do not implement all planned
-families, hard compositions, or the final 30/60/10 difficulty mixture. All generated
-tasks belong to one train split. Evaluation uses the separate benchmarks in the
-program plan. CSV/JSON intermediates do not establish native H5AD, Newick,
-BUSCO-output, Kraken-report, or OME-TIFF coverage. Format profiles describe the
-specific inputs generated here, not general-purpose parser support.
+| Domain | Recipes |
+|---|---:|
+| sequence | 17 |
+| genomic intervals | 10 |
+| expression | 11 |
+| sequencing reads | 13 |
+| variants | 9 |
+| phylogeny | 10 |
+| assembly and ecology | 8 |
+| imaging and spatial | 7 |
+| statistics | 8 |
+| structures and proteomics | 7 |
+| networks | 6 |
+| assays and metabolomics | 7 |
+| workflow and identifiers | 2 |
 
-`strand-extraction` v2 supplies native GFF3 gene, mRNA, and exon records with
-`ID`/`Parent` attributes and a multirecord FASTA. It replaces v1's CSV annotations;
-lineage and generated transcript sequences are preserved. The profile has one
-exon per mRNA. GTF attributes, multi-exon splicing, and CDS phase remain separate
-coverage requirements.
+Use three distinct-input instances per recipe: 345 train tasks at this checkpoint.
+These are easy and medium tasks; hard compositions and the final difficulty
+mixture remain separate work. Evaluation uses the independent benchmarks in the
+program issue. No development or test split is generated.
+
+Native formats now include GFF3 and GTF, BED12 and bedGraph, SAM and VCF,
+Matrix Market/10x, Newick and NEXUS charsets, PDB and mmCIF, SBML, MGF,
+PGM images, PAF, HMMER domain tables, FASTA indexes, and FastQC reports.
+The profiles are explicitly bounded, rather than general-purpose parser support.
+Generic CSV/JSON summaries do not establish native H5AD, BAM, SRA, BUSCO-output,
+Kraken-report, or OME-TIFF coverage. In particular, `sra-spot-export` currently
+models biological/technical read routing from a CSV ledger; it does not read an SRA archive.
+
+Every source repository has a scientific-operation mapping in
+`repository_coverage.json`. Actual CLI/API execution remains a distinct requirement
+for all 50 repositories. The current generated solver environment contains Python;
+it does not yet establish native tool execution. Repository source revisions and
+runtime package versions are different provenance fields and must remain separate.
+
+`strand-extraction` v2 uses GFF3 gene/mRNA/exon parents and a multirecord FASTA.
+Separate recipes now cover multi-exon GTF splicing and GFF3 CDS phase, retaining
+the format distinctions instead of converting every annotation to CSV.
 
 ## Build and inspect
 
@@ -56,12 +69,13 @@ The output directory must not exist. Generation runs one small reference process
 at a time. Each instance must pass its independent oracle, preserve row-order
 invariance, and reject empty, malformed, duplicate-ID, missing-ID, and recipe-specific
 scientifically wrong answers. Where adjacent instances have different targets,
-copied answers must fail. A reference mismatch stops generation and leaves the
-manifest marked `incomplete`.
+copied answers must fail. Duplicate input draws are deterministically resampled, with the actual seed and draw
+number recorded; 64 unsuccessful draws stop generation. A reference mismatch stops
+generation immediately and leaves the manifest marked `incomplete`.
 
 Serve the output directory with `python -m http.server 8757 --directory /tmp/bio-tasks-example`
-and open `http://localhost:8757/`. The index groups three examples per recipe and
-shows input formats and skills. Task pages show exact instructions, bounded input previews, expected
+and open `http://localhost:8757/`. The index groups three examples per recipe, with text search, domain filtering,
+format/skill labels, and a separate 50-repository execution-coverage table. Task pages show exact instructions, bounded input previews, expected
 outputs, negative controls, metadata, and verifier code. These pages contain answers
 and must remain outside solver environments. The bundle contains:
 
@@ -71,7 +85,8 @@ and must remain outside solver environments. The bundle contains:
 - `ledger.jsonl`: task identity, lineage, split, input formats, input/archive hashes, and validation results.
 - `manifest.json`: source hashes, pinned base image and runtime references, counts,
   and readiness status.
-- `source_inventory.json`: all 50 repository assessments.
+- `source_inventory.json`: all 50 repository assessments and original adoption metadata.
+- `repository_coverage.json`: explicit recipe mappings and CLI/API execution evidence status.
 
 The Parquet export can be opened with TaskTrove's file browser. These tasks use
 Harbor's native `tests/test.sh` entry point in a separate verifier environment;
@@ -80,7 +95,8 @@ TaskTrove/EvalDash service ingestion, attempt joins, and review annotations are
 not implemented here. The local pages make the first generated examples inspectable.
 
 Lineage IDs track related tasks and support deduplication and benchmark exclusions.
-Recipe version changes preserve lineage and input seed. Perturbations of an existing
+Recipe version changes preserve lineage and the initial input seed. Deterministic
+resampling records any replacement generation seed explicitly. Perturbations of an existing
 dataset must retain that dataset's lineage when additional generation routes are
 added. The generator does not reserve development or test tasks.
 

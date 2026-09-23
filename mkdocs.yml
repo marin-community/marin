@@ -81,6 +81,7 @@ nav:
   - Experiments:
       - Biology Task Generators: experiments/bio-tasks.md
       - Biology Task Catalog: experiments/bio-task-catalog.md
+      - Biology Task Recipes: experiments/bio-task-recipes.md
       - Daily Ferry Log: experiments/daily-ferry-log.md
       - Report Index: reports/index.md
       - Agent MoE Experiment Digest: reports/agent-moe-experiments.md

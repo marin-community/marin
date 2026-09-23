@@ -6,13 +6,12 @@ program decisions, collection policy, and results; this file holds the detailed
 coverage and source evidence. [Generator documentation](bio-tasks.md) lists the
 implemented recipes and how to inspect their examples.
 
-The catalogs below contain candidate capabilities, not claims of implementation.
-Source inspection establishes plausible seeds and verification constraints; it does
-not establish runtime validity or training benefit. The current implementation has
-12 recipes with three examples each. Native inputs include FASTA, FASTQ (Phred+33),
-BED4, GFF3 (single-exon annotations), and VCF 4.3; other recipes currently use
-explicit CSV/JSON intermediates.
-Scientific review and container validation are pending.
+The implementation has **115 recipes across 13 domains**, with three instances per
+recipe and one train split. The [implemented recipe matrix](bio-task-recipes.md)
+records the supplied formats, skills, and source-repository mappings. Sections below
+also retain candidate capabilities beyond the current implementation. Source inspection
+and host oracle validation do not establish runtime validity or training benefit.
+Scientific review, native tool execution, and Harbor container validation remain separate checks.
 
 Update this catalog when a source assessment, required skill, or format profile
 changes. Preserve revision pins and limitations. Keep the generator's
@@ -35,6 +34,73 @@ The numbered assessments below correspond to the original 50 rows. The machine
 inventory retains the reported metric strings, snapshot date, path, and hash.
 If metrics are refreshed, record dates/windows and sources for the new observations;
 preserve this original snapshot for comparisons.
+
+## Repository execution coverage
+
+All 50 repositories have explicit scientific-operation mappings. The user-facing
+requirement includes **actual CLI/API use for all 50**, with independent verification
+of biological outputs. A recipe mapping, a successful import, or a version command
+does not satisfy that requirement. Runtime tests must execute a bounded data operation,
+record the package version and environment digest, and retain the output and grading result.
+
+The current host-validated recipes use independent Python solvers. Native CLI/API
+execution is still pending for every row below; these are not 50 completed integration tests.
+The maintained machine record is `experiments/post_training/bio_tasks/repository_coverage.json`.
+Downloads, stars, and citations remain available in the unchanged
+[original 50-package inventory](computational_biology_bioinformatics_packages.md).
+
+| # | Repository | Implemented scientific operations | Actual CLI/API execution |
+|---:|---|---|---|
+| 1 | [BLAST+](https://github.com/ncbi/ncbi-cxx-toolkit-public/blob/cf49184dc38476b1c9f605c38f47758a96e72d6b/src/algo/blast/unit_tests/api/bl2seq_unit_test.cpp) | `dna-unique-mapping`, `protein-local-search` | Pending |
+| 2 | [SAMtools](https://github.com/samtools/samtools/blob/664e3b5098a12bd5faca637fdc111ba90c21e135/doc/samtools-depth.1) | `sam-cigar-coverage`, `sam-inclusion` | Pending |
+| 3 | [BWA](https://github.com/lh3/bwa/blob/d82444c17edc2384420409f85557c6ae84019732/example.c) | `dna-unique-mapping` | Pending |
+| 4 | [Bowtie 2](https://github.com/BenLangmead/bowtie2/blob/58e34bffd389d7ead6542b439784d9def92c6172/scripts/test/regressions.py) | `sam-pair-concordance`, `dna-unique-mapping` | Pending |
+| 5 | [DESeq2](https://github.com/thelovelab/DESeq2/blob/9e885b581380291797f2777145c395f50aaaa72b/tests/testthat/test_model_matrix.R) | `design-estimability`, `bulk-size-factors`, `sample-sheet-lanes` | Pending |
+| 6 | [STAR](https://github.com/alexdobin/STAR/blob/b1edc1208d91a53bf40ebae8669f71d50b994851/extras/tests/scripts/checkCellReadsStats_vsMatrix.awk) | `matrixmarket-cell-qc`, `sam-junction-support`, `umi-deduplication` | Pending |
+| 7 | [BEDTools](https://github.com/arq5x/bedtools2/blob/614e9a5c5935ab86e873dab9072fbbaf003c1b7e/test/bed12tobed6/test-bed12tobed6.sh) | `bed12-exons`, `bed-union-coverage`, `bed-complement` | Pending |
+| 8 | [GATK](https://github.com/broadinstitute/gatk/blob/0cde69eed30339f5978cbb1ac6e5cf3662f9e1f8/src/test/java/org/broadinstitute/hellbender/tools/walkers/filters/VariantFiltrationIntegrationTest.java) | `vcf-site-filtering`, `vcf-genotype-masking` | Pending |
+| 9 | [pysam](https://github.com/pysam-developers/pysam/blob/ba2e6c124398bdcd963db741d6f01164fed4f9b7/tests/AlignmentFilePileup_test.py) | `sam-allele-pileup`, `sam-inclusion` | Pending |
+| 10 | [MAFFT](https://github.com/GSLBiotech/mafft/blob/26ecaba0130b533cf06a29200f0fb40829c00101/test/script) | `alignment-sum-of-pairs`, `alignment-column-filter` | Pending |
+| 11 | [HMMER](https://github.com/EddyRivasLab/hmmer/blob/9acd8b6758a0ca5d21db6d167e0277484341929b/testsuite/i13-msa-integrity.pl) | `hmmer-domain-extraction` | Pending |
+| 12 | [Seurat](https://github.com/satijalab/seurat/blob/586015abde10618ecb32d3fe632267a83317a08d/tests/testthat/test_data_manipulation.R) | `matrixmarket-log-normalization`, `matrixmarket-feature-filtering` | Pending |
+| 13 | [minimap2](https://github.com/lh3/minimap2/blob/3c28777e7e2dcc90f825de1b9f17a89cca7d4452/example.c) | `paf-query-coverage`, `dna-unique-mapping` | Pending |
+| 14 | [BCFtools](https://github.com/samtools/bcftools/blob/edf7fd96c5da562ecfd99fb7f9e4b9eb597aeae8/test/fill-tags-VAF.out) | `vcf-allelic-depth`, `vcf-multiallelic-splitting`, `vcf-minimal-representation` | Pending |
+| 15 | [Picard](https://github.com/broadinstitute/picard/blob/c2a483d497d1b0fe6d0ab518b1b32fe98fad0741/src/test/java/picard/sam/FilterSamReadsTest.java) | `sam-fragment-counts`, `sam-pair-concordance` | Pending |
+| 16 | [Snakemake](https://github.com/snakemake/snakemake/blob/91763d644db0a6051c40014fa8ffad340f7d39a0/tests/test_expand.py) | `sample-sheet-lanes` | Pending |
+| 17 | [HTSlib](https://github.com/samtools/htslib/blob/d3cc9553d89dc34239afb7145b06c0dd818c0219/test/faidx/faidx.tst) | `fasta-indexed-regions` | Pending |
+| 18 | [FastQC](https://github.com/s-andrews/FastQC/blob/87fb3364a2f37115833d678648926d41e184f0b1/uk/ac/babraham/FastQC/Modules/SequenceLengthDistribution.java) | `paired-read-qc`, `fastqc-report-reconciliation` | Pending |
+| 19 | [Biopython](https://github.com/biopython/biopython/blob/08fc09086afe0b57215d2515660e0c032b55c0dd/Tests/test_SeqFeature.py) | `strand-extraction`, `gtf-splicing`, `gff-cds-translation` | Pending |
+| 20 | [Nextflow](https://github.com/nextflow-io/nextflow/blob/17f18779266767b16bca51af71522e28adf5cff6/modules/nextflow/src/test/groovy/nextflow/extension/GroupTupleOpTest.groovy) | `sample-sheet-lanes` | Pending |
+| 21 | [DIAMOND](https://github.com/bbuchfink/diamond/blob/5e25acaf40e6b9883636c5c564306fe77210de53/CMakeLists.txt) | `protein-local-search` | Pending |
+| 22 | [PLINK / PLINK 2](https://github.com/chrchang/plink-ng/blob/a25a0d6438b61b1951cd6d7eb209db8b79687581/2.0/Tests/TEST_GRM_MAF/run_tests.sh) | `vcf-sample-qc`, `genotype-hwe` | Pending |
+| 23 | [Scanpy](https://github.com/scverse/scanpy/blob/0d5fd16234865619d2f5097d33fc4281900a2bc2/tests/test_qc_metrics.py) | `matrixmarket-cell-qc`, `donor-counts`, `cell-fractions` | Pending |
+| 24 | [MultiQC](https://github.com/MultiQC/MultiQC/blob/fdc68d394849f69b67b6e6e13ebe907504ed534b/multiqc/modules/samtools/tests/test_flagstat.py) | `fastqc-report-reconciliation` | Pending |
+| 25 | [edgeR](https://github.com/bioconductor-source/edgeR/blob/8986864d8f92dac37925ef641fcd6c4161130551/R/cpm.R) | `bulk-cpm-filter` | Pending |
+| 26 | [limma](https://github.com/bioconductor-source/limma/blob/14eabaeb695945b45ceb885ac8d4c61232639ea5/R/contrasts.R) | `adjusted-linear-effect`, `paired-treatment-effect` | Pending |
+| 27 | [SPAdes](https://github.com/ablab/spades/blob/808b87dade1300ecaa712429955ccba7bfb286f4/src/projects/spades/pipeline/spades_pipeline/supplemetary/check_test_script.py) | `assembly-nx`, `assembly-gap-runs` | Pending |
+| 28 | [IQ-TREE](https://github.com/iqtree/iqtree2/blob/a00094e03d1ae984e1497e16738f91514df8c366/example/example.nex) | `alignment-partitions` | Pending |
+| 29 | [FastTree](https://github.com/morgannprice/fasttree/blob/a5a2723ea1e64faf3da7ea514521cfa348891add/CompareTree.pl) | `newick-distances`, `newick-monophyly`, `newick-split-support` | Pending |
+| 30 | [RAxML](https://github.com/stamatak/standard-RAxML/blob/36ec36110631c34692abcd4f24ca7b3e2fea742a/usefulScripts/bsBranchLengths.pl) | `newick-split-support` | Pending |
+| 31 | [cutadapt](https://github.com/marcelm/cutadapt/blob/4927632f7c546dd290c53501c8417f909252befe/tests/test_trim.py) | `fastq-adapter-trimming`, `fastq-quality-trimming` | Pending |
+| 32 | [Salmon](https://github.com/COMBINE-lab/salmon/blob/5515b7f05a90341b6652adfdb807e7cf14295518/crates/salmon-cli/tests/output_contract.rs) | `transcript-tpm` | Pending |
+| 33 | [kallisto](https://github.com/pachterlab/kallisto/blob/4e9f29cf3b021260415430c057a22469ca081391/test/Snakefile) | `transcript-tpm`, `sample-sheet-lanes` | Pending |
+| 34 | [StringTie](https://github.com/gpertea/stringtie/blob/d1dc38ddb681089b2e8faaabdcfee772af6fb033/prepDE.py3) | `gtf-coverage-counts` | Pending |
+| 35 | [fastp](https://github.com/OpenGene/fastp/blob/8a2397b6628ae14127efdb7566f67fc05f9aea56/src/filter.cpp) | `paired-read-qc`, `fastq-adapter-trimming` | Pending |
+| 36 | [SRA Toolkit](https://github.com/ncbi/sra-tools/blob/434ae787c86e32e7faa5e80417a342c365fa03b0/test/external/fasterq-dump/fq_tests/split3.sh) | `sra-spot-export` | Pending |
+| 37 | [deepTools](https://github.com/deeptools/deepTools/blob/cde2aa7938cb4af6fe28de1504f94f6928344342/pydeeptools/deeptools/test/test_countReadsPerBin.py) | `bedgraph-weighted-signal`, `sam-cigar-coverage`, `sam-fragment-counts` | Pending |
+| 38 | [VCFtools](https://github.com/vcftools/vcftools/blob/1f87a83402ffd17ea2723a456b7edf5d80b4a22c/src/perl/fill-an-ac) | `genotype-alleles`, `vcf-sample-qc` | Pending |
+| 39 | [SnpEff](https://github.com/pcingola/SnpEff/blob/1db15998ea6aad93a35848aca0f6cba81cd36738/src/test/java/org/snpeff/snpEffect/testCases/unity/TestCasesSnps.java) | `variant-coding-consequences` | Pending |
+| 40 | [Ensembl VEP](https://github.com/Ensembl/ensembl-vep/blob/cee181c2a1bb31900a0b7526168c67577fb23928/t/AnnotationSource_File_GTF.t) | `variant-coding-consequences`, `gtf-splicing` | Pending |
+| 41 | [MACS2 / MACS3](https://github.com/macs3-project/MACS/blob/ece08963b6a30f4de0c5a5e684513f876b788d2c/test/test_Pileup.py) | `bedgraph-threshold-peaks` | Pending |
+| 42 | [MMseqs2](https://github.com/soedinglab/MMseqs2/blob/d401e78c2d18a822cdb1527d7464a043f6035a15/data/workflow/easycluster.sh) | `sequence-identity-clusters` | Pending |
+| 43 | [MUSCLE](https://github.com/rcedgar/muscle/blob/29aa0671d0e46c862457749c7f2d87f29007b8eb/test_scripts/check_results.py) | `alignment-sum-of-pairs`, `alignment-consensus` | Pending |
+| 44 | [Kraken 2](https://github.com/DerrickWood/kraken2/blob/8c190b1b668825935dbf6dee5f969227dc8269bb/src/reports.cc) | `taxonomy-counts`, `taxonomic-lca` | Pending |
+| 45 | [BUSCO](https://gitlab.com/ezlab/busco/-/blob/cd071053c38c5060f75d0b370cb66c4edc8e59a1/src/busco/busco_tools/hmmer.py) | `busco-summary` | Pending |
+| 46 | [UCSC Kent utilities](https://github.com/ucscGenomeBrowser/kent/blob/0f58b0eef93be6d6d3b26b9e2b99261d558d67df/src/utils/bedGraphToBigWig/tests/makefile) | `bedgraph-weighted-signal`, `bed12-exons` | Pending |
+| 47 | [GenomicRanges](https://github.com/Bioconductor/GenomicRanges/blob/44c311c711b9a5a5d6db070a8f3210819e4bc9de/inst/unitTests/test_findOverlaps-methods.R) | `interval-overlap`, `bed-nearest-features`, `bed-stranded-promoters` | Pending |
+| 48 | [Biostrings](https://github.com/Bioconductor/Biostrings/blob/fb0cd89830abd054cf2681d6bc6c929981e07b21/tests/testthat/test-translate.R) | `fasta-six-frame-translation`, `gff-cds-translation`, `fasta-motif-hits` | Pending |
+| 49 | [pybedtools](https://github.com/daler/pybedtools/blob/efb8534c11ca6b45a6cd173ff3b3d1bf754e34a1/pybedtools/test/test_1.py) | `strand-extraction`, `interval-overlap` | Pending |
+| 50 | [nf-core/tools](https://github.com/nf-core/tools/blob/eb2f709090f4054f45437c34049ea2068567c339/tests/pipelines/test_schema.py) | `sample-sheet-lanes` | Pending |
 
 ## Skills
 

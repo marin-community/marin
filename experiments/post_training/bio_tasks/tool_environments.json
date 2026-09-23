@@ -1,0 +1,516 @@
+{
+  "schema_version": 1,
+  "status": "package candidates; dependencies and executable behavior not yet validated",
+  "packages": [
+    {
+      "repository_index": 1,
+      "channel": "bioconda",
+      "package": "blast",
+      "version": "2.17.0",
+      "artifact": "linux-64/blast-2.17.0-hb02a186_1.conda",
+      "sha256": "d506d022ca8ab1346dc816cbcbe3e798d7f104714e14dea1d750db9dec47c205",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/blast",
+      "checked_at": "2026-09-23T18:37:45.186229+00:00"
+    },
+    {
+      "repository_index": 2,
+      "channel": "bioconda",
+      "package": "samtools",
+      "version": "1.24",
+      "artifact": "linux-64/samtools-1.24-h9dcdb79_1.conda",
+      "sha256": "18fd604932d0fc197dcfdd54d67e7c54770a2d8eca819e03074556ed9cd3422e",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/samtools",
+      "checked_at": "2026-09-23T18:37:45.603558+00:00"
+    },
+    {
+      "repository_index": 3,
+      "channel": "bioconda",
+      "package": "bwa",
+      "version": "0.7.19",
+      "artifact": "linux-64/bwa-0.7.19-h577a1d6_1.tar.bz2",
+      "sha256": "6914985666bd9527a86a103251cd0e29667f0857b7fe0a47c55b389e3a3b37be",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/bwa",
+      "checked_at": "2026-09-23T18:37:45.830550+00:00"
+    },
+    {
+      "repository_index": 4,
+      "channel": "bioconda",
+      "package": "bowtie2",
+      "version": "2.5.5",
+      "artifact": "linux-64/bowtie2-2.5.5-h63e9258_1.conda",
+      "sha256": "805cdd4718dcefde3d9b2b2c8140a4a5a36c983e4467ee7d22e4b9ae5cde7116",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/bowtie2",
+      "checked_at": "2026-09-23T18:37:46.234180+00:00"
+    },
+    {
+      "repository_index": 5,
+      "channel": "bioconda",
+      "package": "bioconductor-deseq2",
+      "version": "1.50.2",
+      "artifact": "linux-64/bioconductor-deseq2-1.50.2-r45ha27e39d_0.conda",
+      "sha256": "fad846a312218b9f6a0c414d92c599cfe4e21207d2c01d59481753d50498fbcd",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/bioconductor-deseq2",
+      "checked_at": "2026-09-23T18:37:46.409281+00:00"
+    },
+    {
+      "repository_index": 6,
+      "channel": "bioconda",
+      "package": "star",
+      "version": "2.7.11b",
+      "artifact": "linux-64/star-2.7.11b-h5ca1c30_8.conda",
+      "sha256": "292dd41d26a78afbe27690e8b7e027da75a14c63ec546e9254c7d0c963091322",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/star",
+      "checked_at": "2026-09-23T18:37:47.849299+00:00"
+    },
+    {
+      "repository_index": 7,
+      "channel": "bioconda",
+      "package": "bedtools",
+      "version": "2.31.1",
+      "artifact": "linux-64/bedtools-2.31.1-h13024bc_3.tar.bz2",
+      "sha256": "d8b7aef31be37da761a87e1263ea00d62b67134b546f018067786aa6d3dccfac",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/bedtools",
+      "checked_at": "2026-09-23T18:37:48.123088+00:00"
+    },
+    {
+      "repository_index": 8,
+      "channel": "bioconda",
+      "package": "gatk4",
+      "version": "4.6.2.0",
+      "artifact": "noarch/gatk4-4.6.2.0-py310hdfd78af_1.conda",
+      "sha256": "6489c50a4726c3a4b32ccbb19d7668d22ee7fa60317d13a56312e24be97bb829",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/gatk4",
+      "checked_at": "2026-09-23T18:37:48.642913+00:00"
+    },
+    {
+      "repository_index": 9,
+      "channel": "bioconda",
+      "package": "pysam",
+      "version": "0.24.1",
+      "artifact": "linux-64/pysam-0.24.1-py314ha0fe93d_0.conda",
+      "sha256": "795ea6e1d49769644f890c005b26f0fc29404a019f325287a82f9f47ea862ad5",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/pysam",
+      "checked_at": "2026-09-23T18:37:49.466471+00:00"
+    },
+    {
+      "repository_index": 10,
+      "channel": "bioconda",
+      "package": "mafft",
+      "version": "7.525",
+      "artifact": "linux-64/mafft-7.525-h031d066_1.tar.bz2",
+      "sha256": "",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/mafft",
+      "checked_at": "2026-09-23T18:37:49.682363+00:00"
+    },
+    {
+      "repository_index": 11,
+      "channel": "bioconda",
+      "package": "hmmer",
+      "version": "3.4",
+      "artifact": "linux-64/hmmer-3.4-h7d74f8d_5.conda",
+      "sha256": "b0ea2115beb20bbd3fe63dd8e41bfc29eab42a0c3982f91f0e018840567f37b6",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/hmmer",
+      "checked_at": "2026-09-23T18:37:49.833468+00:00"
+    },
+    {
+      "repository_index": 12,
+      "channel": "conda-forge",
+      "package": "r-seurat",
+      "version": "5.5.1",
+      "artifact": "linux-64/r-seurat-5.5.1-r45h3697838_0.conda",
+      "sha256": "1032df893b5fda5d9c38114c875590c61a093327f00fcdc23fc61554d8ae0379",
+      "metadata_source": "https://api.anaconda.org/package/conda-forge/r-seurat",
+      "checked_at": "2026-09-23T18:37:50.248485+00:00"
+    },
+    {
+      "repository_index": 13,
+      "channel": "bioconda",
+      "package": "minimap2",
+      "version": "2.31",
+      "artifact": "linux-64/minimap2-2.31-h118bc1c_0.conda",
+      "sha256": "344fe7b5328ff635dc2b8914b05e003053e136446e456b81e1b4b5fca1a9cedd",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/minimap2",
+      "checked_at": "2026-09-23T18:37:50.424933+00:00"
+    },
+    {
+      "repository_index": 14,
+      "channel": "bioconda",
+      "package": "bcftools",
+      "version": "1.24",
+      "artifact": "linux-64/bcftools-1.24-h118bc1c_2.conda",
+      "sha256": "00db35c4efca39b9fe4597f5507fa7f248ec16fa71e03c0eb0f0917e9d982c13",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/bcftools",
+      "checked_at": "2026-09-23T18:37:50.749969+00:00"
+    },
+    {
+      "repository_index": 15,
+      "channel": "bioconda",
+      "package": "picard",
+      "version": "3.5.0",
+      "artifact": "noarch/picard-3.5.0-hdfd78af_0.conda",
+      "sha256": "04908fa81549bda43ea7712f25d610e86be4eacd1f32e0f454f582ce88a583ab",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/picard",
+      "checked_at": "2026-09-23T18:37:51.226179+00:00"
+    },
+    {
+      "repository_index": 16,
+      "channel": "bioconda",
+      "package": "snakemake-minimal",
+      "version": "9.27.0",
+      "artifact": "noarch/snakemake-minimal-9.27.0-pyhdfd78af_0.conda",
+      "sha256": "2c80dd4dce15bf6eb1806ccab28f12a47d81e623d50e8543f58f6eac9090498b",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/snakemake-minimal",
+      "checked_at": "2026-09-23T18:37:51.899084+00:00"
+    },
+    {
+      "repository_index": 17,
+      "channel": "bioconda",
+      "package": "htslib",
+      "version": "1.24",
+      "artifact": "linux-64/htslib-1.24-ha79157c_0.conda",
+      "sha256": "97e0f0b8700f56b1ade3034f81070ede705fce3ef9a1b5f15e79e3eb9997ac17",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/htslib",
+      "checked_at": "2026-09-23T18:37:52.163758+00:00"
+    },
+    {
+      "repository_index": 18,
+      "channel": "bioconda",
+      "package": "fastqc",
+      "version": "0.12.1",
+      "artifact": "noarch/fastqc-0.12.1-hdfd78af_0.tar.bz2",
+      "sha256": "",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/fastqc",
+      "checked_at": "2026-09-23T18:37:52.637979+00:00"
+    },
+    {
+      "repository_index": 19,
+      "channel": "conda-forge",
+      "package": "biopython",
+      "version": "1.88",
+      "artifact": "linux-64/biopython-1.88-py315hb246bd9_1.conda",
+      "sha256": "9c05efd5b253093ee1aba870379a2cd1b9d08b88d9ffe1710364f42759585a06",
+      "metadata_source": "https://api.anaconda.org/package/conda-forge/biopython",
+      "checked_at": "2026-09-23T18:37:53.636707+00:00"
+    },
+    {
+      "repository_index": 20,
+      "channel": "bioconda",
+      "package": "nextflow",
+      "version": "26.04.6",
+      "artifact": "noarch/nextflow-26.04.6-h2a3209d_1.conda",
+      "sha256": "452805a6a3cc3f4e28417d855c7c03001dce1b2557a7e8ae46971d3a8778f9af",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/nextflow",
+      "checked_at": "2026-09-23T18:37:53.838996+00:00"
+    },
+    {
+      "repository_index": 21,
+      "channel": "bioconda",
+      "package": "diamond",
+      "version": "2.2.8",
+      "artifact": "linux-64/diamond-2.2.8-he361c42_0.conda",
+      "sha256": "2fc36bd54c6f3d0910c37dadcd4eb5b242d522ce1cf331f66a19942b18a70744",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/diamond",
+      "checked_at": "2026-09-23T18:37:54.231367+00:00"
+    },
+    {
+      "repository_index": 22,
+      "channel": "bioconda",
+      "package": "plink2",
+      "version": "2.00a5.10",
+      "artifact": "linux-64/plink2-2.00a5.10-h4ac6f70_0.tar.bz2",
+      "sha256": "",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/plink2",
+      "checked_at": "2026-09-23T18:37:54.321521+00:00"
+    },
+    {
+      "repository_index": 23,
+      "channel": "conda-forge",
+      "package": "scanpy",
+      "version": "1.12.4",
+      "artifact": "noarch/scanpy-1.12.4-pyhd8ed1ab_1.conda",
+      "sha256": "440cf430810a9ef3546dc3ccedc3bd2c02aa72e7dd0969be4eedcdf53849138b",
+      "metadata_source": "https://api.anaconda.org/package/conda-forge/scanpy",
+      "checked_at": "2026-09-23T18:37:54.454508+00:00"
+    },
+    {
+      "repository_index": 24,
+      "channel": "bioconda",
+      "package": "multiqc",
+      "version": "1.35",
+      "artifact": "noarch/multiqc-1.35-pyhdfd78af_2.conda",
+      "sha256": "e43a93cdfef5dc04d0936f72ef2fb1f42cd330adc2dd04239f6533763fedad3b",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/multiqc",
+      "checked_at": "2026-09-23T18:37:54.760382+00:00"
+    },
+    {
+      "repository_index": 25,
+      "channel": "bioconda",
+      "package": "bioconductor-edger",
+      "version": "4.8.2",
+      "artifact": "linux-64/bioconductor-edger-4.8.2-r45h262fe30_1.conda",
+      "sha256": "e227579dff1b1ff504d488c2292920202e159c0b829a40ed2950c15da381ecc4",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/bioconductor-edger",
+      "checked_at": "2026-09-23T18:37:54.929347+00:00"
+    },
+    {
+      "repository_index": 26,
+      "channel": "bioconda",
+      "package": "bioconductor-limma",
+      "version": "3.66.0",
+      "artifact": "linux-64/bioconductor-limma-3.66.0-r45h01b2380_0.conda",
+      "sha256": "c8dcbf3abfc0c1cf4ff6e68c828e0c59052c2b65dd3dd15aa1d39dbca679991e",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/bioconductor-limma",
+      "checked_at": "2026-09-23T18:37:55.110117+00:00"
+    },
+    {
+      "repository_index": 27,
+      "channel": "bioconda",
+      "package": "spades",
+      "version": "4.3.0",
+      "artifact": "linux-64/spades-4.3.0-hde4eca7_1.conda",
+      "sha256": "85e0652e6c0bb1ff888ea8eb54a9a914adc91dec98c2594bdc4707047477a2e3",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/spades",
+      "checked_at": "2026-09-23T18:37:55.354578+00:00"
+    },
+    {
+      "repository_index": 28,
+      "channel": "bioconda",
+      "package": "iqtree",
+      "version": "3.1.3",
+      "artifact": "linux-64/iqtree-3.1.3-h8471819_0.conda",
+      "sha256": "40384c15f43819db92b90c08fdcb17a6d9664c59a5cdc5be259127ed63fd84fb",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/iqtree",
+      "checked_at": "2026-09-23T18:37:55.568115+00:00"
+    },
+    {
+      "repository_index": 29,
+      "channel": "bioconda",
+      "package": "fasttree",
+      "version": "2.2.0",
+      "artifact": "linux-64/fasttree-2.2.0-h7b50bb2_1.conda",
+      "sha256": "d9a6d06fab5f22e5d6a0dfcaf2d51fa07fd9b080f12794ab53e60b1ea1d3ac97",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/fasttree",
+      "checked_at": "2026-09-23T18:37:55.715267+00:00"
+    },
+    {
+      "repository_index": 30,
+      "channel": "bioconda",
+      "package": "raxml",
+      "version": "8.2.13",
+      "artifact": "linux-64/raxml-8.2.13-h7b50bb2_3.tar.bz2",
+      "sha256": "2a974acb73d07dc7e142c997101f14ce865ea4b8f8fb203849002848c37171b9",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/raxml",
+      "checked_at": "2026-09-23T18:37:55.838635+00:00"
+    },
+    {
+      "repository_index": 31,
+      "channel": "bioconda",
+      "package": "cutadapt",
+      "version": "5.2",
+      "artifact": "linux-64/cutadapt-5.2-py310h6813faf_2.conda",
+      "sha256": "0527b8604093f3122f428d8aa7158e44b9884d9beda5b733a2c3ea61e10e5903",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/cutadapt",
+      "checked_at": "2026-09-23T18:37:56.356728+00:00"
+    },
+    {
+      "repository_index": 32,
+      "channel": "bioconda",
+      "package": "salmon",
+      "version": "2.7.0",
+      "artifact": "linux-64/salmon-2.7.0-hfa8f182_0.conda",
+      "sha256": "230dabfd91dab0213aaad500a67a494226ad1124acffb4a7e869aae82f31abd8",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/salmon",
+      "checked_at": "2026-09-23T18:37:56.729707+00:00"
+    },
+    {
+      "repository_index": 33,
+      "channel": "bioconda",
+      "package": "kallisto",
+      "version": "0.52.0",
+      "artifact": "linux-64/kallisto-0.52.0-hd638d68_1.conda",
+      "sha256": "7d09d3fe2f687c96b8f452d61b6b62453ad0d16bd83321a35245976ccc38f59c",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/kallisto",
+      "checked_at": "2026-09-23T18:37:56.904659+00:00"
+    },
+    {
+      "repository_index": 34,
+      "channel": "bioconda",
+      "package": "stringtie",
+      "version": "3.0.3",
+      "artifact": "linux-64/stringtie-3.0.3-h29c0135_0.conda",
+      "sha256": "7b0eda3cd9f8ccb90b62a395313f2d32feb8b8233d04cf080ea497397a4488c9",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/stringtie",
+      "checked_at": "2026-09-23T18:37:57.123279+00:00"
+    },
+    {
+      "repository_index": 35,
+      "channel": "bioconda",
+      "package": "fastp",
+      "version": "1.3.7",
+      "artifact": "linux-64/fastp-1.3.7-h43da1c4_0.conda",
+      "sha256": "aef5c9adde14652c3dc4bc967c2fd4e2b7c7371557fd3e606696c181dd37caef",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/fastp",
+      "checked_at": "2026-09-23T18:37:57.323563+00:00"
+    },
+    {
+      "repository_index": 36,
+      "channel": "bioconda",
+      "package": "sra-tools",
+      "version": "3.4.1",
+      "artifact": "linux-64/sra-tools-3.4.1-2_linux_64.conda",
+      "sha256": "ce6cd07843cf4f04b55fbf4a61ca69592c7bf43948ec6ef67835007a5bcbb560",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/sra-tools",
+      "checked_at": "2026-09-23T18:37:57.524090+00:00"
+    },
+    {
+      "repository_index": 37,
+      "channel": "bioconda",
+      "package": "deeptools",
+      "version": "4.0.0",
+      "artifact": "linux-64/deeptools-4.0.0-py312ha170aba_0.conda",
+      "sha256": "be789d71748521d81304ff283f62c049fc4fb2555d332a3814df7b0369ffef4b",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/deeptools",
+      "checked_at": "2026-09-23T18:37:57.924878+00:00"
+    },
+    {
+      "repository_index": 38,
+      "channel": "bioconda",
+      "package": "vcftools",
+      "version": "0.1.17",
+      "artifact": "linux-64/vcftools-0.1.17-pl5321h077b44d_0.tar.bz2",
+      "sha256": "5282687263909d66bff5c4569e1a84d707369c71d97dd05b4fe7503d57ea451e",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/vcftools",
+      "checked_at": "2026-09-23T18:37:58.083580+00:00"
+    },
+    {
+      "repository_index": 39,
+      "channel": "bioconda",
+      "package": "snpeff",
+      "version": "5.4.0c",
+      "artifact": "noarch/snpeff-5.4.0c-hdfd78af_0.conda",
+      "sha256": "5c0f345385dd39fc6ebb5029fceb589a5c2c19c2abf516e46e49e2bb274e023f",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/snpeff",
+      "checked_at": "2026-09-23T18:37:58.247276+00:00"
+    },
+    {
+      "repository_index": 40,
+      "channel": "bioconda",
+      "package": "ensembl-vep",
+      "version": "116.2",
+      "artifact": "noarch/ensembl-vep-116.2-pl5321h2a3209d_0.conda",
+      "sha256": "5b20b6cc12d97ab056f87967a299cfb70fa4da52670eaf0436ba9e14e45583d0",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/ensembl-vep",
+      "checked_at": "2026-09-23T18:37:58.549238+00:00"
+    },
+    {
+      "repository_index": 41,
+      "channel": "bioconda",
+      "package": "macs3",
+      "version": "3.0.4",
+      "artifact": "linux-64/macs3-3.0.4-py313hda738de_0.conda",
+      "sha256": "3505b0773f85e8cc2448ffe0ce9eabcbd3822ba9004874ed4028e01a9dff4b59",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/macs3",
+      "checked_at": "2026-09-23T18:38:00.075693+00:00"
+    },
+    {
+      "repository_index": 42,
+      "channel": "bioconda",
+      "package": "mmseqs2",
+      "version": "17.b804f",
+      "artifact": "linux-64/mmseqs2-17.b804f-hd6d6fdc_1.tar.bz2",
+      "sha256": "f64af29a82a8642138b34cf7b033b6344c0bd24a6bba898cf653edde6e0f727c",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/mmseqs2",
+      "checked_at": "2026-09-23T18:38:00.316475+00:00"
+    },
+    {
+      "repository_index": 43,
+      "channel": "bioconda",
+      "package": "muscle",
+      "version": "5.3",
+      "artifact": "linux-64/muscle-5.3-h9948957_3.tar.bz2",
+      "sha256": "e0fb500aef23bb13fcd6b4676c0064a1e3ccc63bf68e375d10f9b1edf9042380",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/muscle",
+      "checked_at": "2026-09-23T18:38:00.497347+00:00"
+    },
+    {
+      "repository_index": 44,
+      "channel": "bioconda",
+      "package": "kraken2",
+      "version": "2.17.1",
+      "artifact": "linux-64/kraken2-2.17.1-pl5321h077b44d_0.conda",
+      "sha256": "79c11301d784b7c6c8c8da4cd76beaa8d26456e2fe962a459ed3a12a01e9be8b",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/kraken2",
+      "checked_at": "2026-09-23T18:38:00.671583+00:00"
+    },
+    {
+      "repository_index": 45,
+      "channel": "bioconda",
+      "package": "busco",
+      "version": "6.1.0",
+      "artifact": "noarch/busco-6.1.0-pyhdfd78af_2.conda",
+      "sha256": "4c504a39640f98c5d6a0df9a7425e5af9ce303d95226eaa7b7a3164e0ff1a994",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/busco",
+      "checked_at": "2026-09-23T18:38:00.872327+00:00"
+    },
+    {
+      "repository_index": 46,
+      "channel": "bioconda",
+      "package": "ucsc-bedgraphtobigwig",
+      "version": "482",
+      "artifact": "linux-64/ucsc-bedgraphtobigwig-482-hdc0a859_0.tar.bz2",
+      "sha256": "c8afc8152f569c7730b8f3eb6894a8b277912fdbd0ab8c9d18bb8c1840c89669",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/ucsc-bedgraphtobigwig",
+      "checked_at": "2026-09-23T18:38:00.989972+00:00"
+    },
+    {
+      "repository_index": 46,
+      "channel": "bioconda",
+      "package": "ucsc-bigwigtobedgraph",
+      "version": "482",
+      "artifact": "linux-64/ucsc-bigwigtobedgraph-482-h0b57e2e_0.tar.bz2",
+      "sha256": "3c6aedc84cdf2fcf00bfa362a9d8a3b1c5e4c10f4ab2e74207f0095f01a902ab",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/ucsc-bigwigtobedgraph",
+      "checked_at": "2026-09-23T18:38:01.110927+00:00"
+    },
+    {
+      "repository_index": 47,
+      "channel": "bioconda",
+      "package": "bioconductor-genomicranges",
+      "version": "1.62.1",
+      "artifact": "linux-64/bioconductor-genomicranges-1.62.1-r45h01b2380_0.conda",
+      "sha256": "0d5ea1e661e10cfeecf763a7466efebc616ca55a2c9f6ce33cbe41c7eb1a0a4b",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/bioconductor-genomicranges",
+      "checked_at": "2026-09-23T18:38:01.312023+00:00"
+    },
+    {
+      "repository_index": 48,
+      "channel": "bioconda",
+      "package": "bioconductor-biostrings",
+      "version": "2.78.0",
+      "artifact": "linux-64/bioconductor-biostrings-2.78.0-r45h01b2380_0.conda",
+      "sha256": "b812bbafe431822e0900d4f7738274f86dc63fc7e74f2859db7849e7dce457c0",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/bioconductor-biostrings",
+      "checked_at": "2026-09-23T18:38:01.569205+00:00"
+    },
+    {
+      "repository_index": 49,
+      "channel": "bioconda",
+      "package": "pybedtools",
+      "version": "0.12.1",
+      "artifact": "linux-64/pybedtools-0.12.1-py313haa19386_0.conda",
+      "sha256": "18639f8f36abee7a762e2ad4b744bfdcd0994b41e2436980d19cde44d8b8ef53",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/pybedtools",
+      "checked_at": "2026-09-23T18:38:01.931117+00:00"
+    },
+    {
+      "repository_index": 50,
+      "channel": "bioconda",
+      "package": "nf-core",
+      "version": "4.1.0",
+      "artifact": "noarch/nf-core-4.1.0-pyhdfd78af_0.conda",
+      "sha256": "b90513a5036ff2084d8654913cb76611f374813900df48b394bd05077b6e391b",
+      "metadata_source": "https://api.anaconda.org/package/bioconda/nf-core",
+      "checked_at": "2026-09-23T18:38:02.436895+00:00"
+    }
+  ]
+}

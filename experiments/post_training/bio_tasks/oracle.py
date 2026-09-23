@@ -4,16 +4,27 @@
 """Independent input-reading solutions, packaged outside solver-visible task inputs."""
 
 import argparse
-import csv
 import json
 from collections import Counter, defaultdict
 from pathlib import Path
 from urllib.parse import unquote
 
-
-def table(path: Path) -> list[dict[str, str]]:
-    with path.open() as handle:
-        return list(csv.DictReader(handle))
+from experiments.post_training.bio_tasks.solvers.assays import SOLVERS as ASSAYS_SOLVERS
+from experiments.post_training.bio_tasks.solvers.assembly import SOLVERS as ASSEMBLY_SOLVERS
+from experiments.post_training.bio_tasks.solvers.expression import SOLVERS as EXPRESSION_SOLVERS
+from experiments.post_training.bio_tasks.solvers.formats import table
+from experiments.post_training.bio_tasks.solvers.imaging import SOLVERS as IMAGING_SOLVERS
+from experiments.post_training.bio_tasks.solvers.intervals import SOLVERS as INTERVAL_SOLVERS
+from experiments.post_training.bio_tasks.solvers.networks import SOLVERS as NETWORKS_SOLVERS
+from experiments.post_training.bio_tasks.solvers.phylogeny import SOLVERS as PHYLOGENY_SOLVERS
+from experiments.post_training.bio_tasks.solvers.reads import SOLVERS as READ_SOLVERS
+from experiments.post_training.bio_tasks.solvers.repo_formats import SOLVERS as REPO_FORMATS_SOLVERS
+from experiments.post_training.bio_tasks.solvers.repo_sequences import SOLVERS as REPO_SEQUENCES_SOLVERS
+from experiments.post_training.bio_tasks.solvers.sequence import SOLVERS as SEQUENCE_SOLVERS
+from experiments.post_training.bio_tasks.solvers.statistics import SOLVERS as STATISTICS_SOLVERS
+from experiments.post_training.bio_tasks.solvers.structure import SOLVERS as STRUCTURE_SOLVERS
+from experiments.post_training.bio_tasks.solvers.variants import SOLVERS as VARIANTS_SOLVERS
+from experiments.post_training.bio_tasks.solvers.workflow import SOLVERS as WORKFLOW_SOLVERS
 
 
 def solve_sequence(inputs: Path) -> list[dict]:
@@ -256,6 +267,21 @@ def solve_images(inputs: Path) -> list[dict]:
 
 
 SOLVERS = {
+    **REPO_FORMATS_SOLVERS,
+    **REPO_SEQUENCES_SOLVERS,
+    **WORKFLOW_SOLVERS,
+    **ASSAYS_SOLVERS,
+    **IMAGING_SOLVERS,
+    **NETWORKS_SOLVERS,
+    **STRUCTURE_SOLVERS,
+    **ASSEMBLY_SOLVERS,
+    **PHYLOGENY_SOLVERS,
+    **EXPRESSION_SOLVERS,
+    **VARIANTS_SOLVERS,
+    **SEQUENCE_SOLVERS,
+    **STATISTICS_SOLVERS,
+    **READ_SOLVERS,
+    **INTERVAL_SOLVERS,
     "strand-extraction": solve_sequence,
     "interval-overlap": solve_intervals,
     "donor-counts": solve_counts,

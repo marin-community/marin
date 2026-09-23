@@ -9,13 +9,16 @@ uv run python -m experiments.post_training.bio_tasks.build --help
 import argparse
 import hashlib
 import html
+import io
 import json
 import re
 import subprocess
 import sys
 import tempfile
+import zipfile
 from collections import Counter
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
+from functools import cache
 from pathlib import Path
 
 import pyarrow as pa
@@ -23,12 +26,14 @@ import pyarrow.parquet as pq
 import tomlkit
 
 from experiments.post_training.bio_tasks.contract import grade_answer
-from experiments.post_training.bio_tasks.recipes import RECIPES, Instance, Recipe
+from experiments.post_training.bio_tasks.recipe_types import Instance, Recipe
+from experiments.post_training.bio_tasks.recipes import RECIPES
 from experiments.post_training.tasktrove.task_format import dockerfile_id, render_task_toml
 from experiments.post_training.tasktrove.taskbinary import TaskFiles, write_task_binary
 
 SOURCE_DIR = Path(__file__).parent
 HARBOR_REVISION = "d072bef08e54050880b484eb81d892944d1d82fb"
+MAX_DISTINCT_INPUT_ATTEMPTS = 64
 PARQUET_SCHEMA = pa.schema(
     [
         ("path", pa.string()),
@@ -64,11 +69,37 @@ def identity(recipe: Recipe, seed: int, index: int) -> Identity:
     )
 
 
+@cache
+def oracle_archive() -> bytes:
+    """Package independent solvers for execution with Python isolated mode."""
+    prefix = "experiments/post_training/bio_tasks/"
+    files = {
+        "__main__.py": b"from experiments.post_training.bio_tasks.oracle import main\nmain()\n",
+        "experiments/__init__.py": b"",
+        "experiments/post_training/__init__.py": b"",
+        prefix + "__init__.py": b"",
+        prefix + "oracle.py": (SOURCE_DIR / "oracle.py").read_bytes(),
+    }
+    files.update(
+        {
+            prefix + path.relative_to(SOURCE_DIR).as_posix(): path.read_bytes()
+            for path in (SOURCE_DIR / "solvers").rglob("*.py")
+        }
+    )
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, content in sorted(files.items()):
+            info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            archive.writestr(info, content)
+    return buffer.getvalue()
+
+
 def oracle_files(recipe: Recipe) -> TaskFiles:
     return TaskFiles(
         {
-            "solution/oracle.py": (SOURCE_DIR / "oracle.py").read_bytes(),
-            "solution/solve.sh": f"#!/bin/sh\nset -eu\npython3 /solution/oracle.py {recipe.id}\n".encode(),
+            "solution/oracle.pyz": oracle_archive(),
+            "solution/solve.sh": f"#!/bin/sh\nset -eu\npython3 -I /solution/oracle.pyz {recipe.id}\n".encode(),
         }
     )
 
@@ -80,11 +111,13 @@ def validate_instance(recipe: Recipe, instance: Instance) -> dict:
         for name, text in instance.inputs.items():
             (root / name).write_text(text)
         answer = root / "answer.json"
+        program = root / "oracle.pyz"
+        program.write_bytes(oracle_archive())
         subprocess.run(
             [
                 sys.executable,
                 "-I",
-                str(SOURCE_DIR / "oracle.py"),
+                str(program),
                 recipe.id,
                 "--inputs",
                 str(root),
@@ -121,6 +154,9 @@ def task_files(recipe: Recipe, instance: Instance, task: Identity, base_image: s
         "lineage": task.lineage,
         "split": task.split,
         "difficulty": recipe.difficulty.value,
+        "domain": recipe.domain,
+        "repositories": list(recipe.repositories),
+        "tool_execution": "pending",
         "network": "offline",
         "skills": list(recipe.skills),
         "input_formats": list(recipe.formats),
@@ -205,6 +241,9 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
     (output / "inspect").mkdir()
     inventory = (SOURCE_DIR / "source_inventory.json").read_bytes()
     (output / "source_inventory.json").write_bytes(inventory)
+    coverage_bytes = (SOURCE_DIR / "repository_coverage.json").read_bytes()
+    (output / "repository_coverage.json").write_bytes(coverage_bytes)
+    coverage = json.loads(coverage_bytes)["repositories"]
     counts: Counter = Counter()
     dockerfiles = {}
     recipe_sections = []
@@ -221,9 +260,12 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
         "container_validation": "pending",
         "split_policy": "single train split; evaluation benchmarks remain separate",
         "source_hashes": {
-            path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(SOURCE_DIR.glob("*.py"))
+            path.relative_to(SOURCE_DIR).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted(SOURCE_DIR.rglob("*.py"))
         },
         "source_inventory_sha256": hashlib.sha256(inventory).hexdigest(),
+        "repository_coverage_sha256": hashlib.sha256(coverage_bytes).hexdigest(),
+        "repository_tool_execution": {row["name"]: row["tool_execution"] for row in coverage},
     }
     # A failed generation leaves an explicit incomplete manifest, never an apparently finished release.
     (output / "manifest.json").write_text(json.dumps({**manifest, "status": "incomplete"}, indent=2) + "\n")
@@ -235,10 +277,16 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
             index_rows = []
             for index in range(instances_per_recipe):
                 task = identity(recipe, seed, index)
-                instance = recipe.generate(task.seed)
-                input_hash = hashlib.sha256(json.dumps(instance.inputs, sort_keys=True).encode()).hexdigest()
-                if input_hash in seen_inputs:
-                    raise ValueError(f"duplicate inputs: {task.task_id}")
+                for draw in range(MAX_DISTINCT_INPUT_ATTEMPTS):
+                    if draw:
+                        digest = hashlib.sha256(f"{task.lineage}:distinct-input:{draw}".encode()).digest()
+                        task = replace(task, seed=int.from_bytes(digest[:8], "big"))
+                    instance = recipe.generate(task.seed)
+                    input_hash = hashlib.sha256(json.dumps(instance.inputs, sort_keys=True).encode()).hexdigest()
+                    if input_hash not in seen_inputs:
+                        break
+                else:
+                    raise ValueError(f"No distinct input after {MAX_DISTINCT_INPUT_ATTEMPTS} draws: {task.task_id}")
                 seen_inputs.add(input_hash)
                 validation = validate_instance(recipe, instance)
                 if recipe.id in previous_answers:
@@ -269,6 +317,8 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
                         recipe.difficulty.value,
                         task.split,
                         "offline",
+                        f"domain:{recipe.domain}",
+                        *[f"repository:{name}" for name in recipe.repositories],
                         *recipe.skills,
                         *[f"format:{profile}" for profile in recipe.formats],
                     ],
@@ -282,11 +332,15 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
                     "recipe": recipe.id,
                     "recipe_version": recipe.version,
                     "difficulty": recipe.difficulty.value,
+                    "domain": recipe.domain,
+                    "repositories": recipe.repositories,
+                    "tool_execution": "pending",
                     "skills": recipe.skills,
                     "input_formats": recipe.formats,
                     "sources": recipe.sources,
                     "network": "offline",
                     "input_sha256": input_hash,
+                    "distinct_input_draw": draw,
                     "task_sha256": hashlib.sha256(blob).hexdigest(),
                     "validation": validation,
                     "scientific_review": "pending",
@@ -302,8 +356,13 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
                 counts[task.split] += 1
                 counts[recipe.id] += 1
             recipe_sections.append(
-                f"<section><h2>{html.escape(recipe.id)}</h2>"
+                f'<section class="recipe" data-domain="{html.escape(recipe.domain)}" '
+                f'id="{html.escape(recipe.id)}"><h2>{html.escape(recipe.id)}</h2>'
                 f"<p>{instances_per_recipe} examples · {recipe.difficulty.value}<br>"
+                f"Domain: {html.escape(recipe.domain)}<br>"
+                "Repository-derived operations: "
+                f"{html.escape(', '.join(recipe.repositories)) or 'Additional domain coverage'}"
+                "<br>Actual repository execution: pending<br>"
                 f"Input formats: {html.escape(', '.join(recipe.formats))}<br>"
                 f"Skills: {html.escape(', '.join(recipe.skills))}</p>"
                 "<table><thead><tr><th>Task</th><th>Difficulty</th><th>Validation controls</th></tr></thead>"
@@ -316,17 +375,53 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
         dockerfiles=dockerfiles,
         by_source={"bio-tasks": {"converted": counts["train"]}},
         recipe_formats={recipe.id: recipe.formats for recipe in RECIPES},
+        recipe_domains={recipe.id: recipe.domain for recipe in RECIPES},
+        domain_counts=dict(Counter(recipe.domain for recipe in RECIPES)),
     )
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    domain_options = "".join(
+        f'<option value="{html.escape(domain)}">{html.escape(domain)} ({count} recipes)</option>'
+        for domain, count in sorted(manifest["domain_counts"].items())
+    )
+    repository_rows = "".join(
+        f'<tr><td>{row["index"]}</td><td>{html.escape(row["name"])}</td><td>'
+        + ", ".join(f'<a href="#{name}">{name}</a>' for name in row["recipes"])
+        + f'</td><td>{html.escape(row["tool_execution"]["status"])}</td></tr>'
+        for row in coverage
+    )
     (output / "index.html").write_text(
         '<!doctype html><meta charset="utf-8"><title>Biology task inspection</title>'
-        "<style>body{margin:2rem;font:16px system-ui}td,th{padding:.4rem;text-align:left}</style>"
+        "<style>body{margin:2rem;font:16px system-ui}td,th{padding:.4rem;text-align:left}"
+        "section{border-top:1px solid #ccc;padding-top:1rem}input,select{font:inherit;padding:.5rem}"
+        ".filters{position:sticky;top:0;background:white;padding:1rem 0;display:flex;gap:1rem}"
+        "[hidden]{display:none!important}</style>"
         "<h1>Biology task inspection</h1><p>Private references included. Scientific review and container validation "
         "are pending. No teacher attempts have run.</p>"
         f"<p>{len(RECIPES)} recipes &times; {instances_per_recipe} examples = {counts['train']} tasks. "
         "All tasks belong to the train split.</p>"
-        "<p>Format labels describe supplied inputs. Generic CSV/JSON summaries do not establish coverage "
-        "of native formats such as Newick, H5AD, or OME-TIFF.</p>" + "\n".join(recipe_sections)
+        "<p>All 50 source repositories have an explicit recipe mapping below. Actual CLI/API execution is pending; "
+        "the current environment contains Python only. Host oracle checks do not establish tool coverage.</p>"
+        "<p>Format labels describe supplied inputs. Generic CSV/JSON summaries do not establish native format coverage. "
+        "Newick, Matrix Market, PDB, mmCIF, SBML, MGF and PGM are supplied where labeled; H5AD, BAM, "
+        "native SRA, and OME-TIFF are not covered by their text intermediates.</p>"
+        "<details><summary>All 50 repositories: scientific operation and execution status</summary>"
+        "<table><thead><tr><th>#</th><th>Repository</th><th>Recipes</th><th>CLI/API execution</th></tr></thead><tbody>"
+        + repository_rows
+        + "</tbody></table></details>"
+        '<div class="filters"><input id="search" type="search" placeholder="Search recipe, repo, skill or format" '
+        'aria-label="Search recipes"><select id="domain" aria-label="Filter domain">'
+        '<option value="">All domains</option>'
+        + domain_options
+        + '</select><span id="visible"></span></div>'
+        + "\n".join(recipe_sections)
+        + "<script>const search=document.querySelector('#search'),domain=document.querySelector('#domain');"
+        "function filter(){let n=0;for(const s of document.querySelectorAll('.recipe')){"
+        "s.hidden=!(s.textContent.toLowerCase().includes(search.value.toLowerCase())&&"
+        "(!domain.value||s.dataset.domain===domain.value));if(!s.hidden)n++;}"
+        "document.querySelector('#visible').textContent=n+' recipes';}"
+        "search.addEventListener('input',filter);domain.addEventListener('change',filter);filter();"
+        "document.querySelectorAll('a[href^=\"#\"]').forEach(a=>a.addEventListener('click',()=>{"
+        "search.value='';domain.value='';filter();}));</script>"
     )
     return manifest
 

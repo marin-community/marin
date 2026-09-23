@@ -3,49 +3,29 @@
 
 """Fresh construction-ledger references, independent of the packaged oracle solvers."""
 
-import csv
-import io
 import json
 import random
-from collections.abc import Callable
-from dataclasses import dataclass
-from enum import StrEnum
+from dataclasses import replace
 from fractions import Fraction
+from pathlib import Path
 
 from experiments.post_training.bio_tasks.contract import Column, Contract
-
-
-class Difficulty(StrEnum):
-    EASY = "easy"
-    MEDIUM = "medium"
-    HARD = "hard"
-
-
-@dataclass(frozen=True)
-class Instance:
-    instruction: str
-    inputs: dict[str, str]
-    contract: Contract
-    mutations: dict[str, list[dict]]
-
-
-@dataclass(frozen=True)
-class Recipe:
-    id: str
-    version: str
-    difficulty: Difficulty
-    skills: tuple[str, ...]
-    formats: tuple[str, ...]
-    sources: tuple[str, ...]
-    generate: Callable[[int], Instance]
-
-
-def csv_text(rows: list[dict]) -> str:
-    output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=list(rows[0]))
-    writer.writeheader()
-    writer.writerows(rows)
-    return output.getvalue()
+from experiments.post_training.bio_tasks.generators.assays import RECIPES as ASSAYS_RECIPES
+from experiments.post_training.bio_tasks.generators.assembly import RECIPES as ASSEMBLY_RECIPES
+from experiments.post_training.bio_tasks.generators.expression import RECIPES as EXPRESSION_RECIPES
+from experiments.post_training.bio_tasks.generators.imaging import RECIPES as IMAGING_RECIPES
+from experiments.post_training.bio_tasks.generators.intervals import RECIPES as INTERVAL_RECIPES
+from experiments.post_training.bio_tasks.generators.networks import RECIPES as NETWORKS_RECIPES
+from experiments.post_training.bio_tasks.generators.phylogeny import RECIPES as PHYLOGENY_RECIPES
+from experiments.post_training.bio_tasks.generators.reads import RECIPES as READ_RECIPES
+from experiments.post_training.bio_tasks.generators.repo_formats import RECIPES as REPO_FORMATS_RECIPES
+from experiments.post_training.bio_tasks.generators.repo_sequences import RECIPES as REPO_SEQUENCES_RECIPES
+from experiments.post_training.bio_tasks.generators.sequence import RECIPES as SEQUENCE_RECIPES
+from experiments.post_training.bio_tasks.generators.statistics import RECIPES as STATISTICS_RECIPES
+from experiments.post_training.bio_tasks.generators.structure import RECIPES as STRUCTURE_RECIPES
+from experiments.post_training.bio_tasks.generators.variants import RECIPES as VARIANTS_RECIPES
+from experiments.post_training.bio_tasks.generators.workflow import RECIPES as WORKFLOW_RECIPES
+from experiments.post_training.bio_tasks.recipe_types import Difficulty, Instance, Recipe, csv_text
 
 
 def sequence_extraction(seed: int) -> Instance:
@@ -808,114 +788,195 @@ def image_measurements(seed: int) -> Instance:
 
 
 RECIPES = (
-    Recipe(
-        "strand-extraction",
-        "2",
-        Difficulty.EASY,
-        ("coordinates", "strand", "sequence-extraction", "feature-parent-joins", "sequence-identifiers"),
-        ("fasta-dna", "gff3-single-exon"),
-        (
-            "https://github.com/biopython/biopython/blob/08fc09086afe0b57215d2515660e0c032b55c0dd/Tests/test_SeqFeature.py",
+    *(
+        Recipe(
+            "strand-extraction",
+            "2",
+            Difficulty.EASY,
+            ("coordinates", "strand", "sequence-extraction", "feature-parent-joins", "sequence-identifiers"),
+            ("fasta-dna", "gff3-single-exon"),
+            (
+                "https://github.com/biopython/biopython/blob/08fc09086afe0b57215d2515660e0c032b55c0dd/Tests/test_SeqFeature.py",
+            ),
+            sequence_extraction,
         ),
-        sequence_extraction,
+        Recipe(
+            "interval-overlap",
+            "2",
+            Difficulty.EASY,
+            ("coordinates", "overlap", "feature-identity"),
+            ("bed4", "text-integer"),
+            ("https://github.com/arq5x/bedtools2/tree/614e9a5c5935ab86e873dab9072fbbaf003c1b7e",),
+            interval_overlap,
+        ),
+        Recipe(
+            "donor-counts",
+            "1",
+            Difficulty.MEDIUM,
+            ("sample-joins", "raw-counts", "biological-replication"),
+            ("csv-header",),
+            ("https://github.com/scverse/scanpy/tree/0d5fd16234865619d2f5097d33fc4281900a2bc2",),
+            donor_counts,
+        ),
+        Recipe(
+            "cell-fractions",
+            "1",
+            Difficulty.MEDIUM,
+            ("sample-joins", "cohort-selection", "denominators"),
+            ("csv-header",),
+            ("https://github.com/scverse/scanpy/tree/0d5fd16234865619d2f5097d33fc4281900a2bc2",),
+            cell_fractions,
+        ),
+        Recipe(
+            "paired-read-qc",
+            "1",
+            Difficulty.MEDIUM,
+            ("read-quality", "mate-identity", "thresholds"),
+            ("fastq-phred33", "json"),
+            ("https://github.com/OpenGene/fastp/blob/8a2397b6628ae14127efdb7566f67fc05f9aea56/src/filter.cpp",),
+            read_qc,
+        ),
+        Recipe(
+            "genotype-alleles",
+            "1",
+            Difficulty.MEDIUM,
+            ("ploidy", "missing-calls", "allele-denominators"),
+            ("vcf4.3", "csv-header"),
+            ("https://github.com/samtools/bcftools/tree/edf7fd96c5da562ecfd99fb7f9e4b9eb597aeae8",),
+            genotype_alleles,
+        ),
+        Recipe(
+            "transcript-tpm",
+            "1",
+            Difficulty.MEDIUM,
+            ("transcript-joins", "abundance-units", "decoys"),
+            ("csv-header",),
+            ("https://github.com/COMBINE-lab/salmon/tree/5515b7f05a90341b6652adfdb807e7cf14295518",),
+            transcript_tpm,
+        ),
+        Recipe(
+            "alignment-sites",
+            "1",
+            Difficulty.EASY,
+            ("site-states", "missing-bases", "parsimony-informative-sites"),
+            ("fasta-alignment", "csv-header"),
+            ("https://github.com/JLSteenwyk/PhyKIT/tree/3e59b123e6ffd1ba1f298603a4dc4e7b04c69b0e",),
+            alignment_sites,
+        ),
+        Recipe(
+            "tree-branches",
+            "1",
+            Difficulty.EASY,
+            ("root-conventions", "branch-lengths", "treeness"),
+            ("csv-header",),
+            ("https://github.com/morgannprice/fasttree/tree/a5a2723ea1e64faf3da7ea514521cfa348891add",),
+            tree_branches,
+        ),
+        Recipe(
+            "busco-summary",
+            "1",
+            Difficulty.MEDIUM,
+            ("ortholog-identity", "deduplication", "completeness-categories"),
+            ("csv-header",),
+            ("https://gitlab.com/ezlab/busco/-/tree/cd071053c38c5060f75d0b370cb66c4edc8e59a1",),
+            busco_summary,
+        ),
+        Recipe(
+            "taxonomy-counts",
+            "1",
+            Difficulty.MEDIUM,
+            ("taxonomy", "hierarchical-counts", "unclassified-denominator"),
+            ("csv-header",),
+            ("https://github.com/DerrickWood/kraken2/tree/8c190b1b668825935dbf6dee5f969227dc8269bb",),
+            taxonomy_counts,
+        ),
+        Recipe(
+            "image-measurements",
+            "1",
+            Difficulty.MEDIUM,
+            ("object-identity", "pixel-spacing", "image-measurement"),
+            ("json",),
+            ("https://scikit-image.org/docs/stable/auto_examples/segmentation/plot_regionprops.html",),
+            image_measurements,
+        ),
     ),
-    Recipe(
-        "interval-overlap",
-        "2",
-        Difficulty.EASY,
-        ("coordinates", "overlap", "feature-identity"),
-        ("bed4", "text-integer"),
-        ("https://github.com/arq5x/bedtools2/tree/614e9a5c5935ab86e873dab9072fbbaf003c1b7e",),
-        interval_overlap,
-    ),
-    Recipe(
-        "donor-counts",
-        "1",
-        Difficulty.MEDIUM,
-        ("sample-joins", "raw-counts", "biological-replication"),
-        ("csv-header",),
-        ("https://github.com/scverse/scanpy/tree/0d5fd16234865619d2f5097d33fc4281900a2bc2",),
-        donor_counts,
-    ),
-    Recipe(
-        "cell-fractions",
-        "1",
-        Difficulty.MEDIUM,
-        ("sample-joins", "cohort-selection", "denominators"),
-        ("csv-header",),
-        ("https://github.com/scverse/scanpy/tree/0d5fd16234865619d2f5097d33fc4281900a2bc2",),
-        cell_fractions,
-    ),
-    Recipe(
-        "paired-read-qc",
-        "1",
-        Difficulty.MEDIUM,
-        ("read-quality", "mate-identity", "thresholds"),
-        ("fastq-phred33", "json"),
-        ("https://github.com/OpenGene/fastp/blob/8a2397b6628ae14127efdb7566f67fc05f9aea56/src/filter.cpp",),
-        read_qc,
-    ),
-    Recipe(
-        "genotype-alleles",
-        "1",
-        Difficulty.MEDIUM,
-        ("ploidy", "missing-calls", "allele-denominators"),
-        ("vcf4.3", "csv-header"),
-        ("https://github.com/samtools/bcftools/tree/edf7fd96c5da562ecfd99fb7f9e4b9eb597aeae8",),
-        genotype_alleles,
-    ),
-    Recipe(
-        "transcript-tpm",
-        "1",
-        Difficulty.MEDIUM,
-        ("transcript-joins", "abundance-units", "decoys"),
-        ("csv-header",),
-        ("https://github.com/COMBINE-lab/salmon/tree/5515b7f05a90341b6652adfdb807e7cf14295518",),
-        transcript_tpm,
-    ),
-    Recipe(
-        "alignment-sites",
-        "1",
-        Difficulty.EASY,
-        ("site-states", "missing-bases", "parsimony-informative-sites"),
-        ("fasta-alignment", "csv-header"),
-        ("https://github.com/JLSteenwyk/PhyKIT/tree/3e59b123e6ffd1ba1f298603a4dc4e7b04c69b0e",),
-        alignment_sites,
-    ),
-    Recipe(
-        "tree-branches",
-        "1",
-        Difficulty.EASY,
-        ("root-conventions", "branch-lengths", "treeness"),
-        ("csv-header",),
-        ("https://github.com/morgannprice/fasttree/tree/a5a2723ea1e64faf3da7ea514521cfa348891add",),
-        tree_branches,
-    ),
-    Recipe(
-        "busco-summary",
-        "1",
-        Difficulty.MEDIUM,
-        ("ortholog-identity", "deduplication", "completeness-categories"),
-        ("csv-header",),
-        ("https://gitlab.com/ezlab/busco/-/tree/cd071053c38c5060f75d0b370cb66c4edc8e59a1",),
-        busco_summary,
-    ),
-    Recipe(
-        "taxonomy-counts",
-        "1",
-        Difficulty.MEDIUM,
-        ("taxonomy", "hierarchical-counts", "unclassified-denominator"),
-        ("csv-header",),
-        ("https://github.com/DerrickWood/kraken2/tree/8c190b1b668825935dbf6dee5f969227dc8269bb",),
-        taxonomy_counts,
-    ),
-    Recipe(
-        "image-measurements",
-        "1",
-        Difficulty.MEDIUM,
-        ("object-identity", "pixel-spacing", "image-measurement"),
-        ("json",),
-        ("https://scikit-image.org/docs/stable/auto_examples/segmentation/plot_regionprops.html",),
-        image_measurements,
-    ),
+    *INTERVAL_RECIPES,
+    *READ_RECIPES,
+    *STATISTICS_RECIPES,
+    *SEQUENCE_RECIPES,
+    *VARIANTS_RECIPES,
+    *EXPRESSION_RECIPES,
+    *PHYLOGENY_RECIPES,
+    *ASSEMBLY_RECIPES,
+    *STRUCTURE_RECIPES,
+    *NETWORKS_RECIPES,
+    *IMAGING_RECIPES,
+    *ASSAYS_RECIPES,
+    *WORKFLOW_RECIPES,
+    *REPO_SEQUENCES_RECIPES,
+    *REPO_FORMATS_RECIPES,
 )
+
+
+DOMAIN_RECIPES = {
+    "sequence": SEQUENCE_RECIPES + REPO_SEQUENCES_RECIPES,
+    "genomic-intervals": INTERVAL_RECIPES,
+    "sequencing-reads": READ_RECIPES,
+    "variants": VARIANTS_RECIPES,
+    "expression": EXPRESSION_RECIPES,
+    "statistics": STATISTICS_RECIPES,
+    "phylogeny": PHYLOGENY_RECIPES,
+    "assembly-and-ecology": ASSEMBLY_RECIPES,
+    "structures-and-proteomics": STRUCTURE_RECIPES,
+    "networks": NETWORKS_RECIPES,
+    "imaging-and-spatial": IMAGING_RECIPES,
+    "assays-and-metabolomics": ASSAYS_RECIPES,
+    "workflow-and-identifiers": WORKFLOW_RECIPES,
+}
+EXPLICIT_DOMAINS = {
+    "strand-extraction": "sequence",
+    "interval-overlap": "genomic-intervals",
+    "donor-counts": "expression",
+    "cell-fractions": "expression",
+    "paired-read-qc": "sequencing-reads",
+    "genotype-alleles": "variants",
+    "transcript-tpm": "expression",
+    "alignment-sites": "phylogeny",
+    "tree-branches": "phylogeny",
+    "busco-summary": "assembly-and-ecology",
+    "taxonomy-counts": "assembly-and-ecology",
+    "image-measurements": "imaging-and-spatial",
+    "paf-query-coverage": "sequencing-reads",
+    "sam-pair-concordance": "sequencing-reads",
+    "vcf-sample-qc": "variants",
+    "fastqc-report-reconciliation": "sequencing-reads",
+    "alignment-partitions": "phylogeny",
+    "newick-split-support": "phylogeny",
+    "gtf-coverage-counts": "expression",
+    "bedgraph-threshold-peaks": "genomic-intervals",
+    "sra-spot-export": "sequencing-reads",
+}
+
+
+def annotated_recipes(recipes: tuple[Recipe, ...]) -> tuple[Recipe, ...]:
+    coverage = json.loads(Path(__file__).with_name("repository_coverage.json").read_text())["repositories"]
+    domains = {recipe.id: domain for domain, members in DOMAIN_RECIPES.items() for recipe in members}
+    domains.update(EXPLICIT_DOMAINS)
+    result = []
+    for recipe in recipes:
+        repositories = [row for row in coverage if recipe.id in row["recipes"]]
+        result.append(
+            replace(
+                recipe,
+                domain=domains[recipe.id],
+                repositories=tuple(row["name"] for row in repositories),
+                sources=tuple(dict.fromkeys([*recipe.sources, *(row["source_url"] for row in repositories)])),
+            )
+        )
+    unknown = {identifier for row in coverage for identifier in row["recipes"]} - {recipe.id for recipe in recipes}
+    if unknown:
+        raise ValueError(f"Repository coverage references unknown recipes: {sorted(unknown)}")
+    return tuple(result)
+
+
+RECIPES = annotated_recipes(RECIPES)
