@@ -1883,11 +1883,16 @@ def _accel_scale_group(device_type: AcceleratorType, device_variant: str = "") -
 class TestBackendAttributes:
     def test_device_attrs_derived_from_scale_group_resources(self):
         config = IrisClusterConfig(scale_groups={"h100-8x": _accel_scale_group(AcceleratorType.GPU, "H100")})
-        assert backend_attribute_sets(config) == {"device-type": {"gpu"}, "device-variant": {"h100"}}
+        assert backend_attribute_sets(config) == {
+            "device-type": {"gpu"},
+            "device-variant": {"h100"},
+            "availability:h100": {"true"},
+            "preemptible": {"false"},
+        }
 
     def test_cpu_scale_group_advertises_no_device_attrs(self):
         config = IrisClusterConfig(scale_groups={"cpu": _accel_scale_group(AcceleratorType.CPU)})
-        assert backend_attribute_sets(config) == {}
+        assert backend_attribute_sets(config) == {"preemptible": {"false"}}
 
     def test_multi_scale_group_backend_advertises_variant_union(self):
         config = IrisClusterConfig(
@@ -1897,11 +1902,17 @@ class TestBackendAttributes:
                 "cpu": _accel_scale_group(AcceleratorType.CPU),
             }
         )
-        assert backend_attribute_sets(config) == {"device-type": {"gpu"}, "device-variant": {"h100", "a100"}}
+        assert backend_attribute_sets(config) == {
+            "device-type": {"gpu"},
+            "device-variant": {"h100", "a100"},
+            "availability:h100": {"true"},
+            "availability:a100": {"true"},
+            "preemptible": {"false"},
+        }
 
     def test_auto_variant_derives_device_type_only(self):
         config = IrisClusterConfig(scale_groups={"tpu": _accel_scale_group(AcceleratorType.TPU, "auto")})
-        assert backend_attribute_sets(config) == {"device-type": {"tpu"}}
+        assert backend_attribute_sets(config) == {"device-type": {"tpu"}, "preemptible": {"false"}}
 
     def test_coreweave_implicit_config_advertises_gpu_and_region_attrs(self):
         iris_root = Path(__file__).parent.parent.parent.parent
@@ -1916,6 +1927,8 @@ class TestBackendAttributes:
                 "device-type": {"gpu"},
                 "device-variant": {"h100"},
                 "region": {region},
+                "availability:h100": {"true"},
+                "preemptible": {"false"},
             }
 
     def test_region_derived_from_coreweave_slice_template(self):
@@ -1941,6 +1954,8 @@ class TestBackendAttributes:
             "device-type": {"gpu"},
             "device-variant": {"h100"},
             "region": {"US-EAST-02A"},
+            "availability:h100": {"true"},
+            "preemptible": {"false"},
         }
 
     def test_region_derived_from_gcp_zone_prefix(self):
