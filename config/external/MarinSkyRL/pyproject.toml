@@ -6,6 +6,8 @@ dependencies = ["marinskyrl"]
 
 [tool.uv]
 package = false
+prerelease = "allow"
+required-environments = ["sys_platform == 'linux'"]
 
 [tool.uv.sources]
 # The isolated lock keeps the selected main-branch revision immutable.
