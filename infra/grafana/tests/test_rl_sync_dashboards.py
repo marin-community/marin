@@ -901,41 +901,25 @@ def test_the_decomposition_reads_the_critical_rank_and_never_a_per_phase_maximum
     rows = _panel_rows(store, "policy_ppo_train spans on the slowest rank")
 
     bands = {series: seconds for _, series, seconds in rows}
+    # Only spans that name policy_ppo_train as their parent are banded, so the two container
+    # spellings and policy_span_publish (exclusive, a worker row, another parent) drop out by
+    # construction. The producer's own residual is excluded and recomputed under the same name, and
+    # the bands are the slow rank's own, so they close on its parent.
     expected = dict(WORKER_SPANS[CRITICAL_RANK])
     expected["policy_span_residual"] = PPO_TRAIN[CRITICAL_RANK] - sum(WORKER_SPANS[CRITICAL_RANK].values())
     assert bands == pytest.approx(expected)
 
-    # Only spans that name policy_ppo_train as their parent are banded, so the two container
-    # spellings and the publish cost drop out by construction rather than by a list of names.
-    # policy_span_publish is exclusive, it is a worker row, and it belongs to another parent; a
-    # rule that read the clock domain alone would band it and quietly shrink the residual by its
-    # three seconds.
-    assert CONTAINER_SPAN not in bands
-    assert "policy_training_step" not in bands
-    assert "policy_span_publish" not in bands
-    assert bands["policy_span_residual"] == pytest.approx(
-        PPO_TRAIN[CRITICAL_RANK] - sum(WORKER_SPANS[CRITICAL_RANK].values())
-    )
-    # The producer's own residual is excluded and recomputed under the same name. Reading the
-    # published one would put a -1949 s band in a 2000 s stack.
+    # Reading the published residual would put a -1949 s band in a 2000 s stack.
     published = (
         PPO_TRAIN[CRITICAL_RANK]
         - sum(WORKER_SPANS[CRITICAL_RANK].values())
         - sum(WORKER_SPANS[CRITICAL_RANK][phase] for phase in CONTAINED_SPANS)
     )
     assert published < 0, "the fixture no longer reproduces the double-count"
-    assert bands["policy_span_residual"] != pytest.approx(published)
-
-    # The bands close on the parent they decompose. A per-phase maximum over the two ranks would
-    # sum to 2645 s inside a 2000 s span, because the barrier and the compute come from different
-    # ranks -- which is the failure this panel is built to avoid.
-    assert sum(bands.values()) == pytest.approx(PPO_TRAIN[CRITICAL_RANK])
+    # A per-phase maximum over the two ranks would sum to 2645 s inside a 2000 s span, because the
+    # barrier and the compute come from different ranks.
     per_phase_max = sum(max(WORKER_SPANS["0"][phase], WORKER_SPANS["1"][phase]) for phase in WORKER_SPANS["0"])
-    assert per_phase_max > PPO_TRAIN[CRITICAL_RANK]
-
-    # And it is the slow rank's row set, not the fast one's.
-    assert bands["policy_entry_barrier"] == pytest.approx(WORKER_SPANS[CRITICAL_RANK]["policy_entry_barrier"])
-    assert bands["policy_entry_barrier"] != pytest.approx(WORKER_SPANS["0"]["policy_entry_barrier"])
+    assert per_phase_max > PPO_TRAIN[CRITICAL_RANK], "the fixture no longer separates r* from a per-phase maximum"
 
 
 def test_the_skew_panel_reports_the_spread_and_names_the_same_slowest_rank(store) -> None:
