@@ -1267,13 +1267,13 @@ def segmented_flash_attention_backward_sm90_launcher(
         batch_idx = utils_module.ssa_to_scalar(batch_idx)
         q_idx = utils_module.ssa_to_scalar(q_idx)
         kv_idx = utils_module.ssa_to_scalar(kv_idx)
-        lower_bounds, valid, q_offset = aux_tensors
+        lower_bounds, valid = aux_tensors
         query_in_bounds = cute.elem_less(q_idx, lower_bounds.shape[1])
         metadata_q_idx = q_idx if query_in_bounds else lower_bounds.shape[1] - 1
         query_valid = valid[batch_idx, metadata_q_idx] != 0
         query_lower_bound = lower_bounds[batch_idx, metadata_q_idx]
         key_after_lower_bound = cute.elem_less(query_lower_bound, kv_idx + 1)
-        key_before_query = cute.elem_less(kv_idx, q_idx + q_offset[0] + 1)
+        key_before_query = cute.elem_less(kv_idx, q_idx + 1)
         mask_value = query_in_bounds and query_valid and key_after_lower_bound and key_before_query
         return utils_module.scalar_to_ssa(mask_value, cutlass.Boolean)
 
@@ -1355,7 +1355,6 @@ def segmented_flash_attention_backward_sm90_launcher(
         mask_block_idx: cute.Tensor,
         full_block_cnt: cute.Tensor,
         full_block_idx: cute.Tensor,
-        q_offset: cute.Tensor,
         dq_accum: cute.Tensor,
         dk_accum: cute.Tensor,
         dv_accum: cute.Tensor,
@@ -1401,7 +1400,7 @@ def segmented_flash_attention_backward_sm90_launcher(
                 dk_accum_gmem,
                 dv_accum_gmem,
                 softmax_scale,
-                aux_data=AuxData(tensors=(lower_bounds, valid, q_offset)),
+                aux_data=AuxData(tensors=(lower_bounds, valid)),
                 blocksparse_tensors=blocksparse_tensors,
                 stream=stream,
             )

@@ -36,7 +36,6 @@ from huggingface_hub import hf_hub_download, snapshot_download
 from huggingface_hub.utils import EntryNotFoundError, RepositoryNotFoundError
 from rigging.filesystem.atomic import fetch_file_atomic
 from rigging.filesystem.factory import filesystem, open_url
-from rigging.filesystem.storage_path import StoragePath
 from tokenizers import Encoding as HfEncoding
 from tokenizers import Tokenizer as HfBaseTokenizer
 
@@ -736,10 +735,10 @@ def load_tokenizer(
     *,
     backend: TokenizerBackend = TokenizerBackend.HF,
 ) -> MarinTokenizer:
-    """Load a tokenizer by HF model name, local path, or object-store path.
+    """Load a tokenizer by HF model name or local path.
 
-    Object-store paths stage directly. HF model names use mirror://tokenizers/
-    before falling back to HF Hub. Cached per (name_or_path, backend).
+    Files are staged once via mirror://tokenizers/ (GCS/S3) before falling back
+    to HF Hub. Cached per (name_or_path, backend).
     """
     local_dir = _stage_tokenizer(name_or_path) if not os.path.isdir(name_or_path) else name_or_path
     if backend == TokenizerBackend.HF:
@@ -856,18 +855,6 @@ def _stage_from_mirror(name_or_path: str, local_dir: str) -> bool:
     return copied
 
 
-def _stage_from_storage(name_or_path: str, local_dir: str) -> None:
-    """Copy the regular files in an object-store tokenizer directory locally."""
-    source = StoragePath(name_or_path)
-    copied = False
-    for entry in source.ls():
-        if not entry.isfile():
-            continue
-        copied |= fetch_file_atomic(str(entry), os.path.join(local_dir, entry.name))
-    if not copied:
-        raise FileNotFoundError(f"No tokenizer files found under {name_or_path}")
-
-
 def _stage_from_hf(name_or_path: str, local_dir: str) -> None:
     """Download tokenizer files from HF Hub and populate the mirror.
 
@@ -911,10 +898,9 @@ def _stage_tokenizer(name_or_path: str) -> str:
     success gate — no hardcoded file-list checks.  Resolution order:
 
       1. Local cache — a prior call already staged this tokenizer on disk.
-      2. Explicit object-store path — copies its regular files locally.
-      3. mirror://tokenizers/{org}/{model}/hf-hub-{ver}/ — discovered via ``ls()``, fetches
+      2. mirror://tokenizers/{org}/{model}/hf-hub-{ver}/ — discovered via ``ls()``, fetches
          whatever files a previous worker populated (any shape).
-      4. HF Hub via ``snapshot_download`` — fetches every tokenizer-relevant
+      3. HF Hub via ``snapshot_download`` — fetches every tokenizer-relevant
          file the repo ships, then populates the mirror for future workers.
 
     The local cache directory is keyed by the ``huggingface_hub`` library
@@ -936,22 +922,16 @@ def _stage_tokenizer(name_or_path: str) -> str:
     os.makedirs(local_dir, exist_ok=True)
 
     with _STAGE_LOCK:
-        # Local cache hit (also the double-checked fast path for threads that
+        # 1. Local cache hit (also the double-checked fast path for threads that
         #    waited on the lock while another thread staged this same ref).
         if _try_load_tokenizer_from_dir(local_dir):
             return local_dir
 
-        if "://" in name_or_path:
-            _stage_from_storage(name_or_path, local_dir)
-            if _try_load_tokenizer_from_dir(local_dir):
-                return local_dir
-            raise ValueError(f"No valid tokenizer.json found under {name_or_path}")
-
-        # Mirror: copy whatever files are present, then try loading.
+        # 2. Mirror: copy whatever files are present, then try loading.
         if _stage_from_mirror(name_or_path, local_dir) and _try_load_tokenizer_from_dir(local_dir):
             return local_dir
 
-        # HF Hub: full download, populate mirror as side-effect.
+        # 3. HF Hub: full download, populate mirror as side-effect.
         _stage_from_hf(name_or_path, local_dir)
         return local_dir
 

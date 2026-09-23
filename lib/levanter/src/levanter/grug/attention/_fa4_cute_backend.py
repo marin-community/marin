@@ -173,12 +173,16 @@ def segmented_flash_attention_backward(
 
     qhead_per_kvhead = q.shape[2] // k.shape[2]
     if kernel_config.sm90_backward is not None and qhead_per_kvhead > 1 and q.shape[-1] == 128:
+        # Equal lengths imply offset zero for a query slice contained in the key sequence.
+        if q.shape[1] != k.shape[1]:
+            raise NotImplementedError(
+                "The native SM90 segmented backward does not carry a context-parallel query offset; "
+                "context parallelism currently requires the SM80/SM120 segmented backward."
+            )
         sm90_config = kernel_config.sm90_backward
         sparse_metadata = _packed_segment_backward_block_sparse_indices_with_full(
             lower_bounds,
             valid,
-            kv_len=k.shape[1],
-            q_offset=q_offset,
             tile_m=sm90_config.tile[0],
             tile_n=sm90_config.tile[1],
         )
@@ -197,7 +201,6 @@ def segmented_flash_attention_backward(
             sparse_metadata.full_block_idx,
             softmax_scale=softmax_scale,
             kernel_config=kernel_config,
-            q_offset=q_offset,
             window_size_left=None,
         )
 
@@ -248,11 +251,14 @@ def segmented_flash_attention_backward_sm90_native(
     *,
     softmax_scale: float,
     kernel_config: Flash4CuteKernelConfig,
-    q_offset: jax.Array,
     window_size_left: int | None = None,
 ) -> tuple[jax.Array, jax.Array, jax.Array]:
     """Run the native SM90 segmented backward path for D128 GQA kernels."""
-    _validate_forward_inputs(q, k, v, lower_bounds, valid, softmax_scale=softmax_scale, q_offset=q_offset)
+    if q.shape[1] != k.shape[1]:
+        raise ValueError("native SM90 backward requires equal q/k sequence lengths")
+    _validate_forward_inputs(
+        q, k, v, lower_bounds, valid, softmax_scale=softmax_scale, q_offset=jnp.zeros((1,), dtype=jnp.int32)
+    )
     _validate_backward_inputs(q, k, v, out, dout, lse)
     sm90_config = kernel_config.sm90_backward
     if sm90_config is None:
@@ -349,7 +355,6 @@ def segmented_flash_attention_backward_sm90_native(
         mask_block_idx,
         full_block_cnt,
         full_block_idx,
-        q_offset,
     )
     postprocess_input_spec, postprocess_output_spec = _cutlass_attention_backward_sm90_postprocess_specs(
         modules,
@@ -466,7 +471,6 @@ def _cutlass_attention_backward_sm90_accum_specs(
     qkv_spec = tensor_spec(mode=(0, 1, 2, 3), divisibility=(1, 1, 1, vector_elems), static=True)
     scratch_spec = tensor_spec(mode=(0, 1, 2), static=True)
     metadata_spec = tensor_spec(mode=(0, 1), static=True)
-    offset_spec = tensor_spec(mode=(0,), static=True)
     sparse_cnt_spec = tensor_spec(mode=(0, 1, 2), static=True)
     sparse_idx_spec = tensor_spec(mode=(0, 1, 2, 3), static=True)
     input_spec = (
@@ -482,7 +486,6 @@ def _cutlass_attention_backward_sm90_accum_specs(
         sparse_idx_spec,
         sparse_cnt_spec,
         sparse_idx_spec,
-        offset_spec,
     )
     return input_spec, (scratch_spec, scratch_spec, scratch_spec)
 
@@ -510,8 +513,6 @@ def _packed_segment_backward_block_sparse_indices_with_full(
     lower_bounds: jax.Array,
     valid: jax.Array,
     *,
-    kv_len: int,
-    q_offset: jax.Array,
     tile_m: int,
     tile_n: int,
 ) -> _BackwardBlockSparseMetadata:
@@ -523,26 +524,26 @@ def _packed_segment_backward_block_sparse_indices_with_full(
     if lower_bounds.shape != valid.shape:
         raise ValueError(f"lower_bounds and valid must have matching shape, got {lower_bounds.shape=} {valid.shape=}")
 
-    batch_size, q_len = lower_bounds.shape
-    num_m_blocks = (q_len + tile_m - 1) // tile_m
-    num_n_blocks = (kv_len + tile_n - 1) // tile_n
+    batch_size, seq_len = lower_bounds.shape
+    num_m_blocks = (seq_len + tile_m - 1) // tile_m
+    num_n_blocks = (seq_len + tile_n - 1) // tile_n
     padded_q_len = num_m_blocks * tile_m
-    q_positions = (jnp.arange(padded_q_len, dtype=jnp.int32) + jnp.reshape(q_offset, ())).reshape(num_m_blocks, tile_m)
+    q_positions = jnp.arange(padded_q_len, dtype=jnp.int32).reshape(num_m_blocks, tile_m)
     lower_padded = jnp.pad(
         lower_bounds,
-        ((0, 0), (0, padded_q_len - q_len)),
+        ((0, 0), (0, padded_q_len - seq_len)),
         mode="constant",
-        constant_values=kv_len,
+        constant_values=seq_len,
     ).reshape(batch_size, num_m_blocks, tile_m)
     valid_padded = jnp.pad(
         valid,
-        ((0, 0), (0, padded_q_len - q_len)),
+        ((0, 0), (0, padded_q_len - seq_len)),
         mode="constant",
         constant_values=False,
     ).reshape(batch_size, num_m_blocks, tile_m)
 
     n_starts = jnp.arange(num_n_blocks, dtype=jnp.int32) * tile_n
-    n_ends = jnp.minimum(n_starts + tile_n, kv_len) - 1
+    n_ends = jnp.minimum(n_starts + tile_n, seq_len) - 1
     has_contributor = jnp.any(
         valid_padded[:, None, :, :]
         & (q_positions[None, None, :, :] >= n_starts[None, :, None, None])
@@ -632,11 +633,11 @@ def _cutlass_attention_backward_sm90_backward_output_shapes(
     v: jax.Array,
     backward_tile: tuple[int, int],
 ) -> tuple[jax.ShapeDtypeStruct, ...]:
-    batch, q_len, q_heads, head_dim = q.shape
+    batch, seq_len, q_heads, head_dim = q.shape
     kv_heads = k.shape[2]
     tile_m, tile_n = backward_tile
-    seq_q_rounded = ((q_len + tile_m - 1) // tile_m) * tile_m
-    seq_k_rounded = ((k.shape[1] + tile_n - 1) // tile_n) * tile_n
+    seq_q_rounded = ((seq_len + tile_m - 1) // tile_m) * tile_m
+    seq_k_rounded = ((seq_len + tile_n - 1) // tile_n) * tile_n
     head_dim_rounded = ((head_dim + 31) // 32) * 32
     head_dim_v_rounded = ((v.shape[-1] + 31) // 32) * 32
     dq_accum = jax.ShapeDtypeStruct((batch, q_heads, seq_q_rounded * head_dim_rounded), jnp.float32)
@@ -850,12 +851,12 @@ def _validate_backward_block_sparse_metadata(
     tile_m: int,
     tile_n: int,
 ) -> None:
-    batch, q_len, q_heads, _ = q.shape
+    batch, seq_len, q_heads, _ = q.shape
     kv_heads = k.shape[2]
     if q_heads % kv_heads != 0:
         raise ValueError(f"Hq must be divisible by Hkv for GQA, got q={q.shape}, k={k.shape}")
-    expected_n_blocks = (k.shape[1] + tile_n - 1) // tile_n
-    expected_m_blocks = (q_len + tile_m - 1) // tile_m
+    expected_n_blocks = (seq_len + tile_n - 1) // tile_n
+    expected_m_blocks = (seq_len + tile_m - 1) // tile_m
     if mask_block_cnt.dtype != jnp.int32:
         raise ValueError(f"mask_block_cnt must be int32, got {mask_block_cnt.dtype}")
     if mask_block_idx.dtype != jnp.int32:

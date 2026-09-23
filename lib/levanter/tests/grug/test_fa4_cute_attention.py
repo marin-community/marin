@@ -55,8 +55,6 @@ def test_packed_segment_backward_block_sparse_indices_split_full_blocks():
     sparse_metadata = fa4_cute_backend._packed_segment_backward_block_sparse_indices_with_full(
         lower_bounds,
         valid,
-        kv_len=8,
-        q_offset=jnp.zeros((1,), dtype=jnp.int32),
         tile_m=2,
         tile_n=2,
     )
@@ -71,20 +69,6 @@ def test_packed_segment_backward_block_sparse_indices_split_full_blocks():
         sparse_metadata.full_block_idx,
         jnp.array([[[[1, 2, 3, 0], [2, 3, 0, 0], [3, 0, 0, 0], [0, 0, 0, 0]]]], dtype=jnp.int32),
     )
-
-
-def test_packed_segment_backward_block_sparse_indices_use_global_query_positions():
-    sparse_metadata = fa4_cute_backend._packed_segment_backward_block_sparse_indices_with_full(
-        jnp.zeros((1, 4), dtype=jnp.int32),
-        jnp.ones((1, 4), dtype=jnp.bool_),
-        kv_len=8,
-        q_offset=jnp.array([4], dtype=jnp.int32),
-        tile_m=2,
-        tile_n=2,
-    )
-
-    np.testing.assert_array_equal(sparse_metadata.partial_block_cnt, jnp.array([[[0, 0, 1, 1]]], dtype=jnp.int32))
-    np.testing.assert_array_equal(sparse_metadata.full_block_cnt, jnp.array([[[2, 2, 1, 0]]], dtype=jnp.int32))
 
 
 def test_packed_segment_causal_lower_bounds_carry_next_valid_bound_through_padding():
@@ -286,45 +270,8 @@ _CONTEXT_METADATA_SCRIPT = """
 """
 
 
-_EXPLICIT_BATCH_METADATA_SCRIPT = """
-    import jax
-    import jax.numpy as jnp
-    import numpy as np
-    from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
-
-    from levanter.grug.attention import AttentionMask
-    from levanter.grug.attention._fa4_cute import fa4_cute_segment_bounds
-
-    segment_ids = jnp.asarray([[3] * 7 + [4] * 13 + [5] * 9 + [-1] * 3], dtype=jnp.int32)
-    mesh = Mesh(
-        np.asarray(jax.devices()).reshape(1, 1, 8, 1),
-        ("replica_dcn", "data", "context", "expert"),
-        axis_types=(AxisType.Explicit,) * 4,
-    )
-    sharding = NamedSharding(mesh, P(("replica_dcn", "data", "expert"), None))
-
-    def bounds(ids):
-        return fa4_cute_segment_bounds(
-            AttentionMask.causal().with_segment_ids(ids),
-            batch_size=1,
-            seq_len=32,
-            sliding_window=None,
-        )
-
-    expected = bounds(segment_ids)
-    with jax.set_mesh(mesh):
-        actual = jax.jit(bounds)(jax.device_put(segment_ids, sharding))
-    for actual_array, expected_array in zip(actual, expected, strict=True):
-        np.testing.assert_array_equal(np.asarray(actual_array), np.asarray(expected_array))
-"""
-
-
 def test_context_sharded_segment_ids_preserve_global_bounds():
     run_on_cpu_devices(_CONTEXT_METADATA_SCRIPT, device_count=8)
-
-
-def test_explicit_unit_batch_sharding_preserves_global_bounds():
-    run_on_cpu_devices(_EXPLICIT_BATCH_METADATA_SCRIPT, device_count=8)
 
 
 def test_fa4_wide_attention_rejects_unsupported_hardware(monkeypatch):

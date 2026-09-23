@@ -24,7 +24,6 @@ from marin.datakit.download.numinamath_tir import numinamath_tir_chat_normalize_
 from marin.datakit.download.numinamath_v1_5 import numinamath_v1_5_chat_normalize_steps
 from marin.datakit.download.open_swe_traces import OPEN_SWE_TRACES_PARTITIONS, open_swe_traces_chat_normalize_steps
 from marin.datakit.download.openthoughts4_code import openthoughts4_code_chat_normalize_steps
-from marin.datakit.download.openthoughts_agent import openthoughts_agent_chat_normalize_steps
 from marin.datakit.download.penfever_rollouts import penfever_rollouts_chat_normalize_steps
 from marin.datakit.download.superior_reasoning import superior_reasoning_chat_normalize_steps
 from marin.datakit.download.swe_rebench_openhands import swe_rebench_openhands_chat_normalize_steps
@@ -173,7 +172,6 @@ def all_sft_sources() -> dict[str, DatakitChatSource]:
         ("nemotron-terminal", nemotron_terminal_chat_normalize_steps),
         ("numinamath-1.5", numinamath_v1_5_chat_normalize_steps),
         ("numinamath-tir", numinamath_tir_chat_normalize_steps),
-        ("openthoughts-agent-sft-100k", openthoughts_agent_chat_normalize_steps),
         ("openthoughts4-code-glm-5.2-n4", openthoughts4_code_chat_normalize_steps),
         ("superior-reasoning", superior_reasoning_chat_normalize_steps),
         ("swe-rebench-openhands", swe_rebench_openhands_chat_normalize_steps),
@@ -207,9 +205,6 @@ def all_sft_sources() -> dict[str, DatakitChatSource]:
     # This chat-only source has 3,341,347,579 completion tokens in its pinned
     # manifest. The rough weight excludes repeated prompts.
     token_counts["openthoughts4-code-glm-5.2-n4"] = 3.341347579
-    # Estimated from the pinned source's 5.38 GB in-memory size. Token-store
-    # preparation records the exact count after rendering and tokenization.
-    token_counts["openthoughts-agent-sft-100k"] = 1.4
     # Initial sharding estimates; token-store preparation measures the actual mixture sizes.
     token_counts["agenttrove-glm53-compactions"] = 0.25
     token_counts["wildchat-glm53-format-completions"] = 0.01

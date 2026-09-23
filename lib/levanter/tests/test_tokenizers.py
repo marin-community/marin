@@ -19,7 +19,6 @@ from unittest.mock import patch
 import jinja2.exceptions
 import pytest
 from huggingface_hub import __version__ as _hf_hub_version
-from rigging.filesystem.storage_path import StoragePath
 from tokenizers import Tokenizer as HfBaseTokenizer
 
 import levanter.tokenizers as tk
@@ -1121,19 +1120,6 @@ def test_local_tokenizer_encode_batch(tmp_path):
         batch_result = tok.encode_batch(texts)
         individual = [tok.encode(t) for t in texts]
         assert batch_result == individual
-
-
-def test_object_store_tokenizer_encode_batch(tmp_path, fake_tokenizer_dir, clear_stage_cache):
-    remote_dir = f"memory://tokenizers/{tmp_path.name}"
-    remote_path = StoragePath(remote_dir)
-    for filename in os.listdir(fake_tokenizer_dir):
-        (remote_path / filename).upload_from(str(fake_tokenizer_dir / filename))
-
-    load_tokenizer.cache_clear()
-    tokenizer = load_tokenizer(remote_dir)
-
-    texts = ["one", "two"]
-    assert tokenizer.encode_batch(texts) == [tokenizer.encode(text) for text in texts]
 
 
 # ---------------------------------------------------------------------------

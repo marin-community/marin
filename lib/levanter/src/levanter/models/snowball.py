@@ -670,7 +670,8 @@ class SnowballTransformer(eqx.Module):
             layer, use_long = layer_and_flag
             return layer(carry, short_mask, long_mask, use_long), None
 
-        hidden, _ = jax.lax.scan(_scan_layer, hidden, (stacked, long_schedule))
+        # Bound routed-expert activation memory during the backward pass as well as forward.
+        hidden, _ = jax.lax.scan(jax.checkpoint(_scan_layer), hidden, (stacked, long_schedule))
         return self.final_gated_norm(self.final_norm(hidden))
 
 
