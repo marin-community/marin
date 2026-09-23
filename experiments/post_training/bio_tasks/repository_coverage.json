@@ -215,13 +215,12 @@
       ],
       "source_url": "https://github.com/satijalab/seurat/blob/586015abde10618ecb32d3fe632267a83317a08d/tests/testthat/test_data_manipulation.R",
       "tool_execution": {
-        "status": "answer_mismatch",
-        "evidence": "native_validation.json",
-        "source_revision": "d0af512687173dbacf34daa4959201ad14d39b19",
+        "status": "passed_reference_check",
+        "evidence": "native_validation_runs/e6f1c7cbf14e.json",
+        "source_revision": "e6f1c7cbf14e62bfddb32e7573ea4e277b6ae2e5",
         "instances": 3,
-        "passing_instances": 0,
-        "scope": "matrixmarket-log-normalization",
-        "observed_failure": "All-zero barcode normalizes to null instead of the contract-specified zero (3/3 cases)."
+        "passing_instances": 3,
+        "scope": "matrixmarket-log-normalization"
       },
       "scope": "Join single-cell features and apply prescribed library-size log normalization or row scaling.",
       "limitations": "Compute joins and log1p(count / cell total \u00d7 scale) independently; check IDs, sparse zeros, and every output value. Counts, normalized data, and scaled layers are distinct; this does not grade cell-type interpretation."
@@ -235,13 +234,12 @@
       ],
       "source_url": "https://github.com/lh3/minimap2/blob/3c28777e7e2dcc90f825de1b9f17a89cca7d4452/example.c",
       "tool_execution": {
-        "status": "answer_mismatch",
-        "evidence": "native_validation.json",
-        "source_revision": "d0af512687173dbacf34daa4959201ad14d39b19",
+        "status": "passed_reference_check",
+        "evidence": "native_validation_runs/e6f1c7cbf14e.json",
+        "source_revision": "e6f1c7cbf14e62bfddb32e7573ea4e277b6ae2e5",
         "instances": 3,
-        "passing_instances": 2,
-        "scope": "dna-unique-mapping",
-        "observed_failure": "No accepted full-length placements for the 37-base reads in one case; 2/3 cases pass."
+        "passing_instances": 3,
+        "scope": "dna-unique-mapping"
       },
       "scope": "Recover long-read alignment spans and orientation on fresh references, including split or inverted segments.",
       "limitations": "Check placements and aligned strings against generated segments; validate PAF spans and CIGAR consumption. The example explicitly emits CIGARs without soft/hard clips. Pin presets; equal-scoring placements need equivalence rules."
@@ -256,13 +254,12 @@
       ],
       "source_url": "https://github.com/samtools/bcftools/blob/edf7fd96c5da562ecfd99fb7f9e4b9eb597aeae8/test/fill-tags-VAF.out",
       "tool_execution": {
-        "status": "answer_mismatch",
-        "evidence": "native_validation.json",
-        "source_revision": "d0af512687173dbacf34daa4959201ad14d39b19",
+        "status": "passed_reference_check",
+        "evidence": "native_validation_runs/e6f1c7cbf14e.json",
+        "source_revision": "e6f1c7cbf14e62bfddb32e7573ea4e277b6ae2e5",
         "instances": 3,
-        "passing_instances": 0,
-        "scope": "vcf-allelic-depth",
-        "observed_failure": "Printed VAF fractions have six significant digits and fail the existing numerical contract (3/3 cases)."
+        "passing_instances": 3,
+        "scope": "vcf-allelic-depth"
       },
       "scope": "Calculate per-alternate-allele fractions and total alternate fraction from multiallelic depth fields.",
       "limitations": "Compute AD_alt / sum(AD) and sum(AD_alt) / sum(AD) from fresh integers. Test missing fields and zero denominators. Site-level inclusion and per-sample genotype filtering need separate checks."
@@ -308,13 +305,12 @@
       ],
       "source_url": "https://github.com/samtools/htslib/blob/d3cc9553d89dc34239afb7145b06c0dd818c0219/test/faidx/faidx.tst",
       "tool_execution": {
-        "status": "execution_failed",
-        "evidence": "native_validation.json",
-        "source_revision": "d0af512687173dbacf34daa4959201ad14d39b19",
+        "status": "passed_reference_check",
+        "evidence": "native_validation_runs/873bf55b231f.json",
+        "source_revision": "873bf55b231f54291dee5119b0d981dcdbbccb13",
         "instances": 3,
-        "passing_instances": 0,
-        "scope": "fasta-indexed-regions",
-        "observed_failure": "pkg-config cannot resolve the zlib dependency required by htslib (3/3 cases)."
+        "passing_instances": 3,
+        "scope": "fasta-indexed-regions"
       },
       "scope": "Retrieve indexed regions correctly across wrapped lines, sequence descriptions, and compressed files.",
       "limitations": "Compare extracted bases and qualities to direct slicing of generated records; test absent IDs and coordinate boundaries. HTSlib also underlies SAMtools/pysam, so use an independent parser for the oracle."
@@ -368,13 +364,12 @@
       ],
       "source_url": "https://github.com/nextflow-io/nextflow/blob/17f18779266767b16bca51af71522e28adf5cff6/modules/nextflow/src/test/groovy/nextflow/extension/GroupTupleOpTest.groovy",
       "tool_execution": {
-        "status": "execution_failed",
-        "evidence": "native_validation.json",
-        "source_revision": "d0af512687173dbacf34daa4959201ad14d39b19",
+        "status": "passed_reference_check",
+        "evidence": "native_validation_runs/e6f1c7cbf14e.json",
+        "source_revision": "e6f1c7cbf14e62bfddb32e7573ea4e277b6ae2e5",
         "instances": 3,
-        "passing_instances": 0,
-        "scope": "sample-sheet-lanes",
-        "observed_failure": "Nextflow task metrics require ps, which is absent from the environment (3/3 cases)."
+        "passing_instances": 3,
+        "scope": "sample-sheet-lanes"
       },
       "scope": "Repair sample-key grouping and lane aggregation in a small workflow.",
       "limitations": "Compare complete groups and final per-sample artifacts to a manifest-derived oracle. The tests show that incomplete groups can disappear unless remainders are handled. Make the intended missing-lane policy explicit."
@@ -406,13 +401,12 @@
       ],
       "source_url": "https://github.com/chrchang/plink-ng/blob/a25a0d6438b61b1951cd6d7eb209db8b79687581/2.0/Tests/TEST_GRM_MAF/run_tests.sh",
       "tool_execution": {
-        "status": "execution_failed",
-        "evidence": "native_validation.json",
-        "source_revision": "d0af512687173dbacf34daa4959201ad14d39b19",
+        "status": "passed_reference_check",
+        "evidence": "native_validation_runs/f8dcfe3590ab.json",
+        "source_revision": "f8dcfe3590abd527d5dc2d937c55c4cc28829b84",
         "instances": 3,
-        "passing_instances": 0,
-        "scope": "vcf-sample-qc",
-        "observed_failure": "PLINK rejects the requested 512 MiB workspace; its minimum is 640 MiB (3/3 cases)."
+        "passing_instances": 3,
+        "scope": "vcf-sample-qc"
       },
       "scope": "Choose variants and samples by allele frequency and missingness; keep analysis-specific and global filters distinct.",
       "limitations": "Compute called-allele denominators and selected IDs from fresh genotypes. State ploidy, founder, and missing-call rules. Do not grade PCA by raw eigenvector signs or assume a PCA-only filter also changes frequency reports."
@@ -484,13 +478,12 @@
       ],
       "source_url": "https://github.com/bioconductor-source/limma/blob/14eabaeb695945b45ceb885ac8d4c61232639ea5/R/contrasts.R",
       "tool_execution": {
-        "status": "answer_mismatch",
-        "evidence": "native_validation.json",
-        "source_revision": "d0af512687173dbacf34daa4959201ad14d39b19",
+        "status": "passed_reference_check",
+        "evidence": "native_validation_runs/e6f1c7cbf14e.json",
+        "source_revision": "e6f1c7cbf14e62bfddb32e7573ea4e277b6ae2e5",
         "instances": 3,
-        "passing_instances": 0,
-        "scope": "adjusted-linear-effect",
-        "observed_failure": "R data-frame row names create an extra _row field rejected by the JSON contract (3/3 cases)."
+        "passing_instances": 3,
+        "scope": "adjusted-linear-effect"
       },
       "scope": "Fit prescribed linear models and signed contrasts with correct sample IDs and covariates.",
       "limitations": "Use an independent least-squares calculation on fresh measurements; check contrast estimates, estimability, and unmoderated uncertainty. Gene-wise weights and empirical-Bayes moderation require additional method-specific references."
@@ -670,13 +663,12 @@
       ],
       "source_url": "https://github.com/vcftools/vcftools/blob/1f87a83402ffd17ea2723a456b7edf5d80b4a22c/src/perl/fill-an-ac",
       "tool_execution": {
-        "status": "execution_failed",
-        "evidence": "native_validation.json",
-        "source_revision": "d0af512687173dbacf34daa4959201ad14d39b19",
+        "status": "passed_reference_check",
+        "evidence": "native_validation_runs/e6f1c7cbf14e.json",
+        "source_revision": "e6f1c7cbf14e62bfddb32e7573ea4e277b6ae2e5",
         "instances": 3,
-        "passing_instances": 0,
-        "scope": "vcf-sample-qc",
-        "observed_failure": "VCFtools rejects the VCFv4.3 header; it accepts v4.0 through v4.2 (3/3 cases)."
+        "passing_instances": 3,
+        "scope": "vcf-sample-qc"
       },
       "scope": "Recalculate AC/AN and genotype QC after selecting samples from a VCF.",
       "limitations": "Count called alleles directly, including multiallelic and partially missing genotypes under explicit rules. Check retained sample IDs and header cardinalities; a fixed two-alleles-per-sample denominator fails missing and haploid cases."

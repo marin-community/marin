@@ -313,6 +313,17 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
     coverage = json.loads(coverage_bytes)["repositories"]
     native_evidence = (SOURCE_DIR / "native_validation.json").read_bytes()
     (output / "native_validation.json").write_bytes(native_evidence)
+    native_run_hashes = {}
+    for run in json.loads(native_evidence)["runs"]:
+        name = run["checks_file"]
+        content = (SOURCE_DIR / name).read_bytes()
+        digest = hashlib.sha256(content).hexdigest()
+        if digest != run["checks_sha256"]:
+            raise ValueError(f"Changed native validation evidence: {name}")
+        target = output / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+        native_run_hashes[name] = digest
     data_sources = (SOURCE_DIR / "data_sources.json").read_bytes()
     (output / "data_sources.json").write_bytes(data_sources)
     benchmark_bytes = (SOURCE_DIR / "benchmark_coverage.json").read_bytes()
@@ -348,6 +359,7 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
         "source_inventory_sha256": hashlib.sha256(inventory).hexdigest(),
         "repository_coverage_sha256": hashlib.sha256(coverage_bytes).hexdigest(),
         "native_validation_sha256": hashlib.sha256(native_evidence).hexdigest(),
+        "native_validation_run_sha256": native_run_hashes,
         "data_sources_sha256": hashlib.sha256(data_sources).hexdigest(),
         "benchmark_mapping_source_sha256": hashlib.sha256(benchmark_bytes).hexdigest(),
         "repository_tool_execution": {row["name"]: row["tool_execution"] for row in coverage},
@@ -501,17 +513,21 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
     manifest["benchmark_coverage_sha256"] = hashlib.sha256(registry_bytes).hexdigest()
     manifest["benchmark_coverage_counts"] = dict(Counter(task["status"] for task in benchmark_registry["tasks"]))
     benchmark_page(output, benchmark_registry)
-    (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     domain_options = "".join(
         f'<option value="{html.escape(domain)}">{html.escape(domain)} ({count} recipes)</option>'
         for domain, count in sorted(manifest["domain_counts"].items())
     )
-    repository_rows = "".join(
-        f'<tr><td>{row["index"]}</td><td>{html.escape(row["name"])}</td><td>'
-        + ", ".join(f'<a href="#{name}">{name}</a>' for name in row["recipes"])
-        + f'</td><td>{html.escape(row["tool_execution"]["status"])}</td></tr>'
-        for row in coverage
-    )
+    repository_rows = []
+    for row in coverage:
+        status = html.escape(row["tool_execution"]["status"])
+        if evidence := row["tool_execution"]["evidence"]:
+            status = f'<a href="{html.escape(evidence)}">{status}</a>'
+        repository_rows.append(
+            f'<tr><td>{row["index"]}</td><td>{html.escape(row["name"])}</td><td>'
+            + ", ".join(f'<a href="#{name}">{name}</a>' for name in row["recipes"])
+            + f"</td><td>{status}</td></tr>"
+        )
+    passed_packages = sum(row["tool_execution"]["status"] == "passed_reference_check" for row in coverage)
     (output / "index.html").write_text(
         '<!doctype html><meta charset="utf-8"><title>Biology task inspection</title>'
         "<style>body{margin:2rem;font:16px system-ui}td,th{padding:.4rem;text-align:left}"
@@ -528,6 +544,7 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
         "<p>All 50 source repositories have an explicit recipe mapping below. The table tracks separately "
         "recorded package checks. Generated task environments still contain Python only; package checks "
         "do not establish tool availability in Harbor or teacher tool use.</p>"
+        f"<p>{passed_packages}/50 packages have passed three reference cases each.</p>"
         "<p>Format labels describe supplied inputs. Generic CSV/JSON summaries do not establish native format coverage. "
         "Newick, Matrix Market, PDB, mmCIF, SBML, MGF and PGM are supplied where labeled; H5AD, BAM, "
         "native SRA, and OME-TIFF are not covered by their text intermediates.</p>"
@@ -537,7 +554,7 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
         '<a href="data_sources.json">Biological sources and provenance</a></p>'
         "<details><summary>All 50 repositories: scientific operation and execution status</summary>"
         "<table><thead><tr><th>#</th><th>Repository</th><th>Recipes</th><th>CLI/API execution</th></tr></thead><tbody>"
-        + repository_rows
+        + "".join(repository_rows)
         + "</tbody></table></details>"
         '<div class="filters"><input id="search" type="search" placeholder="Search recipe, repo, skill or format" '
         'aria-label="Search recipes"><select id="domain" aria-label="Filter domain">'
@@ -559,6 +576,7 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
         "document.querySelectorAll('a[href^=\"#\"]').forEach(a=>a.addEventListener('click',()=>{"
         "search.value='';domain.value='';origin.value='';filter();}));</script>"
     )
+    (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     return manifest
 
 

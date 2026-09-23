@@ -1,0 +1,354 @@
+{
+  "schema_version": 1,
+  "source_revision": "873bf55b231f54291dee5119b0d981dcdbbccb13",
+  "checks": [
+    {
+      "repository_index": 17,
+      "repository": "HTSlib",
+      "recipe": "fasta-indexed-regions",
+      "status": "passed",
+      "execution": "completed",
+      "requested_packages": [
+        "bioconda::htslib=1.24",
+        "python=3.12",
+        "c-compiler",
+        "pkg-config",
+        "zlib",
+        "liblzma-devel"
+      ],
+      "cases": [
+        {
+          "task_id": "fasta-indexed-regions-v1-20260923-00000",
+          "recipe": "fasta-indexed-regions",
+          "execution": "completed",
+          "input_sha256": {
+            "reference.fa": "ab5d1f75c012b4ba9017c30e82c6c3f5eb36982f70fbb78e60db156035692900",
+            "reference.fa.fai": "999a31308b30d32933eaa4cb5e4dd6249d690d2882aec93975470df4d8161938",
+            "regions.csv": "3df7cd62d801ba37d161a59019ec4bd52212a27b9cc213dd418ef308f1a56caf"
+          },
+          "artifact_sha256": {
+            "answer.json": "254e9a18fcad63fb963a96990e356e6e5bb3b4d862895963bcc06282c0bbd814",
+            "commands.jsonl": "65256814ac13b693240d4e2b138bbcfa48aedabbaea7bd70e58873e12648ea36",
+            "compile.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "compile.log.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "execution.json": "9defe9046895ae9ecfc81701e8e7107d36dd888af178fcb7c40e451eda42e835",
+            "fetch": "348614cebe3d11478f9166140ed452295555ffbccd26fee2402d9e2bf74bdf70",
+            "fetch.c": "0ba9e27fa1d4bf406c9ff4ac424968ef90557f30350fe916f8f841e7c23be28c",
+            "flags.txt": "130dead8ef6187e57674b5187bc7ba8053029575b0b788de2b9d2539c9017829",
+            "flags.txt.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "r0.txt": "b1e7f71d8f3b41d2332d84aed0c6b8e90bb6aba843fda5a6ac2454f1e65f3876",
+            "r0.txt.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "r1.txt": "a536732cfc6d708c2a7cf7827f7837d97f24ecef862582eb9d7da2746861150f",
+            "r1.txt.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "r2.txt": "347ebd65b6ddecfaa0ab7339c2b306f921412224668ba07ab4a1d310121e8e6c",
+            "r2.txt.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "commands": [
+            {
+              "argv": [
+                "pkg-config",
+                "--cflags",
+                "--libs",
+                "htslib"
+              ],
+              "exit_code": 0,
+              "elapsed_seconds": 0.032500226006959565
+            },
+            {
+              "argv": [
+                "gcc",
+                "<work>/fetch.c",
+                "-o",
+                "<work>/fetch",
+                "-Wl,-rpath,<environment>/lib",
+                "-I<environment>/include",
+                "-L<environment>/lib",
+                "-lhts"
+              ],
+              "exit_code": 0,
+              "elapsed_seconds": 0.11459834700508509
+            },
+            {
+              "argv": [
+                "<work>/fetch",
+                "<inputs>/reference.fa",
+                "chr0",
+                "8",
+                "25"
+              ],
+              "exit_code": 0,
+              "elapsed_seconds": 0.004176260001258925
+            },
+            {
+              "argv": [
+                "<work>/fetch",
+                "<inputs>/reference.fa",
+                "chr1",
+                "1",
+                "1"
+              ],
+              "exit_code": 0,
+              "elapsed_seconds": 0.004106798995053396
+            },
+            {
+              "argv": [
+                "<work>/fetch",
+                "<inputs>/reference.fa",
+                "chr1",
+                "68",
+                "80"
+              ],
+              "exit_code": 0,
+              "elapsed_seconds": 0.004176828995696269
+            }
+          ],
+          "verification": {
+            "status": "scored",
+            "reward": 1.0,
+            "field_checks": 3
+          }
+        },
+        {
+          "task_id": "fasta-indexed-regions-v1-20260923-00001",
+          "recipe": "fasta-indexed-regions",
+          "execution": "completed",
+          "input_sha256": {
+            "reference.fa": "9e133cc9137fb778e903744f262e2a76f8f02b61a8c0f8356c05cacd4eb3d84d",
+            "reference.fa.fai": "999a31308b30d32933eaa4cb5e4dd6249d690d2882aec93975470df4d8161938",
+            "regions.csv": "3df7cd62d801ba37d161a59019ec4bd52212a27b9cc213dd418ef308f1a56caf"
+          },
+          "artifact_sha256": {
+            "answer.json": "e4b4dbfffc9d6c591f41c96e0b1b447e0de534088160fc4ebd3c2fd5665f131d",
+            "commands.jsonl": "b7242f9f7dba69789f1f267bc49c5966a4b44b56c68561fa5b746623ec1b20f0",
+            "compile.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "compile.log.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "execution.json": "94b91bed9738837c2850f553ba2b489c1927a5a602df6bbc3669f8955d9934a0",
+            "fetch": "348614cebe3d11478f9166140ed452295555ffbccd26fee2402d9e2bf74bdf70",
+            "fetch.c": "0ba9e27fa1d4bf406c9ff4ac424968ef90557f30350fe916f8f841e7c23be28c",
+            "flags.txt": "130dead8ef6187e57674b5187bc7ba8053029575b0b788de2b9d2539c9017829",
+            "flags.txt.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "r0.txt": "baf02fb0a7f431301ffe78c1d816a760ef5659652ff927bfa0f0b26dc1c979d1",
+            "r0.txt.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "r1.txt": "678f81a714fbc72030f82f9980054d5cf90e6f041a367f7da2f35b0f7dafb0e5",
+            "r1.txt.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "r2.txt": "8c300b46bd2bae855645101c3d54005c29134d861dabbda55d0fb4e45532b564",
+            "r2.txt.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "commands": [
+            {
+              "argv": [
+                "pkg-config",
+                "--cflags",
+                "--libs",
+                "htslib"
+              ],
+              "exit_code": 0,
+              "elapsed_seconds": 0.03247479599667713
+            },
+            {
+              "argv": [
+                "gcc",
+                "<work>/fetch.c",
+                "-o",
+                "<work>/fetch",
+                "-Wl,-rpath,<environment>/lib",
+                "-I<environment>/include",
+                "-L<environment>/lib",
+                "-lhts"
+              ],
+              "exit_code": 0,
+              "elapsed_seconds": 0.06443883199244738
+            },
+            {
+              "argv": [
+                "<work>/fetch",
+                "<inputs>/reference.fa",
+                "chr0",
+                "8",
+                "25"
+              ],
+              "exit_code": 0,
+              "elapsed_seconds": 0.004149229993345216
+            },
+            {
+              "argv": [
+                "<work>/fetch",
+                "<inputs>/reference.fa",
+                "chr1",
+                "1",
+                "1"
+              ],
+              "exit_code": 0,
+              "elapsed_seconds": 0.004255470004864037
+            },
+            {
+              "argv": [
+                "<work>/fetch",
+                "<inputs>/reference.fa",
+                "chr1",
+                "68",
+                "80"
+              ],
+              "exit_code": 0,
+              "elapsed_seconds": 0.004289308999432251
+            }
+          ],
+          "verification": {
+            "status": "scored",
+            "reward": 1.0,
+            "field_checks": 3
+          }
+        },
+        {
+          "task_id": "fasta-indexed-regions-v1-20260923-00002",
+          "recipe": "fasta-indexed-regions",
+          "execution": "completed",
+          "input_sha256": {
+            "reference.fa": "5ac658d618902b18d6977491b1dd2490538000bf72f71da80cbf11d041822356",
+            "reference.fa.fai": "999a31308b30d32933eaa4cb5e4dd6249d690d2882aec93975470df4d8161938",
+            "regions.csv": "3df7cd62d801ba37d161a59019ec4bd52212a27b9cc213dd418ef308f1a56caf"
+          },
+          "artifact_sha256": {
+            "answer.json": "645a431af0021fbc99122494d04b69808bc549ab033304838088a207bb0f70ca",
+            "commands.jsonl": "e0a095d9f24aac5969bb21e488f0a9df29f71ec79b149e6f87698ae4d5064d32",
+            "compile.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "compile.log.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "execution.json": "5a87a1502a95356c03fb108298f9e876e1e617bbc7da9805915461a329e00b64",
+            "fetch": "348614cebe3d11478f9166140ed452295555ffbccd26fee2402d9e2bf74bdf70",
+            "fetch.c": "0ba9e27fa1d4bf406c9ff4ac424968ef90557f30350fe916f8f841e7c23be28c",
+            "flags.txt": "130dead8ef6187e57674b5187bc7ba8053029575b0b788de2b9d2539c9017829",
+            "flags.txt.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "r0.txt": "924f9badd6c37970d5fd8cd55c9cd4d05d510fce0431bbc662f9ec8ec87ed586",
+            "r0.txt.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "r1.txt": "678f81a714fbc72030f82f9980054d5cf90e6f041a367f7da2f35b0f7dafb0e5",
+            "r1.txt.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "r2.txt": "f1bec3a4d429539a1b3a01cc8f731471e313d6ae1d00b789cfeede34f7802dc8",
+            "r2.txt.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "commands": [
+            {
+              "argv": [
+                "pkg-config",
+                "--cflags",
+                "--libs",
+                "htslib"
+              ],
+              "exit_code": 0,
+              "elapsed_seconds": 0.03250469599151984
+            },
+            {
+              "argv": [
+                "gcc",
+                "<work>/fetch.c",
+                "-o",
+                "<work>/fetch",
+                "-Wl,-rpath,<environment>/lib",
+                "-I<environment>/include",
+                "-L<environment>/lib",
+                "-lhts"
+              ],
+              "exit_code": 0,
+              "elapsed_seconds": 0.06446414299716707
+            },
+            {
+              "argv": [
+                "<work>/fetch",
+                "<inputs>/reference.fa",
+                "chr0",
+                "8",
+                "25"
+              ],
+              "exit_code": 0,
+              "elapsed_seconds": 0.004094328993232921
+            },
+            {
+              "argv": [
+                "<work>/fetch",
+                "<inputs>/reference.fa",
+                "chr1",
+                "1",
+                "1"
+              ],
+              "exit_code": 0,
+              "elapsed_seconds": 0.0019934299925807863
+            },
+            {
+              "argv": [
+                "<work>/fetch",
+                "<inputs>/reference.fa",
+                "chr1",
+                "68",
+                "80"
+              ],
+              "exit_code": 0,
+              "elapsed_seconds": 0.004116848998819478
+            }
+          ],
+          "verification": {
+            "status": "scored",
+            "reward": 1.0,
+            "field_checks": 3
+          }
+        }
+      ],
+      "environment": {
+        "resolved_artifact_urls": [
+          "https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/binutils_impl_linux-64-2.46.1-default_hfdba357_102.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/bzip2-1.0.8-hda65f42_10.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/c-ares-1.34.8-hebe6cf0_2.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/c-compiler-2.0.0-ha29393d_0.conda",
+          "https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.7.22-hbd8a1cb_0.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/conda-gcc-specs-15.3.0-h8846f6e_5.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/gcc-15.3.0-hc6a0c74_5.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/gcc_impl_linux-64-15.3.0-hc396a85_5.conda",
+          "https://conda.anaconda.org/bioconda/linux-64/htslib-1.24-ha79157c_0.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/icu-78.3-py310h44b86e0_2.conda",
+          "https://conda.anaconda.org/conda-forge/noarch/kernel-headers_linux-64-5.14.0-he073ed8_3.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/keyutils-1.6.3-h7cc23a3_1.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/krb5-1.22.2-hbc21106_2.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/ld_impl_linux-64-2.46.1-default_hbd61a6d_102.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/libcurl-8.22.0-ha042cf0_0.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/libdeflate-1.26-h351257e_0.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/libedit-3.1.20250104-pl5321h373387f_1.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/libev-4.33-h280c20c_3.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/libexpat-2.8.4-hd2095e1_0.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/libffi-3.7.0-h81df57d_1.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/libgcc-16.2.0-ha9f2e26_5.conda",
+          "https://conda.anaconda.org/conda-forge/noarch/libgcc-devel_linux-64-15.3.0-h2b852eb_105.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/libgomp-16.2.0-he0feb66_5.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/liblzma-5.8.3-hb03c661_1.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/liblzma-devel-5.8.3-hb03c661_1.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/libnghttp2-1.68.1-h74cf4be_1.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/libnsl-2.0.1-hb9d3cd8_1.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/libpsl-0.23.1-hd9e3e90_1.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/libpython-3.12.14-h0c77377_3_cpython.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/libsanitizer-15.3.0-h54950a5_5.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/libsqlite-3.53.4-h13e7031_1.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/libssh2-1.11.1-h6154650_1.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/libstdcxx-16.2.0-h934c35e_5.conda",
+          "https://conda.anaconda.org/conda-forge/noarch/libstdcxx-devel_linux-64-15.3.0-hb2c5482_105.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/libuuid-2.42.4-hcfc3c73_0.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/libxcrypt-4.4.38-h280c20c_0.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/libzlib-1.3.2-h25fd6f3_3.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/ncurses-6.6-hdb14827_1.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/openssl-3.6.4-h781a0a9_0.conda",
+          "https://conda.anaconda.org/conda-forge/noarch/packaging-26.3-pyhc364b38_0.conda",
+          "https://conda.anaconda.org/conda-forge/noarch/pip-26.2.1-pyh8b19718_0.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/pkg-config-0.29.2-h1114479_1013.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/python-3.12.14-h5f976f7_3_cpython.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/readline-8.3-hd6e31c0_1.conda",
+          "https://conda.anaconda.org/conda-forge/noarch/setuptools-84.0.0-pyh332efcf_0.conda",
+          "https://conda.anaconda.org/conda-forge/noarch/sysroot_linux-64-2.34-h087de78_3.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/tk-8.6.13-noxft_h1df4ec4_4.conda",
+          "https://conda.anaconda.org/conda-forge/noarch/tzdata-2026c-h151e31d_0.conda",
+          "https://conda.anaconda.org/conda-forge/noarch/wheel-0.48.0-pyhd8ed1ab_0.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/zlib-1.3.2-h25fd6f3_3.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/zstd-1.5.7-hb78ec9c_7.conda"
+        ],
+        "explicit_file_sha256": "3ef18d03fcb0a3a268a17552258aa3713f7ff276f0cdda22905cdf8eeb80957c",
+        "install_log_sha256": "b3c835f97a2b39d0ac691bfbc7fff3073f81e5285b132cb5561e73494e7fb278"
+      }
+    }
+  ]
+}

@@ -1,0 +1,330 @@
+{
+  "schema_version": 1,
+  "source_revision": "c87ce544187aa97332fb9a0bf732d7daec0c5f72",
+  "checks": [
+    {
+      "repository_index": 9,
+      "repository": "pysam",
+      "status": "passed",
+      "cases": [
+        {
+          "task_id": "sam-cigar-coverage-v1-20260923-00000",
+          "recipe": "sam-cigar-coverage",
+          "input_sha256": {
+            "reads.sam": "2e64e5a652fec5fcb277e9ca7ee663c7e658d5e3923006a666e8c88f8ca649b4",
+            "windows.bed": "94fad7b951a42e4c146414710c7dec8725c8dff6cb4a742b61a43d50bfc19b3b"
+          },
+          "artifact_sha256": {
+            "answer.json": "b0194482ce74eaa3f3f45e9ee67a3a6270a31f1d76d365950811441d86d87847",
+            "operation.py": "c9cfa342a9563d211de603f72fc36c84941d7655b374f9bbec47bd47a8fbf080",
+            "api.log.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "api.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "commands": [
+            {
+              "argv": [
+                "python",
+                "<work>/operation.py",
+                "<inputs>",
+                "<work>/answer.json"
+              ],
+              "exit_code": 0,
+              "elapsed_seconds": 0.06393892702180892
+            }
+          ],
+          "verification": {
+            "status": "scored",
+            "reward": 1.0,
+            "field_checks": 6
+          }
+        },
+        {
+          "task_id": "sam-cigar-coverage-v1-20260923-00001",
+          "recipe": "sam-cigar-coverage",
+          "input_sha256": {
+            "reads.sam": "3dd7410c0583f440d1d10500df961e354f2805d31fc21127687dd3dcb2c69128",
+            "windows.bed": "94fad7b951a42e4c146414710c7dec8725c8dff6cb4a742b61a43d50bfc19b3b"
+          },
+          "artifact_sha256": {
+            "answer.json": "215ed5d1b3dc59d32766d54c352033f3985082361043fc9a0761ec07f3668fbe",
+            "operation.py": "c9cfa342a9563d211de603f72fc36c84941d7655b374f9bbec47bd47a8fbf080",
+            "api.log.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "api.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "commands": [
+            {
+              "argv": [
+                "python",
+                "<work>/operation.py",
+                "<inputs>",
+                "<work>/answer.json"
+              ],
+              "exit_code": 0,
+              "elapsed_seconds": 0.06385289900936186
+            }
+          ],
+          "verification": {
+            "status": "scored",
+            "reward": 1.0,
+            "field_checks": 6
+          }
+        },
+        {
+          "task_id": "sam-cigar-coverage-v1-20260923-00002",
+          "recipe": "sam-cigar-coverage",
+          "input_sha256": {
+            "reads.sam": "f5cf68e41775c6890b43831e2e69f673c74def145e1fe81cc86d7596997b5380",
+            "windows.bed": "94fad7b951a42e4c146414710c7dec8725c8dff6cb4a742b61a43d50bfc19b3b"
+          },
+          "artifact_sha256": {
+            "answer.json": "f73cedd392b6e100e1170d26f44c87dab5481981759081696467c7ffafdb5f10",
+            "operation.py": "c9cfa342a9563d211de603f72fc36c84941d7655b374f9bbec47bd47a8fbf080",
+            "api.log.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "api.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "commands": [
+            {
+              "argv": [
+                "python",
+                "<work>/operation.py",
+                "<inputs>",
+                "<work>/answer.json"
+              ],
+              "exit_code": 0,
+              "elapsed_seconds": 0.06383332004770637
+            }
+          ],
+          "verification": {
+            "status": "scored",
+            "reward": 1.0,
+            "field_checks": 6
+          }
+        }
+      ]
+    },
+    {
+      "repository_index": 19,
+      "repository": "Biopython",
+      "status": "passed",
+      "cases": [
+        {
+          "task_id": "gtf-splicing-v1-20260923-00000",
+          "recipe": "gtf-splicing",
+          "input_sha256": {
+            "annotations.gtf": "fe6cced7cfa721ff3c964a3165f8d2a8ddc264e3cf32462462d925bba6ea5cd7",
+            "genome.fa": "882e901122d8dda0706245b7458835d415569b86185613a2988e7d2519e69776"
+          },
+          "artifact_sha256": {
+            "answer.json": "807a3edd54e9b334d0b6a9e65d3156250b5aa06a05a52848e604b1b3b53cd255",
+            "operation.py": "e9ce9ee52677af67df734a06e8bf23dfbc7a955960d180643b4a4fd604c3720c",
+            "api.log.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "api.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "commands": [
+            {
+              "argv": [
+                "python",
+                "<work>/operation.py",
+                "<inputs>",
+                "<work>/answer.json"
+              ],
+              "exit_code": 0,
+              "elapsed_seconds": 0.1640147960279137
+            }
+          ],
+          "verification": {
+            "status": "scored",
+            "reward": 1.0,
+            "field_checks": 8
+          }
+        },
+        {
+          "task_id": "gtf-splicing-v1-20260923-00001",
+          "recipe": "gtf-splicing",
+          "input_sha256": {
+            "annotations.gtf": "f034ad43c5b0a6e68e1b4fe6202e97a472804dc6dbe0b9ff8ecf1bf97bbcfb60",
+            "genome.fa": "f09528262152db426dcb293a242081b408297f0aadad55ecfcc1a0bb93a1ed6c"
+          },
+          "artifact_sha256": {
+            "answer.json": "48631b7899df39048b5bee8a5516c06b0204674e593e0e3571ae50c853719b3a",
+            "operation.py": "e9ce9ee52677af67df734a06e8bf23dfbc7a955960d180643b4a4fd604c3720c",
+            "api.log.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "api.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "commands": [
+            {
+              "argv": [
+                "python",
+                "<work>/operation.py",
+                "<inputs>",
+                "<work>/answer.json"
+              ],
+              "exit_code": 0,
+              "elapsed_seconds": 0.16421417996753007
+            }
+          ],
+          "verification": {
+            "status": "scored",
+            "reward": 1.0,
+            "field_checks": 8
+          }
+        },
+        {
+          "task_id": "gtf-splicing-v1-20260923-00002",
+          "recipe": "gtf-splicing",
+          "input_sha256": {
+            "annotations.gtf": "a60017484793c20792bd9aaf2e4be0b6c7df91762eb6fd185aadbb287f6f6c50",
+            "genome.fa": "1c10ff6d35263e3b4efe54f2580124042ca307acd58a867febfeb6cd268b5cc0"
+          },
+          "artifact_sha256": {
+            "answer.json": "96d024e413dd485b92689aa90450998ac2e6ffe0a8c14f405072001dd1d5ead7",
+            "operation.py": "e9ce9ee52677af67df734a06e8bf23dfbc7a955960d180643b4a4fd604c3720c",
+            "api.log.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "api.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "commands": [
+            {
+              "argv": [
+                "python",
+                "<work>/operation.py",
+                "<inputs>",
+                "<work>/answer.json"
+              ],
+              "exit_code": 0,
+              "elapsed_seconds": 0.16405829205177724
+            }
+          ],
+          "verification": {
+            "status": "scored",
+            "reward": 1.0,
+            "field_checks": 8
+          }
+        }
+      ]
+    },
+    {
+      "repository_index": 31,
+      "repository": "cutadapt",
+      "status": "passed",
+      "cases": [
+        {
+          "task_id": "fastq-adapter-trimming-v1-20260923-00000",
+          "recipe": "fastq-adapter-trimming",
+          "input_sha256": {
+            "reads.fastq": "841f858473a3b4cd8655ef4b1d2e0d54bb723a9bc7b3d565bc52c0c49189e61e"
+          },
+          "artifact_sha256": {
+            "answer.json": "ffe12a72b33cfb776d6d65d11ac7181234a6b7d81a99543bc0dc30ab6f441538",
+            "cutadapt.log.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "cutadapt.log": "5f27930267fcac4a586bcfdd495c1a4a5630de345d80f2179ec15e9cbb30d474",
+            "trimmed.fastq": "e83ec1537507d0b59421c10b3e85eaf90618bb6ee6731ff26fb77c50a6ba3ba1"
+          },
+          "commands": [
+            {
+              "argv": [
+                "cutadapt",
+                "-j",
+                "1",
+                "-a",
+                "AGATCGGAAGAGC",
+                "-O",
+                "6",
+                "-e",
+                "0",
+                "--no-indels",
+                "-o",
+                "<work>/trimmed.fastq",
+                "<inputs>/reads.fastq"
+              ],
+              "exit_code": 0,
+              "elapsed_seconds": 0.1140584220411256
+            }
+          ],
+          "verification": {
+            "status": "scored",
+            "reward": 1.0,
+            "field_checks": 15
+          }
+        },
+        {
+          "task_id": "fastq-adapter-trimming-v1-20260923-00001",
+          "recipe": "fastq-adapter-trimming",
+          "input_sha256": {
+            "reads.fastq": "2c27bd224059ea4b1a662c61861c7a32a5ea2e3f69185dbdc7b2a25b3916828a"
+          },
+          "artifact_sha256": {
+            "answer.json": "c8a2d2e8ce77ee9df0429d0f87f081c0aea1c5cc6ead000311b8e4921d25934d",
+            "cutadapt.log.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "cutadapt.log": "3bbe21be8113f2bf20a62da050ab0d4e14402b8e6586788764f4466cd41a1cb8",
+            "trimmed.fastq": "850933cad4cd2d9ab0d1d589ee05040d6519a1d24028979224d7f71c91d0e082"
+          },
+          "commands": [
+            {
+              "argv": [
+                "cutadapt",
+                "-j",
+                "1",
+                "-a",
+                "AGATCGGAAGAGC",
+                "-O",
+                "6",
+                "-e",
+                "0",
+                "--no-indels",
+                "-o",
+                "<work>/trimmed.fastq",
+                "<inputs>/reads.fastq"
+              ],
+              "exit_code": 0,
+              "elapsed_seconds": 0.11516811291221529
+            }
+          ],
+          "verification": {
+            "status": "scored",
+            "reward": 1.0,
+            "field_checks": 15
+          }
+        },
+        {
+          "task_id": "fastq-adapter-trimming-v1-20260923-00002",
+          "recipe": "fastq-adapter-trimming",
+          "input_sha256": {
+            "reads.fastq": "def1d940cf2d7f8539e20955f645170395d131e153429ffb004adbf515aa3033"
+          },
+          "artifact_sha256": {
+            "answer.json": "7a451ac74132144e812232f522caba4e4f8e3e91a3e700d74e21a4528378c266",
+            "cutadapt.log.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "cutadapt.log": "02e7cc92c48a6b4aa77acd000a70a7fe2f5422fb1d07fab395debaa1d9b0c9ec",
+            "trimmed.fastq": "7913c8397c05703b644e570aee9fcf069eedd13658bd5555a575c23ee51fb803"
+          },
+          "commands": [
+            {
+              "argv": [
+                "cutadapt",
+                "-j",
+                "1",
+                "-a",
+                "AGATCGGAAGAGC",
+                "-O",
+                "6",
+                "-e",
+                "0",
+                "--no-indels",
+                "-o",
+                "<work>/trimmed.fastq",
+                "<inputs>/reads.fastq"
+              ],
+              "exit_code": 0,
+              "elapsed_seconds": 0.11448447499424219
+            }
+          ],
+          "verification": {
+            "status": "scored",
+            "reward": 1.0,
+            "field_checks": 15
+          }
+        }
+      ]
+    }
+  ]
+}

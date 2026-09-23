@@ -52,11 +52,12 @@ models biological/technical read routing from a CSV ledger; it does not read an 
 
 Every source repository has a scientific-operation mapping in
 `repository_coverage.json`. Actual CLI/API execution remains a distinct requirement
-for all 50 repositories. A remote CPU run checked 30 packages on three instances
-each: 22 passed all three, four had answer mismatches, and four failed execution.
-Across the 90 cases, 68 passed, 10 produced mismatching answers, and 12 failed
-execution. The other 20 repositories still need reference scripts. Results,
-including failures, are recorded in `native_validation.json`. The current generated solver environment contains Python;
+for all 50 repositories. 30 packages now pass three reference cases each. The
+first CoreWeave run passed 22 packages; corrections on an existing TRC host passed
+8 more, with captured outputs downloaded from regional GCS. Twenty repositories
+still need reference scripts. `native_validation.json` indexes separate checksum-pinned
+files under `native_validation_runs/`; earlier failures and resolved environments
+remain in that history. The current generated solver environment contains Python;
 it does not yet establish native tool execution. Repository source revisions and
 runtime package versions are different provenance fields and must remain separate.
 
@@ -103,7 +104,7 @@ and must remain outside solver environments. The bundle contains:
 - `source_inventory.json`: all 50 repository assessments and original adoption metadata.
 - `data_sources.json`: biological accessions, source licenses, content hashes and transformations.
 - `benchmark_coverage.json` and `benchmark-coverage.html`: pinned ID task inventory, mapping gaps and example evidence.
-- `native_validation.json`: retained evidence for the completed package reference checks.
+- `native_validation.json` and `native_validation_runs/`: indexed, checksum-pinned package execution evidence.
 - `repository_coverage.json`: explicit recipe mappings and CLI/API execution evidence status.
 
 The Parquet export can be opened with TaskTrove's file browser. These tasks use
@@ -187,7 +188,8 @@ with bounded CPU, memory, disk, and runtime requests. Use GCS in the worker's
 region for staged inputs and retained outputs. Iris can place CPU-only work on
 TPU hosts, but its GCP configuration also has an on-demand CPU fallback; record
 actual placement before attributing a run to TRC capacity. The first 30-package
-batch ran on CoreWeave and its captured outputs were retrieved from S3.
+batch ran on CoreWeave with S3 outputs. Correction runs used a reserved TRC v4 host
+in `us-central2`, requested no accelerators, and retrieved their archives from GCS.
 
 Grade returned results with:
 
