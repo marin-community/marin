@@ -72,7 +72,6 @@ def deployment_config() -> DeploymentConfig:
         boot_disk_throughput=140,
         boot_disk_snapshot="loom-pre-c4d-hyperdisk-20260816",
         dotenv_secret_version=3,
-        deployment_token_secret_version=1,
         prune_deployment=True,
         remote_mcps=(
             RemoteMcpConfig.parse(
@@ -348,8 +347,6 @@ def test_deployment_models_durable_resources_without_secret_payloads():
         assert field(scheduling, "provisioning_model", "provisioningModel") == "STANDARD"
         metadata = vm.inputs["metadata"]
         assert metadata["dotenv-secret-version"] == "3"
-        assert metadata["deployment-token-secret-id"] == "LOOM_DEPLOYMENT_TOKEN"
-        assert metadata["deployment-token-secret-version"] == "1"
         assert json.loads(metadata["docker-daemon-config"]) == {
             "data-root": "/var/lib/docker",
             "default-ulimits": {"core": {"Name": "core", "Hard": 0, "Soft": 0}},
@@ -359,6 +356,9 @@ def test_deployment_models_durable_resources_without_secret_payloads():
         assert "startup-script" in metadata
         assert "loom-compose" in metadata
         assert "loom-caddyfile" in metadata
+        assert "header_up X-Loom-Forwarded 1" in metadata["loom-caddyfile"]
+        assert "exec -T loom \\" in metadata["startup-script"]
+        assert "http://127.0.0.1:${LOOM_PORT}/api/deployment/reconcile" in metadata["startup-script"]
         assert "metadataStartupScript" not in vm.inputs
         assert "metadata_startup_script" not in vm.inputs
         assert field(vm.inputs, "allow_stopping_for_update", "allowStoppingForUpdate") is False

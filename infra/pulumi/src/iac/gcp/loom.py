@@ -8,7 +8,6 @@ from iac.gcp.iam import GcpArtifactRepositoryIam, GcpIamGrantSet, GcpRoleGrant, 
 _REGION = "us-central1"
 _RUNTIME_ACCOUNT_ID = "loom-vm"
 _DOTENV_SECRET = "LOOM_DOTENV"
-_DEPLOYMENT_TOKEN_SECRET = "LOOM_DEPLOYMENT_TOKEN"
 _ARTIFACT_REPOSITORY = "loom"
 
 
@@ -33,10 +32,6 @@ def iam_grants(project: str) -> GcpIamGrantSet:
         secrets=(
             GcpSecretIam(
                 secret=_DOTENV_SECRET,
-                grants=(GcpRoleGrant(role="roles/secretmanager.secretAccessor", members=(runtime_account,)),),
-            ),
-            GcpSecretIam(
-                secret=_DEPLOYMENT_TOKEN_SECRET,
                 grants=(GcpRoleGrant(role="roles/secretmanager.secretAccessor", members=(runtime_account,)),),
             ),
         ),

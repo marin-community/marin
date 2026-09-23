@@ -68,6 +68,13 @@ startup unit stores Docker state on the persistent root disk, reads one numbered
 `docker compose up -d`, applies the configured Loom deployment policy, and
 checks readiness. It does not clone a repository or build images on the VM.
 
+The host applies the deployment manifest with a request from inside the Loom
+container to its loopback listener. Loom accepts that local request only for
+`deployment.reconcile`, even when shared-deployment mode disables general
+loopback trust. Caddy marks every forwarded request with `X-Loom-Forwarded`,
+and session containers reach Loom through Docker networking rather than that
+loopback listener. The request uses no deployment token or secret version.
+
 ## Update secrets
 
 Do not put secret values in Pulumi configuration or state. Upload a reviewed
@@ -83,48 +90,6 @@ pulumi config set --cwd /path/to/marin/infra/loom --stack marin-loom \
 
 Delete the local payload after upload. The startup script never reads `latest`,
 so uploading another secret version does not change the running service.
-
-## Deployment credential
-
-Shared-deployment mode rejects Loom's machine-local token. The startup script
-uses a deployment-only token to apply the manifest from VM metadata. Its
-Secret Manager payload is read on the host for that request; the value does not
-enter Pulumi state, Docker Compose, or the shared Loom home volume.
-
-Bootstrap in this order:
-
-1. Deploy a Loom image that includes deployment tokens. The first activation
-   with the old startup script may fail after the new image is running because
-   the machine-local token cannot reconcile in shared mode.
-2. Create the `LOOM_DEPLOYMENT_TOKEN` Secret Manager container from this Pulumi
-   program before the full update, using a targeted update of the
-   `loom-deployment-token` resource.
-3. Sign in as a Loom admin and create a token in **Settings → Account →
-   Deployment tokens**. Copy the one-time value into a temporary mode-`0600`
-   file, add it as a Secret Manager version, and record the numeric version.
-4. Set `marin-loom:deploymentTokenSecretVersion` to that version, then run the
-   normal Loom rollout. Verify that activation reconciles the expected profiles.
-
-From the Marin checkout, the targeted container creation is:
-
-```sh
-CLOUDFLARE_API_TOKEN="$(gcloud secrets versions access latest \
-  --project=hai-gcp-models --secret=cloudflare-oa-dns-token)" \
-  pulumi up --cwd infra/loom --stack marin-loom \
-  --target 'urn:pulumi:marin-loom::marin-loom::gcp:secretmanager/secret:Secret::loom-deployment-token'
-```
-
-Upload the one-time token without placing it in repository files:
-
-```sh
-gcloud secrets versions add LOOM_DEPLOYMENT_TOKEN \
-  --project=hai-gcp-models --data-file=/path/to/private-token-file
-```
-
-The stack pins a numeric version. During rotation, create and upload a second
-token, update the pinned version, apply the stack, and only then revoke the old
-token. A deployment token authorizes only `deployment.reconcile`; it does not
-grant general admin access.
 
 ## Automation identities
 

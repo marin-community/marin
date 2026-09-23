@@ -29,7 +29,6 @@ REPOSITORY_URL = f"https://github.com/{REPOSITORY_OWNER}/{REPOSITORY_NAME}.git"
 ARTIFACT_REPOSITORY_ID = "loom"
 ARTIFACT_IMAGE_NAME = "loom"
 DOTENV_SECRET_ID = "LOOM_DOTENV"
-DEPLOYMENT_TOKEN_SECRET_ID = "LOOM_DEPLOYMENT_TOKEN"
 LOOM_PORT = 7878
 DOCKER_ROOT = "/var/lib/docker"
 WEB_FIREWALL_TAG = "loom-web"
@@ -504,7 +503,6 @@ class DeploymentConfig:
     boot_disk_throughput: int
     boot_disk_snapshot: str
     dotenv_secret_version: int
-    deployment_token_secret_version: int
     prune_deployment: bool = False
     settings: tuple[tuple[str, str | int | bool], ...] = ()
     remote_mcps: tuple[RemoteMcpConfig, ...] = ()
@@ -520,7 +518,6 @@ class DeploymentConfig:
             ("bootDiskIops", self.boot_disk_iops),
             ("bootDiskThroughput", self.boot_disk_throughput),
             ("dotenvSecretVersion", self.dotenv_secret_version),
-            ("deploymentTokenSecretVersion", self.deployment_token_secret_version),
         ):
             _positive_config_int(value, name)
         for profile in self.profiles:
@@ -624,7 +621,6 @@ class DeploymentConfig:
             boot_disk_throughput=config.require_int("bootDiskThroughput"),
             boot_disk_snapshot=config.require("bootDiskSnapshot"),
             dotenv_secret_version=config.require_int("dotenvSecretVersion"),
-            deployment_token_secret_version=config.require_int("deploymentTokenSecretVersion"),
             prune_deployment=config.get_bool("pruneDeployment") or False,
             settings=tuple(settings),
             remote_mcps=tuple(remote_mcps),
@@ -902,7 +898,6 @@ def _create_instance(
     root_disk: gcp.compute.Disk,
     image: ImageResources,
     dotenv_secret: gcp.secretmanager.Secret,
-    deployment_token_secret: gcp.secretmanager.Secret,
     runtime_policy: RuntimePolicyResources,
 ) -> InstanceResources:
     metadata: dict[str, pulumi.Input[str]] = {
@@ -910,8 +905,6 @@ def _create_instance(
         "loom-image": image.reference,
         "dotenv-secret-version": str(config.dotenv_secret_version),
         "dotenv-secret-id": DOTENV_SECRET_ID,
-        "deployment-token-secret-id": DEPLOYMENT_TOKEN_SECRET_ID,
-        "deployment-token-secret-version": str(config.deployment_token_secret_version),
         "loom-port": str(LOOM_PORT),
         "loom-deployment": runtime_policy.manifest,
         "docker-daemon-config": DOCKER_DAEMON_CONFIG,
@@ -925,7 +918,6 @@ def _create_instance(
         network.dns_record,
         root_disk,
         dotenv_secret,
-        deployment_token_secret,
     ]
     instance = gcp.compute.Instance(
         "loom",
@@ -1039,13 +1031,6 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
         replication={"auto": {}},
         opts=pulumi.ResourceOptions(depends_on=apis, protect=True),
     )
-    deployment_token_secret = gcp.secretmanager.Secret(
-        "loom-deployment-token",
-        project=config.project,
-        secret_id=DEPLOYMENT_TOKEN_SECRET_ID,
-        replication={"auto": {}},
-        opts=pulumi.ResourceOptions(depends_on=apis, protect=True),
-    )
     instance = _create_instance(
         config,
         vm_account,
@@ -1053,7 +1038,6 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
         root_disk,
         image,
         dotenv_secret,
-        deployment_token_secret,
         runtime_policy,
     )
     activation = _create_activation(config, instance, network.dns_record)
