@@ -479,10 +479,11 @@ def test_eager_aliases_rejected_before_spawn(monkeypatch, arg):
             pass
 
 
-def test_vllm_config_file_rejected_before_spawn(monkeypatch, tmp_path):
+@pytest.mark.parametrize("args", [["--config", "vllm.yaml"], ["--config=vllm.yaml"]])
+def test_vllm_config_file_rejected_before_spawn(monkeypatch, args):
     monkeypatch.setattr(vllm_server.subprocess, "Popen", lambda *_args, **_kwargs: pytest.fail("vLLM spawned"))
     with pytest.raises(ValueError, match="does not support --config"):
-        with _environment(_FakeLauncher("exit"), extra_args=["--config", str(tmp_path / "vllm.yaml")]):
+        with _environment(_FakeLauncher("exit"), extra_args=args):
             pass
 
 

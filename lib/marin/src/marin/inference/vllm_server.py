@@ -1114,7 +1114,7 @@ def _guard_vllm_eager_args(extra_cli_args: list[str] | None) -> list[str]:
     acknowledged = _VLLM_EAGER_ACKNOWLEDGEMENT in args
     args = [arg for arg in args if arg != _VLLM_EAGER_ACKNOWLEDGEMENT]
 
-    if "--config" in args:
+    if any(arg == "--config" or arg.startswith("--config=") for arg in args):
         raise ValueError("Pass vLLM options as explicit flags; Marin does not support --config")
 
     eager = False
