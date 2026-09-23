@@ -15,6 +15,7 @@ import warnings
 import jax
 import jax.numpy as jnp
 import jaxlib
+from jax._src.mesh import get_concrete_mesh
 from jaxtyping import Array, Float, Int
 from finestore.cache import PersistentKvCache
 from rigging.cache import (
@@ -226,6 +227,29 @@ def _implementation_matches_current_backend(impl_name: str, *, fn: ArrayImpl | N
 
 def _autotune_enabled() -> bool:
     return autotune_utils.env_flag(_AUTOTUNE_ON_MISS_ENV_VAR, default=True)
+
+
+def _autotune_process_ids(*values: jax.Array) -> tuple[int, ...]:
+    """Use the kernel's concrete mesh when only one pipeline stage participates."""
+    for value in values:
+        sharding = autotune_utils.named_sharding_of(value)
+        if sharding is not None and isinstance(sharding.mesh, jax.sharding.Mesh):
+            process_ids = tuple(sorted({device.process_index for device in sharding.mesh.devices.flat}))
+            if jax.process_index() in process_ids:
+                return process_ids
+
+    mesh = get_concrete_mesh()
+    if isinstance(mesh, jax.sharding.Mesh) and not mesh.empty:
+        process_ids = tuple(sorted({device.process_index for device in mesh.devices.flat}))
+        if jax.process_index() in process_ids:
+            return process_ids
+    return tuple(range(jax.process_count()))
+
+
+def _autotune_allgather(value, process_ids: tuple[int, ...]):
+    if process_ids == tuple(range(jax.process_count())):
+        return multihost_allgather_sync(value)
+    return multihost_allgather_sync(value, process_ids=process_ids)
 
 
 _AUTOTUNE_CACHE = AutotuneBlockSizeCache(
@@ -501,6 +525,7 @@ def _autotune_block_sizes_on_miss(
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
     return_argmax: bool,
+    process_ids: tuple[int, ...] | None = None,
 ) -> BlockSizes:
     """Select one candidate by mean timing across all ranks when distributed."""
     if not _autotune_enabled():
@@ -518,17 +543,20 @@ def _autotune_block_sizes_on_miss(
         return_argmax=return_argmax,
     )
     cached = _AUTOTUNE_CACHE.get(cache_key) if cache_key is not None else None
-    distributed = jax.process_count() > 1
+    if process_ids is None:
+        process_ids = _autotune_process_ids(x, labels, w)
+    distributed = len(process_ids) > 1
     candidates = _candidate_block_sizes(impl_name, inferred, x=x, w=w, dtype=dtype)
     if distributed:
         # Every rank must enter the same rendezvous, even when only some ranks
         # have a local cache hit or can construct a persistent cache key.
-        states = multihost_allgather_sync(
+        states = _autotune_allgather(
             {
                 "key": cache_key,
                 "cached": _encode_autotune_entry(cached) if cached is not None else None,
                 "candidates": [_encode_autotune_entry(candidate) for candidate in candidates],
-            }
+            },
+            process_ids,
         )
         if any(state["candidates"] != states[0]["candidates"] for state in states[1:]):
             raise RuntimeError("Fused CE autotune candidates differ across JAX processes")
@@ -578,7 +606,7 @@ def _autotune_block_sizes_on_miss(
                 prepared = None
 
             # No rank may execute the candidate until every rank has compiled it.
-            if not all(multihost_allgather_sync(prepared is not None)):
+            if not all(_autotune_allgather(prepared is not None, process_ids)):
                 continue
             assert prepared is not None
             benchmark_fn, compile_time = prepared
@@ -587,7 +615,7 @@ def _autotune_block_sizes_on_miss(
             except Exception as exc:
                 errors.append(exc)
                 score = None
-            timings = multihost_allgather_sync(score if score is not None and math.isfinite(score) else None)
+            timings = _autotune_allgather(score if score is not None and math.isfinite(score) else None, process_ids)
             if any(timing is None for timing in timings):
                 continue
             score = math.fsum(cast(float, timing) for timing in timings) / len(timings)
@@ -772,6 +800,42 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
         explicit = True
         user_requested_impls = True
 
+    needs_inferred_block_sizes = not explicit_block_sizes and any(
+        not isinstance(impl, str) or impl not in ("xla", "xla_fast_bwd", "reference") for impl in impls
+    )
+    if needs_inferred_block_sizes:
+        inferred, has_tuned_match = infer_block_sizes_with_tuned_match(
+            x.shape[0], x.shape[1], w.shape[1], dtype=dtype, x_dtype=x.dtype, w_dtype=w.dtype
+        )
+    else:
+        inferred, has_tuned_match = None, False
+
+    process_ids = _autotune_process_ids(x, labels, w)
+    if len(process_ids) > 1:
+        # The sweep's rendezvous cannot help if one rank takes a tuned-table hit,
+        # disables tuning, or chooses a different implementation before entering it.
+        plan = {
+            "implementations": [
+                impl if isinstance(impl, str) else f"{type(impl).__module__}.{type(impl).__qualname__}"
+                for impl in impls
+            ],
+            "explicit": explicit,
+            "user_requested_impls": user_requested_impls,
+            "block_sizes": _encode_autotune_entry(resolved_block_sizes) if resolved_block_sizes is not None else None,
+            "inferred": _encode_autotune_entry(inferred) if inferred is not None else None,
+            "has_tuned_match": has_tuned_match,
+            "autotune_enabled": _autotune_enabled() if needs_inferred_block_sizes else None,
+            "shape": (x.shape, labels.shape, w.shape),
+            "dtypes": (str(x.dtype), str(labels.dtype), str(w.dtype), str(dtype)),
+            "backend": jax.default_backend(),
+            "logit_soft_cap": logit_soft_cap,
+            "precision": str(precision),
+            "return_argmax": return_argmax,
+        }
+        plans = _autotune_allgather(plan, process_ids)
+        if any(peer != plans[0] for peer in plans[1:]):
+            raise RuntimeError(f"Fused CE selection differs across JAX processes: {dict(zip(process_ids, plans))}")
+
     errors: list[Exception] = []
     for impl in impls:
         _raise_if_renamed_implementation(impl)
@@ -781,14 +845,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
         elif impl_for_call in ("xla", "xla_fast_bwd", "reference"):
             block_sizes_for_impl = None
         elif isinstance(impl_for_call, str) and impl_for_call in ("pallas_tpu", "batched_xla"):
-            inferred, has_tuned_match = infer_block_sizes_with_tuned_match(
-                x.shape[0],
-                x.shape[1],
-                w.shape[1],
-                dtype=dtype,
-                x_dtype=x.dtype,
-                w_dtype=w.dtype,
-            )
+            assert inferred is not None
             fn = IMPLEMENTATIONS.get(impl_for_call)
             if fn is None or not _implementation_matches_current_backend(impl_for_call, fn=fn):
                 block_sizes_for_impl = inferred
@@ -807,6 +864,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
                         logit_soft_cap=logit_soft_cap,
                         precision=precision,
                         return_argmax=return_argmax,
+                        process_ids=process_ids,
                     )
                 except Exception as exc:
                     if explicit:
@@ -815,14 +873,8 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
                     errors.append(exc)
                     continue
         else:
-            block_sizes_for_impl = infer_block_sizes(
-                x.shape[0],
-                x.shape[1],
-                w.shape[1],
-                dtype=dtype,
-                x_dtype=x.dtype,
-                w_dtype=w.dtype,
-            )
+            assert inferred is not None
+            block_sizes_for_impl = inferred
         if callable(impl_for_call):
             try:
                 kwargs = dict(

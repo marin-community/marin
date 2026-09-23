@@ -5,6 +5,7 @@ import re
 import threading
 import warnings
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from typing import cast
 
 import jax
@@ -1608,7 +1609,15 @@ def test_distributed_fused_ce_autotune_skips_failed_compile_and_chooses_lowest_m
     exchanged: dict[int, dict[int, object]] = {}
     executed: dict[int, list[BlockSizes]] = {0: [], 1: []}
 
-    def allgather(value):
+    @dataclass(frozen=True)
+    class Device:
+        process_index: int
+
+    mesh = jax.sharding.Mesh(np.array([Device(1), Device(2)], dtype=object), ("data",))
+    sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec("data"))
+
+    def allgather(value, *, process_ids):
+        assert process_ids == (1, 2)
         sequence = context.sequence
         context.sequence += 1
         with condition:
@@ -1633,7 +1642,9 @@ def test_distributed_fused_ce_autotune_skips_failed_compile_and_chooses_lowest_m
         del labels_value, w_value, kwargs
         return x_value, x_value
 
-    monkeypatch.setattr(jax, "process_count", lambda: 2)
+    monkeypatch.setattr(jax, "process_count", lambda: 3)
+    monkeypatch.setattr(jax, "process_index", lambda: context.rank + 1)
+    monkeypatch.setattr(fused_api.autotune_utils, "named_sharding_of", lambda _value: sharding)
     monkeypatch.setattr(fused_api, "_autotune_enabled", lambda: True)
     monkeypatch.setattr(fused_api, "_autotune_cache_key", lambda **kwargs: None)
     monkeypatch.setattr(fused_api, "_candidate_block_sizes", lambda *args, **kwargs: candidates)
@@ -1662,6 +1673,60 @@ def test_distributed_fused_ce_autotune_skips_failed_compile_and_chooses_lowest_m
 
     assert winners == [candidates[1], candidates[1]]
     assert executed == {0: candidates[:2], 1: candidates[:2]}
+
+
+@pytest.mark.parametrize("different_setting", ["tuned_match", "autotune_enabled"])
+def test_distributed_fused_ce_rejects_rank_local_selection_before_sweep(
+    monkeypatch: pytest.MonkeyPatch, different_setting: str
+):
+    x = jnp.ones((4, 8), dtype=jnp.float32)
+    w = jnp.ones((8, 16), dtype=jnp.float32)
+    labels = jnp.zeros((4,), dtype=jnp.int32)
+    inferred = BlockSizes(128, 128, 128)
+    faster = BlockSizes(128, 128, 256)
+    context = threading.local()
+    condition = threading.Condition()
+    exchanged: dict[int, object] = {}
+
+    def allgather(value):
+        with condition:
+            exchanged[context.rank] = value
+            condition.notify_all()
+            assert condition.wait_for(lambda: len(exchanged) == 2, timeout=5)
+            return [exchanged[index] for index in range(2)]
+
+    def fake_impl(x_value, labels_value, w_value, *, block_sizes, **kwargs):
+        del labels_value, w_value, kwargs
+        output = jnp.full((x_value.shape[0],), block_sizes.v_block_size, dtype=jnp.float32)
+        return output, jnp.zeros_like(output)
+
+    def infer_for_rank(*args, **kwargs):
+        del args, kwargs
+        return inferred, different_setting == "tuned_match" and context.rank == 0
+
+    monkeypatch.setattr(jax, "process_count", lambda: 2)
+    monkeypatch.setattr(fused_api, "multihost_allgather_sync", allgather)
+    monkeypatch.setattr(fused_api, "infer_block_sizes_with_tuned_match", infer_for_rank)
+    monkeypatch.setattr(
+        fused_api, "_autotune_enabled", lambda: different_setting != "autotune_enabled" or context.rank == 0
+    )
+    monkeypatch.setattr(fused_api, "_autotune_block_sizes_on_miss", lambda **kwargs: faster)
+    monkeypatch.setitem(fused_api.IMPLEMENTATIONS, "batched_xla", fake_impl)
+
+    def run_rank(rank):
+        context.rank = rank
+        try:
+            fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
+                x, labels, w, reduction=None, implementation="batched_xla"
+            )
+        except RuntimeError as exc:
+            return str(exc)
+        return None
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(run_rank, range(2)))
+
+    assert all(result is not None and "selection differs across JAX processes" in result for result in results)
 
 
 def _run_autotune_miss(impl_name: str = "pallas_tpu", *, vocab: int = 16):
