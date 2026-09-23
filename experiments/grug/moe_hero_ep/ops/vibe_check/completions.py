@@ -182,10 +182,6 @@ class SampleStore:
             requests.append(request)
         return requests
 
-    def results(self, spec: SamplingSpec) -> list[SampleResult]:
-        completed = self.completed_ids()
-        return [self.result(request.sample_id) for request in self.requests(spec) if request.sample_id in completed]
-
     def completed_ids(self) -> set[str]:
         return {path.name.removesuffix(".json") for path in (self.root / "results/*.json").glob()}
 

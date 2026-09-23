@@ -31,7 +31,8 @@ Each checkpoint job requests **32 GB200 GPUs** across eight nodes and uses a bat
 size of 32 across the job. With `submission=all`, two checkpoint jobs can run concurrently when
 64 GPUs and the corresponding node resources are available. The backfill skips
 completed results, active jobs, and requests that exhausted their retries. The
-checkpoint selection comes from [`CHECKPOINT_RUNS`](config.py).
+checkpoint selection comes from [`hero_checkpoint_paths()`](../../checkpoints.py),
+which reads the current hero run and its ancestors.
 
 The workflow runs hourly. With its default, `submission=next`, it submits no new
 request while jobs for the current sampling specification are active. Otherwise,
@@ -43,16 +44,18 @@ priority.
 
 Each request identifies a checkpoint and a sampling specification: the prompt bank,
 sampler release, completion count, and other generation settings in
-[config.py](config.py). Each workflow invocation publishes available results for
-the current specification. Older results stay stored and do not block publication
-or enter new retries. The workflow does not wait for GPU jobs to finish. New
-completions appear after a later invocation updates the report. A successful
-workflow does not mean that sampling completed.
+[config.py](config.py). The report retains completed results across sampling
+versions. It updates only when new usable results arrive. Missing historical
+scores appear as unavailable. Unusable files produce a warning and do not block
+other results. The report labels each sampling version in the checkpoint selector.
+Scheduling uses only the current specification. The workflow does not wait for
+GPU jobs to finish, so workflow success does not mean that sampling completed.
 
 ## Recovery
 
-Each request permits three attempts. The workflow records its source commit when
-it first saves a request. All attempts use that commit for the sampler code, so
+Each request permits three Iris job submissions. Each job permits 1,000 preemption retries.
+The workflow records its source commit when it first saves a request.
+All attempts use that commit for the sampler code, so
 merging a fix does not change existing requests.
 To rerun checkpoints with corrected sampler code, change `release` in
 [config.py](config.py) through a PR, then invoke the workflow. A new release

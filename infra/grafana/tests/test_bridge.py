@@ -22,6 +22,7 @@ from conftest import (
     make_k8s_source,
     queried_namespace,
 )
+from errors import FinelogUnavailableError
 from finelog.errors import QueryResultTooLargeError, StatsError
 from finelog_health import FinelogHealth, FinelogRole
 from github_source import GithubSource
@@ -36,7 +37,7 @@ from hero_health import (
     telemetry_alert_rows,
     watched_runs,
 )
-from hero_runs import HeroRun, active_hero_runs, task_state_query
+from hero_runs import HeroRun, active_hero_runs, phase_execution_query, recent_phase_query, task_state_query
 from k8s_source import K8sFleet
 from loom_alerts import (
     LoomAlertClient,
@@ -47,6 +48,7 @@ from loom_alerts import (
 )
 from loss_spikes import loss_spike_alert_rows, loss_window_query
 from relay_health import RelayNamespaceStatus, RelaySenderStatus
+from rl_producers import RL_PRODUCER_NAMESPACES
 from server import create_app, workload_overview
 from starlette.testclient import TestClient
 from training_stalls import telemetry_query, training_stall_alert_rows
@@ -105,6 +107,9 @@ class FakeSource:
             raise self._raises
         return self._table
 
+    def namespaces(self) -> frozenset[str]:
+        return frozenset(RL_PRODUCER_NAMESPACES)
+
     def health(self) -> FinelogHealth:
         return self._health
 
@@ -118,6 +123,7 @@ def _client(
     k8s_fleet: K8sFleet | None = None,
     loom_alerts: LoomAlertClient | None = None,
     slack_alerts: SlackAlertClient | None = None,
+    raise_server_exceptions: bool = True,
 ) -> TestClient:
     github = GithubSource(auth=None, timeout=5.0)
     return TestClient(
@@ -130,7 +136,8 @@ def _client(
             WandbSource(timeout=5.0),
             loom_alerts,
             slack_alerts,
-        )
+        ),
+        raise_server_exceptions=raise_server_exceptions,
     )
 
 
@@ -139,11 +146,14 @@ def _get(client: TestClient, sql: str, **params):
 
 
 class NamespaceSource(FakeSource):
-    """A finelog holding only some namespaces, answering the rest the way DataFusion does."""
+    """A finelog holding only some namespaces, and failing any query naming another."""
 
     def __init__(self, present: set[str], rows: pa.Table) -> None:
         super().__init__(rows)
-        self._present = present
+        self._present = frozenset(present)
+
+    def namespaces(self) -> frozenset[str]:
+        return self._present
 
     def query(self, sql: str, *, max_rows: int) -> pa.Table:
         self.queries.append(sql)
@@ -170,15 +180,15 @@ _PRODUCER_ROW = finelog_result(
 )
 
 
-def test_the_producer_census_answers_when_a_namespace_is_absent():
-    """A namespace the deployment has never held is dropped from the census rather than failing it."""
+def test_the_producer_census_never_queries_a_namespace_the_deployment_lacks():
+    """Naming an absent namespace fails the statement at plan time, so the census leaves it out."""
     source = NamespaceSource({"telemetry_v1.marinskyrl", "telemetry_v1.vllm"}, _PRODUCER_ROW)
 
     resp = _producers(_client(source))
 
     assert resp.status_code == 200
     assert len(resp.json()) == 2
-    assert any("telemetry_v1.harbor" in sql for sql in source.queries), "harbor was never attempted"
+    assert not any("telemetry_v1.harbor" in sql for sql in source.queries)
 
 
 def test_the_producer_census_reports_a_real_query_failure_rather_than_an_empty_table():
@@ -247,6 +257,29 @@ def test_oversized_result_is_a_400_with_guidance():
     resp = _get(_client(FakeSource(raises=QueryResultTooLargeError("query returned 500000 rows"))), "SELECT 1")
     assert resp.status_code == 400
     assert "narrow the time range" in resp.json()["error"]
+
+
+def test_alert_endpoints_return_non_firing_results_when_finelog_is_unavailable():
+    source = FakeSource(raises=FinelogUnavailableError("unavailable"))
+    client = _client(source)
+
+    assert client.get("/finelog/marin/alerts/query", params={"sql": "SELECT 1"}).json() == []
+    assert client.get("/finelog/marin/alerts/training_stalls").json() == [
+        {"cluster": "fleet", "job": "", "run": "", "phase": "idle", "reason": "healthy", "value": 0}
+    ]
+
+
+@pytest.mark.parametrize(
+    "path, params",
+    [
+        ("/finelog/marin/alerts/query", {"sql": "SELECT 1"}),
+        ("/finelog/marin/alerts/training_stalls", {}),
+    ],
+)
+def test_alert_endpoints_surface_invalid_finelog_results(path, params):
+    client = _client(FakeSource(raises=pa.ArrowInvalid("invalid result")), raise_server_exceptions=False)
+
+    assert client.get(path, params=params).status_code == 500
 
 
 def test_repeated_identical_panels_hit_finelog_once():
@@ -560,6 +593,46 @@ def test_training_stall_alert_selects_named_hero_run_and_resolves_on_progress():
     ]
 
 
+def test_training_telemetry_query_keeps_phase_history_and_bounds_progress():
+    now = datetime(2026, 7, 28, 12, tzinfo=UTC)
+    database = duckdb.connect()
+    database.execute(
+        """
+        CREATE TABLE telemetry_v1(
+            cluster VARCHAR,
+            run_id VARCHAR,
+            job_id VARCHAR,
+            execution_uid VARCHAR,
+            process_index INTEGER,
+            name VARCHAR,
+            value DOUBLE,
+            step BIGINT,
+            timestamp_ms BIGINT,
+            seq BIGINT
+        )
+        """
+    )
+    database.execute('CREATE VIEW "levanter.metrics" AS SELECT * FROM telemetry_v1')
+    database.execute("CREATE MACRO to_timestamp_millis(value) AS to_timestamp(value / 1000.0)")
+    run = HeroRun("cw-a", "/hero/job", "hero-a", now - timedelta(hours=3))
+    rows = [
+        ("phase", 1.0, None, now - timedelta(hours=2), 1),
+        ("progress_time_seconds", 10.0, 10, now - timedelta(minutes=45), 2),
+        ("progress_time_seconds", 20.0, 20, now - timedelta(minutes=5), 3),
+    ]
+    database.executemany(
+        "INSERT INTO telemetry_v1 VALUES ('cw-a', 'hero-a', '/hero/job/train', " "'execution-a', 0, ?, ?, ?, ?, ?)",
+        [(name, value, step, int(at.timestamp() * 1000), seq) for name, value, step, at, seq in rows],
+    )
+
+    result = database.execute(telemetry_query(now, (run,))).fetch_arrow_table().to_pylist()
+    by_name = {row["name"]: row for row in result}
+
+    assert set(by_name) == {"phase", "progress_time_seconds", "step"}
+    assert by_name["progress_time_seconds"]["value"] == 20.0
+    assert by_name["step"]["value"] == 20.0
+
+
 def test_training_stall_alert_gives_a_new_execution_its_own_initialization_window():
     now = datetime(2026, 7, 28, 12, tzinfo=UTC)
     task_states = finelog_result(
@@ -593,6 +666,76 @@ def test_training_stall_alert_gives_a_new_execution_its_own_initialization_windo
 
 def _hero_run(run_id: str) -> HeroRun:
     return HeroRun("cw-a", f"/u/{run_id}-coord", run_id, datetime(2026, 7, 28, 11, tzinfo=UTC))
+
+
+def test_phase_enrollment_discovers_recent_runs_then_probes_stale_active_runs_exactly():
+    now = datetime(2026, 8, 21, 12, tzinfo=UTC)
+    database = duckdb.connect()
+    database.execute(
+        """
+        CREATE TABLE "levanter.metrics"(
+            cluster VARCHAR,
+            run_id VARCHAR,
+            job_id VARCHAR,
+            execution_uid VARCHAR,
+            process_index BIGINT,
+            name VARCHAR,
+            timestamp_ms BIGINT,
+            seq BIGINT
+        )
+        """
+    )
+    database.execute("CREATE MACRO to_timestamp_millis(value) AS to_timestamp(value / 1000.0)")
+    database.executemany(
+        "INSERT INTO \"levanter.metrics\" VALUES (?, ?, ?, ?, 0, 'phase', ?, ?)",
+        [
+            (
+                "cw-a",
+                "hero-active",
+                "/u/hero-active-coord/train",
+                "attempt-active",
+                int((now - timedelta(hours=2)).timestamp() * 1000),
+                1,
+            ),
+            (
+                "cw-a",
+                "hero-recent",
+                "/u/hero-recent-coord/train",
+                "attempt-recent",
+                int((now - timedelta(minutes=5)).timestamp() * 1000),
+                2,
+            ),
+            (
+                "cw-a",
+                "hero-old",
+                "/u/hero-old-coord/train",
+                "attempt-old",
+                int((now - timedelta(hours=2)).timestamp() * 1000),
+                3,
+            ),
+        ],
+    )
+
+    recent_phase = database.execute(recent_phase_query(now)).fetch_arrow_table()
+    assert recent_phase.column("run_id").to_pylist() == ["hero-recent"]
+
+    active = (_hero_run("hero-active"),)
+    phase_history = database.execute(phase_execution_query(now, active)).fetch_arrow_table()
+    assert phase_history.column("run_id").to_pylist() == ["hero-active"]
+
+    task_states = finelog_result(
+        cluster=["cw-a"],
+        job=["/u/hero-active-coord"],
+        state_at=[now],
+        running_since=[now - timedelta(hours=3)],
+        running=[64],
+    )
+    runs = watched_runs(task_states, pa.concat_tables((recent_phase, phase_history)), now)
+
+    assert {(run.run_id, run.execution_uid) for run in runs} == {
+        ("hero-active", "attempt-active"),
+        ("hero-recent", "attempt-recent"),
+    }
 
 
 def _loss_windows(now: datetime, runs: tuple[HeroRun, ...], samples: list[tuple[str, datetime, float]]) -> pa.Table:

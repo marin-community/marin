@@ -18,6 +18,7 @@ from typing import Literal, cast
 
 import fsspec
 import yaml
+from pydantic import BaseModel
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
@@ -27,12 +28,15 @@ from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import sanitize_job_name
 from marin.external_dependencies import MARIN_SKYRL
+from marin.rollouts.catalog import RolloutRunKind, record_rollout_run, rollout_run_record
 from marin.training.training import LevanterCheckpoint
 
 _EXECUTION = "skyrl_execution"
 _LAUNCHER_PYTHON = "3.12"
 _MARINSKYRL_STAGING_ROOT = PurePosixPath("/tmp/marinskyrl")
 _TEMPORARY_OUTPUT_PREFIX = "skyrl"
+_TRACE_JOBS_SUBDIR = "trace_jobs"
+_TRAJECTORIES_SUBDIR = "trajectories"
 _LAUNCHER_DIAGNOSTIC_LINES = 20
 SKYRL_POLICY_LOCATION = "<skyrl-policy>"
 SKYRL_TEMPORARY_STORAGE_TTL_DAYS = 14
@@ -236,7 +240,7 @@ class ArtifactDataSource:
 
 @dataclass(frozen=True)
 class TaskTroveDataSource:
-    """A metadata-selected cohort from one packed TaskTrove Clean release."""
+    """A metadata-selected cohort from the compatibility RL view of a TaskTrove release."""
 
     step: ArtifactStep[Artifact]
     selection: TaskTroveSelection
@@ -384,6 +388,22 @@ class SkyRLModel(Artifact):
     iris_job_id: str
 
 
+class _SkyRLTerminalModel(BaseModel):
+    policy_export_uri: str
+    global_step: int
+    tokenizer_uri: str
+    tokenizer_revision: str
+    checkpoint_root: str
+    terminal_manifest_uri: str
+
+
+class _SkyRLLaunchResponse(BaseModel):
+    state: str
+    iris_job_id: str | None = None
+    failure: str | None = None
+    model: _SkyRLTerminalModel | None = None
+
+
 @dataclass(frozen=True)
 class SkyRLEvaluationModel:
     """A terminal SkyRL policy adapted to the shared evaluation model contract."""
@@ -460,31 +480,62 @@ def run_skyrl(config: SkyRLRunConfig) -> SkyRLModel:
             "job_name": sanitize_job_name(f"{config.request.run_id}-{config.request.attempt_id}"),
         },
     }
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", encoding="utf-8") as request_file:
-        json.dump(envelope, request_file, sort_keys=True)
-        request_file.flush()
-        completed = _run_launcher(_launcher_command(config.launcher_requirement, request_file.name))
-    if not completed.stdout.strip():
-        raise RuntimeError(
-            f"MarinSkyRL launcher exited {completed.returncode} without a terminal response:\n"
-            f"{completed.stderr.strip() or '(the launcher wrote nothing to stderr)'}"
+    response: _SkyRLLaunchResponse | None = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", encoding="utf-8") as request_file:
+            json.dump(envelope, request_file, sort_keys=True)
+            request_file.flush()
+            completed = _run_launcher(_launcher_command(config.launcher_requirement, request_file.name))
+        if not completed.stdout.strip():
+            raise RuntimeError(
+                f"MarinSkyRL launcher exited {completed.returncode} without a terminal response:\n"
+                f"{completed.stderr.strip() or '(the launcher wrote nothing to stderr)'}"
+            )
+        response = _SkyRLLaunchResponse.model_validate_json(completed.stdout)
+        if completed.returncode != 0 or response.state != "succeeded":
+            failure = response.failure or f"launcher exited {completed.returncode}"
+            raise RuntimeError(
+                f"MarinSkyRL attempt {config.request.attempt_id} failed: {failure}\n{completed.stderr.strip()}"
+            )
+        model = response.model
+        if model is None or response.iris_job_id is None:
+            raise ValueError("successful MarinSkyRL response requires model and iris_job_id")
+        result = SkyRLModel(
+            path=config.request.output.terminal_manifest_uri,
+            policy_export_uri=model.policy_export_uri,
+            global_step=model.global_step,
+            tokenizer_uri=model.tokenizer_uri,
+            tokenizer_revision=model.tokenizer_revision,
+            checkpoint_root=model.checkpoint_root,
+            terminal_manifest_uri=model.terminal_manifest_uri,
+            iris_job_id=response.iris_job_id,
         )
-    response = json.loads(completed.stdout)
-    if completed.returncode != 0 or response["state"] != "succeeded":
-        failure = response.get("failure") or f"launcher exited {completed.returncode}"
-        raise RuntimeError(
-            f"MarinSkyRL attempt {config.request.attempt_id} failed: {failure}\n{completed.stderr.strip()}"
+    except Exception:
+        _record_skyrl_run(config, "failed", response)
+        raise
+    _record_skyrl_run(config, "succeeded", response)
+    return result
+
+
+def _record_skyrl_run(config: SkyRLRunConfig, status: str, response: _SkyRLLaunchResponse | None) -> None:
+    output = config.request.output
+    record_rollout_run(
+        rollout_run_record(
+            run_id=config.request.run_id,
+            attempt_id=config.request.attempt_id,
+            run_kind=RolloutRunKind.REINFORCEMENT_LEARNING,
+            producer="skyrl",
+            status=status,
+            rollout_uri=prefix_join(output.attempts_root, _TRAJECTORIES_SUBDIR),
+            storage_format="skyrl_trajectory",
+            artifact_uri=output.terminal_manifest_uri,
+            model=config.request.model.identity,
+            job_id=response.iris_job_id if response is not None else None,
+            attributes={
+                "checkpoint_root": output.checkpoint_root,
+                "trace_jobs_uri": prefix_join(output.attempts_root, _TRACE_JOBS_SUBDIR),
+            },
         )
-    model = response["model"]
-    return SkyRLModel(
-        path=config.request.output.terminal_manifest_uri,
-        policy_export_uri=model["policy_export_uri"],
-        global_step=model["global_step"],
-        tokenizer_uri=model["tokenizer_uri"],
-        tokenizer_revision=model["tokenizer_revision"],
-        checkpoint_root=model["checkpoint_root"],
-        terminal_manifest_uri=model["terminal_manifest_uri"],
-        iris_job_id=response["iris_job_id"],
     )
 
 
@@ -520,8 +571,8 @@ def skyrl_step(spec: SkyRLSpec, execution: IrisSkyRLExecution) -> ArtifactStep[S
         )
         retention_overrides = (
             f"++trainer.max_ckpts_to_keep={spec.retention.resume_checkpoint_count}",
-            f"++terminal_bench_config.trials_dir='{prefix_join(attempts_root, 'trace_jobs')}'",
-            f"++generator.trajectory_retention.output_path='{prefix_join(attempts_root, 'trajectories')}'",
+            f"++terminal_bench_config.trials_dir='{prefix_join(attempts_root, _TRACE_JOBS_SUBDIR)}'",
+            f"++generator.trajectory_retention.output_path='{prefix_join(attempts_root, _TRAJECTORIES_SUBDIR)}'",
         )
         request = SkyRLLaunchRequest(
             run_id=f"{step_name}-{spec.version}",

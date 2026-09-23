@@ -15,6 +15,13 @@ The two release lanes have independent dependency environments, manifests,
 qualification gates, and promotion inputs. Advancing tpu-inference does not
 rebuild a GPU wheel. Promoting a GPU artifact does not rebuild the TPU pair.
 
+Prefer one exact vLLM source commit for the GPU and TPU lanes when it passes
+both device gates, but never make one lane wait solely to preserve alignment.
+If compatibility or qualification requires different source pins, record the
+reason and prefer a later common commit once it passes both gates. The
+artifacts, dependency environments, gates, promotion inputs, and release
+cadences remain independent even while the source commits match.
+
 ## Refresh the TPU pair
 
 Refresh `vllm` and `tpu-inference` as one `tpu-vllm` unit and one Marin PR. The

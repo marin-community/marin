@@ -14,9 +14,11 @@ from types import SimpleNamespace
 import click
 import pytest
 from click.testing import CliRunner
+from finestore.eval import EvaluationStore
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.rpc import job_pb2
 from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyRunConfig
+from marin.evaluation.evalchemy.runtime import EVALCHEMY_REQUIRED_EXTRAS
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.harbor.driver_config import (
     HARBOR_RUNTIME,
@@ -25,8 +27,18 @@ from marin.evaluation.harbor.driver_config import (
     ValidatedHarborConfig,
 )
 from marin.evaluation.hardware import AcceleratorChoice, Platform
+from marin.evaluation.lm_eval_samples import samples_from_lm_eval
 from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint, ServeConfig
-from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, EvalRef, RunStatus, TaskCoverage, read_record
+from marin.evaluation.records import (
+    EVALCHEMY_INFRASTRUCTURE_ERROR,
+    BenchmarkMetadataRef,
+    BenchmarkMetricRef,
+    EvalRef,
+    MetricKind,
+    RunStatus,
+    TaskCoverage,
+    read_record,
+)
 from marin.evaluation.runner import (
     Evaluation,
     EvaluationBatch,
@@ -39,12 +51,18 @@ from marin.evaluation.runner import (
 )
 from marin.evaluation.serving_config import inference_config_for_model
 from marin.external_dependencies import EVALCHEMY
+from marin.inference.config import EffectiveServing
 from marin.inference.iris import RemoteInferenceSession
 from marin.inference.types import OpenAIEndpoint, RunningModel
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.evaluation.cli import cli, resolve_model_config
-from experiments.evaluation.evals import EVALS, EvalchemyDefinition, HarborDefinition, resolve_eval_keys
+from experiments.evaluation.evals import (
+    EVALS,
+    EvalchemyDefinition,
+    HarborDefinition,
+    resolve_eval_keys,
+)
 from experiments.evaluation.launch import (
     LaunchSpec,
     build_evaluation_batch,
@@ -89,6 +107,23 @@ def _install_fake_harbor_preflight(
                     ),
                     max_input_tokens=_PREFLIGHT_MAX_INPUT_TOKENS,
                     max_output_tokens=_PREFLIGHT_MAX_OUTPUT_TOKENS,
+                    benchmark=BenchmarkMetadataRef(
+                        schema_version=1,
+                        task="aime",
+                        primary_metric="reward",
+                        metric_kind=MetricKind.CONTINUOUS,
+                        metrics=(
+                            BenchmarkMetricRef(
+                                name="reward",
+                                source_name="reward",
+                                kind=MetricKind.CONTINUOUS,
+                                higher_is_better=True,
+                            ),
+                        ),
+                        n_benchmark=1,
+                        n_attempted=1,
+                    ),
+                    trials_per_task=1,
                 )
             )
         return tuple(configs)
@@ -190,17 +225,66 @@ def _lm_eval_generation(doc_id: int, metric: str, score: float, response: str) -
 def _write_evalchemy_output(
     output_dir: str, task_dir: str, results: dict[str, dict[str, float]], samples: dict[str, list[dict]]
 ) -> None:
-    model_dir = StoragePath(output_dir) / task_dir / "model"
-    model_dir.mkdirs()
-    (model_dir / "results_20260807.json").write_text(json.dumps({"results": results}))
-    for task, rows in samples.items():
-        (model_dir / f"samples_{task}_20260807.jsonl").write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+    sample_counts = {task: max((int(row["doc_id"]) for row in rows), default=-1) + 1 for task, rows in samples.items()}
+    benchmark_metadata = {}
+    canonical_results = {}
+    primary_sources = {}
+    for task, count in sample_counts.items():
+        source_name = next(name.split(",", 1)[0] for name in results[task] if "stderr" not in name)
+        canonical_name = "accuracy" if source_name in {"acc", "exact_match"} else source_name
+        primary_sources[task] = source_name
+        benchmark_metadata[task] = {
+            "schema_version": 1,
+            "task": task,
+            "primary_metric": canonical_name,
+            "metric_kind": "binary",
+            "metrics": [
+                {
+                    "name": canonical_name,
+                    "source_name": source_name,
+                    "kind": "binary",
+                    "higher_is_better": True,
+                }
+            ],
+            "n_benchmark": count,
+            "n_attempted": count,
+        }
+        canonical_results[task] = {canonical_name: next(iter(results[task].values()))}
+
+    store = EvaluationStore.open(output_dir, writer_id="evalchemy-test")
+    try:
+        store.add_source_artifact(
+            f"evalchemy/{task_dir}/native/results_test.json",
+            json.dumps(
+                {
+                    "results": results,
+                    "benchmark_metadata": benchmark_metadata,
+                    "canonical_results": canonical_results,
+                }
+            ).encode(),
+            content_type="application/json",
+        )
+        for task, rows in samples.items():
+            normalized_task = task_dir if len(samples) == 1 else f"{task_dir}/{task}"
+            payload = ("\n".join(json.dumps(row) for row in rows) + "\n").encode()
+            store.add_source_artifact(
+                f"evalchemy/{task_dir}/native/samples_{task}_native.jsonl",
+                payload,
+                content_type="application/x-ndjson",
+            )
+            for row in rows:
+                for sample in samples_from_lm_eval(normalized_task, row, primary_sources[task]):
+                    store.add_sample(sample)
+        store.seal()
+    finally:
+        store.close()
 
 
-def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp_path):
+def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp_path, monkeypatch):
     records = tmp_path / "records"
     endpoint = "https://iris.example/proxy/t/token/inference/v1"
     session = _remote_session(endpoint)
+    session = replace(session, effective_serving=EffectiveServing(2, 1, 1, 1, 4096))
     batch = EvaluationBatch(
         group_id="group",
         user="tester",
@@ -224,6 +308,8 @@ def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp
         provenance=LaunchProvenance(git_sha="abc", launch_host="host"),
         submission_cluster="marin",
     )
+    catalog_rows = []
+    monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", catalog_rows.append)
 
     with pytest.raises(RuntimeError, match="1 of 2 evals failed"):
         evaluate_batch(batch, session, orchestrator_job_id="/orchestrator", env_vars={})
@@ -235,26 +321,35 @@ def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp
     assert failed.log_tails == {"eval": ("failure detail",)}
     assert succeeded.status is RunStatus.SUCCEEDED
     assert succeeded.metrics == {"task": {"accuracy": 0.75}}
+    assert succeeded.serving is not None
+    assert succeeded.serving.effective
+    assert succeeded.serving.tensor_parallel_size == 2
+    assert succeeded.serving.max_model_len == 4096
+    assert failed.serving == succeeded.serving
     assert succeeded.provenance.eval_runtime == "test-runtime"
     assert succeeded.model.config is not None
     assert succeeded.model.config.model_dump(mode="json") == json.loads(json.dumps(asdict(batch.model)))
     assert (tmp_path / "success" / "endpoint.txt").read_text() == endpoint
+    assert [(row.run_id, row.status) for row in catalog_rows] == [
+        ("run-failure", "failed"),
+        ("run-success", "succeeded"),
+    ]
+    assert all(row.storage_format == "finestore" for row in catalog_rows)
 
 
-def test_evalchemy_executor_classifies_archive_export_failure(tmp_path, monkeypatch):
+def test_evalchemy_executor_classifies_missing_native_archive(tmp_path, monkeypatch):
     output_dir = str(StoragePath("memory://evalchemy-export-failure") / tmp_path.name)
-    model_dir = StoragePath(output_dir) / "gsm8k_5shot" / "model"
-    model_dir.mkdirs()
-    (model_dir / "results_20260807.json").write_text(
-        json.dumps({"results": {"gsm8k": {"exact_match,flexible-extract": 0.75}}})
-    )
-    (model_dir / "samples_gsm8k_20260807.jsonl").write_text('{"unterminated": "sample\n')
     monkeypatch.setattr(
         "marin.evaluation.evalchemy.runner._run_evalchemy_child",
         lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
     )
     session = _remote_session()
-    executor = EvalchemyExecutor(EvalchemyRunConfig(name="gsm8k", tasks=(EvalTaskConfig(name="gsm8k", num_fewshot=5),)))
+    executor = EvalchemyExecutor(
+        EvalchemyRunConfig(
+            name="gsm8k",
+            tasks=(EvalTaskConfig(name="gsm8k", num_fewshot=5),),
+        )
+    )
 
     with pytest.raises(EvaluationError) as exc_info:
         executor(session, output_dir, {})
@@ -286,7 +381,12 @@ def test_evalchemy_executor_excludes_infrastructure_failures(tmp_path, monkeypat
         "marin.evaluation.evalchemy.runner._run_evalchemy_child",
         lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
     )
-    executor = EvalchemyExecutor(EvalchemyRunConfig(name="mmlu", tasks=(EvalTaskConfig(name="mmlu", num_fewshot=5),)))
+    executor = EvalchemyExecutor(
+        EvalchemyRunConfig(
+            name="mmlu",
+            tasks=(EvalTaskConfig(name="mmlu", num_fewshot=5),),
+        )
+    )
 
     outcome = executor(_remote_session(), partial_output_dir, {})
 
@@ -296,12 +396,13 @@ def test_evalchemy_executor_excludes_infrastructure_failures(tmp_path, monkeypat
     }
     assert outcome.coverage == {
         "mmlu_5shot/mmlu_anatomy": TaskCoverage(
+            n_benchmark=2,
             n_attempted=2,
             n_scored=1,
             n_correct=1,
             errors={EVALCHEMY_INFRASTRUCTURE_ERROR: 1},
         ),
-        "mmlu_5shot/mmlu_astronomy": TaskCoverage(n_attempted=1, n_scored=1, n_correct=1),
+        "mmlu_5shot/mmlu_astronomy": TaskCoverage(n_benchmark=1, n_attempted=1, n_scored=1, n_correct=1),
     }
 
     failed_output_dir = f"file://{tmp_path / 'failed'}"
@@ -325,11 +426,13 @@ def test_evalchemy_executor_excludes_infrastructure_failures(tmp_path, monkeypat
     assert exc_info.value.status is RunStatus.INFRA_FAILED
     assert exc_info.value.coverage == {
         "mmlu_5shot/mmlu_anatomy": TaskCoverage(
+            n_benchmark=1,
             n_attempted=1,
             n_scored=0,
             errors={EVALCHEMY_INFRASTRUCTURE_ERROR: 1},
         ),
         "mmlu_5shot/mmlu_astronomy": TaskCoverage(
+            n_benchmark=1,
             n_attempted=1,
             n_scored=0,
             errors={EVALCHEMY_INFRASTRUCTURE_ERROR: 1},
@@ -542,7 +645,10 @@ def test_build_evaluation_batch_routes_declared_verifier_host_secrets(monkeypatc
             "env:DAYTONA_API_KEY",
             "gcp-secret://projects/hai-gcp-models/secrets/DAYTONA_EVAL_API_KEY/versions/latest",
         ),
-        "TOGETHER_API_KEY": ("env:TOGETHER_API_KEY",),
+        "TOGETHER_API_KEY": (
+            "env:TOGETHER_API_KEY",
+            "gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest",
+        ),
     }
     assert batch.evaluations[0].secret_env_keys == ("DAYTONA_API_KEY", "TOGETHER_API_KEY")
 
@@ -575,7 +681,44 @@ def test_build_evaluation_batch_records_evalchemy_benchmark_extras(monkeypatch):
         "tester",
     )
 
-    assert batch.evaluations[0].identity.eval_runtime == EVALCHEMY.requirement(("math500",))
+    assert batch.evaluations[0].identity.eval_runtime == EVALCHEMY.requirement((*EVALCHEMY_REQUIRED_EXTRAS, "math500"))
+
+
+def test_build_evaluation_batch_routes_and_records_financebench_judge(monkeypatch):
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    definition = EvalchemyDefinition(
+        name="financebench",
+        config_path=Path("experiments/evaluation/configs/evalchemy/financebench.yaml"),
+    )
+    spec = LaunchSpec(
+        model=models()["qwen3-8b"],
+        evals=(),
+        evalchemy_definitions=(definition,),
+        harbor_definitions=(),
+        platform=Platform.TPU,
+        accelerator=None,
+        limit=1,
+        records_prefix="memory://records",
+        submission_cluster="marin",
+        federated_cluster=None,
+        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
+    )
+
+    batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
+
+    evaluation = batch.evaluations[0]
+    assert batch.secret_env == {
+        "JUDGE_API_KEY": (
+            "env:TOGETHER_API_KEY",
+            "gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest",
+        )
+    }
+    assert evaluation.secret_env_keys == ("JUDGE_API_KEY",)
+    assert evaluation.identity.eval_ref.evalchemy.judge.model_dump() == {
+        "base_url": "https://api.together.xyz/v1",
+        "model": "openai/gpt-oss-120b",
+    }
+    assert "TOGETHER_API_KEY" not in evaluation.identity.eval_ref.model_dump_json()
 
 
 def test_file_evalchemy_chat_template_overrides_model_default(monkeypatch):
@@ -607,6 +750,34 @@ def test_file_evalchemy_chat_template_overrides_model_default(monkeypatch):
     evalchemy = batch.evaluations[0].identity.eval_ref.evalchemy
     assert evalchemy is not None
     assert evalchemy.apply_chat_template is True
+
+
+def test_seed_override_replaces_the_evalchemy_config_seed_in_records(monkeypatch):
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    definition = EvalchemyDefinition(
+        name="ifeval",
+        config_path=Path("experiments/evaluation/configs/evalchemy/ifeval.yaml"),
+    )
+    spec = LaunchSpec(
+        model=models()["qwen3-8b"],
+        evals=(),
+        evalchemy_definitions=(definition,),
+        harbor_definitions=(),
+        platform=Platform.TPU,
+        accelerator=None,
+        limit=1,
+        seed=51,
+        records_prefix="memory://records",
+        submission_cluster="marin",
+        federated_cluster=None,
+        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
+    )
+
+    batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
+
+    evalchemy = batch.evaluations[0].identity.eval_ref.evalchemy
+    assert evalchemy is not None
+    assert evalchemy.seed == 51
 
 
 def test_registry_family_travels_into_the_record_the_launcher_writes(monkeypatch):
@@ -649,6 +820,7 @@ def test_registry_family_travels_into_the_record_the_launcher_writes(monkeypatch
         (128, 8192, 128, 1),
         (8192, 2048, 2048, 0),
         (None, 8192, 8192, 0),
+        (None, None, None, 0),
     ],
 )
 def test_evalchemy_generation_budget_preserves_benchmark_protocol(
@@ -755,7 +927,7 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
         "aime-policy",
     ]
     ifeval = batch.evaluations[1].identity.eval_ref
-    assert batch.evaluations[1].identity.eval_runtime == EVALCHEMY.requirement(("ifeval",))
+    assert batch.evaluations[1].identity.eval_runtime == EVALCHEMY.requirement((*EVALCHEMY_REQUIRED_EXTRAS, "ifeval"))
     assert ifeval.model_dump(mode="json", exclude_none=True) == {
         "name": "ifeval",
         "mechanism": "evalchemy",
@@ -771,7 +943,6 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
         ],
         "evalchemy": {
             "apply_chat_template": True,
-            "max_gen_toks": 2048,
             "max_eval_instances": 2,
             "num_concurrent": 16,
             "batch_size": "1",
@@ -785,7 +956,30 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
     assert evaluation.identity.eval_ref.model_dump(mode="json", exclude_none=True) == {
         "name": "aime-policy",
         "mechanism": "harbor",
-        "tasks": [],
+        "tasks": [
+            {
+                "name": "aime",
+                "generation": False,
+                "unsafe_code": False,
+                "completion_only": False,
+                "benchmark": {
+                    "schema_version": 1,
+                    "task": "aime",
+                    "primary_metric": "reward",
+                    "metric_kind": "continuous",
+                    "metrics": [
+                        {
+                            "name": "reward",
+                            "source_name": "reward",
+                            "kind": "continuous",
+                            "higher_is_better": True,
+                        }
+                    ],
+                    "n_benchmark": 1,
+                    "n_attempted": 1,
+                },
+            }
+        ],
         "harbor": {
             "dataset": "aime",
             "version": "1.0",
@@ -811,6 +1005,16 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
         assert driver_env["DAYTONA_API_KEY"] == "daytona-key"
         captured["config"] = config
         captured["overlay"] = overlay
+        job_dir = Path(overlay.jobs_dir) / overlay.job_name
+        job_dir.mkdir(parents=True, exist_ok=True)
+        (job_dir / "result.json").write_text(
+            json.dumps(
+                {
+                    "n_total_trials": 1,
+                    "benchmark_metadata": [config.benchmark.model_dump(mode="json")],
+                }
+            )
+        )
         trial_dir = Path(overlay.jobs_dir) / overlay.job_name / "trial-one"
         trial_dir.mkdir(parents=True, exist_ok=True)
         (trial_dir / "result.json").write_text('{"task_name":"trial-one","verifier_result":{"rewards":{"reward":1}}}')
@@ -837,7 +1041,7 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
         {"DAYTONA_API_KEY": "daytona-key"},
     )
 
-    assert outcome.metrics["aime"]["accuracy"] == 1.0
+    assert outcome.canonical_metrics["aime"]["reward"] == 1.0
     assert captured["overlay"].task_limit == 2
     assert captured["overlay"].served_model == "served-qwen3-8b"
     assert captured["overlay"].endpoint_url == "https://iris.example/capability/v1"

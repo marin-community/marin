@@ -508,10 +508,12 @@ class ReadView(_ReadOperations):
     def __init__(self, root: str, snapshot: ArchiveSnapshot | None = None) -> None:
         self.root = root
         self._layout = FineStoreLayout(self.root)
-        archive_metadata = validate_archive(self._layout)
+        # The marker only distinguishes a v1 archive from an empty root: v1 archives have no
+        # HEAD, and read_snapshot validates the format version HEAD carries. A missing marker
+        # is expected under a lifecycle rule that expires write-once objects, and the next
+        # writer open recreates it.
+        validate_archive(self._layout)
         self._snapshot = snapshot or read_snapshot(self._layout)
-        if archive_metadata is None and self._snapshot.token is not None:
-            raise ValueError(f"archive at {self.root} has HEAD but no format marker")
         self._meta_cache: dict[str, TableMetadata] = {}
 
     @property

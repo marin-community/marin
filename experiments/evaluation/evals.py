@@ -13,17 +13,17 @@ from types import MappingProxyType
 
 from marin.evaluation.evalchemy.config import EvalchemyConfig
 from marin.evaluation.evalchemy.runner import (
-    DEFAULT_MAX_GEN_TOKS,
     DEFAULT_NUM_CONCURRENT,
     EvalchemyRunConfig,
     EvalchemyRuntimeConfig,
 )
+from marin.evaluation.evalchemy.runtime import EVALCHEMY_REQUIRED_EXTRAS
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.harbor.agent_context import MODEL_INFO_KEY, served_model_info
 from marin.evaluation.harbor.driver_config import HARBOR_RUNTIME, ValidatedHarborConfig
 from marin.evaluation.harbor.runner import HarborExecutor
 from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.records import EvalchemyRef, EvalRef, EvalTaskRef, HarborRef
+from marin.evaluation.records import EvalchemyJudgeRef, EvalchemyRef, EvalRef, EvalTaskRef, HarborRef
 from marin.evaluation.runner import EvalExecutor
 from marin.external_dependencies import EVALCHEMY
 from rigging.secrets import SecretSpec
@@ -41,6 +41,11 @@ _DAYTONA_SECRET_ENV: Mapping[str, SecretSpec] = MappingProxyType(
         )
     }
 )
+_TOGETHER_API_KEY_SECRET: SecretSpec = (
+    "env:TOGETHER_API_KEY",
+    "gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest",
+)
+_VERIFIER_SECRET_ENV: Mapping[str, SecretSpec] = MappingProxyType({"TOGETHER_API_KEY": _TOGETHER_API_KEY_SECRET})
 
 # Capped ``-smoke`` variants remain unfamilied because scoring surfaces exclude them.
 _EVAL_FAMILIES: Mapping[str, str] = MappingProxyType({"gsm8k": "gsm8k", "gsm8k-0shot": "gsm8k"})
@@ -52,6 +57,15 @@ class EvalchemyDefinition:
     config_path: Path
     secret_env: Mapping[str, SecretSpec] = field(default_factory=dict)
     family: str | None = None
+
+    def secret_env_for(self, config: EvalchemyRunConfig) -> Mapping[str, SecretSpec]:
+        secret_env = dict(self.secret_env)
+        if config.judge is not None:
+            judge_secret = config.judge.api_key
+            if "JUDGE_API_KEY" in secret_env and secret_env["JUDGE_API_KEY"] != judge_secret:
+                raise ValueError("Evalchemy definition conflicts with judge.api_key for JUDGE_API_KEY")
+            secret_env["JUDGE_API_KEY"] = judge_secret
+        return MappingProxyType(secret_env)
 
     def record_ref_for(self, config: EvalchemyRunConfig) -> EvalRef:
         return EvalRef(
@@ -79,6 +93,11 @@ class EvalchemyDefinition:
                 extra_gen_kwargs=dict(config.extra_gen_kwargs),
                 extra_model_args=dict(config.extra_model_args),
                 max_length=config.max_length,
+                judge=(
+                    EvalchemyJudgeRef(base_url=config.judge.base_url, model=config.judge.model)
+                    if config.judge is not None
+                    else None
+                ),
             ),
         )
 
@@ -88,7 +107,7 @@ class EvalchemyDefinition:
         model_max_gen_toks = model.generation.max_gen_toks
         max_gen_toks = config.max_gen_toks
         if model_max_gen_toks is not None:
-            if source.max_tokens is None or model_max_gen_toks < max_gen_toks:
+            if max_gen_toks is None or model_max_gen_toks < max_gen_toks:
                 max_gen_toks = model_max_gen_toks
             elif model_max_gen_toks > max_gen_toks:
                 logger.warning(
@@ -124,14 +143,22 @@ class HarborDefinition:
     def secret_env_for(self, config: ValidatedHarborConfig) -> Mapping[str, SecretSpec]:
         secret_env = dict(_DAYTONA_SECRET_ENV) if config.environment == _DAYTONA_ENVIRONMENT_TYPE else {}
         for key in config.verifier_env_keys:
-            secret_env.setdefault(key, (f"env:{key}",))
+            secret_env.setdefault(key, _VERIFIER_SECRET_ENV.get(key, (f"env:{key}",)))
         return MappingProxyType(secret_env)
 
     def record_ref_for(self, config: ValidatedHarborConfig, runtime_task_limit: int | None) -> EvalRef:
+        benchmark = config.benchmark_for(runtime_task_limit)
         return EvalRef(
             name=self.name,
             mechanism="harbor",
             family=self.family,
+            tasks=(
+                EvalTaskRef(
+                    name=config.record_dataset,
+                    num_fewshot=None,
+                    benchmark=benchmark,
+                ),
+            ),
             harbor=HarborRef(
                 dataset=config.record_dataset,
                 version=config.record_revision,
@@ -222,7 +249,7 @@ def evalchemy_run_config(name: str, config: EvalchemyConfig) -> EvalchemyRunConf
         name=name,
         tasks=tuple(tasks),
         apply_chat_template=config.apply_chat_template or False,
-        max_gen_toks=config.max_tokens or DEFAULT_MAX_GEN_TOKS,
+        max_gen_toks=config.max_tokens,
         max_eval_instances=config.limit,
         num_concurrent=num_concurrent,
         batch_size=config.batch_size,
@@ -230,7 +257,10 @@ def evalchemy_run_config(name: str, config: EvalchemyConfig) -> EvalchemyRunConf
         extra_gen_kwargs=extra_gen_kwargs,
         extra_model_args=extra_model_args,
         max_length=config.max_length,
-        runtime=EvalchemyRuntimeConfig(requirement=EVALCHEMY.requirement(config.runtime_extras)),
+        runtime=EvalchemyRuntimeConfig(
+            requirement=EVALCHEMY.requirement((*EVALCHEMY_REQUIRED_EXTRAS, *config.runtime_extras))
+        ),
+        judge=config.judge,
     )
 
 

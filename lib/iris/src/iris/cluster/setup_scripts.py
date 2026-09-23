@@ -76,9 +76,9 @@ def default_setup_script(
     # --frozen when a lockfile is present skips resolution; ConfigMap-based
     # workdirs may drop uv.lock (>1MB limit), so fall back to a normal resolve.
     frozen_flag = "$([ -f uv.lock ] && echo '--frozen' || echo '')"
-    # Symlink wheels from the uv cache into the venv instead of copying; works
-    # across bind mounts.
-    link_mode_flag = "--link-mode symlink"
+    # Clone wheels from the uv cache into the venv. CoreWeave uses reflinks on
+    # node-local XFS; uv falls back to copies when clone-on-write is unavailable.
+    link_mode_flag = "--link-mode clone"
     target = _uv_sync_target(packages)
     extra_flags = _extra_flags(extras)
 
@@ -95,7 +95,6 @@ def default_setup_script(
         ]
         if part
     )
-
     lines = [
         "set -e",
         'cd "$IRIS_WORKDIR"',
@@ -177,7 +176,7 @@ PY
   if [ -n "$_cuda13_version" ]; then
     echo "restoring CUDA 13 library precedence for $_cuda13_package"
     uv pip install --python "$IRIS_VENV/bin/python" \
-      --link-mode symlink \
+      --link-mode clone \
       --reinstall-package "$_cuda13_package" \
       "$_cuda13_package==$_cuda13_version"
   fi
@@ -194,7 +193,7 @@ def iris_runtime_setup_script() -> str:
     install only warns, so it never fails the job.
     """
     pkgs = " ".join(shlex.quote(p) for p in _IRIS_RUNTIME_DEPS)
-    pip_cmd = " ".join(["uv pip install", "--link-mode symlink", pkgs])
+    pip_cmd = " ".join(["uv pip install", "--link-mode clone", pkgs])
     return (
         'cd "$IRIS_WORKDIR" 2>/dev/null || true\n'
         'if [ -d "$IRIS_VENV" ]; then\n'

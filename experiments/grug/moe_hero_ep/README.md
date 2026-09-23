@@ -41,6 +41,100 @@ The attention, shared-expert, language-model-head, and optimizer states use the 
 Bounded diagnostics write metrics only by default. `--save-checkpoints` writes checkpoints below
 `--checkpoint-path` and resumes from the newest complete checkpoint.
 
+## Hero cutovers and W&B lineage
+
+```python
+from experiments.grug.moe_hero_ep.checkpoints import hero_checkpoint_paths
+
+paths = hero_checkpoint_paths()
+```
+
+The function returns permanent checkpoint paths for the current run and its ancestors, in step order.
+Pass a run ID to select another run. The launcher and function share `CURRENT_HERO_RUN_ID` in [`current_run.py`](current_run.py).
+
+Use the [deployment checklist](../../../.agents/skills/deploy-hero-change/SKILL.md)
+for preflight, the 200-step trial, and rollback. `current_run.py` records the
+current run ID. `trigger_hero.sh` records the handoff checkpoint and W&B fork point.
+Update the run ID, handoff checkpoint, and fork point together and land them on main.
+Record the old run's exact launch SHA and command for rollback.
+The checkpoint must be complete and protected from cleanup through the trial.
+
+Both commands below require `WANDB_API_KEY`, an authenticated GitHub CLI (`gh`),
+and a pristine checkout. Fork creation requires fetched main; subsequent launches
+use the same SHA recorded on the child, even if main advances.
+
+For checkpoint `step-N`, the first replayed update logs `global_step=N`. Find the
+parent row with `global_step=N-1` and use its actual W&B `_step` in
+`WANDB_FORK_FROM='<parent-run-id>?_step=<history-step>'`. Inspect the parent with
+`wandb.Api().run("marin-community/marin_moe/<parent>")` and
+`run.scan_history(keys=["_step", "global_step"], min_step=N-2, max_step=N+1)`.
+These bounds use W&B `_step`; if the indices differ or the row is missing,
+adjust the history range and locate `global_step=N-1` explicitly before forking.
+Do not inherit parent results for the replayed updates.
+
+Create the child tracker once, outside training retry loops:
+
+```bash
+experiments/grug/moe_hero_ep/trigger_hero.sh fork-wandb
+```
+
+After preflight and confirmation that the old coordinator is terminal, submit:
+
+```bash
+experiments/grug/moe_hero_ep/trigger_hero.sh launch
+```
+
+For recovery, verify no child coordinator is live, then use `launch` from the
+recorded SHA. Do not fork again. For rollback, use the old run's recorded revision
+and command with `IRIS_USER=marin`. One operator owns submissions; verify exactly
+one live coordinator after launch.
+
+W&B forks preserve history, while `--initialize-from-checkpoint` restores training
+state. Confirm new child progress from its Finelog execution, not inherited W&B
+rows. Before submission, the launcher posts source SHA, run and coordinator IDs,
+fork point, and checkpoint to [#8506](https://github.com/marin-community/marin/issues/8506);
+a failed post aborts submission. Iris also records `MARIN_PROVENANCE`.
+
+## Coordinated garbage collection
+
+The scaling-ladder launcher, including the production hero launched by `trigger_hero.sh`,
+enables coordinated GC every 100 completed training steps. For diagnostics, pass
+`--gc-interval 100` to `python -m experiments.grug.moe_hero_ep.launch_diagnostics`.
+Other callers can set `gc_interval=100` in `hero_grug_trainer_config`; its default `None`
+preserves automatic Python garbage collection. The launcher distributes one configuration to all ranks. After ten
+training steps in each process (including after resume), disable automatic cyclic collection
+and collect once. Then a training hook collects at completed global steps divisible by the
+interval, after evaluation hooks and before checkpoint work. It also collects on the forced
+final callback pass. Training collectives bound rank skew; GC adds no barriers. Collect after each
+evaluation hook as well, so cycles holding temporary eval buffers do not wait for the next periodic boundary.
+Reference-count deallocation continues. The previous GC policy is restored on exit.
+
+`throughput/gc_time` records local startup and hook collection time when GC runs; the `garbage_collection`
+profiler annotation also covers evaluation cleanup. Evaluation cleanup is included in callback
+and iteration time. `throughput/checkpoint_time` includes the save-decision broadcast and any
+synchronous checkpoint work. `throughput/iteration_time` includes batch loading, training,
+callbacks, checkpoint work, and GC. The existing `throughput/duration` excludes loading,
+callbacks, checkpoints, and GC. Tracker steps are zero-based: collections after completed updates
+100/200/300 appear at x=99/199/299. Use elapsed time per update for comparisons.
+
+The [single-rack validation](https://iris.oa.dev/#/job/%2Fmwittmann%2Fgc-sync-9205-hook-20260917-coord)
+used the full model with one sequence per GPU on 64 GPUs. Across 300 measured updates after ten
+warmup steps, elapsed time including initial and final collection fell from 795.576 to 776.003
+seconds (2.46%; 2.652 to 2.587 seconds/update). Before the final callback pass, elapsed time fell
+from 795.575 to 774.700 seconds (2.62%). Across all ranks, automatic GC produced 72 full
+collections across 48 steps; coordinated GC produced one collection per rank after warmup, at
+global updates 100/200/300, and on normal completion at global update 310. Scheduled collections ran through
+the training hook before checkpoint decisions. The slowest rank's periodic collections took
+1.15–1.22 seconds; final collection took up to 1.30 seconds.
+
+Both arms had identical sampled live HBM (35.094 GiB per rank) and allocator peaks (111.840 GiB),
+with no increase above their post-warmup baselines. Live memory was sampled every ten measured
+steps and at completion; the allocator peak includes warmup. The largest per-rank RSS increase in treatment was
+54.4 MiB above its post-warmup baseline. This single pair exercised checkpoint decisions with writes
+and evaluation disabled. The result supports the mechanism and short-term memory behavior at this
+batch size. Cycles can still retain device buffers between collections.
+See [#9205](https://github.com/marin-community/marin/issues/9205).
+
 ## Why this recipe
 
 [#8549](https://github.com/marin-community/marin/pull/8549) selected the ragged transport in a
@@ -58,7 +152,7 @@ compute-scaled optimizer values stay constant across a sweep.
 
 | option | effect |
 | --- | --- |
-| `--num-experts` | routed expert count. Must divide the 64-way expert axis. |
+| `--num-experts` | routed expert count. Must be divisible by `--expert-axis-size` times `--context-axis-size`, the expert bank's storage split (64 by default). |
 | `--intermediate-dim` | routed expert width |
 | `--num-experts-per-token` | routed top-k |
 | `--latent-dim` | routed input and output width |
@@ -77,8 +171,13 @@ The selected E384 model runs at expert width 3072 and receiver capacity factor 1
 
 | option | effect |
 | --- | --- |
+| `--gc-interval` | opts into cyclic GC at shared completed-step boundaries after warmup |
 | `--dp-racks` | sets the data-parallel rack count; `--batch-size` stays global |
 | `--batch-size` | sets global sequences per step and the optimizer token budget |
+| `--seq-len` | sets sequence length; the optimizer uses the resulting token budget |
+| `--context-axis-size`, `--expert-axis-size` | divide each rack between context and expert parallelism |
+| `--qk-mult` | multiplies Q before attention; default 1.3, extension recipe 1.84 |
+| `--restore-from` | restores a checkpoint while keeping outputs under the diagnostic run's path |
 | `--schedule-steps` | sizes the learning-rate schedule while `--num-steps` bounds the run |
 | `--eval-every` | adds Paloma evaluation at the selected interval |
 | `--save-checkpoints` | writes periodic and final checkpoints |
@@ -152,6 +251,21 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra
 Batch 1024 keeps the production local batch of 16 sequences per GPU. The trace does not include
 the 11-rack `replica_dcn` collectives or their global histogram reduction.
 
+### Long-context diagnostics
+
+For 262,144-token sequences on one rack, use `--seq-len 262144 --batch-size 16
+--context-axis-size 4 --expert-axis-size 16 --qk-mult 1.84`. This keeps 4,194,304
+tokens per step, matching the 4K/batch-1024 diagnostic. FA4 gathers K/V within each
+context group; the residual stream and parameter storage remain context-sharded.
+The short convolution exchanges a left halo across sequence shards.
+
+The 4K control uses `--seq-len 4096 --batch-size 1024 --context-axis-size 1
+--expert-axis-size 64 --qk-mult 1.3`. Use the same checkpoint and `--schedule-steps`
+for the 4K control and 262K probe. `--num-steps` is an
+absolute stop step and must exceed the checkpoint step. Record MFU, elapsed step
+time, peak memory, and routing drops after warmup. A throughput probe alone does
+not establish long-context training quality.
+
 ### Small-scale hero-shape ablations
 
 `small_scale_abl_launch.py` runs the hero shape — 384 experts / top-8, hidden/2-wide experts in a
@@ -220,18 +334,8 @@ retries 1000 times on failure and 100 times on preemption.
 
 The [new mixture](../../../docs/reports/hero-mixture-log.md) starts at ~27.7%
 of training, with cooldown weights at ~80% (hero steps 108,000 and 312,192).
-Before using `trigger_hero.sh`, wait for permanent `step-108000` to finish and stop the old run.
-
-Launch or resume the production d6144 hero with `trigger_hero.sh`. The trigger first comments on
-[issue #8506](https://github.com/marin-community/marin/issues/8506) with the full `HEAD` commit,
-whether the tree has staged, unstaged, or untracked changes, and the coordinator job name. A
-missing GitHub CLI login or failed comment aborts the trigger before Iris submission. Iris also
-captures its standard launch provenance in `MARIN_PROVENANCE`. The run ID continues to identify
-the checkpoint and output lineage across resumptions.
-
-```bash
-WANDB_API_KEY=... ./experiments/grug/moe_hero_ep/trigger_hero.sh
-```
+For production launch and recovery, follow
+[Hero cutovers and W&B lineage](#hero-cutovers-and-wb-lineage).
 
 ```bash
 python -m experiments.grug.moe_hero_ep.launch_scaling_ladder \
