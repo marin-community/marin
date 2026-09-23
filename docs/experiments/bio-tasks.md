@@ -175,6 +175,13 @@ the shared development VM. The currently published environment candidates are
 not dependency locks or verified task images; retain resolved environments and
 build reproducible solver images after validation.
 
+Stage the bundle and package-manager executable in a writable, executable task
+work directory. The worker creates package environments beside the bundle and
+points package temporary files there. On Iris's GCP Docker runtime, executing the
+package manager from `/tmp` failed with `PermissionError`; placing executable
+environments there is unsuitable. Package caches remain outside captured outputs
+and are removed when the worker exits.
+
 Prefer available TRC/GCP host CPUs for subsequent package-validation batches,
 with bounded CPU, memory, disk, and runtime requests. Use GCS in the worker's
 region for staged inputs and retained outputs. Iris can place CPU-only work on

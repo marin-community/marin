@@ -64,9 +64,12 @@ def run(bundle: Path, output: Path, micromamba: Path) -> None:
     output.mkdir(parents=True, exist_ok=False)
     plan = json.loads((bundle / "plan.json").read_text())
     # Keep package caches out of captured result artifacts; remove them on exit.
-    with TemporaryDirectory(prefix="bio-native-") as temporary:
+    # Iris's Docker runtime mounts /tmp as tmpfs. Keep executable package
+    # environments beside the staged bundle on the worker's regular filesystem.
+    with TemporaryDirectory(prefix="bio-native-", dir=bundle.parent) as temporary:
         environment = dict(os.environ)
         environment.update(dict.fromkeys(THREAD_VARIABLES, "1"))
+        environment["TMPDIR"] = temporary
         environment["MAMBA_ROOT_PREFIX"] = str(Path(temporary) / "mamba")
         environment["PYTHONPATH"] = str(bundle / "code")
         environment["PYTHONNOUSERSITE"] = "1"
