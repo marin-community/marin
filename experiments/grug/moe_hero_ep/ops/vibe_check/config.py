@@ -25,27 +25,36 @@ from experiments.grug.moe_hero_ep.train import DEFAULT_DROPLESS_MOE_IMPLEMENTATI
 CONFIG_DIRECTORY = Path(__file__).parent
 STORE_ROOT = "s3://marin-us-east-02a/marin/users/rav/hero-completions/"
 TARGET_CLUSTER = "cw-us-east-08a"
-SAMPLING_NODES = 8
+# One NVL72 rack block. The sampler puts one prompt row on each GPU, so 64 rows cover the whole
+# prompt bank in a single pass per sample instead of two.
+SAMPLING_NODES = 16
 SAMPLING_GPUS_PER_NODE = 4
 
 
 def sampling_spec() -> SamplingSpec:
-    # The local dropless backend matches held-out evaluation and cannot drop another prompt's tokens.
-    model = dataclasses.replace(
-        hero_recipe.HERO_MODEL_CONFIG, moe_implementation=DEFAULT_DROPLESS_MOE_IMPLEMENTATION, expert_chunks=1
-    )
     return SamplingSpec(
         release="hero-native-v4-reference-eos",
         completions_per_prompt=3,
-        batch_size=SAMPLING_NODES * SAMPLING_GPUS_PER_NODE,
         prompts=tuple(Prompt.model_validate(row) for row in json.loads((CONFIG_DIRECTORY / "prompts.json").read_text())),
         tokenizer="marin-community/marin-tokenizer",
         tokenizer_revision="a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2",
-        model=draccus.encode(model),
         temperature=0.2,
         max_new_tokens=1024,
         context_length=4096,
     )
+
+
+def sampling_model() -> dict:
+    """The hero architecture used to restore weights, recorded with each request.
+
+    This is provenance, not identity. A training-side change re-pins the architecture for new
+    requests and leaves completed results addressable.
+    """
+    # The local dropless backend matches held-out evaluation and cannot drop another prompt's tokens.
+    model = dataclasses.replace(
+        hero_recipe.HERO_MODEL_CONFIG, moe_implementation=DEFAULT_DROPLESS_MOE_IMPLEMENTATION, expert_chunks=1
+    )
+    return draccus.encode(model)
 
 
 def sampling_resources() -> ResourceConfig:
@@ -59,7 +68,7 @@ def sampling_resources() -> ResourceConfig:
 
 
 def discover_requests(
-    checkpoint_paths: list[str], spec: SamplingSpec, revision: str, *, target_cluster: str
+    checkpoint_paths: list[str], spec: SamplingSpec, model: dict, revision: str, *, target_cluster: str
 ) -> list[SampleRequest]:
     """Build sample requests from permanent checkpoint paths and metadata."""
     requests = []
@@ -74,6 +83,12 @@ def discover_requests(
             metadata_digest=digest(metadata),
         )
         requests.append(
-            SampleRequest(checkpoint=checkpoint, spec=spec, source_revision=revision, target_cluster=target_cluster)
+            SampleRequest(
+                checkpoint=checkpoint,
+                spec=spec,
+                model=model,
+                source_revision=revision,
+                target_cluster=target_cluster,
+            )
         )
     return requests
