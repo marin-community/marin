@@ -86,6 +86,9 @@ _GAUGES = (
     "kv_cache_usage_perc",
     "gpu_cache_usage_perc",
 )
+# Waiting requests split by why the scheduler held them. Kept apart from _GAUGES so the
+# saturation summary, peak and per-engine tables keep one row per request gauge.
+_WAITING_REASON_GAUGE = "num_requests_waiting_by_reason"
 _HISTOGRAM_FAMILIES = (
     ("time_to_first_token_seconds", "ttft"),
     ("request_time_per_output_token_seconds", "tpot"),
@@ -101,7 +104,14 @@ _HISTOGRAM_COMPONENTS = ("bucket", "count", "sum")
 _HISTOGRAM_NAMES = tuple(
     f"{family}_{component}" for family, _ in _HISTOGRAM_FAMILIES for component in _HISTOGRAM_COMPONENTS
 )
-_SERVING_METRIC_NAMES = (*_TOKEN_COUNTERS, *_PREEMPTION_COUNTERS, *_OUTCOME_COUNTERS, *_GAUGES, *_HISTOGRAM_NAMES)
+_SERVING_METRIC_NAMES = (
+    *_TOKEN_COUNTERS,
+    *_PREEMPTION_COUNTERS,
+    *_OUTCOME_COUNTERS,
+    *_GAUGES,
+    _WAITING_REASON_GAUGE,
+    *_HISTOGRAM_NAMES,
+)
 _HEALTH_METRIC_NAMES = (
     "prometheus_source_available",
     "prometheus_stage_failures",
@@ -362,6 +372,27 @@ WITH base AS MATERIALIZED (
     WHERE name IN ('num_requests_running', 'num_requests_waiting')
     GROUP BY 1
     HAVING COUNT(*) = 2
+), waiting_reason_bins AS (
+    SELECT t, reason, SUM(value) AS value
+    FROM (
+        SELECT {start_ms} + (timestamp_ms - {start_ms})
+                   - (timestamp_ms - {start_ms}) % CASE
+                       WHEN service = 'vllm' THEN {standalone_bucket_ms}
+                       ELSE {bucket_ms}
+                   END AS t,
+               COALESCE(json_get(attributes_json, 'reason'), 'unknown') AS reason,
+               origin_cluster,
+               service,
+               resource_attributes_json,
+               COALESCE(json_get(attributes_json, 'engine'), attributes_json) AS producer_identity,
+               AVG(value) AS value
+        FROM base
+        WHERE timestamp_ms >= {start_ms}
+          AND name = {sql_string(_WAITING_REASON_GAUGE)}
+          AND json_get(attributes_json, 'source_temporality') = 'current_snapshot'
+        GROUP BY 1, 2, 3, 4, 5, 6
+    ) AS replica_bins
+    GROUP BY 1, 2
 ), raw_gauge_peaks AS (
     SELECT name, MAX(value) AS peak
     FROM canonical_gauge_samples
@@ -838,6 +869,20 @@ WITH base AS MATERIALIZED (
            CAST(NULL AS BIGINT) AS samples,
            CAST(NULL AS DOUBLE) AS gap_seconds
     FROM request_in_flight_bins
+
+    UNION ALL
+
+    SELECT t AS t,
+           'saturation' AS section,
+           {sql_string(_WAITING_REASON_GAUGE)} AS metric,
+           'value' AS stat,
+           'waiting · ' || reason AS series,
+           value AS value,
+           'requests' AS unit,
+           CAST(NULL AS VARCHAR) AS status,
+           CAST(NULL AS BIGINT) AS samples,
+           CAST(NULL AS DOUBLE) AS gap_seconds
+    FROM waiting_reason_bins
 
     UNION ALL
 

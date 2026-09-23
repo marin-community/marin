@@ -21,6 +21,7 @@ from runs_observability import runs_overview_dataset
 from server import create_app
 from starlette.testclient import TestClient
 from training_observability import training_overview_dataset
+from vllm_observability import VLLM_OVERVIEW_SECTIONS
 from zephyr_observability import zephyr_overview_dataset
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -216,6 +217,8 @@ def test_priority_dashboards_use_only_bounded_panel_endpoints() -> None:
         "training": frozenset(training_overview_dataset("run", start_ms, end_ms, 15_000).views),
         "runs": frozenset(runs_overview_dataset(("cw-a",), ("run",), start_ms, end_ms, 15_000).views),
         "rl": frozenset(rl_overview_dataset(("cw-a",), "run", start_ms, end_ms, 15_000).views),
+        "rl_sync_generation": frozenset(rl_sync_generation_dataset(("cw-a",), "run", start_ms, end_ms, 15_000).views),
+        "vllm": VLLM_OVERVIEW_SECTIONS,
         "accelerator": frozenset(accelerator_overview_dataset(("cw-a",), start_ms, end_ms, 15_000).views),
         "jobs": frozenset(jobs_overview_dataset(("cw-a",), ("job",), start_ms, end_ms, 15_000).views),
         "recent_rl": frozenset(recent_rl_runs_dataset(start_ms, end_ms).views),
@@ -229,6 +232,10 @@ def test_priority_dashboards_use_only_bounded_panel_endpoints() -> None:
         "training.json": {"/v1/training/overview": (16, sections["training"])},
         "runs.json": {"/v1/runs/overview": (8, sections["runs"])},
         "rl_runs.json": {"/v1/rl/overview": (19, sections["rl"])},
+        "rl_sync_generation.json": {
+            "/v1/rl/generation": (5, sections["rl_sync_generation"]),
+            "/v1/vllm/overview": (6, sections["vllm"]),
+        },
         "async_rl.json": {"/v1/async-rl/overview": (48, sections["async_rl"])},
         "jobs.json": {"/v1/jobs/overview": (17, sections["jobs"])},
         "accelerators.json": {"/v1/accelerator/overview": (18, sections["accelerator"])},
