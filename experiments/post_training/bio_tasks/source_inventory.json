@@ -1,0 +1,862 @@
+{
+  "version": 1,
+  "sources": [
+    {
+      "index": 1,
+      "name": "BLAST+",
+      "revision": "cf49184dc38476b1c9f605c38f47758a96e72d6b",
+      "file": "src/algo/blast/unit_tests/api/bl2seq_unit_test.cpp",
+      "source_url": "https://github.com/ncbi/ncbi-cxx-toolkit-public/blob/cf49184dc38476b1c9f605c38f47758a96e72d6b/src/algo/blast/unit_tests/api/bl2seq_unit_test.cpp",
+      "seed": "Local similarity search: find planted unique matches and report strand, coordinates, and identity.",
+      "verification_and_limitations": "Enumerate matches in fresh sequences; check aligned residues and spans. The inspected test uses accession-backed sequences: replace those inputs. E-values and heuristic recall need a separately specified contract.",
+      "url": "https://github.com/ncbi/ncbi-cxx-toolkit-public",
+      "interface": "C++ CLI",
+      "role": "Local sequence similarity search",
+      "adoption": {
+        "download_evidence": "Bioconda 3.13M",
+        "stars": "100",
+        "canonical_paper_citations": "[~23.5k](https://doi.org/10.1186/1471-2105-10-421)"
+      }
+    },
+    {
+      "index": 2,
+      "name": "SAMtools",
+      "revision": "664e3b5098a12bd5faca637fdc111ba90c21e135",
+      "file": "doc/samtools-depth.1",
+      "source_url": "https://github.com/samtools/samtools/blob/664e3b5098a12bd5faca637fdc111ba90c21e135/doc/samtools-depth.1",
+      "seed": "Read-depth calculation with explicit flag, base-quality, deletion, and overlapping-mate rules.",
+      "verification_and_limitations": "Compute depth from a generated SAM/CIGAR ledger. The manual distinguishes depth from mpileup defaults, including swapped quality-option meanings; matching their defaults is not an independent check.",
+      "url": "https://github.com/samtools/samtools",
+      "interface": "C CLI",
+      "role": "SAM/BAM/CRAM manipulation and alignment statistics",
+      "adoption": {
+        "download_evidence": "Bioconda 8.99M",
+        "stars": "1.9k",
+        "canonical_paper_citations": "[~68.2k](https://doi.org/10.1093/bioinformatics/btp352)"
+      }
+    },
+    {
+      "index": 3,
+      "name": "BWA",
+      "revision": "d82444c17edc2384420409f85557c6ae84019732",
+      "file": "example.c",
+      "source_url": "https://github.com/lh3/bwa/blob/d82444c17edc2384420409f85557c6ae84019732/example.c",
+      "seed": "Map fresh, uniquely placed reads; recover coordinates, orientation, and edit operations.",
+      "verification_and_limitations": "Check against planted placements and independently replay CIGARs. Include reverse-strand and unmapped cases. Repeats, clipping, secondary alignments, and MAPQ prevent a universal exact-output oracle.",
+      "url": "https://github.com/lh3/bwa",
+      "interface": "C CLI",
+      "role": "Short-read alignment",
+      "adoption": {
+        "download_evidence": "Bioconda 2.16M",
+        "stars": "1.8k",
+        "canonical_paper_citations": "[~63.4k](https://doi.org/10.1093/bioinformatics/btp324)"
+      }
+    },
+    {
+      "index": 4,
+      "name": "Bowtie 2",
+      "revision": "58e34bffd389d7ead6542b439784d9def92c6172",
+      "file": "scripts/test/regressions.py",
+      "source_url": "https://github.com/BenLangmead/bowtie2/blob/58e34bffd389d7ead6542b439784d9def92c6172/scripts/test/regressions.py",
+      "seed": "Partition paired reads into concordant and nonconcordant outputs without losing sample or mate identity.",
+      "verification_and_limitations": "Check every read ID and mate against a generated ledger, including deliberately discordant pairs. Upstream count-conservation tests motivate the seed but counts alone can accept swapped reads.",
+      "url": "https://github.com/BenLangmead/bowtie2",
+      "interface": "C++ CLI",
+      "role": "Short-read alignment",
+      "adoption": {
+        "download_evidence": "Bioconda 3.47M",
+        "stars": "805",
+        "canonical_paper_citations": "[~61.9k](https://doi.org/10.1038/nmeth.1923)"
+      }
+    },
+    {
+      "index": 5,
+      "name": "DESeq2",
+      "revision": "9e885b581380291797f2777145c395f50aaaa72b",
+      "file": "tests/testthat/test_model_matrix.R",
+      "source_url": "https://github.com/thelovelab/DESeq2/blob/9e885b581380291797f2777145c395f50aaaa72b/tests/testthat/test_model_matrix.R",
+      "seed": "Diagnose confounded designs and construct estimable contrasts; collapse technical sequencing runs by biological sample.",
+      "verification_and_limitations": "Use independent linear algebra for estimability and integer sums for collapseReplicates. Preserve biological replicates. Full dispersion estimation, shrinkage, and fitted DE tests require stronger numerical references.",
+      "url": "https://github.com/thelovelab/DESeq2",
+      "interface": "R/Bioconductor",
+      "role": "Differential expression from count data",
+      "adoption": {
+        "download_evidence": "Bioconda 658k",
+        "stars": "472",
+        "canonical_paper_citations": "[~102k](https://doi.org/10.1186/s13059-014-0550-8)"
+      }
+    },
+    {
+      "index": 6,
+      "name": "STAR",
+      "revision": "b1edc1208d91a53bf40ebae8669f71d50b994851",
+      "file": "extras/tests/scripts/checkCellReadsStats_vsMatrix.awk",
+      "source_url": "https://github.com/alexdobin/STAR/blob/b1edc1208d91a53bf40ebae8669f71d50b994851/extras/tests/scripts/checkCellReadsStats_vsMatrix.awk",
+      "seed": "Reconcile barcode-level UMI and detected-gene summaries with a sparse count matrix.",
+      "verification_and_limitations": "Recompute per-barcode sums and nonzero features, including absent barcodes and unique/multimapping policy. The script prints discrepancies; turn them into complete failing checks. Full splice alignment additionally needs a genome index.",
+      "url": "https://github.com/alexdobin/STAR",
+      "interface": "C++ CLI",
+      "role": "Splice-aware RNA-seq alignment",
+      "adoption": {
+        "download_evidence": "Bioconda 1.70M",
+        "stars": "2.2k",
+        "canonical_paper_citations": "[~57.0k](https://doi.org/10.1093/bioinformatics/bts635)"
+      }
+    },
+    {
+      "index": 7,
+      "name": "BEDTools",
+      "revision": "614e9a5c5935ab86e873dab9072fbbaf003c1b7e",
+      "file": "test/bed12tobed6/test-bed12tobed6.sh",
+      "source_url": "https://github.com/arq5x/bedtools2/blob/614e9a5c5935ab86e873dab9072fbbaf003c1b7e/test/bed12tobed6/test-bed12tobed6.sh",
+      "seed": "Expand transcript blocks into exon intervals, preserving strand-aware exon numbering; compose with overlap or sequence extraction.",
+      "verification_and_limitations": "Use direct arithmetic on generated block starts and sizes. Check complete interval tuples and reverse-strand exon order. BED end coordinates are excluded; feature counts and overlap-pair counts differ.",
+      "url": "https://github.com/arq5x/bedtools2",
+      "interface": "C++ CLI",
+      "role": "Genomic interval arithmetic",
+      "adoption": {
+        "download_evidence": "Bioconda 3.75M",
+        "stars": "1.0k",
+        "canonical_paper_citations": "[~30.9k](https://doi.org/10.1093/bioinformatics/btq033)"
+      }
+    },
+    {
+      "index": 8,
+      "name": "GATK",
+      "revision": "0cde69eed30339f5978cbb1ac6e5cf3662f9e1f8",
+      "file": "src/test/java/org/broadinstitute/hellbender/tools/walkers/filters/VariantFiltrationIntegrationTest.java",
+      "source_url": "https://github.com/broadinstitute/gatk/blob/0cde69eed30339f5978cbb1ac6e5cf3662f9e1f8/src/test/java/org/broadinstitute/hellbender/tools/walkers/filters/VariantFiltrationIntegrationTest.java",
+      "seed": "Apply a supplied variant-quality and interval-mask policy; distinguish site from allele/genotype filtering.",
+      "verification_and_limitations": "Evaluate predicates and interval membership independently on generated VCF records. Check FILTER labels and retained records, including missing annotations and threshold boundaries. Filtering does not establish variant-calling accuracy.",
+      "url": "https://github.com/broadinstitute/gatk",
+      "interface": "Java CLI",
+      "role": "Variant discovery, genotyping, and processing",
+      "adoption": {
+        "download_evidence": "Bioconda 1.21M",
+        "stars": "2.0k",
+        "canonical_paper_citations": "[~30.3k](https://doi.org/10.1101/gr.107524.110)"
+      }
+    },
+    {
+      "index": 9,
+      "name": "pysam",
+      "revision": "ba2e6c124398bdcd963db741d6f01164fed4f9b7",
+      "file": "tests/AlignmentFilePileup_test.py",
+      "source_url": "https://github.com/pysam-developers/pysam/blob/ba2e6c124398bdcd963db741d6f01164fed4f9b7/tests/AlignmentFilePileup_test.py",
+      "seed": "Count eligible bases or alleles at specified loci with explicit read and base filters.",
+      "verification_and_limitations": "Use a generated per-read ledger and CIGAR interpreter. Inspect overlapping mates, orphans, deletions, and BAQ policy. pysam and SAMtools share underlying code; their agreement is not independent validation.",
+      "url": "https://github.com/pysam-developers/pysam",
+      "interface": "Python API",
+      "role": "SAM/BAM/CRAM, VCF/BCF, FASTA, and tabix I/O",
+      "adoption": {
+        "download_evidence": "Bioconda 10.52M",
+        "stars": "902",
+        "canonical_paper_citations": "—"
+      }
+    },
+    {
+      "index": 10,
+      "name": "MAFFT",
+      "revision": "26ecaba0130b533cf06a29200f0fb40829c00101",
+      "file": "test/script",
+      "source_url": "https://github.com/GSLBiotech/mafft/blob/26ecaba0130b533cf06a29200f0fb40829c00101/test/script",
+      "seed": "Construct or repair a small multiple alignment under a specified scoring or correspondence rule.",
+      "verification_and_limitations": "Check residue preservation plus independently established aligned residue pairs or a small exact scoring objective; allow equivalent alignments. The supplied repository is a 2020 snapshot; its bytewise regression diffs do not establish biological optimality.",
+      "url": "https://github.com/GSLBiotech/mafft",
+      "interface": "CLI",
+      "role": "Multiple sequence alignment",
+      "adoption": {
+        "download_evidence": "Bioconda 1.42M",
+        "stars": "93",
+        "canonical_paper_citations": "[~48.9k](https://doi.org/10.1093/molbev/mst010)"
+      }
+    },
+    {
+      "index": 11,
+      "name": "HMMER",
+      "revision": "9acd8b6758a0ca5d21db6d167e0277484341929b",
+      "file": "testsuite/i13-msa-integrity.pl",
+      "source_url": "https://github.com/EddyRivasLab/hmmer/blob/9acd8b6758a0ca5d21db6d167e0277484341929b/testsuite/i13-msa-integrity.pl",
+      "seed": "Extract and reconcile protein domain sequences from a supplied domain table and alignment.",
+      "verification_and_limitations": "Slice fresh FASTA using domain coordinates, remove alignment gaps, and compare IDs and residues. This checks domain bookkeeping; full profile-search significance requires a pinned profile, search space, and statistical reference.",
+      "url": "https://github.com/EddyRivasLab/hmmer",
+      "interface": "C CLI",
+      "role": "Profile-HMM protein sequence search",
+      "adoption": {
+        "download_evidence": "Bioconda 2.29M",
+        "stars": "416",
+        "canonical_paper_citations": "[~7.6k](https://doi.org/10.1371/journal.pcbi.1002195)"
+      }
+    },
+    {
+      "index": 12,
+      "name": "Seurat",
+      "revision": "586015abde10618ecb32d3fe632267a83317a08d",
+      "file": "tests/testthat/test_data_manipulation.R",
+      "source_url": "https://github.com/satijalab/seurat/blob/586015abde10618ecb32d3fe632267a83317a08d/tests/testthat/test_data_manipulation.R",
+      "seed": "Join single-cell features and apply prescribed library-size log normalization or row scaling.",
+      "verification_and_limitations": "Compute joins and log1p(count / cell total × scale) independently; check IDs, sparse zeros, and every output value. Counts, normalized data, and scaled layers are distinct; this does not grade cell-type interpretation.",
+      "url": "https://github.com/satijalab/seurat",
+      "interface": "R API",
+      "role": "Single-cell and spatial omics analysis",
+      "adoption": {
+        "download_evidence": "CRAN; no stable lifetime total",
+        "stars": "2.8k",
+        "canonical_paper_citations": "[~17.1k](https://doi.org/10.1016/j.cell.2019.05.031)"
+      }
+    },
+    {
+      "index": 13,
+      "name": "minimap2",
+      "revision": "3c28777e7e2dcc90f825de1b9f17a89cca7d4452",
+      "file": "example.c",
+      "source_url": "https://github.com/lh3/minimap2/blob/3c28777e7e2dcc90f825de1b9f17a89cca7d4452/example.c",
+      "seed": "Recover long-read alignment spans and orientation on fresh references, including split or inverted segments.",
+      "verification_and_limitations": "Check placements and aligned strings against generated segments; validate PAF spans and CIGAR consumption. The example explicitly emits CIGARs without soft/hard clips. Pin presets; equal-scoring placements need equivalence rules.",
+      "url": "https://github.com/lh3/minimap2",
+      "interface": "C CLI/API",
+      "role": "Long-read, assembly, and spliced alignment",
+      "adoption": {
+        "download_evidence": "Bioconda 1.42M",
+        "stars": "2.2k",
+        "canonical_paper_citations": "[~17.2k](https://doi.org/10.1093/bioinformatics/bty191)"
+      }
+    },
+    {
+      "index": 14,
+      "name": "BCFtools",
+      "revision": "edf7fd96c5da562ecfd99fb7f9e4b9eb597aeae8",
+      "file": "test/fill-tags-VAF.out",
+      "source_url": "https://github.com/samtools/bcftools/blob/edf7fd96c5da562ecfd99fb7f9e4b9eb597aeae8/test/fill-tags-VAF.out",
+      "seed": "Calculate per-alternate-allele fractions and total alternate fraction from multiallelic depth fields.",
+      "verification_and_limitations": "Compute AD_alt / sum(AD) and sum(AD_alt) / sum(AD) from fresh integers. Test missing fields and zero denominators. Site-level inclusion and per-sample genotype filtering need separate checks.",
+      "url": "https://github.com/samtools/bcftools",
+      "interface": "C CLI",
+      "role": "VCF/BCF querying, calling, filtering, and transformation",
+      "adoption": {
+        "download_evidence": "Bioconda 4.36M",
+        "stars": "880",
+        "canonical_paper_citations": "[~16.3k](https://doi.org/10.1093/gigascience/giab008)"
+      }
+    },
+    {
+      "index": 15,
+      "name": "Picard",
+      "revision": "c2a483d497d1b0fe6d0ab518b1b32fe98fad0741",
+      "file": "src/test/java/picard/sam/FilterSamReadsTest.java",
+      "source_url": "https://github.com/broadinstitute/picard/blob/c2a483d497d1b0fe6d0ab518b1b32fe98fad0741/src/test/java/picard/sam/FilterSamReadsTest.java",
+      "seed": "Select or exclude read pairs using a manifest while retaining correct records and metadata.",
+      "verification_and_limitations": "Compare the full multiset of retained SAM records against a fresh ledger; check mates and counts. The upstream test constructs paired reads. Define inclusion by read name explicitly; duplicate marking would require its own tie-breaking policy.",
+      "url": "https://github.com/broadinstitute/picard",
+      "interface": "Java CLI/API",
+      "role": "SAM/BAM processing and sequencing metrics",
+      "adoption": {
+        "download_evidence": "Bioconda 2.92M",
+        "stars": "1.1k",
+        "canonical_paper_citations": "—"
+      }
+    },
+    {
+      "index": 16,
+      "name": "Snakemake",
+      "revision": "91763d644db0a6051c40014fa8ffad340f7d39a0",
+      "file": "tests/test_expand.py",
+      "source_url": "https://github.com/snakemake/snakemake/blob/91763d644db0a6051c40014fa8ffad340f7d39a0/tests/test_expand.py",
+      "seed": "Repair sample/lane pairing and workflow dependencies; avoid accidental Cartesian products.",
+      "verification_and_limitations": "Derive expected input/output mappings from a fresh sample sheet and run a bounded biological step. The tests distinguish product from zip expansion. A correct file list or successful dry run alone does not verify downstream biology.",
+      "url": "https://github.com/snakemake/snakemake",
+      "interface": "Python DSL/CLI",
+      "role": "Reproducible workflow orchestration",
+      "adoption": {
+        "download_evidence": "Bioconda 1.84M",
+        "stars": "2.8k",
+        "canonical_paper_citations": "[~3.2k](https://doi.org/10.1093/bioinformatics/bts480)"
+      }
+    },
+    {
+      "index": 17,
+      "name": "HTSlib",
+      "revision": "d3cc9553d89dc34239afb7145b06c0dd818c0219",
+      "file": "test/faidx/faidx.tst",
+      "source_url": "https://github.com/samtools/htslib/blob/d3cc9553d89dc34239afb7145b06c0dd818c0219/test/faidx/faidx.tst",
+      "seed": "Retrieve indexed regions correctly across wrapped lines, sequence descriptions, and compressed files.",
+      "verification_and_limitations": "Compare extracted bases and qualities to direct slicing of generated records; test absent IDs and coordinate boundaries. HTSlib also underlies SAMtools/pysam, so use an independent parser for the oracle.",
+      "url": "https://github.com/samtools/htslib",
+      "interface": "C API/CLI",
+      "role": "Core high-throughput sequencing formats and indexing",
+      "adoption": {
+        "download_evidence": "Bioconda 8.28M",
+        "stars": "939",
+        "canonical_paper_citations": "[~16.3k, shared ecosystem paper](https://doi.org/10.1093/gigascience/giab008)"
+      }
+    },
+    {
+      "index": 18,
+      "name": "FastQC",
+      "revision": "87fb3364a2f37115833d678648926d41e184f0b1",
+      "file": "uk/ac/babraham/FastQC/Modules/SequenceLengthDistribution.java",
+      "source_url": "https://github.com/s-andrews/FastQC/blob/87fb3364a2f37115833d678648926d41e184f0b1/uk/ac/babraham/FastQC/Modules/SequenceLengthDistribution.java",
+      "seed": "Compute read-length distributions and apply a supplied QC policy to generated FASTQ.",
+      "verification_and_limitations": "Count lengths independently and reconcile report bins and totals; include empty or variable-length records. A FastQC warning is a configured heuristic, not ground truth that a biological sample is unusable.",
+      "url": "https://github.com/s-andrews/FastQC",
+      "interface": "Java CLI/GUI",
+      "role": "Raw sequencing-read quality control",
+      "adoption": {
+        "download_evidence": "Bioconda 1.42M",
+        "stars": "611",
+        "canonical_paper_citations": "—"
+      }
+    },
+    {
+      "index": 19,
+      "name": "Biopython",
+      "revision": "08fc09086afe0b57215d2515660e0c032b55c0dd",
+      "file": "Tests/test_SeqFeature.py",
+      "source_url": "https://github.com/biopython/biopython/blob/08fc09086afe0b57215d2515660e0c032b55c0dd/Tests/test_SeqFeature.py",
+      "seed": "Extract compound, strand-aware features and translate explicitly defined coding sequences.",
+      "verification_and_limitations": "Use direct slicing, complementing, exon concatenation, and a frozen codon table. Check source-record IDs, frame, and alternative genetic codes. Reject unresolved remote references under an explicit input contract.",
+      "url": "https://github.com/biopython/biopython",
+      "interface": "Python API",
+      "role": "General sequence, alignment, phylogenetic, and structure analysis",
+      "adoption": {
+        "download_evidence": "Bioconda 441k; PyPI ~11M/month",
+        "stars": "5.1k",
+        "canonical_paper_citations": "[~5.9k](https://doi.org/10.1093/bioinformatics/btp163)"
+      }
+    },
+    {
+      "index": 20,
+      "name": "Nextflow",
+      "revision": "17f18779266767b16bca51af71522e28adf5cff6",
+      "file": "modules/nextflow/src/test/groovy/nextflow/extension/GroupTupleOpTest.groovy",
+      "source_url": "https://github.com/nextflow-io/nextflow/blob/17f18779266767b16bca51af71522e28adf5cff6/modules/nextflow/src/test/groovy/nextflow/extension/GroupTupleOpTest.groovy",
+      "seed": "Repair sample-key grouping and lane aggregation in a small workflow.",
+      "verification_and_limitations": "Compare complete groups and final per-sample artifacts to a manifest-derived oracle. The tests show that incomplete groups can disappear unless remainders are handled. Make the intended missing-lane policy explicit.",
+      "url": "https://github.com/nextflow-io/nextflow",
+      "interface": "Groovy DSL/CLI",
+      "role": "Portable, scalable workflow orchestration",
+      "adoption": {
+        "download_evidence": "Bioconda 598k",
+        "stars": "3.5k",
+        "canonical_paper_citations": "[~4.3k](https://doi.org/10.1038/nbt.3820)"
+      }
+    },
+    {
+      "index": 21,
+      "name": "DIAMOND",
+      "revision": "5e25acaf40e6b9883636c5c564306fe77210de53",
+      "file": "CMakeLists.txt",
+      "source_url": "https://github.com/bbuchfink/diamond/blob/5e25acaf40e6b9883636c5c564306fe77210de53/CMakeLists.txt",
+      "seed": "Search a tiny protein database and select hits by explicit identity and coverage criteria.",
+      "verification_and_limitations": "Validate planted matches and alignment-derived identity/coverage; use a supplied score table for pure filtering variants. CTest compares saved outputs, while the legacy test command is a no-op at this revision. E-values and heuristic ties need separate treatment.",
+      "url": "https://github.com/bbuchfink/diamond",
+      "interface": "C++ CLI",
+      "role": "Fast protein similarity search",
+      "adoption": {
+        "download_evidence": "Bioconda 2.44M",
+        "stars": "1.3k",
+        "canonical_paper_citations": "[~15.4k](https://doi.org/10.1038/nmeth.3176)"
+      }
+    },
+    {
+      "index": 22,
+      "name": "PLINK / PLINK 2",
+      "revision": "a25a0d6438b61b1951cd6d7eb209db8b79687581",
+      "file": "2.0/Tests/TEST_GRM_MAF/run_tests.sh",
+      "source_url": "https://github.com/chrchang/plink-ng/blob/a25a0d6438b61b1951cd6d7eb209db8b79687581/2.0/Tests/TEST_GRM_MAF/run_tests.sh",
+      "seed": "Choose variants and samples by allele frequency and missingness; keep analysis-specific and global filters distinct.",
+      "verification_and_limitations": "Compute called-allele denominators and selected IDs from fresh genotypes. State ploidy, founder, and missing-call rules. Do not grade PCA by raw eigenvector signs or assume a PCA-only filter also changes frequency reports.",
+      "url": "https://github.com/chrchang/plink-ng",
+      "interface": "C/C++ CLI",
+      "role": "GWAS, genotype QC, and population genetics",
+      "adoption": {
+        "download_evidence": "Bioconda 278k combined",
+        "stars": "508",
+        "canonical_paper_citations": "[~36.5k](https://doi.org/10.1086/519795)"
+      }
+    },
+    {
+      "index": 23,
+      "name": "Scanpy",
+      "revision": "0d5fd16234865619d2f5097d33fc4281900a2bc2",
+      "file": "tests/test_qc_metrics.py",
+      "source_url": "https://github.com/scverse/scanpy/blob/0d5fd16234865619d2f5097d33fc4281900a2bc2/tests/test_qc_metrics.py",
+      "seed": "Calculate per-cell counts, detected genes, and supplied gene-set fractions; aggregate raw counts by donor.",
+      "verification_and_limitations": "Direct sums and nonzero counts on fresh matrices, plus independent donor/cell ledgers. Compare IDs and denominators. Vary raw versus transformed layers; do not reuse benchmark PBMC fixtures.",
+      "url": "https://github.com/scverse/scanpy",
+      "interface": "Python API",
+      "role": "Single-cell gene-expression analysis",
+      "adoption": {
+        "download_evidence": "Bioconda 147k; PyPI 984k/month",
+        "stars": "2.5k",
+        "canonical_paper_citations": "[~9.5k](https://doi.org/10.1186/s13059-017-1382-0)"
+      }
+    },
+    {
+      "index": 24,
+      "name": "MultiQC",
+      "revision": "fdc68d394849f69b67b6e6e13ebe907504ed534b",
+      "file": "multiqc/modules/samtools/tests/test_flagstat.py",
+      "source_url": "https://github.com/MultiQC/MultiQC/blob/fdc68d394849f69b67b6e6e13ebe907504ed534b/multiqc/modules/samtools/tests/test_flagstat.py",
+      "seed": "Combine sample QC reports while retaining sample identity and QC-passed/failed denominators.",
+      "verification_and_limitations": "Generate reports from a hidden count ledger; check every metric and sample mapping, including N/A and filename collisions. Parsing a report correctly does not validate the upstream alignment.",
+      "url": "https://github.com/MultiQC/MultiQC",
+      "interface": "Python CLI/API",
+      "role": "Aggregate QC and pipeline reports",
+      "adoption": {
+        "download_evidence": "Bioconda 863k; PyPI 67k/month",
+        "stars": "1.5k",
+        "canonical_paper_citations": "[~10.7k](https://doi.org/10.1093/bioinformatics/btw354)"
+      }
+    },
+    {
+      "index": 25,
+      "name": "edgeR",
+      "revision": "8986864d8f92dac37925ef641fcd6c4161130551",
+      "file": "R/cpm.R",
+      "source_url": "https://github.com/bioconductor-source/edgeR/blob/8986864d8f92dac37925ef641fcd6c4161130551/R/cpm.R",
+      "seed": "Normalize counts with explicitly supplied library sizes/factors and a declared expression filter.",
+      "verification_and_limitations": "Check non-log CPM = count × 1e6 / effective library size and selected genes. Specify offsets and normalization factors; zero libraries need a defined error. This short recipe does not substitute for replicate-aware differential expression.",
+      "url": "https://git.bioconductor.org/packages/edgeR",
+      "interface": "R/Bioconductor",
+      "role": "Differential expression from count data",
+      "adoption": {
+        "download_evidence": "Bioconda 630k",
+        "stars": "—",
+        "canonical_paper_citations": "[~44.9k](https://doi.org/10.1093/bioinformatics/btp616)"
+      }
+    },
+    {
+      "index": 26,
+      "name": "limma",
+      "revision": "14eabaeb695945b45ceb885ac8d4c61232639ea5",
+      "file": "R/contrasts.R",
+      "source_url": "https://github.com/bioconductor-source/limma/blob/14eabaeb695945b45ceb885ac8d4c61232639ea5/R/contrasts.R",
+      "seed": "Fit prescribed linear models and signed contrasts with correct sample IDs and covariates.",
+      "verification_and_limitations": "Use an independent least-squares calculation on fresh measurements; check contrast estimates, estimability, and unmoderated uncertainty. Gene-wise weights and empirical-Bayes moderation require additional method-specific references.",
+      "url": "https://git.bioconductor.org/packages/limma",
+      "interface": "R/Bioconductor",
+      "role": "Differential expression and linear modeling",
+      "adoption": {
+        "download_evidence": "Bioconda 806k",
+        "stars": "—",
+        "canonical_paper_citations": "[~43.7k](https://doi.org/10.1093/nar/gkv007)"
+      }
+    },
+    {
+      "index": 27,
+      "name": "SPAdes",
+      "revision": "808b87dade1300ecaa712429955ccba7bfb286f4",
+      "file": "src/projects/spades/pipeline/spades_pipeline/supplemetary/check_test_script.py",
+      "source_url": "https://github.com/ablab/spades/blob/808b87dade1300ecaa712429955ccba7bfb286f4/src/projects/spades/pipeline/spades_pipeline/supplemetary/check_test_script.py",
+      "seed": "Reconstruct a deliberately unambiguous tiny genome, or calculate assembly summaries from supplied contigs.",
+      "verification_and_limitations": "For reconstruction, compare full sequences modulo permitted orientation/circular rotation and check missing/extra contigs. N50 and contig-length checks alone are insufficient: the inspected smoke test checks number and length, not sequence identity.",
+      "url": "https://github.com/ablab/spades",
+      "interface": "C++/Python CLI",
+      "role": "Short-read and metagenome assembly",
+      "adoption": {
+        "download_evidence": "Bioconda 851k",
+        "stars": "955",
+        "canonical_paper_citations": "[~27.5k](https://doi.org/10.1089/cmb.2012.0021)"
+      }
+    },
+    {
+      "index": 28,
+      "name": "IQ-TREE",
+      "revision": "a00094e03d1ae984e1497e16738f91514df8c366",
+      "file": "example/example.nex",
+      "source_url": "https://github.com/iqtree/iqtree2/blob/a00094e03d1ae984e1497e16738f91514df8c366/example/example.nex",
+      "seed": "Validate codon-position or gene partitions and prepare correctly labeled alignment/model inputs.",
+      "verification_and_limitations": "Enumerate expected site membership, coverage, and overlap from generated annotations. Short tasks can stop at this contract. Full tree inference needs likelihood/topology criteria; the generating tree is not guaranteed to be the fitted maximum-likelihood tree.",
+      "url": "https://github.com/iqtree/iqtree2",
+      "interface": "C++ CLI",
+      "role": "Maximum-likelihood phylogenetics",
+      "adoption": {
+        "download_evidence": "Bioconda 1.09M",
+        "stars": "334",
+        "canonical_paper_citations": "[~27.9k](https://doi.org/10.1093/molbev/msu300)"
+      }
+    },
+    {
+      "index": 29,
+      "name": "FastTree",
+      "revision": "a5a2723ea1e64faf3da7ea514521cfa348891add",
+      "file": "CompareTree.pl",
+      "source_url": "https://github.com/morgannprice/fasttree/blob/a5a2723ea1e64faf3da7ea514521cfa348891add/CompareTree.pl",
+      "seed": "Compare tree bipartitions and summarize branch lengths while respecting rooting and taxon identity.",
+      "verification_and_limitations": "Canonicalize leaf-set splits and sum lengths independently on generated Newick trees. The script documents duplicate/root-edge problems for rooted trees; do not copy it as the oracle or compare raw Newick strings.",
+      "url": "https://github.com/morgannprice/fasttree",
+      "interface": "C++ CLI",
+      "role": "Approximate maximum-likelihood phylogenetics",
+      "adoption": {
+        "download_evidence": "Bioconda 1.47M",
+        "stars": "41",
+        "canonical_paper_citations": "[~16.1k](https://doi.org/10.1371/journal.pone.0009490)"
+      }
+    },
+    {
+      "index": 30,
+      "name": "RAxML",
+      "revision": "36ec36110631c34692abcd4f24ca7b3e2fea742a",
+      "file": "usefulScripts/bsBranchLengths.pl",
+      "source_url": "https://github.com/stamatak/standard-RAxML/blob/36ec36110631c34692abcd4f24ca7b3e2fea742a/usefulScripts/bsBranchLengths.pl",
+      "seed": "Summarize branch support or lengths across a supplied set of replicate trees.",
+      "verification_and_limitations": "Match canonical bipartitions across fresh trees and compute support denominators and branch summaries directly. The script supplies a workflow boundary, not an independent answer. This source is standard RAxML 8, distinct from RAxML-NG.",
+      "url": "https://github.com/stamatak/standard-RAxML",
+      "interface": "C CLI",
+      "role": "Maximum-likelihood phylogenetics",
+      "adoption": {
+        "download_evidence": "Bioconda 1.40M",
+        "stars": "350",
+        "canonical_paper_citations": "[~30.0k](https://doi.org/10.1093/bioinformatics/btu033)"
+      }
+    },
+    {
+      "index": 31,
+      "name": "cutadapt",
+      "revision": "4927632f7c546dd290c53501c8417f909252befe",
+      "file": "tests/test_trim.py",
+      "source_url": "https://github.com/marcelm/cutadapt/blob/4927632f7c546dd290c53501c8417f909252befe/tests/test_trim.py",
+      "seed": "Trim declared adapters and synchronize sequence/quality strings, including partial matches and paired reads.",
+      "verification_and_limitations": "Generate insert-plus-adapter reads and independently compute allowed cut positions under an explicit error/overlap rule. Test unchanged reads and boundaries. Upstream tests expose deletion-versus-substitution cases; a simple substring oracle cannot grade every fuzzy match.",
+      "url": "https://github.com/marcelm/cutadapt",
+      "interface": "Python CLI/API",
+      "role": "Adapter and primer trimming",
+      "adoption": {
+        "download_evidence": "Bioconda 1.52M; PyPI 44k/month",
+        "stars": "586",
+        "canonical_paper_citations": "[~36.3k](https://doi.org/10.14806/ej.17.1.200)"
+      }
+    },
+    {
+      "index": 32,
+      "name": "Salmon",
+      "revision": "5515b7f05a90341b6652adfdb807e7cf14295518",
+      "file": "crates/salmon-cli/tests/output_contract.rs",
+      "source_url": "https://github.com/COMBINE-lab/salmon/blob/5515b7f05a90341b6652adfdb807e7cf14295518/crates/salmon-cli/tests/output_contract.rs",
+      "seed": "Join transcript quantification outputs to a gene map; check decoy exclusion and abundance normalization.",
+      "verification_and_limitations": "Use fresh supplied quantification tables for exact ID joins, sums, and TPM arithmetic. Quantifier estimates are not latent simulated molecule counts. Inspected main is Salmon 2.0 Rust; legacy 1.x indexes/options require a separate environment.",
+      "url": "https://github.com/COMBINE-lab/salmon",
+      "interface": "C++/Rust CLI",
+      "role": "Transcript-level RNA-seq quantification",
+      "adoption": {
+        "download_evidence": "Bioconda 623k",
+        "stars": "920",
+        "canonical_paper_citations": "[~13.9k](https://doi.org/10.1038/nmeth.4197)"
+      }
+    },
+    {
+      "index": 33,
+      "name": "kallisto",
+      "revision": "4e9f29cf3b021260415430c057a22469ca081391",
+      "file": "test/Snakefile",
+      "source_url": "https://github.com/pachterlab/kallisto/blob/4e9f29cf3b021260415430c057a22469ca081391/test/Snakefile",
+      "seed": "Construct a transcript/sample abundance matrix or repair paired-input wiring for quantification.",
+      "verification_and_limitations": "Independently check transcript IDs, sample columns, explicit missing-transcript policy, and TPM from supplied counts/effective lengths. The bundled workflow requests quant/BUS artifacts but does not itself establish quantification accuracy.",
+      "url": "https://github.com/pachterlab/kallisto",
+      "interface": "C++ CLI",
+      "role": "Pseudoalignment and transcript quantification",
+      "adoption": {
+        "download_evidence": "Bioconda 273k",
+        "stars": "768",
+        "canonical_paper_citations": "[~11.2k](https://doi.org/10.1038/nbt.3519)"
+      }
+    },
+    {
+      "index": 34,
+      "name": "StringTie",
+      "revision": "d1dc38ddb681089b2e8faaabdcfee772af6fb033",
+      "file": "prepDE.py3",
+      "source_url": "https://github.com/gpertea/stringtie/blob/d1dc38ddb681089b2e8faaabdcfee772af6fb033/prepDE.py3",
+      "seed": "Convert annotated transcript coverage into transcript/gene count estimates with correct exon lengths and sample joins.",
+      "verification_and_limitations": "Independently compute inclusive GTF exon lengths and ceil(coverage × length / read length), then aggregate by gene. Check annotation consistency. These are estimated counts; they are not exact observed molecule counts.",
+      "url": "https://github.com/gpertea/stringtie",
+      "interface": "C++ CLI",
+      "role": "Transcript assembly and quantification",
+      "adoption": {
+        "download_evidence": "Bioconda 776k",
+        "stars": "526",
+        "canonical_paper_citations": "[~15.7k](https://doi.org/10.1038/nbt.3122)"
+      }
+    },
+    {
+      "index": 35,
+      "name": "fastp",
+      "revision": "8a2397b6628ae14127efdb7566f67fc05f9aea56",
+      "file": "src/filter.cpp",
+      "source_url": "https://github.com/OpenGene/fastp/blob/8a2397b6628ae14127efdb7566f67fc05f9aea56/src/filter.cpp",
+      "seed": "Apply explicit quality, N-content, length, and complexity filters to fresh FASTQ.",
+      "verification_and_limitations": "Compute per-read predicates and retained IDs independently, preserving paired-read policy. Check strict versus inclusive boundaries and filter ordering. Automatic adapter detection adds ambiguity, so use declared adapters for exact trimming tasks.",
+      "url": "https://github.com/OpenGene/fastp",
+      "interface": "C++ CLI",
+      "role": "FASTQ QC, filtering, and adapter trimming",
+      "adoption": {
+        "download_evidence": "Bioconda 725k",
+        "stars": "2.4k",
+        "canonical_paper_citations": "[~30.4k](https://doi.org/10.1093/bioinformatics/bty560)"
+      }
+    },
+    {
+      "index": 36,
+      "name": "SRA Toolkit",
+      "revision": "434ae787c86e32e7faa5e80417a342c365fa03b0",
+      "file": "test/external/fasterq-dump/fq_tests/split3.sh",
+      "source_url": "https://github.com/ncbi/sra-tools/blob/434ae787c86e32e7faa5e80417a342c365fa03b0/test/external/fasterq-dump/fq_tests/split3.sh",
+      "seed": "Export biological reads from a small staged SRA fixture with correct paired and orphan outputs.",
+      "verification_and_limitations": "Compare IDs, sequences, qualities, and mate assignment to an independently authored spot/read ledger. Upstream fastq-dump/fasterq-dump agreement is only a cross-check. Stage the fixture locally; live accession downloads add network, provenance, and setup cost.",
+      "url": "https://github.com/ncbi/sra-tools",
+      "interface": "C++ CLI/API",
+      "role": "Download and transform NCBI SRA sequencing data",
+      "adoption": {
+        "download_evidence": "Bioconda 727k",
+        "stars": "1.4k",
+        "canonical_paper_citations": "—"
+      }
+    },
+    {
+      "index": 37,
+      "name": "deepTools",
+      "revision": "cde2aa7938cb4af6fe28de1504f94f6928344342",
+      "file": "pydeeptools/deeptools/test/test_countReadsPerBin.py",
+      "source_url": "https://github.com/deeptools/deepTools/blob/cde2aa7938cb4af6fe28de1504f94f6928344342/pydeeptools/deeptools/test/test_countReadsPerBin.py",
+      "seed": "Count reads/fragments in genomic bins under a declared extension and duplicate policy.",
+      "verification_and_limitations": "Use direct interval arithmetic from a generated alignment ledger and check every bin, including zero bins. Separate read counts, covered bases, and normalization denominators; matching a heatmap image is unnecessary.",
+      "url": "https://github.com/deeptools/deepTools",
+      "interface": "Python CLI/API",
+      "role": "Sequencing coverage, QC, and visualization",
+      "adoption": {
+        "download_evidence": "Bioconda 1.21M",
+        "stars": "762",
+        "canonical_paper_citations": "[~9.2k](https://doi.org/10.1093/nar/gkw257)"
+      }
+    },
+    {
+      "index": 38,
+      "name": "VCFtools",
+      "revision": "1f87a83402ffd17ea2723a456b7edf5d80b4a22c",
+      "file": "src/perl/fill-an-ac",
+      "source_url": "https://github.com/vcftools/vcftools/blob/1f87a83402ffd17ea2723a456b7edf5d80b4a22c/src/perl/fill-an-ac",
+      "seed": "Recalculate AC/AN and genotype QC after selecting samples from a VCF.",
+      "verification_and_limitations": "Count called alleles directly, including multiallelic and partially missing genotypes under explicit rules. Check retained sample IDs and header cardinalities; a fixed two-alleles-per-sample denominator fails missing and haploid cases.",
+      "url": "https://github.com/vcftools/vcftools",
+      "interface": "C++/Perl CLI",
+      "role": "VCF filtering, summaries, and population-genetic statistics",
+      "adoption": {
+        "download_evidence": "Bioconda 633k",
+        "stars": "562",
+        "canonical_paper_citations": "[~18.0k](https://doi.org/10.1093/bioinformatics/btr330)"
+      }
+    },
+    {
+      "index": 39,
+      "name": "SnpEff",
+      "revision": "1db15998ea6aad93a35848aca0f6cba81cd36738",
+      "file": "src/test/java/org/snpeff/snpEffect/testCases/unity/TestCasesSnps.java",
+      "source_url": "https://github.com/pcingola/SnpEff/blob/1db15998ea6aad93a35848aca0f6cba81cd36738/src/test/java/org/snpeff/snpEffect/testCases/unity/TestCasesSnps.java",
+      "seed": "Classify coding SNVs as synonymous, missense, stop gained/lost, or start changes on fresh transcripts.",
+      "verification_and_limitations": "Reconstruct strand-aware codons and compare reference/alternate translation with an independent codon table. Check transcript ID and allele orientation. SnpEff impact categories do not establish pathogenicity; freeze annotation and genetic code.",
+      "url": "https://github.com/pcingola/SnpEff",
+      "interface": "Java CLI/API",
+      "role": "Variant-effect annotation and prediction",
+      "adoption": {
+        "download_evidence": "Bioconda 617k",
+        "stars": "310",
+        "canonical_paper_citations": "[~12.8k](https://doi.org/10.4161/fly.19695)"
+      }
+    },
+    {
+      "index": 40,
+      "name": "Ensembl VEP",
+      "revision": "cee181c2a1bb31900a0b7526168c67577fb23928",
+      "file": "t/AnnotationSource_File_GTF.t",
+      "source_url": "https://github.com/Ensembl/ensembl-vep/blob/cee181c2a1bb31900a0b7526168c67577fb23928/t/AnnotationSource_File_GTF.t",
+      "seed": "Annotate variants against a supplied miniature FASTA/GTF, retaining per-transcript consequences.",
+      "verification_and_limitations": "Independently derive exon/CDS positions and codon changes; accept all requested transcripts rather than one arbitrary consequence. The source tests transcript construction and sequence explicitly. Pin assembly, transcript version, phase, and consequence vocabulary.",
+      "url": "https://github.com/Ensembl/ensembl-vep",
+      "interface": "Perl CLI/API",
+      "role": "Variant consequence annotation",
+      "adoption": {
+        "download_evidence": "Bioconda 427k",
+        "stars": "566",
+        "canonical_paper_citations": "[~8.8k](https://doi.org/10.1186/s13059-016-0974-4)"
+      }
+    },
+    {
+      "index": 41,
+      "name": "MACS2 / MACS3",
+      "revision": "ece08963b6a30f4de0c5a5e684513f876b788d2c",
+      "file": "test/test_Pileup.py",
+      "source_url": "https://github.com/macs3-project/MACS/blob/ece08963b6a30f4de0c5a5e684513f876b788d2c/test/test_Pileup.py",
+      "seed": "Build fragment pileups or call intervals above a supplied signal threshold.",
+      "verification_and_limitations": "Use independent interval accumulation, strand-specific shifts, scaling, and explicit merging rules. Verify full bedGraph/peak intervals. Such checks do not establish calibrated significance for the full MACS peak-calling model.",
+      "url": "https://github.com/macs3-project/MACS",
+      "interface": "Python CLI/API",
+      "role": "ChIP-seq and ATAC-seq peak calling",
+      "adoption": {
+        "download_evidence": "Bioconda 248k combined",
+        "stars": "781",
+        "canonical_paper_citations": "[~20.2k](https://doi.org/10.1186/gb-2008-9-9-r137)"
+      }
+    },
+    {
+      "index": 42,
+      "name": "MMseqs2",
+      "revision": "d401e78c2d18a822cdb1527d7464a043f6035a15",
+      "file": "data/workflow/easycluster.sh",
+      "source_url": "https://github.com/soedinglab/MMseqs2/blob/d401e78c2d18a822cdb1527d7464a043f6035a15/data/workflow/easycluster.sh",
+      "seed": "Cluster clearly separated synthetic sequence families and reconcile membership/representative FASTA files.",
+      "verification_and_limitations": "Check expected partition membership modulo representative choice, all IDs, and sequence preservation. State identity, coverage, and clustering mode; greedy clustering is not an all-pairs identity guarantee. Use small independently adjudicable cases.",
+      "url": "https://github.com/soedinglab/MMseqs2",
+      "interface": "C++ CLI",
+      "role": "Large-scale protein search and clustering",
+      "adoption": {
+        "download_evidence": "Bioconda 601k",
+        "stars": "2.1k",
+        "canonical_paper_citations": "[~5.3k](https://doi.org/10.1038/nbt.3988)"
+      }
+    },
+    {
+      "index": 43,
+      "name": "MUSCLE",
+      "revision": "29aa0671d0e46c862457749c7f2d87f29007b8eb",
+      "file": "test_scripts/check_results.py",
+      "source_url": "https://github.com/rcedgar/muscle/blob/29aa0671d0e46c862457749c7f2d87f29007b8eb/test_scripts/check_results.py",
+      "seed": "Score or repair a small multiple alignment using known residue correspondences.",
+      "verification_and_limitations": "Check residue preservation and independently specified pair/column correspondence scores. The inspected regression accepts relative Q/TC thresholds on benchmark alignments; do not reuse those fixtures or treat those thresholds as universal biological truth.",
+      "url": "https://github.com/rcedgar/muscle",
+      "interface": "C++ CLI",
+      "role": "Multiple sequence alignment",
+      "adoption": {
+        "download_evidence": "Bioconda 642k",
+        "stars": "285",
+        "canonical_paper_citations": "[~46.8k](https://doi.org/10.1093/nar/gkh340)"
+      }
+    },
+    {
+      "index": 44,
+      "name": "Kraken 2",
+      "revision": "8c190b1b668825935dbf6dee5f969227dc8269bb",
+      "file": "src/reports.cc",
+      "source_url": "https://github.com/DerrickWood/kraken2/blob/8c190b1b668825935dbf6dee5f969227dc8269bb/src/reports.cc",
+      "seed": "Compute direct and clade-level counts from read assignments and a frozen miniature taxonomy.",
+      "verification_and_limitations": "Sum assignments up the tree, count paired fragments once, and check unclassified denominators. Ancestor clade counts overlap and must not be summed as disjoint abundances. Full classification additionally needs a pinned reference database.",
+      "url": "https://github.com/DerrickWood/kraken2",
+      "interface": "C++ CLI",
+      "role": "K-mer-based metagenomic taxonomic classification",
+      "adoption": {
+        "download_evidence": "Bioconda 205k",
+        "stars": "924",
+        "canonical_paper_citations": "[~7.3k](https://doi.org/10.1186/s13059-019-1891-0)"
+      }
+    },
+    {
+      "index": 45,
+      "name": "BUSCO",
+      "revision": "cd071053c38c5060f75d0b370cb66c4edc8e59a1",
+      "file": "src/busco/busco_tools/hmmer.py",
+      "source_url": "https://gitlab.com/ezlab/busco/-/blob/cd071053c38c5060f75d0b370cb66c4edc8e59a1/src/busco/busco_tools/hmmer.py",
+      "seed": "Reconcile complete single-copy, duplicated, fragmented, and missing ortholog categories.",
+      "verification_and_limitations": "Count unique BUSCO IDs against a supplied lineage inventory: C = S + D and N = S + D + F + M. Multiple hits for a duplicated ortholog do not create multiple orthologs. This checks summary accounting; sequence-level completeness needs frozen models and cutoffs.",
+      "url": "https://gitlab.com/ezlab/busco",
+      "interface": "Python CLI",
+      "role": "Genome, transcriptome, and gene-set completeness",
+      "adoption": {
+        "download_evidence": "Bioconda 416k",
+        "stars": "58",
+        "canonical_paper_citations": "[~14.7k](https://doi.org/10.1093/bioinformatics/btv351)"
+      }
+    },
+    {
+      "index": 46,
+      "name": "UCSC Kent utilities",
+      "revision": "0f58b0eef93be6d6d3b26b9e2b99261d558d67df",
+      "file": "src/utils/bedGraphToBigWig/tests/makefile",
+      "source_url": "https://github.com/ucscGenomeBrowser/kent/blob/0f58b0eef93be6d6d3b26b9e2b99261d558d67df/src/utils/bedGraphToBigWig/tests/makefile",
+      "seed": "Convert small genome-browser tracks while preserving coordinates, values, and chromosome identity.",
+      "verification_and_limitations": "Compare canonical intervals/values to independently generated tracks; include unknown and mixed chromosome aliases. TwoBit tasks can check exact sequence and masking. Match individual executables; utility-specific formats, float precision, and licenses differ.",
+      "url": "https://github.com/ucscGenomeBrowser/kent",
+      "interface": "C CLI collection",
+      "role": "liftOver; 2bit, BigWig, BigBed, BED, and genome-browser formats",
+      "adoption": {
+        "download_evidence": "Bioconda 51k–594k per utility",
+        "stars": "275",
+        "canonical_paper_citations": "[~1.5k for BigWig/BigBed](https://doi.org/10.1093/bioinformatics/btq351)"
+      }
+    },
+    {
+      "index": 47,
+      "name": "GenomicRanges",
+      "revision": "44c311c711b9a5a5d6db070a8f3210819e4bc9de",
+      "file": "inst/unitTests/test_findOverlaps-methods.R",
+      "source_url": "https://github.com/Bioconductor/GenomicRanges/blob/44c311c711b9a5a5d6db070a8f3210819e4bc9de/inst/unitTests/test_findOverlaps-methods.R",
+      "seed": "Translate interval conventions and distinguish hits, counts, and qualifying features, including compound features.",
+      "verification_and_limitations": "Enumerate all expected interval pairs directly with explicit strand and adjacency rules; compare IDs and multiplicities. GRanges uses one-based closed ranges, unlike BED. Cross-tool agreement requires a correct conversion.",
+      "url": "https://github.com/Bioconductor/GenomicRanges",
+      "interface": "R/Bioconductor",
+      "role": "Genomic interval representation and operations",
+      "adoption": {
+        "download_evidence": "Bioconda 1.77M",
+        "stars": "47",
+        "canonical_paper_citations": "[~5.1k](https://doi.org/10.1371/journal.pcbi.1003118)"
+      }
+    },
+    {
+      "index": 48,
+      "name": "Biostrings",
+      "revision": "fb0cd89830abd054cf2681d6bc6c929981e07b21",
+      "file": "tests/testthat/test-translate.R",
+      "source_url": "https://github.com/Bioconductor/Biostrings/blob/fb0cd89830abd054cf2681d6bc6c929981e07b21/tests/testthat/test-translate.R",
+      "seed": "Translate coding sequences under declared genetic-code, initiation, ambiguity, and frame rules.",
+      "verification_and_limitations": "Enumerate codons using a frozen table; check exact peptides or specified errors. Tests distinguish resolvable ambiguous codons, X, initiation handling, and incomplete terminal codons. State these policies in the task.",
+      "url": "https://github.com/Bioconductor/Biostrings",
+      "interface": "R/Bioconductor",
+      "role": "DNA, RNA, and amino-acid sequence operations",
+      "adoption": {
+        "download_evidence": "Bioconda 1.74M",
+        "stars": "69",
+        "canonical_paper_citations": "—"
+      }
+    },
+    {
+      "index": 49,
+      "name": "pybedtools",
+      "revision": "efb8534c11ca6b45a6cd173ff3b3d1bf754e34a1",
+      "file": "pybedtools/test/test_1.py",
+      "source_url": "https://github.com/daler/pybedtools/blob/efb8534c11ca6b45a6cd173ff3b3d1bf754e34a1/pybedtools/test/test_1.py",
+      "seed": "Extract strand-aware sequences or compose feature filtering with interval arithmetic in Python.",
+      "verification_and_limitations": "Check bases and feature IDs by direct arithmetic on fresh BED/FASTA; preserve stream contents and repeated records. The wrapper invokes BEDTools, so comparing the two is not independent verification.",
+      "url": "https://github.com/daler/pybedtools",
+      "interface": "Python API",
+      "role": "Python interface to BEDTools and genomic intervals",
+      "adoption": {
+        "download_evidence": "Bioconda 1.35M",
+        "stars": "330",
+        "canonical_paper_citations": "[~609](https://doi.org/10.1093/bioinformatics/btr539)"
+      }
+    },
+    {
+      "index": 50,
+      "name": "nf-core/tools",
+      "revision": "eb2f709090f4054f45437c34049ea2068567c339",
+      "file": "tests/pipelines/test_schema.py",
+      "source_url": "https://github.com/nf-core/tools/blob/eb2f709090f4054f45437c34049ea2068567c339/tests/pipelines/test_schema.py",
+      "seed": "Repair a bounded pipeline configuration or module contract using a fresh sample sheet and specified biological output.",
+      "verification_and_limitations": "Validate schema and sample mappings, then check the small workflow output independently. Lint/schema success establishes configuration properties only; existing nf-core/rnaseq tests provide a downstream composition example.",
+      "url": "https://github.com/nf-core/tools",
+      "interface": "Python CLI; Nextflow ecosystem",
+      "role": "Develop, lint, launch, and manage community pipelines",
+      "adoption": {
+        "download_evidence": "Bioconda 150k",
+        "stars": "318",
+        "canonical_paper_citations": "[~4.1k for nf-core](https://doi.org/10.1038/s41587-020-0439-x)"
+      }
+    }
+  ],
+  "adoption_snapshot": {
+    "date": "2026-07-28",
+    "path": "docs/experiments/computational_biology_bioinformatics_packages.md",
+    "sha256": "648c18ced2e428d703b0fe61c1f92ad8584170d2b88479ea52ebcae61afd6121",
+    "status": "original reported metrics; not remeasured",
+    "notes": "Download registries and time windows differ; citations refer to individual papers; missing values are not zeros."
+  }
+}
