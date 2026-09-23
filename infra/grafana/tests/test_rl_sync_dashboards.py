@@ -141,7 +141,7 @@ WORKER_COUNTERS = {
 
 # The critical-path twins the driver publishes beside the tree, carrying an outcome and no place in
 # it: train_step == train_critic_and_policy and rollout_or_inference_wait == generate. One step ends
-# in a failure, because a truncated step renders exactly like a fast one.
+# in a failure, because a failed step renders exactly like a fast one.
 CRITICAL_PATH = {"train_step": CONTAINER_SECONDS, "rollout_or_inference_wait": DRIVER_PHASES["generate"]}
 FAILED_BUCKET = 4
 
@@ -676,7 +676,7 @@ def _rl_dashboards() -> dict:
 
 
 def _our_panels() -> list[dict]:
-    """Every panel this branch owns: the shared fragments, plus rl_policy_train's own panels.
+    """Every panel this branch owns: the shared fragments, plus every panel on the train step and generation boards.
 
     rl_runs.json's other panels came from marin#8562 and are deliberately left alone -- holding
     them to a rule written after they shipped would only make that PR harder to rebase onto.
@@ -1205,10 +1205,10 @@ def test_every_panel_has_a_distinct_title_id_and_slot() -> None:
         assert len(slots) == len(set(slots)), (name, slots)
 
 
-def test_the_vitals_table_names_the_clock_domain_the_ranks_and_the_truncated_steps(store) -> None:
+def test_the_vitals_table_names_the_clock_domain_the_ranks_and_the_failed_steps(store) -> None:
     """Three things decide whether anything below can be read, and all three are invisible in a
     duration: which clock the worker sink stamped, whether any worker reported at all, and whether a
-    step ended in a failure -- a truncated step renders exactly like a fast one."""
+    step ended in a failure -- a failed step renders exactly like a fast one."""
     rows = _panel_rows(store, "Span coverage: clock domain, ranks, failed steps")
 
     by_sink = {(role, clock): (ranks, steps, failed) for role, clock, ranks, steps, failed in rows}
@@ -1217,9 +1217,8 @@ def test_the_vitals_table_names_the_clock_domain_the_ranks_and_the_truncated_ste
     # are silent". The same distinction is why failed_steps is null until a row carries an outcome.
     assert by_sink[("trainer", "inclusive_wall")][0] is None, "driver rows carry no rank"
     assert by_sink[("trainer", "critical_path")] == (None, BUCKETS, 1)
-    # Nothing but the critical-path rows carries an outcome, so nothing else may report a failure.
-    # Only the critical-path sink stamps an outcome, so every other sink reports truncated steps as
-    # unknown rather than as none -- a zero there would claim no step was truncated.
+    # Only the critical-path sink stamps an outcome, so every other sink reports failed steps as
+    # unknown rather than as none -- a zero there would claim no step failed.
     assert {failed for (_, clock), (_, _, failed) in by_sink.items() if clock != "critical_path"} == {None}
 
 
@@ -1288,8 +1287,8 @@ def test_the_generate_shares_partition_the_phase(store) -> None:
 
 
 def test_the_generate_shares_are_blank_rather_than_a_single_full_band_without_the_subtree(store) -> None:
-    """156 of the 167 runs in finelog measure generate as one wall. Reporting 100% unaccounted for
-    those would read as a defect in generate rather than as an absent instrument."""
+    """156 of the 167 runs in finelog measure generate as one wall. Reporting 100% generate_span_residual
+    for those would read as a defect in generate rather than as an absent instrument."""
     store.execute(
         """DELETE FROM "telemetry_v1.marinskyrl"
            WHERE json_extract_string(attributes_json, '$.parent') = 'generate'"""
