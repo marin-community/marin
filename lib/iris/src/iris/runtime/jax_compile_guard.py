@@ -88,7 +88,13 @@ class _CompileGuardState:
 def install_gpu_compile_guard() -> None:
     """Guard JAX's shared compile entry point after Iris joins a distributed world."""
     import numpy as np  # noqa: PLC0415 - optional Iris dependency
-    from jax._src import cache_key, compiler, distributed, profiler  # noqa: PLC0415 - optional Iris dependency
+    from jax._src import (  # noqa: PLC0415 - optional Iris dependency
+        compilation_cache,
+        compiler,
+        config,
+        distributed,
+        profiler,
+    )
     from jax._src.lib import xla_client as xc  # noqa: PLC0415 - optional Iris dependency
     from jax._src.lib.mlir import ir  # noqa: PLC0415 - optional Iris dependency
 
@@ -113,7 +119,13 @@ def install_gpu_compile_guard() -> None:
             if client is None:
                 raise RuntimeError("multi-process GPU compile has no JAX coordinator")
             process_id = distributed.global_state.process_id
-            fingerprint = cache_key.get(computation, devices, compile_options, backend)
+            fingerprint = compilation_cache.get_cache_key(
+                computation,
+                devices,
+                compile_options,
+                backend,
+                config.remove_custom_partitioning_ptr_from_cache_key.value,
+            )
             state.check(client, process_ids, process_id, fingerprint)
             logger.debug("GPU compile fingerprint matched across processes %s: %s", process_ids, fingerprint)
 
