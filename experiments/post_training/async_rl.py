@@ -621,12 +621,12 @@ def build_run(policy: PolicySpec, preset: AsyncPreset, version: str | None, sett
             wandb_entity=None,
         ),
     )
-    # The evaluation serves the rendered window, so a --set on the budget reaches the server; these
-    # two fields are the only ones evaluation_serving reads.
+    # The evaluation serves the rendered window, so a --set on the budget reaches the server.
+    # evaluation_serving adds max_new_tokens to request_window_tokens, so it gets the prompt share.
     budget = config["context_budget"]
     served = replace(
         CURRICULUM_TEMPLATE,
-        request_window_tokens=budget["request_window_tokens"],
+        request_window_tokens=budget["request_window_tokens"] - budget["max_new_tokens_per_turn"],
         max_new_tokens=budget["max_new_tokens_per_turn"],
     )
     # The eval artifact is keyed on the model name; the owner keeps two users at one version apart.

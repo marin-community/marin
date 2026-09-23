@@ -256,7 +256,7 @@ def test_run_wires_the_curriculum_pool_and_snowball_export_into_one_chain(owner)
     assert changed.evaluation.name != run.evaluation.name
     evaluation = changed.evaluation
     served = evaluation.build_config(StepContext.for_fingerprint(evaluation.runtime_args.keys(), evaluation.deps))
-    assert served.model.serve.max_model_len == 4096 + async_rl.SMOKE_PRESET.max_new_tokens
+    assert served.model.serve.max_model_len == 4096
 
 
 def test_command_plans_without_running(owner):
