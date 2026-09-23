@@ -31,7 +31,6 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer
 
 _CHECKPOINT_STEP = 0
-_CONVERSION_ENV = {"XLA_PYTHON_CLIENT_PREALLOCATE": "false"}
 
 
 @dataclass(frozen=True)
@@ -78,7 +77,11 @@ def _run_snowball_hf_to_grug(config: SnowballHfToGrugConfig) -> None:
 
 
 def _convert_job(config: SnowballHfToGrugConfig) -> None:
-    remote(_run_snowball_hf_to_grug, resources=config.resources, env_vars=_CONVERSION_ENV)(config)
+    remote(
+        _run_snowball_hf_to_grug,
+        resources=config.resources,
+        env_vars={"XLA_PYTHON_CLIENT_PREALLOCATE": "false"},
+    )(config)
 
 
 def snowball_hf_to_grug(
