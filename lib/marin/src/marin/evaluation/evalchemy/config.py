@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from rigging.secrets import is_secret_reference
 
 RESERVED_ENDPOINT_MODEL_ARGS = frozenset({"model", "base_url", "tokenizer", "tokenizer_backend", "tokenized_requests"})
+JUDGE_API_KEY_ENV = "JUDGE_API_KEY"
 
 
 class EvalchemyJudgeConfig(BaseModel):

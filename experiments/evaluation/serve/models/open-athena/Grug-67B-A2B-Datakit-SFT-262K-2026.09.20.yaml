@@ -1,0 +1,21 @@
+name: snowball-datakit-sft-2026-09-20
+location: open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.20
+revision: 9f2ee50f3d4a12c79b0808bb2414ddba2cdf0098
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 8
+  memory: 512g
+serve:
+  tensor_parallel_size: 1
+  data_parallel_size: 8
+  max_model_len: 73728
+  max_num_seqs: 32
+  auto_overrides: false
+  vllm_extra_args:
+  - --enable-expert-parallel
+  - --model-loader-extra-config
+  - '{"distributed":true}'
+generation:
+  extra_gen_kwargs:
+    skip_special_tokens: "false"
