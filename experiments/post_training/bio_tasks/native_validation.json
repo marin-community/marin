@@ -838,6 +838,38 @@
       "checks_file": "native_validation_runs/fd1f4c3a31f1.json",
       "checks_sha256": "9a3ea2a1acb13d31a957ebded136984fc79a8e96cc4af1c18b2ebcf0b3c3a803",
       "limitations": "Observed ENA ERR266411 paired reads, three disjoint 2,000-pair blocks per operation. Fastp outputs verified against complete FASTQ contracts. No Harbor task-image validation or teacher calls; full benchmark-lineage screening pending. No contract or tolerance changes."
+    },
+    {
+      "checked_at": "2026-09-23",
+      "source_revision": "035bb3a42edce56c7018d6654a99f89209251127",
+      "environment_kind": "CPU-only task on an existing reserved TRC v4 host; serial isolated Conda environments",
+      "region": "us-central2",
+      "storage_backend": "GCS",
+      "base_image": "python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c",
+      "resources": {
+        "cpu": 1,
+        "memory_gib": 16,
+        "disk_gib": 48,
+        "concurrent_workers": 1,
+        "timeout_seconds": 3600,
+        "automatic_retries": 0
+      },
+      "corpus_manifest_sha256": "3ee01f06891b71e6aba462fdb333cbd0a14d09b7dfaf0dbc37c249fdf5da67a0",
+      "input_bundle_sha256": "19699ecae34481a9357eb41aaefab06c9c320b83f5beacf450b616401401ca57",
+      "output_archive_sha256": "4c83b37cef6fdf2d17c722fc144608bdfe4c538845e447022bb84ca2a54d35fd",
+      "output_archive_bytes": 8986,
+      "summary": {
+        "expected_repositories": 50,
+        "attempted_repositories": 2,
+        "passed_repositories": 1,
+        "execution_failed_repositories": 1,
+        "planned_cases": 6,
+        "completed_cases": 3,
+        "passing_cases": 3
+      },
+      "checks_file": "native_validation_runs/035bb3a42edc.json",
+      "checks_sha256": "e25bee47ed821c39f57ee02694466eb72ca8a36356bef346ee6de1757fe34ddd",
+      "limitations": "Six complete curated UniProt globins per case, three distinct protein sets. MUSCLE aligned FASTA outputs meet the fixed 95% pairwise-bound objective and preserve all residues; MAFFT environment installation failed before execution. No Harbor task-image validation or teacher calls; full benchmark-lineage screening pending. No contract or tolerance changes."
     }
   ]
 }

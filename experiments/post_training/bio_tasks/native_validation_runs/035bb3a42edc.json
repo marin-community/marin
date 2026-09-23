@@ -1,0 +1,476 @@
+{
+  "schema_version": 1,
+  "source_revision": "035bb3a42edce56c7018d6654a99f89209251127",
+  "checks": [
+    {
+      "repository_index": 10,
+      "repository": "MAFFT",
+      "recipe": "real-protein-alignment",
+      "status": "environment_failed",
+      "execution": "environment_failed",
+      "requested_packages": [
+        "bioconda::mafft=7.525",
+        "python=3.12"
+      ],
+      "cases": [
+        {
+          "task_id": "real-protein-alignment-v1-20260923-00000",
+          "recipe": "real-protein-alignment",
+          "execution": "not_run",
+          "verification": {
+            "status": "not_completed",
+            "reward": null
+          }
+        },
+        {
+          "task_id": "real-protein-alignment-v1-20260923-00001",
+          "recipe": "real-protein-alignment",
+          "execution": "not_run",
+          "verification": {
+            "status": "not_completed",
+            "reward": null
+          }
+        },
+        {
+          "task_id": "real-protein-alignment-v1-20260923-00002",
+          "recipe": "real-protein-alignment",
+          "execution": "not_run",
+          "verification": {
+            "status": "not_completed",
+            "reward": null
+          }
+        }
+      ],
+      "environment": {
+        "install_log_sha256": "cb531989ac156fd9a18c751e1b7870be151bc00b3cb0fa625f64d8fe28028f1d"
+      },
+      "observed_failure": "MAFFT Bioconda version conflicts with strict conda-forge channel priority; no operation executed."
+    },
+    {
+      "repository_index": 43,
+      "repository": "MUSCLE",
+      "recipe": "real-protein-alignment",
+      "status": "passed",
+      "execution": "completed",
+      "requested_packages": [
+        "bioconda::muscle=5.3",
+        "python=3.12"
+      ],
+      "cases": [
+        {
+          "task_id": "real-protein-alignment-v1-20260923-00000",
+          "recipe": "real-protein-alignment",
+          "execution": "completed",
+          "input_sha256": {
+            "proteins.fa": "c4e783e8c1bddf70080d1689893df21aaa7bbec16268d8b7fb8abcba5edcfc83",
+            "proteins.tsv": "2cf616086bbc07aed287c6db8b548f445ed3067830a5ae6a2532213e0b8a2bf9",
+            "query.json": "15e8d2144c5aeefab4784fe46750c907c2843b14097396c949b5d0ff0c3c4d56"
+          },
+          "artifact_sha256": {
+            "alignment.fa": "45153610347ca72c669b878c0ed28d9cfa3a65f6c19e465f73f4b53e5ed42b95",
+            "answer.json": "f80d39e5b072aec418f83406a38fde3a22408094b679ea0c4be1199453a74b78",
+            "commands.jsonl": "c00d9d613bbb496ecc96532119fd5c600dc053171662ab9445361e4d2202e5b3",
+            "execution.json": "b3191f666084e8ade6a0437c8d672bfdfc73bc28b3becd4f27e5999e3ecbf9da",
+            "muscle.stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "muscle.stdout.stderr": "b8bacfafa5a3dd29c7bfe2ac5575b313c399e233a5d85e829f1111b9051925a6"
+          },
+          "commands": [
+            {
+              "argv": [
+                "muscle",
+                "-align",
+                "<inputs>/proteins.fa",
+                "-output",
+                "<work>/alignment.fa",
+                "-threads",
+                "1"
+              ],
+              "exit_code": 0,
+              "elapsed_seconds": 0.11460088699823245
+            }
+          ],
+          "verification": {
+            "status": "scored",
+            "reward": 1.0,
+            "field_checks": 6
+          }
+        },
+        {
+          "task_id": "real-protein-alignment-v1-20260923-00001",
+          "recipe": "real-protein-alignment",
+          "execution": "completed",
+          "input_sha256": {
+            "proteins.fa": "5a55522d2edf61a6de4894883f572f282846c4920108d8afe4e96234e457e81b",
+            "proteins.tsv": "7febf077dce94cf9d9b1f0da1ae01d92093a4fd8c53083b3bdbe0c16f583df3b",
+            "query.json": "0c2b00f6df373194d510193190c9e6dadc888268bb686de509c7379eceb15fef"
+          },
+          "artifact_sha256": {
+            "alignment.fa": "5b60999eb9a00d70b85efcfb115bbcb7fd38a74ba93b4c3502d54172fdebc195",
+            "answer.json": "6bdb4d2652bd90ec0520fe8d6481a82e69a35064e95cd36f519eaed690f556b7",
+            "commands.jsonl": "589f0b10a4e21f63aa6dcced38e8d77971731c9109ff292752ecba1dc06d3656",
+            "execution.json": "6166cb2d9cf12e08fcd933ed50b5809c3e895c0503302b92c65729d42cfad4b8",
+            "muscle.stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "muscle.stdout.stderr": "b0467ffc12a563bb855c6d7dc484a8d3bc1345d2463350f08619a63a8f7a2c18"
+          },
+          "commands": [
+            {
+              "argv": [
+                "muscle",
+                "-align",
+                "<inputs>/proteins.fa",
+                "-output",
+                "<work>/alignment.fa",
+                "-threads",
+                "1"
+              ],
+              "exit_code": 0,
+              "elapsed_seconds": 0.11463048699079081
+            }
+          ],
+          "verification": {
+            "status": "scored",
+            "reward": 1.0,
+            "field_checks": 6
+          }
+        },
+        {
+          "task_id": "real-protein-alignment-v1-20260923-00002",
+          "recipe": "real-protein-alignment",
+          "execution": "completed",
+          "input_sha256": {
+            "proteins.fa": "6203d05b9e4a0ad25d6167fb43dbda85e82ba043fa0014f70063c7968c9d1cc4",
+            "proteins.tsv": "4043cf4fb35e3030b751e6e98717af223dd60d6d1ee323d94d5b9697b29073cb",
+            "query.json": "e768288f78f61a7a478eb3d9d422878aa35c9df80b6ebfaa635a747cd9bbe1a6"
+          },
+          "artifact_sha256": {
+            "alignment.fa": "2272533c4d2c4f5782cc99d7082f0b8eb763d981ddeae03e2215bb0e282bdef2",
+            "answer.json": "d7367202652843dc5d7bb8d02919261968d8207eee344a63e53cc670af5f2946",
+            "commands.jsonl": "ec1da37982f558f7ba7a59c71d22d32597ea7cd7155ad7cfdca1da9eea9a6ff7",
+            "execution.json": "f9b76e9b93dc3dda3cda669526b3dc78e7e3ad97c90893a973e5b92bbf6a7488",
+            "muscle.stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "muscle.stdout.stderr": "41503221a46e47b451a938cb14013b06ef4b2a4ec0fc24b76d6cd68ac3600140"
+          },
+          "commands": [
+            {
+              "argv": [
+                "muscle",
+                "-align",
+                "<inputs>/proteins.fa",
+                "-output",
+                "<work>/alignment.fa",
+                "-threads",
+                "1"
+              ],
+              "exit_code": 0,
+              "elapsed_seconds": 0.11463584699959029
+            }
+          ],
+          "verification": {
+            "status": "scored",
+            "reward": 1.0,
+            "field_checks": 6
+          }
+        }
+      ],
+      "environment": {
+        "resolved_artifact_urls": [
+          "https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/bzip2-1.0.8-hda65f42_10.conda",
+          "https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.7.22-hbd8a1cb_0.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/icu-78.3-py310h44b86e0_2.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/ld_impl_linux-64-2.46.1-default_hbd61a6d_102.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/libexpat-2.8.4-hd2095e1_0.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/libffi-3.7.0-h81df57d_1.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/libgcc-16.2.0-ha9f2e26_5.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/libgomp-16.2.0-he0feb66_5.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/liblzma-5.8.3-hb03c661_1.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/libnsl-2.0.1-hb9d3cd8_1.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/libpython-3.12.14-h0c77377_3_cpython.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/libsqlite-3.53.4-h13e7031_1.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/libstdcxx-16.2.0-h934c35e_5.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/libuuid-2.42.4-hcfc3c73_0.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/libxcrypt-4.4.38-h280c20c_0.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/libzlib-1.3.2-h25fd6f3_3.conda",
+          "https://conda.anaconda.org/bioconda/linux-64/muscle-5.3-h9948957_3.tar.bz2",
+          "https://conda.anaconda.org/conda-forge/linux-64/ncurses-6.6-hdb14827_1.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/openssl-3.6.4-h781a0a9_0.conda",
+          "https://conda.anaconda.org/conda-forge/noarch/packaging-26.3-pyhc364b38_0.conda",
+          "https://conda.anaconda.org/conda-forge/noarch/pip-26.2.1-pyh8b19718_0.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/python-3.12.14-h5f976f7_3_cpython.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/readline-8.3-hd6e31c0_1.conda",
+          "https://conda.anaconda.org/conda-forge/noarch/setuptools-84.0.0-pyh332efcf_0.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/tk-8.6.13-noxft_h1df4ec4_4.conda",
+          "https://conda.anaconda.org/conda-forge/noarch/tzdata-2026c-h151e31d_0.conda",
+          "https://conda.anaconda.org/conda-forge/noarch/wheel-0.48.0-pyhd8ed1ab_0.conda",
+          "https://conda.anaconda.org/conda-forge/linux-64/zstd-1.5.7-hb78ec9c_7.conda"
+        ],
+        "explicit_file_sha256": "c6523d915a13e95913c0afb8bc4e7cc99973781a4be67ccc48bacd7c74c4439e",
+        "install_log_sha256": "0da2a991b2933c643e03003456657aaec177a412a52f37180e239b270d641f1e",
+        "resolved_packages": [
+          {
+            "name": "_openmp_mutex",
+            "version": "4.5",
+            "build": "20_gnu",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda",
+            "sha256": "1dd3fffd892081df9726d7eb7e0dea6198962ba775bd88842135a4ddb4deb3c9",
+            "md5": "a9f577daf3de00bca7c3c76c0ecbd1de"
+          },
+          {
+            "name": "bzip2",
+            "version": "1.0.8",
+            "build": "hda65f42_10",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/bzip2-1.0.8-hda65f42_10.conda",
+            "sha256": "1a0d382c515ebf55f8ee1f38c8b81bc95af5c2acc42ad53b66bc5df932032f96",
+            "md5": "e675fabcf81499adc7edf58124fb1e01"
+          },
+          {
+            "name": "ca-certificates",
+            "version": "2026.7.22",
+            "build": "hbd8a1cb_0",
+            "subdir": "noarch",
+            "url": "https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.7.22-hbd8a1cb_0.conda",
+            "sha256": "0a0544cf95f64394fe4959286f5c71f5444ad58feb0602e53becb27448d24da6",
+            "md5": "0f51e2391ade309db462a55611263e9c"
+          },
+          {
+            "name": "icu",
+            "version": "78.3",
+            "build": "py310h44b86e0_2",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/icu-78.3-py310h44b86e0_2.conda",
+            "sha256": "9f07834f0c546ab14d885ce0366285f61f44e326c0edd1fc63b8294e113ae432",
+            "md5": "72a381cbad04f24b1c2a43ef707f45b4"
+          },
+          {
+            "name": "ld_impl_linux-64",
+            "version": "2.46.1",
+            "build": "default_hbd61a6d_102",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/ld_impl_linux-64-2.46.1-default_hbd61a6d_102.conda",
+            "sha256": "27d83f1188cd19bcb7754a078b3fa7f4cfb8527f8eb2fde54dd01fc529d1adec",
+            "md5": "449500f2c089da11c40f5c21312e3e07"
+          },
+          {
+            "name": "libexpat",
+            "version": "2.8.4",
+            "build": "hd2095e1_0",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libexpat-2.8.4-hd2095e1_0.conda",
+            "sha256": "2f5e90b621f7bf64c35d5c972bd85a645555d82404130569149a129dcbc8b8dd",
+            "md5": "a77b44d6cbaad97f3ad050ab35fad55a"
+          },
+          {
+            "name": "libffi",
+            "version": "3.7.0",
+            "build": "h81df57d_1",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libffi-3.7.0-h81df57d_1.conda",
+            "sha256": "c8c7583ef063bc3c430f1d48298e5ad24f796a35c22ed5b14183325825a61106",
+            "md5": "6525a0b06aa4fd390795f0740636a9dd"
+          },
+          {
+            "name": "libgcc",
+            "version": "16.2.0",
+            "build": "ha9f2e26_5",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libgcc-16.2.0-ha9f2e26_5.conda",
+            "sha256": "33d1b5d57c5a55a474330c5ec41fe7001a5aa600d9639389e8ce5edafae216a4",
+            "md5": "3b62b92f0f082b67c59618ebf07617a7"
+          },
+          {
+            "name": "libgomp",
+            "version": "16.2.0",
+            "build": "he0feb66_5",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libgomp-16.2.0-he0feb66_5.conda",
+            "sha256": "224a5a09e258a1a257089a9af310e9336e1d36834959718a9fab8679742dd822",
+            "md5": "af44890f8a2beefd3a83805a59a65014"
+          },
+          {
+            "name": "liblzma",
+            "version": "5.8.3",
+            "build": "hb03c661_1",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/liblzma-5.8.3-hb03c661_1.conda",
+            "sha256": "9787df8c22a59c9a70d3e5a10db9ad663485e75e9ccc3f09bd092cb7b95e0dab",
+            "md5": "1390b7c5ac0b1d8e447bc5efa6d3c8c2"
+          },
+          {
+            "name": "libnsl",
+            "version": "2.0.1",
+            "build": "hb9d3cd8_1",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libnsl-2.0.1-hb9d3cd8_1.conda",
+            "sha256": "927fe72b054277cde6cb82597d0fcf6baf127dcbce2e0a9d8925a68f1265eef5",
+            "md5": "d864d34357c3b65a4b731f78c0801dc4"
+          },
+          {
+            "name": "libpython",
+            "version": "3.12.14",
+            "build": "h0c77377_3_cpython",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libpython-3.12.14-h0c77377_3_cpython.conda",
+            "sha256": "6be16a4906d83eb8e9e04375d524f339f426a847cffd294f1ceb0611988dc17a",
+            "md5": "d247b7632f09324c11f24b5270361385"
+          },
+          {
+            "name": "libsqlite",
+            "version": "3.53.4",
+            "build": "h13e7031_1",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libsqlite-3.53.4-h13e7031_1.conda",
+            "sha256": "f20d70da54e5b31dd4a51fb1efeaafafd5ab6dd8d7ac9d1438eaa2526ac4ed3d",
+            "md5": "e72bbec309c2b0f37823ee7d4fabfcd3"
+          },
+          {
+            "name": "libstdcxx",
+            "version": "16.2.0",
+            "build": "h934c35e_5",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libstdcxx-16.2.0-h934c35e_5.conda",
+            "sha256": "38cadde30fad8f7c101f9eec79f60bf03fc99310c7195d23f8b30832516d666f",
+            "md5": "75b43a2912a0354204696708e4f34b8d"
+          },
+          {
+            "name": "libuuid",
+            "version": "2.42.4",
+            "build": "hcfc3c73_0",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libuuid-2.42.4-hcfc3c73_0.conda",
+            "sha256": "f34b8d1de9a2bf62476d8608057d9b8a918d97444236dc53a47128f2fae79041",
+            "md5": "54a948337e66706380ff24d6b5fde63f"
+          },
+          {
+            "name": "libxcrypt",
+            "version": "4.4.38",
+            "build": "h280c20c_0",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libxcrypt-4.4.38-h280c20c_0.conda",
+            "sha256": "f7e9292dd219a6435bbb1223da9586c3e70d66d169c5a92f08db3f2127df04e9",
+            "md5": "f7a7ff5a6ab331e037abd34f379a631d"
+          },
+          {
+            "name": "libzlib",
+            "version": "1.3.2",
+            "build": "h25fd6f3_3",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libzlib-1.3.2-h25fd6f3_3.conda",
+            "sha256": "eb8a0db0aa570124f7d2a93d7c7f596e3390df5e047818d873baad32985fc736",
+            "md5": "0de0122d9570a8ab637c6b73db268389"
+          },
+          {
+            "name": "muscle",
+            "version": "5.3",
+            "build": "h9948957_3",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/bioconda/linux-64/muscle-5.3-h9948957_3.tar.bz2",
+            "sha256": "e0fb500aef23bb13fcd6b4676c0064a1e3ccc63bf68e375d10f9b1edf9042380",
+            "md5": "a467dd774f2bf0e239c3da30ccca7240"
+          },
+          {
+            "name": "ncurses",
+            "version": "6.6",
+            "build": "hdb14827_1",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/ncurses-6.6-hdb14827_1.conda",
+            "sha256": "5d46557214ed184381dafe835b7c94a474a1c3b307a08a250b1ea4779b44ffb3",
+            "md5": "ee6c0cd80a60961a1f48aa3e0b91f986"
+          },
+          {
+            "name": "openssl",
+            "version": "3.6.4",
+            "build": "h781a0a9_0",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/openssl-3.6.4-h781a0a9_0.conda",
+            "sha256": "4747b2d6a8336f52343bceb8a1ebf41a9e6e665b9d2e3f989972de53a310599e",
+            "md5": "16e3034a330cc625f2c685edec60cf4e"
+          },
+          {
+            "name": "packaging",
+            "version": "26.3",
+            "build": "pyhc364b38_0",
+            "subdir": "noarch",
+            "url": "https://conda.anaconda.org/conda-forge/noarch/packaging-26.3-pyhc364b38_0.conda",
+            "sha256": "c432626b16768b8dab228bfb706f7060c2d462a21c516d240f68f2f902b5a044",
+            "md5": "936687ed80f295a1f5dbcf8bd34c252c"
+          },
+          {
+            "name": "pip",
+            "version": "26.2.1",
+            "build": "pyh8b19718_0",
+            "subdir": "noarch",
+            "url": "https://conda.anaconda.org/conda-forge/noarch/pip-26.2.1-pyh8b19718_0.conda",
+            "sha256": "c205bae42eb11b364fe3663a817cbcbc20a8ef544c6b2ff6f391013487117259",
+            "md5": "77b6cf3b0689d9fc68561df0db9b856d"
+          },
+          {
+            "name": "python",
+            "version": "3.12.14",
+            "build": "h5f976f7_3_cpython",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/python-3.12.14-h5f976f7_3_cpython.conda",
+            "sha256": "14c579b1016da04e4c9f1c5c857272d83ec447317d8c4074a07d59de3cef70ef",
+            "md5": "98be3cf76eca2e8871f907a03aed3b84"
+          },
+          {
+            "name": "readline",
+            "version": "8.3",
+            "build": "hd6e31c0_1",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/readline-8.3-hd6e31c0_1.conda",
+            "sha256": "01b3fe073a66e321970d09e04b388708f8cbdca5cdfbfcb7c9eeb470ad10383d",
+            "md5": "69c01c781e7c8190bbdaf79e3848c5ca"
+          },
+          {
+            "name": "setuptools",
+            "version": "84.0.0",
+            "build": "pyh332efcf_0",
+            "subdir": "noarch",
+            "url": "https://conda.anaconda.org/conda-forge/noarch/setuptools-84.0.0-pyh332efcf_0.conda",
+            "sha256": "9e200ee5f9ff19a4d94e4b51c4856d53dec849f91032f345cf0c6bc3d51a7183",
+            "md5": "62ac906f1cd582c6c264c95625cb9d6f"
+          },
+          {
+            "name": "tk",
+            "version": "8.6.13",
+            "build": "noxft_h1df4ec4_4",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/tk-8.6.13-noxft_h1df4ec4_4.conda",
+            "sha256": "a1a241d172c1ccab067ba245206dd048bc3c2d1b84504b53c9468e99adfc16a1",
+            "md5": "676a2f9b1c4fcf57b70aa5c65f6c60d0"
+          },
+          {
+            "name": "tzdata",
+            "version": "2026c",
+            "build": "h151e31d_0",
+            "subdir": "noarch",
+            "url": "https://conda.anaconda.org/conda-forge/noarch/tzdata-2026c-h151e31d_0.conda",
+            "sha256": "b928c30ddcb0e3f544c6eade8352737e6e610e263276b90232db6a578ef899d8",
+            "md5": "fcb489df604d100968b737f2cb6076c6"
+          },
+          {
+            "name": "wheel",
+            "version": "0.48.0",
+            "build": "pyhd8ed1ab_0",
+            "subdir": "noarch",
+            "url": "https://conda.anaconda.org/conda-forge/noarch/wheel-0.48.0-pyhd8ed1ab_0.conda",
+            "sha256": "ba64b29b6d418024cb565081a1799262cb2780d2534ff4c14f76aa858c4286cd",
+            "md5": "9a2124517bfd5d792e0f7b86eefdfeb8"
+          },
+          {
+            "name": "zstd",
+            "version": "1.5.7",
+            "build": "hb78ec9c_7",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/zstd-1.5.7-hb78ec9c_7.conda",
+            "sha256": "47d682b9f6d6ec9eb1a6e6c3e75ea6273e899e78fb7fc59f81d39745009fbc60",
+            "md5": "aa459086047c0e5e27023ab19f8cb86a"
+          }
+        ],
+        "lock_sha256": "1413f0e20c9e99a779d94b7504d66dbe4bbafef58e8e6e01aaa79cd9bbe7e9ce"
+      }
+    }
+  ]
+}

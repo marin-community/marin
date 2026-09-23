@@ -189,9 +189,13 @@
       ],
       "source_url": "https://github.com/GSLBiotech/mafft/blob/26ecaba0130b533cf06a29200f0fb40829c00101/test/script",
       "tool_execution": {
-        "status": "implemented_unvalidated",
-        "evidence": null,
-        "scope": "real-protein-alignment"
+        "status": "execution_failed",
+        "evidence": "native_validation_runs/035bb3a42edc.json",
+        "source_revision": "035bb3a42edce56c7018d6654a99f89209251127",
+        "instances": 3,
+        "passing_instances": 0,
+        "scope": "real-protein-alignment",
+        "observed_failure": "MAFFT Bioconda version conflicts with strict conda-forge channel priority; no operation executed."
       },
       "scope": "Construct or repair a small multiple alignment under a specified scoring or correspondence rule.",
       "limitations": "Check residue preservation plus independently established aligned residue pairs or a small exact scoring objective; allow equivalent alignments. The supplied repository is a 2020 snapshot; its bytewise regression diffs do not establish biological optimality."
@@ -773,8 +777,11 @@
       ],
       "source_url": "https://github.com/rcedgar/muscle/blob/29aa0671d0e46c862457749c7f2d87f29007b8eb/test_scripts/check_results.py",
       "tool_execution": {
-        "status": "implemented_unvalidated",
-        "evidence": null,
+        "status": "passed_reference_check",
+        "evidence": "native_validation_runs/035bb3a42edc.json",
+        "source_revision": "035bb3a42edce56c7018d6654a99f89209251127",
+        "instances": 3,
+        "passing_instances": 3,
         "scope": "real-protein-alignment"
       },
       "scope": "Score or repair a small multiple alignment using known residue correspondences.",

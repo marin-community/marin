@@ -94,13 +94,13 @@
     },
     {
       "repository_index": 10,
-      "channel": "bioconda",
+      "channel": "conda-forge",
       "package": "mafft",
       "version": "7.525",
-      "artifact": "linux-64/mafft-7.525-h031d066_1.tar.bz2",
-      "sha256": "",
-      "metadata_source": "https://api.anaconda.org/package/bioconda/mafft",
-      "checked_at": "2026-09-23T18:37:49.682363+00:00"
+      "artifact": "linux-64/mafft-7.525-h56fdecd_0.conda",
+      "sha256": "9bf7504a326f59ddc3ae93a4cd253b3d3afd9c0ced2821a05116d709aecf3f27",
+      "metadata_source": "https://api.anaconda.org/package/conda-forge/mafft",
+      "checked_at": "2026-09-23T23:53:00Z"
     },
     {
       "repository_index": 11,

@@ -56,11 +56,11 @@ models biological/technical read routing from a CSV ledger; it does not read an 
 
 Every source repository has a scientific-operation mapping in
 `repository_coverage.json`. Actual CLI/API execution remains a distinct requirement
-for all 50 repositories. 32 packages now pass three reference cases each. The
+for all 50 repositories. 33 packages now pass three reference cases each. The
 first CoreWeave run passed 22 packages; corrections on an existing TRC host passed
-10 more, with captured outputs downloaded from regional GCS. Picard quality-yield and
-fastp paired-filter checks pass on observed reads. MAFFT and MUSCLE alignment scripts
-are implemented and await execution; sixteen other repositories still need scripts. `native_validation.json` indexes separate checksum-pinned
+11 more, with captured outputs downloaded from regional GCS. Picard quality-yield and
+fastp paired-filter checks pass on observed reads. MUSCLE passed three real-protein alignments; MAFFT needs a corrected channel pin
+after an installation conflict. Sixteen other repositories still need scripts. `native_validation.json` indexes separate checksum-pinned
 files under `native_validation_runs/`; earlier failures and resolved environments
 remain in that history. The current generated solver environment contains Python;
 it does not yet establish native tool execution. Repository source revisions and
