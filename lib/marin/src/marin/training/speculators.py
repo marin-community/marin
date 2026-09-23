@@ -298,6 +298,7 @@ def _capture_vllm_args(config: HiddenStateCaptureConfig, hidden_states_path: Pat
     }
     return [
         "--enforce-eager",
+        "--i-know-i-am-making-vllm-slow",
         "--no-enable-flashinfer-autotune",
         "--data-parallel-size",
         str(config.data_parallel_size),
