@@ -166,11 +166,12 @@ to the launcher's shared `evals` root; its artifact path contains the pipeline c
 override is a runtime arg, so changing it does not change the artifact identity. Produced-model
 adapters such as `SkyRLEvaluationModel` use the same `eval_step` entry point.
 
-Use `ArtifactEvaluationModel` for an HF-format target produced by another step. Pass an
-`ArtifactSpeculativeModel` through `eval_step(..., speculative=draft)` to evaluate an artifact-backed
-draft. The control arm omits `speculative`; initial and trained draft arms pass different artifact
-handles to the same function. Artifact paths are resolved in `pipeline.py` before the generic
-evaluation runner starts.
+Use `ArtifactEvaluationModel` for an HF-format target produced by another step. Use
+`draft_model_step(source, name=..., version=..., method=SpeculativeMethod.EAGLE3,
+num_speculative_tokens=...)` to turn a produced or adopted draft source into a
+`DraftModelArtifact`. Pass its handle through `eval_step(..., speculative=draft)`. The control arm
+omits `speculative`; initial and trained draft arms pass different handles to the same function.
+The pipeline loads the draft's resolved URI and identity before the generic evaluation runner starts.
 
 The resulting `EvaluationResult.results_paths` tuple points at the sealed FineStore archives in run
 order. Downstream offline rollout processing should depend on this typed result instead of rebuilding

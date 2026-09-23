@@ -62,6 +62,9 @@ class EvalStepConfig:
     submission_cluster: str
     federated_cluster: str | None
     version: str
+    # The dependency has no value record during fingerprinting; its recipe identity still
+    # distinguishes draft policies and sources in the evaluation step's drift check.
+    speculative_artifact_identity: str | None = None
 
 
 class EvaluationResult(Artifact):
@@ -79,14 +82,6 @@ class EvaluationModelSource(Protocol):
     def deps(self) -> tuple[ArtifactStep, ...]: ...
 
     def resolve(self, ctx: StepContext) -> ModelConfig: ...
-
-
-class EvaluationSpeculativeSource(Protocol):
-    """An optional draft resolved before the generic evaluation runner starts."""
-
-    def deps(self) -> tuple[ArtifactStep, ...]: ...
-
-    def resolve(self, ctx: StepContext) -> SpeculativeServingConfig: ...
 
 
 @dataclass(frozen=True)
@@ -120,27 +115,71 @@ class ArtifactEvaluationModel:
         return replace(self.model, location=location, identity=artifact_identity(self.step))
 
 
-@dataclass(frozen=True)
-class ArtifactSpeculativeModel:
-    """A draft artifact resolved into the generic speculative-serving contract."""
+class DraftModelArtifact(Artifact):
+    """A resolved draft model that an evaluation step can load from its dependency record."""
 
-    step: ArtifactStep
+    model: ResolvedModelLocator
     method: SpeculativeMethod
     num_speculative_tokens: int
-    relative_path: str = ""
 
-    def deps(self) -> tuple[ArtifactStep, ...]:
-        return (self.step,)
+    def url(self) -> str:
+        return self.model.uri
 
-    def resolve(self, ctx: StepContext) -> SpeculativeServingConfig:
-        uri = ctx.artifact_path(self.step)
-        if self.relative_path:
-            uri = prefix_join(uri, self.relative_path)
+    def config(self) -> SpeculativeServingConfig:
         return SpeculativeServingConfig(
             method=self.method,
-            model=ResolvedModelLocator(uri=uri, identity=artifact_identity(self.step)),
+            model=self.model,
             num_speculative_tokens=self.num_speculative_tokens,
         )
+
+
+@dataclass(frozen=True)
+class DraftModelStepConfig:
+    artifact_path: str
+    model: ResolvedModelLocator
+    method: SpeculativeMethod
+    num_speculative_tokens: int
+
+
+def run_draft_model_step(config: DraftModelStepConfig) -> DraftModelArtifact:
+    return DraftModelArtifact(
+        path=config.artifact_path,
+        model=config.model,
+        method=config.method,
+        num_speculative_tokens=config.num_speculative_tokens,
+    )
+
+
+def draft_model_step(
+    source: ArtifactStep,
+    *,
+    name: str,
+    version: str,
+    method: SpeculativeMethod,
+    num_speculative_tokens: int,
+    relative_path: str = "",
+) -> ArtifactStep[DraftModelArtifact]:
+    """Adapt a produced or adopted draft source into a typed evaluation dependency."""
+
+    def build_config(ctx: StepContext) -> DraftModelStepConfig:
+        uri = ctx.artifact_path(source)
+        if relative_path:
+            uri = prefix_join(uri, relative_path)
+        return DraftModelStepConfig(
+            artifact_path=ctx.output_path,
+            model=ResolvedModelLocator(uri=uri, identity=artifact_identity(source)),
+            method=method,
+            num_speculative_tokens=num_speculative_tokens,
+        )
+
+    return ArtifactStep(
+        name=name,
+        version=version,
+        artifact_type=DraftModelArtifact,
+        run=run_draft_model_step,
+        build_config=build_config,
+        deps=(source,),
+    )
 
 
 def run_eval_pipeline_step(config: EvalStepConfig) -> EvaluationResult:
@@ -178,7 +217,7 @@ def eval_step(
     evals: str,
     *,
     version: str,
-    speculative: EvaluationSpeculativeSource | None = None,
+    speculative: ArtifactStep[DraftModelArtifact] | None = None,
     limit: int | None = None,
     accelerator: str | None = None,
     submission_cluster: str = EVALUATION_CONTROLLER_CLUSTER,
@@ -186,14 +225,14 @@ def eval_step(
 ) -> ArtifactStep[EvaluationResult]:
     """Evaluate a static or upstream-produced model with Evalchemy and Harbor."""
 
-    deps = tuple(dict.fromkeys((*model.deps(), *(speculative.deps() if speculative is not None else ()))))
+    deps = tuple(dict.fromkeys((*model.deps(), *((speculative,) if speculative is not None else ()))))
 
     def build_config(ctx: StepContext) -> EvalStepConfig:
         resolved_model = model.resolve(ctx)
-        if speculative is not None:
+        if speculative is not None and not ctx.is_fingerprint:
             resolved_model = replace(
                 resolved_model,
-                serve=replace(resolved_model.serve, speculative=speculative.resolve(ctx)),
+                serve=replace(resolved_model.serve, speculative=ctx.resolved(speculative).config()),
             )
         return EvalStepConfig(
             model=resolved_model,
@@ -204,6 +243,7 @@ def eval_step(
             submission_cluster=ctx.runtime_arg(_SUBMISSION_CLUSTER_RUNTIME_ARG),
             federated_cluster=ctx.runtime_arg(_FEDERATED_CLUSTER_RUNTIME_ARG),
             version=version,
+            speculative_artifact_identity=artifact_identity(speculative) if speculative is not None else None,
         )
 
     model_name = model.resolve(StepContext.for_fingerprint(deps=deps)).name

@@ -52,7 +52,7 @@ from marin.evaluation.runner import (
 )
 from marin.evaluation.serving_config import inference_config_for_model
 from marin.execution.artifact import Artifact
-from marin.execution.lazy import ArtifactStep, materialized_config
+from marin.execution.lazy import ArtifactStep, materialized_config, resolve
 from marin.external_dependencies import EVALCHEMY
 from marin.inference.config import (
     EffectiveServing,
@@ -79,8 +79,8 @@ from experiments.evaluation.launch import (
 from experiments.evaluation.models import models
 from experiments.evaluation.pipeline import (
     ArtifactEvaluationModel,
-    ArtifactSpeculativeModel,
     EvalStepConfig,
+    draft_model_step,
     eval_step,
     run_eval_pipeline_step,
 )
@@ -442,9 +442,26 @@ vllm:spec_decode_num_accepted_tokens_total {accepted}
     assert record.model.config.serve.speculative.model.identity == "draft@2026.09.23:abc123"
 
 
-def test_eval_step_resolves_artifacts_and_selects_speculative_gpu(monkeypatch):
+@pytest.mark.parametrize("adopted", [False, True], ids=["produced", "adopted"])
+def test_eval_step_resolves_artifacts_and_selects_speculative_gpu(tmp_path, monkeypatch, adopted):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     target = _artifact_step("models/target")
-    draft = _artifact_step("models/draft")
+    if adopted:
+        source_path = tmp_path / "adopted-draft"
+        source_path.mkdir()
+        draft_source = ArtifactStep.adopt("models/draft", "2026.09.23", source=str(source_path))
+    else:
+        draft_source = _artifact_step("models/draft")
+    draft = draft_model_step(
+        draft_source,
+        name="models/draft-serving",
+        version="2026.09.23",
+        method=SpeculativeMethod.EAGLE3,
+        num_speculative_tokens=3,
+    )
+    resolved_draft = resolve(draft)
+    assert resolved_draft.url() == draft_source.path(str(tmp_path))
+    assert resolved_draft.config().model.identity == f"models/draft@2026.09.23:{draft_source.fingerprint()}"
     model = ArtifactEvaluationModel(
         step=target,
         model=ModelConfig(
@@ -461,14 +478,10 @@ def test_eval_step_resolves_artifacts_and_selects_speculative_gpu(monkeypatch):
         model,
         "gsm8k-smoke",
         version="2026.09.23.1",
-        speculative=ArtifactSpeculativeModel(
-            step=draft,
-            method=SpeculativeMethod.EAGLE3,
-            num_speculative_tokens=3,
-        ),
+        speculative=draft,
     )
-    control_config = materialized_config(control, "s3://artifacts")
-    drafted_config = materialized_config(drafted, "s3://artifacts")
+    control_config = materialized_config(control, str(tmp_path))
+    drafted_config = materialized_config(drafted, str(tmp_path))
     assert isinstance(control_config, EvalStepConfig)
     assert isinstance(drafted_config, EvalStepConfig)
 
@@ -504,11 +517,12 @@ def test_eval_step_resolves_artifacts_and_selects_speculative_gpu(monkeypatch):
     assert waited == [float("inf"), float("inf")]
     assert submitted_batches[0].accelerator.platform is Platform.TPU
     assert submitted_batches[1].accelerator.platform is Platform.GPU
-    assert submitted_batches[1].model.location == "s3://artifacts/models/target/2026.09.23/hf"
+    assert submitted_batches[1].model.location == f"{tmp_path}/models/target/2026.09.23/hf"
     assert submitted_batches[1].model.identity == f"models/target@2026.09.23:{target.fingerprint()}"
     assert submitted_batches[1].model.serve.speculative is not None
+    assert submitted_batches[1].model.serve.speculative.model.uri == draft_source.path(str(tmp_path))
     assert submitted_batches[1].model.serve.speculative.model.identity == (
-        f"models/draft@2026.09.23:{draft.fingerprint()}"
+        f"models/draft@2026.09.23:{draft_source.fingerprint()}"
     )
     assert control_result.results_paths == tuple(
         f"{control_result.records_prefix}/{run_id}/results" for run_id in control_result.run_ids
