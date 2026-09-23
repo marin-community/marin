@@ -262,7 +262,7 @@ def test_preflight_exports_pinned_harbor_error_taxonomy(checked_policies):
         "VerificationNotCompletedError",
         "VerifierTimeoutError",
     }
-    assert taxonomies[0]["commit"] == "7caf32849df2ec18c04532d17e2211475b896ab4"
+    assert taxonomies[0]["commit"] == "a27606b45dfdfe1571ffa69017c84c882e988bca"
 
 
 def test_preflight_reports_agent_context_resolved_from_the_served_model(tmp_path):
