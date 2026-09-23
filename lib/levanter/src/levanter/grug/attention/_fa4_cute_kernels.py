@@ -1606,7 +1606,7 @@ def segmented_flash_attention_backward_sm100_launcher(
 
 
 @cute_launcher_factory
-def segmented_flash_attention_backward_sm90_preprocess_launcher(
+def native_flash_attention_backward_preprocess_launcher(
     modules: Any,
     *,
     dtype: Any,
@@ -1625,7 +1625,7 @@ def segmented_flash_attention_backward_sm90_preprocess_launcher(
     elif str(dtype) == "float16":
         cute_dtype = cutlass.Float16
     else:
-        raise TypeError(f"native SM90 FA4/CuTe preprocess expects bf16/fp16, got {dtype}")
+        raise TypeError(f"native FA4/CuTe preprocess expects bf16/fp16, got {dtype}")
 
     preprocess_module = importlib.import_module("flash_attn.cute.flash_bwd_preprocess")
     FlashAttentionBackwardPreprocess = preprocess_module.FlashAttentionBackwardPreprocess
@@ -1639,7 +1639,7 @@ def segmented_flash_attention_backward_sm90_preprocess_launcher(
     )
 
     @cute.jit
-    def _launch_flash_attention_backward_sm90_preprocess(
+    def _launch_native_flash_attention_backward_preprocess(
         stream: cuda.CUstream,
         out: cute.Tensor,
         dout: cute.Tensor,
@@ -1666,7 +1666,7 @@ def segmented_flash_attention_backward_sm90_preprocess_launcher(
             stream,
         )
 
-    return _launch_flash_attention_backward_sm90_preprocess
+    return _launch_native_flash_attention_backward_preprocess
 
 
 @cute_launcher_factory
@@ -1807,7 +1807,7 @@ __all__ = [
     "flash_attention_backward_postprocess_launcher",
     "segmented_flash_attention_backward_launcher",
     "segmented_flash_attention_backward_sm90_launcher",
-    "segmented_flash_attention_backward_sm90_preprocess_launcher",
+    "native_flash_attention_backward_preprocess_launcher",
     "segmented_flash_attention_forward_launcher",
     "segmented_flash_attention_forward_sm100_launcher",
 ]

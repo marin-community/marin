@@ -27,7 +27,7 @@ from levanter.grug.attention._fa4_cute_kernels import (
     segmented_flash_attention_backward_launcher,
     segmented_flash_attention_backward_sm100_launcher,
     segmented_flash_attention_backward_sm90_launcher,
-    segmented_flash_attention_backward_sm90_preprocess_launcher,
+    native_flash_attention_backward_preprocess_launcher,
     segmented_flash_attention_forward_launcher,
     segmented_flash_attention_forward_sm100_launcher,
 )
@@ -338,12 +338,12 @@ def _segmented_flash_attention_backward_sm100(
         tile_n=tile[1],
     )
     dpsum, lse_log2 = _native_backward_preprocess(modules, q, out, dout, lse, tile=tile, softmax_scale=softmax_scale)
-    accum_inputs, accum_outputs = _cutlass_attention_backward_sm90_accum_specs(modules, vector_elems=8)
+    accum_inputs, accum_outputs = _native_backward_accum_specs(modules, vector_elems=8)
     backward = cutlass_call(
         segmented_flash_attention_backward_sm100_launcher(
             modules, head_dim=q.shape[-1], head_dim_v=v.shape[-1], qhead_per_kvhead=ratio, config=config
         ),
-        output_shape_dtype=_cutlass_attention_backward_sm90_backward_output_shapes(q, k, v, tile),
+        output_shape_dtype=_native_backward_accum_output_shapes(q, k, v, tile),
         input_spec=accum_inputs,
         output_spec=accum_outputs,
         use_static_tensors=True,
@@ -454,8 +454,8 @@ def segmented_flash_attention_backward_sm90_native(
         modules, q, out, dout, lse, tile=sm90_config.tile, softmax_scale=softmax_scale
     )
 
-    backward_input_spec, backward_output_spec = _cutlass_attention_backward_sm90_accum_specs(modules, vector_elems=8)
-    backward_output_shape_dtype = _cutlass_attention_backward_sm90_backward_output_shapes(q, k, v, sm90_config.tile)
+    backward_input_spec, backward_output_spec = _native_backward_accum_specs(modules, vector_elems=8)
+    backward_output_shape_dtype = _native_backward_accum_output_shapes(q, k, v, sm90_config.tile)
     backward_call = cutlass_call(
         backward_launcher,
         output_shape_dtype=backward_output_shape_dtype,
@@ -500,12 +500,12 @@ def _native_backward_preprocess(
     tile: tuple[int, int],
     softmax_scale: float,
 ) -> tuple[jax.Array, jax.Array]:
-    inputs, outputs = _cutlass_attention_backward_sm90_preprocess_specs(modules, vector_elems=8)
+    inputs, outputs = _native_backward_preprocess_specs(modules, vector_elems=8)
     preprocess = cutlass_call(
-        segmented_flash_attention_backward_sm90_preprocess_launcher(
+        native_flash_attention_backward_preprocess_launcher(
             modules, dtype=q.dtype, head_dim=q.shape[-1], head_dim_v=out.shape[-1], tile_m=tile[0]
         ),
-        output_shape_dtype=_cutlass_attention_backward_sm90_preprocess_output_shapes(q, tile),
+        output_shape_dtype=_native_backward_preprocess_output_shapes(q, tile),
         input_spec=inputs,
         output_spec=outputs,
         use_static_tensors=True,
@@ -525,7 +525,7 @@ def _native_backward_gradients(
     num_threads: int,
     softmax_scale: float,
 ) -> tuple[jax.Array, jax.Array, jax.Array]:
-    inputs, outputs = _cutlass_attention_backward_sm90_postprocess_specs(modules, vector_elems=8)
+    inputs, outputs = _native_backward_postprocess_specs(modules, vector_elems=8)
     gradients = []
     for tensor, accum, scale, rows in zip(
         qkv, accumulators, (softmax_scale, softmax_scale, 1.0), tile_rows, strict=True
@@ -596,9 +596,7 @@ def _cutlass_attention_backward_specs(
     )
 
 
-def _cutlass_attention_backward_sm90_accum_specs(
-    modules: _CutlassCuteModules, *, vector_elems: int
-) -> tuple[tuple[Any, ...], Any]:
+def _native_backward_accum_specs(modules: _CutlassCuteModules, *, vector_elems: int) -> tuple[tuple[Any, ...], Any]:
     tensor_spec = modules.cjax.TensorSpec
     qkv_spec = tensor_spec(mode=(0, 1, 2, 3), divisibility=(1, 1, 1, vector_elems), static=True)
     scratch_spec = tensor_spec(mode=(0, 1, 2), static=True)
@@ -623,7 +621,7 @@ def _cutlass_attention_backward_sm90_accum_specs(
     return input_spec, (scratch_spec, scratch_spec, scratch_spec)
 
 
-def _cutlass_attention_backward_sm90_preprocess_specs(
+def _native_backward_preprocess_specs(
     modules: _CutlassCuteModules, *, vector_elems: int
 ) -> tuple[tuple[Any, ...], Any]:
     tensor_spec = modules.cjax.TensorSpec
@@ -633,7 +631,7 @@ def _cutlass_attention_backward_sm90_preprocess_specs(
     return (qkv_spec, qkv_spec, lse_spec), (scratch_spec, scratch_spec)
 
 
-def _cutlass_attention_backward_sm90_postprocess_specs(
+def _native_backward_postprocess_specs(
     modules: _CutlassCuteModules, *, vector_elems: int
 ) -> tuple[tuple[Any, ...], Any]:
     tensor_spec = modules.cjax.TensorSpec
@@ -789,7 +787,7 @@ def _cutlass_attention_backward_output_shapes(
     )
 
 
-def _cutlass_attention_backward_sm90_preprocess_output_shapes(
+def _native_backward_preprocess_output_shapes(
     q: jax.Array,
     backward_tile: tuple[int, int],
 ) -> tuple[jax.ShapeDtypeStruct, ...]:
@@ -800,7 +798,7 @@ def _cutlass_attention_backward_sm90_preprocess_output_shapes(
     return scratch_q, scratch_q
 
 
-def _cutlass_attention_backward_sm90_backward_output_shapes(
+def _native_backward_accum_output_shapes(
     q: jax.Array,
     k: jax.Array,
     v: jax.Array,
