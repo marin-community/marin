@@ -12,10 +12,11 @@ the matched control/initial/trained measurements:
 4. run source-disjoint evaluations with no draft, the starting draft, and the
    trained draft.
 
-Run the complete bounded experiment on the US East 02A controller::
+Run the complete bounded experiment through the Marin controller. GPU steps
+federate to US East 02A from their resource configurations::
 
     uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
-      --enable-extra-resources --target-cluster cw-us-east-02a \
+      --enable-extra-resources \
       -- python experiments/post_training/snowball_eagle_speculators.py \
       --version 2026.09.23.3 --stage evaluations --run
 """
