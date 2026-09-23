@@ -313,8 +313,8 @@ of repeating the Kubernetes object name.
 | Workload | Jobs | `jobs.json` | What is running, queued, and stuck? | cluster, job |
 | Workload | Runs | `runs.json` | How is each Levanter training run doing? | cluster, run |
 | Workload | RL Post-training (sync) | `rl_runs.json` | How is one reinforcement-learning run doing? | cluster, run |
-| Workload | RL generation | `rl_generation.json` | Why is generation slow, and is it the tail or the whole batch? | cluster, run |
-| Workload | RL training step | `rl_policy_train.json` | Why is the policy update slow, and were the accelerators doing arithmetic? | cluster, run |
+| Workload | RL Post-training (sync): generation | `rl_sync_generation.json` | Why is generation slow, and is it the tail or the whole batch? | cluster, run |
+| Workload | RL Post-training (sync): training step | `rl_sync_training_step.json` | Why is the policy update slow, and were the accelerators doing arithmetic? | cluster, run |
 | Workload | RL Post-training (async) | `async_rl.json` | Is concurrent rollout work useful, fresh, and keeping the policy trainer busy? | cluster, run, job, execution |
 | Workload | Training run | `training.json` | Is one training run on track? | run |
 | Workload | Inference overview | `inference_overview.json` | Is inference progressing, and are responses slow or queues growing? | identity kind, serve |

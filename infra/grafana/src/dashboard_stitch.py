@@ -74,26 +74,26 @@ _RL_POST_TRAINING_LINK = {
     "type": "link",
     "url": "/d/marin-rl-runs",
 }
-_RL_GENERATION_LINK = {
+_RL_SYNC_GENERATION_LINK = {
     "asDropdown": False,
     "icon": "dashboard",
     "includeVars": True,
     "keepTime": True,
     "targetBlank": False,
-    "title": "RL generation",
+    "title": "RL Post-training (sync): generation",
     "type": "link",
-    "url": "/d/marin-rl-generation",
+    "url": "/d/marin-rl-sync-generation",
 }
 
-_RL_TRAINING_STEP_LINK = {
+_RL_SYNC_TRAINING_STEP_LINK = {
     "asDropdown": False,
     "icon": "dashboard",
     "includeVars": True,
     "keepTime": True,
     "targetBlank": False,
-    "title": "RL training step",
+    "title": "RL Post-training (sync): training step",
     "type": "link",
-    "url": "/d/marin-rl-policy-train",
+    "url": "/d/marin-rl-sync-training-step",
 }
 
 _SHARED_LINKS = {
@@ -104,9 +104,9 @@ _SHARED_LINKS = {
     "fleet_accelerators_without_vars": {**_FLEET_ACCELERATORS_LINK, "includeVars": False},
     "fleet_health": _FLEET_HEALTH_LINK,
     "fleet_health_without_vars": {**_FLEET_HEALTH_LINK, "includeVars": False},
-    "rl_generation": _RL_GENERATION_LINK,
+    "rl_sync_generation": _RL_SYNC_GENERATION_LINK,
     "rl_post_training": _RL_POST_TRAINING_LINK,
-    "rl_training_step": _RL_TRAINING_STEP_LINK,
+    "rl_sync_training_step": _RL_SYNC_TRAINING_STEP_LINK,
 }
 
 

@@ -132,10 +132,10 @@
       "linkRef": "rl_post_training"
     },
     {
-      "linkRef": "rl_generation"
+      "linkRef": "rl_sync_generation"
     },
     {
-      "linkRef": "rl_training_step"
+      "linkRef": "rl_sync_training_step"
     },
     {
       "linkRef": "async_rl"

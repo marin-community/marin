@@ -618,12 +618,12 @@ def _stitched() -> dict:
     return stitch_all(DASHBOARDS, DASHBOARDS / "panels")
 
 
-def _dashboard(name: str = "rl_policy_train.json") -> dict:
+def _dashboard(name: str = "rl_sync_training_step.json") -> dict:
     return _stitched()[name]
 
 
 def _rl_dashboards() -> dict:
-    return {name: _stitched()[name] for name in ("rl_policy_train.json", "rl_generation.json", "rl_runs.json")}
+    return {name: _stitched()[name] for name in ("rl_sync_training_step.json", "rl_sync_generation.json", "rl_runs.json")}
 
 
 def _our_panels() -> list[dict]:
@@ -638,7 +638,7 @@ def _our_panels() -> list[dict]:
         for name, board in _rl_dashboards().items()
         for panel, source in zip(board["panels"], json.loads((DASHBOARDS / name).read_text())["panels"], strict=True)
         if source.get("panelRef") in ours
-        or (name in ("rl_policy_train.json", "rl_generation.json") and panel["type"] != "row")
+        or (name in ("rl_sync_training_step.json", "rl_sync_generation.json") and panel["type"] != "row")
     ]
     assert len(mounted) >= len(ours), (len(mounted), len(ours))
     return mounted

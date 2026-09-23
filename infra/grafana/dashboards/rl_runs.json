@@ -26,10 +26,10 @@
       "url": "/d/marin-home"
     },
     {
-      "linkRef": "rl_generation"
+      "linkRef": "rl_sync_generation"
     },
     {
-      "linkRef": "rl_training_step"
+      "linkRef": "rl_sync_training_step"
     },
     {
       "asDropdown": false,
@@ -539,6 +539,16 @@
       "panelRef": "rl_step_composition"
     },
     {
+      "id": 22,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 18
+      },
+      "panelRef": "rl_policy_train_share"
+    },
+    {
       "id": 2,
       "type": "timeseries",
       "title": "Rollout wait vs train step (critical path)",
@@ -550,8 +560,8 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 12,
-        "y": 18
+        "x": 0,
+        "y": 26
       },
       "fieldConfig": {
         "defaults": {
@@ -651,7 +661,7 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 0,
+        "x": 12,
         "y": 26
       },
       "fieldConfig": {
@@ -743,20 +753,10 @@
       "interval": "1m"
     },
     {
-      "id": 22,
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 26
-      },
-      "panelRef": "rl_policy_train_share"
-    },
-    {
       "id": 23,
       "gridPos": {
         "h": 8,
-        "w": 12,
+        "w": 24,
         "x": 0,
         "y": 34
       },

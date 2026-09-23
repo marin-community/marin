@@ -1,6 +1,6 @@
 {
-  "uid": "marin-rl-policy-train",
-  "title": "RL training step",
+  "uid": "marin-rl-sync-training-step",
+  "title": "RL Post-training (sync): training step",
   "description": "Why the training half of an RL step takes as long as it does: the per-rank spans MarinSkyRL publishes from inside the policy worker, and the DCGM occupancy of the same nodes. Training is 21-27% of the step; generation is the larger half and has its own board.",
   "tags": [
     "marin",
@@ -16,34 +16,13 @@
   },
   "links": [
     {
-      "asDropdown": false,
-      "icon": "dashboard",
-      "includeVars": true,
-      "keepTime": true,
-      "targetBlank": false,
-      "title": "RL runs",
-      "type": "link",
-      "url": "/d/marin-rl-runs"
+      "linkRef": "rl_post_training"
     },
     {
-      "asDropdown": false,
-      "icon": "dashboard",
-      "includeVars": true,
-      "keepTime": true,
-      "targetBlank": false,
-      "title": "RL generation",
-      "type": "link",
-      "url": "/d/marin-rl-generation"
+      "linkRef": "rl_sync_generation"
     },
     {
-      "asDropdown": false,
-      "icon": "dashboard",
-      "includeVars": true,
-      "keepTime": true,
-      "targetBlank": false,
-      "title": "Accelerators",
-      "type": "link",
-      "url": "/d/marin-accel"
+      "linkRef": "fleet_accelerators"
     }
   ],
   "templating": {
@@ -77,7 +56,7 @@
         "multi": false,
         "includeAll": false,
         "refresh": 2,
-        "sort": 1,
+        "sort": 0,
         "current": {},
         "options": [],
         "query": {
@@ -95,7 +74,7 @@
               "params": [
                 {
                   "key": "sql",
-                  "value": "SELECT DISTINCT run_id AS value FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'policy_step' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND run_id IS NOT NULL ORDER BY 1"
+                  "value": "SELECT run_id AS value FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND name = 'policy_step' AND COALESCE(json_get(resource_attributes_json, 'training_loop'), '') <> 'async' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND run_id IS NOT NULL GROUP BY 1 ORDER BY MAX(timestamp_ms) DESC"
                 },
                 {
                   "key": "from",
