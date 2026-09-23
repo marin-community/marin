@@ -76,9 +76,9 @@ _DEFAULT_IMPLEMENTATION: tuple[Implementation, ...] = ("xla",)
 _IMPLEMENTATION_FALLBACK_WARNINGS_EMITTED: set[str] = set()
 _SELECTED_IMPL_LOGGED: set[str] = set()
 _AUTOTUNE_ON_MISS_ENV_VAR = "LEVANTER_PALLAS_CE_AUTOTUNE_ON_MISS"
-# Bump the trailing version when the entry encoding changes so stale entries are ignored.
+# Bump the prefix when entry encoding changes; bump the source schema when selection semantics change.
 _AUTOTUNE_BLOCK_SIZE_PREFIX = "levanter_kernel_autotune/fused_cross_entropy_loss/block_sizes_v2"
-_AUTOTUNE_SOURCE_SCHEMA = "fused-cross-entropy-autotune-v4"
+_AUTOTUNE_SOURCE_SCHEMA = "fused-cross-entropy-autotune-v5"
 
 
 class _NoViableCandidate:
@@ -435,7 +435,7 @@ def _compile_block_sizes_candidate(
     logit_soft_cap: Optional[float],
     precision: jax.lax.PrecisionLike,
     return_argmax: bool,
-) -> tuple[Callable[..., jax.Array], float]:
+) -> Callable[..., jax.Array]:
     def _loss_only(x_value: jax.Array, labels_value: jax.Array, w_value: jax.Array) -> jax.Array:
         kwargs = dict(
             block_sizes=candidate,
@@ -466,19 +466,15 @@ def _compile_block_sizes_candidate(
             compile_time,
         )
 
-    return benchmark_fn, compile_time
+    return benchmark_fn
 
 
 def _run_block_sizes_candidate(
     benchmark_fn: Callable[..., jax.Array],
-    compile_time: float,
     x: jax.Array,
     labels: jax.Array,
     w: jax.Array,
 ) -> float:
-    if autotune_utils.contains_tracer(x, labels, w):
-        return compile_time
-
     jitted = jax.jit(benchmark_fn)
     start = time.perf_counter()
     out = jitted(x, labels, w)
@@ -499,7 +495,7 @@ def _benchmark_block_sizes_candidate(
     precision: jax.lax.PrecisionLike,
     return_argmax: bool,
 ) -> float:
-    benchmark_fn, compile_time = _compile_block_sizes_candidate(
+    benchmark_fn = _compile_block_sizes_candidate(
         fn=fn,
         candidate=candidate,
         x=x,
@@ -510,7 +506,7 @@ def _benchmark_block_sizes_candidate(
         precision=precision,
         return_argmax=return_argmax,
     )
-    return _run_block_sizes_candidate(benchmark_fn, compile_time, x, labels, w)
+    return _run_block_sizes_candidate(benchmark_fn, x, labels, w)
 
 
 def _autotune_block_sizes_on_miss(
@@ -527,7 +523,7 @@ def _autotune_block_sizes_on_miss(
     return_argmax: bool,
     process_ids: tuple[int, ...] | None = None,
 ) -> BlockSizes:
-    """Select one candidate by mean timing across all ranks when distributed."""
+    """Select the first jointly compilable candidate while tracing, or the fastest at runtime."""
     if not _autotune_enabled():
         return inferred
     cache_key = _autotune_cache_key(
@@ -546,6 +542,7 @@ def _autotune_block_sizes_on_miss(
     if process_ids is None:
         process_ids = _autotune_process_ids(x, labels, w)
     distributed = len(process_ids) > 1
+    tracing = autotune_utils.contains_tracer(x, labels, w)
     candidates = _candidate_block_sizes(impl_name, inferred, x=x, w=w, dtype=dtype)
     if distributed:
         # Every rank must enter the same rendezvous, even when only some ranks
@@ -579,11 +576,7 @@ def _autotune_block_sizes_on_miss(
         logger.info("Fused CE autotune cache hit for %s. Using cached block sizes %s.", impl_name, cached)
         return cached
 
-    logger.info(
-        "Fused CE autotune miss for %s. Sweeping %d block-size candidates.",
-        impl_name,
-        len(candidates),
-    )
+    logger.info("Fused CE autotune miss for %s. Checking %d block-size candidates.", impl_name, len(candidates))
     best: BlockSizes | None = None
     best_score = float("inf")
     errors: list[Exception] = []
@@ -609,9 +602,11 @@ def _autotune_block_sizes_on_miss(
             if not all(_autotune_allgather(prepared is not None, process_ids)):
                 continue
             assert prepared is not None
-            benchmark_fn, compile_time = prepared
+            if tracing:
+                best = candidate
+                break
             try:
-                score = _run_block_sizes_candidate(benchmark_fn, compile_time, x, labels, w)
+                score = _run_block_sizes_candidate(prepared, x, labels, w)
             except Exception as exc:
                 errors.append(exc)
                 score = None
@@ -621,17 +616,32 @@ def _autotune_block_sizes_on_miss(
             score = math.fsum(cast(float, timing) for timing in timings) / len(timings)
         else:
             try:
-                score = _benchmark_block_sizes_candidate(
-                    fn=fn,
-                    candidate=candidate,
-                    x=x,
-                    labels=labels,
-                    w=w,
-                    dtype=dtype,
-                    logit_soft_cap=logit_soft_cap,
-                    precision=precision,
-                    return_argmax=return_argmax,
-                )
+                if tracing:
+                    _compile_block_sizes_candidate(
+                        fn=fn,
+                        candidate=candidate,
+                        x=x,
+                        labels=labels,
+                        w=w,
+                        dtype=dtype,
+                        logit_soft_cap=logit_soft_cap,
+                        precision=precision,
+                        return_argmax=return_argmax,
+                    )
+                    best = candidate
+                    break
+                else:
+                    score = _benchmark_block_sizes_candidate(
+                        fn=fn,
+                        candidate=candidate,
+                        x=x,
+                        labels=labels,
+                        w=w,
+                        dtype=dtype,
+                        logit_soft_cap=logit_soft_cap,
+                        precision=precision,
+                        return_argmax=return_argmax,
+                    )
             except Exception as exc:
                 errors.append(exc)
                 continue

@@ -1325,7 +1325,7 @@ def test_benchmark_candidate_handles_real_shard_map_tracers():
     assert float(score) >= 0.0
 
 
-def test_pallas_tpu_autotune_sweeps_for_real_shard_map_tracers(monkeypatch: pytest.MonkeyPatch):
+def test_pallas_tpu_autotune_selects_first_viable_for_real_shard_map_tracers(monkeypatch: pytest.MonkeyPatch):
     partition_spec = jax.sharding.PartitionSpec
     mesh = jax.sharding.Mesh(
         np.array(jax.devices()[:1]),
@@ -1346,7 +1346,7 @@ def test_pallas_tpu_autotune_sweeps_for_real_shard_map_tracers(monkeypatch: pyte
     )
     inferred = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=128)
     seen_block_sizes: list[fused_api.BlockSizes | None] = []
-    benchmarked_candidates: list[fused_api.BlockSizes] = []
+    compiled_candidates: list[fused_api.BlockSizes] = []
     faster = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=256)
     slower = fused_api.BlockSizes(b_block_size=128, h_block_size=128, v_block_size=512)
 
@@ -1368,12 +1368,14 @@ def test_pallas_tpu_autotune_sweeps_for_real_shard_map_tracers(monkeypatch: pyte
         lambda impl_name, inferred_block_sizes, **kwargs: [inferred_block_sizes, slower, faster],
     )
 
-    def fake_benchmark(**kwargs):
+    def fake_compile(**kwargs):
         candidate = kwargs["candidate"]
-        benchmarked_candidates.append(candidate)
-        return 1.0 if candidate == faster else 2.0
+        compiled_candidates.append(candidate)
+        if candidate == inferred:
+            raise RuntimeError("candidate cannot compile")
+        return lambda *args: args[0]
 
-    monkeypatch.setattr(fused_api, "_benchmark_block_sizes_candidate", fake_benchmark)
+    monkeypatch.setattr(fused_api, "_compile_block_sizes_candidate", fake_compile)
     monkeypatch.setitem(fused_api.IMPLEMENTATIONS, "pallas_tpu", fake_impl)
     monkeypatch.setattr(
         fused_api, "_AUTOTUNE_CACHE", fused_api.AutotuneBlockSizeCache(fused_api.PersistentKvCache.in_memory())
@@ -1400,9 +1402,8 @@ def test_pallas_tpu_autotune_sweeps_for_real_shard_map_tracers(monkeypatch: pyte
     out = mapped(x, y, w)
     out.block_until_ready()
 
-    assert benchmarked_candidates == [inferred, slower, faster]
-    assert seen_block_sizes[-1] == faster
-    assert faster in seen_block_sizes
+    assert compiled_candidates == [inferred, slower]
+    assert seen_block_sizes[-1] == slower
 
 
 def test_pallas_tpu_vmem_compile_error_falls_back_to_xla_when_requested(monkeypatch: pytest.MonkeyPatch):
@@ -1631,10 +1632,10 @@ def test_distributed_fused_ce_autotune_skips_failed_compile_and_chooses_lowest_m
         del kwargs
         if rank_timings[context.rank][candidates.index(candidate)] is None:
             raise RuntimeError("candidate failed on this rank")
-        return candidate, 0.0
+        return candidate
 
-    def run_candidate(candidate, compile_time, *args):
-        del compile_time, args
+    def run_candidate(candidate, *args):
+        del args
         executed[context.rank].append(candidate)
         return rank_timings[context.rank][candidates.index(candidate)]
 
