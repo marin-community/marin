@@ -1,14 +1,14 @@
 {
   "type": "table",
-  "title": "Span coverage: clock, ranks, truncated steps",
-  "description": "Which clock the worker sink stamped, how many ranks reported, and whether a step died mid-flight. `_launch` spans measure kernel launch rather than execution and must never be compared with `_wall`. A truncated step looks fast.",
+  "title": "Span coverage: clock domain, ranks, failed steps",
+  "description": "Rows per role and `clock_domain`, the ranks that reported, and steps with `outcome=failure`. `_launch` rows measure launch time and are not comparable with `_wall` rows. A failed step looks fast.",
   "datasource": {
     "type": "yesoreyeram-infinity-datasource",
     "uid": "finelog-marin"
   },
   "fieldConfig": {
     "defaults": {
-      "noValue": "No spans at all. The run reported a policy_step, so the timing sink itself is not reaching finelog."
+      "noValue": "No spans. The run reported a policy_step, so the trainer's timing sink is not reaching Finelog."
     },
     "overrides": [
       {

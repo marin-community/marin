@@ -316,8 +316,8 @@ of repeating the Kubernetes object name.
 | Workload | Jobs | `jobs.json` | What is running, queued, and stuck? | cluster, job |
 | Workload | Runs | `runs.json` | How is each Levanter training run doing? | cluster, run |
 | Workload | RL Post-training (sync) | `rl_runs.json` | How is one reinforcement-learning run doing? | cluster, run |
-| Workload | RL Post-training (sync): generation | `rl_sync_generation.json` | Why is generation slow, and is it the tail or the whole batch? | cluster, run |
-| Workload | RL Post-training (sync): train step | `rl_sync_train_step.json` | Why is the policy update slow, and were the accelerators doing arithmetic? | cluster, run |
+| Workload | RL Post-training (sync): generation | `rl_sync_generation.json` | Where does `generate` spend its time: slow trajectories, vLLM, or the environment? | cluster, run |
+| Workload | RL Post-training (sync): train step | `rl_sync_train_step.json` | Where does `policy_train` spend its time on each rank, and were the GPUs busy? | cluster, run |
 | Workload | RL Post-training (async) | `async_rl.json` | Is concurrent rollout work useful, fresh, and keeping the policy trainer busy? | cluster, run, job, execution |
 | Workload | Training run | `training.json` | Is one training run on track? | run |
 | Workload | Inference overview | `inference_overview.json` | Is inference progressing, and are responses slow or queues growing? | identity kind, serve |
@@ -331,11 +331,11 @@ its records. Each view's run picker offers only its own loop. MarinSkyRL documen
 
 RL Post-training (sync) and its two drill-downs read datasets built in `src/rl_observability.py`.
 `/v1/rl/overview` holds `core`, `engine`, `gpu` and `spans`. The generation board reads
-`/v1/rl/generation` (`driver`: the driver's step spans and rollout counters) and, for its engine
-panels, the run's `/v1/vllm/overview` result, which carries engine detail only for windows of 7
+`/v1/rl/generation` (`driver`: the driver's step spans and rollout counters) and, for its vLLM
+panels, the run's `/v1/vllm/overview` result, which carries vLLM detail only for windows of 7
 hours or less. The train-step board reads `/v1/rl/train-step` (`spans`, `counters` and `gpu`).
 Span and counter sources keep one row per step and phase. Finelog reduces each step's worker spans
-to its critical rank, the rank with the longest `policy_ppo_train`, and to a per-bucket spread
+to its slowest rank, the rank with the longest `policy_ppo_train`, and to a per-bucket spread
 across ranks, so their row counts do not grow with the rank count. Each is capped at 50,000 rows;
 at 500 steps across 64 ranks the largest, `driver`, holds 11,000.
 

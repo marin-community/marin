@@ -1,7 +1,7 @@
 {
   "type": "timeseries",
-  "title": "Is the environment slow, or the loop around it?",
-  "description": "The environment wait split three ways. Resume dominates on real runs — 88 s of 92 s while the environment itself ran for 0.05 s — which is the event loop being behind, not a slow environment. `unaccounted` audits the split.",
+  "title": "Environment wait: queue, exec and resume",
+  "description": "`rollout_env_queue`, `rollout_env_exec` and `rollout_env_resume` as shares of `rollout_env_await`. A large resume share means event-loop backlog. The remainder should stay near zero.",
   "datasource": {
     "type": "yesoreyeram-infinity-datasource",
     "uid": "finelog-marin"

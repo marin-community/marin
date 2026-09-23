@@ -1,7 +1,7 @@
 {
   "type": "timeseries",
-  "title": "Signed span residuals — both trees",
-  "description": "What each parent measured that its children do not account for. Positive is ordinary. Negative means a child is double-counted — the first instrumented run read -1703 s inside a 1706 s parent. Never clamped.",
+  "title": "Signed span residuals: generate and policy_ppo_train",
+  "description": "`generate_span_residual` from the driver and `policy_span_residual` on the slowest rank. Positive is ordinary. Negative means a child is counted twice. Never clamped.",
   "datasource": {
     "type": "yesoreyeram-infinity-datasource",
     "uid": "finelog-marin"
@@ -17,7 +17,7 @@
         "axisLabel": "seconds the children do not account for"
       },
       "unit": "s",
-      "noValue": "No residual rows. The residual ships with the spans, so this build predates an auditable tree."
+      "noValue": "No residual rows. Builds without span trees publish neither residual, and policy_span_residual also needs trainer.policy_train_spans=true."
     },
     "overrides": []
   },

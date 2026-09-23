@@ -1,9 +1,11 @@
 {
   "uid": "marin-rl-sync-generation",
   "title": "RL Post-training (sync): generation",
-  "description": "Why generation takes as long as it does. It is 57-66% of an E6 step and the half that moves: after the grouped-mm fix made training about 13x faster, generation did not move and the bottleneck relocated here. The driver's own view of the fan-out sits above what the serving engines report.",
+  "description": "Drill-down of RL Post-training (sync) into `generate`. The top rows read the driver's `generate` spans and rollout wait counters. The vLLM panels read the run's vLLM engines and need a time range of 7 hours or less.",
   "tags": [
     "marin",
+    "rl",
+    "sync",
     "generated"
   ],
   "timezone": "utc",
@@ -108,7 +110,7 @@
   "panels": [
     {
       "type": "row",
-      "title": "Does generation own this step?",
+      "title": "How much of the step is generate?",
       "collapsed": false,
       "id": 300,
       "gridPos": {
@@ -122,8 +124,8 @@
     {
       "id": 305,
       "type": "timeseries",
-      "title": "Generation against training, per step",
-      "description": "The two halves of the step side by side. Generation is 57-66% of it and moves 95-139 s between steps; training is 21-27% and barely moves. The step range is generation's variance, not training's — which is why this board exists.",
+      "title": "generate and policy_train per step",
+      "description": "Inclusive wall seconds of the driver's `generate` and `policy_train` spans. When the step time moves, check which line moved.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -257,8 +259,8 @@
     {
       "id": 306,
       "type": "timeseries",
-      "title": "How far the slowest trajectory runs past the mean",
-      "description": "The longest single engine wait divided by the per-trajectory mean — about 7.6x on this run, a 93.6 s tail against a 12.3 s mean. Generation is tail-latency-bound: the step ends with the last trajectory, so the mean alone actively misleads.",
+      "title": "rollout_engine_await: slowest trajectory ÷ mean",
+      "description": "`rollout_engine_await_seconds_max` ÷ (`rollout_engine_await_seconds_sum` ÷ `rollout_trajectory_count`). A high ratio means a few trajectories stretch `generate`.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -281,7 +283,7 @@
           },
           "unit": "none",
           "min": 0,
-          "noValue": "No rollout counters. This build does not instrument the generation coroutines."
+          "noValue": "No rollout wait counters or no per-trajectory maximum. Batched collection, Harbor and MiniSwe runners publish neither."
         },
         "overrides": []
       },
@@ -363,8 +365,8 @@
     {
       "id": 231,
       "type": "table",
-      "title": "Generated tokens per request",
-      "description": "Generated tokens per rollout request, as percentiles over the vLLM histogram. The step ends with the slowest sample, so the p99-over-p50 gap is what generation costs it, not the mean.",
+      "title": "vLLM generated tokens per request",
+      "description": "p50, p90 and p99 of vLLM `request_generation_tokens` over the whole time range. `generate` waits for its longest requests, so compare p99 with p50.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -377,7 +379,7 @@
       },
       "fieldConfig": {
         "defaults": {
-          "noValue": "No request_generation_tokens histogram, in either the vllm namespace or the trainer's forwarded one.",
+          "noValue": "No request_generation_tokens histogram from this run's vLLM engines. vLLM detail needs a time range of 7 hours or less.",
           "custom": {
             "filterable": true
           }
@@ -448,7 +450,7 @@
     },
     {
       "type": "row",
-      "title": "Is the engine slow, or is nothing reaching it?",
+      "title": "Is vLLM slow, or under-filled?",
       "collapsed": false,
       "id": 320,
       "gridPos": {
@@ -462,8 +464,8 @@
     {
       "id": 232,
       "type": "timeseries",
-      "title": "Time to first token and inter-token latency",
-      "description": "Prefill responsiveness and decode speed. Inter-token latency times the p99 length is the floor on the generate phase at any concurrency. Only TTFT survives the trainer's forwarder, so the ITL lines are often absent.",
+      "title": "vLLM time to first token and inter-token latency",
+      "description": "Per-bucket means of vLLM `time_to_first_token_seconds` and `inter_token_latency_seconds`. `FinelogInferenceMetricsSink` forwards no `inter_token_latency_seconds`, so a run whose vLLM metrics reach Finelog only through the trainer has no inter-token latency line.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -486,7 +488,7 @@
           },
           "unit": "s",
           "min": 0,
-          "noValue": "Neither histogram reached finelog from this run's engines. Never an instant prefill.",
+          "noValue": "No time-to-first-token or inter-token latency histogram from this run's vLLM engines. vLLM detail needs a time range of 7 hours or less.",
           "displayName": "${__field.labels.series}"
         },
         "overrides": []
@@ -575,8 +577,8 @@
     {
       "id": 233,
       "type": "table",
-      "title": "Request latency by stage",
-      "description": "Where a request's wall goes inside the engine, as percentiles: queue, prefill, decode, end to end. Queue large against decode is an admission problem, not a slow model. Means and gauges for the same stages are on RL runs.",
+      "title": "vLLM request latency by stage",
+      "description": "p50 and p99 of vLLM queue, decode and end-to-end request time over the whole time range. A queue time close to the decode time means requests wait to be scheduled. Means over time are on RL Post-training (sync).",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -589,7 +591,7 @@
       },
       "fieldConfig": {
         "defaults": {
-          "noValue": "No per-stage latency histograms. The generate row above reports the same wait from the driver's side.",
+          "noValue": "No queue, decode or end-to-end latency histograms from this run's vLLM engines. vLLM detail needs a time range of 7 hours or less.",
           "custom": {
             "filterable": true
           }
@@ -679,8 +681,8 @@
     {
       "id": 234,
       "type": "timeseries",
-      "title": "Engine queue depth and why requests are waiting",
-      "description": "Queue depth and the requests held back by each reason, summed across engines. A queue that never fills while the step waits is under-subscription; waiting on KV-cache is the opposite.",
+      "title": "vLLM waiting requests by reason",
+      "description": "vLLM `num_requests_waiting`, and the same count split by `reason`, summed across the run's vLLM engines. `capacity` counts requests waiting for scheduling capacity. `deferred` counts requests held by a transient constraint such as a KV transfer. An empty queue while `generate` runs long means vLLM is under-filled.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -703,7 +705,7 @@
           },
           "unit": "none",
           "min": 0,
-          "noValue": "No queue gauges. These are gauges, so blank is an absent producer and never an empty queue.",
+          "noValue": "No waiting-request gauges from this run's vLLM engines. An empty queue reports 0, so blank means no gauge arrived. vLLM detail needs a time range of 7 hours or less.",
           "displayName": "${__field.labels.series}"
         },
         "overrides": []
@@ -787,8 +789,8 @@
     {
       "id": 235,
       "type": "timeseries",
-      "title": "Tokens per engine iteration",
-      "description": "How full each engine step was, as the mean of the iteration-token histogram. A mean well below the batch size means the engine ran a mostly empty step, and the fix is concurrency or routing.",
+      "title": "vLLM tokens per iteration",
+      "description": "Per-bucket mean of vLLM `iteration_tokens_total`, the tokens scheduled in one vLLM iteration. A mean far below `max_num_batched_tokens` means mostly empty iterations. Raise concurrency or fix routing.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -811,7 +813,7 @@
           },
           "unit": "none",
           "min": 0,
-          "noValue": "No iteration_tokens_total histogram. An RL run's engine rows usually arrive forwarded under the trainer's service, and that forwarder carries a narrower set than the engine's own registry.",
+          "noValue": "No iteration_tokens_total histogram from this run's vLLM engines. vLLM detail needs a time range of 7 hours or less.",
           "displayName": "${__field.labels.series}"
         },
         "overrides": []
@@ -895,8 +897,8 @@
     {
       "id": 236,
       "type": "timeseries",
-      "title": "KV-cache utilisation",
-      "description": "Mean and peak KV-cache occupancy across the run's engines, a gauge. Read it with the waiting-reason lines: a cache pinned near full while requests wait explains queueing that no amount of extra concurrency will clear, and a cache that stays empty says the engines had room the trainer never used.",
+      "title": "vLLM KV-cache usage",
+      "description": "Mean and peak vLLM `kv_cache_usage_perc` across the run's vLLM engines. Near full with waiting requests: the cache limits concurrency. Near empty: vLLM had unused room.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -920,7 +922,7 @@
           "unit": "percentunit",
           "min": 0,
           "max": 1,
-          "noValue": "No KV-cache gauge from this run's engines. Never an empty cache.",
+          "noValue": "No kv_cache_usage_perc gauge from this run's vLLM engines. vLLM detail needs a time range of 7 hours or less.",
           "displayName": "${__field.labels.series}"
         },
         "overrides": []

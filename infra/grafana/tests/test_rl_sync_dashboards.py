@@ -828,7 +828,7 @@ def test_the_run_variable_offers_the_run_the_trainer_reported(store) -> None:
 
 
 def test_the_step_bands_are_exclusive_and_they_close_on_the_step(store) -> None:
-    rows = _panel_rows(store, "Step composition — exclusive seconds per phase")
+    rows = _panel_rows(store, "Step composition: exclusive seconds per span")
 
     bands = {series: seconds for _, series, seconds in rows}
     # Every phase gets a band, and it is the wall it did not spend inside a child. A parent banded
@@ -845,7 +845,7 @@ def test_the_generate_subtree_is_subtracted_from_generate_and_not_stacked_beside
     list could not see it: rollout_collect alone is 97% of generate, so banding both put 162% of
     the phase on the stack with nothing to say so."""
     bands = {
-        series: seconds for _, series, seconds in _panel_rows(store, "Step composition — exclusive seconds per phase")
+        series: seconds for _, series, seconds in _panel_rows(store, "Step composition: exclusive seconds per span")
     }
 
     # generate's own band is the orchestration it does outside its children, which is what the
@@ -867,7 +867,7 @@ def test_policy_train_share_reproduces_the_measured_ninety_percent(store) -> Non
 
 
 def test_the_decomposition_reads_the_critical_rank_and_never_a_per_phase_maximum(store) -> None:
-    rows = _panel_rows(store, "policy_ppo_train decomposition at the critical rank")
+    rows = _panel_rows(store, "policy_ppo_train spans on the slowest rank")
 
     bands = {series: seconds for _, series, seconds in rows}
     expected = dict(WORKER_SPANS[CRITICAL_RANK])
@@ -906,7 +906,7 @@ def test_the_decomposition_reads_the_critical_rank_and_never_a_per_phase_maximum
 
 
 def test_the_skew_panel_reports_the_spread_and_names_the_same_slowest_rank(store) -> None:
-    rows = _panel_rows(store, "Rank skew: policy_ppo_train across ranks")
+    rows = _panel_rows(store, "policy_ppo_train spread across ranks")
 
     for _, slowest, _p95, _p50, fastest in rows:
         assert slowest == pytest.approx(PPO_TRAIN[CRITICAL_RANK])
@@ -919,11 +919,11 @@ def test_the_derived_ratios_divide_the_quantities_they_name(store) -> None:
         assert micro_steps == pytest.approx(64.0)
         assert seconds_per_micro_step == pytest.approx(DRIVER_PHASES["policy_train"] / 64.0)
 
-    ratio = _panel_rows(store, "backward ÷ forward at the critical rank")
+    ratio = _panel_rows(store, "policy_backward ÷ policy_forward on the slowest rank")
     expected = WORKER_SPANS[CRITICAL_RANK]["policy_backward"] / WORKER_SPANS[CRITICAL_RANK]["policy_forward"]
     assert [round(value, 6) for _, value in ratio] == [round(expected, 6)] * len(ratio)
 
-    waiting = _panel_rows(store, "Waiting and collective share at the critical rank")
+    waiting = _panel_rows(store, "Barrier and all-reduce share on the slowest rank")
     barriers = sum(
         WORKER_SPANS[CRITICAL_RANK][phase]
         for phase in (
@@ -957,7 +957,7 @@ def test_the_waiting_share_is_absent_rather_than_zero_without_the_barrier_spans(
         list(BARRIER_SPANS),
     )
 
-    waiting = _panel_rows(store, "Waiting and collective share at the critical rank")
+    waiting = _panel_rows(store, "Barrier and all-reduce share on the slowest rank")
 
     assert waiting, "the panel still reports a bucket per step; only the share is unknown"
     assert {value for _, value in waiting} == {None}, f"a missing barrier span read as a share: {waiting}"
@@ -971,25 +971,24 @@ def test_the_worker_panels_read_whichever_clock_the_sink_stamped(launch_store) -
     ran unsynchronised.
     """
     bands = {
-        series: seconds
-        for _, series, seconds in _panel_rows(launch_store, "policy_ppo_train decomposition at the critical rank")
+        series: seconds for _, series, seconds in _panel_rows(launch_store, "policy_ppo_train spans on the slowest rank")
     }
     assert bands["policy_backward"] == pytest.approx(WORKER_SPANS[CRITICAL_RANK]["policy_backward"])
     assert sum(bands.values()) == pytest.approx(PPO_TRAIN[CRITICAL_RANK])
 
-    skew = _panel_rows(launch_store, "Rank skew: policy_ppo_train across ranks")
+    skew = _panel_rows(launch_store, "policy_ppo_train spread across ranks")
     assert {round(slowest, 6) for _, slowest, _, _, _ in skew} == {round(PPO_TRAIN[CRITICAL_RANK], 6)}
 
-    ratio = _panel_rows(launch_store, "backward ÷ forward at the critical rank")
+    ratio = _panel_rows(launch_store, "policy_backward ÷ policy_forward on the slowest rank")
     expected = WORKER_SPANS[CRITICAL_RANK]["policy_backward"] / WORKER_SPANS[CRITICAL_RANK]["policy_forward"]
     assert {round(value, 6) for _, value in ratio} == {round(expected, 6)}
 
-    waiting = _panel_rows(launch_store, "Waiting and collective share at the critical rank")
+    waiting = _panel_rows(launch_store, "Barrier and all-reduce share on the slowest rank")
     assert {value for _, value in waiting} != {None}
 
 
 def test_padding_is_a_per_rank_ratio_rather_than_a_ratio_of_summed_tokens(store) -> None:
-    rows = _panel_rows(store, "Padding waste and attention work")
+    rows = _panel_rows(store, "Padding fraction and attention_work_ratio")
 
     # Averaging the per-rank fractions (0.25 and 0.20) is unaffected by how the batch is sharded;
     # a ratio of summed tokens would not be.
@@ -1006,12 +1005,12 @@ def test_the_padding_panel_reads_the_old_spelling_of_the_token_counters(store) -
     """Runs from before the 2026-09-03 rename publish tokens_real and tokens_padded. Reading only
     the current spelling empties this panel across the whole back catalogue, and an empty padding
     panel reads as an unpadded batch."""
-    fresh = _panel_rows(store, "Padding waste and attention work")
+    fresh = _panel_rows(store, "Padding fraction and attention_work_ratio")
     store.execute(
         """UPDATE "telemetry_v1.marinskyrl"
            SET attributes_json = replace(attributes_json, 'rank_tokens_', 'tokens_')"""
     )
-    renamed = _panel_rows(store, "Padding waste and attention work")
+    renamed = _panel_rows(store, "Padding fraction and attention_work_ratio")
 
     assert [row[1] for row in renamed] == [pytest.approx(row[1]) for row in fresh]
     assert all(row[1] is not None for row in renamed)
@@ -1053,7 +1052,7 @@ def test_the_fault_table_differences_the_counters_and_hides_healthy_gpus(store) 
 
 
 def test_the_engine_histograms_interpolate_quantiles_from_cumulative_buckets(store) -> None:
-    rows = _panel_rows(store, "Generated tokens per request")
+    rows = _panel_rows(store, "vLLM generated tokens per request")
 
     # Counts are cumulative in `le`: 50 of 100 requests are at or below 256 tokens, 90 at or
     # below 1024, 99 at or below 4096.
@@ -1062,19 +1061,19 @@ def test_the_engine_histograms_interpolate_quantiles_from_cumulative_buckets(sto
     # each engine contributes BUCKETS - 1 increments of 100 requests.
     assert {samples for _, _, samples in rows} == {(BUCKETS - 1) * 100 * len(ENGINES)}
 
-    stages = _panel_rows(store, "Request latency by stage")
+    stages = _panel_rows(store, "vLLM request latency by stage")
     assert {(stage, quantile): value for stage, quantile, value, _ in stages} == {
         (stage, quantile): value
         for stage in ("queue", "decode", "e2e")
         for quantile, value in (("p50", 2.0), ("p99", 32.0))
     }
 
-    tokens = _panel_rows(store, "Time to first token and inter-token latency")
+    tokens = _panel_rows(store, "vLLM time to first token and inter-token latency")
     assert {series for _, series, _, _, _ in tokens} == {"ttft", "inter_token_latency"}
     assert all(value == pytest.approx(LATENCY_MEAN) for _, _, value, _, _ in tokens)
     assert len({t for t, *_ in tokens}) == BUCKETS - 1
 
-    iteration = _panel_rows(store, "Tokens per engine iteration")
+    iteration = _panel_rows(store, "vLLM tokens per iteration")
     assert {series for _, series, _, _ in iteration} == {"iteration tokens per engine step"}
     assert all(value == pytest.approx(TOKEN_MEAN) for _, _, value, _ in iteration)
 
@@ -1087,7 +1086,7 @@ def test_a_counter_reset_drops_the_sample_rather_than_reading_as_a_giant_delta(s
             f"""UPDATE "{stream}" SET value = 1.0
                 WHERE name = 'request_generation_tokens_bucket' AND seq >= 3"""
         )
-    rows = _panel_rows(store, "Generated tokens per request")
+    rows = _panel_rows(store, "vLLM generated tokens per request")
 
     # Samples 1 and 2 still difference cleanly and 3 is the reset; 4 and 5 are flat at 1.0, which
     # adds requests to the count but none to a bucket. Keeping the reset would count BUCKETS - 1.
@@ -1099,18 +1098,18 @@ def test_engine_rows_are_read_from_whichever_namespace_the_run_wrote_them_to(sto
     # An RL run's engine metrics are forwarded by the MarinSkyRL process under its own service
     # name, so they land in telemetry_v1.marinskyrl rather than telemetry_v1.vllm. Reading only
     # the latter renders every engine panel blank for exactly the runs this dashboard is for.
-    both = _panel_rows(store, "Generated tokens per request")
+    both = _panel_rows(store, "vLLM generated tokens per request")
     assert both
 
     store.execute('DELETE FROM "telemetry_v1.vllm"')
-    marinskyrl_only = _panel_rows(store, "Generated tokens per request")
+    marinskyrl_only = _panel_rows(store, "vLLM generated tokens per request")
 
     assert {stat: value for stat, value, _ in marinskyrl_only} == {stat: value for stat, value, _ in both}
     assert {samples for _, _, samples in marinskyrl_only} == {(BUCKETS - 1) * 100}
 
 
 def test_the_engine_gauges_are_summed_across_engines_and_never_differenced(store) -> None:
-    queue = _panel_rows(store, "Engine queue depth and why requests are waiting")
+    queue = _panel_rows(store, "vLLM waiting requests by reason")
 
     # One engine in each namespace, each averaged over its own samples and then summed. The
     # reasons partition the queue, so they add up to its depth.
@@ -1120,7 +1119,7 @@ def test_the_engine_gauges_are_summed_across_engines_and_never_differenced(store
         **{f"waiting · {reason}": pytest.approx(len(ENGINES) * v) for reason, v in WAITING_BY_REASON.items()},
     }
 
-    cache = _panel_rows(store, "KV-cache utilisation")
+    cache = _panel_rows(store, "vLLM KV-cache usage")
     assert len(cache) == 2 * BUCKETS
     assert {series: value for _, series, value, _ in cache} == {
         "kv_cache_usage": pytest.approx(KV_CACHE_USAGE),
@@ -1161,7 +1160,7 @@ def test_every_panel_says_on_its_face_why_it_would_be_blank() -> None:
 def test_generation_is_shown_against_training_rather_than_alone(store) -> None:
     """The premise the old layout encoded -- policy_train owns 90.4% of the step -- was true before
     the grouped-mm fix and is false now. Two series on one axis is what makes that legible."""
-    rows = _panel_rows(store, "Generation against training, per step")
+    rows = _panel_rows(store, "generate and policy_train per step")
 
     by_series = {series: seconds for _, series, seconds in rows}
     assert set(by_series) == {"generate", "policy_train"}
@@ -1172,7 +1171,7 @@ def test_generation_is_shown_against_training_rather_than_alone(store) -> None:
 def test_the_tail_is_reported_against_the_per_trajectory_mean(store) -> None:
     """Generation is tail-latency-bound: the step ends with the last trajectory, so the mean alone
     misleads. The ratio has to divide the max by the per-trajectory mean, not by the raw sum."""
-    rows = _panel_rows(store, "How far the slowest trajectory runs past the mean")
+    rows = _panel_rows(store, "rollout_engine_await: slowest trajectory ÷ mean")
 
     expected = ENGINE_AWAIT_MAX / (ENGINE_AWAIT_SUM / TRAJECTORIES)
     assert expected > 1.0, "the fixture no longer has a tail"
@@ -1195,7 +1194,7 @@ def test_the_vitals_table_names_the_clock_domain_the_ranks_and_the_truncated_ste
     """Three things decide whether anything below can be read, and all three are invisible in a
     duration: which clock the worker sink stamped, whether any worker reported at all, and whether a
     step ended in a failure -- a truncated step renders exactly like a fast one."""
-    rows = _panel_rows(store, "Span coverage: clock, ranks, truncated steps")
+    rows = _panel_rows(store, "Span coverage: clock domain, ranks, failed steps")
 
     by_sink = {(role, clock): (ranks, steps, failed) for role, clock, ranks, steps, failed in rows}
     assert by_sink[("worker", "exclusive_wall")][0] == len(WORKER_SPANS)
@@ -1218,14 +1217,14 @@ def test_the_vitals_table_shows_a_run_that_stamped_two_clock_domains_as_two_rows
            SET attributes_json = replace(attributes_json, 'exclusive_wall', 'exclusive_launch')
            WHERE seq >= 3 AND json_extract_string(attributes_json, '$.role') = 'worker'"""
     )
-    rows = _panel_rows(store, "Span coverage: clock, ranks, truncated steps")
+    rows = _panel_rows(store, "Span coverage: clock domain, ranks, failed steps")
 
     worker_clocks = {clock for role, clock, *_ in rows if role == "worker"}
     assert worker_clocks == {"exclusive_wall", "exclusive_launch", "inclusive_wall"}
 
 
 def test_the_outcome_table_reports_each_process_terminal_event(store) -> None:
-    title = "How the run ended, and whether telemetry kept up"
+    title = "Terminal event and lost records"
 
     assert _panel_rows(store, title) == [
         ("trainer", "completed", "normal_exit", 0, 3),
@@ -1236,7 +1235,7 @@ def test_the_outcome_table_reports_each_process_terminal_event(store) -> None:
 
 
 def test_the_residual_panel_reports_both_trees_signed(store) -> None:
-    (panel,) = _all_panels("Signed span residuals — both trees")
+    (panel,) = _all_panels("Signed span residuals: generate and policy_ppo_train")
     driver, worker = (_target_rows(store, target) for target in panel["targets"])
 
     assert {round(value, 6) for _, value in driver} == {round(GENERATE_RESIDUAL, 6)}
@@ -1253,7 +1252,7 @@ def test_the_residual_panel_reports_both_trees_signed(store) -> None:
 
 
 def test_the_generate_shares_partition_the_phase(store) -> None:
-    rows = _panel_rows(store, "Inside generate — where the fan-out goes")
+    rows = _panel_rows(store, "generate: share of each child span")
 
     shares = {series: value for _, series, value in rows}
     assert shares["rollout_collect"] == pytest.approx(GENERATE_CHILDREN["rollout_collect"] / DRIVER_PHASES["generate"])
@@ -1271,11 +1270,11 @@ def test_the_generate_shares_are_blank_rather_than_a_single_full_band_without_th
            WHERE json_extract_string(attributes_json, '$.parent') = 'generate'"""
     )
 
-    assert _panel_rows(store, "Inside generate — where the fan-out goes") == []
+    assert _panel_rows(store, "generate: share of each child span") == []
 
 
 def test_the_rollout_waits_are_divided_by_the_trajectory_count(store) -> None:
-    rows = _panel_rows(store, "A trajectory's wait: the engine against the environment")
+    rows = _panel_rows(store, "Per-trajectory wait: rollout_engine_await and rollout_env_await")
 
     for _, engine, environment, slowest in rows:
         assert engine == pytest.approx(ENGINE_AWAIT_SUM / TRAJECTORIES)
@@ -1316,7 +1315,7 @@ def test_no_panel_plots_a_concurrent_await_sum_undivided(store) -> None:
 
 
 def test_the_environment_split_is_a_partition_with_an_audit_band(store) -> None:
-    rows = _panel_rows(store, "Is the environment slow, or the loop around it?")
+    rows = _panel_rows(store, "Environment wait: queue, exec and resume")
 
     shares = {series: value for _, series, value in rows}
     awaited = sum(ENV_SPLIT.values())
@@ -1329,7 +1328,7 @@ def test_the_environment_split_is_a_partition_with_an_audit_band(store) -> None:
 
 
 def test_memory_is_the_worst_rank_and_allocator_events_are_the_run_total(store) -> None:
-    rows = _panel_rows(store, "Allocator pressure and peak memory on the worst rank")
+    rows = _panel_rows(store, "Allocator peaks, retries and OOMs")
 
     for _, reserved, allocated, retries, ooms in rows:
         # The binding constraint on the micro-batch is the rank that used most, never the mean.
@@ -1347,7 +1346,7 @@ def test_the_memory_panel_reads_the_instrument_the_byte_gauges_moved_to(store) -
         """UPDATE "telemetry_v1.marinskyrl" SET name = 'policy_train_count'
            WHERE name = 'policy_train_bytes'"""
     )
-    rows = _panel_rows(store, "Allocator pressure and peak memory on the worst rank")
+    rows = _panel_rows(store, "Allocator peaks, retries and OOMs")
 
     assert all(row[1] is not None for row in rows)
     assert rows[0][1] == pytest.approx(max(m["peak_reserved_bytes"] for m in WORKER_MEMORY.values()))

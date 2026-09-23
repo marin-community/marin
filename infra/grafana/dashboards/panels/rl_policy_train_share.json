@@ -1,7 +1,7 @@
 {
   "type": "timeseries",
   "title": "policy_train share of the step",
-  "description": "policy_train ÷ the step. The triage number: 0.90 on E6, 0.24 on pr488 where generation owns the step instead. The denominator is the run's own `step` span.",
+  "description": "Driver `policy_train` ÷ `step`, per step. Near 1 means `policy_train` dominates the step. Near 0 means `generate` does.",
   "datasource": {
     "type": "yesoreyeram-infinity-datasource",
     "uid": "finelog-marin"
@@ -19,7 +19,7 @@
       "unit": "percentunit",
       "min": 0,
       "max": 1,
-      "noValue": "No policy_train row, and no phases naming step as their parent. The driver sink is not reaching finelog."
+      "noValue": "No policy_train row, and no phases naming step as their parent. The trainer's timing sink is not reaching Finelog."
     },
     "overrides": []
   },

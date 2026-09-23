@@ -1,9 +1,11 @@
 {
   "uid": "marin-rl-sync-train-step",
   "title": "RL Post-training (sync): train step",
-  "description": "Why the training half of an RL step takes as long as it does: the per-rank spans MarinSkyRL publishes from inside the policy worker, and the DCGM occupancy of the same nodes. Training is 21-27% of the step; generation is the larger half and has its own board.",
+  "description": "Drill-down of RL Post-training (sync) into `policy_train`: the per-rank spans and counters each policy worker publishes, and DCGM counters for the same nodes. The spans and counters need `trainer.policy_train_spans=true`, which is off by default.",
   "tags": [
     "marin",
+    "rl",
+    "sync",
     "generated"
   ],
   "timezone": "utc",
@@ -101,7 +103,7 @@
   "panels": [
     {
       "type": "row",
-      "title": "Why is the training step slow?",
+      "title": "Why is policy_train slow?",
       "collapsed": false,
       "id": 210,
       "gridPos": {
@@ -115,8 +117,8 @@
     {
       "id": 211,
       "type": "timeseries",
-      "title": "policy_ppo_train decomposition at the critical rank",
-      "description": "Exclusive spans on r* = argmax_rank(policy_ppo_train), the rank the driver blocked on. Never take a per-phase maximum across ranks: barrier and compute are anti-correlated, so the maxima come from different ranks and can sum past the parent. `unattributed` is recomputed here, and signed.",
+      "title": "policy_ppo_train spans on the slowest rank",
+      "description": "Exclusive spans on r* = argmax_r(`policy_ppo_train`), the rank the driver waited for. `policy_span_residual` is recomputed from r*'s spans and is signed. Do not take a per-span maximum across ranks: barrier and compute time are anti-correlated, so those maxima can sum past the parent.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -142,7 +144,7 @@
             }
           },
           "unit": "s",
-          "noValue": "No worker spans. Set trainer.policy_train_spans=true, and check the telemetry endpoint, run id and execution uid reached the Ray actors — an unconfigured runtime discards every record and still reports a healthy flush.",
+          "noValue": "No worker spans. The run did not set trainer.policy_train_spans=true, or its build predates the worker spans.",
           "min": 0,
           "displayName": "${__field.labels.series}"
         },
@@ -221,8 +223,8 @@
     {
       "id": 212,
       "type": "timeseries",
-      "title": "Rank skew: policy_ppo_train across ranks",
-      "description": "Spread of policy_ppo_train across one step's ranks. The max-to-p50 gap is the straggler skew the driver pays for. Do not subtract it from the driver's policy_train — that waits for the last rank to return, not the longest-running one.",
+      "title": "policy_ppo_train spread across ranks",
+      "description": "Max, p95, p50 and min of `policy_ppo_train` over all ranks and steps in the bucket. Do not subtract it from the driver's `policy_train`. The driver waits for the last rank to return, which need not be the rank that ran longest.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -245,7 +247,7 @@
           },
           "unit": "s",
           "min": 0,
-          "noValue": "No worker spans, so there is no spread. Never a run whose ranks all finished together."
+          "noValue": "No worker spans, so there is no spread to show."
         },
         "overrides": []
       },
@@ -333,7 +335,7 @@
       "id": 213,
       "type": "timeseries",
       "title": "policy_train ÷ micro-step count",
-      "description": "Driver policy_train per micro-step, with the count itself on the right axis. FSDP pays a parameter all-gather per micro-step, so a flat ratio against a halved count is a real win and an inversely proportional one is not.",
+      "description": "Driver `policy_train` ÷ `micro_step_count`, with the count on the right axis. FSDP all-gathers parameters once per micro-step. If the count halves and this ratio stays flat, `policy_train` halved. If the ratio doubles, nothing was saved.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -356,7 +358,7 @@
           },
           "unit": "s",
           "min": 0,
-          "noValue": "No policy_train_count rows. The spans and these counters ship together, so this run predates them."
+          "noValue": "No micro_step_count counter. Workers publish it only with trainer.policy_train_spans=true."
         },
         "overrides": [
           {
@@ -454,8 +456,8 @@
     {
       "id": 214,
       "type": "timeseries",
-      "title": "backward ÷ forward at the critical rank",
-      "description": "The ratio on r*. FSDP2 pays a second all-gather in backward when reshard_after_forward is on and a third for gradient checkpointing, so it climbs above 2:1 when the gathers cost more than the maths. Meaningless across clock domains.",
+      "title": "policy_backward ÷ policy_forward on the slowest rank",
+      "description": "The ratio on r*. FSDP2 pays a second all-gather in backward when `reshard_after_forward` is on, and a third for gradient checkpointing, so the ratio climbs above 2:1 when the all-gathers cost more than the compute. Compare only within one `clock_domain`.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -478,7 +480,7 @@
           },
           "unit": "none",
           "min": 0,
-          "noValue": "No worker spans on r*. Never a forward that took no time."
+          "noValue": "No policy_forward or policy_backward span on the slowest rank."
         },
         "overrides": []
       },
@@ -550,8 +552,8 @@
     {
       "id": 215,
       "type": "timeseries",
-      "title": "Waiting and collective share at the critical rank",
-      "description": "The share of policy_ppo_train that r* spent in barriers and collectives. r*'s entry barrier is near zero by construction, so a large share here is real synchronisation cost rather than arrival skew — that belongs to the skew panel.",
+      "title": "Barrier and all-reduce share on the slowest rank",
+      "description": "Share of `policy_ppo_train` that r* spent in `policy_entry_barrier`, `policy_final_barrier` and the two all-reduces. r* arrives last, so its entry barrier is near zero. A large share is synchronisation cost.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -574,7 +576,7 @@
           },
           "unit": "percentunit",
           "min": 0,
-          "noValue": "No barrier or allreduce spans on r*. Never a rank that waited for nothing."
+          "noValue": "No barrier or all-reduce spans on the slowest rank."
         },
         "overrides": []
       },
@@ -646,8 +648,8 @@
     {
       "id": 216,
       "type": "timeseries",
-      "title": "Padding waste and attention work",
-      "description": "Left: the padding fraction of the trained batch. Right: B·S² ÷ ΣLᵢ², how far eager attention's quadratic cost runs past what the real lengths need. Packing is off for Grug, so the linear padded fraction understates the cost.",
+      "title": "Padding fraction and attention_work_ratio",
+      "description": "Left: 1 − `rank_tokens_real` ÷ `rank_tokens_padded`, averaged over ranks. Right: `attention_work_ratio`, padded over real attention work. Grug rejects sequence packing, and eager attention cost grows with the square of the padded length, so the padding fraction understates the cost.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -671,7 +673,7 @@
           "unit": "percentunit",
           "min": 0,
           "max": 1,
-          "noValue": "No token counters. They ship with the spans, so this is an older run — never an unpadded batch."
+          "noValue": "No token counters. Workers publish them only with trainer.policy_train_spans=true."
         },
         "overrides": [
           {
@@ -769,8 +771,8 @@
     {
       "id": 217,
       "type": "timeseries",
-      "title": "Allocator pressure and peak memory on the worst rank",
-      "description": "Torch's own peak bytes on the rank that used most, with allocator retries on the right axis. A retry means the bytes were there but not contiguous: the leading indicator of an OOM, and invisible in a peak-bytes series alone.",
+      "title": "Allocator peaks, retries and OOMs",
+      "description": "`peak_allocated_bytes` and `peak_reserved_bytes` on the highest rank, and `alloc_retries` and `alloc_ooms` summed over ranks on the right axis. A retry is a failed `cudaMalloc` that made the allocator free its cache and try again. Retries usually come before an OOM.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -792,7 +794,7 @@
             "axisLabel": "peak bytes on the worst rank"
           },
           "unit": "bytes",
-          "noValue": "No memory counters. They ship with the worker spans, so this run predates them.",
+          "noValue": "No allocator counters. Workers publish them only with trainer.policy_train_spans=true.",
           "min": 0
         },
         "overrides": [
@@ -900,7 +902,7 @@
     },
     {
       "type": "row",
-      "title": "Were the accelerators doing arithmetic, or waiting?",
+      "title": "Were the GPUs computing or waiting?",
       "collapsed": false,
       "id": 250,
       "gridPos": {
@@ -915,7 +917,7 @@
       "id": 221,
       "type": "timeseries",
       "title": "SM and tensor-pipe activity on this run's nodes",
-      "description": "DCGM SM-active against tensor-active on this run's nodes. The direct test of whether the eager MoE loop is launch-bound: SM-active stays high while the device does very little, so tensor-active near zero underneath it is the signature. Joined by node, never per rank.",
+      "description": "DCGM SM-active and tensor-active on this run's nodes. High SM-active with near-zero tensor-active means kernels run but do little matrix math. Joined by node, so per-rank values are unavailable.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -939,7 +941,7 @@
           "unit": "percent",
           "min": 0,
           "max": 100,
-          "noValue": "No node join: trainer rows carry no node_name, or the node agent is not reporting this cluster. Never idle GPUs.",
+          "noValue": "No node join: trainer rows carry no node_name, or the node agent is not reporting this cluster.",
           "displayName": "${__field.labels.series}"
         },
         "overrides": []
@@ -1018,7 +1020,7 @@
       "id": 222,
       "type": "timeseries",
       "title": "GPU memory in use on this run's nodes",
-      "description": "DCGM framebuffer bytes, mean and peak across the run's GPUs. Per device, so it counts everything else on the card — the per-rank torch peaks are the number that decides whether a larger micro-batch fits.",
+      "description": "DCGM framebuffer bytes, mean and peak across the run's GPUs. Per device, so it counts everything else on the card. The allocator peaks panel decides whether a larger micro-batch fits.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -1041,7 +1043,7 @@
           },
           "unit": "bytes",
           "min": 0,
-          "noValue": "No node join. Never “the GPUs used no memory”."
+          "noValue": "No node join: trainer rows carry no node_name, or the node agent is not reporting this cluster."
         },
         "overrides": []
       },
@@ -1119,7 +1121,7 @@
       "id": 223,
       "type": "timeseries",
       "title": "NVLink against PCIe receive traffic",
-      "description": "DCGM NVLink and PCIe throughput per direction. The proxy for where the FSDP all-gather goes: NVLink is traffic that stayed in the tray, PCIe is what left it. It cannot identify the fabric beyond the host.",
+      "description": "DCGM NVLink and PCIe receive throughput, summed over the run's GPUs. The proxy for where the FSDP all-gather goes: NVLink is traffic that stayed in the tray, PCIe is what left it. It cannot identify the fabric beyond the host.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -1142,7 +1144,7 @@
           },
           "unit": "Bps",
           "min": 0,
-          "noValue": "No node join, or no NVLink/PCIe counters from this cluster's node agent. Never “nothing crossed the fabric”.",
+          "noValue": "No node join, or no NVLink or PCIe counters from this cluster's node agent.",
           "displayName": "${__field.labels.series}"
         },
         "overrides": []

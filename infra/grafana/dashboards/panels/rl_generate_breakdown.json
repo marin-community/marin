@@ -1,7 +1,7 @@
 {
   "type": "timeseries",
-  "title": "Inside generate — where the fan-out goes",
-  "description": "generate's direct children as shares of generate. rollout_collect — the fan-out that awaits every trajectory — is about 97%, so the question is what it waits on. `unaccounted` should stay near zero.",
+  "title": "generate: share of each child span",
+  "description": "`generate`'s direct child spans as shares of `generate`. `rollout_collect` is the fan-out over trajectories. `generate_span_residual` should stay near zero.",
   "datasource": {
     "type": "yesoreyeram-infinity-datasource",
     "uid": "finelog-marin"
@@ -23,7 +23,7 @@
       "unit": "percentunit",
       "min": 0,
       "max": 1,
-      "noValue": "This build measures generate as one wall — 11 of 167 runs decompose it. Its total is on the step composition.",
+      "noValue": "No generate child spans. This runner or build does not publish them. The generate total is on Step composition.",
       "displayName": "${__field.labels.series}"
     },
     "overrides": []

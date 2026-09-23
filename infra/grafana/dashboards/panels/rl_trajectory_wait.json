@@ -1,7 +1,7 @@
 {
   "type": "timeseries",
-  "title": "A trajectory's wait: the engine against the environment",
-  "description": "Per-trajectory wait, from concurrent sums divided by rollout_trajectory_count. The raw sums run about 200x their own parent and must never be banded. `slowest` is what generate waits for. The engine wait also contains any driver-thread tokenization on the call path, so it is not purely engine time.",
+  "title": "Per-trajectory wait: rollout_engine_await and rollout_env_await",
+  "description": "`_seconds_sum` ÷ `rollout_trajectory_count` for `rollout_engine_await` and `rollout_env_await`, and `rollout_engine_await_seconds_max`. The sums overlap across coroutines, so never stack them. `rollout_engine_await` is the caller's wait on the inference client. For callers that pass text, it includes chat templating on the driver thread.",
   "datasource": {
     "type": "yesoreyeram-infinity-datasource",
     "uid": "finelog-marin"
@@ -17,7 +17,7 @@
         "axisLabel": "seconds per trajectory"
       },
       "unit": "s",
-      "noValue": "No rollout counters. This build does not instrument the generation coroutines.",
+      "noValue": "No rollout wait counters. This build or runner does not publish them.",
       "min": 0
     },
     "overrides": []

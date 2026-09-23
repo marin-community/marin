@@ -1,7 +1,7 @@
 {
   "type": "timeseries",
-  "title": "Step composition — exclusive seconds per phase",
-  "description": "Seconds each phase spent outside its own children, so the bands sum to the step at any depth. `generate` near zero is correct — it is pure orchestration. A negative band means a child is being counted inside its parent.",
+  "title": "Step composition: exclusive seconds per span",
+  "description": "Seconds each driver span spent outside its children, so the bands sum to `step`. The `step` band is time outside every child span. `generate` is near zero when its child spans are on. Harbor and MiniSwe runners publish no generate child spans, so all of `generate` lands in its own band. A negative band means a child is counted inside another.",
   "datasource": {
     "type": "yesoreyeram-infinity-datasource",
     "uid": "finelog-marin"

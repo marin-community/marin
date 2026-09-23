@@ -1,14 +1,14 @@
 {
   "type": "table",
-  "title": "How the run ended, and whether telemetry kept up",
-  "description": "The terminal event each process published: status, reason, and how many records the exporter queued or lost. A nonzero lost count means every number on this dashboard is computed from a short row set — max and p95 understate first.",
+  "title": "Terminal event and lost records",
+  "description": "The `terminal` event per role: status, reason, and the exporter's queued and lost record counts. A nonzero lost count means every panel here reads an incomplete row set.",
   "datasource": {
     "type": "yesoreyeram-infinity-datasource",
     "uid": "finelog-marin"
   },
   "fieldConfig": {
     "defaults": {
-      "noValue": "No terminal event. The run is still going, or it died without one — check the job, not this panel."
+      "noValue": "No terminal event. The run is still going, or it exited without publishing one. Check the job's own state."
     },
     "overrides": []
   },
