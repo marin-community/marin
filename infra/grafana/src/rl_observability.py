@@ -779,25 +779,16 @@ WITH {_run_nodes_cte(bucket, clusters_sql, start_ms, end_ms)}, gpu AS (
     SELECT gpu.* FROM gpu JOIN run_node USING (origin_cluster, t, node)
     WHERE run_node.run = {sql_string(run)}
 )
-SELECT 'series' AS statistic, t, name,
-       CAST(NULL AS VARCHAR) AS node,
-       CAST(NULL AS VARCHAR) AS gpu,
-       AVG(mean_value) AS mean_value,
-       SUM(mean_value) AS total_value,
+SELECT CASE WHEN GROUPING(node) = 1 THEN 'series' ELSE 'device' END AS statistic,
+       t, name, node, gpu,
+       CASE WHEN GROUPING(node) = 1 THEN AVG(mean_value) END AS mean_value,
+       CASE WHEN GROUPING(node) = 1 THEN SUM(mean_value) END AS total_value,
        MAX(max_value) AS max_value,
-       CAST(NULL AS DOUBLE) AS min_value
-FROM attributed WHERE name IN ({sql_values(_DCGM_SERIES)})
-GROUP BY t, name
-UNION ALL
-SELECT 'device' AS statistic,
-       CAST(NULL AS BIGINT) AS t,
-       name, node, gpu,
-       CAST(NULL AS DOUBLE) AS mean_value,
-       CAST(NULL AS DOUBLE) AS total_value,
-       MAX(max_value) AS max_value,
-       MIN(min_value) AS min_value
-FROM attributed WHERE name IN ({sql_values(_DCGM_DEVICE)})
-GROUP BY name, node, gpu
+       CASE WHEN GROUPING(node) = 0 THEN MIN(min_value) END AS min_value
+FROM attributed
+GROUP BY GROUPING SETS ((t, name), (name, node, gpu))
+HAVING (GROUPING(node) = 1 AND name IN ({sql_values(_DCGM_SERIES)}))
+    OR (GROUPING(node) = 0 AND name IN ({sql_values(_DCGM_DEVICE)}))
 ORDER BY statistic, t, name
 LIMIT {RL_MAX_GPU_ROWS + 1}
 """.strip()
