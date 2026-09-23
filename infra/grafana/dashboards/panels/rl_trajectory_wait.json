@@ -88,8 +88,8 @@
           "type": "number"
         },
         {
-          "selector": "slowest_single_trajectory",
-          "text": "slowest_single_trajectory",
+          "selector": "engine_await_max",
+          "text": "engine_await_max",
           "type": "number"
         }
       ]

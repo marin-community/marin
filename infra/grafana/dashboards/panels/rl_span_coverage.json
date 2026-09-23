@@ -26,7 +26,7 @@
       {
         "matcher": {
           "id": "byName",
-          "options": "truncated_steps"
+          "options": "failed_steps"
         },
         "properties": [
           {
@@ -97,7 +97,7 @@
           "type": "number"
         },
         {
-          "selector": "truncated_steps",
+          "selector": "failed_steps",
           "text": "steps that failed",
           "type": "number"
         }

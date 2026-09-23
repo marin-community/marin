@@ -836,7 +836,7 @@ def test_the_step_bands_are_exclusive_and_they_close_on_the_step(store) -> None:
     # 3805.6 s of policy_train it contains, in a 4210 s step.
     assert bands["train_critic_and_policy"] == pytest.approx(DISPATCH_SECONDS)
     assert bands["policy_train"] == pytest.approx(DRIVER_PHASES["policy_train"])
-    assert bands["unattributed"] == pytest.approx(UNATTRIBUTED)
+    assert bands["step"] == pytest.approx(UNATTRIBUTED)
     assert sum(bands.values()) == pytest.approx(STEP_SECONDS)
 
 
@@ -871,7 +871,7 @@ def test_the_decomposition_reads_the_critical_rank_and_never_a_per_phase_maximum
 
     bands = {series: seconds for _, series, seconds in rows}
     expected = dict(WORKER_SPANS[CRITICAL_RANK])
-    expected["unattributed"] = PPO_TRAIN[CRITICAL_RANK] - sum(WORKER_SPANS[CRITICAL_RANK].values())
+    expected["policy_span_residual"] = PPO_TRAIN[CRITICAL_RANK] - sum(WORKER_SPANS[CRITICAL_RANK].values())
     assert bands == pytest.approx(expected)
 
     # Only spans that name policy_ppo_train as their parent are banded, so the two container
@@ -882,16 +882,18 @@ def test_the_decomposition_reads_the_critical_rank_and_never_a_per_phase_maximum
     assert CONTAINER_SPAN not in bands
     assert "policy_training_step" not in bands
     assert "policy_span_publish" not in bands
-    assert bands["unattributed"] == pytest.approx(PPO_TRAIN[CRITICAL_RANK] - sum(WORKER_SPANS[CRITICAL_RANK].values()))
-    # The producer's own residual is excluded and recomputed. Reading the published one would put
-    # a -1949 s band in a 2000 s stack.
-    assert "policy_span_residual" not in bands
+    assert bands["policy_span_residual"] == pytest.approx(
+        PPO_TRAIN[CRITICAL_RANK] - sum(WORKER_SPANS[CRITICAL_RANK].values())
+    )
+    # The producer's own residual is excluded and recomputed under the same name. Reading the
+    # published one would put a -1949 s band in a 2000 s stack.
     published = (
         PPO_TRAIN[CRITICAL_RANK]
         - sum(WORKER_SPANS[CRITICAL_RANK].values())
         - sum(WORKER_SPANS[CRITICAL_RANK][phase] for phase in CONTAINED_SPANS)
     )
     assert published < 0, "the fixture no longer reproduces the double-count"
+    assert bands["policy_span_residual"] != pytest.approx(published)
 
     # The bands close on the parent they decompose. A per-phase maximum over the two ranks would
     # sum to 2645 s inside a 2000 s span, because the barrier and the compute come from different
@@ -1199,7 +1201,7 @@ def test_the_vitals_table_names_the_clock_domain_the_ranks_and_the_truncated_ste
     by_sink = {(role, clock): (ranks, steps, failed) for role, clock, ranks, steps, failed in rows}
     assert by_sink[("worker", "exclusive_wall")][0] == len(WORKER_SPANS)
     # Absent, not zero: the driver sink has no concept of a rank, and "0" reads as "the workers
-    # are silent". The same distinction is why truncated_steps is null until a row carries an outcome.
+    # are silent". The same distinction is why failed_steps is null until a row carries an outcome.
     assert by_sink[("trainer", "inclusive_wall")][0] is None, "driver rows carry no rank"
     assert by_sink[("trainer", "critical_path")] == (None, BUCKETS, 1)
     # Nothing but the critical-path rows carries an outcome, so nothing else may report a failure.
@@ -1257,9 +1259,9 @@ def test_the_generate_shares_partition_the_phase(store) -> None:
     shares = {series: value for _, series, value in rows}
     assert shares["rollout_collect"] == pytest.approx(GENERATE_CHILDREN["rollout_collect"] / DRIVER_PHASES["generate"])
     # The grandchildren belong to their own parents' walls, not to generate's.
-    assert set(shares) == {*GENERATE_CHILDREN, "unaccounted"}
+    assert set(shares) == {*GENERATE_CHILDREN, "generate_span_residual"}
     assert sum(shares.values()) == pytest.approx(1.0)
-    assert shares["unaccounted"] == pytest.approx(GENERATE_RESIDUAL / DRIVER_PHASES["generate"])
+    assert shares["generate_span_residual"] == pytest.approx(GENERATE_RESIDUAL / DRIVER_PHASES["generate"])
 
 
 def test_the_generate_shares_are_blank_rather_than_a_single_full_band_without_the_subtree(store) -> None:
@@ -1319,11 +1321,11 @@ def test_the_environment_split_is_a_partition_with_an_audit_band(store) -> None:
 
     shares = {series: value for _, series, value in rows}
     awaited = sum(ENV_SPLIT.values())
-    assert shares["resuming on the event loop"] == pytest.approx(ENV_SPLIT["resume"] / awaited)
-    assert shares["running the environment"] == pytest.approx(ENV_SPLIT["exec"] / awaited)
+    assert shares["rollout_env_resume"] == pytest.approx(ENV_SPLIT["resume"] / awaited)
+    assert shares["rollout_env_exec"] == pytest.approx(ENV_SPLIT["exec"] / awaited)
     # The producer states the three terms partition the wait exactly, so the audit band is zero
     # until they stop doing so.
-    assert shares["unaccounted"] == pytest.approx(0.0)
+    assert shares["remainder"] == pytest.approx(0.0)
     assert sum(shares.values()) == pytest.approx(1.0)
 
 

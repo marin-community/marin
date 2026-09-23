@@ -77,8 +77,8 @@
           "type": "timestamp_epoch"
         },
         {
-          "selector": "generate_residual",
-          "text": "generate_residual",
+          "selector": "generate_span_residual",
+          "text": "generate_span_residual",
           "type": "number"
         }
       ]
@@ -126,8 +126,8 @@
           "type": "timestamp_epoch"
         },
         {
-          "selector": "policy_residual",
-          "text": "policy_residual",
+          "selector": "policy_span_residual",
+          "text": "policy_span_residual",
           "type": "number"
         }
       ]

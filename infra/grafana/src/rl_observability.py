@@ -294,7 +294,7 @@ SELECT 'driver' AS statistic, t, step,
        MAX(value) AS max_value,
        CAST(NULL AS BIGINT) AS ranks,
        CAST(NULL AS BIGINT) AS steps,
-       CAST(NULL AS BIGINT) AS truncated_steps,
+       CAST(NULL AS BIGINT) AS failed_steps,
        CAST(NULL AS VARCHAR) AS status,
        CAST(NULL AS VARCHAR) AS reason,
        CAST(NULL AS BIGINT) AS lost_records,
@@ -312,7 +312,7 @@ SELECT 'critical_rank' AS statistic, t, step,
        MAX(value) AS max_value,
        CAST(NULL AS BIGINT) AS ranks,
        CAST(NULL AS BIGINT) AS steps,
-       CAST(NULL AS BIGINT) AS truncated_steps,
+       CAST(NULL AS BIGINT) AS failed_steps,
        CAST(NULL AS VARCHAR) AS status,
        CAST(NULL AS VARCHAR) AS reason,
        CAST(NULL AS BIGINT) AS lost_records,
@@ -334,7 +334,7 @@ SELECT 'coverage' AS statistic,
        NULLIF(COUNT(DISTINCT worker_rank), 0) AS ranks,
        COUNT(DISTINCT step) AS steps,
        CASE WHEN COUNT(outcome) = 0 THEN NULL
-            ELSE COUNT(DISTINCT CASE WHEN outcome = 'failure' THEN step END) END AS truncated_steps,
+            ELSE COUNT(DISTINCT CASE WHEN outcome = 'failure' THEN step END) END AS failed_steps,
        CAST(NULL AS VARCHAR) AS status,
        CAST(NULL AS VARCHAR) AS reason,
        CAST(NULL AS BIGINT) AS lost_records,
@@ -354,7 +354,7 @@ SELECT 'terminal' AS statistic,
        CAST(NULL AS DOUBLE) AS max_value,
        CAST(NULL AS BIGINT) AS ranks,
        CAST(NULL AS BIGINT) AS steps,
-       CAST(NULL AS BIGINT) AS truncated_steps,
+       CAST(NULL AS BIGINT) AS failed_steps,
        status, reason, lost_records, queued_records
 FROM terminal
 ORDER BY statistic, t, step
@@ -466,7 +466,7 @@ GROUP BY 1, 2 ORDER BY 1
 """.strip()
         ),
         "span_coverage": (
-            "SELECT role, clock_domain AS clock, ranks, steps, truncated_steps "
+            "SELECT role, clock_domain AS clock, ranks, steps, failed_steps "
             "FROM spans WHERE statistic = 'coverage' ORDER BY 1, 2"
         ),
         "run_outcome": (
@@ -484,7 +484,7 @@ WITH driver AS (
     FROM driver WHERE parent IS NOT NULL AND parent <> '' GROUP BY 1, 2, 3
 )
 SELECT driver.t,
-       CASE WHEN driver.phase = 'step' THEN 'unattributed' ELSE driver.phase END AS series,
+       driver.phase AS series,
        SUM(driver.sum_value - driver.sample_count * COALESCE(contained.child_seconds, 0))
            / SUM(driver.sample_count) AS value
 FROM driver
@@ -507,11 +507,11 @@ FROM per_step GROUP BY 1 ORDER BY 1
 """.strip()
         ),
         "generate_residual": (
-            "SELECT t, SUM(sum_value) / SUM(sample_count) AS generate_residual FROM spans "
+            "SELECT t, SUM(sum_value) / SUM(sample_count) AS generate_span_residual FROM spans "
             "WHERE statistic = 'driver' AND phase = 'generate_span_residual' GROUP BY 1 ORDER BY 1"
         ),
         "policy_residual": (
-            "SELECT t, SUM(sum_value) / SUM(sample_count) AS policy_residual FROM spans "
+            "SELECT t, SUM(sum_value) / SUM(sample_count) AS policy_span_residual FROM spans "
             "WHERE statistic = 'critical_rank' AND phase = 'policy_span_residual' GROUP BY 1 ORDER BY 1"
         ),
     }
@@ -601,7 +601,7 @@ WITH spans AS (
     FROM spans JOIN per_step ON per_step.t = spans.t AND per_step.step = spans.step
     WHERE spans.parent = 'generate'
     UNION ALL
-    SELECT t, 'unaccounted', (generate_seconds - child_seconds) / NULLIF(generate_seconds, 0), 1
+    SELECT t, 'generate_span_residual', (generate_seconds - child_seconds) / NULLIF(generate_seconds, 0), 1
     FROM per_step WHERE child_seconds IS NOT NULL
 )
 SELECT t, band AS series,
@@ -614,7 +614,7 @@ FROM banded GROUP BY 1, 2 ORDER BY 1
 SELECT t,
        AVG(engine_seconds / NULLIF(trajectories, 0)) AS engine_wait_per_trajectory,
        AVG(env_seconds / NULLIF(trajectories, 0)) AS env_wait_per_trajectory,
-       AVG(slowest) AS slowest_single_trajectory
+       AVG(slowest) AS engine_await_max
 FROM rollout_steps GROUP BY 1 ORDER BY 1
 """.strip()
         ),
@@ -625,13 +625,13 @@ FROM rollout_steps GROUP BY 1 ORDER BY 1
         "environment_split": (
             """
 WITH banded AS (
-    SELECT t, 'queued for the executor' AS band, queued / NULLIF(env_seconds, 0) AS share FROM rollout_steps
+    SELECT t, 'rollout_env_queue' AS band, queued / NULLIF(env_seconds, 0) AS share FROM rollout_steps
     UNION ALL
-    SELECT t, 'running the environment', executed / NULLIF(env_seconds, 0) FROM rollout_steps
+    SELECT t, 'rollout_env_exec', executed / NULLIF(env_seconds, 0) FROM rollout_steps
     UNION ALL
-    SELECT t, 'resuming on the event loop', resumed / NULLIF(env_seconds, 0) FROM rollout_steps
+    SELECT t, 'rollout_env_resume', resumed / NULLIF(env_seconds, 0) FROM rollout_steps
     UNION ALL
-    SELECT t, 'unaccounted', (env_seconds - queued - executed - resumed) / NULLIF(env_seconds, 0)
+    SELECT t, 'remainder', (env_seconds - queued - executed - resumed) / NULLIF(env_seconds, 0)
     FROM rollout_steps
 )
 SELECT t, band AS series, AVG(share) AS value FROM banded GROUP BY 1, 2 ORDER BY 1
@@ -821,7 +821,7 @@ GROUP BY 1, 2
             f"""
 WITH banded AS (
     SELECT t,
-           CASE WHEN clock_domain IN {_INCLUSIVE_CLOCKS} THEN 'unattributed' ELSE phase END AS band,
+           CASE WHEN clock_domain IN {_INCLUSIVE_CLOCKS} THEN 'policy_span_residual' ELSE phase END AS band,
            CASE WHEN clock_domain IN {_INCLUSIVE_CLOCKS}
                 THEN (parent_seconds - covered_seconds) * sample_count ELSE sum_value END AS seconds,
            sample_count
