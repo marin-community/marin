@@ -57,6 +57,7 @@ _DCGM_SERIES = (
     "gpu_pcie_receive_bytes_per_second",
 )
 _DCGM_DEVICE = ("gpu_power_watts", "gpu_nvlink_errors", "gpu_pcie_replay_errors")
+_ALLOCATOR_COUNTERS = ("peak_reserved_bytes", "peak_allocated_bytes", "alloc_retries", "alloc_ooms")
 
 
 def _rl_bucket_ms(
@@ -729,28 +730,27 @@ WITH samples AS (
            MAX(CASE WHEN counter = 'micro_step_count' THEN value END) AS micro_steps
     FROM samples WHERE name = 'policy_train_count'
     GROUP BY 1, 2, 3
+), per_step AS (
+    SELECT t, step,
+           SUM(1.0 - tokens_real / NULLIF(tokens_padded, 0)) AS padded_sum,
+           COUNT(1.0 - tokens_real / NULLIF(tokens_padded, 0)) AS padded_count,
+           SUM(attention_work) AS attention_sum,
+           COUNT(attention_work) AS attention_count,
+           MAX(micro_steps) AS micro_steps
+    FROM per_rank GROUP BY t, step
 ), worker AS (
     SELECT t, step, worker_rank, counter, MAX(value) AS value
-    FROM samples WHERE role = 'worker'
+    FROM samples WHERE role = 'worker' AND counter IN ({sql_values(_ALLOCATOR_COUNTERS)})
     GROUP BY 1, 2, 3, 4
 )
-SELECT 'per_rank' AS statistic, t, step, 'padded_fraction' AS counter,
-       SUM(1.0 - tokens_real / NULLIF(tokens_padded, 0)) AS sum_value,
-       COUNT(1.0 - tokens_real / NULLIF(tokens_padded, 0)) AS sample_count,
-       CAST(NULL AS DOUBLE) AS max_value
-FROM per_rank GROUP BY t, step
-UNION ALL
-SELECT 'per_rank' AS statistic, t, step, 'attention_work_ratio' AS counter,
-       SUM(attention_work) AS sum_value,
-       COUNT(attention_work) AS sample_count,
-       CAST(NULL AS DOUBLE) AS max_value
-FROM per_rank GROUP BY t, step
-UNION ALL
-SELECT 'per_rank' AS statistic, t, step, 'micro_step_count' AS counter,
-       CAST(NULL AS DOUBLE) AS sum_value,
-       CAST(NULL AS BIGINT) AS sample_count,
-       MAX(micro_steps) AS max_value
-FROM per_rank GROUP BY t, step
+SELECT 'per_rank' AS statistic, t, step, k.counter,
+       CASE k.counter WHEN 'padded_fraction' THEN padded_sum
+                      WHEN 'attention_work_ratio' THEN attention_sum END AS sum_value,
+       CASE k.counter WHEN 'padded_fraction' THEN padded_count
+                      WHEN 'attention_work_ratio' THEN attention_count END AS sample_count,
+       CASE k.counter WHEN 'micro_step_count' THEN micro_steps END AS max_value
+FROM per_step
+CROSS JOIN (VALUES ('padded_fraction'), ('attention_work_ratio'), ('micro_step_count')) AS k(counter)
 UNION ALL
 SELECT 'worker' AS statistic, t, step, counter,
        SUM(value) AS sum_value,
