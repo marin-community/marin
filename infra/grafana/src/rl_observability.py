@@ -6,6 +6,10 @@
 The overview's span source holds one row per bucket and phase; the drill-downs' span sources hold
 one row per step and phase. Finelog reduces each step's worker spans to the step's slowest rank,
 the rank with the longest ``policy_ppo_train``, and to a per-bucket spread across ranks.
+
+A step is keyed by ``(execution_uid, step)``: a run restarted from a checkpoint repeats step
+numbers, and each attempt's repeat is its own step. A bucket averages or sums over every step in
+it, whichever attempt ran it.
 """
 
 from dashboard_dataset import (
@@ -116,6 +120,7 @@ def _run_nodes_cte(bucket: str, clusters_sql: str, start_ms: int, end_ms: int) -
 def _phase_rows_cte(bucket: str, scope: str) -> str:
     return f"""phase_rows AS (
     SELECT {bucket} AS t,
+           execution_uid,
            json_get(attributes_json, 'role') AS role,
            json_get(attributes_json, 'step') AS step,
            json_get(attributes_json, 'rank') AS worker_rank,
@@ -139,19 +144,19 @@ def _phase_rows_cte(bucket: str, scope: str) -> str:
 def _critical_rank_cte(phases: tuple[str, ...] = ()) -> str:
     only = f" AND phase IN ({sql_values(phases)})" if phases else ""
     return f"""tagged AS (
-    SELECT t, step, worker_rank, phase, parent, clock_domain, value,
+    SELECT t, execution_uid, step, worker_rank, phase, parent, clock_domain, value,
            FIRST_VALUE(worker_rank) OVER (
-               PARTITION BY step
+               PARTITION BY execution_uid, step
                ORDER BY CASE WHEN phase = 'policy_ppo_train' AND clock_domain IN {_INCLUSIVE_CLOCKS}
                              THEN value ELSE -1 END DESC NULLS LAST,
                         worker_rank
                ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
            ) AS critical_rank,
            MAX(CASE WHEN phase = 'policy_ppo_train' AND clock_domain IN {_INCLUSIVE_CLOCKS} THEN value END)
-               OVER (PARTITION BY step) AS parent_seconds,
+               OVER (PARTITION BY execution_uid, step) AS parent_seconds,
            SUM(CASE WHEN parent = 'policy_ppo_train' AND clock_domain IN {_EXCLUSIVE_CLOCKS}
                          AND phase <> 'policy_span_residual' THEN value END)
-               OVER (PARTITION BY step, worker_rank) AS covered_seconds
+               OVER (PARTITION BY execution_uid, step, worker_rank) AS covered_seconds
     FROM phase_rows
     WHERE role = 'worker'{only}
 )"""
@@ -335,9 +340,10 @@ SELECT 'coverage' AS statistic,
        CAST(NULL AS BIGINT) AS sample_count,
        CAST(NULL AS DOUBLE) AS max_value,
        NULLIF(COUNT(DISTINCT worker_rank), 0) AS ranks,
-       COUNT(DISTINCT step) AS steps,
+       COUNT(DISTINCT execution_uid || ' ' || step) AS steps,
        CASE WHEN COUNT(outcome) = 0 THEN NULL
-            ELSE COUNT(DISTINCT CASE WHEN outcome = 'failure' THEN step END) END AS failed_steps,
+            ELSE COUNT(DISTINCT CASE WHEN outcome = 'failure' THEN execution_uid || ' ' || step END) END
+           AS failed_steps,
        CAST(NULL AS VARCHAR) AS status,
        CAST(NULL AS VARCHAR) AS reason,
        CAST(NULL AS BIGINT) AS lost_records,
@@ -536,6 +542,7 @@ def rl_sync_generation_dataset(
 WITH selected AS (
     SELECT {_bucket_sql(start_ms, bucket_ms)} AS t,
            name,
+           execution_uid,
            json_get(attributes_json, 'step') AS step,
            json_get(attributes_json, 'phase') AS phase,
            json_get(attributes_json, 'parent') AS parent,
@@ -548,14 +555,14 @@ WITH selected AS (
       AND name IN ({names})
       AND json_get(attributes_json, 'role') = 'trainer'
 )
-SELECT t, step, name, phase, parent, counter,
+SELECT t, execution_uid, step, name, phase, parent, counter,
        SUM(value) AS sum_value,
        COUNT(value) AS sample_count,
        MAX(value) AS max_value
 FROM selected
 WHERE name <> 'phase_duration_seconds' OR (clock_domain = 'inclusive_wall' AND root = 'step')
-GROUP BY t, step, name, phase, parent, counter
-ORDER BY t, step, name
+GROUP BY t, execution_uid, step, name, phase, parent, counter
+ORDER BY t, execution_uid, step, name
 LIMIT {RL_MAX_SPAN_ROWS + 1}
 """.strip()
     # The rollout counters are sums over concurrent coroutines and exceed the step itself, so
@@ -563,7 +570,7 @@ LIMIT {RL_MAX_SPAN_ROWS + 1}
     setup_sql = (
         f"""
 CREATE VIEW rollout_steps AS
-SELECT t, step,
+SELECT t, execution_uid, step,
        MAX(CASE WHEN counter = 'rollout_trajectory_count' THEN max_value END) AS trajectories,
        MAX(CASE WHEN counter = 'rollout_engine_await_seconds_sum' THEN max_value END) AS engine_seconds,
        MAX(CASE WHEN counter = 'rollout_engine_await_seconds_max' THEN max_value END) AS slowest,
@@ -572,7 +579,7 @@ SELECT t, step,
        MAX(CASE WHEN counter = 'rollout_env_exec_seconds_sum' THEN max_value END) AS executed,
        MAX(CASE WHEN counter = 'rollout_env_resume_seconds_sum' THEN max_value END) AS resumed
 FROM driver WHERE name IN ({sql_values(_ROLLOUT_COUNTER_NAMES)})
-GROUP BY 1, 2
+GROUP BY 1, 2, 3
 """.strip(),
     )
     views = {
@@ -586,15 +593,15 @@ GROUP BY 1, 2
 WITH spans AS (
     SELECT * FROM driver WHERE name = 'phase_duration_seconds'
 ), per_step AS (
-    SELECT t, step,
+    SELECT t, execution_uid, step,
            MAX(CASE WHEN phase = 'generate' THEN max_value END) AS generate_seconds,
            SUM(CASE WHEN parent = 'generate' THEN sum_value END) AS child_seconds
-    FROM spans GROUP BY 1, 2
+    FROM spans GROUP BY 1, 2, 3
 ), banded AS (
     SELECT spans.t, spans.phase AS band,
            spans.sum_value / NULLIF(per_step.generate_seconds, 0) AS share_sum,
            spans.sample_count AS samples
-    FROM spans JOIN per_step ON per_step.t = spans.t AND per_step.step = spans.step
+    FROM spans JOIN per_step USING (t, execution_uid, step)
     WHERE spans.parent = 'generate'
     UNION ALL
     SELECT t, 'generate_span_residual', (generate_seconds - child_seconds) / NULLIF(generate_seconds, 0), 1
@@ -654,7 +661,7 @@ def rl_sync_train_step_dataset(
     clusters_sql = sql_values(clusters)
     spans_sql = f"""
 WITH {_phase_rows_cte(bucket, scope)}, {_critical_rank_cte()}
-SELECT 'critical_rank' AS statistic, t, step, phase, parent, clock_domain,
+SELECT 'critical_rank' AS statistic, t, execution_uid, step, phase, parent, clock_domain,
        SUM(value) AS sum_value,
        COUNT(value) AS sample_count,
        MAX(value) AS max_value,
@@ -665,9 +672,10 @@ SELECT 'critical_rank' AS statistic, t, step, phase, parent, clock_domain,
        MAX(covered_seconds) AS covered_seconds
 FROM tagged
 WHERE worker_rank = critical_rank
-GROUP BY t, step, phase, parent, clock_domain
+GROUP BY t, execution_uid, step, phase, parent, clock_domain
 UNION ALL
 SELECT 'rank_spread' AS statistic, t,
+       CAST(NULL AS VARCHAR) AS execution_uid,
        CAST(NULL AS VARCHAR) AS step,
        'policy_ppo_train' AS phase,
        CAST(NULL AS VARCHAR) AS parent,
@@ -684,7 +692,7 @@ FROM phase_rows
 WHERE role = 'worker' AND phase = 'policy_ppo_train' AND clock_domain IN {_INCLUSIVE_CLOCKS}
 GROUP BY t
 UNION ALL
-SELECT 'driver' AS statistic, t, step, phase,
+SELECT 'driver' AS statistic, t, execution_uid, step, phase,
        CAST(NULL AS VARCHAR) AS parent,
        clock_domain,
        SUM(value) AS sum_value,
@@ -697,8 +705,8 @@ SELECT 'driver' AS statistic, t, step, phase,
        CAST(NULL AS DOUBLE) AS covered_seconds
 FROM phase_rows
 WHERE role = 'trainer' AND clock_domain = 'inclusive_wall' AND phase = 'policy_train'
-GROUP BY t, step, phase, clock_domain
-ORDER BY statistic, t, step
+GROUP BY t, execution_uid, step, phase, clock_domain
+ORDER BY statistic, t, execution_uid, step
 LIMIT {RL_MAX_SPAN_ROWS + 1}
 """.strip()
     # Each counter is first reduced to its per-rank maximum within a step, as the worker publishes
@@ -707,6 +715,7 @@ LIMIT {RL_MAX_SPAN_ROWS + 1}
     counters_sql = f"""
 WITH samples AS (
     SELECT {bucket} AS t,
+           execution_uid,
            json_get(attributes_json, 'step') AS step,
            json_get(attributes_json, 'rank') AS worker_rank,
            json_get(attributes_json, 'role') AS role,
@@ -716,29 +725,29 @@ WITH samples AS (
     FROM "telemetry_v1.marinskyrl"
     WHERE {scope}
       AND name IN ('policy_train_count', 'policy_train_bytes')
-    GROUP BY 1, 2, 3, 4, 5, 6
+    GROUP BY 1, 2, 3, 4, 5, 6, 7
 ), per_rank AS (
-    SELECT t, step, worker_rank,
+    SELECT t, execution_uid, step, worker_rank,
            MAX(CASE WHEN counter IN ('rank_tokens_real', 'tokens_real') THEN value END) AS tokens_real,
            MAX(CASE WHEN counter IN ('rank_tokens_padded', 'tokens_padded') THEN value END) AS tokens_padded,
            MAX(CASE WHEN counter = 'attention_work_ratio' THEN value END) AS attention_work,
            MAX(CASE WHEN counter = 'micro_step_count' THEN value END) AS micro_steps
     FROM samples WHERE name = 'policy_train_count'
-    GROUP BY 1, 2, 3
+    GROUP BY 1, 2, 3, 4
 ), per_step AS (
-    SELECT t, step,
+    SELECT t, execution_uid, step,
            SUM(1.0 - tokens_real / NULLIF(tokens_padded, 0)) AS padded_sum,
            COUNT(1.0 - tokens_real / NULLIF(tokens_padded, 0)) AS padded_count,
            SUM(attention_work) AS attention_sum,
            COUNT(attention_work) AS attention_count,
            MAX(micro_steps) AS micro_steps
-    FROM per_rank GROUP BY t, step
+    FROM per_rank GROUP BY t, execution_uid, step
 ), worker AS (
-    SELECT t, step, worker_rank, counter, MAX(value) AS value
+    SELECT t, execution_uid, step, worker_rank, counter, MAX(value) AS value
     FROM samples WHERE role = 'worker' AND counter IN ({sql_values(_ALLOCATOR_COUNTERS)})
-    GROUP BY 1, 2, 3, 4
+    GROUP BY 1, 2, 3, 4, 5
 )
-SELECT 'per_rank' AS statistic, t, step, k.counter,
+SELECT 'per_rank' AS statistic, t, execution_uid, step, k.counter,
        CASE k.counter WHEN 'padded_fraction' THEN padded_sum
                       WHEN 'attention_work_ratio' THEN attention_sum END AS sum_value,
        CASE k.counter WHEN 'padded_fraction' THEN padded_count
@@ -747,12 +756,12 @@ SELECT 'per_rank' AS statistic, t, step, k.counter,
 FROM per_step
 CROSS JOIN (VALUES ('padded_fraction'), ('attention_work_ratio'), ('micro_step_count')) AS k(counter)
 UNION ALL
-SELECT 'worker' AS statistic, t, step, counter,
+SELECT 'worker' AS statistic, t, execution_uid, step, counter,
        SUM(value) AS sum_value,
        COUNT(value) AS sample_count,
        MAX(value) AS max_value
-FROM worker GROUP BY t, step, counter
-ORDER BY statistic, t, step, counter
+FROM worker GROUP BY t, execution_uid, step, counter
+ORDER BY statistic, t, execution_uid, step, counter
 LIMIT {RL_MAX_COUNTER_ROWS + 1}
 """.strip()
     gpu_sql = f"""
@@ -790,14 +799,14 @@ LIMIT {RL_MAX_GPU_ROWS + 1}
     setup_sql = (
         f"""
 CREATE VIEW critical_steps AS
-SELECT t, step,
+SELECT t, execution_uid, step,
        MAX(CASE WHEN phase = 'policy_forward' THEN max_value END) AS forward_seconds,
        MAX(CASE WHEN phase = 'policy_backward' THEN max_value END) AS backward_seconds,
        SUM(CASE WHEN phase IN {_BARRIER_PHASES} THEN sum_value END) AS waiting_seconds,
        MAX(parent_seconds) AS total_seconds
 FROM spans
 WHERE statistic = 'critical_rank' AND clock_domain IN {_EXCLUSIVE_CLOCKS}
-GROUP BY 1, 2
+GROUP BY 1, 2, 3
 """.strip(),
     )
     views = {
@@ -829,15 +838,15 @@ FROM banded GROUP BY 1, 2 ORDER BY 1
         "micro_steps": (
             """
 WITH driver AS (
-    SELECT t, step, max_value AS seconds FROM spans WHERE statistic = 'driver'
+    SELECT t, execution_uid, step, max_value AS seconds FROM spans WHERE statistic = 'driver'
 ), micro AS (
-    SELECT step, MAX(max_value) AS micro_steps FROM counters
-    WHERE statistic = 'per_rank' AND counter = 'micro_step_count' GROUP BY 1
+    SELECT execution_uid, step, MAX(max_value) AS micro_steps FROM counters
+    WHERE statistic = 'per_rank' AND counter = 'micro_step_count' GROUP BY 1, 2
 )
 SELECT driver.t,
        AVG(driver.seconds / NULLIF(micro.micro_steps, 0)) AS seconds_per_micro_step,
        AVG(micro.micro_steps) AS micro_steps
-FROM driver LEFT JOIN micro ON driver.step = micro.step
+FROM driver LEFT JOIN micro USING (execution_uid, step)
 GROUP BY 1 ORDER BY 1
 """.strip()
         ),

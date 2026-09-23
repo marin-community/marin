@@ -17,6 +17,7 @@ empty on every run made the other way and reads exactly like a producer that sto
 
 import json
 import re
+import statistics
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -103,6 +104,16 @@ WORKER_SPANS = {
 }
 PPO_TRAIN = {"0": 1900.0, "1": 2000.0}
 CRITICAL_RANK = "1"
+
+EXECUTION = "iris:/atqamar/snowball-e6-rl-7786-attempt-0/0:attempt:0"
+# The run restarts from a checkpoint and repeats RETRIED_STEP inside the same bucket, with the two
+# ranks' roles swapped so that rank 0 is the slowest, and every worker span RETRY_SCALE times longer.
+# Each attempt's step is its own, so that bucket's worker panels average the two attempts'
+# decompositions. Keying a step by its number alone picks one slowest rank and one parent for both
+# attempts, and decomposes one of them on its fast rank.
+RETRY_EXECUTION = "iris:/atqamar/snowball-e6-rl-7786-attempt-0/0:attempt:1"
+RETRIED_STEP = 2
+RETRY_SCALE = 1.1
 
 # policy_training_step wraps these four, and the fixture carries both of the ways it has arrived --
 # which no single run does, so one store exercises both exclusions at once. The current spelling
@@ -256,13 +267,14 @@ def _row(
     role: str = "",
     attributes: dict[str, str] | None = None,
     body: dict[str, object] | None = None,
+    execution_uid: str = EXECUTION,
 ) -> tuple:
     return (
         CLUSTER,
         service,
         run_id,
         "/atqamar/snowball-e6-rl-7786-attempt-0",
-        "iris:/atqamar/snowball-e6-rl-7786-attempt-0/0:attempt:0",
+        execution_uid,
         node_name,
         None,
         name,
@@ -277,7 +289,7 @@ def _row(
     )
 
 
-def _driver_rows(moment: datetime, seq: int) -> list[tuple]:
+def _driver_rows(moment: datetime, seq: int, execution_uid: str = EXECUTION) -> list[tuple]:
     """What FinelogTimingSink publishes: one inclusive-wall row per recorded phase, no rank.
 
     The parent is the nearest *recorded* ancestor, so the synchronous trainer — which never opens
@@ -306,6 +318,7 @@ def _driver_rows(moment: datetime, seq: int) -> list[tuple]:
                 moment=moment,
                 seq=seq,
                 run_id=RUN_ID,
+                execution_uid=execution_uid,
                 node_name=NODES[0],
                 role="trainer",
                 attributes={
@@ -327,6 +340,7 @@ def _driver_rows(moment: datetime, seq: int) -> list[tuple]:
                 moment=moment,
                 seq=seq,
                 run_id=RUN_ID,
+                execution_uid=execution_uid,
                 node_name=NODES[0],
                 role="trainer",
                 attributes={
@@ -347,6 +361,7 @@ def _driver_rows(moment: datetime, seq: int) -> list[tuple]:
                 moment=moment,
                 seq=seq,
                 run_id=RUN_ID,
+                execution_uid=execution_uid,
                 node_name=NODES[0],
                 role="trainer",
                 attributes={
@@ -369,6 +384,7 @@ def _driver_rows(moment: datetime, seq: int) -> list[tuple]:
                 moment=moment,
                 seq=seq,
                 run_id=RUN_ID,
+                execution_uid=execution_uid,
                 node_name=NODES[0],
                 role="trainer",
                 attributes={"counter": counter, "role": "trainer", "step": str(seq)},
@@ -378,22 +394,26 @@ def _driver_rows(moment: datetime, seq: int) -> list[tuple]:
     )
 
 
-def _worker_rows(moment: datetime, seq: int, clock: str) -> list[tuple]:
+def _worker_rows(moment: datetime, seq: int, clock: str, execution_uid: str = EXECUTION) -> list[tuple]:
     """What WorkerTimingSink publishes: exclusive spans per rank, plus one inclusive parent.
 
     The ranks sit on different nodes, which is what lets the DCGM join credit both of the run's
     nodes to it: those rows carry a node and no run, and the run's own rows carry the reverse.
     """
     rows = []
+    retried = execution_uid == RETRY_EXECUTION
     for rank, spans in WORKER_SPANS.items():
-        rank_node = NODES[int(rank) % len(NODES)]
+        worker_rank = str(len(WORKER_SPANS) - 1 - int(rank)) if retried else rank
+        spans = {phase: seconds * (RETRY_SCALE if retried else 1.0) for phase, seconds in spans.items()}
+        ppo_train = PPO_TRAIN[rank] * (RETRY_SCALE if retried else 1.0)
+        rank_node = NODES[int(worker_rank) % len(NODES)]
         emitted = dict(spans)
         # The container span, as the first instrumented run actually published it: an exclusive
         # clock domain, an empty parent, and four of the spans beside it inside its own wall.
         # Banding it counts that time twice, and the producer's own residual goes sharply negative.
         contained_seconds = sum(spans[phase] for phase in CONTAINED_SPANS)
         emitted[CONTAINER_SPAN] = contained_seconds
-        emitted["policy_span_residual"] = PPO_TRAIN[rank] - sum(emitted.values())
+        emitted["policy_span_residual"] = ppo_train - sum(emitted.values())
         parents = dict.fromkeys(emitted, "policy_ppo_train")
         parents[CONTAINER_SPAN] = ""
         parents["policy_span_publish"] = "policy_train"
@@ -407,6 +427,7 @@ def _worker_rows(moment: datetime, seq: int, clock: str) -> list[tuple]:
                     moment=moment,
                     seq=seq,
                     run_id=RUN_ID,
+                    execution_uid=execution_uid,
                     node_name=rank_node,
                     role="worker",
                     attributes={
@@ -415,7 +436,7 @@ def _worker_rows(moment: datetime, seq: int, clock: str) -> list[tuple]:
                         "parent": parents[phase],
                         "clock_domain": f"exclusive_{clock}",
                         "role": "worker",
-                        "rank": rank,
+                        "rank": worker_rank,
                         "step": str(seq),
                     },
                 )
@@ -429,6 +450,7 @@ def _worker_rows(moment: datetime, seq: int, clock: str) -> list[tuple]:
                 moment=moment,
                 seq=seq,
                 run_id=RUN_ID,
+                execution_uid=execution_uid,
                 node_name=rank_node,
                 role="worker",
                 attributes={
@@ -437,7 +459,7 @@ def _worker_rows(moment: datetime, seq: int, clock: str) -> list[tuple]:
                     "parent": "policy_ppo_train",
                     "clock_domain": f"inclusive_{clock}",
                     "role": "worker",
-                    "rank": rank,
+                    "rank": worker_rank,
                     "step": str(seq),
                 },
             )
@@ -446,10 +468,11 @@ def _worker_rows(moment: datetime, seq: int, clock: str) -> list[tuple]:
             _row(
                 service="marinskyrl",
                 name="phase_duration_seconds",
-                value=PPO_TRAIN[rank],
+                value=ppo_train,
                 moment=moment,
                 seq=seq,
                 run_id=RUN_ID,
+                execution_uid=execution_uid,
                 node_name=rank_node,
                 role="worker",
                 attributes={
@@ -458,7 +481,7 @@ def _worker_rows(moment: datetime, seq: int, clock: str) -> list[tuple]:
                     "parent": "policy_train",
                     "clock_domain": f"inclusive_{clock}",
                     "role": "worker",
-                    "rank": rank,
+                    "rank": worker_rank,
                     "step": str(seq),
                 },
             )
@@ -480,9 +503,10 @@ def _worker_rows(moment: datetime, seq: int, clock: str) -> list[tuple]:
                         moment=moment,
                         seq=seq,
                         run_id=RUN_ID,
+                        execution_uid=execution_uid,
                         node_name=rank_node,
                         role="worker",
-                        attributes={"counter": counter, "role": "worker", "rank": rank, "step": str(seq)},
+                        attributes={"counter": counter, "role": "worker", "rank": worker_rank, "step": str(seq)},
                     )
                 )
     return rows
@@ -596,6 +620,9 @@ def _run_rows(clock: str) -> list[tuple]:
                 role="trainer",
             )
         )
+    retry = WINDOW_START + timedelta(minutes=5 * RETRIED_STEP + 2)
+    rows += _driver_rows(retry, RETRIED_STEP, RETRY_EXECUTION)
+    rows += _worker_rows(retry, RETRIED_STEP, clock, RETRY_EXECUTION)
     for role, status, lost in (("trainer", "completed", 0), ("worker", "failed", 12)):
         rows.append(
             _row(
@@ -723,6 +750,17 @@ def _resolve(sql: str) -> str:
 
 BUCKET_MS = 5 * 60 * 1000
 BUCKET_TIMES = [_millis(WINDOW_START) + bucket * BUCKET_MS for bucket in range(BUCKETS)]
+# What a worker panel's mean over one bucket's steps reads, relative to a single attempt's step.
+BUCKET_SCALE = {t: (1.0 + RETRY_SCALE) / 2 if bucket == RETRIED_STEP else 1.0 for bucket, t in enumerate(BUCKET_TIMES)}
+# Every rank's policy_ppo_train in each bucket, across both attempts in the retried step's.
+BUCKET_PPO_TRAIN = {
+    t: sorted(
+        [*PPO_TRAIN.values(), *(RETRY_SCALE * seconds for seconds in PPO_TRAIN.values())]
+        if bucket == RETRIED_STEP
+        else PPO_TRAIN.values()
+    )
+    for bucket, t in enumerate(BUCKET_TIMES)
+}
 _DATASETS = {
     "/v1/rl/overview": rl_overview_dataset,
     "/v1/rl/generation": rl_sync_generation_dataset,
@@ -899,14 +937,17 @@ def test_the_decomposition_reads_the_critical_rank_and_never_a_per_phase_maximum
     )
     rows = _panel_rows(store, "policy_ppo_train spans on the slowest rank")
 
-    bands = {series: seconds for _, series, seconds in rows}
+    bands = {(t, series): seconds for t, series, seconds in rows}
     # Only spans that name policy_ppo_train as their parent are banded, so the two container
     # spellings and policy_span_publish (exclusive, a worker row, another parent) drop out by
     # construction. The producer's own residual is excluded and recomputed under the same name, and
-    # the bands are the slow rank's own, so they close on its parent.
+    # the bands are the slow rank's own, so they close on its parent. The retried step's bucket
+    # holds two attempts with different slowest ranks, and each decomposes on its own.
     expected = dict(WORKER_SPANS[CRITICAL_RANK])
     expected["policy_span_residual"] = PPO_TRAIN[CRITICAL_RANK] - sum(WORKER_SPANS[CRITICAL_RANK].values())
-    assert bands == pytest.approx(expected)
+    assert bands == pytest.approx(
+        {(t, band): seconds * BUCKET_SCALE[t] for t in BUCKET_TIMES for band, seconds in expected.items()}
+    )
 
     # Reading the published residual would put a -1949 s band in a 2000 s stack.
     published = (
@@ -924,11 +965,15 @@ def test_the_decomposition_reads_the_critical_rank_and_never_a_per_phase_maximum
 def test_the_skew_panel_reports_the_spread_and_names_the_same_slowest_rank(store) -> None:
     rows = _panel_rows(store, "policy_ppo_train spread across ranks")
 
-    slowest, fastest = PPO_TRAIN[CRITICAL_RANK], min(PPO_TRAIN.values())
-    # Over two ranks, DuckDB interpolates p95 to 1995 s and Finelog's DataFusion reports 2000 s.
-    p95 = pytest.approx(slowest, abs=0.05 * (slowest - fastest))
-    median = pytest.approx((slowest + fastest) / 2)
-    assert rows == [(t, pytest.approx(slowest), p95, median, pytest.approx(fastest)) for t in BUCKET_TIMES]
+    expected = []
+    for t, seconds in BUCKET_PPO_TRAIN.items():
+        # DuckDB interpolates linearly, to a p95 of 1995 s over two ranks, where Finelog's DataFusion
+        # reports up to the slowest rank, and a median 5 s short over the retried bucket's four.
+        interpolated = statistics.quantiles(seconds, n=100, method="inclusive")[94]
+        p95 = pytest.approx(interpolated, abs=seconds[-1] - interpolated)
+        median = pytest.approx(statistics.median(seconds), abs=5.0)
+        expected.append((t, pytest.approx(seconds[-1]), p95, median, pytest.approx(seconds[0])))
+    assert rows == expected
 
 
 def test_the_derived_ratios_divide_the_quantities_they_name(store) -> None:
@@ -993,7 +1038,9 @@ def test_the_worker_panels_read_whichever_clock_the_sink_stamped(launch_store) -
     assert sum(bands.values()) == pytest.approx(PPO_TRAIN[CRITICAL_RANK])
 
     skew = _panel_rows(launch_store, "policy_ppo_train spread across ranks")
-    assert {round(slowest, 6) for _, slowest, _, _, _ in skew} == {round(PPO_TRAIN[CRITICAL_RANK], 6)}
+    assert [(t, slowest) for t, slowest, _, _, _ in skew] == [
+        (t, pytest.approx(seconds[-1])) for t, seconds in BUCKET_PPO_TRAIN.items()
+    ]
 
     ratio = _panel_rows(launch_store, "policy_backward ÷ policy_forward on the slowest rank")
     expected = WORKER_SPANS[CRITICAL_RANK]["policy_backward"] / WORKER_SPANS[CRITICAL_RANK]["policy_forward"]
@@ -1219,7 +1266,8 @@ def test_the_vitals_table_names_the_clock_domain_the_ranks_and_the_failed_steps(
     # Absent, not zero: the driver sink has no concept of a rank, and "0" reads as "the workers
     # are silent". The same distinction is why failed_steps is null until a row carries an outcome.
     assert by_sink[("trainer", "inclusive_wall")][0] is None, "driver rows carry no rank"
-    assert by_sink[("trainer", "critical_path")] == (None, BUCKETS, 1)
+    # The retried attempt's repeat of a step is a step of its own.
+    assert by_sink[("trainer", "critical_path")] == (None, BUCKETS + 1, 1)
     # Only the critical-path sink stamps an outcome, so every other sink reports failed steps as
     # unknown rather than as none -- a zero there would claim no step failed.
     assert {failed for (_, clock), (_, _, failed) in by_sink.items() if clock != "critical_path"} == {None}
@@ -1275,18 +1323,19 @@ def test_the_residual_panel_reports_both_trees_signed(store) -> None:
     assert published < 0, "the fixture no longer reproduces the double-count"
     # Signed, and read from r*. Clamping it at zero would retire the one series that can report a
     # child being counted inside its parent.
-    assert {round(value, 6) for _, value in worker} == {round(published, 6)}
+    assert worker == [(t, pytest.approx(published * BUCKET_SCALE[t])) for t in BUCKET_TIMES]
 
 
 def test_the_generate_shares_partition_the_phase(store) -> None:
     rows = _panel_rows(store, "generate: share of each child span")
 
-    shares = {series: value for _, series, value in rows}
-    assert shares["rollout_collect"] == pytest.approx(GENERATE_CHILDREN["rollout_collect"] / DRIVER_PHASES["generate"])
-    # The grandchildren belong to their own parents' walls, not to generate's.
-    assert set(shares) == {*GENERATE_CHILDREN, "generate_span_residual"}
-    assert sum(shares.values()) == pytest.approx(1.0)
-    assert shares["generate_span_residual"] == pytest.approx(GENERATE_RESIDUAL / DRIVER_PHASES["generate"])
+    # The grandchildren belong to their own parents' walls, not to generate's, and the shares sum
+    # to one in the retried step's bucket too.
+    expected = {child: seconds / DRIVER_PHASES["generate"] for child, seconds in GENERATE_CHILDREN.items()}
+    expected["generate_span_residual"] = GENERATE_RESIDUAL / DRIVER_PHASES["generate"]
+    assert sum(expected.values()) == pytest.approx(1.0)
+    shares = {(t, series): value for t, series, value in rows}
+    assert shares == pytest.approx({(t, band): share for t in BUCKET_TIMES for band, share in expected.items()})
 
 
 def test_the_generate_shares_are_blank_rather_than_a_single_full_band_without_the_subtree(store) -> None:
@@ -1356,13 +1405,19 @@ def test_memory_is_the_worst_rank_and_allocator_events_are_the_run_total(store) 
     rows = _panel_rows(store, "Allocator peaks, retries and OOMs")
 
     # The binding constraint on the micro-batch is the rank that used most, never the mean.
-    expected = (
-        max(m["peak_reserved_bytes"] for m in WORKER_MEMORY.values()),
-        max(m["peak_allocated_bytes"] for m in WORKER_MEMORY.values()),
-        sum(a["alloc_retries"] for a in WORKER_ALLOCATOR.values()),
-        0.0,
-    )
-    assert rows == [(t, *map(pytest.approx, expected)) for t in BUCKET_TIMES]
+    retries = sum(a["alloc_retries"] for a in WORKER_ALLOCATOR.values())
+    expected = [
+        (
+            t,
+            max(m["peak_reserved_bytes"] for m in WORKER_MEMORY.values()),
+            max(m["peak_allocated_bytes"] for m in WORKER_MEMORY.values()),
+            # Both attempts of the retried step retried their allocations.
+            2 * retries if bucket == RETRIED_STEP else retries,
+            0.0,
+        )
+        for bucket, t in enumerate(BUCKET_TIMES)
+    ]
+    assert rows == [tuple(map(pytest.approx, row)) for row in expected]
 
 
 def test_the_memory_panel_reads_the_instrument_the_byte_gauges_moved_to(store) -> None:
