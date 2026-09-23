@@ -1711,7 +1711,13 @@ def test_distributed_fused_ce_rejects_rank_local_selection_before_sweep(
     monkeypatch.setattr(
         fused_api, "_autotune_enabled", lambda: different_setting != "autotune_enabled" or context.rank == 0
     )
-    monkeypatch.setattr(fused_api, "_autotune_block_sizes_on_miss", lambda **kwargs: faster)
+    sweep_called = []
+
+    def fake_autotune(**kwargs):
+        sweep_called.append(kwargs)
+        return faster
+
+    monkeypatch.setattr(fused_api, "_autotune_block_sizes_on_miss", fake_autotune)
     monkeypatch.setitem(fused_api.IMPLEMENTATIONS, "batched_xla", fake_impl)
 
     def run_rank(rank):
@@ -1721,13 +1727,14 @@ def test_distributed_fused_ce_rejects_rank_local_selection_before_sweep(
                 x, labels, w, reduction=None, implementation="batched_xla"
             )
         except RuntimeError as exc:
-            return str(exc)
+            return exc
         return None
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         results = list(executor.map(run_rank, range(2)))
 
-    assert all(result is not None and "selection differs across JAX processes" in result for result in results)
+    assert all(isinstance(result, RuntimeError) for result in results)
+    assert not sweep_called
 
 
 def _run_autotune_miss(impl_name: str = "pallas_tpu", *, vocab: int = 16):
