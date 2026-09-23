@@ -24,6 +24,7 @@ from fray.actor import ActorGroup, ActorHandle, current_actor
 from fray.current_client import current_client
 from fray.local_backend import LocalClient
 from fray.types import ActorConfig, ResourceConfig
+from iris.client.client import get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from rigging import telemetry
 from rigging.filesystem.storage_path import StoragePath
@@ -31,16 +32,14 @@ from rigging.timing import Duration, ExponentialBackoff, RateLimiter, Timestamp,
 from starlette.types import ASGIApp
 
 from zephyr.dashboard.app import (
-    ROOT_PLAN_PREFIX,
     PipelinePlan,
     PlanNodeState,
     create_dashboard_application,
-    join_right_prefix,
-    stage_node_id,
 )
 from zephyr.dashboard.coordinator import CoordinatorDashboard
 from zephyr.memory_store import MemoryTableRegistration
 from zephyr.plan import (
+    ROOT_PLAN_PREFIX,
     Join,
     PhysicalOp,
     PhysicalPlan,
@@ -51,7 +50,9 @@ from zephyr.plan import (
     StageType,
     execution_stage_name,
     execution_stages,
+    join_right_prefix,
     join_stage_name,
+    stage_node_id,
 )
 from zephyr.shuffle import ListShard, MemChunk
 from zephyr.stage_io import (
@@ -82,7 +83,7 @@ MAX_STATUS_TEXT_LENGTH = 1000
 MAX_CONCURRENT_PIPELINES = 16
 MAX_CONCURRENT_RESULT_READS = 16
 ZEPHYR_PROGRESS_TIME_METRIC = "progress_time_seconds"
-ZEPHYR_APPLET_URL = "https://applets.marina.oa.dev/a/6c2b0dc9-9a31-4777-82d4-e759c0292aa3/"
+ZEPHYR_HISTORY_ENDPOINT_NAME = "/system/zephyr-history"
 
 # Seconds between worker-job liveness probes. Each probe is a GetJobState RPC to
 # the Iris controller, and the coordinator loop ticks every 0.5s, so probing once
@@ -115,6 +116,17 @@ def _cleanup_execution(prefix: str, execution_id: str) -> None:
                 exec_dir.rmtree()
             except Exception as e:
                 logger.warning(f"Failed to cleanup chunks at {exec_dir}: {e}")
+
+
+def _resolve_execution_history_url() -> str | None:
+    """Resolve the optional execution-history app for the current Iris cluster."""
+    context = get_iris_ctx()
+    if context is None or context.client is None:
+        return None
+    try:
+        return context.client.resolve_endpoint(ZEPHYR_HISTORY_ENDPOINT_NAME).rstrip("/")
+    except ConnectionError:
+        return None
 
 
 class WorkerState(enum.StrEnum):
@@ -386,6 +398,7 @@ class ZephyrCoordinator:
         self._max_shard_infra_failures = max_shard_infra_failures
         self._max_concurrent_pipelines = max_concurrent_pipelines
         self._stats_config = stats_config
+        self._execution_history_url = _resolve_execution_history_url()
         # Per-worker in-flight counter snapshots. Each snapshot carries a
         # monotonic generation so the coordinator can discard stale or
         # out-of-order heartbeats.
@@ -627,15 +640,21 @@ class ZephyrCoordinator:
                 if not run.done
             ]
 
-        applet_link = f"[Zephyr]({ZEPHYR_APPLET_URL})"
-        detail_lines = [applet_link]
-        summary_lines = [applet_link]
+        detail_lines = []
+        summary_lines = []
+        if self._execution_history_url is not None:
+            applet_link = f"[Zephyr]({self._execution_history_url})"
+            detail_lines.append(applet_link)
+            summary_lines.append(applet_link)
         if not snapshot:
             detail_lines.append("idle")
             summary_lines.append("idle")
         for execution_id, plan_stages, stage_index, completed, total, in_flight, queued in snapshot:
-            execution_url = f"{ZEPHYR_APPLET_URL}#/execution/{quote(execution_id, safe='')}"
-            detail_lines.append(f"**[{execution_id}]({execution_url})**")
+            if self._execution_history_url is not None:
+                execution_url = f"{self._execution_history_url}/#/execution/{quote(execution_id, safe='')}"
+                detail_lines.append(f"**[{execution_id}]({execution_url})**")
+            else:
+                detail_lines.append(f"**{execution_id}**")
             for idx, stage in enumerate(plan_stages):
                 stage_desc = _get_stage_description(stage)
                 detail_lines.append(f"- **{stage_desc}**" if idx == stage_index else f"- {stage_desc}")

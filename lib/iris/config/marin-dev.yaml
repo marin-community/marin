@@ -8,6 +8,9 @@ name: marin-dev
 finelog:
   config: marin-dev
 dashboard_url: https://iris-dev.oa.dev
+endpoints:
+  /system/zephyr-history:
+    uri: https://applets.marina.oa.dev/a/6c2b0dc9-9a31-4777-82d4-e759c0292aa3/
 
 platform:
   label_prefix: marin-dev

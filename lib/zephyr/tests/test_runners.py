@@ -449,6 +449,12 @@ def test_execution_plan_preserves_join_dependencies(local_client, tmp_path, fine
     assert len(executions) == 1
     execution = next(row for row in executions if row["execution_id"] == result.execution_id)
     graph = json.loads(execution["stages_json"])
+    stage_positions = {stage["stage_name"]: index for index, stage in enumerate(graph)}
+    assert all(
+        stage_positions[dependency] < stage_positions[stage["stage_name"]]
+        for stage in graph
+        for dependency in stage["dependencies"]
+    )
     assert {stage["stage_name"] for stage in graph if stage["stage_type"] != "reshard"} == {
         row["stage_name"] for row in reported
     }

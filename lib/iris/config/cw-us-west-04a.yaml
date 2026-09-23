@@ -9,6 +9,9 @@ name: cw-us-west-04a
 # public origin and carry this cluster's name so marin-dev relays them back.
 dashboard_url: https://iris-cw-us-west-04a.oa.dev
 federation_public_parent: https://iris-dev.oa.dev
+endpoints:
+  /system/zephyr-history:
+    uri: https://applets.marina.oa.dev/a/6c2b0dc9-9a31-4777-82d4-e759c0292aa3/
 
 # Infrastructure-as-code provisioning (see infra/pulumi). Iris carries this as an opaque
 # dict; iac.config owns the typed schema. NodePools derive from scale_groups,

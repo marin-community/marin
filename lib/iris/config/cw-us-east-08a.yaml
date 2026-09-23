@@ -44,6 +44,9 @@ finelog:
 # egress (scripts/install_cw_network.py); there is no off-cluster user surface.
 dashboard_url: https://iris-cw-us-east-08a.oa.dev
 federation_public_parent: https://iris.oa.dev
+endpoints:
+  /system/zephyr-history:
+    uri: https://applets.marina.oa.dev/a/6c2b0dc9-9a31-4777-82d4-e759c0292aa3/
 
 # Infrastructure-as-code provisioning (see infra/pulumi). Opaque to Iris.
 provisioning:

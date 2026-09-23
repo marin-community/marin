@@ -18,7 +18,7 @@ from starlette.responses import HTMLResponse, Response
 from starlette.routing import Route
 from starlette.types import ASGIApp
 
-from zephyr.plan import Join, PhysicalPlan
+from zephyr.plan import PhysicalPlan, PlanNode, plan_nodes
 from zephyr.stats import PipelineMetricPoint
 from zephyr.worker_context import Aggregation, CounterEntry
 
@@ -28,9 +28,6 @@ DEFAULT_WORKER_LIMIT = 50
 MAX_WORKER_LIMIT = 200
 DEFAULT_METRIC_POINTS = 200
 MAX_METRIC_POINTS = 500
-SOURCE_STAGE_TYPE = "SOURCE"
-ROOT_PLAN_PREFIX = "main"
-
 _BASE_ELEMENT = '<base href="/"'
 
 
@@ -63,18 +60,6 @@ class PipelineSummary:
 @dataclass(frozen=True)
 class PipelineList:
     pipelines: tuple[PipelineSummary, ...]
-
-
-@dataclass(frozen=True)
-class PlanNode:
-    node_id: str
-    label: str
-    stage_type: str
-    output_shards: int
-    stage_index: int
-    parent_node_id: str
-    auxiliary: bool
-    operation_types: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -222,18 +207,6 @@ def counter_value(name: str, entry: CounterEntry) -> CounterValue:
     )
 
 
-def source_node_id(prefix: str) -> str:
-    return f"{prefix}/source"
-
-
-def stage_node_id(prefix: str, stage_index: int) -> str:
-    return f"{prefix}/stage/{stage_index}"
-
-
-def join_right_prefix(parent_node_id: str, operation_index: int) -> str:
-    return f"{parent_node_id}/join/{operation_index}/right"
-
-
 def pipeline_plan(
     plan: PhysicalPlan,
     *,
@@ -241,60 +214,11 @@ def pipeline_plan(
     execution_id: str,
 ) -> PipelinePlan:
     """Build a safe graph that contains no source values or callable representations."""
-    nodes: list[PlanNode] = []
-
-    def add_plan(
-        nested_plan: PhysicalPlan,
-        *,
-        prefix: str,
-        parent_node_id: str = "",
-        auxiliary: bool = False,
-    ) -> None:
-        nodes.append(
-            PlanNode(
-                node_id=source_node_id(prefix),
-                label=f"Source ({nested_plan.num_shards} shards)",
-                stage_type=SOURCE_STAGE_TYPE,
-                output_shards=nested_plan.num_shards,
-                stage_index=-1,
-                parent_node_id=parent_node_id,
-                auxiliary=auxiliary,
-            )
-        )
-        current_shards = nested_plan.num_shards
-        for stage_index, stage in enumerate(nested_plan.stages):
-            node_id = stage_node_id(prefix, stage_index)
-            output_shards = stage.output_shards or current_shards
-            nodes.append(
-                PlanNode(
-                    node_id=node_id,
-                    label=stage.stage_name(),
-                    stage_type=stage.stage_type.value.upper(),
-                    operation_types=tuple(type(operation).__name__ for operation in stage.operations),
-                    output_shards=output_shards,
-                    stage_index=stage_index,
-                    parent_node_id=parent_node_id,
-                    auxiliary=auxiliary,
-                )
-            )
-            current_shards = output_shards
-
-            for operation_index, operation in enumerate(stage.operations):
-                if not isinstance(operation, Join) or operation.right_plan is None:
-                    continue
-                add_plan(
-                    operation.right_plan,
-                    prefix=join_right_prefix(node_id, operation_index),
-                    parent_node_id=node_id,
-                    auxiliary=True,
-                )
-
-    add_plan(plan, prefix=ROOT_PLAN_PREFIX)
     return PipelinePlan(
         pipeline_name=pipeline_name,
         execution_id=execution_id,
         source_item_count=len(plan.source_items),
-        nodes=tuple(nodes),
+        nodes=plan_nodes(plan),
     )
 
 
