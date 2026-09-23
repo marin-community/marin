@@ -35,7 +35,8 @@ from experiments.datakit.cluster.quality.fast_transformer.model import (
     FastTransformerConfig,
     count_params,
 )
-from experiments.datakit.cluster.quality.fast_transformer.scorer import MODEL_STEM, artifact_names
+from experiments.datakit.cluster.quality.fast_transformer.quality_model import artifact_names
+from experiments.datakit.cluster.quality.fast_transformer.scorer import MODEL_STEM
 
 logger = logging.getLogger(__name__)
 

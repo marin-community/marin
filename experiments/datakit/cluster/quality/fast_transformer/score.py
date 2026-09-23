@@ -49,6 +49,7 @@ from zephyr.runners import InlineRunner
 from zephyr.writers import ThreadedBatchWriter, write_parquet_file
 
 from experiments.datakit.cluster.quality.fast_transformer.artifact import BUCKET_EDGES, QualityScores
+from experiments.datakit.cluster.quality.fast_transformer.quality_model import CALIBRATION_FILE
 from experiments.datakit.cluster.quality.fast_transformer.scorer import (
     PooledScorer,
     load_pooled_scorer,
@@ -63,14 +64,13 @@ BATCH_SIZE = 512
 # shard can spike transiently above that -- 4g OOM-killed workers on the 100B corpus.
 # 8g covers the spike with margin; packing is CPU-bound (cpu=2), so the extra RAM is free.
 WORKER_RESOURCES = ResourceConfig(cpu=2, ram="8g")
-MODEL_CALIB = "calib_bme.json"  # calibration json name in the model dir
 SAMPLE_TEXT_CHARS = 4_000  # text kept per sampled doc for the report spot-check
 SAMPLE_PCT = 0.02  # fraction of each shard emitted (with text) as the samples side output
 _SHARD_FILE = "__shard_file"  # internal: input basename carried to the writer to name the output
 
 
 @functools.cache
-def _load_scorer(model_dir: str, calib_file: str = MODEL_CALIB) -> tuple[PooledScorer, np.ndarray, np.ndarray]:
+def _load_scorer(model_dir: str, calib_file: str = CALIBRATION_FILE) -> tuple[PooledScorer, np.ndarray, np.ndarray]:
     """Load the scorer + calibration once per worker process."""
     scorer = load_pooled_scorer(model_dir)
     with open_url(f"{model_dir.rstrip('/')}/{calib_file}", "r") as fh:
@@ -153,7 +153,7 @@ def score_normalized(
     normalized: NormalizedData,
     source: str,
     model_dir: str,
-    calib_file: str = MODEL_CALIB,
+    calib_file: str = CALIBRATION_FILE,
     sample_pct: float = SAMPLE_PCT,
     max_workers: int | None = None,
     worker_resources: ResourceConfig = WORKER_RESOURCES,
