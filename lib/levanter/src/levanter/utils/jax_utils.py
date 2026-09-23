@@ -126,6 +126,8 @@ def move_tree_to_memory_kind(tree: T, *, memory_kind: str) -> T:
 
 
 _sync_counter = 0
+# Barrier IDs advance separately for each group; other pipeline stages may enter
+# a different number of collectives. The process key also supports local simulations.
 _group_sync_counters: dict[tuple[int, tuple[int, ...]], int] = defaultdict(int)
 _group_sync_mutex = threading.Lock()
 

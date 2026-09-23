@@ -230,7 +230,7 @@ def _autotune_enabled() -> bool:
 
 
 def _autotune_process_ids(*values: jax.Array) -> tuple[int, ...]:
-    """Use the kernel's concrete mesh when only one pipeline stage participates."""
+    """Return the process IDs that participate in this kernel invocation."""
     for value in values:
         sharding = autotune_utils.named_sharding_of(value)
         if sharding is not None and isinstance(sharding.mesh, jax.sharding.Mesh):
