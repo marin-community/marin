@@ -299,6 +299,7 @@ def test_lora_merged_load_in_hf_llama():
             loraized,
             converter,
             f"{tmpdir}/loraized",
+            save_reference_code=False,
             save_tokenizer=False,
         )
 

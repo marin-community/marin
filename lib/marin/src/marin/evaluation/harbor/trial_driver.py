@@ -43,6 +43,9 @@ _HOSTED_VLLM_PROVIDER = "hosted_vllm"
 _HOSTED_VLLM_DISPLAY_NAME = "Hosted vLLM"
 _OPENAI_COMPATIBLE_PACKAGE = "@ai-sdk/openai-compatible"
 _OPENCODE_AGENT = "opencode"
+_TERMINUS_2_AGENT = "terminus-2"
+_LLM_CALL_KWARGS_KEY = "llm_call_kwargs"
+_MAX_TOKENS_KEY = "max_tokens"
 _STABLE_JOB_NAME = "__marin_job__"
 _STABLE_JOBS_DIR = "/__marin_jobs__"
 _STABLE_MODEL = "__marin_model__"
@@ -212,6 +215,30 @@ def _opencode_config(config: object, endpoint_url: str) -> dict[str, Any]:
     }
 
 
+def _terminus_llm_call_kwargs(
+    config: Mapping[str, Any] | None,
+    max_output_tokens: int,
+) -> dict[str, Any]:
+    if config is None:
+        call_kwargs: Mapping[str, Any] = {}
+    elif isinstance(config, Mapping):
+        call_kwargs = config
+    else:
+        raise ValueError("Harbor agent llm_call_kwargs must be a mapping")
+
+    if not isinstance(max_output_tokens, int) or max_output_tokens < 1:
+        raise ValueError(f"Harbor agent model_info.max_output_tokens must be positive, got {max_output_tokens!r}")
+    max_tokens = call_kwargs.get(_MAX_TOKENS_KEY, max_output_tokens)
+    if not isinstance(max_tokens, int) or max_tokens < 1:
+        raise ValueError(f"Harbor agent llm_call_kwargs.max_tokens must be positive, got {max_tokens!r}")
+    if max_tokens > max_output_tokens:
+        raise ValueError(
+            f"Harbor agent llm_call_kwargs.max_tokens is {max_tokens} but model_info.max_output_tokens is only "
+            f"{max_output_tokens}; lower the request limit or raise generation.max_gen_toks"
+        )
+    return {**call_kwargs, _MAX_TOKENS_KEY: max_tokens}
+
+
 def _agent_config(
     agent: AgentConfig,
     *,
@@ -234,10 +261,16 @@ def _agent_config(
 
 def _effective_agent(agent: AgentConfig, overlay: RuntimeOverlay) -> AgentConfig:
     kwargs = {**overlay.model_agent_kwargs, **agent.kwargs}
-    kwargs[MODEL_INFO_KEY] = reconciled_model_info(
+    model_info = reconciled_model_info(
         overlay.model_agent_kwargs.get(MODEL_INFO_KEY),
         agent.kwargs.get(MODEL_INFO_KEY),
     )
+    kwargs[MODEL_INFO_KEY] = model_info
+    if agent.name == _TERMINUS_2_AGENT:
+        kwargs[_LLM_CALL_KWARGS_KEY] = _terminus_llm_call_kwargs(
+            kwargs.get(_LLM_CALL_KWARGS_KEY),
+            model_info[MAX_OUTPUT_TOKENS_KEY],
+        )
     return _agent_config(
         agent,
         endpoint_url=overlay.endpoint_url,

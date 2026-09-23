@@ -25,9 +25,7 @@ from haliax import Axis
 from haliax.state_dict import from_torch_compatible_state_dict, to_torch_compatible_state_dict
 
 from levanter.grug.sharding import compact_grug_mesh
-from levanter.layers.attention import AttentionMask
-from levanter.models.lm_model import LmConfig, LmExample
-from levanter.models.loss import next_token_loss
+from levanter.models.lm_model import LmConfig
 from levanter.models.snowball import (
     GRUG_MOE_ARCHITECTURE,
     GRUG_MOE_MODEL_TYPE,
@@ -36,6 +34,7 @@ from levanter.models.snowball import (
     SnowballLMHeadModel,
     validate_single_name_config,
 )
+from levanter.testing.cpu_devices import run_on_cpu_devices
 
 
 def _tiny_config(**overrides) -> SnowballConfig:
@@ -199,43 +198,6 @@ def test_snowball_state_dict_roundtrip_is_exact():
     assert np.array_equal(src_logits, dst_logits), "state-dict round-trip changed logits"
 
 
-def test_snowball_sharded_head_loss_matches_logits_reference():
-    cfg = _tiny_config()
-    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
-        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(6))
-        ids = _device_batched_ids(cfg.vocab_size, 10)
-        loss_weight = hax.ones(ids.axes, dtype=jnp.float32)
-        example = LmExample(tokens=ids, loss_weight=loss_weight)
-        actual = model.compute_next_token_loss(example)
-        logits = model(ids)
-        expected = next_token_loss(model.Pos, model.Vocab, logits, ids, loss_weight=loss_weight)
-
-    np.testing.assert_allclose(np.asarray(actual.array), np.asarray(expected.array), rtol=1e-5, atol=1e-5)
-
-
-def test_snowball_packed_documents_do_not_attend_to_previous_document():
-    cfg = _tiny_config()
-    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
-        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(7))
-        ids = _device_batched_ids(cfg.vocab_size, 10)
-        segments = hax.named(jnp.broadcast_to(jnp.arange(10) // 5, ids.array.shape), ids.axes)
-        mask = AttentionMask.causal().with_segment_ids(segments)
-        changed_ids = hax.named(ids.array.at[:, :5].set(11), ids.axes)
-        weights = hax.named(jnp.broadcast_to(jnp.arange(10) >= 5, ids.array.shape), ids.axes)
-        run_logits = hax.named_jit(lambda m, x, a: m(x, a))
-        original = run_logits(model, ids, mask)
-        changed = run_logits(model, changed_ids, mask)
-        np.testing.assert_allclose(
-            np.asarray(original.array[:, 5:]), np.asarray(changed.array[:, 5:]), rtol=1e-5, atol=1e-5
-        )
-        run_loss = hax.named_jit(lambda m, e: m.compute_next_token_loss(e))
-        loss = run_loss(model, LmExample(tokens=ids, loss_weight=weights, attn_mask=mask))
-        changed_loss = run_loss(model, LmExample(tokens=changed_ids, loss_weight=weights, attn_mask=mask))
-        expected = next_token_loss(model.Pos, model.Vocab, original, ids, loss_weight=weights)
-    np.testing.assert_allclose(np.asarray(loss.array), np.asarray(changed_loss.array), rtol=1e-5, atol=1e-5)
-    np.testing.assert_allclose(np.asarray(loss.array), np.asarray(expected.array), rtol=1e-5, atol=1e-5)
-
-
 def test_snowball_torch_compatible_state_dict_roundtrip():
     """Exercise the exact serialization path load_pretrained uses (to/from_torch_compatible_state_dict)."""
     cfg = _tiny_config()
@@ -331,7 +293,6 @@ def test_snowball_load_path_multidevice_sharding():
         from jax.random import PRNGKey
         from jax.sharding import NamedSharding, PartitionSpec as P
         from levanter.grug.sharding import compact_grug_mesh
-        from levanter.models.lm_model import LmExample
         from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 
         assert jax.device_count() == 8
@@ -365,10 +326,7 @@ def test_snowball_load_path_multidevice_sharding():
             template = eqx.filter_eval_shape(SnowballLMHeadModel.init, Vocab, cfg, key=PRNGKey(0))
             loaded = hax.named_jit(lambda t, s: from_torch_compatible_state_dict(t, s))(template, sd)
             got = np.asarray(hax.named_jit(lambda m, x: m(x))(loaded, ids).array)
-            example = LmExample(tokens=ids, loss_weight=hax.ones(ids.axes, dtype=jnp.float32))
-            loss = hax.named_jit(lambda m, e: m.compute_next_token_loss(e))(loaded, example)
         assert np.array_equal(ref, got), "data-sharded load-path logits differ from the reference"
-        assert np.isfinite(np.asarray(loss.array)).all(), "data-sharded Snowball loss is not finite"
         print("OK")
         """
     )
@@ -406,3 +364,58 @@ def test_snowball_fresh_process_hf_discovery(tmp_path):
     )
     assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
     assert "OK" in result.stdout
+
+
+@pytest.mark.timeout(120)
+def test_snowball_context_parallel_values_and_gradients_match_data_parallel():
+    run_on_cpu_devices(
+        """
+        import equinox as eqx
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        import haliax as hax
+        from haliax import Axis
+        from jax.sharding import AxisType, Mesh
+        from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
+
+        cfg = SnowballConfig(
+            vocab_size=32, hidden_dim=16, intermediate_dim=16,
+            shared_expert_intermediate_dim=16, num_experts=4,
+            num_experts_per_token=2, num_layers=2, num_heads=2,
+            num_kv_heads=1, head_dim=8, max_seq_len=8, sliding_window=4,
+            attention_implementation="reference", moe_implementation="ring",
+        )
+        ids = hax.named(
+            jnp.arange(32, dtype=jnp.int32).reshape(4, 8),
+            (Axis("batch", 4), Axis("position", 8)),
+        )
+        axes = ("replica_dcn", "data", "context", "expert", "model")
+
+        def run(shape):
+            mesh = Mesh(
+                np.asarray(jax.devices()).reshape(shape), axes,
+                axis_types=(AxisType.Explicit,) * len(axes),
+            )
+            with jax.set_mesh(mesh):
+                model = SnowballLMHeadModel.init(Axis("vocab", 32), cfg, key=jax.random.key(0))
+                activations = eqx.filter_jit(lambda m: m.activations(ids).array)(model)
+                value, grad = eqx.filter_jit(
+                    eqx.filter_value_and_grad(lambda m: jnp.mean(m(ids).array))
+                )(model)
+            block = grad.transformer.blocks[0]
+            return activations.sharding.spec[1], (
+                np.asarray(value), np.asarray(grad.transformer.token_embed),
+                np.asarray(block.attn.w_q), np.asarray(block.mlp.expert_mlp.w_gate),
+                np.asarray(block.shared.w_gate), np.asarray(grad.transformer.output_proj),
+            )
+
+        data_axis, reference = run((1, 2, 1, 2, 1))
+        context_axis, sharded = run((1, 1, 2, 2, 1))
+        assert data_axis is None
+        assert context_axis == "context"
+        for expected, actual in zip(reference, sharded, strict=True):
+            np.testing.assert_allclose(actual, expected, rtol=2e-4, atol=2e-4)
+        """,
+        device_count=4,
+    )

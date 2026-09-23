@@ -6,16 +6,15 @@
 The two arms reuse the oracle-verified weak-specification datasets from the
 generation diagnostic. They differ only in whether GLM received the pinned finance
 curriculum section while generating those examples. Datakit validates, renders,
-normalizes, tokenizes, and packs each Parquet dataset before one matched Snowball
-optimizer update. Model staging, checkpoints, and HF exports live in the CoreWeave
-region's lifecycle-managed temporary bucket.
+normalizes, and tokenizes each Parquet dataset before one matched Snowball optimizer
+update. Each conversation remains a separate sequence until packed-document attention
+lands. Model staging, checkpoints, and HF exports live in the CoreWeave region's
+lifecycle-managed temporary bucket.
 """
 
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
 
 import click
@@ -53,7 +52,7 @@ from experiments.post_training.curriculum_sft.ablation.matrix import (
     CurriculumCondition,
     GenerationSpec,
 )
-from experiments.sft.launcher import ModelSource, PreparedModel, SFTSpec
+from experiments.sft.launcher import PreparedModel, SFTSpec
 
 SNOWBALL_TOKENIZER = "marin-community/marin-tokenizer"
 SNOWBALL_EOT_TOKEN_ID = 128001
@@ -68,74 +67,9 @@ TEMP_TTL_DAYS = 7
 SNOWBALL_EVALUATION_MODEL = "snowball-datakit-sft-2026-09-20"
 
 TRAIN_STEPS = 1
-TRAIN_BATCH_SIZE = 64
+TRAIN_BATCH_SIZE = 8
 TRAIN_SEQUENCE_LENGTH = 4096
-DATA_AXIS_SIZE = 8
-EXPERT_AXIS_SIZE = 8
 _TRAIN_RESOURCES = "train_resources"
-
-
-@dataclass(frozen=True)
-class SnowballModelSource(ModelSource):
-    """Pinned staged Snowball checkpoint with the proven 64-H100 mesh."""
-
-    staged_model: ArtifactStep[LevanterCheckpoint]
-
-    def _prepared(self) -> PreparedModel:
-        return PreparedModel(
-            step=self.staged_model,
-            model_type="snowball",
-            eos_token_ids=SNOWBALL_EOS_TOKEN_IDS,
-        )
-
-    def tokenizer_cache_key(self) -> str:
-        return SNOWBALL_TOKENIZER
-
-    def resolve_tokenizer(self, _ctx: StepContext) -> str:
-        return SNOWBALL_TOKENIZER
-
-    @property
-    def run(self) -> Callable[..., None]:
-        return self._prepared().run
-
-    def init_deps(self) -> tuple[ArtifactStep, ...]:
-        return self._prepared().init_deps()
-
-    def build_train_config(
-        self,
-        ctx: StepContext,
-        spec: SFTSpec,
-        data_config: LmDataConfig,
-        resources: ResourceConfig,
-        num_train_steps: int,
-    ) -> TrainLmOnPodConfig:
-        pod_config = self._prepared().build_train_config(
-            ctx,
-            spec,
-            data_config,
-            resources,
-            num_train_steps,
-        )
-        mesh = MeshConfig(
-            axes={"expert": EXPERT_AXIS_SIZE, "replica": 1, "model": 1},
-            dcn_axes={"data": DATA_AXIS_SIZE, "replica_dcn": 1},
-            compute_mapping={"batch": ["replica_dcn", "data", "expert"]},
-        )
-        trainer = dataclasses.replace(
-            pod_config.train_config.trainer,
-            mesh=mesh,
-            use_explicit_mesh_axes=True,
-            per_device_parallelism=1,
-            log_jaxprs=False,
-            log_xla_hlo=False,
-        )
-        train_config = dataclasses.replace(
-            pod_config.train_config,
-            trainer=trainer,
-            z_loss_weight=1e-4,
-            hf_save_dtype="bfloat16",
-        )
-        return dataclasses.replace(pod_config, train_config=train_config)
 
 
 def _evaluation_model(name: str) -> ModelConfig:
@@ -161,7 +95,7 @@ def _training_resources() -> ResourceConfig:
         cpu=32,
         ram="512g",
         disk="256g",
-        replicas=8,
+        replicas=4,
         preemptible=False,
     )
 
@@ -205,7 +139,11 @@ def _sft_spec(
     return SFTSpec(
         name=user_owned_name(f"checkpoints/curriculum-sft/snowball/{condition.value}"),
         version=version,
-        model=SnowballModelSource(staged_model),
+        model=PreparedModel(
+            step=staged_model,
+            model_type="snowball",
+            eos_token_ids=SNOWBALL_EOS_TOKEN_IDS,
+        ),
         chat_template=MARIN_CHAT_TEMPLATE,
         datasets=(),
         optimizer=AdamConfig(
@@ -219,8 +157,11 @@ def _sft_spec(
             warmup=0.0,
             min_lr_ratio=0.0,
         ),
+        mesh=MeshConfig(
+            axes={"data": 1, "replica": 1, "model": 1, "context": 4, "expert": -1},
+        ),
         seq_len=TRAIN_SEQUENCE_LENGTH,
-        pack=True,
+        pack=False,
         batch_size=TRAIN_BATCH_SIZE,
         num_train_steps=TRAIN_STEPS,
         wandb_project="marin-curriculum-sft-snowball",
@@ -236,7 +177,7 @@ def _training_data(cache_path: str, tokenizer: str, arm: str) -> LmDataConfig:
                 source=None,
                 cache_dir=cache_path,
                 format=TextLmDatasetFormat(),
-                pack=True,
+                pack=False,
             )
         },
         train_weights={arm: 1.0},
@@ -261,7 +202,13 @@ def _sft_step(
     def build_config(ctx: StepContext) -> TrainLmOnPodConfig:
         tokenizer = source.resolve_tokenizer(ctx)
         data = _training_data(prefix_join(ctx.artifact_path(store), STORE_RELATIVE_PATH), tokenizer, arm)
-        return source.build_train_config(ctx, spec, data, ctx.runtime_arg(_TRAIN_RESOURCES), TRAIN_STEPS)
+        pod_config = source.build_train_config(ctx, spec, data, ctx.runtime_arg(_TRAIN_RESOURCES), TRAIN_STEPS)
+        train_config = dataclasses.replace(
+            pod_config.train_config,
+            z_loss_weight=1e-4,
+            hf_save_dtype="bfloat16",
+        )
+        return dataclasses.replace(pod_config, train_config=train_config)
 
     output = marin_temp_bucket(
         TEMP_TTL_DAYS,

@@ -30,7 +30,6 @@ from iris.cluster.config import (
     assert_no_inlined_secrets,
     config_to_dict,
 )
-from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.inject_env import TASK_ENV_SECRET_NAME, collect_inject_env, projects_task_env_secret
 from iris.cluster.node_agent import SERVICE_NAME as _NODE_AGENT_NAME
 from iris.cluster.platforms.k8s.constants import (
@@ -318,15 +317,18 @@ def _build_node_agent_daemonset(
     *,
     namespace: str,
     image: str,
-    cache_dir: str | None = None,
+    cache_dir: str,
     cache_max_age: Duration | None = None,
 ) -> dict:
     """Run the Iris physical-node collector once on every Kubernetes node."""
-    volume_mounts = [{"name": "config", "mountPath": "/etc/iris", "readOnly": True}]
-    volumes = [{"name": "config", "configMap": {"name": "iris-cluster-config"}}]
-    if cache_dir is not None:
-        volume_mounts.append({"name": "task-cache", "mountPath": cache_dir})
-        volumes.append({"name": "task-cache", "hostPath": {"path": cache_dir, "type": "DirectoryOrCreate"}})
+    volume_mounts = [
+        {"name": "config", "mountPath": "/etc/iris", "readOnly": True},
+        {"name": "task-cache", "mountPath": cache_dir},
+    ]
+    volumes = [
+        {"name": "config", "configMap": {"name": "iris-cluster-config"}},
+        {"name": "task-cache", "hostPath": {"path": cache_dir, "type": "DirectoryOrCreate"}},
+    ]
     return {
         "apiVersion": "apps/v1",
         "kind": "DaemonSet",
@@ -529,28 +531,16 @@ class K8sControllerProvider:
 
         self.ensure_kueue_queues(config)
         self.ensure_priority_classes()
-        if (
-            config.finelog.config
-            or LOG_SERVER_ENDPOINT_NAME in config.endpoints
-            or config.kubernetes_provider.cache_max_age is not None
-        ):
-            cache_dir = (
-                config.kubernetes_provider.cache_dir or DEFAULT_TASK_CACHE_DIR
-                if config.kubernetes_provider.cache_max_age is not None
-                else None
+        cache_dir = config.kubernetes_provider.cache_dir or DEFAULT_TASK_CACHE_DIR
+        self._kubectl.apply_json(
+            _build_node_agent_daemonset(
+                namespace=self._namespace,
+                image=config.controller.image,
+                cache_dir=cache_dir,
+                cache_max_age=config.kubernetes_provider.cache_max_age,
             )
-            self._kubectl.apply_json(
-                _build_node_agent_daemonset(
-                    namespace=self._namespace,
-                    image=config.controller.image,
-                    cache_dir=cache_dir,
-                    cache_max_age=config.kubernetes_provider.cache_max_age,
-                )
-            )
-            logger.info("DaemonSet %s applied", _NODE_AGENT_NAME)
-        else:
-            self._kubectl.delete(K8sResource.DAEMONSETS, _NODE_AGENT_NAME)
-            logger.info("Node telemetry is unconfigured; DaemonSet %s is absent", _NODE_AGENT_NAME)
+        )
+        logger.info("DaemonSet %s applied", _NODE_AGENT_NAME)
         if local_state_hostpath:
             logger.info("controller local state uses node-local hostPath %s (no PVC)", state_mount_path)
         else:

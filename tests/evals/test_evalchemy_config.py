@@ -16,7 +16,7 @@ from types import SimpleNamespace
 
 import pytest
 from marin.evaluation.evalchemy.client import build_command, build_model_args, scored_results
-from marin.evaluation.evalchemy.config import EvalchemyJudgeConfig
+from marin.evaluation.evalchemy.config import EvalchemyConfig, EvalchemyJudgeConfig
 from marin.evaluation.evalchemy.runner import (
     EvalchemyRunConfig,
     _run_config_json,
@@ -104,6 +104,46 @@ def test_parent_rejects_endpoint_model_arg_overrides():
         _payload(_config(extra_model_args={"model": "other"}))
 
 
+def test_financebench_requires_an_explicit_external_judge():
+    with pytest.raises(ValueError, match="requires an explicit judge"):
+        EvalchemyConfig(tasks=("FinanceBench",))
+
+    judge = EvalchemyJudgeConfig(
+        base_url="https://judge.example/v1",
+        model="judge-model",
+        api_key=("env:JUDGE_KEY",),
+    )
+    with pytest.raises(ValueError, match="only for a single FinanceBench"):
+        EvalchemyConfig(tasks=("FinanceBench", "gsm8k"), judge=judge)
+    with pytest.raises(ValueError, match="only for a single FinanceBench"):
+        EvalchemyConfig(tasks=("gsm8k",), judge=judge)
+
+
+@pytest.mark.parametrize(
+    "judge",
+    [
+        {
+            "base_url": "https://user:password@judge.example/v1",
+            "model": "judge-model",
+            "api_key": ["env:JUDGE_KEY"],
+        },
+        {
+            "base_url": "https://judge.example/v1?api_key=secret",
+            "model": "judge-model",
+            "api_key": ["env:JUDGE_KEY"],
+        },
+        {
+            "base_url": "https://judge.example/v1",
+            "model": "judge-model",
+            "api_key": ["literal-secret"],
+        },
+    ],
+)
+def test_financebench_rejects_inline_judge_credentials(judge):
+    with pytest.raises(ValueError):
+        EvalchemyConfig(tasks=("FinanceBench",), judge=judge)
+
+
 def test_evalchemy_child_keeps_candidate_and_judge_credentials_separate(monkeypatch):
     submitted = []
 
@@ -138,6 +178,21 @@ def test_evalchemy_child_keeps_candidate_and_judge_credentials_separate(monkeypa
     assert env["JUDGE_BASE_URL"] == "https://judge.example/v1"
     assert env["JUDGE_MODEL"] == "judge-model"
     assert env["HF_TOKEN"] == "candidate-runtime-token"
+
+
+def test_evalchemy_child_rejects_a_missing_judge_secret():
+    config = _config(
+        name="financebench",
+        tasks=(EvalTaskConfig("FinanceBench", 0, generation=True),),
+        judge=EvalchemyJudgeConfig(
+            base_url="https://judge.example/v1",
+            model="judge-model",
+            api_key=("env:TOGETHER_API_KEY",),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="requires JUDGE_API_KEY"):
+        _run_evalchemy_child(_MODEL, config, "gs://bucket/evals/qwen3/financebench", {})
 
 
 def test_task_dirs_distinguish_shot_variants_of_one_task():

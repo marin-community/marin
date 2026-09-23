@@ -43,7 +43,7 @@ dependencies = [
     "requests>=2.33.0",
     "resiliparse>=0.17.2",
     "s3fs>=2024",
-    "shellsim @ git+https://github.com/rjpower/shellsim.git@563f09ee9c736f8c507db8e64837fc9a228a6c69",
+    "shellsim>=0.1.10",
     "tqdm",
     "tqdm-loggable",
     "wandb>0.24.0",

@@ -1,4 +1,5 @@
 import type { ThinkingMode } from './chat_template'
+import type { VllmRequestDebug } from './vllm_debug'
 
 /** Output conventions discovered from the served model's active chat template. */
 export interface ChatTemplateProtocol {
@@ -47,6 +48,7 @@ export interface AssistantMessage {
   thinkingSeconds: number | null
   error: string | null
   toolCalls?: ToolCall[]
+  requestDebug?: VllmRequestDebug
 }
 
 export interface ToolMessage {
@@ -90,4 +92,5 @@ export interface SamplingParams {
   temperature: number
   maxTokens: number
   topP: number
+  maxToolRounds: number
 }

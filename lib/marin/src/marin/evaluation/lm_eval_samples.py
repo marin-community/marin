@@ -346,35 +346,31 @@ def _is_infrastructure_error(sample: EvalSample) -> bool:
     )
 
 
-def _validated_coverage(coverage: TaskCoverage) -> TaskCoverage:
-    if coverage.n_attempted is not None and coverage.n_scored > coverage.n_attempted:
-        raise ValueError(f"scored count {coverage.n_scored} exceeds intended count {coverage.n_attempted}")
-    if coverage.n_benchmark is None:
-        return coverage
-    if coverage.n_benchmark <= 0:
-        raise ValueError(f"benchmark size must be positive, got {coverage.n_benchmark}")
-    if coverage.n_attempted is None:
-        raise ValueError("benchmark size requires an intended attempted count")
-    if coverage.n_attempted > coverage.n_benchmark:
-        raise ValueError(f"intended count {coverage.n_attempted} exceeds benchmark size {coverage.n_benchmark}")
-    return coverage
-
-
 def task_coverage_and_metrics(
-    samples: Sequence[EvalSample], *, n_benchmark: int | None = None, n_attempted: int | None = None
+    samples: Sequence[EvalSample],
+    *,
+    n_benchmark: int | None = None,
+    n_attempted: int | None = None,
+    score_from_aggregate: bool = False,
 ) -> tuple[TaskCoverage, dict[str, float]]:
     """Compute one task's coverage and metrics recovered after request failures.
 
     Ungraded documents and failed requests are unscored. Empty model completions remain scored and
     count as unanswered. For tasks with several extraction filters, coverage uses the filter chosen
     by :func:`~marin.evaluation.metric_selection.primary_filter`. Recovered metrics retain every filter.
+
+    When the evaluator declares an aggregate-only primary metric, every enumerated document counts
+    as scored even though the sample rows carry no per-item score. No per-item pass tally exists.
     """
     graded: dict[str, list[EvalSample]] = {}
     recovered_values: dict[str, list[float]] = {}
     recovered_doc_ids: set[str] = set()
-    seen: set[str] = set()
+    by_doc: dict[str, list[EvalSample]] = {}
+    aggregate_scored = score_from_aggregate and bool(samples) and not any(sample.metrics for sample in samples)
     for sample in samples:
-        seen.add(sample.doc_id)
+        by_doc.setdefault(sample.doc_id, []).append(sample)
+        if aggregate_scored:
+            continue
         if sample.grading is not None:
             graded.setdefault(sample.doc_id, []).append(sample)
             if not _is_infrastructure_error(sample):
@@ -386,19 +382,23 @@ def task_coverage_and_metrics(
     headline = primary_filter(
         {sample.grading.filter for rows in graded.values() for sample in rows if sample.grading.filter}
     )
-    graded_samples = [
-        next((sample for sample in rows if sample.grading.filter == headline), rows[0]) for rows in graded.values()
-    ]
+    if aggregate_scored:
+        graded_samples = [rows[0] for rows in by_doc.values()]
+    else:
+        graded_samples = [
+            next((sample for sample in rows if sample.grading.filter == headline), rows[0]) for rows in graded.values()
+        ]
     infrastructure_errors = [sample for sample in graded_samples if _is_infrastructure_error(sample)]
     scored = [sample for sample in graded_samples if not _is_infrastructure_error(sample)]
-    ungraded = len(seen) - len(graded_samples)
+    ungraded = len(by_doc) - len(graded_samples)
     # A pass/fail grade is the only one with a Bernoulli count behind it; a partial-credit score
-    # (a rubric, an edit distance) has no numerator to record.
-    binary = all(sample.grading.score in (0.0, 1.0) for sample in scored)
+    # (a rubric, an edit distance) has no numerator to record, and neither does an aggregate-scored
+    # task.
+    binary = not aggregate_scored and all(sample.grading.score in (0.0, 1.0) for sample in scored)
     errors = {"ungraded": ungraded} if ungraded else {}
     if infrastructure_errors:
         errors[EVALCHEMY_INFRASTRUCTURE_ERROR] = len(infrastructure_errors)
-    extent = _document_extent(seen)
+    extent = _document_extent(by_doc)
     if n_attempted is not None and extent is not None and extent > n_attempted:
         raise ValueError(f"sample document extent {extent} exceeds intended count {n_attempted}")
     coverage = TaskCoverage(
@@ -622,10 +622,12 @@ def _write_sample_archive(
             leaf = _task_from_filename(PurePosixPath(relative).name, ".jsonl")
             benchmark = benchmarks.get(directory, {}).get(leaf)
             primary_source = None
+            score_from_aggregate = False
             if benchmark is not None:
                 primary_source = next(
                     metric.source_name for metric in benchmark.metrics if metric.name == benchmark.primary_metric
                 )
+                score_from_aggregate = primary_source.endswith("_avg")
             samples = _add_lm_eval_rows(
                 store,
                 relative.rsplit("/", 1)[-1],
@@ -639,6 +641,7 @@ def _write_sample_archive(
                 samples,
                 n_benchmark=benchmark.n_benchmark if benchmark is not None else None,
                 n_attempted=benchmark.n_attempted if benchmark is not None else None,
+                score_from_aggregate=score_from_aggregate,
             )
             coverage[task_key] = task_coverage_result
             if task_coverage_result.errors.get(EVALCHEMY_INFRASTRUCTURE_ERROR):

@@ -32,12 +32,12 @@ def test_sft_question_and_answer_use_verified_facts(question):
     cell = AblationCell(CurriculumCondition.TASK_ONLY, GenerationSpec.WEAK, accepted_examples=1)
     [row] = generated_payloads_to_rows(cell, [payload])
 
-    assert row["messages"][1]["content"] == (
-        "A fictional issuer reports revenue of 100 (evidence: disclosure.revenue) "
-        "and operating cost of 80 (evidence: disclosure.operating_cost). "
-        "Calculate gross profit as revenue minus operating cost "
-        "and gross margin in basis points as gross profit divided by revenue times 10000."
-    )
+    user_message = row["messages"][1]["content"]
+    assert "revenue of 100 (evidence: disclosure.revenue)" in user_message
+    assert "operating cost of 80 (evidence: disclosure.operating_cost)" in user_message
+    assert "revenue minus operating cost" in user_message
+    assert "gross profit divided by revenue times 10000" in user_message
+    assert question not in user_message
     assert json.loads(row["messages"][2]["content"]) == {
         "result": {"gross_profit": 20, "margin_bps": 2000},
         "evidence": ["disclosure.revenue", "disclosure.operating_cost"],

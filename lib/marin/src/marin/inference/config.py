@@ -40,6 +40,19 @@ VLLM_TOPOLOGY_OPTIONS = frozenset(
 )
 
 
+def resolve_tokenizer_revision(
+    revision: str | None,
+    tokenizer: str | None,
+    tokenizer_revision: str | None,
+) -> str | None:
+    """Resolve the revision owned by an explicit or model-default tokenizer."""
+    if tokenizer_revision is not None:
+        return tokenizer_revision
+    if tokenizer is None:
+        return revision
+    return None
+
+
 def validate_pipeline_args(args: tuple[str, ...]) -> None:
     """Reject flags whose values must agree with the Iris gang geometry."""
     for arg in args:
@@ -154,10 +167,18 @@ class VllmCompilationCacheMode(StrEnum):
 
 @dataclass(frozen=True)
 class ServedModelConfig:
+    """Model and tokenizer inputs for local or Iris-backed serving.
+
+    ``revision`` pins ``weights``. ``tokenizer_revision`` pins an explicitly
+    configured ``tokenizer``. When ``tokenizer`` is omitted, it defaults to the
+    original weights repository and may inherit its revision.
+    """
+
     weights: str
     revision: str | None = None
     api_model: str | None = None
     tokenizer: str | None = None
+    tokenizer_revision: str | None = None
     dtype: str = "bfloat16"
     max_model_len: int | None = None
     tensor_parallel_size: int | None = None
@@ -177,6 +198,11 @@ class ServedModelConfig:
     def model_id(self) -> str:
         """Model identifier accepted by the served OpenAI endpoint."""
         return self.api_model or self.weights
+
+    @property
+    def effective_tokenizer_revision(self) -> str | None:
+        """Revision owned by the configured or default tokenizer repository."""
+        return resolve_tokenizer_revision(self.revision, self.tokenizer, self.tokenizer_revision)
 
 
 @dataclass
