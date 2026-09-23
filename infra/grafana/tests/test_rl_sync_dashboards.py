@@ -723,6 +723,7 @@ def _resolve(sql: str) -> str:
 
 
 BUCKET_MS = 5 * 60 * 1000
+BUCKET_TIMES = [_millis(WINDOW_START) + bucket * BUCKET_MS for bucket in range(BUCKETS)]
 _DATASETS = {
     "/v1/rl/overview": rl_overview_dataset,
     "/v1/rl/generation": rl_sync_generation_dataset,
@@ -932,20 +933,18 @@ def test_the_decomposition_reads_the_critical_rank_and_never_a_per_phase_maximum
 def test_the_skew_panel_reports_the_spread_and_names_the_same_slowest_rank(store) -> None:
     rows = _panel_rows(store, "policy_ppo_train spread across ranks")
 
-    for _, slowest, _p95, _p50, fastest in rows:
-        assert slowest == pytest.approx(PPO_TRAIN[CRITICAL_RANK])
-        assert fastest == pytest.approx(min(PPO_TRAIN.values()))
+    slowest, fastest = PPO_TRAIN[CRITICAL_RANK], min(PPO_TRAIN.values())
+    spread = (slowest, fastest + 0.95 * (slowest - fastest), fastest + 0.5 * (slowest - fastest), fastest)
+    assert rows == [(t, *map(pytest.approx, spread)) for t in BUCKET_TIMES]
 
 
 def test_the_derived_ratios_divide_the_quantities_they_name(store) -> None:
     micro = _panel_rows(store, "policy_train ÷ micro-step count")
-    for _, seconds_per_micro_step, micro_steps in micro:
-        assert micro_steps == pytest.approx(64.0)
-        assert seconds_per_micro_step == pytest.approx(DRIVER_PHASES["policy_train"] / 64.0)
+    assert micro == [(t, pytest.approx(DRIVER_PHASES["policy_train"] / 64.0), pytest.approx(64.0)) for t in BUCKET_TIMES]
 
     ratio = _panel_rows(store, "policy_backward ÷ policy_forward on the slowest rank")
     expected = WORKER_SPANS[CRITICAL_RANK]["policy_backward"] / WORKER_SPANS[CRITICAL_RANK]["policy_forward"]
-    assert [round(value, 6) for _, value in ratio] == [round(expected, 6)] * len(ratio)
+    assert ratio == [(t, pytest.approx(expected)) for t in BUCKET_TIMES]
 
     waiting = _panel_rows(store, "Barrier and all-reduce share on the slowest rank")
     barriers = sum(
@@ -957,7 +956,7 @@ def test_the_derived_ratios_divide_the_quantities_they_name(store) -> None:
             "policy_entropy_allreduce",
         )
     )
-    assert [round(value, 6) for _, value in waiting] == [round(barriers / PPO_TRAIN[CRITICAL_RANK], 6)] * len(waiting)
+    assert waiting == [(t, pytest.approx(barriers / PPO_TRAIN[CRITICAL_RANK])) for t in BUCKET_TIMES]
 
 
 BARRIER_SPANS = (
@@ -1020,9 +1019,7 @@ def test_padding_is_a_per_rank_ratio_rather_than_a_ratio_of_summed_tokens(store)
         1.0 - counters["rank_tokens_real"] / counters["rank_tokens_padded"] for counters in WORKER_COUNTERS.values()
     ) / len(WORKER_COUNTERS)
     expected_work = sum(counters["attention_work_ratio"] for counters in WORKER_COUNTERS.values()) / len(WORKER_COUNTERS)
-    for _, padded_fraction, attention_work_ratio in rows:
-        assert padded_fraction == pytest.approx(expected_padding)
-        assert attention_work_ratio == pytest.approx(expected_work)
+    assert rows == [(t, pytest.approx(expected_padding), pytest.approx(expected_work)) for t in BUCKET_TIMES]
 
 
 def test_the_padding_panel_reads_the_old_spelling_of_the_token_counters(store) -> None:
@@ -1047,7 +1044,7 @@ def test_the_accelerator_panels_join_dcgm_to_the_run_through_its_nodes(store) ->
     assert by_series["tensor pipe active"] == pytest.approx(TENSOR_ACTIVE_RATIO * 100.0)
 
     memory = _panel_rows(store, "GPU memory in use on this run's nodes")
-    assert [row[2] for row in memory] == [pytest.approx(GPU_MEMORY_USED)] * len(memory)
+    assert memory == [(t, pytest.approx(GPU_MEMORY_USED), pytest.approx(GPU_MEMORY_USED)) for t in BUCKET_TIMES]
 
     fabric = _panel_rows(store, "NVLink against PCIe receive traffic")
     # Four GPUs across the run's two nodes, summed per direction.
@@ -1300,10 +1297,8 @@ def test_the_generate_shares_are_blank_rather_than_a_single_full_band_without_th
 def test_the_rollout_waits_are_divided_by_the_trajectory_count(store) -> None:
     rows = _panel_rows(store, "Per-trajectory wait: rollout_engine_await and rollout_env_await")
 
-    for _, engine, environment, slowest in rows:
-        assert engine == pytest.approx(ENGINE_AWAIT_SUM / TRAJECTORIES)
-        assert environment == pytest.approx(sum(ENV_SPLIT.values()) / TRAJECTORIES)
-        assert slowest == pytest.approx(ENGINE_AWAIT_MAX)
+    waits = (ENGINE_AWAIT_SUM / TRAJECTORIES, sum(ENV_SPLIT.values()) / TRAJECTORIES, ENGINE_AWAIT_MAX)
+    assert rows == [(t, *map(pytest.approx, waits)) for t in BUCKET_TIMES]
 
 
 def test_no_panel_plots_a_concurrent_await_sum_undivided(store) -> None:
@@ -1354,12 +1349,14 @@ def test_the_environment_split_is_a_partition_with_an_audit_band(store) -> None:
 def test_memory_is_the_worst_rank_and_allocator_events_are_the_run_total(store) -> None:
     rows = _panel_rows(store, "Allocator peaks, retries and OOMs")
 
-    for _, reserved, allocated, retries, ooms in rows:
-        # The binding constraint on the micro-batch is the rank that used most, never the mean.
-        assert reserved == pytest.approx(max(m["peak_reserved_bytes"] for m in WORKER_MEMORY.values()))
-        assert allocated == pytest.approx(max(m["peak_allocated_bytes"] for m in WORKER_MEMORY.values()))
-        assert retries == pytest.approx(sum(a["alloc_retries"] for a in WORKER_ALLOCATOR.values()))
-        assert ooms == pytest.approx(0.0)
+    # The binding constraint on the micro-batch is the rank that used most, never the mean.
+    expected = (
+        max(m["peak_reserved_bytes"] for m in WORKER_MEMORY.values()),
+        max(m["peak_allocated_bytes"] for m in WORKER_MEMORY.values()),
+        sum(a["alloc_retries"] for a in WORKER_ALLOCATOR.values()),
+        0.0,
+    )
+    assert rows == [(t, *map(pytest.approx, expected)) for t in BUCKET_TIMES]
 
 
 def test_the_memory_panel_reads_the_instrument_the_byte_gauges_moved_to(store) -> None:
