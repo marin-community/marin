@@ -190,7 +190,7 @@ generator:
   model_dtype: bfloat16
   vllm_attention_backend: FLASH_ATTN
   gpu_memory_utilization: 0.70
-  enforce_eager: true
+  enforce_eager: false
   run_engines_locally: true
   weight_sync_backend: nccl
   async_engine: true
