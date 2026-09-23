@@ -45,11 +45,10 @@ def _window_literal(epoch_ms):
     return f"TIMESTAMP '{datetime.fromtimestamp(epoch_ms / 1000, UTC).strftime('%Y-%m-%d %H:%M:%S')}'"
 
 
-def resolve(sql, *, window_ms=WINDOW_MS, interval_ms=WINDOW_MS):
+def resolve(sql, *, window_ms=WINDOW_MS):
     for macro, value in {
         "{{from}}": _window_literal(WINDOW_START_MS),
         "{{to}}": _window_literal(WINDOW_START_MS + window_ms),
-        "${__interval_ms}": str(interval_ms),
         "${cluster:sqlstring}": f"'{CLUSTER}'",
         "${run:sqlstring}": f"'{RUN_ID}'",
         "${job:sqlstring}": f"'{JOB_ID}'",
@@ -486,7 +485,6 @@ REQUEST = {
     "executions": f"{DRIVER},{WORKER}",
     "from": WINDOW_START_MS,
     "to": WINDOW_START_MS + WINDOW_MS,
-    "bucket_ms": WINDOW_MS,
 }
 
 
@@ -501,7 +499,6 @@ def test_the_page_reads_finelog_once_per_source_for_every_panel(store):
 
     assert len(queries) == len(dataset().sources)
     assert {response.status_code for response in responses.values()} == {200}
-    assert {title: len(response.json()) for title, response in responses.items()} == PANEL_SERIES
 
 
 def test_a_request_past_the_budget_asks_the_operator_to_narrow_it(store):

@@ -339,10 +339,6 @@
                 "value": "${__to}"
               },
               {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
                 "key": "view",
                 "value": "policy_step"
               }
@@ -451,10 +447,6 @@
                 "value": "${__to}"
               },
               {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
                 "key": "view",
                 "value": "token_rates"
               }
@@ -544,10 +536,6 @@
               {
                 "key": "to",
                 "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
               },
               {
                 "key": "view",
@@ -690,10 +678,6 @@
                 "value": "${__to}"
               },
               {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
                 "key": "view",
                 "value": "driver_walls"
               }
@@ -802,10 +786,6 @@
                 "value": "${__to}"
               },
               {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
                 "key": "view",
                 "value": "worker_waits"
               }
@@ -912,10 +892,6 @@
               {
                 "key": "to",
                 "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
               },
               {
                 "key": "view",
@@ -1039,10 +1015,6 @@
                 "value": "${__to}"
               },
               {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
                 "key": "view",
                 "value": "buffer_dwell"
               }
@@ -1151,10 +1123,6 @@
                 "value": "${__to}"
               },
               {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
                 "key": "view",
                 "value": "policy_staleness"
               }
@@ -1261,10 +1229,6 @@
               {
                 "key": "to",
                 "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
               },
               {
                 "key": "view",
@@ -1388,10 +1352,6 @@
                 "value": "${__to}"
               },
               {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
                 "key": "view",
                 "value": "sync_walls"
               }
@@ -1498,10 +1458,6 @@
               {
                 "key": "to",
                 "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
               },
               {
                 "key": "view",
@@ -1611,10 +1567,6 @@
                 "value": "${__to}"
               },
               {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
                 "key": "view",
                 "value": "residuals"
               }
@@ -1717,10 +1669,6 @@
               {
                 "key": "to",
                 "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
               },
               {
                 "key": "view",
@@ -1840,10 +1788,6 @@
                 "value": "${__to}"
               },
               {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
                 "key": "view",
                 "value": "group_dispositions"
               }
@@ -1950,10 +1894,6 @@
               {
                 "key": "to",
                 "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
               },
               {
                 "key": "view",
@@ -2077,10 +2017,6 @@
                 "value": "${__to}"
               },
               {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
                 "key": "view",
                 "value": "reward"
               }
@@ -2187,10 +2123,6 @@
               {
                 "key": "to",
                 "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
               },
               {
                 "key": "view",
@@ -2302,10 +2234,6 @@
                 "value": "${__to}"
               },
               {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
                 "key": "view",
                 "value": "length_stops"
               }
@@ -2411,10 +2339,6 @@
               {
                 "key": "to",
                 "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
               },
               {
                 "key": "view",
@@ -2538,10 +2462,6 @@
                 "value": "${__to}"
               },
               {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
                 "key": "view",
                 "value": "megatron_policy_wall"
               }
@@ -2631,10 +2551,6 @@
               {
                 "key": "to",
                 "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
               },
               {
                 "key": "view",
@@ -2740,10 +2656,6 @@
               {
                 "key": "to",
                 "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
               },
               {
                 "key": "view",
@@ -2875,10 +2787,6 @@
                 "value": "${__to}"
               },
               {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
                 "key": "view",
                 "value": "drift"
               }
@@ -2984,10 +2892,6 @@
               {
                 "key": "to",
                 "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
               },
               {
                 "key": "view",
@@ -3097,10 +3001,6 @@
                 "value": "${__to}"
               },
               {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
                 "key": "view",
                 "value": "drift_coverage"
               }
@@ -3206,10 +3106,6 @@
               {
                 "key": "to",
                 "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
               },
               {
                 "key": "view",
@@ -3319,10 +3215,6 @@
               {
                 "key": "to",
                 "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
               },
               {
                 "key": "view",
@@ -3445,10 +3337,6 @@
                 "value": "${__to}"
               },
               {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
                 "key": "view",
                 "value": "core_cycle"
               }
@@ -3556,10 +3444,6 @@
                 "value": "${__to}"
               },
               {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
                 "key": "view",
                 "value": "loss_token_rates"
               }
@@ -3665,10 +3549,6 @@
               {
                 "key": "to",
                 "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
               },
               {
                 "key": "view",
@@ -3791,10 +3671,6 @@
                 "value": "${__to}"
               },
               {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
                 "key": "view",
                 "value": "role_gpu_tokens"
               }
@@ -3902,10 +3778,6 @@
                 "value": "${__to}"
               },
               {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
                 "key": "view",
                 "value": "role_gpus"
               }
@@ -3992,10 +3864,6 @@
               {
                 "key": "to",
                 "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
               },
               {
                 "key": "view",
@@ -4124,10 +3992,6 @@
               {
                 "key": "to",
                 "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
               },
               {
                 "key": "view",
@@ -4270,10 +4134,6 @@
               {
                 "key": "to",
                 "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
               },
               {
                 "key": "view",
@@ -4432,10 +4292,6 @@
                 "value": "${__to}"
               },
               {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
                 "key": "view",
                 "value": "uniform_staleness"
               }
@@ -4549,10 +4405,6 @@
               {
                 "key": "to",
                 "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
               },
               {
                 "key": "view",
@@ -4675,10 +4527,6 @@
                 "value": "${__to}"
               },
               {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
                 "key": "view",
                 "value": "evaluation_lengths"
               }
@@ -4784,10 +4632,6 @@
               {
                 "key": "to",
                 "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
               },
               {
                 "key": "view",
@@ -4898,10 +4742,6 @@
                 "value": "${__to}"
               },
               {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
                 "key": "view",
                 "value": "staleness_groups"
               }
@@ -5008,10 +4848,6 @@
               {
                 "key": "to",
                 "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
               },
               {
                 "key": "view",
@@ -5136,10 +4972,6 @@
               {
                 "key": "to",
                 "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
               },
               {
                 "key": "view",
@@ -5276,10 +5108,6 @@
                 "value": "${__to}"
               },
               {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
                 "key": "view",
                 "value": "mismatch_staleness0"
               }
@@ -5385,10 +5213,6 @@
               {
                 "key": "to",
                 "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
               },
               {
                 "key": "view",
@@ -5498,10 +5322,6 @@
                 "value": "${__to}"
               },
               {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
                 "key": "view",
                 "value": "learner_drift"
               }
@@ -5607,10 +5427,6 @@
               {
                 "key": "to",
                 "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
               },
               {
                 "key": "view",
@@ -5737,10 +5553,6 @@
                 "value": "${__to}"
               },
               {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
-              },
-              {
                 "key": "view",
                 "value": "gradient_direction"
               }
@@ -5846,10 +5658,6 @@
               {
                 "key": "to",
                 "value": "${__to}"
-              },
-              {
-                "key": "bucket_ms",
-                "value": "${__interval_ms}"
               },
               {
                 "key": "view",

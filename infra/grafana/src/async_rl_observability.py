@@ -264,7 +264,7 @@ def async_rl_overview_dataset(
     executions: tuple[str, ...],
     start_ms: int,
     end_ms: int,
-    requested_bucket_ms: int,
+    requested_bucket_ms: int = ASYNC_RL_MIN_BUCKET_MS,
 ) -> DashboardDataset:
     """Build the bounded sources behind every panel of the asynchronous RL dashboard."""
     validate_values("clusters", clusters, max_values=ASYNC_RL_MAX_CLUSTERS, max_length=128)

@@ -324,88 +324,6 @@ the telemetry environment, what a run id should look like, and which training lo
 its records. Each view's run picker offers only its own loop. MarinSkyRL documents it at
 `docs/grafana-rl-runs.md`.
 
-RL Post-training (async) (`marin-async-rl`) reads native MarinSkyRL records from
-Finelog. Select a cluster, run, exact training job, and its driver and worker
-executions. It links from Home and RL Post-training (sync) and needs no additional
-datasource or W&B credentials. Every panel description names the records it
-reads: lifecycle, step, buffer, staleness, phase-wall and exporter series arrive
-whenever MarinSkyRL telemetry is configured, while the training-metric, span and
-Megatron panels stay empty until the run exports `trainer.training_metrics`,
-`trainer.async_spans` or `trainer.policy_train_spans`.
-
-Every panel reads `/v1/async-rl/overview` (`src/async_rl_observability.py`) with the
-selected clusters, run, job and executions, the window and the display interval, and
-names its view; the three selectors stay on `/query`. The dataset holds nine sources
-over `telemetry_v1.marinskyrl`, each shaped for the panels it serves: `core` (loop
-events summed, maxed, latest-per-process or percentiled per display bucket and
-execution), `metrics` (one row per `training_metric_value` point on the allowlisted
-metric names and every `eval/%` metric), `staleness` (group counts and token sums per
-optimizer step and staleness value), `processes` (the latest lifecycle event and the
-exporter/nonfinite totals per process), `memory`, `megatron`, `windows`, `overlap` and
-`service`. The last two carry the interval joins of the two table panels, because a
-join over raw rollout calls or engine counter samples is only bounded on the Finelog
-side. Each view keeps its panel's series names, filters, units and empty-state text.
-Display buckets start at the window start, are at least 30 s wide and number at most
-360, so a long window widens the requested interval. Each source has a row cap
-(100,000 for `core` and `metrics`, 50,000 for per-step and span sources, 10,000 for
-per-process ones) and the window is capped at 7 days. A request past either cap
-returns a 400 that asks the operator to narrow the filters or time range.
-
-Native token counters are summed; queue gauges use their latest observation.
-Concurrent generation-worker waits can exceed elapsed time. Rollout completions are joined
-to policy intervals only within the same process clock; incomplete intervals and
-absent rollout records show unknown overlap. An observed zero does not establish
-GPU idleness. Evaluation retains phase and timestamp because periodic and final
-evaluation can share an optimizer step. Signed timing residuals remain visible
-below zero to expose overlapping child spans.
-
-Learner memory rows distinguish native PyTorch interval peaks, current allocator
-bytes and sampled whole-device free memory for each worker/GPU. Peaks include the
-resident baseline; reserved memory includes cache. Model-ready precedes lazy Adam
-state, and initialization/checkpoint/export peaks are not covered.
-
-Inference service rates use reset-safe imported token-counter deltas whose entire
-sample interval falls within a successful driver phase window. The rate divides
-by covered sample time; coverage shows how much of each phase was observed. Missing
-intervals show as unknown. Collector and unique engine identities
-remain separate. Clock-adjusted windows are excluded; collection delay still limits
-alignment precision. No additional engine polling or vLLM changes are required.
-Core GPU-hours charge both configured roles for core step time, including waiting,
-and accumulate within the selected window. They exclude startup/eval/export and
-must not be presented as whole-job billing or active GPU execution.
-
-The async drift panels compare pre-update learner logprob minus the generator's
-reported logprob on tokens selected by the training loss mask. They show the
-signed mean, absolute mean and exact token quantiles over the gathered batch.
-Finite coverage is the fraction of selected tokens with finite logprobs on both
-sides. PPO-window pressure is the fraction below or above the configured ratio
-bounds; the eventual clipping decision also depends on the advantage sign.
-Token-weight concentration is `(sum(w))² / (N * sum(w²))`, with
-`w = exp(learner_logprob - reported_behavior_logprob)` over finite selected tokens.
-It does not count independent trajectories and can remain 1 under a uniform
-ratio shift. Raw vLLM logprobs precede sampling processors, so they need not equal
-the actual sampling distribution. These diagnostics are not KL estimates.
-Old runs without these metrics show no data.
-
-Consumed length stops use admitted response sequences before data-parallel padding,
-and are reported after the learner update completes. Read the length-stop fraction
-with stop-reason coverage: incomplete coverage leaves a gap, while complete coverage
-can establish a measured zero. A length stop identifies engine or runner budget
-exhaustion and does not establish that an answer is incomplete. The panel preserves
-missing fractions as null points so the chart does not bridge incomplete steps.
-
-Useful work means consumed response tokens or tokens selected by the loss mask,
-as named by each series. Core runs from batch admission wait through weight
-synchronization. Cycle starts there and ends before metric publication, including
-checkpoint/evaluation callbacks; both exclude startup, epoch cleanup and final
-export. Role-normalized rates divide useful tokens by cycle seconds and the
-configured GPU count for that role. Do not add overlapping role counts or infer
-whole-job billed efficiency from them. For sizing, inspect buffer-empty learner
-waits alongside generation-worker slot and enqueue waits and completed-buffer dwell (completion
-to consumption). Existing inference running/waiting request counts and token rates
-describe engine demand; physical engine-to-GPU mapping is still needed for
-per-engine hardware attribution.
-
 The two inference dashboards keep the selected identity and time range when
 linked. The existing `marin-inference` UID now opens diagnostics, preserving old
 links and panel IDs; `marin-inference-overview` is the entry point from Home.
@@ -930,21 +848,6 @@ Install the app on `marin-community` with access to the main repo and every
 nightly lane repo (`evalchemy`, `harbor`, `MarinSkyRL`, `vllm`, `tpu-inference`),
 read-only on Contents, Metadata, Commit statuses, Checks, and Actions. The minted
 token is attenuated to that subset even if the app holds broader grants.
-
-### Async RL diagnostic panels
-
-The nine panels beginning with “Staleness of trained groups” add per-step staleness
-distributions, training/weight-sync intervals, separate ratio families, gradient
-persistence, and correction activity. Bars share each optimizer step's final observation time.
-The timeline uses explicit interval ends; its sync completion markers have a
-1 ms display width, not measured duration. The M2 reference is visible only
-alongside an M2 observation and is not a validated quality boundary.
-
-Availability follows the run's instrumentation. `consumed_staleness` is a
-per-group token event (`body.staleness`, `body.response_tokens`, role/step
-attributes); a run that does not emit it has no token-staleness series, and the
-same holds for the ratio, gradient and correction series. The drift panels read the consume-time
-learner/vLLM ratio and fill from a wider set of runs.
 
 ## Adding a dashboard
 

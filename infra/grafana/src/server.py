@@ -731,7 +731,6 @@ def create_app(
                 _csv_values(params, "executions"),
                 start_ms,
                 end_ms,
-                int(_require(params, "bucket_ms")),
             ),
         )
 
