@@ -32,6 +32,8 @@ fetch server-side, so nothing outside the container reaches it.
 GET /finelog/{cluster}/query?sql=&from=&to=      finelog SQL
 GET /finelog/{cluster}/v1/{node,training,runs,rl,async-rl,accelerator,jobs}/overview
                                                     bounded shared dashboard datasets
+GET /finelog/{cluster}/v1/rl/{generation,training-step}
+                                                    bounded sync RL drill-down datasets
 GET /finelog/{cluster}/v1/zephyr/overview        bounded ranked shuffle snapshot
 GET /finelog/{cluster}/v1/rl/recent              bounded recent RL runs
 GET /finelog/marin/fleet_health                  main query probe + k8s mirror readiness
@@ -151,8 +153,9 @@ and Home dashboards use the same shared-dataset contract. Each endpoint validate
 identity and time input, runs a small fixed set of domain queries, and projects all
 panel views locally. Concurrent panel requests coalesce on one logical cache key;
 the `view` parameter only filters the cached result. A cold traversal uses one
-Finelog source for Node and Zephyr, three for Training, two for Runs, three for RL,
-nine for async RL, three for Accelerators, and five for Jobs. Those boundaries are intentional:
+Finelog source for Node and Zephyr, three for Training, two for Runs, four for RL,
+one and three for the sync RL generation and training-step boards, nine for async RL,
+three for Accelerators, and five for Jobs. Those boundaries are intentional:
 crossing namespaces or mixing fleet-wide per-device data with compact summaries
 just to reach one RPC would make the query less predictable.
 
@@ -325,6 +328,16 @@ Getting a run onto an RL Post-training view is a MarinSkyRL-side question: which
 the telemetry environment, what a run id should look like, and which training loop the run stamps on
 its records. Each view's run picker offers only its own loop. MarinSkyRL documents it at
 `docs/grafana-rl-runs.md`.
+
+RL Post-training (sync) and its two drill-downs read datasets built in `src/rl_observability.py`.
+`/v1/rl/overview` holds `core`, `engine`, `gpu` and `spans`. The generation board reads
+`/v1/rl/generation` (`driver`: the driver's step spans and rollout counters) and, for its engine
+panels, the run's `/v1/vllm/overview` result, which carries engine detail only for windows of 7
+hours or less. The training-step board reads `/v1/rl/training-step` (`spans`, `counters` and `gpu`).
+Span and counter sources keep one row per step and phase. Finelog reduces each step's worker spans
+to its critical rank, the rank with the longest `policy_ppo_train`, and to a per-bucket spread
+across ranks, so their row counts do not grow with the rank count. Each is capped at 50,000 rows;
+at 500 steps across 64 ranks the largest, `driver`, holds 11,000.
 
 The two inference dashboards keep the selected identity and time range when
 linked. The existing `marin-inference` UID now opens diagnostics, preserving old
