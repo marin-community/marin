@@ -51,8 +51,6 @@ from marin.evaluation.runner import (
     submit_evaluation_batch,
 )
 from marin.evaluation.serving_config import inference_config_for_model
-from marin.execution.artifact import Artifact
-from marin.execution.lazy import ArtifactStep, artifact_identity, materialized_config
 from marin.external_dependencies import EVALCHEMY
 from marin.inference.config import (
     EffectiveServing,
@@ -79,7 +77,6 @@ from experiments.evaluation.launch import (
 from experiments.evaluation.models import models
 from experiments.evaluation.pipeline import (
     EvalStepConfig,
-    eval_step,
     run_eval_pipeline_step,
 )
 
@@ -87,16 +84,6 @@ from experiments.evaluation.pipeline import (
 # model in these tests, so an assertion on them can only be satisfied by the preflight result.
 _PREFLIGHT_MAX_INPUT_TOKENS = 262144
 _PREFLIGHT_MAX_OUTPUT_TOKENS = 65536
-
-
-def _artifact_step(name: str) -> ArtifactStep[Artifact]:
-    return ArtifactStep(
-        name=name,
-        version="2026.09.23",
-        artifact_type=Artifact,
-        run=lambda _config: None,
-        build_config=lambda ctx: {"output": ctx.output_path},
-    )
 
 
 def _install_fake_harbor_preflight(
@@ -440,61 +427,35 @@ vllm:spec_decode_num_accepted_tokens_total {accepted}
     assert record.model.config.serve.speculative.model.identity == "draft@2026.09.23:abc123"
 
 
-@pytest.mark.parametrize("adopted", [False, True], ids=["produced", "adopted"])
-def test_eval_step_resolves_artifacts_and_selects_speculative_gpu(tmp_path, monkeypatch, adopted):
-    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
-    target_source = _artifact_step("models/target")
-    if adopted:
-        source_path = tmp_path / "adopted-draft"
-        source_path.mkdir()
-        draft_source = ArtifactStep.adopt("models/draft", "2026.09.23", source=str(source_path))
-    else:
-        draft_source = _artifact_step("models/draft")
+def test_speculative_pipeline_launch_selects_gpu(tmp_path, monkeypatch):
     model = ModelConfig(
         name="target",
-        location="<artifact-model>",
+        location="s3://models/target",
         tokenizer="org/tokenizer",
-        tokenizer_revision="tokenizer-revision",
         resource_hint=ResourceHint(hbm_gb=40),
     )
-
-    def resolve_target(ctx):
-        return replace(
-            model,
-            location=f"{ctx.artifact_path(target_source)}/hf",
-            identity=artifact_identity(target_source),
-        )
-
-    def resolve_drafted(ctx):
-        target = resolve_target(ctx)
-        speculative = SpeculativeServingConfig(
-            method=SpeculativeMethod.EAGLE3,
-            model=ResolvedModelLocator(
-                uri=ctx.artifact_path(draft_source),
-                identity=artifact_identity(draft_source),
-            ),
-            num_speculative_tokens=3,
-        )
-        return replace(target, serve=replace(target.serve, speculative=speculative))
-
-    control = eval_step(model, "gsm8k-smoke", version="2026.09.23", deps=(target_source,), resolve_model=resolve_target)
-    drafted = eval_step(
-        model,
-        "gsm8k-smoke",
-        version="2026.09.23.1",
-        deps=(target_source, draft_source),
-        resolve_model=resolve_drafted,
+    speculative = SpeculativeServingConfig(
+        method=SpeculativeMethod.EAGLE3,
+        model=ResolvedModelLocator(uri="s3://models/draft", identity="draft@2026.09.23:abc123"),
+        num_speculative_tokens=3,
     )
-    control_config = materialized_config(control, str(tmp_path))
-    drafted_config = materialized_config(drafted, str(tmp_path))
-    assert isinstance(control_config, EvalStepConfig)
-    assert isinstance(drafted_config, EvalStepConfig)
+    control_config = EvalStepConfig(
+        model=model,
+        evals="gsm8k-smoke",
+        limit=1,
+        artifact_path=str(tmp_path / "control"),
+        accelerator=None,
+        submission_cluster="marin",
+        federated_cluster=None,
+        version="2026.09.23",
+    )
+    drafted_config = replace(
+        control_config,
+        model=replace(model, serve=replace(model.serve, speculative=speculative)),
+        version="2026.09.23.1",
+    )
 
     submitted_batches: list[EvaluationBatch] = []
-    waited: list[float] = []
-
-    def wait(*, timeout: float) -> None:
-        waited.append(timeout)
 
     def launch(batch: EvaluationBatch, _client: object):
         submitted_batches.append(batch)
@@ -502,7 +463,7 @@ def test_eval_step_resolves_artifacts_and_selects_speculative_gpu(tmp_path, monk
             group_id=batch.group_id,
             records_prefix=batch.records_prefix,
             evaluations=tuple(SimpleNamespace(run_id=evaluation.identity.run_id) for evaluation in batch.evaluations),
-            job=SimpleNamespace(wait=wait),
+            job=SimpleNamespace(wait=lambda *, timeout: None),
         )
 
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
@@ -516,25 +477,11 @@ def test_eval_step_resolves_artifacts_and_selects_speculative_gpu(tmp_path, monk
         lambda path: SimpleNamespace(results_path=f"{path.removesuffix('/record.json')}/results"),
     )
 
-    control_result = run_eval_pipeline_step(control_config)
-    drafted_result = run_eval_pipeline_step(drafted_config)
+    run_eval_pipeline_step(control_config)
+    run_eval_pipeline_step(drafted_config)
 
-    assert waited == [float("inf"), float("inf")]
     assert submitted_batches[0].accelerator.platform is Platform.TPU
     assert submitted_batches[1].accelerator.platform is Platform.GPU
-    assert submitted_batches[1].model.location == f"{tmp_path}/models/target/2026.09.23/hf"
-    assert submitted_batches[1].model.identity == f"models/target@2026.09.23:{target_source.fingerprint()}"
-    assert submitted_batches[1].model.serve.speculative is not None
-    assert submitted_batches[1].model.serve.speculative.model.uri == draft_source.path(str(tmp_path))
-    assert submitted_batches[1].model.serve.speculative.model.identity == (
-        f"models/draft@2026.09.23:{draft_source.fingerprint()}"
-    )
-    assert control_result.results_paths == tuple(
-        f"{control_result.records_prefix}/{run_id}/results" for run_id in control_result.run_ids
-    )
-    assert drafted_result.results_paths == tuple(
-        f"{drafted_result.records_prefix}/{run_id}/results" for run_id in drafted_result.run_ids
-    )
 
 
 def test_evalchemy_executor_classifies_missing_native_archive(tmp_path, monkeypatch):

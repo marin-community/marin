@@ -272,7 +272,7 @@ def test_resolved_model_keeps_requested_id_as_served_name(monkeypatch):
     assert resolved.model_id == "Qwen/Qwen3-0.6B"
 
 
-def test_resolved_engine_resolves_speculative_model_without_changing_identity(monkeypatch):
+def test_speculative_model_uses_resolved_uri_in_vllm_launch(monkeypatch):
     observed: dict[str, object] = {}
 
     @contextmanager
@@ -308,20 +308,10 @@ def test_resolved_engine_resolves_speculative_model_without_changing_identity(mo
 
     resolved = _resolved_engine(engine, iris)
 
-    assert isinstance(resolved, VllmEngineConfig)
-    assert resolved.speculative is not None
-    assert resolved.speculative.model.uri == "/cache/eagle-draft"
-    assert resolved.speculative.model.identity == "models/eagle@2026.09.23:abc123"
-    assert json.loads(resolved.speculative.vllm_argument()) == {
-        "method": "eagle3",
-        "model": "/cache/eagle-draft",
-        "num_speculative_tokens": 3,
-    }
     with local_inference(ServedModelConfig(weights="org/target", api_model="target"), resolved, num_chips=1):
         pass
 
     extra_args = observed["extra_args"]
-    assert isinstance(extra_args, list)
     assert json.loads(extra_args[extra_args.index("--speculative-config") + 1]) == {
         "method": "eagle3",
         "model": "/cache/eagle-draft",

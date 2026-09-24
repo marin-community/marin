@@ -74,8 +74,7 @@ Pipeline evaluations declare their target and optional draft producer steps as d
 evaluation step resolves their paths into a plain `ModelConfig` before submitting the shared
 Evalchemy or Harbor runner. Checked-in model configurations need no producer step. The inference
 worker resolves the draft URI through Marin's model-preparation path before it starts vLLM.
-Evaluation and inference library code receives model URIs and serving settings, not artifact or step
-objects.
+Evaluation and inference library code receives resolved model URIs and serving settings.
 
 The target `ModelConfig` records its model identity, tokenizer URI, and tokenizer revision. The
 optional `ServeConfig.speculative` records the draft URI, artifact identity, method, and proposal
