@@ -6,7 +6,7 @@
 from collections.abc import Callable
 
 import jax
-from jaxtyping import Array, Float, Int
+from jaxtyping import Array, Bool, Float, Int
 
 from levanter.grug._moe.common import _LOCAL_MOE_IMPLEMENTATIONS, MoeImplementation
 from levanter.grug._moe.scatter import _moe_mlp_local_scatter
@@ -22,6 +22,7 @@ def _moe_mlp_local(
     x: Float[Array, "T H"],
     selected_experts: Int[Array, "T K"],
     combine_weights: Float[Array, "T K"],
+    token_valid: Bool[Array, "T"],
     moe_w13: Float[Array, "E H I2"],
     moe_w2: Float[Array, "E I H"],
     *,
@@ -47,6 +48,7 @@ def _moe_mlp_local(
                 x,
                 selected_experts,
                 combine_weights,
+                token_valid,
                 moe_w13,
                 moe_w2,
                 num_experts=num_experts,
@@ -57,6 +59,7 @@ def _moe_mlp_local(
             x,
             selected_experts,
             combine_weights,
+            token_valid,
             moe_w13,
             moe_w2,
             num_experts=num_experts,
@@ -68,6 +71,7 @@ def _moe_mlp_local(
         x,
         selected_experts,
         combine_weights,
+        token_valid,
         moe_w13,
         moe_w2,
         activation_fn=activation_fn,

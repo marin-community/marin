@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import subprocess
 import tempfile
 import threading
@@ -37,6 +38,7 @@ MAX_WANDB_ARTIFACT_BYTES = 20 * 1_000_000
 _WANDB_INIT_ERROR_KEY = "error"
 _WANDB_INIT_METADATA_KEY = "metadata"
 _WANDB_INIT_PROCESS_INDEX_KEY = "process_index"
+_WANDB_FORK_FROM_PATTERN = re.compile(r"(?P<run_id>[^?]+)\?_step=(?P<step>\d+)")
 
 
 class _WandbInitStatus(TypedDict):
@@ -383,6 +385,14 @@ class WandbConfig(TrackerConfig):
     document for more details.
     """
 
+    fork_from: Optional[str] = None
+    """Fork a new run from ``<source-run-id>?_step=<step>``.
+
+    W&B does not allow ``fork_from`` and ``resume`` in the same initialization.
+    A fork starts a new child run; recover a stopped child with a subsequent
+    configuration that omits ``fork_from`` and resumes the child run ID.
+    """
+
     save_code: Union[bool, str] = True
     """If string, will save code from that directory. If True, will attempt to sniff out the main directory (since we
     typically don't run from the root of the repo)."""
@@ -420,6 +430,8 @@ class WandbConfig(TrackerConfig):
         if id is None:
             id = run_id
 
+        fork_from = self._validated_fork_from(id)
+
         hparams_to_save = {}
 
         # for distributed runs, we only want the primary worker to use wandb, so we make everyone else be disabled
@@ -438,19 +450,23 @@ class WandbConfig(TrackerConfig):
         process_count = jax.process_count()
         initialization_error = None
         try:
-            r = wandb.init(
+            init_kwargs = dict(
                 entity=self.entity,
                 project=self.project,
                 name=self.name,
                 tags=self.tags,
                 id=id,
                 group=self.group,
-                resume=self.resume,
                 mode=mode,
                 config=hparams_to_save,
                 settings=git_settings,
                 allow_val_change=True,
             )
+            if fork_from is None:
+                init_kwargs["resume"] = self.resume
+            else:
+                init_kwargs["fork_from"] = fork_from
+            r = wandb.init(**init_kwargs)
             if r is None:
                 raise RuntimeError("W&B initialization returned no run")
         except Exception as e:
@@ -549,6 +565,20 @@ class WandbConfig(TrackerConfig):
             max_queue_size=self.background_max_queue_size,
             finish_timeout=self.background_finish_timeout,
         )
+
+    def _validated_fork_from(self, child_run_id: Optional[str]) -> Optional[str]:
+        if self.fork_from is None:
+            return None
+
+        match = _WANDB_FORK_FROM_PATTERN.fullmatch(self.fork_from)
+        if match is None:
+            raise ValueError("fork_from must have the form '<source-run-id>?_step=<nonnegative-step>'.")
+
+        source_run_id = match["run_id"]
+        if child_run_id == source_run_id:
+            raise ValueError("fork_from must name a different run from the new child run ID.")
+
+        return self.fork_from
 
     def _git_settings(self):
         other_settings = dict()

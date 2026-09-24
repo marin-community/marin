@@ -1,19 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The table behind the RL Post-training view's "Producers reporting this run" panel.
+"""The table behind the RL Post-training view's "Services reporting this run" panel.
 
-One run reports through several namespaces, and the panel shows which of them actually did. Which
-namespaces exist is a property of the deployment, and DataFusion rejects a statement naming an
-absent table at plan time, so the panel cannot build this query itself. Each namespace is asked
-separately and a missing one is dropped; listing them up front would need a client method the
-deployed finelog wheel does not have.
+A run reports through several namespaces and the panel shows which of them did. Which namespaces
+exist is a property of the deployment, and naming an absent one fails the statement at plan time,
+so the route asks what this deployment holds and queries only those.
 """
 
 import logging
 from collections.abc import Callable, Iterable, Mapping
 
-from finelog.errors import StatsError
 from vllm_observability import VLLM_MAX_WINDOW_MS, sql_string
 
 logger = logging.getLogger(__name__)
@@ -22,7 +19,7 @@ logger = logging.getLogger(__name__)
 # the whole retained table. Same ceiling as the vLLM overview route.
 MAX_WINDOW_MS = VLLM_MAX_WINDOW_MS
 
-# Every namespace an RL run can report through. Each is included only when the deployment has it.
+# Every namespace an RL run can report through.
 RL_PRODUCER_NAMESPACES = (
     "telemetry_v1.marinskyrl",
     "telemetry_v1.vllm",
@@ -56,24 +53,17 @@ def check_window(start_ms: int, end_ms: int) -> None:
 
 def collect_producers(
     query: Callable[[str], Iterable[Mapping[str, object]]],
+    present: frozenset[str],
     run: str,
     clusters: tuple[str, ...],
     start_ms: int,
     end_ms: int,
 ) -> list[dict[str, object]]:
-    """Roll up every RL namespace this deployment can answer for, skipping those it cannot.
-
-    A namespace the deployment has never received a row for has no table, and DataFusion rejects
-    the statement at plan time. That is indistinguishable, from here, from "no rows", and it is the
-    answer the panel wants in both cases -- so the failure is dropped rather than propagated.
-    Anything else the query raises is a real fault and is left to the caller.
-    """
+    """Roll up the RL namespaces in `present`, the ones this deployment can answer for."""
     rows: list[dict[str, object]] = []
     for namespace in RL_PRODUCER_NAMESPACES:
-        try:
-            rows.extend(dict(row) for row in query(producers_query(namespace, run, clusters, start_ms, end_ms)))
-        except StatsError as error:
-            if f"table 'datafusion.public.{namespace}' not found" not in str(error):
-                raise
+        if namespace not in present:
             logger.info("rl producers: %s is absent from this deployment", namespace)
+            continue
+        rows.extend(dict(row) for row in query(producers_query(namespace, run, clusters, start_ms, end_ms)))
     return rows

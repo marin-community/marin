@@ -4,7 +4,7 @@
 from pathlib import Path
 
 import pytest
-from tasktrove_verify.grade import Status
+from tasktrove_verify.grade import Status, negative_candidate
 from tasktrove_verify.grade import grade as dispatch
 from tasktrove_verify.modes import grade_math
 from tasktrove_verify.spec import NumericSpec
@@ -28,6 +28,9 @@ def _answer(workspace: Path, text: str) -> None:
         # A boxed result wins over numbers written after it.
         (42.0, "\\boxed{42}\nchecked against 999 samples\n", 1.0),
         (999.0, "\\boxed{42}\nchecked against 999 samples\n", 0.0),
+        # A malformed final box cannot expose an earlier number to the parser.
+        (42.0, "\\boxed{42}\nthat was wrong, actually \\boxed{\n", 0.0),
+        (42.0, "\\boxed{42}\nthat was wrong, actually \\boxed{}\n", 0.0),
     ],
 )
 def test_numeric_reads_the_final_number(tmp_path, expected, text, reward):
@@ -66,6 +69,25 @@ def test_numeric_reward_detail_carries_the_extracted_value(tmp_path):
     assert detail["extracted"] == 17.5
 
 
-def test_numeric_non_finite_expected_is_an_invalid_task(tmp_path):
+@pytest.mark.parametrize(
+    "spec",
+    [
+        NumericSpec(expected=float("nan")),
+        NumericSpec(expected=float("inf")),
+        NumericSpec(expected=42.0, tolerance_abs=-1.0),
+        NumericSpec(expected=42.0, tolerance_rel=-1.0),
+        NumericSpec(expected=42.0, tolerance_abs=float("inf")),
+        NumericSpec(expected=1e308, tolerance_rel=1e308),
+    ],
+)
+def test_numeric_invalid_contract_is_an_invalid_task(tmp_path, spec):
     _answer(tmp_path, "42")
-    assert dispatch(NumericSpec(expected=float("nan")), tmp_path, tmp_path).status == Status.INVALID_TASK
+    assert dispatch(spec, tmp_path, tmp_path).status == Status.INVALID_TASK
+
+
+def test_numeric_negative_candidate_exceeds_the_configured_tolerance(tmp_path):
+    spec = NumericSpec(expected=42.0, tolerance_abs=2.0)
+    candidate = negative_candidate(spec)
+    assert candidate is not None
+    _answer(tmp_path, candidate)
+    assert grade_math.grade(spec, tmp_path, tmp_path).reward == 0.0

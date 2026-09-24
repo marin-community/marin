@@ -26,7 +26,6 @@ def to_markdown(html, config: HtmlToMarkdownConfig = HtmlToMarkdownConfig()):
 
 
 whitespace_re = re.compile(r"[\t ]+")
-spaces_re = re.compile(r"^[ ]+$")
 
 
 always_escape_pattern = re.compile(r"([\[\]<>`])")  # square brackets, backticks, angle brackets
@@ -441,13 +440,8 @@ class MyMarkdownConverter(MarkdownConverter):
         ):
             return True
 
-        # now we want to understand paragraphs. We want to look at each cell and see how many paragraphs are in it
-        # if it's more than 1, it's probably for layout
-        # Actually, we're fine with <p>'s. we'll convert them to <br>'s.
-        # for td in table.select('td'):
-        #     if len(td.select('p')) > 1:
-        #         return True
-
+        # We're fine with <p>'s in cells: they convert to <br>'s rather than marking the table
+        # as layout.
         return False
 
     def _process_layout_table(self, table, parent_tags):
@@ -528,7 +522,6 @@ class MyMarkdownConverter(MarkdownConverter):
             is_paragraph = text1.endswith("\n\n")
             is_br = text1.endswith("<br>") or text1.endswith("  \n")
             # if text1 is a paragraph or br, we can trim any leading spaces
-            # however, we nede to
             if is_paragraph or is_br:
                 text2 = text2.lstrip()
 
@@ -549,14 +542,6 @@ class MyMarkdownConverter(MarkdownConverter):
                     newline_count = 2
                 if newline_count:
                     text2 = "\n" * newline_count + text2
-            # elif rhs_is_string:
-            #     # if instead we are joining spaces, only join if there's not already a space
-            #     tail1 = re.search(r' +$', text1)
-            #     head2 = re.search(r'^ +', text2)
-            #     if tail1 and head2:
-            #         text1 = text1[:tail1.start()]
-            #         text2 = text2[head2.end():]
-            #         text2 = ' ' + text2
 
         return text1 + text2
 

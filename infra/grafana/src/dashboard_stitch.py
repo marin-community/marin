@@ -24,6 +24,16 @@ from pathlib import Path
 PANEL_REF_KEY = "panelRef"
 LINK_REF_KEY = "linkRef"
 
+_ASYNC_RL_LINK = {
+    "asDropdown": False,
+    "icon": "dashboard",
+    "includeVars": True,
+    "keepTime": True,
+    "targetBlank": False,
+    "title": "RL Post-training (async)",
+    "type": "link",
+    "url": "/d/marin-async-rl",
+}
 _CLUSTER_CAPACITY_LINK = {
     "asDropdown": False,
     "icon": "dashboard",
@@ -60,11 +70,12 @@ _RL_POST_TRAINING_LINK = {
     "includeVars": True,
     "keepTime": True,
     "targetBlank": False,
-    "title": "RL Post-training",
+    "title": "RL Post-training (sync)",
     "type": "link",
     "url": "/d/marin-rl-runs",
 }
 _SHARED_LINKS = {
+    "async_rl": _ASYNC_RL_LINK,
     "cluster_capacity": _CLUSTER_CAPACITY_LINK,
     "cluster_capacity_without_vars": {**_CLUSTER_CAPACITY_LINK, "includeVars": False},
     "fleet_accelerators": _FLEET_ACCELERATORS_LINK,
@@ -109,7 +120,7 @@ def _stitch_links(links: list[dict]) -> list[dict]:
             continue
         if ref not in _SHARED_LINKS:
             raise KeyError(f"unknown dashboard link fragment {ref!r}")
-        resolved.append(_SHARED_LINKS[ref])
+        resolved.append(dict(_SHARED_LINKS[ref]))
     return resolved
 
 
