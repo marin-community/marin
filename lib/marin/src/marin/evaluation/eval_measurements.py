@@ -96,13 +96,17 @@ def _task_ref(record: EvalRunRecord, task_key: str) -> EvalTaskRef | None:
     return None
 
 
+def _is_scratch_task_key(task_key: str) -> bool:
+    return is_scratch_artifact(f"{task_key}/")
+
+
 def _canonical_task_scores(record: EvalRunRecord) -> tuple[list[_TaskScore], bool]:
     """Read evaluator-canonical scores under their recorded benchmark protocols."""
     scores: dict[str, _TaskScore] = {}
     missing_primary = False
     task_keys = dict.fromkeys((*record.metrics, *record.canonical_metrics))
     for task_key in task_keys:
-        if is_scratch_artifact(f"{task_key}/"):
+        if _is_scratch_task_key(task_key):
             continue
         task = _task_ref(record, task_key)
         benchmark = task.benchmark if task is not None else None
@@ -157,7 +161,7 @@ def _legacy_task_scores(record: EvalRunRecord, *, undeclared_only: bool = False)
     """
     scores: dict[str, _TaskScore] = {}
     for task_key, metrics in (record.metrics or {}).items():
-        if is_scratch_artifact(f"{task_key}/"):
+        if _is_scratch_task_key(task_key):
             continue
         task = _task_ref(record, task_key)
         if undeclared_only and task is not None and task.benchmark is not None:
@@ -210,7 +214,7 @@ def _mechanism_coverage(record: EvalRunRecord, n_scored: int | None) -> Coverage
     """
     reported_by_leaf: dict[str, RecordTaskCoverage] = {}
     for task_key, entry in (record.coverage or {}).items():
-        if is_scratch_artifact(f"{task_key}/"):
+        if _is_scratch_task_key(task_key):
             continue
         reported_by_leaf.setdefault(task_key.rsplit("/", 1)[-1], entry)
     reported = list(reported_by_leaf.values())
