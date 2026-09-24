@@ -114,8 +114,10 @@ dispatch commands.
 The refresh never force-moves a fork's stable branch. A rebase stages on `main-next`
 and leaves the protected stable branch at the old tip; the draft Marin PR names
 the `main-next` to `main` hard swap an admin performs after review. Because
-the staged tip and the eventual stable tip are the same commit, the pins need no
-change after promotion.
+the staged tip and the eventual stable tip are the same commit, source and commit
+pins need no change after promotion. The vLLM GPU wheel is different: replace its
+temporary staged candidate pin with the final release manifest after promotion,
+as described above.
 
 The vLLM TPU selector is the exception: it reuses an exact commit already on
 the fork's `main` lineage, so it has no vLLM staging branch or protected-branch
