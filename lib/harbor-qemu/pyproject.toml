@@ -15,13 +15,13 @@ qemu = ["quicksand-qemu==0.5.12"]
 shellsim = ["shellsim==0.1.10"]
 
 [project.scripts]
-harbor-qemu-stage = "harbor_qemu.bundle:main"
+harbor-qemu-stage = "harbor_qemu.backends.qemu.bundle:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/harbor_qemu"]
 
 [tool.hatch.build]
-artifacts = ["src/harbor_qemu/guest/init", "src/harbor_qemu/guest/disk-init", "src/harbor_qemu/guest/pty-agent.c"]
+artifacts = ["src/harbor_qemu/backends/qemu/guest/init", "src/harbor_qemu/backends/qemu/guest/disk-init", "src/harbor_qemu/backends/qemu/guest/pty-agent.c"]
 
 [dependency-groups]
 test = ["pytest>=8"]

@@ -18,7 +18,7 @@ from harbor_qemu.machine import (
     ShellSession,
     ShellSimBuiltins,
 )
-from harbor_qemu.shellsim_machine import (
+from harbor_qemu.backends.shellsim.machine import (
     DEFAULT_CPU_LIMIT,
     DEFAULT_DISK_LIMIT,
     DEFAULT_MEMORY_MB,

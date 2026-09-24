@@ -6,8 +6,8 @@
 import asyncio
 from pathlib import Path
 
+from harbor_qemu.backends.shellsim.machine import ShellSimMachineFactory
 from harbor_qemu.machine import Command, MachineSpec, ShellSimBuiltins, ShellStatus
-from harbor_qemu.shellsim_machine import ShellSimMachineFactory
 
 
 def test_shell_state_and_one_shot_command() -> None:

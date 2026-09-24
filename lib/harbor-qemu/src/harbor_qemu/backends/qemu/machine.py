@@ -17,14 +17,8 @@ from dataclasses import replace
 from enum import StrEnum
 from pathlib import Path
 
-from harbor_qemu.image import (
-    DockerfileSource,
-    PreparedImage,
-    QemuAssets,
-    RegistryImage,
-    process_image_cache,
-    stage_qemu_image,
-)
+from harbor_qemu.backends.qemu.image import QemuAssets, stage_qemu_image
+from harbor_qemu.image import DockerfileSource, PreparedImage, RegistryImage, process_image_cache
 from harbor_qemu.machine import (
     Command,
     ExitReason,

@@ -116,10 +116,10 @@ if __name__ == "__main__":
     else:
         commands = ModelHandler.bash_commands
     if args.bundle_or_source == "shellsim":
-        environment_import_path = "harbor_qemu.shellsim_environment:ShellSimEnvironment"
+        environment_import_path = "harbor_qemu.backends.shellsim.environment:ShellSimEnvironment"
         environment_kwargs = {"network_policy": args.network_policy}
     elif args.bundle_or_source == "task-image":
-        environment_import_path = "harbor_qemu.environment:QemuEnvironment"
+        environment_import_path = "harbor_qemu.backends.qemu.environment:QemuEnvironment"
         if args.image_cache is None or args.skopeo is None or args.qemu_assets_json is None:
             parser.error("task-image requires --image-cache, --skopeo, and --qemu-assets-json")
         environment_kwargs = {
@@ -130,7 +130,7 @@ if __name__ == "__main__":
             "acceleration": args.acceleration,
         }
     else:
-        environment_import_path = "harbor_qemu.environment:QemuEnvironment"
+        environment_import_path = "harbor_qemu.backends.qemu.environment:QemuEnvironment"
         environment_kwargs = {
             "guest_bundle": args.bundle_or_source,
             "network_policy": args.network_policy,

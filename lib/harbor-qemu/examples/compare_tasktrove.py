@@ -13,7 +13,7 @@ from pathlib import Path
 
 from harbor.models.task.config import EnvironmentConfig
 from harbor.models.trial.paths import TrialPaths
-from harbor_qemu.environment import QemuEnvironment
+from harbor_qemu.backends.qemu.environment import QemuEnvironment
 
 VERIFIER_COMMAND = "bash /tests/test.sh"
 

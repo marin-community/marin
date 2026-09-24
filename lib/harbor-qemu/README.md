@@ -3,8 +3,8 @@
 `marin-harbor-qemu` provides three Harbor import paths:
 
 - `harbor_qemu.agent:BashAgent`: an **external** agent. It runs in the Harbor process and calls an OpenAI-compatible endpoint from that process. Its `Bash` tool uses the selected environment's persistent shell.
-- `harbor_qemu.environment:QemuEnvironment`: one persistent QEMU system guest per Harbor trial. It uses KVM when the process can access `/dev/kvm` and QEMU can initialize it, then falls back to software emulation (TCG). Running a prebuilt bundle needs no Docker daemon, user namespace, or guest network.
-- `harbor_qemu.shellsim_environment:ShellSimEnvironment`: one in-memory [ShellSim](https://pypi.org/project/shellsim/) instance per trial. It uses ShellSim's built-in commands and ignores the task's Docker image or Dockerfile.
+- `harbor_qemu.backends.qemu.environment:QemuEnvironment`: one persistent QEMU system guest per Harbor trial. It uses KVM when the process can access `/dev/kvm` and QEMU can initialize it, then falls back to software emulation (TCG). Running a prebuilt bundle needs no Docker daemon, user namespace, or guest network.
+- `harbor_qemu.backends.shellsim.environment:ShellSimEnvironment`: one in-memory [ShellSim](https://pypi.org/project/shellsim/) instance per trial. It uses ShellSim's built-in commands and ignores the task's Docker image or Dockerfile.
 
 Install the backend dependencies you need:
 
@@ -19,9 +19,11 @@ The base wheel contains the Harbor adapter, machine API, and guest source. Harbo
 
 The package also provides a Harbor-independent machine interface. QEMU and Docker factories accept a registry reference, a local Dockerfile, or a `PreparedImage`. QEMU also accepts a prebuilt guest bundle; Docker accepts a local image. `ShellSimMachineFactory` accepts only `ShellSimBuiltins()`. Each `create` returns a fresh machine with a persistent writable filesystem. `run` returns bytes, exit status, and output truncation flags. `upload`, `download`, and `close` complete the common interface.
 
+Shared contracts and OCI image preparation live at the package root. Backend machines and their Harbor adapters live under `harbor_qemu.backends.qemu`, `harbor_qemu.backends.shellsim`, and `harbor_qemu.backends.docker`. The Docker backend has no Harbor adapter yet.
+
 ```python
 from harbor_qemu.machine import Command, MachineSpec, QemuBundle
-from harbor_qemu.qemu_machine import QemuMachineFactory
+from harbor_qemu.backends.qemu.machine import QemuMachineFactory
 
 machine = await QemuMachineFactory().create(MachineSpec(source=QemuBundle(bundle_path)))
 try:
@@ -36,9 +38,10 @@ To prepare a registry image, use a standard image reference without `https://`:
 
 ```python
 from pathlib import Path
-from harbor_qemu.image import QemuAssets, RegistryImage
+from harbor_qemu.backends.qemu.image import QemuAssets
+from harbor_qemu.image import RegistryImage
 from harbor_qemu.machine import MachineSpec
-from harbor_qemu.qemu_machine import QemuMachineFactory
+from harbor_qemu.backends.qemu.machine import QemuMachineFactory
 
 spec = MachineSpec(source=RegistryImage("ghcr.io/astral-sh/uv:alpine3.21"))
 machine = await QemuMachineFactory(
@@ -86,7 +89,7 @@ ShellSim requires no QEMU assets, Docker daemon, image pull, or build step. The 
 
 ```yaml
 environment:
-  import_path: harbor_qemu.shellsim_environment:ShellSimEnvironment
+  import_path: harbor_qemu.backends.shellsim.environment:ShellSimEnvironment
 agents:
   - import_path: harbor_qemu.agent:BashAgent
     model_name: openai/local-model
@@ -136,7 +139,7 @@ Use the import paths in a Harbor job config:
 
 ```yaml
 environment:
-  import_path: harbor_qemu.environment:QemuEnvironment
+  import_path: harbor_qemu.backends.qemu.environment:QemuEnvironment
   kwargs:
     guest_bundle: /opt/harbor-qemu/bash-image
 agents:
@@ -150,7 +153,7 @@ To use the image named by a task's `docker_image` or build its `environment/Dock
 
 ```yaml
 environment:
-  import_path: harbor_qemu.environment:QemuEnvironment
+  import_path: harbor_qemu.backends.qemu.environment:QemuEnvironment
   kwargs:
     image_cache: /var/cache/harbor-qemu
     skopeo: /usr/bin/skopeo
