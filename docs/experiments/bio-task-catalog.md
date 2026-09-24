@@ -289,7 +289,7 @@ task ID, workflow pattern, required stages and formats, recipe mappings, evidenc
 and remaining gaps. Source revisions and hashes identify the inspected metadata;
 benchmark answers and biological fixtures are excluded from training authoring.
 
-| Benchmark inventory | Assessed ID task/protocol records | Advertised full suite, when larger |
+| Benchmark inventory | Enumerated ID records and inspection depth | Advertised full suite, when larger |
 | --- | ---: | ---: |
 | [BixBench](../../experiments/post_training/bio_tasks/benchmark_tasks/bixbench.json) | 205 | — |
 | [CompBioBench](../../experiments/post_training/bio_tasks/benchmark_tasks/compbiobench.json) | 100 | — |
@@ -321,9 +321,10 @@ benchmark answers and biological fixtures are excluded from training authoring.
 | [DrugDiscoveryBench](../../experiments/post_training/bio_tasks/benchmark_tasks/drugdiscoverybench.json) | All 82 complete public prompts and endpoints assessed | 82; full-release ID equality unverified |
 | [SciGym](../../experiments/post_training/bio_tasks/benchmark_tasks/scigym.json) | All 350 system IDs; shared protocol and scorer reviewed, individual systems uninspected | — |
 | [BioKGBench KGCheck](../../experiments/post_training/bio_tasks/benchmark_tasks/biokgbench.json) | All 225 agentic rows; shared instructions and final scorer reviewed, individual evidence uninspected | — |
+| [ScholarQA-Bio](../../experiments/post_training/bio_tasks/benchmark_tasks/scholarqabench-bio.json) | All 1,451 public question IDs/hashes; shared literature protocol and citation scorer inspected, individual endpoints unreviewed | — |
 
-Of these 2,881 ID task/protocol/definition records, 47 have manually assessed component mappings,
-2,832 are unmapped, one assembly-contiguity workflow is validated on independent
+Of these 4,332 ID task/protocol/definition records, 47 have manually assessed component mappings,
+4,283 are unmapped, one assembly-contiguity workflow is validated on independent
 observed PhiX reads, and one is excluded from authoring. Other eligible sources
 still need task-level inspection. The 90
 [BioMysteryBench identifiers](../../experiments/post_training/bio_tasks/benchmark_tasks/biomysterybench.json)
@@ -374,6 +375,14 @@ and SCV exercises are excluded. The main score is exact label matching;
 the optional process judge and baseline literature tool use LLMs. An offline
 adaptation needs frozen evidence and complete artifact checks. Missing
 annotations and failed retrieval do not establish biological absence.
+
+[ScholarQA-Bio](../../experiments/post_training/bio_tasks/benchmark_tasks/scholarqabench-bio.json)
+adds 1,451 unique public question identifiers and question-text hashes. The pinned
+README lists long-form answers and citation scoring, with no answer-label availability
+indicated for this subset. The citation scorer uses a learned attribution model;
+its code was inspected but not run. Source questions, inspiring papers and answer
+contexts are not vendored. All records remain unmapped with individual endpoint-review
+dispositions; deterministic citation linkage alone cannot validate literature synthesis.
 
 LABBench2's pinned dataset card declares 1,912 rows in its `all` configuration.
 The public harness and card are inspected, but existing access lacks the dataset

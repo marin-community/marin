@@ -1,11 +1,11 @@
 # Biology workflow authoring queue
 
 The [question portfolio](../../experiments/post_training/bio_tasks/workflow_portfolio.json)
-accounts for all **2,881 inventoried task, protocol or dataset-definition records
-across 30 ID releases**. It links 2,480 records to scientific question proposals,
+accounts for all **4,332 inventoried task, protocol or dataset-definition records
+across 31 ID releases**. It links 2,480 records to scientific question proposals,
 links 50 known BixBench-Verified aliases to their original designs, preserves 350
-SciGym systems as individual-endpoint review gaps, and retains one excluded
-objective. Twelve provisional-ID source leads still lack task inventories.
+SciGym systems and 1,451 ScholarQA-Bio questions as individual-endpoint review gaps,
+and retains one excluded objective. Eleven provisional-ID source leads still lack task inventories.
 
 The portfolio contains **676 question cards and 635 proposed task groups**, including
 25 conditional combinations of question cards. These are planning units, with
@@ -32,8 +32,8 @@ retains assessed target IDs, conditional gains and overlap; the
 [coverage inventories](../../experiments/post_training/bio_tasks/benchmark_tasks/README.md)
 remain authoritative for validated mappings.
 
-The plan groups 551 benchmark/family combinations for review. Fifty known
-BixBench-Verified aliases reduce the record count to 2,831, or 2,830 after the one
+The plan groups 552 benchmark/family combinations for review. Fifty known
+BixBench-Verified aliases reduce the record count to 4,282, or 4,281 after the one
 excluded objective. Other shared studies, assays and protocols are not automatically
 independent workflows. Workstream membership alone does not show that a proposed
 question completes a benchmark endpoint, and the proposed question count is not a
@@ -134,6 +134,22 @@ The expanded portfolio also includes the following source-specific plans:
 | [CellBench](../../experiments/post_training/bio_tasks/workflow_designs/cellbench.json) | 50 | 22 | Context-inspired executable adaptations; original open-ended planning quality is not covered |
 | [SciGym](../../experiments/post_training/bio_tasks/workflow_designs/scigym.json) | 350 | 3 | Shared observed-dynamics adaptations; zero individual system endpoint assignments |
 | [BixBench-Verified-50](../../experiments/post_training/bio_tasks/workflow_designs/bixbench-verified-50.json) | 50 | 0 new | Known aliases; 17 revised question texts retain separate protocol review |
+| [ScholarQA-Bio](../../experiments/post_training/bio_tasks/workflow_designs/scholarqabench-bio.json) | 1,451 | 0 | All public question identities/hashes; individual scientific endpoints and deterministic adaptations unreviewed |
+
+[ScholarQA-Bio's public file](../../experiments/post_training/bio_tasks/benchmark_tasks/scholarqabench-bio.json)
+contains 1,451 distinct question IDs. Its source protocol produces long-form literature
+syntheses with citations; the inspected citation scorer uses a learned attribution
+model. Every question remains an explicit endpoint-review gap. Frozen retrieval,
+source-table extraction and quantitative evidence reconciliation may supply bounded
+components, but do not establish synthesis correctness. Individual question inspection
+must determine whether a complete deterministic adaptation is possible.
+
+The remaining source leads now retain publication-level boundaries in the source
+inventory. BioASQ requires selecting a specific agentic protocol and release; its
+retrieval/exact-answer metrics do not cover ideal-summary quality. LAB-Bench needs a
+tool-enabled subset and alias check against Biomni-Eval1. The original BixBench
+notebook protocol may overlap existing IDs. Restricted suites and model-judged
+scientific opinions remain explicit gaps, with no invented task count or coverage.
 
 BioML's 283 assay-ranking definitions need distinct measured-property and
 generalization questions, rather than automatic replication of registry entries.

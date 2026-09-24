@@ -65,3 +65,9 @@ independent workflows. Keep those distinctions when reporting totals.
 Existing OOD assignments remain held out. The BioMysteryBench file contains
 identifiers only; it supplies no workflow patterns or training mappings.
 Benchmark answers and biological fixtures are excluded from training authoring.
+
+The [ScholarQA-Bio inventory](scholarqabench-bio.json) enumerates 1,451 public question
+IDs and text hashes without copying prompts or inspiring papers. Shared literature
+retrieval/synthesis stages are inspected; individual endpoints remain unreviewed.
+Its model-based citation attribution is not used as a reward. A deterministic
+extraction or retrieval component cannot claim full open-ended synthesis coverage.

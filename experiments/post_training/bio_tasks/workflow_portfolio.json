@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T15:55:29.084390+00:00",
-  "scope": "Full question-proposal portfolio for the 30 currently inventoried provisional-ID agentic releases. This planning index resolves every question card and records conditional consolidation; it creates no training task or validated coverage. Twelve source leads without inventories remain outside the enumerated denominator.",
+  "updated_at": "2026-09-24T16:05:12.084813+00:00",
+  "scope": "Full question-proposal portfolio for the 31 currently inventoried provisional-ID agentic releases. This planning index resolves every question card and records conditional consolidation; it creates no training task or validated coverage. Eleven source leads without inventories remain outside the enumerated denominator.",
   "counts": {
-    "source_releases": 30,
-    "inventory_records": 2881,
+    "source_releases": 31,
+    "inventory_records": 4332,
     "question_cards": 676,
     "proposed_task_groups": 635,
     "conditional_consolidations": 25,
@@ -12,14 +12,16 @@
     "known_cross_release_alias_records": 50,
     "identity_only_records_with_gap_dispositions": 350,
     "excluded_records": 1,
-    "validated_new_mappings": 0
+    "validated_new_mappings": 0,
+    "question_records_with_gap_dispositions": 1451
   },
   "interpretation": [
     "Question cards, proposed task groups, benchmark records and implemented tasks are different units. The proposed task count is neither a cap nor a target to instantiate mechanically.",
     "All source card endpoints, scientific caveats, native package requirements and full artifacts are inherited by reference. A group cannot discard any member requirement to fit its title.",
     "Conditional consolidation is a proposed scientific task, not a proved equivalence. If compatible independent inputs, methods and <=30-minute runtime do not exist, split it back into coherent questions and preserve uncovered source IDs.",
     "Do not turn registry configurations, repeated assays, source protocol variants or known aliases into automatic independent workflow credit.",
-    "Scientific realism governs task boundaries. One task may use several native tools and produce many intermediate artifacts when they answer one question; unrelated estimands stay separate."
+    "Scientific realism governs task boundaries. One task may use several native tools and produce many intermediate artifacts when they answer one question; unrelated estimands stay separate.",
+    "ScholarQA-Bio contributes 1,451 enumerated question identities with unreviewed endpoint dispositions. These have no question-card assignments; source citation attribution uses a learned model, and deterministic numerical extraction does not cover unrestricted synthesis."
   ],
   "source_question_files": [
     {
@@ -85,6 +87,10 @@
     {
       "path": "workflow_designs/bixbench-verified-50.json",
       "sha256": "5d420a146dd4b0bd19bc80f88f880f83bd71419a887aa6e6b3658cb2ff462f49"
+    },
+    {
+      "path": "workflow_designs/scholarqabench-bio.json",
+      "sha256": "0f1e4c959b41b5a94a7a028e6fb90ae94597ade8fead448741a023027b43c46e"
     }
   ],
   "question_groups": [

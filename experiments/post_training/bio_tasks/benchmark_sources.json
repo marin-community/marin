@@ -4,7 +4,7 @@
   "retrieved_at": "2026-09-24",
   "scope": "Agentic (Harbor) tab only. Benchmark/protocol rows are not independent datasets or task counts. Shared questions and parent subsets must be deduplicated before coverage reporting.",
   "policy": "Preserve every OOD assignment in the agentic tab: Terminal-Bench-Science/full and lite, GeneBench/original and Pro, BioMysteryBench and SciCode. All other listed agentic sources are provisionally ID. Borrow workflow ideas; use independent biological inputs and references. Do not use OOD formulations or derived copies for authoring.",
-  "task_coverage": "benchmark_coverage.json indexes 2,881 task/protocol/definition records across 30 ID releases, with overlaps and source-specific review limits. 47 have component mappings, 2,833 are unmapped and one is excluded. No full workflow is validated. PromptBio includes all 244 public agent-facing definitions and 316 required-output declarations; biological inputs and source evaluators remain uninspected. Other releases include partial examples, planning contexts and registry definitions. These are not unique independent workflows. Remaining eligible sources are not fully inventoried. BioMysteryBench retains 90 identifiers only as OOD. BioXArena adds 76 reconciled task identities with catalog/scorer endpoint review; full prompts and data remain uninspected. TxBench public subsets add 12 PP, six antibody and four oligonucleotide task definitions; manifest/file counts differ from all three READMEs. Full suites remain unavailable. Biomni-Eval1 adds all 433 released IDs across ten source categories; its deterministic evaluator was inspected but not executed. LABBench2 advertises 1,912 rows, but its gated content is not accessible with existing access. DrugDiscoveryBench adds all 82 public preview IDs; review depth and absent attachments are explicit. All remain unmapped. SciGym adds 350 system IDs under one shared protocol; individual models remain uninspected and all records unmapped. BioKGBench adds 225 agentic KGCheck records only; shared patterns are assessed, individual evidence unreviewed and all records unmapped.",
+  "task_coverage": "benchmark_coverage.json indexes 4,332 task/protocol/definition records across 31 ID releases, with overlaps and source-specific inspection limits. One workflow mapping is validated, 47 are component-only, 4,283 remain unmapped and one is excluded. ScholarQA-Bio adds 1,451 public question identities and hashes under a shared literature-synthesis protocol; individual endpoints remain unreviewed. Counts of source definitions, protocols and related assays are not independent workflows. Eleven provisional-ID source leads still lack inventories. BioMysteryBench retains 90 OOD identifiers only. See each versioned release for exact prompt, schema, evidence and access limits.",
   "sources": [
     {
       "sheet": "Agentic (Harbor)",
@@ -771,7 +771,15 @@
       "source_url": "https://github.com/latchbio/biosecbench-surveillance",
       "data_url": "https://github.com/latchbio/biosecbench-surveillance/blob/main/METHODS.md",
       "inspection": "sheet metadata reviewed; source release and task-level inventory require verification",
-      "training_mapping_allowed": true
+      "training_mapping_allowed": true,
+      "planning_source_review": {
+        "reviewed_at": "2026-09-24",
+        "primary_url": "https://github.com/latchbio/biosecbench-surveillance",
+        "evidence": "Public README declares seven examples and a restricted 100-evaluation suite; input data, graders and ground truth are withheld. Only release metadata inspected.",
+        "planning_boundary": "Plan benign surveillance/data-QC patterns only after exact public-endpoint review; no coverage assigned from category names.",
+        "task_content_reviewed": false,
+        "validated_mappings_added": 0
+      }
     },
     {
       "sheet": "Agentic (Harbor)",
@@ -787,7 +795,15 @@
       "source_url": "https://github.com/latchbio/biosecbench-function",
       "data_url": "https://github.com/latchbio/biosecbench-function/blob/main/METHODS.md",
       "inspection": "sheet metadata reviewed; source release and task-level inventory require verification",
-      "training_mapping_allowed": true
+      "training_mapping_allowed": true,
+      "planning_source_review": {
+        "reviewed_at": "2026-09-24",
+        "primary_url": "https://github.com/latchbio/biosecbench-function",
+        "evidence": "Public README declares seven examples and a restricted 111-evaluation suite; inputs, graders and ground truth withheld. Only release metadata inspected.",
+        "planning_boundary": "Independent benign assay/QC analysis may supply limited components. Threat-property optimization is outside training authoring; do not convert source category counts into coverage.",
+        "task_content_reviewed": false,
+        "validated_mappings_added": 0
+      }
     },
     {
       "sheet": "Agentic (Harbor)",
@@ -803,7 +819,15 @@
       "source_url": "https://github.com/latchbio/biosecbench-refusal",
       "data_url": "https://github.com/latchbio/biosecbench-refusal/blob/main/METHODS.md",
       "inspection": "sheet metadata reviewed; source release and task-level inventory require verification",
-      "training_mapping_allowed": true
+      "training_mapping_allowed": true,
+      "planning_source_review": {
+        "reviewed_at": "2026-09-24",
+        "primary_url": "https://github.com/latchbio/biosecbench-refusal",
+        "evidence": "Public README describes 61 Routine and 46 Red-Team tasks, with two public paired examples. Only release metadata inspected.",
+        "planning_boundary": "Refusal/risk recognition and fictional scenarios do not directly map to an observed-data analysis recipe. Retain a source-objective gap; no full coverage claim.",
+        "task_content_reviewed": false,
+        "validated_mappings_added": 0
+      }
     },
     {
       "sheet": "Agentic (Harbor)",
@@ -920,7 +944,15 @@
       "source_url": "https://openai.com/index/introducing-life-sci-bench/",
       "data_url": "https://cdn.openai.com/pdf/b4299379-0a97-4ffa-8b9b-c3fbb299caa9/lifescibench_preprint.pdf",
       "inspection": "sheet metadata reviewed; source release and task-level inventory require verification",
-      "training_mapping_allowed": true
+      "training_mapping_allowed": true,
+      "planning_source_review": {
+        "reviewed_at": "2026-09-24",
+        "primary_url": "https://openai.com/index/introducing-life-sci-bench/",
+        "evidence": "Primary overview describes free-response tasks with expert-authored multi-criterion rubrics and multiple artifact types; no full task manifest was retrieved.",
+        "planning_boundary": "Use exact artifact analysis as a component only; do not claim subjective scientific judgment is covered by a numeric proxy.",
+        "task_content_reviewed": false,
+        "validated_mappings_added": 0
+      }
     },
     {
       "sheet": "Agentic (Harbor)",
@@ -1199,8 +1231,9 @@
       "scoring_access": "Public grading",
       "source_url": "https://allenai.org/blog/openscilm",
       "data_url": "https://github.com/AkariAsai/ScholarQABench/tree/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9",
-      "inspection": "sheet metadata reviewed; source release and task-level inventory require verification",
-      "training_mapping_allowed": true
+      "inspection": "Pinned public file contains 1,451 unique IDs. Question hashes enumerated; README/citation scorer reviewed; individual endpoints unreviewed. Source uses long-form literature synthesis and model-based attribution; numerical extraction alone does not establish full coverage.",
+      "training_mapping_allowed": true,
+      "task_inventory": "benchmark_tasks/scholarqabench-bio.json"
     },
     {
       "sheet": "Agentic (Harbor)",
@@ -1245,7 +1278,15 @@
       "source_url": "https://arxiv.org/abs/2606.11150",
       "data_url": "https://arxiv.org/abs/2606.11150",
       "inspection": "sheet metadata reviewed; source release and task-level inventory require verification",
-      "training_mapping_allowed": true
+      "training_mapping_allowed": true,
+      "planning_source_review": {
+        "reviewed_at": "2026-09-24",
+        "primary_url": "https://arxiv.org/abs/2606.11150",
+        "evidence": "Primary abstract describes three task families including robot code, DNA assembly and synthesis-screening evasion. No task-level manifest inspected.",
+        "planning_boundary": "Screening evasion is outside training authoring. Benign static protocol-accounting components would require independent observed records and explicit validation limits.",
+        "task_content_reviewed": false,
+        "validated_mappings_added": 0
+      }
     },
     {
       "sheet": "Agentic (Harbor)",
@@ -1261,7 +1302,15 @@
       "source_url": "https://arxiv.org/abs/2609.05818",
       "data_url": "https://arxiv.org/abs/2609.05818",
       "inspection": "sheet metadata reviewed; source release and task-level inventory require verification",
-      "training_mapping_allowed": true
+      "training_mapping_allowed": true,
+      "planning_source_review": {
+        "reviewed_at": "2026-09-24",
+        "primary_url": "https://arxiv.org/abs/2609.05818",
+        "evidence": "Primary abstract describes structure retrieval, sequence generation and design validation using biological AI tools; no task-level manifest inspected.",
+        "planning_boundary": "Observed-structure retrieval and artifact validation may inform limited components; generated designs are not observed biological outcomes and do not establish full source coverage.",
+        "task_content_reviewed": false,
+        "validated_mappings_added": 0
+      }
     },
     {
       "sheet": "Agentic (Harbor)",
@@ -1343,7 +1392,15 @@
       "source_url": "https://arxiv.org/abs/2407.10362",
       "data_url": "https://huggingface.co/datasets/futurehouse/lab-bench",
       "inspection": "sheet metadata reviewed; source release and task-level inventory require verification",
-      "training_mapping_allowed": true
+      "training_mapping_allowed": true,
+      "planning_source_review": {
+        "reviewed_at": "2026-09-24",
+        "primary_url": "https://huggingface.co/datasets/futurehouse/lab-bench/raw/main/README.md",
+        "evidence": "Raw card inspected: DbQA has 520 public rows and LitQA2 199; eight categories overall. No agentic-only selection or exact overlap with Biomni-Eval1 has been established.",
+        "planning_boundary": "Inventory only the sheet-scoped tool-enabled literature/database protocol after selection and alias review. Exclude answer/distractor columns and source biological fixtures.",
+        "task_content_reviewed": false,
+        "validated_mappings_added": 0
+      }
     },
     {
       "sheet": "Agentic (Harbor)",
@@ -1359,7 +1416,15 @@
       "source_url": "https://www.bioasq.org/",
       "data_url": "https://github.com/BioASQ/Evaluation-Measures/tree/8c8e689068a41c1370fec55260e5fbfe3a6a6016",
       "inspection": "sheet metadata reviewed; source release and task-level inventory require verification",
-      "training_mapping_allowed": true
+      "training_mapping_allowed": true,
+      "planning_source_review": {
+        "reviewed_at": "2026-09-24",
+        "primary_url": "https://www.bioasq.org/",
+        "evidence": "Official challenge page distinguishes article/snippet retrieval, exact answers, ideal summaries and iterative expert-feedback Synergy tasks, with automatic and expert assessment. No release/year-specific IDs inspected.",
+        "planning_boundary": "Choose the agentic retrieval/end-to-end protocol and release before enumeration. Structured retrieval/exact-answer metrics do not establish ideal-summary quality.",
+        "task_content_reviewed": false,
+        "validated_mappings_added": 0
+      }
     },
     {
       "sheet": "Agentic (Harbor)",
@@ -1375,7 +1440,15 @@
       "source_url": "https://arxiv.org/abs/2503.00096",
       "data_url": "https://huggingface.co/datasets/futurehouse/BixBench",
       "inspection": "sheet metadata reviewed; source release and task-level inventory require verification",
-      "training_mapping_allowed": true
+      "training_mapping_allowed": true,
+      "planning_source_review": {
+        "reviewed_at": "2026-09-24",
+        "primary_url": "https://arxiv.org/abs/2503.00096",
+        "evidence": "Primary paper describes notebook-derived multi-step analysis scenarios. Existing BixBench inventory already holds 205 question IDs; original-protocol identity equality remains unverified.",
+        "planning_boundary": "Resolve protocol revisions and aliases against existing IDs before adding records; paper-level scenario counts are not additional independent tasks.",
+        "task_content_reviewed": false,
+        "validated_mappings_added": 0
+      }
     }
   ]
 }

@@ -419,6 +419,17 @@
       "tasks_file": "benchmark_tasks/biokgbench.json",
       "source_inventory_name": "BioKGBench",
       "task_inventory_status": "all KGCheck rows enumerated; shared instructions and scorer reviewed; individual scientific evidence unreviewed"
+    },
+    "ScholarQABench \u2014 biomedicine": {
+      "revision": "95e6fc52b0a8a0ce0a74956029991e3bb00c38b9",
+      "source_url": "https://raw.githubusercontent.com/AkariAsai/ScholarQABench/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9/data/scholarqa_bio/scholarqabench_bio.jsonl",
+      "inventory_count": 1451,
+      "public_inventory_count": 1451,
+      "training_mapping_allowed": true,
+      "distribution": "ID",
+      "tasks_file": "benchmark_tasks/scholarqabench-bio.json",
+      "source_inventory_name": "ScholarQABench \u2014 biomedicine",
+      "task_inventory_status": "all public IDs and question hashes; shared protocol/scorer reviewed; individual endpoints unreviewed"
     }
   },
   "assessment_policy": "ID workflow prerequisites are manually inferred from permitted task descriptions. Shared family stages may exceed an individual endpoint; assess that endpoint before claiming coverage. Benchmark answers and biological fixtures are excluded from authoring."

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T15:55:29.084390+00:00",
+  "updated_at": "2026-09-24T16:05:12.084813+00:00",
   "basis_revision": "952929c306",
   "scope": "Agentic provisional-ID benchmarks only; preserve all existing OOD exclusions. Plan the broad task set before further recipe implementation.",
   "authoring_unit": "One coherent observed-data task per recipe by default. Proposed questions are separate task designs, not repeated instances. They may be split or merged after endpoint and runtime checks.",
@@ -9,11 +9,11 @@
   "source_inventory_files": [
     {
       "path": "experiments/post_training/bio_tasks/benchmark_coverage.json",
-      "sha256": "c19fa85b0db4211607380b0933023e85272560c6a7454a72b28a9007286fa2a9"
+      "sha256": "adad25ce33031cdcde0cd31f967dceb7bb0ee7c641f94ece0b39bbe5a1bc0049"
     },
     {
       "path": "experiments/post_training/bio_tasks/benchmark_sources.json",
-      "sha256": "96b02e4aeadfebcb3e4c7e383b91fc7678598397b76763741c65b3e7e683c269"
+      "sha256": "b8290ba034d6d0014c4fe057c60f4bdfd97f3d5651714ee382551bac8059969f"
     }
   ],
   "question_inspection_evidence": {
@@ -37,13 +37,13 @@
     }
   },
   "counts": {
-    "release_count": 30,
-    "record_count": 2881,
-    "group_count": 551,
+    "release_count": 31,
+    "record_count": 4332,
+    "group_count": 552,
     "known_bixbench_cross_release_alias_count": 50,
-    "unique_record_count_after_known_bix_aliases": 2831,
-    "unique_nonexcluded_count_after_known_bix_aliases": 2830,
-    "source_rows_without_task_inventory": 12,
+    "unique_record_count_after_known_bix_aliases": 4282,
+    "unique_nonexcluded_count_after_known_bix_aliases": 4281,
+    "source_rows_without_task_inventory": 11,
     "initial_group_label_count": 31,
     "planning_disposition_counts": {
       "accession-evidence-review": 225,
@@ -54,7 +54,8 @@
       "full-prompt-input-and-held-out-data-review": 76,
       "instance-endpoint-and-evidence-review": 333,
       "observed-data-and-system-endpoint-review": 350,
-      "plan-artifact-and-verifier-review": 50
+      "plan-artifact-and-verifier-review": 50,
+      "literature-endpoint-and-deterministic-contract-review": 1451
     },
     "scientific_workstreams": 52,
     "proposed_task_questions": 147,
@@ -1632,10 +1633,11 @@
         "group-0241",
         "group-0244",
         "group-0253",
-        "group-0311"
+        "group-0311",
+        "group-0552"
       ],
       "target_assignment_limit": "The group references define candidate endpoint review scope. Individual planned-task assignments and complete endpoint contracts remain to be checked; counts are not predicted or validated coverage.",
-      "candidate_record_references": 29,
+      "candidate_record_references": 1480,
       "expected_completed_distinct_task_gain": null
     },
     {
@@ -12133,6 +12135,23 @@
       ],
       "routing_basis": "workflow-family-review-routing",
       "inspection_tier": "shared-pattern-only"
+    },
+    {
+      "planning_disposition": "literature-endpoint-and-deterministic-contract-review",
+      "benchmark": "ScholarQABench \u2014 biomedicine",
+      "workflow_family": "biomedical-literature-synthesis",
+      "id": "group-0552",
+      "proposed_workstreams": [
+        "evidence-meta-analysis"
+      ],
+      "routing_basis": "shared-literature-protocol-review-only-no-equivalence",
+      "inspection_tier": "shared-protocol-only-individual-endpoint-unreviewed",
+      "task_ids_reference": {
+        "path": "benchmark_tasks/scholarqabench-bio.json",
+        "field": "tasks[].task_id",
+        "sha256": "56db0b4186e82e3ef0ba7385cb173c639003325615f903fd8b23f08221f26bbd",
+        "record_count": 1451
+      }
     }
   ],
   "known_cross_release_aliases": [
@@ -13015,6 +13034,26 @@
       },
       "initial_group_referenced_record_count": 4,
       "new_expansion_card_record_count": 4
+    },
+    "ScholarQABench \u2014 biomedicine": {
+      "source_inventory_path": "experiments/post_training/bio_tasks/benchmark_tasks/scholarqabench-bio.json",
+      "source_inventory_sha256": "56db0b4186e82e3ef0ba7385cb173c639003325615f903fd8b23f08221f26bbd",
+      "source_revision": "95e6fc52b0a8a0ce0a74956029991e3bb00c38b9",
+      "task_inventory_status": "identities-and-question-hashes-only",
+      "record_count": 1451,
+      "unique_count_after_known_bix_aliases": 1451,
+      "provisional_design_record_count": 0,
+      "endpoint_or_access_review_record_count": 1451,
+      "excluded_record_count": 0,
+      "planning_disposition_counts": {
+        "literature-endpoint-and-deterministic-contract-review": 1451
+      },
+      "reconciled_inspection_tier_counts": {
+        "shared-protocol-only-individual-endpoint-unreviewed": 1451
+      },
+      "initial_group_referenced_record_count": 0,
+      "new_expansion_card_record_count": 0,
+      "unassigned_endpoint_record_count": 1451
     }
   },
   "id_source_rows_without_inventory": [
@@ -13027,31 +13066,39 @@
     },
     {
       "name": "BioSecBench-Surveillance",
-      "inspection": "sheet metadata reviewed; source release and task-level inventory require verification",
+      "inspection": "Public README declares seven examples and a restricted 100-evaluation suite; input data, graders and ground truth are withheld. Only release metadata inspected.",
       "source_url": "https://github.com/latchbio/biosecbench-surveillance",
       "data_url": "https://github.com/latchbio/biosecbench-surveillance/blob/main/METHODS.md",
-      "scoring_access": "Restricted access"
+      "scoring_access": "Restricted access",
+      "planning_boundary": "Plan benign surveillance/data-QC patterns only after exact public-endpoint review; no coverage assigned from category names.",
+      "reviewed_primary_url": "https://github.com/latchbio/biosecbench-surveillance"
     },
     {
       "name": "BioSecBench-Function",
-      "inspection": "sheet metadata reviewed; source release and task-level inventory require verification",
+      "inspection": "Public README declares seven examples and a restricted 111-evaluation suite; inputs, graders and ground truth withheld. Only release metadata inspected.",
       "source_url": "https://github.com/latchbio/biosecbench-function",
       "data_url": "https://github.com/latchbio/biosecbench-function/blob/main/METHODS.md",
-      "scoring_access": "Restricted access"
+      "scoring_access": "Restricted access",
+      "planning_boundary": "Independent benign assay/QC analysis may supply limited components. Threat-property optimization is outside training authoring; do not convert source category counts into coverage.",
+      "reviewed_primary_url": "https://github.com/latchbio/biosecbench-function"
     },
     {
       "name": "BioSecBench-Refusal \u2014 direct framing",
-      "inspection": "sheet metadata reviewed; source release and task-level inventory require verification",
+      "inspection": "Public README describes 61 Routine and 46 Red-Team tasks, with two public paired examples. Only release metadata inspected.",
       "source_url": "https://github.com/latchbio/biosecbench-refusal",
       "data_url": "https://github.com/latchbio/biosecbench-refusal/blob/main/METHODS.md",
-      "scoring_access": "Restricted access"
+      "scoring_access": "Restricted access",
+      "planning_boundary": "Refusal/risk recognition and fictional scenarios do not directly map to an observed-data analysis recipe. Retain a source-objective gap; no full coverage claim.",
+      "reviewed_primary_url": "https://github.com/latchbio/biosecbench-refusal"
     },
     {
       "name": "LifeSciBench",
-      "inspection": "sheet metadata reviewed; source release and task-level inventory require verification",
+      "inspection": "Primary overview describes free-response tasks with expert-authored multi-criterion rubrics and multiple artifact types; no full task manifest was retrieved.",
       "source_url": "https://openai.com/index/introducing-life-sci-bench/",
       "data_url": "https://cdn.openai.com/pdf/b4299379-0a97-4ffa-8b9b-c3fbb299caa9/lifescibench_preprint.pdf",
-      "scoring_access": "Restricted access"
+      "scoring_access": "Restricted access",
+      "planning_boundary": "Use exact artifact analysis as a component only; do not claim subjective scientific judgment is covered by a numeric proxy.",
+      "reviewed_primary_url": "https://openai.com/index/introducing-life-sci-bench/"
     },
     {
       "name": "TargetVal (Popper)",
@@ -13061,46 +13108,49 @@
       "scoring_access": "Public grading"
     },
     {
-      "name": "ScholarQABench \u2014 biomedicine",
-      "inspection": "sheet metadata reviewed; source release and task-level inventory require verification",
-      "source_url": "https://allenai.org/blog/openscilm",
-      "data_url": "https://github.com/AkariAsai/ScholarQABench/tree/95e6fc52b0a8a0ce0a74956029991e3bb00c38b9",
-      "scoring_access": "Public grading"
-    },
-    {
       "name": "ABC-Bench (SecureBio)",
-      "inspection": "sheet metadata reviewed; source release and task-level inventory require verification",
+      "inspection": "Primary abstract describes three task families including robot code, DNA assembly and synthesis-screening evasion. No task-level manifest inspected.",
       "source_url": "https://arxiv.org/abs/2606.11150",
       "data_url": "https://arxiv.org/abs/2606.11150",
-      "scoring_access": "Restricted access"
+      "scoring_access": "Restricted access",
+      "planning_boundary": "Screening evasion is outside training authoring. Benign static protocol-accounting components would require independent observed records and explicit validation limits.",
+      "reviewed_primary_url": "https://arxiv.org/abs/2606.11150"
     },
     {
       "name": "ABLE \u2014 agentic biological AI tool use",
-      "inspection": "sheet metadata reviewed; source release and task-level inventory require verification",
+      "inspection": "Primary abstract describes structure retrieval, sequence generation and design validation using biological AI tools; no task-level manifest inspected.",
       "source_url": "https://arxiv.org/abs/2609.05818",
       "data_url": "https://arxiv.org/abs/2609.05818",
-      "scoring_access": "Restricted access"
+      "scoring_access": "Restricted access",
+      "planning_boundary": "Observed-structure retrieval and artifact validation may inform limited components; generated designs are not observed biological outcomes and do not establish full source coverage.",
+      "reviewed_primary_url": "https://arxiv.org/abs/2609.05818"
     },
     {
       "name": "LAB-Bench \u2014 tool-enabled literature / database",
-      "inspection": "sheet metadata reviewed; source release and task-level inventory require verification",
+      "inspection": "Raw card inspected: DbQA has 520 public rows and LitQA2 199; eight categories overall. No agentic-only selection or exact overlap with Biomni-Eval1 has been established.",
       "source_url": "https://arxiv.org/abs/2407.10362",
       "data_url": "https://huggingface.co/datasets/futurehouse/lab-bench",
-      "scoring_access": "Public subset"
+      "scoring_access": "Public subset",
+      "planning_boundary": "Inventory only the sheet-scoped tool-enabled literature/database protocol after selection and alias review. Exclude answer/distractor columns and source biological fixtures.",
+      "reviewed_primary_url": "https://huggingface.co/datasets/futurehouse/lab-bench/raw/main/README.md"
     },
     {
       "name": "BioASQ \u2014 retrieval / end-to-end QA",
-      "inspection": "sheet metadata reviewed; source release and task-level inventory require verification",
+      "inspection": "Official challenge page distinguishes article/snippet retrieval, exact answers, ideal summaries and iterative expert-feedback Synergy tasks, with automatic and expert assessment. No release/year-specific IDs inspected.",
       "source_url": "https://www.bioasq.org/",
       "data_url": "https://github.com/BioASQ/Evaluation-Measures/tree/8c8e689068a41c1370fec55260e5fbfe3a6a6016",
-      "scoring_access": "Task-dependent access"
+      "scoring_access": "Task-dependent access",
+      "planning_boundary": "Choose the agentic retrieval/end-to-end protocol and release before enumeration. Structured retrieval/exact-answer metrics do not establish ideal-summary quality.",
+      "reviewed_primary_url": "https://www.bioasq.org/"
     },
     {
       "name": "BixBench \u2014 original notebook protocols",
-      "inspection": "sheet metadata reviewed; source release and task-level inventory require verification",
+      "inspection": "Primary paper describes notebook-derived multi-step analysis scenarios. Existing BixBench inventory already holds 205 question IDs; original-protocol identity equality remains unverified.",
       "source_url": "https://arxiv.org/abs/2503.00096",
       "data_url": "https://huggingface.co/datasets/futurehouse/BixBench",
-      "scoring_access": "Public grading"
+      "scoring_access": "Public grading",
+      "planning_boundary": "Resolve protocol revisions and aliases against existing IDs before adding records; paper-level scenario counts are not additional independent tasks.",
+      "reviewed_primary_url": "https://arxiv.org/abs/2503.00096"
     }
   ],
   "implementation_sequence": [
@@ -13290,15 +13340,23 @@
       "inventory_records_alias_linked": 50,
       "additional_independent_questions": 0,
       "inspection_basis": "All question revisions previously inspected; known identity aliases linked to original designs while preserving protocol differences."
+    },
+    {
+      "path": "workflow_designs/scholarqabench-bio.json",
+      "sha256": "0f1e4c959b41b5a94a7a028e6fb90ae94597ade8fead448741a023027b43c46e",
+      "benchmark_id": "ScholarQABench \u2014 biomedicine",
+      "inventory_records_with_gap_dispositions": 1451,
+      "proposed_question_cards": 0,
+      "inspection_basis": "All public question identities and hashes enumerated; shared literature protocol/scorer assessed; individual question design remains unreviewed."
     }
   ],
   "authoring_phase": "question-portfolio-planning",
   "portfolio_index": {
     "path": "workflow_portfolio.json",
-    "sha256": "e8ba40d1f1d42e75fbb12c418a6ff7ca1935e5ec9bcbfca20e8639be344c6495",
+    "sha256": "b410d7fa3c8ed9028a03361e8295b340e35d285acf72bf690ee561abb3c21fcb",
     "counts": {
-      "source_releases": 30,
-      "inventory_records": 2881,
+      "source_releases": 31,
+      "inventory_records": 4332,
       "question_cards": 676,
       "proposed_task_groups": 635,
       "conditional_consolidations": 25,
@@ -13306,7 +13364,8 @@
       "known_cross_release_alias_records": 50,
       "identity_only_records_with_gap_dispositions": 350,
       "excluded_records": 1,
-      "validated_new_mappings": 0
+      "validated_new_mappings": 0,
+      "question_records_with_gap_dispositions": 1451
     },
     "status": "question-portfolio-with-conditional-consolidation-input-and-acceptance-designs-pending"
   }

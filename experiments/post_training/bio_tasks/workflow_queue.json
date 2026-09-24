@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T15:55:29.084390+00:00",
+  "updated_at": "2026-09-24T16:05:12.084813+00:00",
   "basis_revision": "c3a42fa5cf",
   "scope": "Provisional ID agentic benchmarks only. This queue selects new authoring work; it does not change benchmark coverage states.",
   "selection_policy": {
@@ -23,7 +23,7 @@
     "scope_limit": "Ranks compare the currently assessed candidate set, not all possible workflows in all releases. Source-review backlog entries remain explicit and can change the ranking."
   },
   "selected_candidate": null,
-  "selection_reason": "Question portfolio now accounts for all 2,881 inventoried records. Review its conditional consolidations, source inspection limits and input/acceptance contracts before selecting implementation work. The eight earlier assessed gains remain conditional and are not a global ranking.",
+  "selection_reason": "Question portfolio now accounts for all 4,332 inventoried records. Review its conditional consolidations, source inspection limits and input/acceptance contracts before selecting implementation work. The eight earlier assessed gains remain conditional and are not a global ranking.",
   "candidates": [
     {
       "id": "multi-locus-phylogenomic-signal",
@@ -1128,25 +1128,25 @@
       "name": "BioSecBench-Surveillance",
       "source_url": "https://github.com/latchbio/biosecbench-surveillance",
       "priority_score": null,
-      "reason": "Task enumeration and endpoint inspection are required before ranking."
+      "reason": "Public README declares seven examples and a restricted 100-evaluation suite; input data, graders and ground truth are withheld. Only release metadata inspected. Plan benign surveillance/data-QC patterns only after exact public-endpoint review; no coverage assigned from category names."
     },
     {
       "name": "BioSecBench-Function",
       "source_url": "https://github.com/latchbio/biosecbench-function",
       "priority_score": null,
-      "reason": "Task enumeration and endpoint inspection are required before ranking."
+      "reason": "Public README declares seven examples and a restricted 111-evaluation suite; inputs, graders and ground truth withheld. Only release metadata inspected. Independent benign assay/QC analysis may supply limited components. Threat-property optimization is outside training authoring; do not convert source category counts into coverage."
     },
     {
       "name": "BioSecBench-Refusal \u2014 direct framing",
       "source_url": "https://github.com/latchbio/biosecbench-refusal",
       "priority_score": null,
-      "reason": "Task enumeration and endpoint inspection are required before ranking."
+      "reason": "Public README describes 61 Routine and 46 Red-Team tasks, with two public paired examples. Only release metadata inspected. Refusal/risk recognition and fictional scenarios do not directly map to an observed-data analysis recipe. Retain a source-objective gap; no full coverage claim."
     },
     {
       "name": "LifeSciBench",
       "source_url": "https://openai.com/index/introducing-life-sci-bench/",
       "priority_score": null,
-      "reason": "Task enumeration and endpoint inspection are required before ranking."
+      "reason": "Primary overview describes free-response tasks with expert-authored multi-criterion rubrics and multiple artifact types; no full task manifest was retrieved. Use exact artifact analysis as a component only; do not claim subjective scientific judgment is covered by a numeric proxy."
     },
     {
       "name": "TargetVal (Popper)",
@@ -1155,40 +1155,34 @@
       "reason": "Task enumeration and endpoint inspection are required before ranking."
     },
     {
-      "name": "ScholarQABench \u2014 biomedicine",
-      "source_url": "https://allenai.org/blog/openscilm",
-      "priority_score": null,
-      "reason": "Task enumeration and endpoint inspection are required before ranking."
-    },
-    {
       "name": "ABC-Bench (SecureBio)",
       "source_url": "https://arxiv.org/abs/2606.11150",
       "priority_score": null,
-      "reason": "Task enumeration and endpoint inspection are required before ranking."
+      "reason": "Primary abstract describes three task families including robot code, DNA assembly and synthesis-screening evasion. No task-level manifest inspected. Screening evasion is outside training authoring. Benign static protocol-accounting components would require independent observed records and explicit validation limits."
     },
     {
       "name": "ABLE \u2014 agentic biological AI tool use",
       "source_url": "https://arxiv.org/abs/2609.05818",
       "priority_score": null,
-      "reason": "Task enumeration and endpoint inspection are required before ranking."
+      "reason": "Primary abstract describes structure retrieval, sequence generation and design validation using biological AI tools; no task-level manifest inspected. Observed-structure retrieval and artifact validation may inform limited components; generated designs are not observed biological outcomes and do not establish full source coverage."
     },
     {
       "name": "LAB-Bench \u2014 tool-enabled literature / database",
       "source_url": "https://arxiv.org/abs/2407.10362",
       "priority_score": null,
-      "reason": "Task enumeration and endpoint inspection are required before ranking."
+      "reason": "Raw card inspected: DbQA has 520 public rows and LitQA2 199; eight categories overall. No agentic-only selection or exact overlap with Biomni-Eval1 has been established. Inventory only the sheet-scoped tool-enabled literature/database protocol after selection and alias review. Exclude answer/distractor columns and source biological fixtures."
     },
     {
       "name": "BioASQ \u2014 retrieval / end-to-end QA",
       "source_url": "https://www.bioasq.org/",
       "priority_score": null,
-      "reason": "Task enumeration and endpoint inspection are required before ranking."
+      "reason": "Official challenge page distinguishes article/snippet retrieval, exact answers, ideal summaries and iterative expert-feedback Synergy tasks, with automatic and expert assessment. No release/year-specific IDs inspected. Choose the agentic retrieval/end-to-end protocol and release before enumeration. Structured retrieval/exact-answer metrics do not establish ideal-summary quality."
     },
     {
       "name": "BixBench \u2014 original notebook protocols",
       "source_url": "https://arxiv.org/abs/2503.00096",
       "priority_score": null,
-      "reason": "Task enumeration and endpoint inspection are required before ranking."
+      "reason": "Primary paper describes notebook-derived multi-step analysis scenarios. Existing BixBench inventory already holds 205 question IDs; original-protocol identity equality remains unverified. Resolve protocol revisions and aliases against existing IDs before adding records; paper-level scenario counts are not additional independent tasks."
     }
   ],
   "execution_policy": {
@@ -1238,8 +1232,8 @@
   "portfolio_plan": "workflow_plan.json",
   "authoring_phase": "question-portfolio-planning",
   "portfolio_review_progress": {
-    "source_releases": 30,
-    "inventory_records": 2881,
+    "source_releases": 31,
+    "inventory_records": 4332,
     "question_cards": 676,
     "proposed_task_groups": 635,
     "conditional_consolidations": 25,
@@ -1249,7 +1243,8 @@
     "excluded_records": 1,
     "validated_new_mappings": 0,
     "portfolio_file": "workflow_portfolio.json",
-    "portfolio_sha256": "e8ba40d1f1d42e75fbb12c418a6ff7ca1935e5ec9bcbfca20e8639be344c6495",
-    "limit": "All 30 original cross-card combinations have scientific planning dispositions; 25 remain conditional. Complete input and acceptance contracts, individual-card review and inaccessible-source dispositions are still required. No implementation is selected and validated coverage is unchanged."
+    "portfolio_sha256": "b410d7fa3c8ed9028a03361e8295b340e35d285acf72bf690ee561abb3c21fcb",
+    "limit": "All 30 original cross-card combinations have scientific planning dispositions; 25 remain conditional. Complete input and acceptance contracts, individual-card review and inaccessible-source dispositions are still required. No implementation is selected and validated coverage is unchanged.",
+    "question_records_with_gap_dispositions": 1451
   }
 }
