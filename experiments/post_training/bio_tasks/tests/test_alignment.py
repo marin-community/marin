@@ -8,11 +8,49 @@ from experiments.post_training.bio_tasks.contract import (
     AlignmentContract,
     Column,
     Contract,
+    FastaContract,
     alignment_score,
     grade_files,
 )
 from experiments.post_training.bio_tasks.real_data import source_text
 from experiments.post_training.bio_tasks.solvers.protein_alignment import pair_alignment
+
+
+def test_unaligned_fasta_checks_all_residues_and_identities_even_with_correct_summary(tmp_path):
+    contract = Contract(
+        columns={"proteins": Column(kind="integer", description="representative count", unit="proteins")},
+        expected={"proteome": {"proteins": 2}},
+        fasta={"representatives.fa": FastaContract(sequences={"P1": "MACDEX", "P2": "MKU*"}, max_bytes=256)},
+    )
+    reference, answer, artifact = [tmp_path / name for name in ("reference.json", "answer.json", "representatives.fa")]
+    reference.write_text(contract.model_dump_json())
+    answer.write_text(json.dumps(contract.answer()))
+    assert grade_files(reference, answer).reward == 0
+    for valid in (">P1\nMACDEX\n>P2\nMKU*\n", "\n>P2 comment\nmku*\n\n>P1\nmac\ndex\n"):
+        artifact.write_text(valid)
+        verdict = grade_files(reference, answer)
+        assert verdict.reward == 1
+        assert verdict.detail["artifact_checks"]["representatives.fa"]["residues"] == 10
+    for invalid in (
+        ">P1\nMACDEY\n>P2\nMKU*\n",  # Changed residue, unchanged length.
+        ">P1\nMACDEX\n>P2\nMKU\n",  # Truncated final sequence.
+        ">P1\nMACDE\n>P2\nMKU*\n",  # Truncated nonfinal sequence.
+        ">P1\nMACDEX\n>P1\nMACDEX\n>P2\nMKU*\n",  # Duplicate expected record.
+        ">P1\nMACDEX\n",  # Missing record.
+        ">P1\nMACDEX\n>P2\nMKU*\n>P3\nM\n",  # Extra record.
+        ">P1\nMACDEX\n>P2\n\n",  # Empty sequence.
+        "MACDEX\n>P2\nMKU*\n",  # Missing header.
+        ">\nMACDEX\n>P2\nMKU*\n",  # Empty identity.
+        ">P1\nMAC-DEX\n>P2\nMKU*\n",  # Alignment gap in unaligned output.
+        ">P1\nMACDEX\n>P2\nMKU*\n" + " " * 256,
+    ):
+        artifact.write_text(invalid)
+        assert grade_files(reference, answer).reward == 0
+    artifact.unlink()
+    outside = tmp_path / "outside.fa"
+    outside.write_text(">P1\nMACDEX\n>P2\nMKU*\n")
+    artifact.symlink_to(outside)
+    assert grade_files(reference, answer).reward == 0
 
 
 def test_alignment_accepts_alternative_gap_placements_and_rejects_damaged_or_poor_alignments(tmp_path):

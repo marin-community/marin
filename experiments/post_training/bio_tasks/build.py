@@ -189,6 +189,22 @@ def validate_instance(
         if grade_files(reference, answer).reward != 1:
             raise ValueError(f"{recipe.id}: validation oracle outputs failed verification")
         artifact_checks = {}
+        for name in instance.contract.fasta:
+            artifact = root / name
+            original = artifact.read_text()
+            artifact.unlink()
+            artifact_checks[f"missing_artifact:{name}"] = grade_files(reference, answer).reward
+            lines = original.splitlines()
+            index = next(i for i, line in enumerate(lines) if line and not line.startswith(">"))
+            lines[index] = ("A" if lines[index][0].upper() != "A" else "C") + lines[index][1:]
+            artifact.write_text("\n".join(lines) + "\n")
+            artifact_checks[f"changed_residue:{name}"] = grade_files(reference, answer).reward
+            artifact.write_text(original + "\n" + original)
+            artifact_checks[f"duplicate_sequence:{name}"] = grade_files(reference, answer).reward
+            last = original.rfind(">")
+            artifact.write_text(original[:last])
+            artifact_checks[f"missing_sequence:{name}"] = grade_files(reference, answer).reward
+            artifact.write_text(original)
         for name in instance.contract.fastq:
             artifact = root / name
             original = artifact.read_bytes()
@@ -423,6 +439,17 @@ def inspection_page(root: Path, task: Identity, instance: Instance, files: TaskF
         "Expected output (private)": json.dumps(instance.contract.answer(), indent=2),
         "Native artifact contracts (private)": json.dumps(
             {
+                "fasta": {
+                    name: {
+                        "records": len(target.sequences),
+                        "residues": sum(map(len, target.sequences.values())),
+                        "max_bytes": target.max_bytes,
+                        "sequence_preview": {
+                            key: sequence[:120] for key, sequence in list(target.sequences.items())[:10]
+                        },
+                    }
+                    for name, target in instance.contract.fasta.items()
+                },
                 "fastq": {name: target.model_dump() for name, target in instance.contract.fastq.items()},
                 "alignments": {name: target.model_dump() for name, target in instance.contract.alignments.items()},
                 "trees": {name: target.model_dump() for name, target in instance.contract.trees.items()},
@@ -744,6 +771,15 @@ def build(
                         json.dumps(
                             {
                                 "answer": instance.contract.expected,
+                                **(
+                                    {
+                                        "fasta": {
+                                            name: target.model_dump() for name, target in instance.contract.fasta.items()
+                                        }
+                                    }
+                                    if instance.contract.fasta
+                                    else {}
+                                ),
                                 "fastq": {name: target.sha256 for name, target in instance.contract.fastq.items()},
                                 "alignments": {
                                     name: target.model_dump() for name, target in instance.contract.alignments.items()

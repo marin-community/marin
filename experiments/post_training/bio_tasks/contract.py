@@ -29,6 +29,60 @@ MATRIX_SORT_TIMEOUT = 120
 Scalar = int | float | str | None
 
 
+class FastaContract(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    sequences: dict[str, str] = Field(min_length=1)
+    max_bytes: int = Field(gt=0, le=128 * 1024 * 1024)
+
+    @model_validator(mode="after")
+    def validate_sequences(self) -> "FastaContract":
+        for identifier, sequence in self.sequences.items():
+            if not re.fullmatch(r"[!-~]+", identifier) or identifier.startswith(">"):
+                raise ValueError("FASTA identities must be nonempty ASCII header tokens")
+            if not re.fullmatch(r"[A-Z*]+", sequence):
+                raise ValueError("FASTA references must be nonempty uppercase unaligned sequences")
+        return self
+
+
+def check_fasta(path: Path, target: FastaContract) -> dict:
+    """Verify every identity and residue without retaining submitted sequences."""
+    identifiers = set()
+    current = None
+    offset = 0
+    consumed = 0
+    residues = 0
+    with path.open("rb") as handle:
+        while line := handle.readline(target.max_bytes - consumed + 1):
+            consumed += len(line)
+            if consumed > target.max_bytes:
+                raise ValueError("fasta_too_large")
+            text = line.decode("ascii").strip()
+            if not text:
+                continue
+            if text.startswith(">"):
+                if current is not None and offset != len(target.sequences[current]):
+                    raise ValueError("fasta_missing_residues")
+                fields = text[1:].split()
+                if not fields or fields[0] in identifiers or fields[0] not in target.sequences:
+                    raise ValueError("fasta_identity")
+                current = fields[0]
+                identifiers.add(current)
+                offset = 0
+                continue
+            if current is None:
+                raise ValueError("fasta_missing_header")
+            if text.upper() != target.sequences[current][offset : offset + len(text)]:
+                raise ValueError("fasta_changed_residues")
+            offset += len(text)
+            residues += len(text)
+    if identifiers != set(target.sequences):
+        raise ValueError("fasta_missing_records")
+    if current is not None and offset != len(target.sequences[current]):
+        raise ValueError("fasta_missing_residues")
+    return {"passed": True, "records": len(identifiers), "residues": residues}
+
+
 class AlignmentContract(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
@@ -378,6 +432,7 @@ class Contract(BaseModel):
     version: Literal["1"] = "1"
     columns: dict[str, Column]
     expected: dict[str, dict[str, Scalar]]
+    fasta: dict[str, FastaContract] = Field(default_factory=dict)
     fastq: dict[str, FastqContract] = Field(default_factory=dict)
     alignments: dict[str, AlignmentContract] = Field(default_factory=dict)
     tables: dict[str, TableContract] = Field(default_factory=dict)
@@ -397,7 +452,7 @@ class Contract(BaseModel):
         return [{"id": key, **value} for key, value in self.expected.items()]
 
     def artifacts(self) -> tuple[str, ...]:
-        return (*self.fastq, *self.alignments, *self.tables, *self.trees, *self.matrices)
+        return (*self.fasta, *self.fastq, *self.alignments, *self.tables, *self.trees, *self.matrices)
 
     def instructions(self) -> str:
         lines = [
@@ -412,6 +467,14 @@ class Contract(BaseModel):
             nullable = "; use null when specified" if column.nullable else ""
             lines.append(f"- {name}: {column.kind} ({column.unit}); {column.description}{nullable}{tolerance}.")
         lines.append("Numeric tolerance is abs(actual - reference) <= atol + rtol * abs(reference).")
+        for name, target in self.fasta.items():
+            lines.append(
+                f"Also write /app/{name} as unaligned FASTA, at most {target.max_bytes} bytes. "
+                "Every requested first-token ID and its complete sequence must occur exactly once. "
+                "Record order, letter case, line wrapping, blank lines and header comments are ignored. "
+                "Do not add gaps or change residues. Every sequence is verified; a correct JSON summary "
+                "alone does not pass."
+            )
         for name in self.fastq:
             lines.append(
                 f"Also write /app/{name} as four-line FASTQ. Preserve retained input-record order, first-token "
@@ -527,6 +590,14 @@ def grade_files(reference: Path, answer: Path) -> Reward:
         if verdict.reward != 1 or not contract.artifacts():
             return verdict
         checks = {}
+        for name, target in contract.fasta.items():
+            path = answer.parent / name
+            if path.is_symlink() or not path.is_file():
+                return scored(0, reason="missing_or_nonregular_fasta", artifact=name)
+            try:
+                checks[name] = check_fasta(path, target)
+            except ValueError as error:
+                return scored(0, reason=str(error), artifact=name)
         for name, target in contract.fastq.items():
             path = answer.parent / name
             if path.is_symlink() or not path.is_file():

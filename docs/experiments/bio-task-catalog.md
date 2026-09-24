@@ -509,12 +509,15 @@ Choose input scale to preserve the biological problem and measure execution cost
 train split and the 30-minute attempt limit. Size targets remain uncalibrated
 until measured on the selected task environment.
 
-Large matrices, alignments and call sets require native output artifacts with
-streaming or bounded deterministic checks. The current record-array verifier has
-a 2 MiB answer limit and normalization emits every gene–cell pair, so simply
-increasing dimensions would produce an unsuitable task. Preserve the small JSON
-contract for compact summaries; add an artifact contract before scaling full
-matrix outputs. Do not silently truncate results or relax scientific checks.
+Large matrices, sequences and call sets require native output artifacts with
+streaming or bounded deterministic checks. Keep JSON summaries within the 2 MiB
+answer limit. Separate contracts verify complete FASTA records, FASTQ reads,
+alignments, TSV tables, Newick trees and sparse MatrixMarket counts. Unaligned
+FASTA verification checks every identity and residue while accepting record
+reordering, line wrapping and letter-case changes. The full-study single-cell
+workflow uses sparse matrix artifacts; the older normalization controls still
+emit gene–cell pairs in JSON and must remain small. Do not silently truncate
+results or relax scientific checks.
 
 An independent read-only review on 2026-09-23 identified the component/workflow
 gap, small inputs, insufficient method discrimination, and repeated targets across
