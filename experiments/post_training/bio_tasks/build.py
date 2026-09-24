@@ -346,7 +346,8 @@ def inspection_page(root: Path, task: Identity, instance: Instance, files: TaskF
         "pre{white-space:pre-wrap;background:#f4f4f4;padding:1rem}details{margin:1rem 0}</style>"
         '<a href="../index.html">Corpus</a><h1>' + html.escape(task.task_id) + "</h1>"
         f"<p>Data origin: <strong>{instance.data_origin.value}</strong>. "
-        f"{html.escape(instance.derivation)}</p><p>Component coverage; end-to-end workflow validation is pending. "
+        f"{html.escape(instance.derivation)}</p><p>{instance.workflow_scope.value.capitalize()} task; "
+        "benchmark workflow validation is pending. "
         "Scientific review pending. Private inspection view; never mount this directory in solver environments. "
         "Input previews are limited to 8,000 characters; complete files are in the task bundle.</p>"
         + content

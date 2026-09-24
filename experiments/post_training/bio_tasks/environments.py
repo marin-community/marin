@@ -24,6 +24,8 @@ PROFILES = {
     "real-fastq-pair-filter": EnvironmentProfile(35, "native_validation_runs/fd1f4c3a31f1.json", 4096),
     "real-fastq-quality-yield": EnvironmentProfile(15, "native_validation_runs/fd1f4c3a31f1.json", 4096),
     "real-protein-alignment": EnvironmentProfile(43, "native_validation_runs/035bb3a42edc.json", 2048),
+    "real-rnaseq-differential-expression": EnvironmentProfile(5, "native_validation_runs/e39ec1c86f62.json", 4096),
+    "real-rnaseq-go-enrichment": EnvironmentProfile(5, "native_validation_runs/e39ec1c86f62.json", 4096),
 }
 
 

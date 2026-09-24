@@ -87,8 +87,9 @@ the format distinctions instead of converting every annotation to CSV.
 Connected DESeq2 differential-expression and GO-enrichment candidates are defined in
 `generators/real_rnaseq.py`. Their private fits use unchanged GSE60450 observations;
 the public annotation snapshot preserves propagated biological-process membership
-from org.Mm.eg.db and GO.db 3.22.0. They remain outside the default corpus while
-native-oracle and container validation are pending. No benchmark inputs or model
+from org.Mm.eg.db and GO.db 3.22.0. Six native oracle cases pass on reserved TRC
+CPUs, checking 16,659–17,361 fitted genes and 5,898–6,021 GO terms per case. They
+remain outside the default corpus while Harbor container validation is pending. No benchmark inputs or model
 calls were used to prepare these references.
 
 `sources/prepare_deseq.R` prepares all contrasts, fitted size factors and frozen

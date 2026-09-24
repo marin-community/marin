@@ -1,6 +1,6 @@
 {
   "schema_version": 3,
-  "scope": "Three component instances per implemented package, including observed read data; reference execution, not Harbor or full ID workflow validation.",
+  "scope": "Three validation instances per checked recipe, including components and connected real-data RNA-seq. Native reference execution is distinct from Harbor validation and benchmark workflow coverage.",
   "runs": [
     {
       "checked_at": "2026-09-23",
@@ -902,6 +902,38 @@
       "checks_file": "native_validation_runs/bcb69270b1f9.json",
       "checks_sha256": "62b17c5983f7e56e4e284cfc74c5ec97ed8852743e0335e60d0eb059d4bf3c15",
       "limitations": "Six complete curated UniProt globins per case, three distinct protein sets. MAFFT aligned FASTA outputs meet the unchanged 95% pairwise-bound objective and preserve all residues, after selecting the same MAFFT version from conda-forge. Previous failed Bioconda installation is retained separately. No Harbor task-image validation or teacher calls; full benchmark-lineage screening pending. No contract or tolerance changes."
+    },
+    {
+      "checked_at": "2026-09-24",
+      "source_revision": "dd9f5cff152545627370a7c2665423575e287649",
+      "environment_kind": "CPU-only task on an existing reserved TRC v4 host; checksum-locked R 4.5.3 and DESeq2 1.50.2, supplied frozen GO annotations",
+      "region": "us-central2",
+      "storage_backend": "GCS",
+      "job_id": "/exedev/bio-rnaseq-validation-20260924-021912",
+      "base_image": "python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c",
+      "resources": {
+        "cpu": 1,
+        "memory_gib": 16,
+        "disk_gib": 48,
+        "concurrent_workers": 1,
+        "timeout_seconds": 3600,
+        "automatic_retries": 0
+      },
+      "input_bundle_sha256": "653c8532a8890c7f185f4b444ff28de16bbb82b0d18c3626869a65e790b665f5",
+      "output_archive_sha256": "3c90e9a68e6f31ab5dc7895f9905382221c670dcb8e104b569c8804db0b598ee",
+      "output_archive_bytes": 4966829,
+      "summary": {
+        "expected_repositories": 50,
+        "attempted_repositories": 1,
+        "passed_repositories": 1,
+        "execution_failed_repositories": 0,
+        "planned_cases": 6,
+        "completed_cases": 6,
+        "passing_cases": 6
+      },
+      "checks_file": "native_validation_runs/e39ec1c86f62.json",
+      "checks_sha256": "e39ec1c86f62f3609bdddca5e36a16217776d4da7d9213ffa41fb6e42f17fd4c",
+      "limitations": "Two connected RNA-seq recipes on GSE60450; complete QC and fitted-gene tables, plus full GO enrichment tables where requested. All six oracle cases and malformed/missing/changed-artifact controls pass. Fitted-model construction and oracle share the pinned DESeq2 engine; enrichment uses SciPy versus R. No Harbor image validation or teacher calls in this run. Benchmark lineage screening and scientific review remain pending."
     }
   ]
 }
