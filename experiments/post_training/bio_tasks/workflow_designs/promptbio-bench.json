@@ -12,7 +12,7 @@
   "counts": {
     "source_records": 244,
     "validated_new_mappings": 0,
-    "question_cards": 92
+    "question_cards": 94
   },
   "defaults": {
     "unit": "One coherent question per recipe; file manipulation, plotting and scalar summaries should normally be stages in a connected biological analysis.",
@@ -2947,13 +2947,12 @@
       "input_contract_limit": "The routed workstream supplies an input search boundary. Preserve every exact source stage and native format in source_endpoint_patterns; input manifest and final schema still need endpoint-specific design."
     },
     {
-      "proposed_id": "promptbio-design-receptor-repertoire-states",
-      "scientific_question": "Which clonotypes, gene-usage patterns and repertoire overlaps are supported across observed samples and cell states?",
+      "proposed_id": "promptbio-design-tcr-repertoire-states",
+      "scientific_question": "Which observed T-cell clonotypes recur and associate with measured transcriptional states after chain, sample and repertoire-depth checks?",
       "target_ids": [
         "a-9-2",
         "a-9-5",
         "a-9-6",
-        "a-9-7",
         "a-9-9"
       ],
       "source_endpoint_patterns": [
@@ -2999,23 +2998,6 @@
           ]
         },
         {
-          "task_id": "a-9-7",
-          "pattern": "Assign BCR V/J identities and summarize gene usage",
-          "source_metadata_sha256": "ee26e5767eedf04a2bc03d5ee6eb18041b06ca6733e3e012ae9dc2030ce5fe10",
-          "source_output_artifacts": [
-            {
-              "file": "j_gene_usage_summary.csv",
-              "type": "csv",
-              "description": "rows as J genes, columns should include j_gene, count, frequency (float value, between 0 and 1)"
-            },
-            {
-              "file": "v_gene_usage_summary.csv",
-              "type": "csv",
-              "description": "rows as V genes, columns should include v_gene, count, frequency (float value, between 0 and 1)"
-            }
-          ]
-        },
-        {
           "task_id": "a-9-9",
           "pattern": "Compare amino-acid repertoire overlap with Morisita-Horn similarity",
           "source_metadata_sha256": "f135898bcb27738f62dece0b982af93211781d173837e9b1692d369e66b513c9",
@@ -3038,7 +3020,6 @@
         "csv",
         "fastq.gz",
         "png",
-        "tsv",
         "txt"
       ],
       "named_method_requirements": [],
@@ -3048,14 +3029,67 @@
       "verifier_design": [
         "Independent chain/sequence identity and denominator checks; native repertoire operations; preserve donor dependence and ambiguous chain calls."
       ],
-      "connected_workflow_rationale": "Use the same independent observed study and retain each listed endpoint as an intermediate or final artifact. Source-specific methods, parameter choices, cohorts and output contracts remain separate when they differ. Split this proposal if one coherent study cannot support all endpoints.",
+      "connected_workflow_rationale": "The receptor class or interaction partner defines this question. Reuse acquisition/provenance work across related questions without requiring unrelated biology in one task.",
       "remaining_decisions": [
         "Choose independent observed inputs with enough biological replication and native-format detail; exclude source benchmark studies and fixtures.",
         "Freeze every source-specific threshold, feature universe, model and output schema before claiming endpoint equivalence.",
         "Measure the complete offline analysis against the 30-minute budget without discarding biological sample structure."
       ],
       "status": "question-portfolio-proposal-no-coverage-credit",
-      "input_contract_limit": "The routed workstream supplies an input search boundary. Preserve every exact source stage and native format in source_endpoint_patterns; input manifest and final schema still need endpoint-specific design."
+      "input_contract_limit": "The routed workstream supplies an input search boundary. Preserve every exact source stage and native format in source_endpoint_patterns; input manifest and final schema still need endpoint-specific design.",
+      "refines_prior_question_id": "promptbio-design-receptor-repertoire-states"
+    },
+    {
+      "proposed_id": "promptbio-design-bcr-gene-usage",
+      "scientific_question": "Which V/J gene usage patterns follow from native assignment of independently observed B-cell receptor sequences?",
+      "target_ids": [
+        "a-9-7"
+      ],
+      "source_endpoint_patterns": [
+        {
+          "task_id": "a-9-7",
+          "pattern": "Assign BCR V/J identities and summarize gene usage",
+          "source_metadata_sha256": "ee26e5767eedf04a2bc03d5ee6eb18041b06ca6733e3e012ae9dc2030ce5fe10",
+          "source_output_artifacts": [
+            {
+              "file": "j_gene_usage_summary.csv",
+              "type": "csv",
+              "description": "rows as J genes, columns should include j_gene, count, frequency (float value, between 0 and 1)"
+            },
+            {
+              "file": "v_gene_usage_summary.csv",
+              "type": "csv",
+              "description": "rows as V genes, columns should include v_gene, count, frequency (float value, between 0 and 1)"
+            }
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "immune-repertoire"
+      ],
+      "input_requirements": [
+        "Observed AIRR/VDJ annotations paired to sample/cell identities, receptor chains and transcriptomes when joint analyses require them."
+      ],
+      "native_format_requirements": [
+        "csv",
+        "tsv"
+      ],
+      "named_method_requirements": [],
+      "proposed_artifact_requirements": [
+        "AIRR tables, chain eligibility, clonotype membership, per-sample abundance/diversity and transcriptome joins"
+      ],
+      "verifier_design": [
+        "Independent chain/sequence identity and denominator checks; native repertoire operations; preserve donor dependence and ambiguous chain calls."
+      ],
+      "connected_workflow_rationale": "The receptor class or interaction partner defines this question. Reuse acquisition/provenance work across related questions without requiring unrelated biology in one task.",
+      "remaining_decisions": [
+        "Choose independent observed inputs with enough biological replication and native-format detail; exclude source benchmark studies and fixtures.",
+        "Freeze every source-specific threshold, feature universe, model and output schema before claiming endpoint equivalence.",
+        "Measure the complete offline analysis against the 30-minute budget without discarding biological sample structure."
+      ],
+      "status": "question-portfolio-proposal-no-coverage-credit",
+      "input_contract_limit": "The routed workstream supplies an input search boundary. Preserve every exact source stage and native format in source_endpoint_patterns; input manifest and final schema still need endpoint-specific design.",
+      "refines_prior_question_id": "promptbio-design-receptor-repertoire-states"
     },
     {
       "proposed_id": "promptbio-design-hla-read-evidence",
@@ -3803,11 +3837,10 @@
       "input_contract_limit": "The routed workstream supplies an input search boundary. Preserve every exact source stage and native format in source_endpoint_patterns; input manifest and final schema still need endpoint-specific design."
     },
     {
-      "proposed_id": "promptbio-design-macromolecular-contact-audit",
-      "scientific_question": "Which ligand and protein-DNA contacts are supported by an observed structure after chain, alternate-location and atom-distance checks?",
+      "proposed_id": "promptbio-design-protein-ligand-contact-audit",
+      "scientific_question": "Which protein residues contact an independently observed ligand after chain, assembly and atom-identity reconciliation?",
       "target_ids": [
-        "a-14-2",
-        "a-14-3"
+        "a-14-2"
       ],
       "source_endpoint_patterns": [
         {
@@ -3821,7 +3854,42 @@
               "description": "rows as binding residues, columns should include Chain, Residue_ID, Residue_Name"
             }
           ]
-        },
+        }
+      ],
+      "matching_workstreams": [
+        "ligand-structure-affinity"
+      ],
+      "input_requirements": [
+        "Observed PDB/mmCIF structures with biological assembly, ligand identity, alternate locations, protonation assumptions and measured affinity where available."
+      ],
+      "native_format_requirements": [
+        "csv",
+        "pdb"
+      ],
+      "named_method_requirements": [],
+      "proposed_artifact_requirements": [
+        "Native structures, ligand/residue mapping, atom/contact tables, descriptor/ranking outputs and assay comparison"
+      ],
+      "verifier_design": [
+        "Independent coordinate/contact calculations and native structural parsing; distinguish a docking score from measured affinity; deterministic invariants for equivalent atom ordering."
+      ],
+      "connected_workflow_rationale": "The receptor class or interaction partner defines this question. Reuse acquisition/provenance work across related questions without requiring unrelated biology in one task.",
+      "remaining_decisions": [
+        "Choose independent observed inputs with enough biological replication and native-format detail; exclude source benchmark studies and fixtures.",
+        "Freeze every source-specific threshold, feature universe, model and output schema before claiming endpoint equivalence.",
+        "Measure the complete offline analysis against the 30-minute budget without discarding biological sample structure."
+      ],
+      "status": "question-portfolio-proposal-no-coverage-credit",
+      "input_contract_limit": "The routed workstream supplies an input search boundary. Preserve every exact source stage and native format in source_endpoint_patterns; input manifest and final schema still need endpoint-specific design.",
+      "refines_prior_question_id": "promptbio-design-macromolecular-contact-audit"
+    },
+    {
+      "proposed_id": "promptbio-design-protein-dna-contact-audit",
+      "scientific_question": "Which protein residues and DNA nucleotides form the bidirectional interface in an independently observed complex?",
+      "target_ids": [
+        "a-14-3"
+      ],
+      "source_endpoint_patterns": [
         {
           "task_id": "a-14-3",
           "pattern": "Measure bidirectional protein-DNA interface contacts",
@@ -3852,14 +3920,15 @@
       "verifier_design": [
         "Independent coordinate/contact calculations and native structural parsing; distinguish a docking score from measured affinity; deterministic invariants for equivalent atom ordering."
       ],
-      "connected_workflow_rationale": "Use the same independent observed study and retain each listed endpoint as an intermediate or final artifact. Source-specific methods, parameter choices, cohorts and output contracts remain separate when they differ. Split this proposal if one coherent study cannot support all endpoints.",
+      "connected_workflow_rationale": "The receptor class or interaction partner defines this question. Reuse acquisition/provenance work across related questions without requiring unrelated biology in one task.",
       "remaining_decisions": [
         "Choose independent observed inputs with enough biological replication and native-format detail; exclude source benchmark studies and fixtures.",
         "Freeze every source-specific threshold, feature universe, model and output schema before claiming endpoint equivalence.",
         "Measure the complete offline analysis against the 30-minute budget without discarding biological sample structure."
       ],
       "status": "question-portfolio-proposal-no-coverage-credit",
-      "input_contract_limit": "The routed workstream supplies an input search boundary. Preserve every exact source stage and native format in source_endpoint_patterns; input manifest and final schema still need endpoint-specific design."
+      "input_contract_limit": "The routed workstream supplies an input search boundary. Preserve every exact source stage and native format in source_endpoint_patterns; input manifest and final schema still need endpoint-specific design.",
+      "refines_prior_question_id": "promptbio-design-macromolecular-contact-audit"
     },
     {
       "proposed_id": "promptbio-design-paired-methylation-expression",

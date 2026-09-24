@@ -1149,7 +1149,7 @@
         }
       ],
       "matching_workstreams": [
-        "dose-response"
+        "molecular-property"
       ],
       "source_inspection_tiers": [
         "question-endpoint-reviewed"
@@ -1161,7 +1161,7 @@
         "compare fit criteria and identify the influential observation"
       ],
       "observed_input_requirements": [
-        "Observed concentration/time response with biological replicates, plate positions, controls and measurement units."
+        "Independently measured paired potency assays on the same compound panel, with compound identities, units, censoring and assay context. These are paired assay points, not concentration-response curves."
       ],
       "required_formats": [
         "paired assay tables",
@@ -1175,7 +1175,7 @@
         "Plate/sample maps, raw and normalized responses, control diagnostics, fitted curves/uncertainty and complete hit decisions"
       ],
       "deterministic_verifier_design": [
-        "Independent normalization and model-prediction residuals; actual curve fitting; observed replicate units and multiple-testing rules; no invented response points."
+        "Recompute potency-scale conversion, the specified paired-assay regression, and every one-compound-deleted fit statistic. Verify complete omissions and the declared optimum; distinguish in-sample refit quality from leave-one-out prediction error."
       ],
       "status": "question-proposal-input-and-contract-decisions-pending",
       "validated_new_mappings": 0

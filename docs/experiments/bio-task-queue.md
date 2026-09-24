@@ -7,8 +7,8 @@ links 50 known BixBench-Verified aliases to their original designs, preserves 35
 SciGym systems as individual-endpoint review gaps, and retains one excluded
 objective. Twelve provisional-ID source leads still lack task inventories.
 
-The portfolio contains **662 question cards and 605 proposed task groups**, including
-30 conditional combinations across benchmarks. These are planning units, with
+The portfolio contains **676 question cards and 629 proposed task groups**, including
+28 conditional combinations across benchmarks. These are planning units, with
 substantial differences in source inspection depth. They add zero validated mappings
 and do not set a target dataset size. Each combined question retains all member
 contracts; incompatible inputs, methods or estimands require separate tasks.
@@ -84,7 +84,7 @@ Other releases retain their recorded inspection limits in the full plan.
 ## Broader question portfolio
 
 The [additional benchmark questions](../../experiments/post_training/bio_tasks/workflow_designs/additional_benchmarks.json)
-assign another **493 task/protocol records from 15 releases to 160 proposed question
+assign another **493 task/protocol records from 15 releases to 172 proposed question
 cards**. Together with the three earlier design files, these four files assign
 848 records across 18 inventoried ID releases. These counts
 measure planning assignments, not task coverage or independent training questions.
@@ -111,7 +111,7 @@ The expanded portfolio also includes the following source-specific plans:
 | [BioML-bench](../../experiments/post_training/bio_tasks/workflow_designs/biomlbench.json) | 406 | 25 | Registry/configuration review; 24 definitions appear in the released experiment list |
 | [Biomni-Eval1](../../experiments/post_training/bio_tasks/workflow_designs/biomni-eval1.json) | 433 | 20 | Shared protocols plus reviewed sequence/database questions; individual evidence remains unreviewed |
 | [BioKGBench](../../experiments/post_training/bio_tasks/workflow_designs/biokgbench.json) | 225 | 3 | Structured graph evidence can be verified; unrestricted literature entailment and absence claims remain gaps |
-| [PromptBio-Bench](../../experiments/post_training/bio_tasks/workflow_designs/promptbio-bench.json) | 244 | 92 | Exact versioned patterns and artifact specifications; assay and numeric decisions remain |
+| [PromptBio-Bench](../../experiments/post_training/bio_tasks/workflow_designs/promptbio-bench.json) | 244 | 94 | Exact versioned patterns and artifact specifications; assay and numeric decisions remain |
 | [BixBench3](../../experiments/post_training/bio_tasks/workflow_designs/bixbench3.json) | 20 | 19 | Nineteen endpoint proposals; one excluded objective retained |
 | [DrugDiscoveryBench](../../experiments/post_training/bio_tasks/workflow_designs/drugdiscoverybench.json) | 82 | 27 | Public-preview endpoint-stage review; independent evidence and inputs needed |
 | [Liu single-cell](../../experiments/post_training/bio_tasks/workflow_designs/liu-single-cell.json) | 63 | 49 | Native method requirements and shared prompt variants retained |
@@ -133,13 +133,46 @@ associations and chromosome density also remain separate. Each of its 244 source
 is still assigned once. Required packages remain explicit: the Liu PyDESeq2 endpoint
 requires native PyDESeq2 execution even if an R DESeq2 cross-check is available.
 
-The 30 proposed combinations include ortholog metrics, donor pseudobulk expression,
+The 28 retained proposed combinations include ortholog metrics, donor pseudobulk expression,
 count contrasts and enrichment, reference-cell classification, paired RNA/protein
 prediction, receptor/state analysis and spatial neighborhoods. Every combination
 states when one independently observed study can support all its endpoints. For
 example, a two-dimensional section cannot supply a three-dimensional neighborhood
 endpoint, and a TCR-only study cannot supply BCR V/J outputs. These combinations
 remain conditional until the actual inputs and contracts are fixed.
+
+Eight combinations were narrowed or split after rechecking source questions. The
+former donor-pseudobulk group mixed 73 records with different estimands. Sixty-nine
+BAISBench/sc-HeurekaBench records now have 16 separate cards for localization,
+aging, tissue, genotype, sex interaction, disease state and observed host-response
+questions. The paired-condition group retains three exact source records. All
+record IDs are preserved; no source answer or multiple-choice option was used.
+
+Paired-assay regression is separate from concentration-response curve fitting.
+TCR state analysis is separate from BCR V/J assignment, and protein-ligand contacts
+are separate from protein-DNA interfaces. Within-volume 3D neighborhoods are
+separate from replicated section comparisons. These decisions increase the number
+of proposed questions because one unrelated input collection cannot honestly
+complete all those endpoints.
+
+The [shared input-source plan](../../experiments/post_training/bio_tasks/workflow_designs/source_collections.json)
+records six candidates and the questions each might support. Four new sources were
+reviewed through primary metadata; two reuse existing observed-data assessments.
+No new biological payload was downloaded, and no source gained training clearance.
+
+| Input collection | Potential shared work | Scientific boundary |
+|---|---|---|
+| [Lawlor paired PBMC CITE-seq](https://explore.data.humancellatlas.org/projects/efea6426-510a-4b60-9a19-277e52bfa815) | Paired-condition RNA analysis, RNA/protein prediction, cell characterization | Ten donors; exact layers and per-condition sample coverage still need verification. Healthy stimulation does not supply disease, age or genetic-perturbation outcomes. |
+| [GSE252331](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE252331) | Alternative RNA/ADT prediction and clinical-state comparisons | Reconcile the deposited subset with the study description; myeloid enrichment complicates cell-abundance interpretation. |
+| [GSE271413](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE271413) | Receptor QC, sequence annotation and developmental-state analysis | Verify donor/visit identities and sequence availability. It does not establish cancer exhaustion or sorting-gate endpoints. |
+| [Fang 3D MERFISH](https://datadryad.org/dataset/doi:10.5061/dryad.w0vt4b922) | Native three-dimensional neighborhoods and within-volume expression analysis | Targeted panels and limited biological replication; separate regions cannot be treated as interchangeable animal replicates. |
+| Existing GSE60450 counts | Count contrasts, enrichment and native PyDESeq2 comparison | New endpoint and expanded benchmark-lineage checks remain; the count package does not exercise raw-read processing. |
+| Existing matched ortholog alignments/trees | Per-locus evolutionary signal | Mirror/deposit identity and full endpoint validation remain; precomputed loci do not exercise ortholog discovery. |
+
+A preliminary accession/DOI search found no explicit matches for the four new
+candidates in inspected benchmark metadata. This does not prove cohort independence
+from uninspected or gated source inputs. The source plan retains that uncertainty,
+exact manifest requirements, rights gaps and the biological limitations above.
 
 Planning priority considers exact endpoint detail, cross-benchmark reuse and
 feasibility. Predicted validated gains remain unset. When those contracts are fixed,

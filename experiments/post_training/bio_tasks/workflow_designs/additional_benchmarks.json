@@ -6,7 +6,7 @@
   "counts": {
     "source_releases": 15,
     "task_or_protocol_records": 493,
-    "question_cards": 160,
+    "question_cards": 172,
     "validated_new_mappings": 0
   },
   "relationship_to_existing_plan": "These question cards refine or split the existing 147 broad questions. They overlap the three existing detailed-design files and one another across benchmarks; do not sum them into an independent task count or a coverage forecast.",
@@ -5864,283 +5864,6 @@
       "validated_new_mappings": 0
     },
     {
-      "proposed_id": "portfolio-sc-heurekabench-cell-type-condition-expression",
-      "scientific_question": "Which condition-associated expression effects occur within an observed cell type after donor-aware aggregation?",
-      "benchmark_targets": [
-        {
-          "benchmark": "sc-HeurekaBench",
-          "task_id": "oeq-paper2-insight1-q1--oeq",
-          "source_task_record_sha256": "7f5c440da2d444829ba7b6fa9a4df47d1812348658d143744d8f181472562b31"
-        },
-        {
-          "benchmark": "sc-HeurekaBench",
-          "task_id": "oeq-paper2-insight7-q1--oeq",
-          "source_task_record_sha256": "2b8bf75cd840a1853af705218fd47f2b1f1a76bf3dd50689462293319b72f50d"
-        },
-        {
-          "benchmark": "sc-HeurekaBench",
-          "task_id": "oeq-paper6-insight1-q1--oeq",
-          "source_task_record_sha256": "de23af0db2fc70ca577e8c28d2778ec9d4cb8e3c08ce0f9c4c8461879f57c8b1"
-        },
-        {
-          "benchmark": "sc-HeurekaBench",
-          "task_id": "oeq-paper7-insight9-q1--oeq",
-          "source_task_record_sha256": "f4efa67199042ce4fade766b872c6f7c1918bdb2758e716bedcd2fa4e27630e0"
-        },
-        {
-          "benchmark": "sc-HeurekaBench",
-          "task_id": "oeq-paper11-insight22-q1--oeq",
-          "source_task_record_sha256": "0e40fea035cea9fc52f7b4faf7eedfd23e1e0770436de1a5da0dcc25f42c18c1"
-        },
-        {
-          "benchmark": "sc-HeurekaBench",
-          "task_id": "oeq-paper11-insight23-q1--oeq",
-          "source_task_record_sha256": "72e9712893114d9a0e53f23f21feb00e134eead0768c14ef184521ec2af198ae"
-        },
-        {
-          "benchmark": "sc-HeurekaBench",
-          "task_id": "oeq-paper11-insight23-q2--oeq",
-          "source_task_record_sha256": "d5a17bccdb0f2d9240fa94279ed35a6cafc0b4f7f5bcf48fabf1d86cc59ddeeb"
-        },
-        {
-          "benchmark": "sc-HeurekaBench",
-          "task_id": "oeq-paper11-insight24-q1--oeq",
-          "source_task_record_sha256": "f242f79aa58d7dfac687ca1032f92395972e5c8e74a33591750b3a757b93a2ed"
-        },
-        {
-          "benchmark": "sc-HeurekaBench",
-          "task_id": "oeq-paper13-insight30-q1--oeq",
-          "source_task_record_sha256": "19dcf745c68f4d4ed43af10e3d61cf7a7998255029328e046e03f862712fd916"
-        },
-        {
-          "benchmark": "sc-HeurekaBench",
-          "task_id": "oeq-paper13-insight31-q1--oeq",
-          "source_task_record_sha256": "14f72a15cf321bf27996abf27f28a5b53a9380b7d458cb338bb8c938352019f1"
-        },
-        {
-          "benchmark": "sc-HeurekaBench",
-          "task_id": "oeq-paper13-insight32-q1--oeq",
-          "source_task_record_sha256": "d4f69a9bdd971903626ed02a794db4890b31692cd3daa239d18ed327076ca273"
-        },
-        {
-          "benchmark": "sc-HeurekaBench",
-          "task_id": "mcq-paper2-insight1-q1--mcq",
-          "source_task_record_sha256": "58ec75590341e9cc3891de6d8fdb3900c0a1d047decabff28014000542e4ec69"
-        },
-        {
-          "benchmark": "sc-HeurekaBench",
-          "task_id": "mcq-paper2-insight1-q2--mcq",
-          "source_task_record_sha256": "f76237ceefa5d981d7270a1c2b765e826bc4254f131896526993e2991a1a394d"
-        },
-        {
-          "benchmark": "sc-HeurekaBench",
-          "task_id": "mcq-paper2-insight7-q1--mcq",
-          "source_task_record_sha256": "1d8803b07a1dbebc16bf36acea1f499c8128cb27889c2e003d1e4875521a7c20"
-        },
-        {
-          "benchmark": "sc-HeurekaBench",
-          "task_id": "mcq-paper6-insight1-q2--mcq",
-          "source_task_record_sha256": "e3d8acfd04483dd6d24eaef758c6766ccafc7ec70f39c66a85ac441ce285b3ba"
-        },
-        {
-          "benchmark": "sc-HeurekaBench",
-          "task_id": "mcq-paper7-insight9-q2--mcq",
-          "source_task_record_sha256": "a0ab49069c63df9c5a93876b7965ed1eab848e687ea5d837b8a5b2e9ca408a30"
-        },
-        {
-          "benchmark": "sc-HeurekaBench",
-          "task_id": "mcq-paper11-insight22-q1--mcq",
-          "source_task_record_sha256": "3920fed50694c31f7766e50f9147634a39b4f82b3cf4e99492bd04af5e3779de"
-        },
-        {
-          "benchmark": "sc-HeurekaBench",
-          "task_id": "mcq-paper11-insight22-q2--mcq",
-          "source_task_record_sha256": "8ff890cd93113e6856258c24435468d09f87c3966a76f0dd01376bfb276f38a4"
-        },
-        {
-          "benchmark": "sc-HeurekaBench",
-          "task_id": "mcq-paper11-insight23-q1--mcq",
-          "source_task_record_sha256": "dce565874e2ad98dd61df62dbfb01ddf053946cfed17092d2bb36d1fae4d09e9"
-        },
-        {
-          "benchmark": "sc-HeurekaBench",
-          "task_id": "mcq-paper11-insight23-q2--mcq",
-          "source_task_record_sha256": "cf0f3efc71cce174a70f472da9143ba776706125dd171693953262fcebc55ad0"
-        },
-        {
-          "benchmark": "sc-HeurekaBench",
-          "task_id": "mcq-paper11-insight24-q2--mcq",
-          "source_task_record_sha256": "ad1ed4e065bd4f1eaca3851d554af7019e3900d357ae82cc527f7e0dab970787"
-        },
-        {
-          "benchmark": "sc-HeurekaBench",
-          "task_id": "mcq-paper13-insight30-q2--mcq",
-          "source_task_record_sha256": "8151c6859337f1244c20f1649bd62330934cb63e4796c4b4fd586526a0902e4e"
-        },
-        {
-          "benchmark": "sc-HeurekaBench",
-          "task_id": "mcq-paper13-insight31-q1--mcq",
-          "source_task_record_sha256": "6833a333157658a6ffc4bb7febc77e779dc8bb74db7df85b0ecbd5883d4adc7b"
-        }
-      ],
-      "source_family": "cell-type-condition-expression",
-      "source_inspection_tier": "question-endpoint-reviewed",
-      "source_planning_disposition": "candidate-design-provisional",
-      "matching_workstreams": [
-        "single-cell-pseudobulk"
-      ],
-      "required_endpoint_stages": [
-        "join sample and cell-type identities to measured expression",
-        "summarize or pseudobulk the specified genes by biological replicate",
-        "estimate condition contrasts and uncertainty within the requested populations"
-      ],
-      "observed_input_requirements": [
-        "Observed raw counts, donor/sample identifiers, conditions and cell identities; matched pairing where documented."
-      ],
-      "required_formats": [
-        "H5AD"
-      ],
-      "native_package_leads": [],
-      "proposed_artifact_requirements": [
-        "Sample-by-cell-type count matrices, donor inclusion, designs, complete gene effects, enrichment universe and pathway outputs"
-      ],
-      "source_specific_decisions": [
-        "Use biological replicates for inference and declare count versus normalized expression; expression alone does not establish protein activity."
-      ],
-      "deterministic_verification_approach": [
-        "Verify sums from raw cells, library eligibility and contrasts independently; native differential-expression fit; panel-aware multiplicity and uncertainty checks."
-      ],
-      "source_artifact_contracts": [],
-      "status": "question-planned-source-and-contract-review-pending",
-      "validated_new_mappings": 0
-    },
-    {
-      "proposed_id": "portfolio-sc-heurekabench-cell-type-expression-to-pathways",
-      "scientific_question": "Which directional pathway associations follow from donor-aware within-cell-type expression contrasts?",
-      "benchmark_targets": [
-        {
-          "benchmark": "sc-HeurekaBench",
-          "task_id": "oeq-paper2-insight5-q1--oeq",
-          "source_task_record_sha256": "7601c4158a6cc08f6b781b24fe8e0f89822d3b4c582d745a5d90fda4b3ecf88b"
-        },
-        {
-          "benchmark": "sc-HeurekaBench",
-          "task_id": "oeq-paper7-insight3-q1--oeq",
-          "source_task_record_sha256": "7c62720410983211eaf70ba0755529be6c766f71048aa9ba71eb61a94b1d27b5"
-        },
-        {
-          "benchmark": "sc-HeurekaBench",
-          "task_id": "oeq-paper7-insight3-q2--oeq",
-          "source_task_record_sha256": "fe55cd367036dcf929fe04153376b4905f149ac3b716eb15e3e84ca639562dd2"
-        },
-        {
-          "benchmark": "sc-HeurekaBench",
-          "task_id": "oeq-paper9-insight16-q1--oeq",
-          "source_task_record_sha256": "fecdc0e4864ee733e1a5749f09a53cc6e1c61063b0830356233fcaeb63bcb23f"
-        },
-        {
-          "benchmark": "sc-HeurekaBench",
-          "task_id": "oeq-paper9-insight17-q1--oeq",
-          "source_task_record_sha256": "09947d84edabca13ca2917eca63d97809778cdbef538ce7c27d1e3af1f1c5e10"
-        },
-        {
-          "benchmark": "sc-HeurekaBench",
-          "task_id": "oeq-paper11-insight25-q1--oeq",
-          "source_task_record_sha256": "afa1c78fcb3f9b503a8b079eedb81755da8d6926ecfea6a8f368a05e3aabe693"
-        },
-        {
-          "benchmark": "sc-HeurekaBench",
-          "task_id": "oeq-paper9-insight4-q1--oeq_tu",
-          "source_task_record_sha256": "824a85b0f4147279553f6d915fc7ffa01fc146f231f0127c28d1029163c5e8f9"
-        },
-        {
-          "benchmark": "sc-HeurekaBench",
-          "task_id": "oeq-paper9-insight4-q2--oeq_tu",
-          "source_task_record_sha256": "503d4dd2a791d9fd75b4ab8b154177d0f232fa1a71964606047c4d1b471b3c85"
-        },
-        {
-          "benchmark": "sc-HeurekaBench",
-          "task_id": "mcq-paper2-insight5-q1--mcq",
-          "source_task_record_sha256": "58cb813ab0b5cf63389ab20cd4da996f715dbe7b266878f67bd1fb0ec92c4935"
-        },
-        {
-          "benchmark": "sc-HeurekaBench",
-          "task_id": "mcq-paper7-insight3-q1--mcq",
-          "source_task_record_sha256": "1ee5958132299a579012e7e37db3da6e2713098ca907f532740f697574824e57"
-        },
-        {
-          "benchmark": "sc-HeurekaBench",
-          "task_id": "mcq-paper9-insight16-q1--mcq",
-          "source_task_record_sha256": "25d1f7803225752202ae260e9709cf2a0fa2387c7dc2958d77f94a7e164a06c9"
-        },
-        {
-          "benchmark": "sc-HeurekaBench",
-          "task_id": "mcq-paper9-insight17-q1--mcq",
-          "source_task_record_sha256": "8faa08bb886f3255d7fbde03b2244fe1092f7f2ea34edb18b2292c9845ab7ae5"
-        },
-        {
-          "benchmark": "sc-HeurekaBench",
-          "task_id": "mcq-paper9-insight17-q2--mcq",
-          "source_task_record_sha256": "46bde1c915be166f6586f53cd54e6b7ff834fee071240dd203a9b6eb5423a55b"
-        },
-        {
-          "benchmark": "sc-HeurekaBench",
-          "task_id": "mcq-paper11-insight25-q1--mcq",
-          "source_task_record_sha256": "780e68fabacebc7d3567c54fd8f282d3ff4750369d95a33783af054715f22f05"
-        },
-        {
-          "benchmark": "sc-HeurekaBench",
-          "task_id": "mcq-paper11-insight25-q2--mcq",
-          "source_task_record_sha256": "c077f5e4359290b637a7cccdfecbc0707e6d9e454eccda9ba8a846f601c2c5b3"
-        },
-        {
-          "benchmark": "sc-HeurekaBench",
-          "task_id": "mcq-paper9-insight4-q1--mcq_tu",
-          "source_task_record_sha256": "d3200dee04a72a2e689c9ad3d714d3a52e9f59f6a4dcf2c836a32e2254bf6ba3"
-        },
-        {
-          "benchmark": "sc-HeurekaBench",
-          "task_id": "mcq-paper9-insight4-q2--mcq_tu",
-          "source_task_record_sha256": "d48306d61709dfdeb27d27edca790fb5dd8dbcef391e6791094b6ed84814b583"
-        },
-        {
-          "benchmark": "sc-HeurekaBench",
-          "task_id": "mcq-paper9-insight5-q2--mcq_tu",
-          "source_task_record_sha256": "b470562a3f023d473fec0b8aef2f13eb4a51a8353c8c5c3c6f5ae16f095efcd9"
-        }
-      ],
-      "source_family": "cell-type-expression-to-pathways",
-      "source_inspection_tier": "question-endpoint-reviewed",
-      "source_planning_disposition": "candidate-design-provisional",
-      "matching_workstreams": [
-        "single-cell-pseudobulk"
-      ],
-      "required_endpoint_stages": [
-        "form the requested sample-aware cell-type contrasts",
-        "rank or select tested genes under declared rules",
-        "test frozen pathway sets against the measured universe and correct multiple testing"
-      ],
-      "observed_input_requirements": [
-        "Observed raw counts, donor/sample identifiers, conditions and cell identities; matched pairing where documented."
-      ],
-      "required_formats": [
-        "H5AD"
-      ],
-      "native_package_leads": [],
-      "proposed_artifact_requirements": [
-        "Sample-by-cell-type count matrices, donor inclusion, designs, complete gene effects, enrichment universe and pathway outputs"
-      ],
-      "source_specific_decisions": [
-        "Record the gene universe, pathway release and enrichment direction; transcriptomic enrichment does not establish causal pathway activation."
-      ],
-      "deterministic_verification_approach": [
-        "Verify sums from raw cells, library eligibility and contrasts independently; native differential-expression fit; panel-aware multiplicity and uncertainty checks."
-      ],
-      "source_artifact_contracts": [],
-      "status": "question-planned-source-and-contract-review-pending",
-      "validated_new_mappings": 0
-    },
-    {
       "proposed_id": "portfolio-sc-heurekabench-compartment-conditioned-cell-communication",
       "scientific_question": "Which ligand-receptor associations change after restricting observed cells to comparable anatomical compartments?",
       "benchmark_targets": [
@@ -7361,145 +7084,6 @@
       "validated_new_mappings": 0
     },
     {
-      "proposed_id": "portfolio-baisbench-replicate-aware-single-cell-contrast",
-      "scientific_question": "Which within-population expression effects remain after preserving biological replication and the specified contrast?",
-      "benchmark_targets": [
-        {
-          "benchmark": "BAISBench",
-          "task_id": "discovery/10.1172/jci.insight.176963/q4",
-          "source_task_record_sha256": "926adeb3c15a4956d48d29afa030ade2c6fda5be5d83b399e50c4e2572035fbd"
-        },
-        {
-          "benchmark": "BAISBench",
-          "task_id": "discovery/10.1038/s41586-021-03710-0/q3",
-          "source_task_record_sha256": "d196c762c097e85b37c1c9000ae14244293a5427bd7a45d5e3af3c494c77cfca"
-        },
-        {
-          "benchmark": "BAISBench",
-          "task_id": "discovery/10.1164/rccm.202207-1384OC/q3",
-          "source_task_record_sha256": "2bd3f8b94c44a025c41e115601bb802863031c91f1f75b7d6b200dacb7b4ab09"
-        },
-        {
-          "benchmark": "BAISBench",
-          "task_id": "discovery/10.1126/science.aat5031/q2",
-          "source_task_record_sha256": "d958a5bb234333124116e6a8eec647c6e053dbeb423d6b0c5f6c1cc1d6314b34"
-        },
-        {
-          "benchmark": "BAISBench",
-          "task_id": "discovery/10.1038/s41467-019-12464-3/q2",
-          "source_task_record_sha256": "a3ddb69765af945dbebf7fbe6c1b29289f006569f098e269e11ed5d8044381be"
-        },
-        {
-          "benchmark": "BAISBench",
-          "task_id": "discovery/10.1182/bloodadvances.2023011445/q1",
-          "source_task_record_sha256": "503a827abf09267f0c1ba43fcb12e8d39694354ce731b3fba38fb1a77b421e12"
-        },
-        {
-          "benchmark": "BAISBench",
-          "task_id": "discovery/10.1182/bloodadvances.2023011445/q2",
-          "source_task_record_sha256": "e5070afa9ad6ab5550f02a4d6c59471624b8ddf39dafb424293cdc9324efeef4"
-        },
-        {
-          "benchmark": "BAISBench",
-          "task_id": "discovery/10.3389/fdmed.2021.806294/q2",
-          "source_task_record_sha256": "250d9a0d07fbec9dccb33b504de328e09fed062361e8844fd21cfb27062d8f4d"
-        },
-        {
-          "benchmark": "BAISBench",
-          "task_id": "discovery/10.1038/s41467-024-45165-7/q5",
-          "source_task_record_sha256": "80cbb0301c0305351278753b6577c476f3ddf417333a74ea9908660513553920"
-        },
-        {
-          "benchmark": "BAISBench",
-          "task_id": "discovery/10.1038/s44161-022-00183-w/q1",
-          "source_task_record_sha256": "c6357c4e71036665e91b1fda8d1c3368de15ddcd60d0ec4a0533b8294a3349ab"
-        },
-        {
-          "benchmark": "BAISBench",
-          "task_id": "discovery/10.1038/s44161-022-00183-w/q3",
-          "source_task_record_sha256": "dbe0fbefe359a7525aa0787fad3fcbb4dc2e83f3229074487c3f11cc5359ddf9"
-        },
-        {
-          "benchmark": "BAISBench",
-          "task_id": "discovery/10.1111/cas.15979/q2",
-          "source_task_record_sha256": "6f8e95d9f94c25b42ebabbec44dd9cbf624eba3b943bd07f734480f1e55d95a8"
-        },
-        {
-          "benchmark": "BAISBench",
-          "task_id": "discovery/10.1016/j.stem.2023.12.013/q1",
-          "source_task_record_sha256": "4ce49f07f10d33aaebea05009047b43760b736ba329179b7f8aa40419a16392d"
-        },
-        {
-          "benchmark": "BAISBench",
-          "task_id": "discovery/10.1038/s42255-022-00531-x/q3",
-          "source_task_record_sha256": "195233c4e2e3360871f4d343fd7b6ed22cb6fa330de5c38b709515382b4d1e8e"
-        },
-        {
-          "benchmark": "BAISBench",
-          "task_id": "discovery/10.1177/00220345221147908/q2",
-          "source_task_record_sha256": "954a3e0395e40f9205564dde0524115cd8c9e9a203ee41df5d2823ab9bc4cc92"
-        },
-        {
-          "benchmark": "BAISBench",
-          "task_id": "discovery/10.1172/jci.insight.178499/q2",
-          "source_task_record_sha256": "5b314cb48dd0b90d07ad3caa9f5542723a949693932b410d6f57ca8d9f7f6b06"
-        },
-        {
-          "benchmark": "BAISBench",
-          "task_id": "discovery/10.1172/jci.insight.178499/q3",
-          "source_task_record_sha256": "41eeef57d9aa6118e9744dda718e973fc7a0dfc2b0b444eb43e908ee741db47a"
-        },
-        {
-          "benchmark": "BAISBench",
-          "task_id": "discovery/10.1016/j.celrep.2022.111838/q5",
-          "source_task_record_sha256": "4d08665af8f4ed97c030a9757685b87012861e9c185313d998ebdc286d4dfb86"
-        },
-        {
-          "benchmark": "BAISBench",
-          "task_id": "discovery/10.1038/s42003-024-06225-2/q2",
-          "source_task_record_sha256": "5e2f02aa098097c45b7ab497c5f460e74440534e45f3fb3007c352a90e07cad0"
-        },
-        {
-          "benchmark": "BAISBench",
-          "task_id": "discovery/10.1016/j.devcel.2020.11.010/q1",
-          "source_task_record_sha256": "d543dd66496fe6372e34b0a7f727c7150aa0f1bf2ff3b8959b1425068319648a"
-        }
-      ],
-      "source_family": "replicate-aware-single-cell-contrast",
-      "source_inspection_tier": "question-stem-only",
-      "source_planning_disposition": "candidate-design-provisional",
-      "matching_workstreams": [
-        "single-cell-pseudobulk"
-      ],
-      "required_endpoint_stages": [
-        "join cell and donor identities",
-        "select relevant populations",
-        "preserve biological replicates",
-        "fit condition or interaction contrast",
-        "adjust multiple tests"
-      ],
-      "observed_input_requirements": [
-        "Observed raw counts, donor/sample identifiers, conditions and cell identities; matched pairing where documented."
-      ],
-      "required_formats": [
-        "H5AD expression data",
-        "cell and biological-sample metadata"
-      ],
-      "native_package_leads": [],
-      "proposed_artifact_requirements": [
-        "Sample-by-cell-type count matrices, donor inclusion, designs, complete gene effects, enrichment universe and pathway outputs"
-      ],
-      "source_specific_decisions": [
-        "Define covariates, expression layer, tested universe and effect direction; avoid treating cells as independent subjects."
-      ],
-      "deterministic_verification_approach": [
-        "Verify sums from raw cells, library eligibility and contrasts independently; native differential-expression fit; panel-aware multiplicity and uncertainty checks."
-      ],
-      "source_artifact_contracts": [],
-      "status": "question-planned-source-and-contract-review-pending",
-      "validated_new_mappings": 0
-    },
-    {
       "proposed_id": "portfolio-baisbench-sample-level-signal-detection",
       "scientific_question": "Which observed sample-level biological signals remain after detection thresholds and negative controls are fixed?",
       "benchmark_targets": [
@@ -7616,85 +7200,6 @@
       ],
       "deterministic_verification_approach": [
         "Independently recompute eligibility, complex-subunit rules, joins, null statistics and multiplicity; distinguish association from demonstrated signaling."
-      ],
-      "source_artifact_contracts": [],
-      "status": "question-planned-source-and-contract-review-pending",
-      "validated_new_mappings": 0
-    },
-    {
-      "proposed_id": "portfolio-baisbench-single-cell-contrast-enrichment",
-      "scientific_question": "Which functional categories follow from an observed cell-type contrast under an explicit tested-gene background?",
-      "benchmark_targets": [
-        {
-          "benchmark": "BAISBench",
-          "task_id": "discovery/10.1038/s41586-021-03710-0/q5",
-          "source_task_record_sha256": "d5b4a54e9729dcc914debe64b44af8b9d1f8969ef32c91a48bd123e470606e0f"
-        },
-        {
-          "benchmark": "BAISBench",
-          "task_id": "discovery/10.1165/rcmb.2021-0555OC/q4",
-          "source_task_record_sha256": "8d0faff6299bd0fa0f46e1c1ee26dae9b0225bb74e65d3088b4c34d430c42762"
-        },
-        {
-          "benchmark": "BAISBench",
-          "task_id": "discovery/10.1016/j.xcrm.2023.101158/q2",
-          "source_task_record_sha256": "cb408644f4462bc0cf8a1eda317488487d5d24dfbe8c861d04b99e66283e2377"
-        },
-        {
-          "benchmark": "BAISBench",
-          "task_id": "discovery/10.1182/bloodadvances.2023011445/q4",
-          "source_task_record_sha256": "769885100629d3dceae01b10f786f9e976b18e13f65b9cd16c2f9c0728f5a888"
-        },
-        {
-          "benchmark": "BAISBench",
-          "task_id": "discovery/10.1016/j.celrep.2024.114247/q3",
-          "source_task_record_sha256": "9e55ed29e5bef30a09fc891d0c9cc4e045299b09a5fa00b9db35eb89d89a0a0d"
-        },
-        {
-          "benchmark": "BAISBench",
-          "task_id": "discovery/10.1038/s41467-024-45165-7/q2",
-          "source_task_record_sha256": "7d27c40f06993a4cae48f56a3449a982de15e294074917c7b2deb185cf15d5a8"
-        },
-        {
-          "benchmark": "BAISBench",
-          "task_id": "discovery/10.1172/jci.insight.178499/q4",
-          "source_task_record_sha256": "08ae591459411f67b0026038b0c58f66392374c33b342bcbaf132ee52f944292"
-        },
-        {
-          "benchmark": "BAISBench",
-          "task_id": "discovery/10.1038/s42003-024-06225-2/q4",
-          "source_task_record_sha256": "a290a4dbce4c410445b6107f68f167ffa31592b1f1b6438508a8f244d2f76343"
-        }
-      ],
-      "source_family": "single-cell-contrast-enrichment",
-      "source_inspection_tier": "question-stem-only",
-      "source_planning_disposition": "candidate-design-provisional",
-      "matching_workstreams": [
-        "single-cell-pseudobulk"
-      ],
-      "required_endpoint_stages": [
-        "fit replicate-aware cell-type contrast",
-        "pin gene mappings and gene-set release",
-        "define background or ranking",
-        "calculate enrichment and multiplicity",
-        "report complete results"
-      ],
-      "observed_input_requirements": [
-        "Observed raw counts, donor/sample identifiers, conditions and cell identities; matched pairing where documented."
-      ],
-      "required_formats": [
-        "H5AD expression data",
-        "cell and biological-sample metadata"
-      ],
-      "native_package_leads": [],
-      "proposed_artifact_requirements": [
-        "Sample-by-cell-type count matrices, donor inclusion, designs, complete gene effects, enrichment universe and pathway outputs"
-      ],
-      "source_specific_decisions": [
-        "Do not interchange overrepresentation and rank-based enrichment or reuse cells as biological replicates."
-      ],
-      "deterministic_verification_approach": [
-        "Verify sums from raw cells, library eligibility and contrasts independently; native differential-expression fit; panel-aware multiplicity and uncertainty checks."
       ],
       "source_artifact_contracts": [],
       "status": "question-planned-source-and-contract-review-pending",
@@ -8705,6 +8210,1457 @@
       "status": "question-planned-source-and-contract-review-pending",
       "validated_new_mappings": 0,
       "merge_reason": "One observed input bundle supports a connected end-to-end analysis; preserve all listed component endpoint stages and protocol-specific decisions."
+    },
+    {
+      "proposed_id": "portfolio-sc-heurekabench-inflammatory-celltype-comparison",
+      "scientific_question": "Which observed inflammatory-condition expression effects differ across independently sampled cardiac cell types under explicit group contrasts?",
+      "benchmark_targets": [
+        {
+          "benchmark": "sc-HeurekaBench",
+          "task_id": "oeq-paper2-insight1-q1--oeq",
+          "source_task_record_sha256": "7f5c440da2d444829ba7b6fa9a4df47d1812348658d143744d8f181472562b31"
+        },
+        {
+          "benchmark": "sc-HeurekaBench",
+          "task_id": "oeq-paper2-insight7-q1--oeq",
+          "source_task_record_sha256": "2b8bf75cd840a1853af705218fd47f2b1f1a76bf3dd50689462293319b72f50d"
+        },
+        {
+          "benchmark": "sc-HeurekaBench",
+          "task_id": "mcq-paper2-insight1-q1--mcq",
+          "source_task_record_sha256": "58ec75590341e9cc3891de6d8fdb3900c0a1d047decabff28014000542e4ec69"
+        },
+        {
+          "benchmark": "sc-HeurekaBench",
+          "task_id": "mcq-paper2-insight1-q2--mcq",
+          "source_task_record_sha256": "f76237ceefa5d981d7270a1c2b765e826bc4254f131896526993e2991a1a394d"
+        },
+        {
+          "benchmark": "sc-HeurekaBench",
+          "task_id": "mcq-paper2-insight7-q1--mcq",
+          "source_task_record_sha256": "1d8803b07a1dbebc16bf36acea1f499c8128cb27889c2e003d1e4875521a7c20"
+        },
+        {
+          "benchmark": "sc-HeurekaBench",
+          "task_id": "oeq-paper2-insight5-q1--oeq",
+          "source_task_record_sha256": "7601c4158a6cc08f6b781b24fe8e0f89822d3b4c582d745a5d90fda4b3ecf88b"
+        },
+        {
+          "benchmark": "sc-HeurekaBench",
+          "task_id": "mcq-paper2-insight5-q1--mcq",
+          "source_task_record_sha256": "58cb813ab0b5cf63389ab20cd4da996f715dbe7b266878f67bd1fb0ec92c4935"
+        }
+      ],
+      "source_inspection_tier": "question-stems-rechecked-for-estimand-and-sampling-design",
+      "source_planning_disposition": "estimand-specific-input-and-artifact-design",
+      "matching_workstreams": [
+        "single-cell-pseudobulk"
+      ],
+      "required_endpoint_stages": [
+        "Join measured cells, genes, biological samples and the explicitly observed grouping variable.",
+        "Construct the complete eligible population and expression summaries for every required cell state.",
+        "Fit the specified sample-level contrast or localization summary with the actual paired/unpaired design.",
+        "Return all tested effects, uncertainties and gene-set results where requested; link every conclusion to these artifacts."
+      ],
+      "observed_input_requirements": [
+        "Independent observed RNA counts, feature annotation and cell/sample/donor metadata with the grouping variable required by this question. Preserve real biological replication and all requested compartments/condition levels."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "native_package_leads": [],
+      "proposed_artifact_requirements": [
+        "Complete cell/sample eligibility, cell-type-by-sample counts, gene detection summaries, design/contrast matrices where applicable, all tested gene effects and explicitly requested pathway/membership tables."
+      ],
+      "source_specific_decisions": [
+        "Preserve multiple observed inflammatory conditions and biological samples; predefined inflammatory gene sets support scoped enrichment, not a claim that expression proves pathway activation."
+      ],
+      "deterministic_verification_approach": [
+        "Check identities, real sample grouping, complete denominators and design estimability. Use native count/statistical analysis plus independent arithmetic and multiplicity checks. No effect is required to have the source study sign or significance.",
+        "Only claims mechanically supported by the supplied observations and frozen evidence rules are graded. Causal or functional interpretations unsupported by these artifacts remain gaps."
+      ],
+      "source_artifact_contracts": [],
+      "status": "question-planned-source-and-contract-review-pending",
+      "validated_new_mappings": 0,
+      "source_families": [
+        "cell-type-condition-expression",
+        "cell-type-expression-to-pathways"
+      ],
+      "refines_prior_question_ids": [
+        "portfolio-sc-heurekabench-cell-type-condition-expression",
+        "portfolio-sc-heurekabench-cell-type-expression-to-pathways"
+      ],
+      "planning_review": {
+        "record_count": 7,
+        "scope": "Question stems and prior permitted endpoint metadata only; expected answers, multiple-choice options and biological fixtures were not used.",
+        "pairedness": "No donor pairing is assumed from a family name; input metadata must establish it.",
+        "source_question_hashes": [
+          {
+            "task_id": "oeq-paper2-insight1-q1--oeq",
+            "sha256": "d5903cec7085b23ec027acd0547000c648593a4bc2eff15c42b11a5530582817"
+          },
+          {
+            "task_id": "oeq-paper2-insight7-q1--oeq",
+            "sha256": "2917985e370a1c8a6c8eb1fd051d263583afdbb18fae25a404b82046f79cffab"
+          },
+          {
+            "task_id": "mcq-paper2-insight1-q1--mcq",
+            "sha256": "2945ac660a07e126186458f81055475f8a46ec3658300bd9b2b966f4f1b35e76"
+          },
+          {
+            "task_id": "mcq-paper2-insight1-q2--mcq",
+            "sha256": "6cfdb26a0ef89967e35f5fbde361f31c7da3a18ae2d59ff492ee33d16dac312c"
+          },
+          {
+            "task_id": "mcq-paper2-insight7-q1--mcq",
+            "sha256": "f982e5586e4214eb81a653dccc92eaa12175f9fccad0fb5d60393bccb7911437"
+          },
+          {
+            "task_id": "oeq-paper2-insight5-q1--oeq",
+            "sha256": "2f7b79d6099f6513b24c442e2de64e167d29f86ebe3ea2fe73530855309efd52"
+          },
+          {
+            "task_id": "mcq-paper2-insight5-q1--mcq",
+            "sha256": "ff42d9c081a0a29a68862612eb17fedaeb672fd32682b9123fd2d66e80715379"
+          }
+        ]
+      }
+    },
+    {
+      "proposed_id": "portfolio-sc-heurekabench-within-tissue-expression-localization",
+      "scientific_question": "Which independently observed tissue cell populations contribute to the expression of a prespecified gene after detection-rate and sample-level checks?",
+      "benchmark_targets": [
+        {
+          "benchmark": "sc-HeurekaBench",
+          "task_id": "oeq-paper6-insight1-q1--oeq",
+          "source_task_record_sha256": "de23af0db2fc70ca577e8c28d2778ec9d4cb8e3c08ce0f9c4c8461879f57c8b1"
+        },
+        {
+          "benchmark": "sc-HeurekaBench",
+          "task_id": "mcq-paper6-insight1-q2--mcq",
+          "source_task_record_sha256": "e3d8acfd04483dd6d24eaef758c6766ccafc7ec70f39c66a85ac441ce285b3ba"
+        }
+      ],
+      "source_inspection_tier": "question-stems-rechecked-for-estimand-and-sampling-design",
+      "source_planning_disposition": "estimand-specific-input-and-artifact-design",
+      "matching_workstreams": [
+        "single-cell-annotation"
+      ],
+      "required_endpoint_stages": [
+        "Join measured cells, genes, biological samples and the explicitly observed grouping variable.",
+        "Construct the complete eligible population and expression summaries for every required cell state.",
+        "Fit the specified sample-level contrast or localization summary with the actual paired/unpaired design.",
+        "Return all tested effects, uncertainties and gene-set results where requested; link every conclusion to these artifacts."
+      ],
+      "observed_input_requirements": [
+        "Independent observed RNA counts, feature annotation and cell/sample/donor metadata with the grouping variable required by this question. Preserve real biological replication and all requested compartments/condition levels."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "native_package_leads": [],
+      "proposed_artifact_requirements": [
+        "Complete cell/sample eligibility, cell-type-by-sample counts, gene detection summaries, design/contrast matrices where applicable, all tested gene effects and explicitly requested pathway/membership tables."
+      ],
+      "source_specific_decisions": [
+        "This is a localization/denominator question. It need not contain a treatment contrast and cannot be counted as paired pseudobulk differential expression."
+      ],
+      "deterministic_verification_approach": [
+        "Check identities, real sample grouping, complete denominators and design estimability. Use native count/statistical analysis plus independent arithmetic and multiplicity checks. No effect is required to have the source study sign or significance.",
+        "Only claims mechanically supported by the supplied observations and frozen evidence rules are graded. Causal or functional interpretations unsupported by these artifacts remain gaps."
+      ],
+      "source_artifact_contracts": [],
+      "status": "question-planned-source-and-contract-review-pending",
+      "validated_new_mappings": 0,
+      "source_families": [
+        "cell-type-condition-expression"
+      ],
+      "refines_prior_question_ids": [
+        "portfolio-sc-heurekabench-cell-type-condition-expression"
+      ],
+      "planning_review": {
+        "record_count": 2,
+        "scope": "Question stems and prior permitted endpoint metadata only; expected answers, multiple-choice options and biological fixtures were not used.",
+        "pairedness": "No donor pairing is assumed from a family name; input metadata must establish it.",
+        "source_question_hashes": [
+          {
+            "task_id": "oeq-paper6-insight1-q1--oeq",
+            "sha256": "3693ebdd1ab615122b7b5a78df311bd775bd72dee80c1a33869c872570c9295a"
+          },
+          {
+            "task_id": "mcq-paper6-insight1-q2--mcq",
+            "sha256": "f4b9a4cf9d70d95be589cab02e4f6f7662aa013e7b1ecff7471d4fbc75f57fd2"
+          }
+        ]
+      }
+    },
+    {
+      "proposed_id": "portfolio-sc-heurekabench-muscle-aging-expression",
+      "scientific_question": "Which observed muscle-cell programs and pathway associations differ with recorded age after biological-sample and cell-state checks?",
+      "benchmark_targets": [
+        {
+          "benchmark": "sc-HeurekaBench",
+          "task_id": "oeq-paper7-insight9-q1--oeq",
+          "source_task_record_sha256": "f4efa67199042ce4fade766b872c6f7c1918bdb2758e716bedcd2fa4e27630e0"
+        },
+        {
+          "benchmark": "sc-HeurekaBench",
+          "task_id": "mcq-paper7-insight9-q2--mcq",
+          "source_task_record_sha256": "a0ab49069c63df9c5a93876b7965ed1eab848e687ea5d837b8a5b2e9ca408a30"
+        },
+        {
+          "benchmark": "sc-HeurekaBench",
+          "task_id": "oeq-paper7-insight3-q1--oeq",
+          "source_task_record_sha256": "7c62720410983211eaf70ba0755529be6c766f71048aa9ba71eb61a94b1d27b5"
+        },
+        {
+          "benchmark": "sc-HeurekaBench",
+          "task_id": "oeq-paper7-insight3-q2--oeq",
+          "source_task_record_sha256": "fe55cd367036dcf929fe04153376b4905f149ac3b716eb15e3e84ca639562dd2"
+        },
+        {
+          "benchmark": "sc-HeurekaBench",
+          "task_id": "mcq-paper7-insight3-q1--mcq",
+          "source_task_record_sha256": "1ee5958132299a579012e7e37db3da6e2713098ca907f532740f697574824e57"
+        }
+      ],
+      "source_inspection_tier": "question-stems-rechecked-for-estimand-and-sampling-design",
+      "source_planning_disposition": "estimand-specific-input-and-artifact-design",
+      "matching_workstreams": [
+        "single-cell-pseudobulk"
+      ],
+      "required_endpoint_stages": [
+        "Join measured cells, genes, biological samples and the explicitly observed grouping variable.",
+        "Construct the complete eligible population and expression summaries for every required cell state.",
+        "Fit the specified sample-level contrast or localization summary with the actual paired/unpaired design.",
+        "Return all tested effects, uncertainties and gene-set results where requested; link every conclusion to these artifacts."
+      ],
+      "observed_input_requirements": [
+        "Independent observed RNA counts, feature annotation and cell/sample/donor metadata with the grouping variable required by this question. Preserve real biological replication and all requested compartments/condition levels."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "native_package_leads": [],
+      "proposed_artifact_requirements": [
+        "Complete cell/sample eligibility, cell-type-by-sample counts, gene detection summaries, design/contrast matrices where applicable, all tested gene effects and explicitly requested pathway/membership tables."
+      ],
+      "source_specific_decisions": [
+        "Keep age, cell-state definition, tested gene universe and actual sampling design. Cross-sectional expression does not establish senescence causality."
+      ],
+      "deterministic_verification_approach": [
+        "Check identities, real sample grouping, complete denominators and design estimability. Use native count/statistical analysis plus independent arithmetic and multiplicity checks. No effect is required to have the source study sign or significance.",
+        "Only claims mechanically supported by the supplied observations and frozen evidence rules are graded. Causal or functional interpretations unsupported by these artifacts remain gaps."
+      ],
+      "source_artifact_contracts": [],
+      "status": "question-planned-source-and-contract-review-pending",
+      "validated_new_mappings": 0,
+      "source_families": [
+        "cell-type-condition-expression",
+        "cell-type-expression-to-pathways"
+      ],
+      "refines_prior_question_ids": [
+        "portfolio-sc-heurekabench-cell-type-condition-expression",
+        "portfolio-sc-heurekabench-cell-type-expression-to-pathways"
+      ],
+      "planning_review": {
+        "record_count": 5,
+        "scope": "Question stems and prior permitted endpoint metadata only; expected answers, multiple-choice options and biological fixtures were not used.",
+        "pairedness": "No donor pairing is assumed from a family name; input metadata must establish it.",
+        "source_question_hashes": [
+          {
+            "task_id": "oeq-paper7-insight9-q1--oeq",
+            "sha256": "b2bb28aab9637c9e9a8bb66d5160883efc324359a699ccd73d00910f5ab46b68"
+          },
+          {
+            "task_id": "mcq-paper7-insight9-q2--mcq",
+            "sha256": "bc91cfe0e7d3fbaae247d70d8a5c17549e13f77da9025cec30cfb25193c2487c"
+          },
+          {
+            "task_id": "oeq-paper7-insight3-q1--oeq",
+            "sha256": "efe01855105a32dc1cbc67d8f87de37a1ae9bc556097fe7564c8299a2269e98e"
+          },
+          {
+            "task_id": "oeq-paper7-insight3-q2--oeq",
+            "sha256": "a91bd88ca4ec26ae6cf46d9f9263a970a9846cf51ab72b8bd79219542ec94531"
+          },
+          {
+            "task_id": "mcq-paper7-insight3-q1--mcq",
+            "sha256": "40967903a54fc7e7a8531c80876956e01d2f838e5336b5e6c479a16c1cb0a3c2"
+          }
+        ]
+      }
+    },
+    {
+      "proposed_id": "portfolio-sc-heurekabench-placental-host-response-comparison",
+      "scientific_question": "Which measured host-cell expression and pathway responses differ across observed placental study conditions under an explicitly replicated analysis?",
+      "benchmark_targets": [
+        {
+          "benchmark": "sc-HeurekaBench",
+          "task_id": "oeq-paper11-insight22-q1--oeq",
+          "source_task_record_sha256": "0e40fea035cea9fc52f7b4faf7eedfd23e1e0770436de1a5da0dcc25f42c18c1"
+        },
+        {
+          "benchmark": "sc-HeurekaBench",
+          "task_id": "oeq-paper11-insight23-q1--oeq",
+          "source_task_record_sha256": "72e9712893114d9a0e53f23f21feb00e134eead0768c14ef184521ec2af198ae"
+        },
+        {
+          "benchmark": "sc-HeurekaBench",
+          "task_id": "oeq-paper11-insight23-q2--oeq",
+          "source_task_record_sha256": "d5a17bccdb0f2d9240fa94279ed35a6cafc0b4f7f5bcf48fabf1d86cc59ddeeb"
+        },
+        {
+          "benchmark": "sc-HeurekaBench",
+          "task_id": "oeq-paper11-insight24-q1--oeq",
+          "source_task_record_sha256": "f242f79aa58d7dfac687ca1032f92395972e5c8e74a33591750b3a757b93a2ed"
+        },
+        {
+          "benchmark": "sc-HeurekaBench",
+          "task_id": "mcq-paper11-insight22-q1--mcq",
+          "source_task_record_sha256": "3920fed50694c31f7766e50f9147634a39b4f82b3cf4e99492bd04af5e3779de"
+        },
+        {
+          "benchmark": "sc-HeurekaBench",
+          "task_id": "mcq-paper11-insight22-q2--mcq",
+          "source_task_record_sha256": "8ff890cd93113e6856258c24435468d09f87c3966a76f0dd01376bfb276f38a4"
+        },
+        {
+          "benchmark": "sc-HeurekaBench",
+          "task_id": "mcq-paper11-insight23-q1--mcq",
+          "source_task_record_sha256": "dce565874e2ad98dd61df62dbfb01ddf053946cfed17092d2bb36d1fae4d09e9"
+        },
+        {
+          "benchmark": "sc-HeurekaBench",
+          "task_id": "mcq-paper11-insight23-q2--mcq",
+          "source_task_record_sha256": "cf0f3efc71cce174a70f472da9143ba776706125dd171693953262fcebc55ad0"
+        },
+        {
+          "benchmark": "sc-HeurekaBench",
+          "task_id": "mcq-paper11-insight24-q2--mcq",
+          "source_task_record_sha256": "ad1ed4e065bd4f1eaca3851d554af7019e3900d357ae82cc527f7e0dab970787"
+        },
+        {
+          "benchmark": "sc-HeurekaBench",
+          "task_id": "oeq-paper11-insight25-q1--oeq",
+          "source_task_record_sha256": "afa1c78fcb3f9b503a8b079eedb81755da8d6926ecfea6a8f368a05e3aabe693"
+        },
+        {
+          "benchmark": "sc-HeurekaBench",
+          "task_id": "mcq-paper11-insight25-q1--mcq",
+          "source_task_record_sha256": "780e68fabacebc7d3567c54fd8f282d3ff4750369d95a33783af054715f22f05"
+        },
+        {
+          "benchmark": "sc-HeurekaBench",
+          "task_id": "mcq-paper11-insight25-q2--mcq",
+          "source_task_record_sha256": "c077f5e4359290b637a7cccdfecbc0707e6d9e454eccda9ba8a846f601c2c5b3"
+        }
+      ],
+      "source_inspection_tier": "question-stems-rechecked-for-estimand-and-sampling-design",
+      "source_planning_disposition": "estimand-specific-input-and-artifact-design",
+      "matching_workstreams": [
+        "single-cell-pseudobulk"
+      ],
+      "required_endpoint_stages": [
+        "Join measured cells, genes, biological samples and the explicitly observed grouping variable.",
+        "Construct the complete eligible population and expression summaries for every required cell state.",
+        "Fit the specified sample-level contrast or localization summary with the actual paired/unpaired design.",
+        "Return all tested effects, uncertainties and gene-set results where requested; link every conclusion to these artifacts."
+      ],
+      "observed_input_requirements": [
+        "Independent observed RNA counts, feature annotation and cell/sample/donor metadata with the grouping variable required by this question. Preserve real biological replication and all requested compartments/condition levels."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "native_package_leads": [],
+      "proposed_artifact_requirements": [
+        "Complete cell/sample eligibility, cell-type-by-sample counts, gene detection summaries, design/contrast matrices where applicable, all tested gene effects and explicitly requested pathway/membership tables."
+      ],
+      "source_specific_decisions": [
+        "Use already observed host measurements only. Distinct cell lineages and challenge conditions require their own contrasts. Quantitative changes do not establish a protective or causal mechanism; no intervention optimization or experimental instructions are part of the task."
+      ],
+      "deterministic_verification_approach": [
+        "Check identities, real sample grouping, complete denominators and design estimability. Use native count/statistical analysis plus independent arithmetic and multiplicity checks. No effect is required to have the source study sign or significance.",
+        "Only claims mechanically supported by the supplied observations and frozen evidence rules are graded. Causal or functional interpretations unsupported by these artifacts remain gaps."
+      ],
+      "source_artifact_contracts": [],
+      "status": "question-planned-source-and-contract-review-pending",
+      "validated_new_mappings": 0,
+      "source_families": [
+        "cell-type-condition-expression",
+        "cell-type-expression-to-pathways"
+      ],
+      "refines_prior_question_ids": [
+        "portfolio-sc-heurekabench-cell-type-condition-expression",
+        "portfolio-sc-heurekabench-cell-type-expression-to-pathways"
+      ],
+      "planning_review": {
+        "record_count": 12,
+        "scope": "Question stems and prior permitted endpoint metadata only; expected answers, multiple-choice options and biological fixtures were not used.",
+        "pairedness": "No donor pairing is assumed from a family name; input metadata must establish it.",
+        "source_question_hashes": [
+          {
+            "task_id": "oeq-paper11-insight22-q1--oeq",
+            "sha256": "f15ce9d1ab960a87b3d1268c54581b2d51916fed80f027540d529d0a08fed9d1"
+          },
+          {
+            "task_id": "oeq-paper11-insight23-q1--oeq",
+            "sha256": "319df99ded76ce68344a4de5936190a9a6cb4123569be4f18a01a0ae502d6dd4"
+          },
+          {
+            "task_id": "oeq-paper11-insight23-q2--oeq",
+            "sha256": "83dc0434bc09752e995235f32a66f62e13291b6ae9a8528046fcea7e9445b5d5"
+          },
+          {
+            "task_id": "oeq-paper11-insight24-q1--oeq",
+            "sha256": "e772260e4617872333091c000ab578e89acaab2e01bee74d67459bd38bd77fe9"
+          },
+          {
+            "task_id": "mcq-paper11-insight22-q1--mcq",
+            "sha256": "30cd382234847b6342c8ba763728a5e7b169d6aac70b3c54d428d1e9af538e5c"
+          },
+          {
+            "task_id": "mcq-paper11-insight22-q2--mcq",
+            "sha256": "5a046dd5218f34a9a9333b468b5fd87868fdae132784f0300a8ac27626ed365e"
+          },
+          {
+            "task_id": "mcq-paper11-insight23-q1--mcq",
+            "sha256": "52aa873250052e51faff1dfe03979b08773672e6ddd19e324efb9b643f85d7f4"
+          },
+          {
+            "task_id": "mcq-paper11-insight23-q2--mcq",
+            "sha256": "416e265a666f53195f0940e36650ea520852f5b977686269e44ade3169c0f156"
+          },
+          {
+            "task_id": "mcq-paper11-insight24-q2--mcq",
+            "sha256": "fa4717d95c4a839abe43635191f4068a6c4cb3dee11ff7787182aab024ebcdfe"
+          },
+          {
+            "task_id": "oeq-paper11-insight25-q1--oeq",
+            "sha256": "6d1a2e65e204018e634922038c3703c8a10e942f776c08ec2f85f544a271cd32"
+          },
+          {
+            "task_id": "mcq-paper11-insight25-q1--mcq",
+            "sha256": "0ba52103c43764381f6ff1e8d725e16683822514c15ede8d3cea4fa250b9d505"
+          },
+          {
+            "task_id": "mcq-paper11-insight25-q2--mcq",
+            "sha256": "c4d809d84d45716468b81cdee23e3e109c4eb8b46cb61d32367eb841d292cfa8"
+          }
+        ]
+      }
+    },
+    {
+      "proposed_id": "portfolio-sc-heurekabench-placental-cytokine-response",
+      "scientific_question": "Which observed trophoblast expression changes associate with recorded maternal-cell signaling conditions under prespecified gene-set and receptor evidence rules?",
+      "benchmark_targets": [
+        {
+          "benchmark": "sc-HeurekaBench",
+          "task_id": "oeq-paper13-insight30-q1--oeq",
+          "source_task_record_sha256": "19dcf745c68f4d4ed43af10e3d61cf7a7998255029328e046e03f862712fd916"
+        },
+        {
+          "benchmark": "sc-HeurekaBench",
+          "task_id": "oeq-paper13-insight31-q1--oeq",
+          "source_task_record_sha256": "14f72a15cf321bf27996abf27f28a5b53a9380b7d458cb338bb8c938352019f1"
+        },
+        {
+          "benchmark": "sc-HeurekaBench",
+          "task_id": "oeq-paper13-insight32-q1--oeq",
+          "source_task_record_sha256": "d4f69a9bdd971903626ed02a794db4890b31692cd3daa239d18ed327076ca273"
+        },
+        {
+          "benchmark": "sc-HeurekaBench",
+          "task_id": "mcq-paper13-insight30-q2--mcq",
+          "source_task_record_sha256": "8151c6859337f1244c20f1649bd62330934cb63e4796c4b4fd586526a0902e4e"
+        },
+        {
+          "benchmark": "sc-HeurekaBench",
+          "task_id": "mcq-paper13-insight31-q1--mcq",
+          "source_task_record_sha256": "6833a333157658a6ffc4bb7febc77e779dc8bb74db7df85b0ecbd5883d4adc7b"
+        }
+      ],
+      "source_inspection_tier": "question-stems-rechecked-for-estimand-and-sampling-design",
+      "source_planning_disposition": "estimand-specific-input-and-artifact-design",
+      "matching_workstreams": [
+        "single-cell-pseudobulk"
+      ],
+      "required_endpoint_stages": [
+        "Join measured cells, genes, biological samples and the explicitly observed grouping variable.",
+        "Construct the complete eligible population and expression summaries for every required cell state.",
+        "Fit the specified sample-level contrast or localization summary with the actual paired/unpaired design.",
+        "Return all tested effects, uncertainties and gene-set results where requested; link every conclusion to these artifacts."
+      ],
+      "observed_input_requirements": [
+        "Independent observed RNA counts, feature annotation and cell/sample/donor metadata with the grouping variable required by this question. Preserve real biological replication and all requested compartments/condition levels."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "native_package_leads": [],
+      "proposed_artifact_requirements": [
+        "Complete cell/sample eligibility, cell-type-by-sample counts, gene detection summaries, design/contrast matrices where applicable, all tested gene effects and explicitly requested pathway/membership tables."
+      ],
+      "source_specific_decisions": [
+        "Distinguish measured expression from inferred differentiation, inflammation and blood-flow functions. Require independent observations for functional claims; do not turn a cytokine-associated contrast into an experimental optimization objective."
+      ],
+      "deterministic_verification_approach": [
+        "Check identities, real sample grouping, complete denominators and design estimability. Use native count/statistical analysis plus independent arithmetic and multiplicity checks. No effect is required to have the source study sign or significance.",
+        "Only claims mechanically supported by the supplied observations and frozen evidence rules are graded. Causal or functional interpretations unsupported by these artifacts remain gaps."
+      ],
+      "source_artifact_contracts": [],
+      "status": "question-planned-source-and-contract-review-pending",
+      "validated_new_mappings": 0,
+      "source_families": [
+        "cell-type-condition-expression"
+      ],
+      "refines_prior_question_ids": [
+        "portfolio-sc-heurekabench-cell-type-condition-expression"
+      ],
+      "planning_review": {
+        "record_count": 5,
+        "scope": "Question stems and prior permitted endpoint metadata only; expected answers, multiple-choice options and biological fixtures were not used.",
+        "pairedness": "No donor pairing is assumed from a family name; input metadata must establish it.",
+        "source_question_hashes": [
+          {
+            "task_id": "oeq-paper13-insight30-q1--oeq",
+            "sha256": "e17b5ddfef2952bed2aaf282c93105343786557f6f17cf631138f22a354a2087"
+          },
+          {
+            "task_id": "oeq-paper13-insight31-q1--oeq",
+            "sha256": "1d6a0c0e53596b98906af4c9fbb75e94d5c1bce88acf59084898796333030d13"
+          },
+          {
+            "task_id": "oeq-paper13-insight32-q1--oeq",
+            "sha256": "4137f0b17613e3a0b6dbb85abee616f60e0f71cd1fe07264688b648aabf58cf8"
+          },
+          {
+            "task_id": "mcq-paper13-insight30-q2--mcq",
+            "sha256": "a0e02b8a1344cbc8f4fef83fafc0912d3db33bf3abe9125043c22845369fb03c"
+          },
+          {
+            "task_id": "mcq-paper13-insight31-q1--mcq",
+            "sha256": "56d3ef0f3a4bbac563b06f334846688b02e81d1a01976aaae42121def598fddd"
+          }
+        ]
+      }
+    },
+    {
+      "proposed_id": "portfolio-sc-heurekabench-ovarian-aging-expression",
+      "scientific_question": "Which expression and pathway differences associate with recorded age across observed ovarian stromal, vascular and follicular populations?",
+      "benchmark_targets": [
+        {
+          "benchmark": "sc-HeurekaBench",
+          "task_id": "oeq-paper9-insight16-q1--oeq",
+          "source_task_record_sha256": "fecdc0e4864ee733e1a5749f09a53cc6e1c61063b0830356233fcaeb63bcb23f"
+        },
+        {
+          "benchmark": "sc-HeurekaBench",
+          "task_id": "oeq-paper9-insight17-q1--oeq",
+          "source_task_record_sha256": "09947d84edabca13ca2917eca63d97809778cdbef538ce7c27d1e3af1f1c5e10"
+        },
+        {
+          "benchmark": "sc-HeurekaBench",
+          "task_id": "oeq-paper9-insight4-q1--oeq_tu",
+          "source_task_record_sha256": "824a85b0f4147279553f6d915fc7ffa01fc146f231f0127c28d1029163c5e8f9"
+        },
+        {
+          "benchmark": "sc-HeurekaBench",
+          "task_id": "oeq-paper9-insight4-q2--oeq_tu",
+          "source_task_record_sha256": "503d4dd2a791d9fd75b4ab8b154177d0f232fa1a71964606047c4d1b471b3c85"
+        },
+        {
+          "benchmark": "sc-HeurekaBench",
+          "task_id": "mcq-paper9-insight16-q1--mcq",
+          "source_task_record_sha256": "25d1f7803225752202ae260e9709cf2a0fa2387c7dc2958d77f94a7e164a06c9"
+        },
+        {
+          "benchmark": "sc-HeurekaBench",
+          "task_id": "mcq-paper9-insight17-q1--mcq",
+          "source_task_record_sha256": "8faa08bb886f3255d7fbde03b2244fe1092f7f2ea34edb18b2292c9845ab7ae5"
+        },
+        {
+          "benchmark": "sc-HeurekaBench",
+          "task_id": "mcq-paper9-insight17-q2--mcq",
+          "source_task_record_sha256": "46bde1c915be166f6586f53cd54e6b7ff834fee071240dd203a9b6eb5423a55b"
+        },
+        {
+          "benchmark": "sc-HeurekaBench",
+          "task_id": "mcq-paper9-insight4-q1--mcq_tu",
+          "source_task_record_sha256": "d3200dee04a72a2e689c9ad3d714d3a52e9f59f6a4dcf2c836a32e2254bf6ba3"
+        },
+        {
+          "benchmark": "sc-HeurekaBench",
+          "task_id": "mcq-paper9-insight4-q2--mcq_tu",
+          "source_task_record_sha256": "d48306d61709dfdeb27d27edca790fb5dd8dbcef391e6791094b6ed84814b583"
+        },
+        {
+          "benchmark": "sc-HeurekaBench",
+          "task_id": "mcq-paper9-insight5-q2--mcq_tu",
+          "source_task_record_sha256": "b470562a3f023d473fec0b8aef2f13eb4a51a8353c8c5c3c6f5ae16f095efcd9"
+        }
+      ],
+      "source_inspection_tier": "question-stems-rechecked-for-estimand-and-sampling-design",
+      "source_planning_disposition": "estimand-specific-input-and-artifact-design",
+      "matching_workstreams": [
+        "single-cell-pseudobulk"
+      ],
+      "required_endpoint_stages": [
+        "Join measured cells, genes, biological samples and the explicitly observed grouping variable.",
+        "Construct the complete eligible population and expression summaries for every required cell state.",
+        "Fit the specified sample-level contrast or localization summary with the actual paired/unpaired design.",
+        "Return all tested effects, uncertainties and gene-set results where requested; link every conclusion to these artifacts."
+      ],
+      "observed_input_requirements": [
+        "Independent observed RNA counts, feature annotation and cell/sample/donor metadata with the grouping variable required by this question. Preserve real biological replication and all requested compartments/condition levels."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "native_package_leads": [],
+      "proposed_artifact_requirements": [
+        "Complete cell/sample eligibility, cell-type-by-sample counts, gene detection summaries, design/contrast matrices where applicable, all tested gene effects and explicitly requested pathway/membership tables."
+      ],
+      "source_specific_decisions": [
+        "Preserve tissue compartments, cell-state eligibility and biological replication; do not substitute a blood treatment comparison for the required aging and anatomical analysis."
+      ],
+      "deterministic_verification_approach": [
+        "Check identities, real sample grouping, complete denominators and design estimability. Use native count/statistical analysis plus independent arithmetic and multiplicity checks. No effect is required to have the source study sign or significance.",
+        "Only claims mechanically supported by the supplied observations and frozen evidence rules are graded. Causal or functional interpretations unsupported by these artifacts remain gaps."
+      ],
+      "source_artifact_contracts": [],
+      "status": "question-planned-source-and-contract-review-pending",
+      "validated_new_mappings": 0,
+      "source_families": [
+        "cell-type-expression-to-pathways"
+      ],
+      "refines_prior_question_ids": [
+        "portfolio-sc-heurekabench-cell-type-expression-to-pathways"
+      ],
+      "planning_review": {
+        "record_count": 10,
+        "scope": "Question stems and prior permitted endpoint metadata only; expected answers, multiple-choice options and biological fixtures were not used.",
+        "pairedness": "No donor pairing is assumed from a family name; input metadata must establish it.",
+        "source_question_hashes": [
+          {
+            "task_id": "oeq-paper9-insight16-q1--oeq",
+            "sha256": "7b2638adb77018fbdd00e4ca16025cf4c5b365ac827aa9795b8cd3c993584f34"
+          },
+          {
+            "task_id": "oeq-paper9-insight17-q1--oeq",
+            "sha256": "70d9ffa1406ee89d582efc2fbbe1939b9bcbb5b103f6a96c230bcb86cebd3337"
+          },
+          {
+            "task_id": "oeq-paper9-insight4-q1--oeq_tu",
+            "sha256": "c4c0c4a574ec8c9d271dca73b8980eaad514bb45533f8c1d7f93f39eaca62524"
+          },
+          {
+            "task_id": "oeq-paper9-insight4-q2--oeq_tu",
+            "sha256": "787e4ff69d3f13cc1e77c60bb7f359e3ee6624c1c30bdde99b23744fae1ea076"
+          },
+          {
+            "task_id": "mcq-paper9-insight16-q1--mcq",
+            "sha256": "240ba4f5f079875a00cfa8229bee6783f8b7fbbd09b0de5907387ddd92c87715"
+          },
+          {
+            "task_id": "mcq-paper9-insight17-q1--mcq",
+            "sha256": "bb947e2b3b233c6e1a9fc669f0d825c74e58f655308a6c040dbb2b5412462794"
+          },
+          {
+            "task_id": "mcq-paper9-insight17-q2--mcq",
+            "sha256": "9d629dfb6585c6c7284720d6f4be4f5901d11f1399ce3700b1b36388e6085ace"
+          },
+          {
+            "task_id": "mcq-paper9-insight4-q1--mcq_tu",
+            "sha256": "cb0f9d224b2c9bb26ae4cdb8a35bd8cc327a10de17925227fb834f4807bfdb96"
+          },
+          {
+            "task_id": "mcq-paper9-insight4-q2--mcq_tu",
+            "sha256": "a029ccd6f04517adeb862e0df7512ef9cc3793a5db10ffca5bd9d1c18ed9d35d"
+          },
+          {
+            "task_id": "mcq-paper9-insight5-q2--mcq_tu",
+            "sha256": "f297dbcc9e250e3fcbc779ba9c6cfad2b694cd3f731d4c72d7ce00717843fd64"
+          }
+        ]
+      }
+    },
+    {
+      "proposed_id": "portfolio-baisbench-condition-state-expression",
+      "scientific_question": "Which cell-type expression and pathway differences persist across independently observed disease states, including a prespecified low-activity or intermediate state?",
+      "benchmark_targets": [
+        {
+          "benchmark": "BAISBench",
+          "task_id": "discovery/10.1172/jci.insight.176963/q4",
+          "source_task_record_sha256": "926adeb3c15a4956d48d29afa030ade2c6fda5be5d83b399e50c4e2572035fbd"
+        },
+        {
+          "benchmark": "BAISBench",
+          "task_id": "discovery/10.1038/s42255-022-00531-x/q3",
+          "source_task_record_sha256": "195233c4e2e3360871f4d343fd7b6ed22cb6fa330de5c38b709515382b4d1e8e"
+        },
+        {
+          "benchmark": "BAISBench",
+          "task_id": "discovery/10.1172/jci.insight.178499/q2",
+          "source_task_record_sha256": "5b314cb48dd0b90d07ad3caa9f5542723a949693932b410d6f57ca8d9f7f6b06"
+        },
+        {
+          "benchmark": "BAISBench",
+          "task_id": "discovery/10.1172/jci.insight.178499/q3",
+          "source_task_record_sha256": "41eeef57d9aa6118e9744dda718e973fc7a0dfc2b0b444eb43e908ee741db47a"
+        },
+        {
+          "benchmark": "BAISBench",
+          "task_id": "discovery/10.1172/jci.insight.178499/q4",
+          "source_task_record_sha256": "08ae591459411f67b0026038b0c58f66392374c33b342bcbaf132ee52f944292"
+        }
+      ],
+      "source_inspection_tier": "question-stems-rechecked-for-estimand-and-sampling-design",
+      "source_planning_disposition": "estimand-specific-input-and-artifact-design",
+      "matching_workstreams": [
+        "single-cell-pseudobulk"
+      ],
+      "required_endpoint_stages": [
+        "Join measured cells, genes, biological samples and the explicitly observed grouping variable.",
+        "Construct the complete eligible population and expression summaries for every required cell state.",
+        "Fit the specified sample-level contrast or localization summary with the actual paired/unpaired design.",
+        "Return all tested effects, uncertainties and gene-set results where requested; link every conclusion to these artifacts."
+      ],
+      "observed_input_requirements": [
+        "Independent observed RNA counts, feature annotation and cell/sample/donor metadata with the grouping variable required by this question. Preserve real biological replication and all requested compartments/condition levels."
+      ],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
+      "native_package_leads": [],
+      "proposed_artifact_requirements": [
+        "Complete cell/sample eligibility, cell-type-by-sample counts, gene detection summaries, design/contrast matrices where applicable, all tested gene effects and explicitly requested pathway/membership tables."
+      ],
+      "source_specific_decisions": [
+        "Retain all source-required condition levels and planned comparisons. Binary case/control data cannot establish persistence in remission or a predisease state."
+      ],
+      "deterministic_verification_approach": [
+        "Check identities, real sample grouping, complete denominators and design estimability. Use native count/statistical analysis plus independent arithmetic and multiplicity checks. No effect is required to have the source study sign or significance.",
+        "Only claims mechanically supported by the supplied observations and frozen evidence rules are graded. Causal or functional interpretations unsupported by these artifacts remain gaps."
+      ],
+      "source_artifact_contracts": [],
+      "status": "question-planned-source-and-contract-review-pending",
+      "validated_new_mappings": 0,
+      "source_families": [
+        "replicate-aware-single-cell-contrast",
+        "single-cell-contrast-enrichment"
+      ],
+      "refines_prior_question_ids": [
+        "portfolio-baisbench-replicate-aware-single-cell-contrast",
+        "portfolio-baisbench-single-cell-contrast-enrichment"
+      ],
+      "planning_review": {
+        "record_count": 5,
+        "scope": "Question stems and prior permitted endpoint metadata only; expected answers, multiple-choice options and biological fixtures were not used.",
+        "pairedness": "No donor pairing is assumed from a family name; input metadata must establish it.",
+        "source_question_hashes": [
+          {
+            "task_id": "discovery/10.1172/jci.insight.176963/q4",
+            "sha256": "ba70f6870645c0efdc63f1bc81c041610d6011cbf40da8122f8e6e68906bfe56"
+          },
+          {
+            "task_id": "discovery/10.1038/s42255-022-00531-x/q3",
+            "sha256": "445f5df6cf6003fead5d88b0fc6b2db56ab1f4b8abce92acb892b450d8059939"
+          },
+          {
+            "task_id": "discovery/10.1172/jci.insight.178499/q2",
+            "sha256": "bb46d73d15ebeb4ba73806c028ac08df52ed4def598f7ee134126e800196d41b"
+          },
+          {
+            "task_id": "discovery/10.1172/jci.insight.178499/q3",
+            "sha256": "68f3d132a626165fc7ca68f136a7e8e04f3fa311c7fabfe6d9a82929fe708600"
+          },
+          {
+            "task_id": "discovery/10.1172/jci.insight.178499/q4",
+            "sha256": "5bffc7bcd7229163c93d95c6642b6ea0231f0dd03527951bfc1233525445d50f"
+          }
+        ]
+      }
+    },
+    {
+      "proposed_id": "portfolio-baisbench-inflammatory-case-control-expression",
+      "scientific_question": "Which cell-type expression and pathway associations distinguish independently observed inflammatory cases and controls under biological-sample replication?",
+      "benchmark_targets": [
+        {
+          "benchmark": "BAISBench",
+          "task_id": "discovery/10.1038/s41586-021-03710-0/q3",
+          "source_task_record_sha256": "d196c762c097e85b37c1c9000ae14244293a5427bd7a45d5e3af3c494c77cfca"
+        },
+        {
+          "benchmark": "BAISBench",
+          "task_id": "discovery/10.1164/rccm.202207-1384OC/q3",
+          "source_task_record_sha256": "2bd3f8b94c44a025c41e115601bb802863031c91f1f75b7d6b200dacb7b4ab09"
+        },
+        {
+          "benchmark": "BAISBench",
+          "task_id": "discovery/10.3389/fdmed.2021.806294/q2",
+          "source_task_record_sha256": "250d9a0d07fbec9dccb33b504de328e09fed062361e8844fd21cfb27062d8f4d"
+        },
+        {
+          "benchmark": "BAISBench",
+          "task_id": "discovery/10.1016/j.devcel.2020.11.010/q1",
+          "source_task_record_sha256": "d543dd66496fe6372e34b0a7f727c7150aa0f1bf2ff3b8959b1425068319648a"
+        },
+        {
+          "benchmark": "BAISBench",
+          "task_id": "discovery/10.1038/s41586-021-03710-0/q5",
+          "source_task_record_sha256": "d5b4a54e9729dcc914debe64b44af8b9d1f8969ef32c91a48bd123e470606e0f"
+        },
+        {
+          "benchmark": "BAISBench",
+          "task_id": "discovery/10.1165/rcmb.2021-0555OC/q4",
+          "source_task_record_sha256": "8d0faff6299bd0fa0f46e1c1ee26dae9b0225bb74e65d3088b4c34d430c42762"
+        }
+      ],
+      "source_inspection_tier": "question-stems-rechecked-for-estimand-and-sampling-design",
+      "source_planning_disposition": "estimand-specific-input-and-artifact-design",
+      "matching_workstreams": [
+        "single-cell-pseudobulk"
+      ],
+      "required_endpoint_stages": [
+        "Join measured cells, genes, biological samples and the explicitly observed grouping variable.",
+        "Construct the complete eligible population and expression summaries for every required cell state.",
+        "Fit the specified sample-level contrast or localization summary with the actual paired/unpaired design.",
+        "Return all tested effects, uncertainties and gene-set results where requested; link every conclusion to these artifacts."
+      ],
+      "observed_input_requirements": [
+        "Independent observed RNA counts, feature annotation and cell/sample/donor metadata with the grouping variable required by this question. Preserve real biological replication and all requested compartments/condition levels."
+      ],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
+      "native_package_leads": [],
+      "proposed_artifact_requirements": [
+        "Complete cell/sample eligibility, cell-type-by-sample counts, gene detection summaries, design/contrast matrices where applicable, all tested gene effects and explicitly requested pathway/membership tables."
+      ],
+      "source_specific_decisions": [
+        "Use declared cell populations, reference direction, covariates, expression scale and full gene/pathway universes; permit null effects in independent observations."
+      ],
+      "deterministic_verification_approach": [
+        "Check identities, real sample grouping, complete denominators and design estimability. Use native count/statistical analysis plus independent arithmetic and multiplicity checks. No effect is required to have the source study sign or significance.",
+        "Only claims mechanically supported by the supplied observations and frozen evidence rules are graded. Causal or functional interpretations unsupported by these artifacts remain gaps."
+      ],
+      "source_artifact_contracts": [],
+      "status": "question-planned-source-and-contract-review-pending",
+      "validated_new_mappings": 0,
+      "source_families": [
+        "replicate-aware-single-cell-contrast",
+        "single-cell-contrast-enrichment"
+      ],
+      "refines_prior_question_ids": [
+        "portfolio-baisbench-replicate-aware-single-cell-contrast",
+        "portfolio-baisbench-single-cell-contrast-enrichment"
+      ],
+      "planning_review": {
+        "record_count": 6,
+        "scope": "Question stems and prior permitted endpoint metadata only; expected answers, multiple-choice options and biological fixtures were not used.",
+        "pairedness": "No donor pairing is assumed from a family name; input metadata must establish it.",
+        "source_question_hashes": [
+          {
+            "task_id": "discovery/10.1038/s41586-021-03710-0/q3",
+            "sha256": "cb98d0254621bc7ccc6213b527d7e5970aadb9d0c7284f8bc9061be19d3c2d96"
+          },
+          {
+            "task_id": "discovery/10.1164/rccm.202207-1384OC/q3",
+            "sha256": "b1ba74506a195a261772003990107196f411c3d5e430bb50700bf3694f22bcdc"
+          },
+          {
+            "task_id": "discovery/10.3389/fdmed.2021.806294/q2",
+            "sha256": "eca389ededdc6bbddfe90ff6243f91d3baf86d2e1d6b047e2b30432731ae0797"
+          },
+          {
+            "task_id": "discovery/10.1016/j.devcel.2020.11.010/q1",
+            "sha256": "1f3d95a5534841087b06d99c6ba8ae5330d3666531286c6f65348b6a4469556e"
+          },
+          {
+            "task_id": "discovery/10.1038/s41586-021-03710-0/q5",
+            "sha256": "af9373a7b4ae1919ee5872d13a2f512a78f0579c71350f28bdc3dfc96edbdebe"
+          },
+          {
+            "task_id": "discovery/10.1165/rcmb.2021-0555OC/q4",
+            "sha256": "1da31b5afdf6e6368b19a0745723a1ee110d4e46606e0ced7f097aa18fe54239"
+          }
+        ]
+      }
+    },
+    {
+      "proposed_id": "portfolio-baisbench-developmental-stage-expression",
+      "scientific_question": "Which observed cell-type programs change across recorded developmental stages after biological-sample and assay reconciliation?",
+      "benchmark_targets": [
+        {
+          "benchmark": "BAISBench",
+          "task_id": "discovery/10.1126/science.aat5031/q2",
+          "source_task_record_sha256": "d958a5bb234333124116e6a8eec647c6e053dbeb423d6b0c5f6c1cc1d6314b34"
+        },
+        {
+          "benchmark": "BAISBench",
+          "task_id": "discovery/10.1038/s44161-022-00183-w/q1",
+          "source_task_record_sha256": "c6357c4e71036665e91b1fda8d1c3368de15ddcd60d0ec4a0533b8294a3349ab"
+        },
+        {
+          "benchmark": "BAISBench",
+          "task_id": "discovery/10.1038/s44161-022-00183-w/q3",
+          "source_task_record_sha256": "dbe0fbefe359a7525aa0787fad3fcbb4dc2e83f3229074487c3f11cc5359ddf9"
+        },
+        {
+          "benchmark": "BAISBench",
+          "task_id": "discovery/10.1016/j.celrep.2024.114247/q3",
+          "source_task_record_sha256": "9e55ed29e5bef30a09fc891d0c9cc4e045299b09a5fa00b9db35eb89d89a0a0d"
+        }
+      ],
+      "source_inspection_tier": "question-stems-rechecked-for-estimand-and-sampling-design",
+      "source_planning_disposition": "estimand-specific-input-and-artifact-design",
+      "matching_workstreams": [
+        "single-cell-pseudobulk"
+      ],
+      "required_endpoint_stages": [
+        "Join measured cells, genes, biological samples and the explicitly observed grouping variable.",
+        "Construct the complete eligible population and expression summaries for every required cell state.",
+        "Fit the specified sample-level contrast or localization summary with the actual paired/unpaired design.",
+        "Return all tested effects, uncertainties and gene-set results where requested; link every conclusion to these artifacts."
+      ],
+      "observed_input_requirements": [
+        "Independent observed RNA counts, feature annotation and cell/sample/donor metadata with the grouping variable required by this question. Preserve real biological replication and all requested compartments/condition levels."
+      ],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
+      "native_package_leads": [],
+      "proposed_artifact_requirements": [
+        "Complete cell/sample eligibility, cell-type-by-sample counts, gene detection summaries, design/contrast matrices where applicable, all tested gene effects and explicitly requested pathway/membership tables."
+      ],
+      "source_specific_decisions": [
+        "Developmental stage is the observed comparison; do not invent repeated measurements or treat a fetal-versus-adult cohort as a treatment effect."
+      ],
+      "deterministic_verification_approach": [
+        "Check identities, real sample grouping, complete denominators and design estimability. Use native count/statistical analysis plus independent arithmetic and multiplicity checks. No effect is required to have the source study sign or significance.",
+        "Only claims mechanically supported by the supplied observations and frozen evidence rules are graded. Causal or functional interpretations unsupported by these artifacts remain gaps."
+      ],
+      "source_artifact_contracts": [],
+      "status": "question-planned-source-and-contract-review-pending",
+      "validated_new_mappings": 0,
+      "source_families": [
+        "replicate-aware-single-cell-contrast",
+        "single-cell-contrast-enrichment"
+      ],
+      "refines_prior_question_ids": [
+        "portfolio-baisbench-replicate-aware-single-cell-contrast",
+        "portfolio-baisbench-single-cell-contrast-enrichment"
+      ],
+      "planning_review": {
+        "record_count": 4,
+        "scope": "Question stems and prior permitted endpoint metadata only; expected answers, multiple-choice options and biological fixtures were not used.",
+        "pairedness": "No donor pairing is assumed from a family name; input metadata must establish it.",
+        "source_question_hashes": [
+          {
+            "task_id": "discovery/10.1126/science.aat5031/q2",
+            "sha256": "6b27ae74bc1e8f0120895be5a1299987c56341bb78978f8e93dd65df4a79cb47"
+          },
+          {
+            "task_id": "discovery/10.1038/s44161-022-00183-w/q1",
+            "sha256": "5d37c94d754d080c62af2d8450a4ad411c88fc950ebdc9e5bc646cf696c25b65"
+          },
+          {
+            "task_id": "discovery/10.1038/s44161-022-00183-w/q3",
+            "sha256": "5ec5147412fb7e79b36e59c7c0853814344eeeda383774fd2597d6ff00b691a7"
+          },
+          {
+            "task_id": "discovery/10.1016/j.celrep.2024.114247/q3",
+            "sha256": "c973eeac7e9e21d3d0f771848fc5ed62eff3972f25767cc1260c29773aa9fdaf"
+          }
+        ]
+      }
+    },
+    {
+      "proposed_id": "portfolio-baisbench-tissue-compartment-expression",
+      "scientific_question": "Which expression programs distinguish observed tissue-resident and circulating populations after matched cell-state and donor checks?",
+      "benchmark_targets": [
+        {
+          "benchmark": "BAISBench",
+          "task_id": "discovery/10.1038/s41467-019-12464-3/q2",
+          "source_task_record_sha256": "a3ddb69765af945dbebf7fbe6c1b29289f006569f098e269e11ed5d8044381be"
+        }
+      ],
+      "source_inspection_tier": "question-stems-rechecked-for-estimand-and-sampling-design",
+      "source_planning_disposition": "estimand-specific-input-and-artifact-design",
+      "matching_workstreams": [
+        "single-cell-pseudobulk"
+      ],
+      "required_endpoint_stages": [
+        "Join measured cells, genes, biological samples and the explicitly observed grouping variable.",
+        "Construct the complete eligible population and expression summaries for every required cell state.",
+        "Fit the specified sample-level contrast or localization summary with the actual paired/unpaired design.",
+        "Return all tested effects, uncertainties and gene-set results where requested; link every conclusion to these artifacts."
+      ],
+      "observed_input_requirements": [
+        "Independent observed RNA counts, feature annotation and cell/sample/donor metadata with the grouping variable required by this question. Preserve real biological replication and all requested compartments/condition levels."
+      ],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
+      "native_package_leads": [],
+      "proposed_artifact_requirements": [
+        "Complete cell/sample eligibility, cell-type-by-sample counts, gene detection summaries, design/contrast matrices where applicable, all tested gene effects and explicitly requested pathway/membership tables."
+      ],
+      "source_specific_decisions": [
+        "Anatomical compartment is essential. Preserve donor matching where present; one blood-only treatment cohort cannot supply the tissue-versus-blood endpoint."
+      ],
+      "deterministic_verification_approach": [
+        "Check identities, real sample grouping, complete denominators and design estimability. Use native count/statistical analysis plus independent arithmetic and multiplicity checks. No effect is required to have the source study sign or significance.",
+        "Only claims mechanically supported by the supplied observations and frozen evidence rules are graded. Causal or functional interpretations unsupported by these artifacts remain gaps."
+      ],
+      "source_artifact_contracts": [],
+      "status": "question-planned-source-and-contract-review-pending",
+      "validated_new_mappings": 0,
+      "source_families": [
+        "replicate-aware-single-cell-contrast"
+      ],
+      "refines_prior_question_ids": [
+        "portfolio-baisbench-replicate-aware-single-cell-contrast"
+      ],
+      "planning_review": {
+        "record_count": 1,
+        "scope": "Question stems and prior permitted endpoint metadata only; expected answers, multiple-choice options and biological fixtures were not used.",
+        "pairedness": "No donor pairing is assumed from a family name; input metadata must establish it.",
+        "source_question_hashes": [
+          {
+            "task_id": "discovery/10.1038/s41467-019-12464-3/q2",
+            "sha256": "6b4b597240425362e059599a6505a93096cf04429a4ea626c7d81b93f65eb96a"
+          }
+        ]
+      }
+    },
+    {
+      "proposed_id": "portfolio-baisbench-genotype-associated-expression",
+      "scientific_question": "Which observed cell-type expression and pathway differences associate with measured somatic genotype after donor and condition adjustment?",
+      "benchmark_targets": [
+        {
+          "benchmark": "BAISBench",
+          "task_id": "discovery/10.1182/bloodadvances.2023011445/q1",
+          "source_task_record_sha256": "503a827abf09267f0c1ba43fcb12e8d39694354ce731b3fba38fb1a77b421e12"
+        },
+        {
+          "benchmark": "BAISBench",
+          "task_id": "discovery/10.1182/bloodadvances.2023011445/q2",
+          "source_task_record_sha256": "e5070afa9ad6ab5550f02a4d6c59471624b8ddf39dafb424293cdc9324efeef4"
+        },
+        {
+          "benchmark": "BAISBench",
+          "task_id": "discovery/10.1182/bloodadvances.2023011445/q4",
+          "source_task_record_sha256": "769885100629d3dceae01b10f786f9e976b18e13f65b9cd16c2f9c0728f5a888"
+        }
+      ],
+      "source_inspection_tier": "question-stems-rechecked-for-estimand-and-sampling-design",
+      "source_planning_disposition": "estimand-specific-input-and-artifact-design",
+      "matching_workstreams": [
+        "single-cell-pseudobulk"
+      ],
+      "required_endpoint_stages": [
+        "Join measured cells, genes, biological samples and the explicitly observed grouping variable.",
+        "Construct the complete eligible population and expression summaries for every required cell state.",
+        "Fit the specified sample-level contrast or localization summary with the actual paired/unpaired design.",
+        "Return all tested effects, uncertainties and gene-set results where requested; link every conclusion to these artifacts."
+      ],
+      "observed_input_requirements": [
+        "Independent observed RNA counts, feature annotation and cell/sample/donor metadata with the grouping variable required by this question. Preserve real biological replication and all requested compartments/condition levels."
+      ],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
+      "native_package_leads": [],
+      "proposed_artifact_requirements": [
+        "Complete cell/sample eligibility, cell-type-by-sample counts, gene detection summaries, design/contrast matrices where applicable, all tested gene effects and explicitly requested pathway/membership tables."
+      ],
+      "source_specific_decisions": [
+        "Use measured genotype/clone labels with sample-level replication; ancestry or treatment labels are not substitutes for genotype."
+      ],
+      "deterministic_verification_approach": [
+        "Check identities, real sample grouping, complete denominators and design estimability. Use native count/statistical analysis plus independent arithmetic and multiplicity checks. No effect is required to have the source study sign or significance.",
+        "Only claims mechanically supported by the supplied observations and frozen evidence rules are graded. Causal or functional interpretations unsupported by these artifacts remain gaps."
+      ],
+      "source_artifact_contracts": [],
+      "status": "question-planned-source-and-contract-review-pending",
+      "validated_new_mappings": 0,
+      "source_families": [
+        "replicate-aware-single-cell-contrast",
+        "single-cell-contrast-enrichment"
+      ],
+      "refines_prior_question_ids": [
+        "portfolio-baisbench-replicate-aware-single-cell-contrast",
+        "portfolio-baisbench-single-cell-contrast-enrichment"
+      ],
+      "planning_review": {
+        "record_count": 3,
+        "scope": "Question stems and prior permitted endpoint metadata only; expected answers, multiple-choice options and biological fixtures were not used.",
+        "pairedness": "No donor pairing is assumed from a family name; input metadata must establish it.",
+        "source_question_hashes": [
+          {
+            "task_id": "discovery/10.1182/bloodadvances.2023011445/q1",
+            "sha256": "647727c22b052efdee916b1e6ed32c565004c727e815ab5c9781311a9b6af872"
+          },
+          {
+            "task_id": "discovery/10.1182/bloodadvances.2023011445/q2",
+            "sha256": "2b3ae8385fa8f3e44dd321bf2ba5147c598b1f7a4812501caaebf5a3a79ec763"
+          },
+          {
+            "task_id": "discovery/10.1182/bloodadvances.2023011445/q4",
+            "sha256": "c0ebfaced8e8e4ed07dd8131fad0e1a8d8741c61063a4ea47f3b3db0946e5c5f"
+          }
+        ]
+      }
+    },
+    {
+      "proposed_id": "portfolio-baisbench-sex-by-condition-expression",
+      "scientific_question": "Which observed condition effects differ by recorded sex, and which sex-associated expression effects remain in prespecified populations?",
+      "benchmark_targets": [
+        {
+          "benchmark": "BAISBench",
+          "task_id": "discovery/10.1038/s41467-024-45165-7/q5",
+          "source_task_record_sha256": "80cbb0301c0305351278753b6577c476f3ddf417333a74ea9908660513553920"
+        },
+        {
+          "benchmark": "BAISBench",
+          "task_id": "discovery/10.1177/00220345221147908/q2",
+          "source_task_record_sha256": "954a3e0395e40f9205564dde0524115cd8c9e9a203ee41df5d2823ab9bc4cc92"
+        },
+        {
+          "benchmark": "BAISBench",
+          "task_id": "discovery/10.1038/s41467-024-45165-7/q2",
+          "source_task_record_sha256": "7d27c40f06993a4cae48f56a3449a982de15e294074917c7b2deb185cf15d5a8"
+        }
+      ],
+      "source_inspection_tier": "question-stems-rechecked-for-estimand-and-sampling-design",
+      "source_planning_disposition": "estimand-specific-input-and-artifact-design",
+      "matching_workstreams": [
+        "single-cell-pseudobulk"
+      ],
+      "required_endpoint_stages": [
+        "Join measured cells, genes, biological samples and the explicitly observed grouping variable.",
+        "Construct the complete eligible population and expression summaries for every required cell state.",
+        "Fit the specified sample-level contrast or localization summary with the actual paired/unpaired design.",
+        "Return all tested effects, uncertainties and gene-set results where requested; link every conclusion to these artifacts."
+      ],
+      "observed_input_requirements": [
+        "Independent observed RNA counts, feature annotation and cell/sample/donor metadata with the grouping variable required by this question. Preserve real biological replication and all requested compartments/condition levels."
+      ],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
+      "native_package_leads": [],
+      "proposed_artifact_requirements": [
+        "Complete cell/sample eligibility, cell-type-by-sample counts, gene detection summaries, design/contrast matrices where applicable, all tested gene effects and explicitly requested pathway/membership tables."
+      ],
+      "source_specific_decisions": [
+        "Require an estimable sex-by-condition design for interaction endpoints. Distinguish the direct interaction from separate within-sex significance calls."
+      ],
+      "deterministic_verification_approach": [
+        "Check identities, real sample grouping, complete denominators and design estimability. Use native count/statistical analysis plus independent arithmetic and multiplicity checks. No effect is required to have the source study sign or significance.",
+        "Only claims mechanically supported by the supplied observations and frozen evidence rules are graded. Causal or functional interpretations unsupported by these artifacts remain gaps."
+      ],
+      "source_artifact_contracts": [],
+      "status": "question-planned-source-and-contract-review-pending",
+      "validated_new_mappings": 0,
+      "source_families": [
+        "replicate-aware-single-cell-contrast",
+        "single-cell-contrast-enrichment"
+      ],
+      "refines_prior_question_ids": [
+        "portfolio-baisbench-replicate-aware-single-cell-contrast",
+        "portfolio-baisbench-single-cell-contrast-enrichment"
+      ],
+      "planning_review": {
+        "record_count": 3,
+        "scope": "Question stems and prior permitted endpoint metadata only; expected answers, multiple-choice options and biological fixtures were not used.",
+        "pairedness": "No donor pairing is assumed from a family name; input metadata must establish it.",
+        "source_question_hashes": [
+          {
+            "task_id": "discovery/10.1038/s41467-024-45165-7/q5",
+            "sha256": "a9190e73302d24509d3f6f310f3b511aecebd5fbc5e32422ab7e8f46f085067b"
+          },
+          {
+            "task_id": "discovery/10.1177/00220345221147908/q2",
+            "sha256": "a2b32f24e17c202f2fd965fbc8a5e83ba76091e2c69fe62748e4610280fb4d71"
+          },
+          {
+            "task_id": "discovery/10.1038/s41467-024-45165-7/q2",
+            "sha256": "d2663d6978a0ea843219335b614f565965c54d571f0a03a19a7e76c2e2bb051d"
+          }
+        ]
+      }
+    },
+    {
+      "proposed_id": "portfolio-baisbench-disease-subtype-expression",
+      "scientific_question": "Which cell-state expression and pathway differences distinguish independently observed disease subgroups with explicitly measured subgroup labels?",
+      "benchmark_targets": [
+        {
+          "benchmark": "BAISBench",
+          "task_id": "discovery/10.1111/cas.15979/q2",
+          "source_task_record_sha256": "6f8e95d9f94c25b42ebabbec44dd9cbf624eba3b943bd07f734480f1e55d95a8"
+        },
+        {
+          "benchmark": "BAISBench",
+          "task_id": "discovery/10.1016/j.xcrm.2023.101158/q2",
+          "source_task_record_sha256": "cb408644f4462bc0cf8a1eda317488487d5d24dfbe8c861d04b99e66283e2377"
+        }
+      ],
+      "source_inspection_tier": "question-stems-rechecked-for-estimand-and-sampling-design",
+      "source_planning_disposition": "estimand-specific-input-and-artifact-design",
+      "matching_workstreams": [
+        "single-cell-pseudobulk"
+      ],
+      "required_endpoint_stages": [
+        "Join measured cells, genes, biological samples and the explicitly observed grouping variable.",
+        "Construct the complete eligible population and expression summaries for every required cell state.",
+        "Fit the specified sample-level contrast or localization summary with the actual paired/unpaired design.",
+        "Return all tested effects, uncertainties and gene-set results where requested; link every conclusion to these artifacts."
+      ],
+      "observed_input_requirements": [
+        "Independent observed RNA counts, feature annotation and cell/sample/donor metadata with the grouping variable required by this question. Preserve real biological replication and all requested compartments/condition levels."
+      ],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
+      "native_package_leads": [],
+      "proposed_artifact_requirements": [
+        "Complete cell/sample eligibility, cell-type-by-sample counts, gene detection summaries, design/contrast matrices where applicable, all tested gene effects and explicitly requested pathway/membership tables."
+      ],
+      "source_specific_decisions": [
+        "Preserve subtype and sampled compartment; supervised discrimination requires patient-held-out validation and cannot be inferred from differential expression alone."
+      ],
+      "deterministic_verification_approach": [
+        "Check identities, real sample grouping, complete denominators and design estimability. Use native count/statistical analysis plus independent arithmetic and multiplicity checks. No effect is required to have the source study sign or significance.",
+        "Only claims mechanically supported by the supplied observations and frozen evidence rules are graded. Causal or functional interpretations unsupported by these artifacts remain gaps."
+      ],
+      "source_artifact_contracts": [],
+      "status": "question-planned-source-and-contract-review-pending",
+      "validated_new_mappings": 0,
+      "source_families": [
+        "replicate-aware-single-cell-contrast",
+        "single-cell-contrast-enrichment"
+      ],
+      "refines_prior_question_ids": [
+        "portfolio-baisbench-replicate-aware-single-cell-contrast",
+        "portfolio-baisbench-single-cell-contrast-enrichment"
+      ],
+      "planning_review": {
+        "record_count": 2,
+        "scope": "Question stems and prior permitted endpoint metadata only; expected answers, multiple-choice options and biological fixtures were not used.",
+        "pairedness": "No donor pairing is assumed from a family name; input metadata must establish it.",
+        "source_question_hashes": [
+          {
+            "task_id": "discovery/10.1111/cas.15979/q2",
+            "sha256": "403cd49ca18e2f6693ca24ebef2dfa890c4db2ecdec9ace774b9c8227f9fd965"
+          },
+          {
+            "task_id": "discovery/10.1016/j.xcrm.2023.101158/q2",
+            "sha256": "483c1539b37ed774db22b75e12b15148a96af9377a1b11c7dd76674badbefc84"
+          }
+        ]
+      }
+    },
+    {
+      "proposed_id": "portfolio-baisbench-ligand-associated-expression",
+      "scientific_question": "Which observed immune-cell expression differences associate with a recorded receptor-ligand context after cell and biological-sample reconciliation?",
+      "benchmark_targets": [
+        {
+          "benchmark": "BAISBench",
+          "task_id": "discovery/10.1016/j.stem.2023.12.013/q1",
+          "source_task_record_sha256": "4ce49f07f10d33aaebea05009047b43760b736ba329179b7f8aa40419a16392d"
+        }
+      ],
+      "source_inspection_tier": "question-stems-rechecked-for-estimand-and-sampling-design",
+      "source_planning_disposition": "estimand-specific-input-and-artifact-design",
+      "matching_workstreams": [
+        "single-cell-pseudobulk"
+      ],
+      "required_endpoint_stages": [
+        "Join measured cells, genes, biological samples and the explicitly observed grouping variable.",
+        "Construct the complete eligible population and expression summaries for every required cell state.",
+        "Fit the specified sample-level contrast or localization summary with the actual paired/unpaired design.",
+        "Return all tested effects, uncertainties and gene-set results where requested; link every conclusion to these artifacts."
+      ],
+      "observed_input_requirements": [
+        "Independent observed RNA counts, feature annotation and cell/sample/donor metadata with the grouping variable required by this question. Preserve real biological replication and all requested compartments/condition levels."
+      ],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
+      "native_package_leads": [],
+      "proposed_artifact_requirements": [
+        "Complete cell/sample eligibility, cell-type-by-sample counts, gene detection summaries, design/contrast matrices where applicable, all tested gene effects and explicitly requested pathway/membership tables."
+      ],
+      "source_specific_decisions": [
+        "Preserve the measured receptor/ligand grouping and predefined expression comparison. A generic treatment contrast does not demonstrate receptor specificity."
+      ],
+      "deterministic_verification_approach": [
+        "Check identities, real sample grouping, complete denominators and design estimability. Use native count/statistical analysis plus independent arithmetic and multiplicity checks. No effect is required to have the source study sign or significance.",
+        "Only claims mechanically supported by the supplied observations and frozen evidence rules are graded. Causal or functional interpretations unsupported by these artifacts remain gaps."
+      ],
+      "source_artifact_contracts": [],
+      "status": "question-planned-source-and-contract-review-pending",
+      "validated_new_mappings": 0,
+      "source_families": [
+        "replicate-aware-single-cell-contrast"
+      ],
+      "refines_prior_question_ids": [
+        "portfolio-baisbench-replicate-aware-single-cell-contrast"
+      ],
+      "planning_review": {
+        "record_count": 1,
+        "scope": "Question stems and prior permitted endpoint metadata only; expected answers, multiple-choice options and biological fixtures were not used.",
+        "pairedness": "No donor pairing is assumed from a family name; input metadata must establish it.",
+        "source_question_hashes": [
+          {
+            "task_id": "discovery/10.1016/j.stem.2023.12.013/q1",
+            "sha256": "8fbfc9ef7a1158d1e26bc6aca6e942fbaeed27b99c57c97d9b11ff753a5993ca"
+          }
+        ]
+      }
+    },
+    {
+      "proposed_id": "portfolio-baisbench-age-associated-expression",
+      "scientific_question": "Which observed cell-type expression patterns differ with recorded age under the actual sampling design?",
+      "benchmark_targets": [
+        {
+          "benchmark": "BAISBench",
+          "task_id": "discovery/10.1016/j.celrep.2022.111838/q5",
+          "source_task_record_sha256": "4d08665af8f4ed97c030a9757685b87012861e9c185313d998ebdc286d4dfb86"
+        }
+      ],
+      "source_inspection_tier": "question-stems-rechecked-for-estimand-and-sampling-design",
+      "source_planning_disposition": "estimand-specific-input-and-artifact-design",
+      "matching_workstreams": [
+        "single-cell-pseudobulk"
+      ],
+      "required_endpoint_stages": [
+        "Join measured cells, genes, biological samples and the explicitly observed grouping variable.",
+        "Construct the complete eligible population and expression summaries for every required cell state.",
+        "Fit the specified sample-level contrast or localization summary with the actual paired/unpaired design.",
+        "Return all tested effects, uncertainties and gene-set results where requested; link every conclusion to these artifacts."
+      ],
+      "observed_input_requirements": [
+        "Independent observed RNA counts, feature annotation and cell/sample/donor metadata with the grouping variable required by this question. Preserve real biological replication and all requested compartments/condition levels."
+      ],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
+      "native_package_leads": [],
+      "proposed_artifact_requirements": [
+        "Complete cell/sample eligibility, cell-type-by-sample counts, gene detection summaries, design/contrast matrices where applicable, all tested gene effects and explicitly requested pathway/membership tables."
+      ],
+      "source_specific_decisions": [
+        "Treat age as measured; cross-sectional and repeated-subject age effects require different models, and cells are not independent age replicates."
+      ],
+      "deterministic_verification_approach": [
+        "Check identities, real sample grouping, complete denominators and design estimability. Use native count/statistical analysis plus independent arithmetic and multiplicity checks. No effect is required to have the source study sign or significance.",
+        "Only claims mechanically supported by the supplied observations and frozen evidence rules are graded. Causal or functional interpretations unsupported by these artifacts remain gaps."
+      ],
+      "source_artifact_contracts": [],
+      "status": "question-planned-source-and-contract-review-pending",
+      "validated_new_mappings": 0,
+      "source_families": [
+        "replicate-aware-single-cell-contrast"
+      ],
+      "refines_prior_question_ids": [
+        "portfolio-baisbench-replicate-aware-single-cell-contrast"
+      ],
+      "planning_review": {
+        "record_count": 1,
+        "scope": "Question stems and prior permitted endpoint metadata only; expected answers, multiple-choice options and biological fixtures were not used.",
+        "pairedness": "No donor pairing is assumed from a family name; input metadata must establish it.",
+        "source_question_hashes": [
+          {
+            "task_id": "discovery/10.1016/j.celrep.2022.111838/q5",
+            "sha256": "889b268ef4e7a95dac60877c59e903b53f43acda6f662c4e5a9146cd7d41b752"
+          }
+        ]
+      }
+    },
+    {
+      "proposed_id": "portfolio-baisbench-post-treatment-state-expression",
+      "scientific_question": "Which observed cell-type expression and pathway differences remain between prespecified post-treatment clinical states?",
+      "benchmark_targets": [
+        {
+          "benchmark": "BAISBench",
+          "task_id": "discovery/10.1038/s42003-024-06225-2/q2",
+          "source_task_record_sha256": "5e2f02aa098097c45b7ab497c5f460e74440534e45f3fb3007c352a90e07cad0"
+        },
+        {
+          "benchmark": "BAISBench",
+          "task_id": "discovery/10.1038/s42003-024-06225-2/q4",
+          "source_task_record_sha256": "a290a4dbce4c410445b6107f68f167ffa31592b1f1b6438508a8f244d2f76343"
+        }
+      ],
+      "source_inspection_tier": "question-stems-rechecked-for-estimand-and-sampling-design",
+      "source_planning_disposition": "estimand-specific-input-and-artifact-design",
+      "matching_workstreams": [
+        "single-cell-pseudobulk"
+      ],
+      "required_endpoint_stages": [
+        "Join measured cells, genes, biological samples and the explicitly observed grouping variable.",
+        "Construct the complete eligible population and expression summaries for every required cell state.",
+        "Fit the specified sample-level contrast or localization summary with the actual paired/unpaired design.",
+        "Return all tested effects, uncertainties and gene-set results where requested; link every conclusion to these artifacts."
+      ],
+      "observed_input_requirements": [
+        "Independent observed RNA counts, feature annotation and cell/sample/donor metadata with the grouping variable required by this question. Preserve real biological replication and all requested compartments/condition levels."
+      ],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
+      "native_package_leads": [],
+      "proposed_artifact_requirements": [
+        "Complete cell/sample eligibility, cell-type-by-sample counts, gene detection summaries, design/contrast matrices where applicable, all tested gene effects and explicitly requested pathway/membership tables."
+      ],
+      "source_specific_decisions": [
+        "Keep actual treatment timing and observed state labels. Do not claim a longitudinal treatment effect without baseline/paired observations."
+      ],
+      "deterministic_verification_approach": [
+        "Check identities, real sample grouping, complete denominators and design estimability. Use native count/statistical analysis plus independent arithmetic and multiplicity checks. No effect is required to have the source study sign or significance.",
+        "Only claims mechanically supported by the supplied observations and frozen evidence rules are graded. Causal or functional interpretations unsupported by these artifacts remain gaps."
+      ],
+      "source_artifact_contracts": [],
+      "status": "question-planned-source-and-contract-review-pending",
+      "validated_new_mappings": 0,
+      "source_families": [
+        "replicate-aware-single-cell-contrast",
+        "single-cell-contrast-enrichment"
+      ],
+      "refines_prior_question_ids": [
+        "portfolio-baisbench-replicate-aware-single-cell-contrast",
+        "portfolio-baisbench-single-cell-contrast-enrichment"
+      ],
+      "planning_review": {
+        "record_count": 2,
+        "scope": "Question stems and prior permitted endpoint metadata only; expected answers, multiple-choice options and biological fixtures were not used.",
+        "pairedness": "No donor pairing is assumed from a family name; input metadata must establish it.",
+        "source_question_hashes": [
+          {
+            "task_id": "discovery/10.1038/s42003-024-06225-2/q2",
+            "sha256": "050faed88bc9eb2ff70e903ccff0b1ca20afa732fccf9c9621f27aa6bc56dfa4"
+          },
+          {
+            "task_id": "discovery/10.1038/s42003-024-06225-2/q4",
+            "sha256": "97dc494b51727ebde0698f3145ca14fbb85ccb00a303dc041d6f0b3a82e2e9df"
+          }
+        ]
+      }
     }
   ],
   "cross_benchmark_consolidation_queue": [
@@ -8720,25 +9676,27 @@
         "portfolio-baisbench-compartment-expression-contrast",
         "portfolio-baisbench-transcriptome-and-functional-assay"
       ],
-      "decision": "Review for shared observed inputs and question consolidation; shared workstream alone does not justify merging different assays, estimands or required methods."
+      "decision": "Consider shared input preparation only after checking estimand, biological unit and required methods. See workflow_portfolio.json for explicit proposed task combinations and review decisions."
     },
     {
-      "workstream": "clinical-response-model",
+      "workstream": "variant-evidence",
       "benchmarks": [
+        "BioAgent",
         "CORE-Bench",
-        "TxBench-OD",
-        "scBench-Long"
+        "ScienceAgentBench",
+        "VariantBench"
       ],
       "question_ids": [
-        "portfolio-core-bench-research-cohort-sampling",
-        "portfolio-core-bench-sample-to-patient-diagnostic-evaluation",
-        "portfolio-core-bench-longitudinal-drug-response",
-        "portfolio-core-bench-clinical-team-performance-classification",
-        "portfolio-core-bench-longitudinal-laboratory-records",
-        "portfolio-txbench-od-transcript-reduction-cohort",
-        "portfolio-scbench-long-cohort-design-and-expression-program-audit"
+        "portfolio-bioagent-inherited-variant-prioritization",
+        "portfolio-variantbench-cis-mendelian-randomization",
+        "portfolio-variantbench-credible-set-mechanistic-evidence",
+        "portfolio-variantbench-read-phased-codon-consequences",
+        "portfolio-variantbench-structural-variant-distribution-qc",
+        "portfolio-scienceagentbench-structure-indexed-mutation-effects",
+        "portfolio-core-bench-cancer-alteration-exclusivity",
+        "portfolio-somatic-calls-expression-peptides"
       ],
-      "decision": "Review for shared observed inputs and question consolidation; shared workstream alone does not justify merging different assays, estimands or required methods."
+      "decision": "Consider shared input preparation only after checking estimand, biological unit and required methods. See workflow_portfolio.json for explicit proposed task combinations and review decisions."
     },
     {
       "workstream": "single-cell-qc-embedding",
@@ -8761,93 +9719,190 @@
         "portfolio-baisbench-single-cell-gene-module",
         "portfolio-single-cell-qc-and-population-representation"
       ],
-      "decision": "Review for shared observed inputs and question consolidation; shared workstream alone does not justify merging different assays, estimands or required methods."
+      "decision": "Consider shared input preparation only after checking estimand, biological unit and required methods. See workflow_portfolio.json for explicit proposed task combinations and review decisions."
     },
     {
-      "workstream": "single-cell-annotation",
+      "workstream": "chromatin-regulatory",
       "benchmarks": [
         "BAISBench",
-        "sc-HeurekaBench"
-      ],
-      "question_ids": [
-        "portfolio-sc-heurekabench-cell-state-characterization",
-        "portfolio-sc-heurekabench-state-characterization-and-composition",
-        "portfolio-baisbench-cell-type-expression-localization",
-        "portfolio-baisbench-single-cell-state-characterization",
-        "portfolio-baisbench-subtype-marker-evidence",
-        "portfolio-baisbench-single-cell-hierarchical-annotation",
-        "portfolio-baisbench-cross-dataset-cell-state-comparison"
-      ],
-      "decision": "Review for shared observed inputs and question consolidation; shared workstream alone does not justify merging different assays, estimands or required methods."
-    },
-    {
-      "workstream": "single-cell-composition",
-      "benchmarks": [
-        "BAISBench",
-        "SpatialBench",
-        "sc-HeurekaBench"
-      ],
-      "question_ids": [
-        "portfolio-spatialbench-spatial-cell-composition-timecourse",
-        "portfolio-sc-heurekabench-sample-aware-cell-composition",
-        "portfolio-sc-heurekabench-genotype-treatment-cell-composition",
-        "portfolio-baisbench-donor-aware-cell-composition",
-        "portfolio-baisbench-sample-level-signal-detection",
-        "portfolio-baisbench-donor-level-clinical-association"
-      ],
-      "decision": "Review for shared observed inputs and question consolidation; shared workstream alone does not justify merging different assays, estimands or required methods."
-    },
-    {
-      "workstream": "single-cell-pseudobulk",
-      "benchmarks": [
-        "BAISBench",
-        "SpatialBench",
-        "sc-HeurekaBench",
-        "scBench"
-      ],
-      "question_ids": [
-        "portfolio-spatialbench-donor-aware-feature-comparison",
-        "portfolio-spatialbench-donor-aware-genome-wide-comparison",
-        "portfolio-spatialbench-targeted-panel-cell-contrast",
-        "portfolio-spatialbench-donor-aware-control-gene-test",
-        "portfolio-scbench-paired-donor-pseudobulk",
-        "portfolio-sc-heurekabench-cell-type-condition-expression",
-        "portfolio-sc-heurekabench-cell-type-expression-to-pathways",
-        "portfolio-sc-heurekabench-perturbation-domain-expression",
-        "portfolio-sc-heurekabench-diet-by-domain-expression",
-        "portfolio-baisbench-replicate-aware-single-cell-contrast",
-        "portfolio-baisbench-single-cell-contrast-enrichment"
-      ],
-      "decision": "Review for shared observed inputs and question consolidation; shared workstream alone does not justify merging different assays, estimands or required methods."
-    },
-    {
-      "workstream": "single-cell-trajectory",
-      "benchmarks": [
-        "BAISBench",
-        "sc-HeurekaBench"
-      ],
-      "question_ids": [
-        "portfolio-sc-heurekabench-developmental-cell-state-trajectory",
-        "portfolio-sc-heurekabench-cell-state-regulon-activity",
-        "portfolio-sc-heurekabench-anatomical-gene-program-trajectories",
-        "portfolio-baisbench-single-cell-trajectory-hypotheses",
-        "portfolio-baisbench-lineage-potential-evidence"
-      ],
-      "decision": "Review for shared observed inputs and question consolidation; shared workstream alone does not justify merging different assays, estimands or required methods."
-    },
-    {
-      "workstream": "cell-communication",
-      "benchmarks": [
-        "BAISBench",
-        "sc-HeurekaBench",
+        "EpiBench",
         "scBench-Long"
       ],
       "question_ids": [
-        "portfolio-scbench-long-cross-species-expression-supported-communication",
-        "portfolio-sc-heurekabench-compartment-conditioned-cell-communication",
-        "portfolio-baisbench-cell-communication-hypotheses"
+        "portfolio-epibench-atac-consensus-and-tss-context",
+        "portfolio-epibench-enhancer-motif-program",
+        "portfolio-scbench-long-paired-rna-accessibility-regulatory-comparison",
+        "portfolio-baisbench-regulatory-module-evidence"
       ],
-      "decision": "Review for shared observed inputs and question consolidation; shared workstream alone does not justify merging different assays, estimands or required methods."
+      "decision": "Consider shared input preparation only after checking estimand, biological unit and required methods. See workflow_portfolio.json for explicit proposed task combinations and review decisions."
+    },
+    {
+      "workstream": "population-genetics",
+      "benchmarks": [
+        "BAISBench",
+        "CORE-Bench",
+        "VariantBench"
+      ],
+      "question_ids": [
+        "portfolio-variantbench-sex-chromosome-family-concordance",
+        "portfolio-core-bench-screening-population-risk-model",
+        "portfolio-baisbench-cell-type-genetic-risk-association"
+      ],
+      "decision": "Consider shared input preparation only after checking estimand, biological unit and required methods. See workflow_portfolio.json for explicit proposed task combinations and review decisions."
+    },
+    {
+      "workstream": "dose-response",
+      "benchmarks": [
+        "ScienceAgentBench",
+        "TxBench-PP"
+      ],
+      "question_ids": [
+        "portfolio-scienceagentbench-assay-distribution-and-similarity",
+        "portfolio-txbench-pp-multi-assay-mechanism",
+        "portfolio-txbench-pp-screen-hit-selection",
+        "portfolio-txbench-pp-screen-position-artifact",
+        "portfolio-txbench-pp-multi-assay-advancement"
+      ],
+      "decision": "Consider shared input preparation only after checking estimand, biological unit and required methods. See workflow_portfolio.json for explicit proposed task combinations and review decisions."
+    },
+    {
+      "workstream": "biological-imaging",
+      "benchmarks": [
+        "CORE-Bench",
+        "ScienceAgentBench",
+        "TxBench-Ab",
+        "TxBench-PP"
+      ],
+      "question_ids": [
+        "portfolio-scienceagentbench-microscopy-cell-count-prediction",
+        "portfolio-core-bench-repeated-imaging-variance-models",
+        "portfolio-core-bench-medical-image-classification",
+        "portfolio-core-bench-clinical-imaging-group-comparison",
+        "portfolio-txbench-ab-classifier-annotation-reliability",
+        "portfolio-txbench-pp-paired-activity-safety-imaging",
+        "portfolio-txbench-pp-organoid-response-imaging"
+      ],
+      "decision": "Consider shared input preparation only after checking estimand, biological unit and required methods. See workflow_portfolio.json for explicit proposed task combinations and review decisions."
+    },
+    {
+      "workstream": "data-statistics-visualization",
+      "benchmarks": [
+        "CORE-Bench",
+        "ScienceAgentBench",
+        "SpatialBench"
+      ],
+      "question_ids": [
+        "portfolio-scienceagentbench-paired-model-metric-comparison",
+        "portfolio-core-bench-research-power-audit",
+        "portfolio-core-bench-metabolic-phenotype-classification",
+        "portfolio-spatialbench-sample-confounded-clustering"
+      ],
+      "decision": "Consider shared input preparation only after checking estimand, biological unit and required methods. See workflow_portfolio.json for explicit proposed task combinations and review decisions."
+    },
+    {
+      "workstream": "immune-repertoire",
+      "benchmarks": [
+        "ScienceAgentBench",
+        "scBench-Long"
+      ],
+      "question_ids": [
+        "portfolio-scienceagentbench-paired-receptor-chain-qc",
+        "portfolio-scbench-long-paired-transcriptome-repertoire-comparison"
+      ],
+      "decision": "Consider shared input preparation only after checking estimand, biological unit and required methods. See workflow_portfolio.json for explicit proposed task combinations and review decisions."
+    },
+    {
+      "workstream": "clinical-response-model",
+      "benchmarks": [
+        "CORE-Bench",
+        "TxBench-OD",
+        "scBench-Long"
+      ],
+      "question_ids": [
+        "portfolio-core-bench-research-cohort-sampling",
+        "portfolio-core-bench-sample-to-patient-diagnostic-evaluation",
+        "portfolio-core-bench-longitudinal-drug-response",
+        "portfolio-core-bench-clinical-team-performance-classification",
+        "portfolio-core-bench-longitudinal-laboratory-records",
+        "portfolio-txbench-od-transcript-reduction-cohort",
+        "portfolio-scbench-long-cohort-design-and-expression-program-audit"
+      ],
+      "decision": "Consider shared input preparation only after checking estimand, biological unit and required methods. See workflow_portfolio.json for explicit proposed task combinations and review decisions."
+    },
+    {
+      "workstream": "physiological-timeseries",
+      "benchmarks": [
+        "CORE-Bench",
+        "TxBench-PP"
+      ],
+      "question_ids": [
+        "portfolio-core-bench-physiological-signal-classification",
+        "portfolio-core-bench-eeg-model-comparison",
+        "portfolio-txbench-pp-calcium-response-interpretation"
+      ],
+      "decision": "Consider shared input preparation only after checking estimand, biological unit and required methods. See workflow_portfolio.json for explicit proposed task combinations and review decisions."
+    },
+    {
+      "workstream": "evidence-meta-analysis",
+      "benchmarks": [
+        "BAISBench",
+        "CORE-Bench"
+      ],
+      "question_ids": [
+        "portfolio-core-bench-exercise-meta-analysis",
+        "portfolio-core-bench-registration-publication-discrepancy-review",
+        "portfolio-core-bench-longitudinal-biomarker-meta-analysis",
+        "portfolio-baisbench-data-and-literature-evidence-synthesis"
+      ],
+      "decision": "Consider shared input preparation only after checking estimand, biological unit and required methods. See workflow_portfolio.json for explicit proposed task combinations and review decisions."
+    },
+    {
+      "workstream": "gene-program-factorization",
+      "benchmarks": [
+        "BAISBench",
+        "CORE-Bench",
+        "SpatialBench"
+      ],
+      "question_ids": [
+        "portfolio-core-bench-cancer-expression-signature-comparison",
+        "portfolio-spatialbench-targeted-panel-coexpression",
+        "portfolio-baisbench-cell-type-feature-coexpression"
+      ],
+      "decision": "Consider shared input preparation only after checking estimand, biological unit and required methods. See workflow_portfolio.json for explicit proposed task combinations and review decisions."
+    },
+    {
+      "workstream": "target-evidence",
+      "benchmarks": [
+        "CORE-Bench",
+        "TxBench-PP"
+      ],
+      "question_ids": [
+        "portfolio-core-bench-pharmacogenomic-response-network",
+        "portfolio-txbench-pp-pharmacogenomic-confounding",
+        "portfolio-txbench-pp-patient-aware-target-expression",
+        "portfolio-txbench-pp-dependency-mechanism-sign",
+        "portfolio-txbench-pp-target-engagement-controls"
+      ],
+      "decision": "Consider shared input preparation only after checking estimand, biological unit and required methods. See workflow_portfolio.json for explicit proposed task combinations and review decisions."
+    },
+    {
+      "workstream": "clinical-safety-evidence",
+      "benchmarks": [
+        "TxBench-Ab",
+        "TxBench-OD",
+        "TxBench-PP"
+      ],
+      "question_ids": [
+        "portfolio-txbench-ab-biodistribution-label-validity",
+        "portfolio-txbench-ab-compartment-delivery-evidence",
+        "portfolio-txbench-ab-subcellular-delivery-validation",
+        "portfolio-txbench-ab-longitudinal-readout-validity",
+        "portfolio-txbench-od-informative-missingness-toxicity",
+        "portfolio-txbench-od-cross-study-safety-comparability",
+        "portfolio-txbench-od-censored-pharmacokinetics",
+        "portfolio-txbench-pp-cross-modality-safety"
+      ],
+      "decision": "Consider shared input preparation only after checking estimand, biological unit and required methods. See workflow_portfolio.json for explicit proposed task combinations and review decisions."
     },
     {
       "workstream": "spatial-expression",
@@ -8872,192 +9927,105 @@
         "portfolio-baisbench-cell-state-anatomical-context",
         "portfolio-spatial-assay-coordinate-qc"
       ],
-      "decision": "Review for shared observed inputs and question consolidation; shared workstream alone does not justify merging different assays, estimands or required methods."
+      "decision": "Consider shared input preparation only after checking estimand, biological unit and required methods. See workflow_portfolio.json for explicit proposed task combinations and review decisions."
     },
     {
-      "workstream": "chromatin-regulatory",
+      "workstream": "single-cell-composition",
       "benchmarks": [
         "BAISBench",
-        "EpiBench",
+        "SpatialBench",
+        "sc-HeurekaBench"
+      ],
+      "question_ids": [
+        "portfolio-spatialbench-spatial-cell-composition-timecourse",
+        "portfolio-sc-heurekabench-sample-aware-cell-composition",
+        "portfolio-sc-heurekabench-genotype-treatment-cell-composition",
+        "portfolio-baisbench-donor-aware-cell-composition",
+        "portfolio-baisbench-sample-level-signal-detection",
+        "portfolio-baisbench-donor-level-clinical-association"
+      ],
+      "decision": "Consider shared input preparation only after checking estimand, biological unit and required methods. See workflow_portfolio.json for explicit proposed task combinations and review decisions."
+    },
+    {
+      "workstream": "single-cell-pseudobulk",
+      "benchmarks": [
+        "BAISBench",
+        "SpatialBench",
+        "sc-HeurekaBench",
+        "scBench"
+      ],
+      "question_ids": [
+        "portfolio-spatialbench-donor-aware-feature-comparison",
+        "portfolio-spatialbench-donor-aware-genome-wide-comparison",
+        "portfolio-spatialbench-targeted-panel-cell-contrast",
+        "portfolio-spatialbench-donor-aware-control-gene-test",
+        "portfolio-scbench-paired-donor-pseudobulk",
+        "portfolio-sc-heurekabench-perturbation-domain-expression",
+        "portfolio-sc-heurekabench-diet-by-domain-expression",
+        "portfolio-sc-heurekabench-inflammatory-celltype-comparison",
+        "portfolio-sc-heurekabench-muscle-aging-expression",
+        "portfolio-sc-heurekabench-placental-host-response-comparison",
+        "portfolio-sc-heurekabench-placental-cytokine-response",
+        "portfolio-sc-heurekabench-ovarian-aging-expression",
+        "portfolio-baisbench-condition-state-expression",
+        "portfolio-baisbench-inflammatory-case-control-expression",
+        "portfolio-baisbench-developmental-stage-expression",
+        "portfolio-baisbench-tissue-compartment-expression",
+        "portfolio-baisbench-genotype-associated-expression",
+        "portfolio-baisbench-sex-by-condition-expression",
+        "portfolio-baisbench-disease-subtype-expression",
+        "portfolio-baisbench-ligand-associated-expression",
+        "portfolio-baisbench-age-associated-expression",
+        "portfolio-baisbench-post-treatment-state-expression"
+      ],
+      "decision": "Consider shared input preparation only after checking estimand, biological unit and required methods. See workflow_portfolio.json for explicit proposed task combinations and review decisions."
+    },
+    {
+      "workstream": "cell-communication",
+      "benchmarks": [
+        "BAISBench",
+        "sc-HeurekaBench",
         "scBench-Long"
       ],
       "question_ids": [
-        "portfolio-epibench-atac-consensus-and-tss-context",
-        "portfolio-epibench-enhancer-motif-program",
-        "portfolio-scbench-long-paired-rna-accessibility-regulatory-comparison",
-        "portfolio-baisbench-regulatory-module-evidence"
+        "portfolio-scbench-long-cross-species-expression-supported-communication",
+        "portfolio-sc-heurekabench-compartment-conditioned-cell-communication",
+        "portfolio-baisbench-cell-communication-hypotheses"
       ],
-      "decision": "Review for shared observed inputs and question consolidation; shared workstream alone does not justify merging different assays, estimands or required methods."
+      "decision": "Consider shared input preparation only after checking estimand, biological unit and required methods. See workflow_portfolio.json for explicit proposed task combinations and review decisions."
     },
     {
-      "workstream": "population-genetics",
+      "workstream": "single-cell-annotation",
       "benchmarks": [
         "BAISBench",
-        "CORE-Bench",
-        "VariantBench"
+        "sc-HeurekaBench"
       ],
       "question_ids": [
-        "portfolio-variantbench-sex-chromosome-family-concordance",
-        "portfolio-core-bench-screening-population-risk-model",
-        "portfolio-baisbench-cell-type-genetic-risk-association"
+        "portfolio-sc-heurekabench-cell-state-characterization",
+        "portfolio-sc-heurekabench-state-characterization-and-composition",
+        "portfolio-baisbench-cell-type-expression-localization",
+        "portfolio-baisbench-single-cell-state-characterization",
+        "portfolio-baisbench-subtype-marker-evidence",
+        "portfolio-baisbench-single-cell-hierarchical-annotation",
+        "portfolio-baisbench-cross-dataset-cell-state-comparison",
+        "portfolio-sc-heurekabench-within-tissue-expression-localization"
       ],
-      "decision": "Review for shared observed inputs and question consolidation; shared workstream alone does not justify merging different assays, estimands or required methods."
+      "decision": "Consider shared input preparation only after checking estimand, biological unit and required methods. See workflow_portfolio.json for explicit proposed task combinations and review decisions."
     },
     {
-      "workstream": "variant-evidence",
-      "benchmarks": [
-        "BioAgent",
-        "CORE-Bench",
-        "ScienceAgentBench",
-        "VariantBench"
-      ],
-      "question_ids": [
-        "portfolio-bioagent-inherited-variant-prioritization",
-        "portfolio-variantbench-cis-mendelian-randomization",
-        "portfolio-variantbench-credible-set-mechanistic-evidence",
-        "portfolio-variantbench-read-phased-codon-consequences",
-        "portfolio-variantbench-structural-variant-distribution-qc",
-        "portfolio-scienceagentbench-structure-indexed-mutation-effects",
-        "portfolio-core-bench-cancer-alteration-exclusivity",
-        "portfolio-somatic-calls-expression-peptides"
-      ],
-      "decision": "Review for shared observed inputs and question consolidation; shared workstream alone does not justify merging different assays, estimands or required methods."
-    },
-    {
-      "workstream": "target-evidence",
-      "benchmarks": [
-        "CORE-Bench",
-        "TxBench-PP"
-      ],
-      "question_ids": [
-        "portfolio-core-bench-pharmacogenomic-response-network",
-        "portfolio-txbench-pp-pharmacogenomic-confounding",
-        "portfolio-txbench-pp-patient-aware-target-expression",
-        "portfolio-txbench-pp-dependency-mechanism-sign",
-        "portfolio-txbench-pp-target-engagement-controls"
-      ],
-      "decision": "Review for shared observed inputs and question consolidation; shared workstream alone does not justify merging different assays, estimands or required methods."
-    },
-    {
-      "workstream": "dose-response",
-      "benchmarks": [
-        "ScienceAgentBench",
-        "TxBench-PP"
-      ],
-      "question_ids": [
-        "portfolio-scienceagentbench-assay-distribution-and-similarity",
-        "portfolio-txbench-pp-multi-assay-mechanism",
-        "portfolio-txbench-pp-screen-hit-selection",
-        "portfolio-txbench-pp-screen-position-artifact",
-        "portfolio-txbench-pp-multi-assay-advancement"
-      ],
-      "decision": "Review for shared observed inputs and question consolidation; shared workstream alone does not justify merging different assays, estimands or required methods."
-    },
-    {
-      "workstream": "immune-repertoire",
-      "benchmarks": [
-        "ScienceAgentBench",
-        "scBench-Long"
-      ],
-      "question_ids": [
-        "portfolio-scienceagentbench-paired-receptor-chain-qc",
-        "portfolio-scbench-long-paired-transcriptome-repertoire-comparison"
-      ],
-      "decision": "Review for shared observed inputs and question consolidation; shared workstream alone does not justify merging different assays, estimands or required methods."
-    },
-    {
-      "workstream": "clinical-safety-evidence",
-      "benchmarks": [
-        "TxBench-Ab",
-        "TxBench-OD",
-        "TxBench-PP"
-      ],
-      "question_ids": [
-        "portfolio-txbench-ab-biodistribution-label-validity",
-        "portfolio-txbench-ab-compartment-delivery-evidence",
-        "portfolio-txbench-ab-subcellular-delivery-validation",
-        "portfolio-txbench-ab-longitudinal-readout-validity",
-        "portfolio-txbench-od-informative-missingness-toxicity",
-        "portfolio-txbench-od-cross-study-safety-comparability",
-        "portfolio-txbench-od-censored-pharmacokinetics",
-        "portfolio-txbench-pp-cross-modality-safety"
-      ],
-      "decision": "Review for shared observed inputs and question consolidation; shared workstream alone does not justify merging different assays, estimands or required methods."
-    },
-    {
-      "workstream": "gene-program-factorization",
+      "workstream": "single-cell-trajectory",
       "benchmarks": [
         "BAISBench",
-        "CORE-Bench",
-        "SpatialBench"
+        "sc-HeurekaBench"
       ],
       "question_ids": [
-        "portfolio-core-bench-cancer-expression-signature-comparison",
-        "portfolio-spatialbench-targeted-panel-coexpression",
-        "portfolio-baisbench-cell-type-feature-coexpression"
+        "portfolio-sc-heurekabench-developmental-cell-state-trajectory",
+        "portfolio-sc-heurekabench-cell-state-regulon-activity",
+        "portfolio-sc-heurekabench-anatomical-gene-program-trajectories",
+        "portfolio-baisbench-single-cell-trajectory-hypotheses",
+        "portfolio-baisbench-lineage-potential-evidence"
       ],
-      "decision": "Review for shared observed inputs and question consolidation; shared workstream alone does not justify merging different assays, estimands or required methods."
-    },
-    {
-      "workstream": "biological-imaging",
-      "benchmarks": [
-        "CORE-Bench",
-        "ScienceAgentBench",
-        "TxBench-Ab",
-        "TxBench-PP"
-      ],
-      "question_ids": [
-        "portfolio-scienceagentbench-microscopy-cell-count-prediction",
-        "portfolio-core-bench-repeated-imaging-variance-models",
-        "portfolio-core-bench-medical-image-classification",
-        "portfolio-core-bench-clinical-imaging-group-comparison",
-        "portfolio-txbench-ab-classifier-annotation-reliability",
-        "portfolio-txbench-pp-paired-activity-safety-imaging",
-        "portfolio-txbench-pp-organoid-response-imaging"
-      ],
-      "decision": "Review for shared observed inputs and question consolidation; shared workstream alone does not justify merging different assays, estimands or required methods."
-    },
-    {
-      "workstream": "physiological-timeseries",
-      "benchmarks": [
-        "CORE-Bench",
-        "TxBench-PP"
-      ],
-      "question_ids": [
-        "portfolio-core-bench-physiological-signal-classification",
-        "portfolio-core-bench-eeg-model-comparison",
-        "portfolio-txbench-pp-calcium-response-interpretation"
-      ],
-      "decision": "Review for shared observed inputs and question consolidation; shared workstream alone does not justify merging different assays, estimands or required methods."
-    },
-    {
-      "workstream": "evidence-meta-analysis",
-      "benchmarks": [
-        "BAISBench",
-        "CORE-Bench"
-      ],
-      "question_ids": [
-        "portfolio-core-bench-exercise-meta-analysis",
-        "portfolio-core-bench-registration-publication-discrepancy-review",
-        "portfolio-core-bench-longitudinal-biomarker-meta-analysis",
-        "portfolio-baisbench-data-and-literature-evidence-synthesis"
-      ],
-      "decision": "Review for shared observed inputs and question consolidation; shared workstream alone does not justify merging different assays, estimands or required methods."
-    },
-    {
-      "workstream": "data-statistics-visualization",
-      "benchmarks": [
-        "CORE-Bench",
-        "ScienceAgentBench",
-        "SpatialBench"
-      ],
-      "question_ids": [
-        "portfolio-scienceagentbench-paired-model-metric-comparison",
-        "portfolio-core-bench-research-power-audit",
-        "portfolio-core-bench-metabolic-phenotype-classification",
-        "portfolio-spatialbench-sample-confounded-clustering"
-      ],
-      "decision": "Review for shared observed inputs and question consolidation; shared workstream alone does not justify merging different assays, estimands or required methods."
+      "decision": "Consider shared input preparation only after checking estimand, biological unit and required methods. See workflow_portfolio.json for explicit proposed task combinations and review decisions."
     }
   ]
 }

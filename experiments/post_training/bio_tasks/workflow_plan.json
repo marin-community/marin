@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T15:24:08.927757+00:00",
+  "updated_at": "2026-09-24T15:40:35.143831+00:00",
   "basis_revision": "952929c306",
   "scope": "Agentic provisional-ID benchmarks only; preserve all existing OOD exclusions. Plan the broad task set before further recipe implementation.",
   "authoring_unit": "One coherent observed-data task per recipe by default. Proposed questions are separate task designs, not repeated instances. They may be split or merged after endpoint and runtime checks.",
@@ -60,8 +60,8 @@
     "proposed_task_questions": 147,
     "validated_coverage_added_by_plan": 0,
     "unrouted_family_groups": 0,
-    "detailed_question_cards": 662,
-    "proposed_task_groups_after_conditional_consolidation": 605
+    "detailed_question_cards": 676,
+    "proposed_task_groups_after_conditional_consolidation": 629
   },
   "workstreams": [
     {
@@ -13160,7 +13160,7 @@
     },
     {
       "path": "workflow_designs/additional_benchmarks.json",
-      "sha256": "7c733ea364993c88b62576c4daaf7f7e87c4bd486b384d9650a1318b593cc153",
+      "sha256": "a1c190aee0020e0f9dfedaae179e2aa58726980018428454ad327a01379aa457",
       "benchmark_ids": [
         "BioAgent",
         "EpiBench",
@@ -13179,7 +13179,7 @@
         "BAISBench"
       ],
       "inventory_records_assigned": 493,
-      "proposed_question_cards": 160,
+      "proposed_question_cards": 172,
       "inspection_basis": "Existing versioned inventories and endpoint-stage reviews; per-record source inspection limits preserved. No new full-prompt inspection implied.",
       "relationship_to_workstream_questions": "These question cards refine or split the existing 147 broad questions. They overlap the three existing detailed-design files and one another across benchmarks; do not sum them into an independent task count or a coverage forecast."
     },
@@ -13212,10 +13212,10 @@
     },
     {
       "path": "workflow_designs/promptbio-bench.json",
-      "sha256": "7b740fa2b5616993f50d43f3f9acc9e557d73443d7272de5709d369be777caaf",
+      "sha256": "5d03daf718a8bd845a26481488b61eb6c86bf2ba975738f3d95c2ac5410f6de0",
       "benchmark_id": "PromptBio-Bench",
       "inventory_records_assigned": 244,
-      "proposed_question_cards": 92,
+      "proposed_question_cards": 94,
       "inspection_basis": "All versioned endpoint patterns and artifact specifications grouped; full-source numeric/assay details still require reconciliation.",
       "relationship_to_workstream_questions": "Connected question refinements with exact source-task assignments; no completed coverage or independent task-count forecast."
     },
@@ -13231,7 +13231,7 @@
     },
     {
       "path": "workflow_designs/drugdiscoverybench.json",
-      "sha256": "78bd1eebc2a0072dcbf6c395292eaad1744bbf035d48a257c054ed092972aeef",
+      "sha256": "795eb2f36a97abe386367c15bc1d6cf6f70ddc42097bcfc83203f5fbb7d3c4ce",
       "benchmark_id": "DrugDiscoveryBench public preview",
       "inventory_records_assigned": 82,
       "excluded_records": 0,
@@ -13295,13 +13295,13 @@
   "authoring_phase": "question-portfolio-planning",
   "portfolio_index": {
     "path": "workflow_portfolio.json",
-    "sha256": "300766ccfb81d06234e292e575fc8359744a5f4424944814c91ee9be6eda3097",
+    "sha256": "ffa616b07fc7f3c44209c366ff0f57fe5cf1c03e67e86e781332f3572d90e587",
     "counts": {
       "source_releases": 30,
       "inventory_records": 2881,
-      "question_cards": 662,
-      "proposed_task_groups": 605,
-      "conditional_consolidations": 30,
+      "question_cards": 676,
+      "proposed_task_groups": 629,
+      "conditional_consolidations": 28,
       "non_alias_records_linked_to_questions": 2480,
       "known_cross_release_alias_records": 50,
       "identity_only_records_with_gap_dispositions": 350,

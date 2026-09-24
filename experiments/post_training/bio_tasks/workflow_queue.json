@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T15:22:12.546163+00:00",
+  "updated_at": "2026-09-24T15:40:35.143831+00:00",
   "basis_revision": "c3a42fa5cf",
   "scope": "Provisional ID agentic benchmarks only. This queue selects new authoring work; it does not change benchmark coverage states.",
   "selection_policy": {
@@ -1227,7 +1227,7 @@
     "next_actions": [
       {
         "id": "portfolio-consolidation-review",
-        "work": "Review the complete question portfolio and its 30 conditional combinations; preserve standalone methods, estimands and observation types where one study cannot support every endpoint."
+        "work": "Continue reviewing the 28 retained conditional combinations and standalone questions; eight earlier combinations were narrowed or split by exact source requirements. Share acquisition work without conflating scientific objectives."
       },
       {
         "id": "source-and-acceptance-contracts",
@@ -1240,16 +1240,16 @@
   "portfolio_review_progress": {
     "source_releases": 30,
     "inventory_records": 2881,
-    "question_cards": 662,
-    "proposed_task_groups": 605,
-    "conditional_consolidations": 30,
+    "question_cards": 676,
+    "proposed_task_groups": 629,
+    "conditional_consolidations": 28,
     "non_alias_records_linked_to_questions": 2480,
     "known_cross_release_alias_records": 50,
     "identity_only_records_with_gap_dispositions": 350,
     "excluded_records": 1,
     "validated_new_mappings": 0,
     "portfolio_file": "workflow_portfolio.json",
-    "portfolio_sha256": "300766ccfb81d06234e292e575fc8359744a5f4424944814c91ee9be6eda3097",
-    "limit": "The portfolio now accounts for every inventoried record, but inspection depth varies. Conditional task consolidation and source-specific input/acceptance contracts remain unresolved. No implemented task count or validated coverage increased."
+    "portfolio_sha256": "ffa616b07fc7f3c44209c366ff0f57fe5cf1c03e67e86e781332f3572d90e587",
+    "limit": "Every inventoried record has a planning disposition; question proposals and conditional merges have unequal inspection depth. No implemented task or validated coverage increased. Eight combinations were revised and 69 records now have estimand-specific cards."
   }
 }
