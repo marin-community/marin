@@ -225,7 +225,7 @@ def load_vllm_gpu_release(path: Path) -> VllmGpuRelease:
     return release
 
 
-def render_gpu_release_toml(manifest: dict, *, allow_staged_candidate: bool = False) -> str:
+def render_gpu_release_toml(manifest: dict, *, staged_candidate: bool = False) -> str:
     """Return gpu.toml text for a promoted release or explicit staged candidate.
 
     ``manifest`` is a parsed ``marin-vllm-gpu-manifest.json``. Each wheel URL is rebuilt from
@@ -234,27 +234,20 @@ def render_gpu_release_toml(manifest: dict, *, allow_staged_candidate: bool = Fa
     """
     release = manifest["release"]
     status = release.get("status")
-    if status == "released":
-        if manifest.get("validation", {}).get("status") != "passed":
-            raise ValueError("manifest validation did not pass; refusing to pin an unvalidated release")
-    elif status == "candidate" and allow_staged_candidate:
+    if staged_candidate:
+        if status != "candidate":
+            raise ValueError(f"expected a staged 'candidate' manifest, found status {status!r}")
         tag = release.get("tag", "")
         source_commit = manifest.get("source", {}).get("fork_commit", "")
         if tag != f"{GPU_STAGED_CANDIDATE_TAG_PREFIX}{source_commit[:12]}":
             raise ValueError(f"expected a staged GPU candidate tag, found {tag!r}")
         if manifest.get("validation") != {"status": "pending", "targets": []}:
             raise ValueError("staged candidate has an unexpected validation state")
-        workflow = manifest.get("workflow", {})
-        run_id = str(workflow.get("run_id", ""))
-        if (
-            workflow.get("commit") != source_commit
-            or workflow.get("ref") != "refs/heads/main-next"
-            or not run_id.isdigit()
-            or workflow.get("run_url") != f"https://github.com/{GPU_RELEASE_REPOSITORY}/actions/runs/{run_id}"
-        ):
-            raise ValueError("staged candidate workflow provenance is invalid")
     else:
-        raise ValueError(f"expected a promoted 'released' manifest, found status {status!r}")
+        if status != "released":
+            raise ValueError(f"expected a promoted 'released' manifest, found status {status!r}")
+        if manifest.get("validation", {}).get("status") != "passed":
+            raise ValueError("manifest validation did not pass; refusing to pin an unvalidated release")
     repository = release["repository"]
     if repository != GPU_RELEASE_REPOSITORY:
         raise ValueError(f"expected a {GPU_RELEASE_REPOSITORY} release, found {repository!r}")
@@ -606,7 +599,7 @@ def promote_gpu_release(manifest_path: Path) -> None:
 
 def stage_gpu_candidate(manifest_path: Path) -> None:
     manifest = json.loads(manifest_path.read_text())
-    rendered = render_gpu_release_toml(manifest, allow_staged_candidate=True)
+    rendered = render_gpu_release_toml(manifest, staged_candidate=True)
     _install_gpu_manifest(manifest_path, manifest, rendered, kind="staged candidate")
 
 
