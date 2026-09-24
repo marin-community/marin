@@ -13,7 +13,14 @@ from harbor.environments.base import BaseEnvironment, ExecResult
 from harbor.environments.capabilities import EnvironmentCapabilities
 
 from harbor_qemu.image import DockerfileSource, QemuAssets, RegistryImage
-from harbor_qemu.machine import Command, ExitReason, MachineSpec, QemuBundle, ShellSession
+from harbor_qemu.machine import (
+    HARBOR_EXEC_OUTPUT_LIMIT_BYTES,
+    Command,
+    ExitReason,
+    MachineSpec,
+    QemuBundle,
+    ShellSession,
+)
 from harbor_qemu.machine import NetworkPolicy as MachineNetworkPolicy
 from harbor_qemu.qemu_machine import Acceleration, QemuMachine, QemuMachineFactory
 
@@ -176,7 +183,7 @@ class QemuEnvironment(BaseEnvironment):
                 cwd=cwd,
                 env=self._merge_env(env) or {},
                 timeout=timeout_sec,
-                output_limit_bytes=128 * 1024 * 1024,
+                output_limit_bytes=HARBOR_EXEC_OUTPUT_LIMIT_BYTES,
             )
         )
         if result.reason is ExitReason.TIMED_OUT:

@@ -10,6 +10,8 @@ from typing import Protocol, runtime_checkable
 
 from harbor_qemu.image import DockerfileSource, PreparedImage, RegistryImage
 
+HARBOR_EXEC_OUTPUT_LIMIT_BYTES = 128 * 1024 * 1024
+
 
 class NetworkPolicy(StrEnum):
     DENY = "deny"
