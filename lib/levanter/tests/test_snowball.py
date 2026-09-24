@@ -25,7 +25,7 @@ import haliax as hax
 from haliax import Axis
 from haliax.state_dict import from_torch_compatible_state_dict, to_torch_compatible_state_dict
 
-from levanter.grug.sharding import compact_grug_mesh
+from levanter.grug.sharding import _GRUG_MESH_AXIS_NAMES, compact_grug_mesh
 from levanter.models.lm_model import LmConfig
 from levanter.models.snowball import (
     GRUG_MOE_ARCHITECTURE,
@@ -35,6 +35,9 @@ from levanter.models.snowball import (
     SnowballLMHeadModel,
     validate_single_name_config,
 )
+from levanter.testing.cpu_devices import run_on_cpu_devices
+
+SNOWBALL_LOAD_TEST_DEVICE_COUNT = 8
 
 
 def _tiny_config(**overrides) -> SnowballConfig:
@@ -270,7 +273,7 @@ def test_snowball_rejects_off_recipe(overrides, message):
 
 def test_snowball_load_path_multidevice_sharding():
     """Preserve logits when loading a state dict sharded over eight data devices."""
-    if jax.device_count() < 8:
+    if jax.device_count() < SNOWBALL_LOAD_TEST_DEVICE_COUNT:
         pytest.skip("Requires eight devices")
     # All parallel dims divide 8 so they actually shard on data=8 (E=16 => router_bias shards).
     cfg = SnowballConfig(
@@ -292,11 +295,13 @@ def test_snowball_load_path_multidevice_sharding():
     )
     Vocab = Axis("vocab", cfg.vocab_size)
     mesh = Mesh(
-        np.asarray(jax.devices()[:8]).reshape(1, 8, 1, 1, 1),
-        ("replica_dcn", "data", "context", "expert", "model"),
-        axis_types=(AxisType.Explicit,) * 5,
+        np.asarray(jax.devices()[:SNOWBALL_LOAD_TEST_DEVICE_COUNT]).reshape(
+            1, SNOWBALL_LOAD_TEST_DEVICE_COUNT, 1, 1, 1
+        ),
+        _GRUG_MESH_AXIS_NAMES,
+        axis_types=(AxisType.Explicit,) * len(_GRUG_MESH_AXIS_NAMES),
     )
-    Batch = Axis("batch", 8)
+    Batch = Axis("batch", SNOWBALL_LOAD_TEST_DEVICE_COUNT)
     Pos = Axis("position", 8)
     ids = hax.named(
         (jnp.arange(Batch.size * Pos.size, dtype=jnp.int32) % cfg.vocab_size).reshape(Batch.size, Pos.size),
@@ -307,7 +312,7 @@ def test_snowball_load_path_multidevice_sharding():
         # Auto-shard the leading axis on data when it divides 8, else replicate (mimics the
         # placement of freshly-read safetensors that broke the 67B).
         v = jnp.asarray(v)
-        spec = P("data") if v.ndim >= 1 and v.shape[0] % 8 == 0 else P()
+        spec = P("data") if v.ndim >= 1 and v.shape[0] % SNOWBALL_LOAD_TEST_DEVICE_COUNT == 0 else P()
         return jax.device_put(v, NamedSharding(mesh, spec))
 
     with hax.partitioning.set_mesh(mesh):
@@ -349,3 +354,58 @@ def test_snowball_fresh_process_hf_discovery(tmp_path):
     )
     assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
     assert "OK" in result.stdout
+
+
+@pytest.mark.timeout(120)
+def test_snowball_context_parallel_values_and_gradients_match_data_parallel():
+    run_on_cpu_devices(
+        """
+        import equinox as eqx
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        import haliax as hax
+        from haliax import Axis
+        from jax.sharding import AxisType, Mesh
+        from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
+
+        cfg = SnowballConfig(
+            vocab_size=32, hidden_dim=16, intermediate_dim=16,
+            shared_expert_intermediate_dim=16, num_experts=4,
+            num_experts_per_token=2, num_layers=2, num_heads=2,
+            num_kv_heads=1, head_dim=8, max_seq_len=8, sliding_window=4,
+            attention_implementation="reference", moe_implementation="ring",
+        )
+        ids = hax.named(
+            jnp.arange(32, dtype=jnp.int32).reshape(4, 8),
+            (Axis("batch", 4), Axis("position", 8)),
+        )
+        axes = ("replica_dcn", "data", "context", "expert", "model")
+
+        def run(shape):
+            mesh = Mesh(
+                np.asarray(jax.devices()).reshape(shape), axes,
+                axis_types=(AxisType.Explicit,) * len(axes),
+            )
+            with jax.set_mesh(mesh):
+                model = SnowballLMHeadModel.init(Axis("vocab", 32), cfg, key=jax.random.key(0))
+                activations = eqx.filter_jit(lambda m: m.activations(ids).array)(model)
+                value, grad = eqx.filter_jit(
+                    eqx.filter_value_and_grad(lambda m: jnp.mean(m(ids).array))
+                )(model)
+            block = grad.transformer.blocks[0]
+            return activations.sharding.spec[1], (
+                np.asarray(value), np.asarray(grad.transformer.token_embed),
+                np.asarray(block.attn.w_q), np.asarray(block.mlp.expert_mlp.w_gate),
+                np.asarray(block.shared.w_gate), np.asarray(grad.transformer.output_proj),
+            )
+
+        data_axis, reference = run((1, 2, 1, 2, 1))
+        context_axis, sharded = run((1, 1, 2, 2, 1))
+        assert data_axis is None
+        assert context_axis == "context"
+        for expected, actual in zip(reference, sharded, strict=True):
+            np.testing.assert_allclose(actual, expected, rtol=2e-4, atol=2e-4)
+        """,
+        device_count=4,
+    )

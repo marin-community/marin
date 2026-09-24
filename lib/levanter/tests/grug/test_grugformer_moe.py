@@ -1257,7 +1257,9 @@ def _simulate_ragged_a2a(operands, outputs, params):
 def test_expert_granular_a2a_params_roundtrip_with_drops():
     """Dispatch packs receivers expert-major with sender order inside each expert, and the
     return direction restores each accepted row to its unclipped sorted position, leaving
-    dropped rows at the output operand's values -- all under forced capacity clipping."""
+    dropped rows at the output operand's values -- all under forced capacity clipping. The
+    expert MLP leaves unused receiver capacity unspecified, so it starts as NaN here and must
+    never reach the return."""
     shards, local_experts, tokens, topk, hidden = 4, 3, 10, 2, 5
     num_experts = shards * local_experts
     assignments = tokens * topk
@@ -1289,7 +1291,7 @@ def test_expert_granular_a2a_params_roundtrip_with_drops():
         for s in range(shards)
     ]
 
-    received = [np.zeros((capacity, hidden), np.float32) for _ in range(shards)]
+    received = [np.full((capacity, hidden), np.nan, np.float32) for _ in range(shards)]
     _simulate_ragged_a2a(sorted_payload, received, [p[0] for p in params])
     for receiver in range(shards):
         rows = [
@@ -1300,7 +1302,7 @@ def test_expert_granular_a2a_params_roundtrip_with_drops():
         ]
         expected = np.concatenate(rows, axis=0)
         np.testing.assert_array_equal(received[receiver][: len(expected)], expected)
-        np.testing.assert_array_equal(received[receiver][len(expected) :], 0)
+        assert np.isnan(received[receiver][len(expected) :]).all()
 
     returned = [np.zeros((assignments, hidden), np.float32) for _ in range(shards)]
     _simulate_ragged_a2a(received, returned, [p[1] for p in params])
@@ -1316,7 +1318,8 @@ def test_expert_granular_a2a_params_roundtrip_with_drops():
 def test_expert_granular_a2a_params_chunked_masking_composes():
     """Masking the clip to one expert chunk at a time (full sender starts, chained returns)
     reproduces the whole layer: each chunk's receiver packs only its experts from offset zero,
-    and the chained returns cover exactly the per-chunk accepted prefixes."""
+    and the chained returns cover exactly the per-chunk accepted prefixes, never a chunk's
+    unused capacity."""
     shards, local_experts, tokens, topk, hidden = 4, 3, 10, 2, 5
     num_experts = shards * local_experts
     assignments = tokens * topk
@@ -1353,7 +1356,7 @@ def test_expert_granular_a2a_params_chunked_masking_composes():
             )
             for s in range(shards)
         ]
-        received = [np.zeros((chunk_capacity, hidden), np.float32) for _ in range(shards)]
+        received = [np.full((chunk_capacity, hidden), np.nan, np.float32) for _ in range(shards)]
         _simulate_ragged_a2a(sorted_payload, received, [p[0] for p in params])
         _simulate_ragged_a2a(received, returned, [p[1] for p in params])
 

@@ -83,6 +83,7 @@ from levanter.models.lm_model import LmConfig
 from levanter.optim.config import OptimizerConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import DEFAULT_JAX_CONFIG, TrainerConfig
+from levanter.utils.mesh import MeshConfig
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, lower
 from marin.execution.remote import remote
@@ -194,7 +195,12 @@ def _levanter_train_config(
         data=data_config,
         model=model_config,
         optimizer=spec.optimizer,
-        trainer=_trainer(spec, num_train_steps=num_train_steps, gpu_allocator=gpu_allocator),
+        trainer=_trainer(
+            spec,
+            num_train_steps=num_train_steps,
+            gpu_allocator=gpu_allocator,
+            use_explicit_mesh_axes=model_config.requires_explicit_mesh_axes,
+        ),
         train_seq_len=spec.seq_len,
         initialize_from_hf=initialize_from_hf,
         initialize_model_from_checkpoint_path=initialize_model_from_checkpoint_path,
@@ -504,6 +510,7 @@ class SFTSpec:
     chat_template: str  # any jinja carrying a {% generation %} block (completions-only mask)
     datasets: Sequence[DatasetSpec]  # the instruction mixture
     optimizer: OptimizerConfig  # e.g. AdamConfig for the Levanter backend
+    mesh: MeshConfig | None = None
     seq_len: int = 4096
     pack: bool = True  # chat packs by default; a step count must count packed examples
     batch_size: int = 16
@@ -636,7 +643,9 @@ def _prebuilt_chat_data_config(spec: SFTSpec, cache_paths: Sequence[str], tokeni
     )
 
 
-def _trainer(spec: SFTSpec, *, num_train_steps: int, gpu_allocator: bool) -> TrainerConfig:
+def _trainer(
+    spec: SFTSpec, *, num_train_steps: int, gpu_allocator: bool, use_explicit_mesh_axes: bool = False
+) -> TrainerConfig:
     """Trainer config. ``gpu_allocator`` adds the GPU-only cuda_async PJRT allocator."""
     jax_config = dict(DEFAULT_JAX_CONFIG)
     if gpu_allocator:
@@ -650,6 +659,8 @@ def _trainer(spec: SFTSpec, *, num_train_steps: int, gpu_allocator: bool) -> Tra
         jax_config=jax_config,
         mp=jmp.get_policy(_MARIN_PRECISION),
         per_device_parallelism=-1,  # auto microbatch; raise on OOM (math-equivalent)
+        use_explicit_mesh_axes=use_explicit_mesh_axes,
+        mesh=spec.mesh if spec.mesh is not None else MeshConfig(),
         tracker=WandbConfig(
             project=spec.wandb_project,
             tags=["sft", "levanter", spec.name.split("/")[-1]],

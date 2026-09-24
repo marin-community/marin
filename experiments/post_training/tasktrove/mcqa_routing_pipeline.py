@@ -21,9 +21,9 @@ from marin.execution.remote import remote
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import launch_provenance
 
+from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_BULK_TOKEN_ENV
 from experiments.post_training.tasktrove.mcqa_routing import (
     DECISIONS_FILENAME,
-    GLM_BULK_TOKEN_ENV,
     MCQA_SOURCE,
     POLICY_VERSION,
     ROUTE_MAPPINGS_FILENAME,
@@ -36,7 +36,6 @@ from experiments.post_training.tasktrove.mcqa_routing import (
 logger = logging.getLogger(__name__)
 
 DEFAULT_INPUT = "s3://marin-us-east-02a/marin/tasktrove/routing/mcqa-glm53-v1/input/mechanical-ledger.parquet"
-DEFAULT_RELAY_JOB = "/muchanem/glm53-relay-08a"
 ARTIFACT_VERSION = "2026.09.18.1"
 DEFAULT_WORKERS = 64
 DEFAULT_REQUEST_BATCH_SIZE = 20
@@ -180,7 +179,7 @@ def routing_step(
     worker_count: int = DEFAULT_WORKERS,
     request_batch_size: int = DEFAULT_REQUEST_BATCH_SIZE,
     source: str = MCQA_SOURCE,
-    relay_job: str = DEFAULT_RELAY_JOB,
+    relay_job: str = DEFAULT_GLM_RELAY_JOB,
     poll_seconds: float = 10,
 ) -> ArtifactStep[Artifact]:
     """Build a recoverable MCQA route-mapping artifact."""

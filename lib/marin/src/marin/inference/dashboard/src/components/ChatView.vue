@@ -20,6 +20,8 @@ import {
   parseWorkspaceFiles,
 } from '../lib/shell_workspace'
 import { splitThinking } from '../lib/thinking'
+import { requestDebugData, vllmDebugStreamOptions } from '../lib/vllm_debug'
+import type { VllmRequestDebug } from '../lib/vllm_debug'
 import {
   appendToolCallDelta,
   createToolCallAccumulator,
@@ -55,6 +57,7 @@ const busy = ref(false)
 const showTools = ref(false)
 const showWorkspace = ref(false)
 const showRawChat = ref(false)
+const showVllmDebug = ref(false)
 const rawChat = computed(() => plainTextChat(props.conversation))
 const scroller = ref<HTMLElement | null>(null)
 const composer = ref<HTMLTextAreaElement | null>(null)
@@ -272,6 +275,7 @@ async function complete(
   let thinkingStartedAt: number | null = null
   const structuredCalls = createToolCallAccumulator()
 
+  const debugEnabled = showVllmDebug.value
   const body: Record<string, unknown> = {
     model: props.model,
     messages,
@@ -280,13 +284,16 @@ async function complete(
     max_tokens: props.params.maxTokens,
     top_p: props.params.topP,
     ...templateFields,
+    ...vllmDebugStreamOptions(debugEnabled, props.streaming),
   }
+  let requestDebug: VllmRequestDebug | null = null
   if (tools.length) {
     // Permit model-native call generation without requiring vLLM auto-tool parsing.
     // The response handling below also accepts structured calls when a server emits them.
     body.tool_choice = null
   }
   await requestCompletion('v1/chat/completions', body, props.streaming, signal, (data) => {
+    if (debugEnabled) requestDebug = requestDebugData(data) ?? requestDebug
     const delta = data.choices?.[0]?.delta ?? data.choices?.[0]?.message
     if (!delta) return
     const reasoning = delta.reasoning_content ?? delta.reasoning
@@ -313,6 +320,7 @@ async function complete(
       reply.thinkingSeconds = (performance.now() - thinkingStartedAt) / 1000
     }
   })
+  if (debugEnabled && !signal.aborted) reply.requestDebug = requestDebug ?? { metrics: null, usage: null }
 
   if (thinkingStartedAt !== null && reply.thinkingSeconds === null) {
     reply.thinkingSeconds = (performance.now() - thinkingStartedAt) / 1000
@@ -367,14 +375,15 @@ async function complete(
           :key="index"
           :message="message"
           :streaming="busy && index === conversation.messages.length - 1"
+          :show-vllm-debug="showVllmDebug"
         />
       </div>
     </div>
 
     <div class="border-t border-surface-border px-4 py-3">
       <div class="mx-auto max-w-3xl">
-        <div class="mb-2 flex items-center justify-between gap-4">
-          <div class="flex items-center gap-4">
+        <div class="mb-2 flex flex-wrap items-center justify-between gap-3">
+          <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
             <button
               class="flex items-center gap-2 text-xs font-medium text-text-muted transition-colors hover:text-text-secondary"
               :class="{ 'text-accent': conversation.pythonTools.trim() }"
@@ -398,13 +407,19 @@ async function complete(
               </span>
             </button>
           </div>
-          <label
-            class="flex cursor-pointer items-center gap-2 text-xs font-medium text-text-muted"
-            title="Show the whole chat as a plain-text transcript"
-          >
-            <input v-model="showRawChat" type="checkbox" class="accent-accent" />
-            Raw chat
-          </label>
+          <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
+            <label class="flex cursor-pointer items-center gap-2 text-xs font-medium text-text-muted" title="Record and show vLLM timings on each reply">
+              <input v-model="showVllmDebug" type="checkbox" class="accent-accent" />
+              vLLM debug
+            </label>
+            <label
+              class="flex cursor-pointer items-center gap-2 text-xs font-medium text-text-muted"
+              title="Show the whole chat as a plain-text transcript"
+            >
+              <input v-model="showRawChat" type="checkbox" class="accent-accent" />
+              Raw chat
+            </label>
+          </div>
         </div>
         <div v-if="showTools" class="mb-3">
           <textarea
