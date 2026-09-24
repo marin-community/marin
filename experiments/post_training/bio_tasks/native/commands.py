@@ -21,21 +21,27 @@ THREAD_VARIABLES = (
 COMMAND_TIMEOUT = 300
 
 
-def execute(argv: list[str], work: Path, output: str) -> Path:
+def execute(argv: list[str], work: Path, output: str, timeout: int = COMMAND_TIMEOUT) -> Path:
     """Execute a native data operation and retain its command, status, and streams."""
     destination = work / output
     error = work / (output + ".stderr")
     environment = dict(os.environ)
     environment.update(dict.fromkeys(THREAD_VARIABLES, "1"))
     start = time.monotonic()
-    status = {"argv": argv, "exit_code": None, "stdout": destination.name, "stderr": error.name}
+    status = {
+        "argv": argv,
+        "exit_code": None,
+        "stdout": destination.name,
+        "stderr": error.name,
+        "timeout_seconds": timeout,
+    }
     try:
         with destination.open("wb") as stdout, error.open("wb") as stderr:
             with subprocess.Popen(
                 argv, cwd=work, env=environment, stdout=stdout, stderr=stderr, start_new_session=True
             ) as process:
                 try:
-                    status["exit_code"] = process.wait(timeout=COMMAND_TIMEOUT)
+                    status["exit_code"] = process.wait(timeout=timeout)
                 finally:
                     # Workflow engines can own grandchildren; terminate the whole command group.
                     if process.poll() is None:

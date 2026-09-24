@@ -4,6 +4,7 @@
 """Run pinned phylogenetic packages and measure their complete trees with Biopython."""
 
 import argparse
+import csv
 import gzip
 import hashlib
 import json
@@ -21,7 +22,23 @@ SEED = 20260924
 def prepare(proteins: Path, output: Path) -> None:
     output.mkdir(parents=True, exist_ok=False)
     records = json.loads(gzip.decompress(proteins.read_bytes()))["proteins"]
-    sequences = {key: record["sequence"] for key, record in sorted(records.items())}
+    representatives = {}
+    for key, record in sorted(records.items()):
+        representatives.setdefault(record["sequence"], key)
+    sequences = {key: sequence for sequence, key in representatives.items()}
+    with (output / "accessions.tsv").open("w") as handle:
+        writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
+        writer.writerow(["accession", "representative", "taxon", "organism", "sequence_version"])
+        for key, record in sorted(records.items()):
+            writer.writerow(
+                [
+                    key,
+                    representatives[record["sequence"]],
+                    record["taxon"],
+                    record["organism"],
+                    record["sequence_version"],
+                ]
+            )
     raw = output / "proteins.fa"
     raw.write_text("".join(f">{key}\n{sequence}\n" for key, sequence in sequences.items()))
     execute(["mafft", "--auto", "--amino", "--thread", "1", str(raw)], output, "alignment.fa")
@@ -63,7 +80,12 @@ def prepare(proteins: Path, output: Path) -> None:
         ],
     }
     for method, command in methods.items():
-        execute(command, output, "fasttree.nwk" if method == "fasttree" else method + ".stdout")
+        execute(
+            command,
+            output,
+            "fasttree.nwk" if method == "fasttree" else method + ".stdout",
+            timeout=900 if method == "iqtree" else 300,
+        )
     shutil.copyfile(output / "iqtree.treefile", output / "iqtree.nwk")
     shutil.copyfile(output / "RAxML_bestTree.cox1", output / "raxml.nwk")
     taxa = sorted(sequences)
@@ -103,6 +125,8 @@ def prepare(proteins: Path, output: Path) -> None:
     }
     reference = {
         "sequences": len(taxa),
+        "source_accessions": len(records),
+        "identical_sequence_policy": "Keep lexicographically first accession per unchanged amino-acid sequence",
         "alignment_columns": len(next(iter(aligned.values()))),
         "trees": {method: (output / f"{method}.nwk").read_text() for method in methods},
         "summaries": summaries,

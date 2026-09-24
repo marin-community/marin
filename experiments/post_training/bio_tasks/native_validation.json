@@ -1234,5 +1234,27 @@
         ]
       }
     }
+  ],
+  "preparation_runs": [
+    {
+      "checked_at": "2026-09-24",
+      "job_id": "/exedev/bio-phylogeny-20260924-040919",
+      "source_revision": "b677f36aa3feb59b47e4622c089f616e283f2da3",
+      "status": "failed-command-timeout",
+      "data_source": "UniProt:metazoan-cox1-20260924",
+      "input_sequences": 94,
+      "unique_sequences": 89,
+      "alignment_columns": 558,
+      "mafft_seconds": 15.53495329800353,
+      "iqtree_timeout_seconds": 300,
+      "iqtree_progress": "Default search reached iteration 70; it had not terminated at the 300-second command cap. No complete trees or workflow validation claimed.",
+      "placement": "existing reserved TRC worker 28, us-central2",
+      "environment_lock": "sources/phylogeny-preparation.lock.json",
+      "environment_lock_sha256": "31356d3b938be13a17e12119f555db3259a9d34012e26effd2e4ce3a9f57ef67",
+      "archive_uri": "gs://marin-us-central2/tmp/ttl=7d/iris/task-outputs/exedev/bio-phylogeny-20260924-040919/0/daaa1adc2ccb76f7/outputs.tar.zst",
+      "archive_bytes": 86603,
+      "archive_sha256": "1457498d358e60f172d2ba742a7dfa4591265c8114bf6af8f2e31feeb23e6bf8",
+      "decision": "Keep a representative per identical protein sequence with a complete accession map. Permit up to 900 seconds for IQ-TREE within the 30-minute task limit; other native checks retain the 300-second cap."
+    }
   ]
 }
