@@ -76,23 +76,58 @@ Correctness: `test_kda.py` — exact-fp32 parity pinned via `matmul_dtype=float3
 HF-validated `recurrent_gated_delta_rule`); bf16 tests at rtol 2e-2 for C=32/64/128;
 gradients and strong-decay finiteness on the bf16 default. 14 tests pass.
 
+## Phase 2 — chunk-parallel inter-chunk recurrence (associative scan)
+
+The decomposition (KDA_DECOMPOSE) showed the Neumann inverse is only ~25% of the
+fwd time (1.22ms of 4.89ms at C=128, running at ~10% of bf16 peak); the rest is the
+**sequential inter-chunk scan** (L/C steps) running at <1% of peak. `lax.scan(unroll=)`
+barely helped fwd (~6%) — confirming it is *depth*, not per-step launch, that hurts.
+
+The cross-chunk update is **linear in S**, so it was replaced with a log-depth
+`lax.associative_scan` over the affine transforms `(M_n, C_n)`,
+`M_n = Diag(decay_tail_n) − Kw_nᵀ k_cumdecay_n`, `C_n = Kw_nᵀ v_pseudo_n`; depth
+drops from L/C to log2(L/C) and the per-chunk outputs then compute in one parallel
+batched pass (`_parallel_chunk_recurrence`, default `scan_impl="parallel"`; the old
+serial path stays as `scan_impl="sequential"`). All state math is fp32 (arXiv 2406.06484).
+
+Measured (H100, L=8192, bf16, parallel vs sequential):
+
+| | seq fwd | par fwd | seq fwd+bwd | par fwd+bwd |
+|---|---|---|---|---|
+| B=4 C=64 | 5.55ms | 4.80ms (+16%) | 17.39ms | 11.27ms (+54%) |
+| B=4 C=128 | 4.90ms | 4.23ms (+16%) | 14.66ms | 10.35ms (+42%) |
+| B=2 C=128 | 3.31ms | 2.23ms (+48%) | 10.07ms | 5.39ms (+87%) |
+| B=4 C=256 | 5.88ms | 5.11ms (+15%) | — | — |
+
+Hardware utilization rose from ~2.4% (original fp32) to **~4–5% at the wall-time
+optimum (C=128) and 11.7% at C=256 fwd** (116 GEMM-TFLOP/s). Cumulative vs the
+original fp32/seq/C=64 kernel: **fwd 5.95→4.23ms (1.41×)**, **fwd+bwd 19.79→10.35ms
+(1.91×)** at the shipped default (C=128, parallel, bf16). Correctness:
+parallel==sequential to ~3e-8 fp32, ==recurrence to ~1e-7 fp32 / 5.9e-3 bf16
+(`test_parallel_scan_matches_sequential`, 18 tests pass).
+
+**Memory tradeoff:** the associative scan materializes the d_k×d_k transition
+matrices, so its footprint scales O(L/C · d_k²) (vs the serial scan's O(d_k²)).
+C=128 fwd+bwd fits fine at B=4 on a bare 80GB H100 (10.35ms) when run alone — an
+earlier "OOM" was a benchmark artifact (several chunk sizes compiled in one process
+without freeing GPU memory). For very long context or large per-device batch, drop
+to C=64 or `scan_impl="sequential"` (constant-memory), or wrap the layer in the
+model's usual gradient checkpointing.
+
 ## Remaining bottleneck & next steps (highest leverage first)
 
-1. **Fuse the inter-chunk scan into one Pallas/Mosaic-GPU (Hopper) kernel.** The
-   ~128 sequential scan steps × several tiny GEMMs are the dominant cost. A single
-   kernel that keeps `S` in registers/SMEM across chunks and issues wgmma for the
-   intra-chunk blocks (the fla `chunk_kda`/`chunk_gated_delta_rule` Triton kernels
-   do exactly this) would move utilization from ~2% toward tens of %. Largest win,
-   largest effort. Use the repo `add-pallas-kernel` skill.
-2. **Grow the per-op work so tensor cores fill.** Increase the batch folded into
-   each GEMM (process more (B·H) per step) and/or raise d — but d is fixed by the
-   architecture (128). Cheap to try: confirm the scan GEMMs are emitted as batched
-   `dot_general` over B·H (they are) and that XLA is not padding C=64 poorly.
-3. **Cut scan-carried state traffic.** `S` is d_k×d_v=128×128 fp32 per (B,H); the
-   `add`/`inter`/`v_prime` GEMMs re-read it every step. A bf16 *shadow* of `S`
-   for the read-side GEMMs (keeping the fp32 accumulator) is a candidate — needs a
-   stability check before enabling.
-4. Re-confirm C=64 once (1)–(3) change the compute/latency balance.
+1. **Fuse into one Pallas/Mosaic-GPU (Hopper) kernel** — still the ceiling-breaker.
+   Even after the parallel scan the kernel is a chain of ~20 separate XLA ops with
+   HBM round-trips between them, capping util at single-digit % on the wall-time
+   optimum. A fused kernel that keeps chunk state resident and issues wgmma for the
+   intra-chunk blocks (fla's Triton `chunk_kda`) is the path to tens-of-%.
+2. **Cut the redundant Neumann FLOPs.** The log-depth inverse does 4·C³·log2(C) —
+   ~log2(C)× more matmul work than a blocked triangular solve. At C=128 it is ~25%
+   of fwd; a blocked inverse would reduce it (though it is more sequential).
+3. **`jax.checkpoint` the parallel recurrence** to make C=128 fwd+bwd fit at larger
+   batch (memory tradeoff above).
+4. **bf16 shadow of S** for the read-side state GEMMs (fp32 accumulator) — stability
+   check needed.
 
 ## How to run the benchmark
 

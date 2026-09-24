@@ -193,22 +193,6 @@ def main():
     kda_fp32 = functools.partial(chunk_kda, matmul_dtype=jnp.float32, scan_impl="parallel")
     kda_seq = functools.partial(chunk_kda, matmul_dtype=jnp.bfloat16, scan_impl="sequential")
 
-    if os.environ.get("KDA_REMAT") == "1":
-        args = _make_inputs(b, h, lengths[0], dk, dv)
-        for mode in ("fwd", "fwd_bwd"):
-            for c in (int(x) for x in os.environ.get("KDA_SWEEP", "128").split(",")):
-                plain = functools.partial(chunk_kda, matmul_dtype=jnp.bfloat16, scan_impl="parallel")
-                remat = jax.checkpoint(plain)
-                _try("parallel plain", plain, args, c, _H100_BF16_PEAK, mode)
-                _try("parallel remat", remat, args, c, _H100_BF16_PEAK, mode)
-        marker = "###KDA_RESULTS###"
-        print("\n" + marker, flush=True)
-        for ln in RESULTS:
-            print(ln, flush=True)
-        print(marker, flush=True)
-        sys.stdout.flush()
-        sys.exit(3)
-
     if os.environ.get("KDA_SCANIMPL") == "1":
         args = _make_inputs(b, h, lengths[0], dk, dv)
         for mode in ("fwd", "fwd_bwd"):
