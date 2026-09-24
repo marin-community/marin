@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "reviewed_at": "2026-09-24",
-  "scope": "Observed-data source planning for related scientific questions. Inspected one new cell-annotation CSV and existing vendored mammary counts/sample metadata; no new expression matrices or raw reads downloaded. No new task is implemented or candidate cleared for training export.",
+  "scope": "Observed-assay and curated-reference input planning. Inspected a Lawlor cell-annotation CSV, existing mammary counts/sample metadata, and MANE 1.4 GTF/summary with assembly aliases. No new task is implemented or candidate cleared for training export.",
   "policy": {
     "reuse_unit": "Share acquisition, identity reconciliation and native environment preparation across compatible questions. Each task still answers one coherent question and retains its own complete private oracle/verifier contract.",
     "realism": "Keep the biological replicate count and observation structure needed by the estimand. Bound cells, loci or genomic regions by declared outcome-independent eligibility, not by selecting observations that force a desired answer.",
     "single_split": "The corpus has one train split. Held-out subjects, cells or observations inside a predictive task are part of its scientific evaluation protocol, with evaluation labels private to the verifier.",
     "no_automatic_coverage": "A source's availability or a question's eligibility does not establish benchmark endpoint equivalence. Preserve benchmark biological-context and method departures explicitly.",
     "lineage_screen": "Check accessions, DOI, project IDs, originating cohorts and known mirrors against all permitted ID-source metadata before authoring. Absence of an identifier match is only a preliminary screen. Uninspected/gated source fixtures prevent a universal nonoverlap claim. Do not deanonymize OOD inputs.",
-    "metadata_only": "Inspected primary landing pages, versioned manifests, one Lawlor cell-annotation CSV, existing vendored GSE60450 counts/GEO metadata and two small independent provider sample sheets. No new expression/protein matrix, raw read, image or benchmark answer was fetched in this source review."
+    "metadata_only": "Inspected primary manifests, one Lawlor cell-annotation CSV, existing vendored GSE60450 counts/GEO metadata and provider sample sheets, plus MANE reference GTF/transcript summary and an assembly report. No new expression/protein matrix, raw read, genomic FASTA, image or benchmark answer was fetched in this source review."
   },
   "collections": [
     {
@@ -783,6 +783,269 @@
       "candidate_question_or_card_ids": [
         "ortholog-signal-comparison"
       ]
+    },
+    {
+      "id": "mane-1.4-curated-transcript-reference",
+      "accessions": [
+        "MANE:1.4",
+        "GCF_000001405.40",
+        "GCF_000001405.40-RS_2024_08",
+        "Ensembl:114"
+      ],
+      "primary_sources": [
+        "https://ftp.ncbi.nlm.nih.gov/refseq/MANE/MANE_human/release_1.4/",
+        "https://ftp.ncbi.nlm.nih.gov/refseq/MANE/MANE_human/release_1.4/README.txt",
+        "https://ftp.ncbi.nlm.nih.gov/refseq/MANE/MANE_human/release_1.4/README_versions.txt",
+        "https://www.ncbi.nlm.nih.gov/refseq/MANE/",
+        "https://www.ncbi.nlm.nih.gov/home/about/policies/"
+      ],
+      "data_kind": "Curated reference annotation supported by biological evidence; not a newly observed assay, patient cohort, or independent replicate.",
+      "metadata_evidence": "Downloaded the versioned RefSeq GTF and transcript summary directly from NCBI, 10,207,254 compressed bytes total. A streaming scan parsed all 476,053 feature rows. The official assembly report resolves RefSeq accessions to chromosome aliases; all 19,404 transcript IDs, locations, strands and GeneID cross-references agree with the summary.",
+      "planning_status": "native-annotation-schema-and-summary-join-verified; shared-reference-use-and-task-selection-pending",
+      "candidate_question_or_card_ids": [
+        "compbio-design-transcript-region-lengths",
+        "compbio-design-reference-interval-audit",
+        "compbio-design-orf-cds-audit"
+      ],
+      "rejected_as_sole_source_for": {
+        "compbio-design-exon-union-length": "MANE contains selected representative transcripts and a small clinical supplement, not the complete isoform annotation required for an all-transcript gene union.",
+        "experimental-expression-or-splicing-outcomes": "Curated transcript coordinates do not provide measured abundance, differential splicing or donor variation."
+      },
+      "release_files": [
+        {
+          "name": "MANE.GRCh38.v1.4.summary.txt.gz",
+          "url": "https://ftp.ncbi.nlm.nih.gov/refseq/MANE/MANE_human/release_1.4/MANE.GRCh38.v1.4.summary.txt.gz",
+          "bytes": 1113014,
+          "sha256": "4b3992457556e302a5e47e18a305bb4763718377696ca37d5a6b34df7db630d2",
+          "provider_checksum": null,
+          "format": "TSV",
+          "payload_inspected": true,
+          "checksum_status": "locally-computed-sha256; no-provider-checksum-in-inspected-release-manifest"
+        },
+        {
+          "name": "MANE.GRCh38.v1.4.refseq_genomic.gtf.gz",
+          "url": "https://ftp.ncbi.nlm.nih.gov/refseq/MANE/MANE_human/release_1.4/MANE.GRCh38.v1.4.refseq_genomic.gtf.gz",
+          "bytes": 9094240,
+          "sha256": "63825a1b5eaa3d232481b93db80f494e860990c503e1c253379015fe817f5ac1",
+          "provider_checksum": null,
+          "format": "GTF",
+          "payload_inspected": true,
+          "checksum_status": "locally-computed-sha256; no-provider-checksum-in-inspected-release-manifest"
+        },
+        {
+          "name": "GCF_000001405.40_GRCh38.p14_assembly_report.txt",
+          "url": "https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/001/405/GCF_000001405.40_GRCh38.p14/GCF_000001405.40_GRCh38.p14_assembly_report.txt",
+          "format": "assembly-report",
+          "bytes": 80454,
+          "sha256": "64318ddff470b69b261a667d813210044f60d4ce654253a547db80ff73638d38",
+          "payload_inspected": true,
+          "checksum_status": "locally-computed-sha256"
+        }
+      ],
+      "release_provenance": {
+        "mane_release": "1.4",
+        "genome": "GRCh38.p14",
+        "refseq_annotation_release": "GCF_000001405.40-RS_2024_08",
+        "ensembl_release": "114",
+        "gtf_annotation_date": "2024-08-23",
+        "release_file_date": "2024-10-08",
+        "readme_sha256": "2c398a08bf0a0e2fe35b0d447f2bd620c9b4ad2c1b7aee918b7af68677674d62",
+        "versions_sha256": "343c4f316cc74bc0cf11aed86ffd75aea246aedbff54a6b5be05f95492c0d2b0"
+      },
+      "schema_audit": {
+        "gtf_version": "2.2",
+        "feature_rows": 476053,
+        "uncompressed_bytes": 191867992,
+        "feature_counts": {
+          "gene": 19338,
+          "transcript": 19404,
+          "exon": 204569,
+          "CDS": 193980,
+          "start_codon": 19387,
+          "stop_codon": 19375
+        },
+        "summary_columns": [
+          "#NCBI_GeneID",
+          "Ensembl_Gene",
+          "HGNC_ID",
+          "symbol",
+          "name",
+          "RefSeq_nuc",
+          "RefSeq_prot",
+          "Ensembl_nuc",
+          "Ensembl_prot",
+          "MANE_status",
+          "GRCh38_chr",
+          "chr_start",
+          "chr_end",
+          "chr_strand"
+        ],
+        "summary_records": 19404,
+        "summary_status_counts": {
+          "MANE Select": 19338,
+          "MANE Plus Clinical": 66
+        },
+        "reconciled_counts": {
+          "coding_plus_stop_length_not_multiple_of_three": 1,
+          "coding_stop_overlap_with_cds_bases:0": 19354,
+          "coding_stop_union_bases:3": 19354,
+          "coding_transcripts_cds_and_stop_within_exons": 19354,
+          "coding_transcripts_with_split_start_codon": 33,
+          "coding_transcripts_with_split_stop_codon": 21,
+          "patch_or_alt:MANE Select": 62,
+          "patch_or_alt:MANE Select:with_cds": 62,
+          "primary:MANE Plus Clinical": 66,
+          "primary:MANE Plus Clinical:with_cds": 66,
+          "primary:MANE Select": 19276,
+          "primary:MANE Select:with_cds": 19226,
+          "primary:MANE Select:without_cds": 50,
+          "transcripts_with_exact_alias_coordinate_gene_join": 19404
+        },
+        "transcript_tag_counts": {
+          "MANE Plus Clinical:missing": 3,
+          "MANE Plus Clinical:present": 63,
+          "MANE Select:missing": 2,
+          "MANE Select:present": 19336
+        },
+        "missing_transcript_tag_records": {
+          "NM_001351425.2": {
+            "summary_status": "MANE Plus Clinical",
+            "transcript_tags": [],
+            "contig": "chr2"
+          },
+          "NR_185500.1": {
+            "summary_status": "MANE Select",
+            "transcript_tags": [],
+            "contig": "chr5"
+          },
+          "NM_001394034.2": {
+            "summary_status": "MANE Select",
+            "transcript_tags": [],
+            "contig": "chr5"
+          },
+          "NM_001365.5": {
+            "summary_status": "MANE Plus Clinical",
+            "transcript_tags": [],
+            "contig": "chr17"
+          },
+          "NM_001127221.2": {
+            "summary_status": "MANE Plus Clinical",
+            "transcript_tags": [],
+            "contig": "chr19"
+          }
+        },
+        "coding_length_exceptions": {
+          "NM_001424184.1": {
+            "contig": "chr2",
+            "summary_status": "MANE Select",
+            "gene_id": [
+              "TMEM247"
+            ],
+            "cds_including_stop_bases": 659,
+            "cds_exceptions": [
+              "annotated by transcript or proteomic data"
+            ]
+          }
+        },
+        "interpretation": [
+          "No UTR feature rows occur in this RefSeq GTF. UTR intervals require exon/CDS/stop-codon reconstruction, with strand and splice order preserved.",
+          "All 19,354 coding transcripts have three stop-codon bases disjoint from CDS. Twenty-one stop codons and 33 start codons span more than one feature row; counting rows as codons is incorrect.",
+          "The summary defines 19,338 MANE Select and 66 Plus Clinical transcript pairs. Restricting to chr1-22, chrX and chrY leaves 19,276 Select, of which 50 are noncoding; 19,226 coding Select records are the starting population before region-completeness checks.",
+          "Five transcript rows lack their summary MANE tag: two Select and three Plus Clinical. Use the declared summary membership join for this candidate and preserve a discrepancy report. Do not silently filter only literal GTF tags.",
+          "GTF gene_id is a gene symbol in this export. Use the GeneID db_xref and summary mapping for identity, while preserving the original field; do not assume it contains a versioned Ensembl gene ID.",
+          "TMEM247 NM_001424184.1 has a 659-base CDS-plus-stop union and an annotated CDS exception. Do not repair its length or exclude it solely for failing divisibility by three. Translation/ORF tasks need a separate exception review."
+        ]
+      },
+      "proposed_input_boundary": "Retain the native GTF, versioned summary and assembly alias report. For a coding-region analysis, declare MANE Select membership from the summary, require a CDS, and report the fixed chr1-22/X/Y population with every exclusion reason. Derive strand-aware spliced regions from complete feature blocks. Exact authored query selection remains open.",
+      "proposed_sampling": "The complete annotation is feasible to stream; no tiny-example downsampling is justified. If a later task selects genes or contigs, select them before examining target statistics and retain every feature for each selected transcript.",
+      "missing_inputs_by_question": {
+        "compbio-design-transcript-region-lengths": "Freeze the original authored comparison/query and completeness policy, then validate region reconstruction and private Harbor grading. Source inspection did not compute requested medians.",
+        "compbio-design-reference-interval-audit": "Need exact matching genomic FASTA sequence and index, plus independent promoter/interval query identities. No genomic sequence payload was downloaded.",
+        "compbio-design-orf-cds-audit": "Need transcript FASTA and explicit treatment of annotation/translation exceptions. Coordinates alone do not validate translated proteins."
+      },
+      "reuse_terms": {
+        "source_url": "https://www.ncbi.nlm.nih.gov/home/about/policies/",
+        "assessment": "NCBI places no restrictions on use/distribution of its molecular database contents and does not accept submitter restrictions on reuse; its policy also notes possible original-submitter intellectual-property claims. Retain NCBI/MANE/Ensembl attribution and the linked disclaimer. No CC0 license is asserted.",
+        "distribution_status": "Public primary reference source; not yet packaged or cleared as a training task."
+      },
+      "lineage_screen": {
+        "scope": "ID inventories and pinned permitted CompBioBench question text only; no OOD content or source biological fixtures inspected. GRCh38 and MANE are shared public reference resources; release change alone does not establish independent biological input.",
+        "known_source_overlap": "CompBioBench explicitly requests MANE v1.3 and GRCh38 in several questions. MANE v1.4 uses the same underlying reference ecosystem; different release bytes do not imply independent biological observations.",
+        "permitted_question_matches": [
+          {
+            "task_id": "compute-gc-content-interval-q1",
+            "matched": [
+              "GRCh38"
+            ]
+          },
+          {
+            "task_id": "pathogenic-variant-lookup-q1",
+            "matched": [
+              "MANE"
+            ]
+          },
+          {
+            "task_id": "conservation-lookup-q1",
+            "matched": [
+              "MANE"
+            ]
+          },
+          {
+            "task_id": "splice-pred-q1",
+            "matched": [
+              "MANE"
+            ]
+          },
+          {
+            "task_id": "gtf-5-utr-median-len-q1",
+            "matched": [
+              "MANE",
+              "GRCh38"
+            ]
+          },
+          {
+            "task_id": "reverse-encode-q1",
+            "matched": [
+              "GRCh38"
+            ]
+          },
+          {
+            "task_id": "annotate-variant-regulatory-overlap-q1",
+            "matched": [
+              "GRCh38"
+            ]
+          },
+          {
+            "task_id": "variant-coordinate-lookup-q1",
+            "matched": [
+              "GRCh38"
+            ]
+          },
+          {
+            "task_id": "afgr-1000g-intersect-atac-q1",
+            "matched": [
+              "GRCh38"
+            ]
+          },
+          {
+            "task_id": "compute-gccontent-promoter-q1",
+            "matched": [
+              "GRCh38"
+            ]
+          }
+        ],
+        "authoring_boundary": "Treat this as shared public reference infrastructure. Do not relabel a source benchmark fixture or repeat its exact query/answer as new training data. Establish a distinct authored analysis and document any benchmark-context departure before release.",
+        "cleared_for_training": false
+      },
+      "bounded_inspection": {
+        "algorithm": "Stream gzip line-by-line; keep only the bounded 19,404-row identity lookup and one transcript feature block. Reconcile aliases from the official assembly report and exact transcript coordinates/GeneID. Interval unions are local to each transcript; no full annotation sort or materialization.",
+        "schema_scan_seconds": 5.07,
+        "schema_scan_peak_rss_kib": 58124,
+        "reconciliation_seconds": 3.57,
+        "reconciliation_peak_rss_kib": 46860,
+        "limit": "These are source-inspection measurements on the shared VM, not native package/oracle/Harbor or model-task runtime evidence."
+      },
+      "validated_new_mappings": 0
     }
   ],
   "preliminary_lineage_screen": {

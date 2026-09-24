@@ -470,10 +470,10 @@ of proposed questions because one unrelated input collection cannot honestly
 complete all those endpoints.
 
 The [shared input-source plan](../../experiments/post_training/bio_tasks/workflow_designs/source_collections.json)
-records six candidates and the questions each might support. Four new sources were
-reviewed through primary metadata; two reuse existing observed-data assessments.
-The Lawlor cell-annotation CSV was downloaded and its checksum verified; expression
-matrices and raw reads remain uninspected. No source gained training clearance.
+records seven candidates and the questions each might support. The Lawlor
+cell-annotation CSV and MANE transcript annotation have been inspected; two
+candidates reuse existing observed-data assessments. New expression matrices and
+raw reads remain uninspected. No source gained training clearance.
 
 | Input collection | Potential shared work | Scientific boundary |
 |---|---|---|
@@ -483,6 +483,18 @@ matrices and raw reads remain uninspected. No source gained training clearance.
 | [Fang 3D MERFISH](https://datadryad.org/dataset/doi:10.5061/dryad.w0vt4b922) | Native three-dimensional neighborhoods and within-volume expression analysis | Targeted panels and limited biological replication; separate regions cannot be treated as interchangeable animal replicates. |
 | Existing GSE60450 counts | Developmental count contrasts, enrichment and native PyDESeq2 | Verified 27,179 genes and twelve sample identities. Two libraries per population/stage; no documented failed replicate for a QC-exclusion task. Enrichment inputs and new native methods remain unresolved. |
 | Existing matched ortholog alignments/trees | Per-locus evolutionary signal | Mirror/deposit identity and full endpoint validation remain; precomputed loci do not exercise ortholog discovery. |
+| [MANE 1.4 reference annotation](https://ftp.ncbi.nlm.nih.gov/refseq/MANE/MANE_human/release_1.4/) | Transcript-region reconstruction, reference identifier joins and candidate promoter/ORF queries | GTF and summary identities reconcile; genomic/transcript FASTA remains absent. Selected transcripts cannot supply an all-isoform exon union. This is shared curated reference infrastructure, not independent assay data. |
+
+The MANE audit parsed 476,053 GTF feature rows and reconciled all 19,404 transcript
+IDs, coordinates and GeneID mappings through the assembly's chromosome aliases.
+The file has no UTR rows; derive UTRs from exon/CDS/stop-codon intervals. Five
+transcript rows lack their summary MANE tag, so membership uses the pinned summary
+join with a discrepancy report. The initial primary-chromosome coding Select
+population contains 19,226 transcripts; 50 noncoding Select records require an
+explicit eligibility decision. Split codons and one annotated coding-length
+exception must survive parsing. Exact query selection and native/Harbor validation
+remain open. A newer annotation release alone does not establish independence from
+benchmark inputs.
 
 Lawlor's 282,528 annotation rows include 16,382 labelled cells across all 30
 donor-condition pairs. Four T-cell populations meet a proposed minimum of 20 cells

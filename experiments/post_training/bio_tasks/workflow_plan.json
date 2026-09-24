@@ -13349,7 +13349,7 @@
     },
     {
       "path": "workflow_designs/compbiobench.json",
-      "sha256": "853d16e687c8ecf6b56ff3089674d862d5b1a4a17f4b7a278b164ec3c3f4557d",
+      "sha256": "984d7992c9523b5adef0fb93a8ea493bc4ee5b95da77bfb4e276f7173a4b64b0",
       "benchmark_id": "CompBioBench",
       "reviewed_question_ids": 100,
       "proposed_designs": 84,
@@ -13516,7 +13516,7 @@
   "authoring_phase": "question-portfolio-planning",
   "portfolio_index": {
     "path": "workflow_portfolio.json",
-    "sha256": "61703c64073429d96780c1f56ad48474810974a9a1010c5d07ac5c2995705a4f",
+    "sha256": "971d8ccf32044101843a6c03d21c0123e65b1fd9df276158adfc12854907e0f5",
     "counts": {
       "source_releases": 32,
       "inventory_records": 5133,

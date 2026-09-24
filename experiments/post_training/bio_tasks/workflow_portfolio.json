@@ -35,7 +35,7 @@
     },
     {
       "path": "workflow_designs/compbiobench.json",
-      "sha256": "853d16e687c8ecf6b56ff3089674d862d5b1a4a17f4b7a278b164ec3c3f4557d"
+      "sha256": "984d7992c9523b5adef0fb93a8ea493bc4ee5b95da77bfb4e276f7173a4b64b0"
     },
     {
       "path": "workflow_designs/additional_benchmarks.json",
@@ -10850,11 +10850,11 @@
   },
   "source_collection_plan": {
     "path": "workflow_designs/source_collections.json",
-    "sha256": "098cd72f1efa1b26e02c04ba2f81b512376b20af29e88a2fd9c627255144e271",
-    "candidate_collections": 6,
-    "new_biological_payloads_downloaded": 1,
+    "sha256": "4b8d8d1ef58d8b75140e00ea2fc88679ed8d0213802884d87ddafcadcb1b65d9",
+    "candidate_collections": 7,
+    "new_biological_payloads_downloaded": 3,
     "cleared_for_training": 0,
-    "inspected_payload_kind": "One new cell-annotation CSV; existing vendored mammary counts/GEO metadata cross-checked against two small provider sample sheets. Zero new expression matrices or raw reads."
+    "inspected_payload_kind": "One new cell-annotation CSV plus MANE GTF and transcript-summary payloads; assembly aliases reconciled. Existing mammary counts/GEO metadata checked against provider sample sheets. Zero new expression matrices or raw reads."
   },
   "source_endpoint_review_updates": [
     {

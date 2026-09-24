@@ -1686,6 +1686,11 @@
           "compute-gccontent-promoter-q1": "5261dc3bd625c27cc462e522e4c04c914d045983c6998453e785a2bd80581c71"
         },
         "status": "specified-for-independent-input-authoring; not-implemented-or-validated"
+      },
+      "candidate_input_collection": {
+        "file": "workflow_designs/source_collections.json",
+        "collection_id": "mane-1.4-curated-transcript-reference",
+        "status": "schema-verified-shared-reference; authored-query-and-runtime-pending"
       }
     },
     {
@@ -2338,7 +2343,7 @@
       "method_parameters_and_decisions_to_freeze": "Use native_format_acceptance_contract.authored_task_decisions; freeze exact data/tool versions and verify feasibility before assignment.",
       "deterministic_verifier_strategy": "Native interval operations construct region unions from GTF features; an independent transcript-wise interval sweep checks lengths and E = UTR5 union C union UTR3 with disjoint regions. Verify eligibility, every per-transcript length, and the three final medians.",
       "negative_artifact_mutation": "Add three bases when stop_codon already overlaps CDS. Swap minus-strand UTR classes. Exclude zero UTRs or take the median over segments.",
-      "unresolved_inputs_runtime_and_exactness": "Need a licensed independent annotation snapshot with complete MANE feature/tag semantics. Any new exclusion for malformed or incomplete models must be reported as an authored eligibility choice; the source prompt alone does not authorize changing its transcript denominator.",
+      "unresolved_inputs_runtime_and_exactness": "MANE 1.4 GTF/summary identities and schema are inspected; the file has no UTR rows and five transcript-tag omissions. It is shared public reference annotation, not independent assay data. A distinct authored query, region-completeness checks and native/Harbor validation remain; the source benchmark used v1.3, so eligibility differences must be explicit.",
       "source_question_types": {
         "gtf-5-utr-median-len-q1": "observed_or_unspecified"
       },
@@ -2352,10 +2357,11 @@
       "native_format_acceptance_contract": {
         "source_endpoint": "For MANE Select transcripts on standard chromosomes, compute median 5-prime UTR, CDS and 3-prime UTR lengths, including the stop codon in CDS; floor each numpy-style median.",
         "authored_task_decisions": [
-          "Select the literal MANE Select tag from a frozen GTF release, retain versioned transcript IDs, and declare the exact standard-contig allowlist. Do not substitute generic canonical, longest, basic or MANE Plus Clinical transcripts.",
+          "Resolve MANE Select membership from the explicitly declared provider field or release summary, retaining versioned transcript IDs and an exact standard-contig allowlist. For the inspected MANE 1.4 candidate, join the summary by RefSeq_nuc and report missing GTF tags. Do not substitute generic canonical, longest, basic or MANE Plus Clinical transcripts.",
           "Convert inclusive GTF segments to half-open intervals once. Form each transcript exon union E and coding union C = union(CDS, stop_codon); overlapping start/stop annotations must not add duplicate bases.",
           "Classify E minus C in transcript order into 5-prime and 3-prime noncoding segments. On minus strand, the high-coordinate end is 5-prime. Do not sum UTR rows blindly: provider conventions can overlap stop_codon with UTR. Reject incomplete/internal noncoding coding models from this authored task with explicit reasons.",
-          "Each complete eligible transcript contributes one row, including a zero length if a UTR is absent. Compute each median over the same transcript set; for an even count average the middle two integers and floor once. Do not compute a median over exon segments or filter zero lengths."
+          "Each complete eligible transcript contributes one row, including a zero length if a UTR is absent. Compute each median over the same transcript set; for an even count average the middle two integers and floor once. Do not compute a median over exon segments or filter zero lengths.",
+          "For MANE 1.4, require CDS presence: 50 primary-contig Select records are noncoding. Preserve annotated coding exceptions for coordinate-length statistics; divisibility by three alone is not a valid completeness exclusion. A translation task needs its own exception contract."
         ],
         "complete_artifacts": [
           "selection.tsv: transcript_id,gene_id,contig,strand,eligible,reason",
@@ -2371,7 +2377,7 @@
           "Swap minus-strand UTR classes.",
           "Exclude zero UTRs or take the median over segments."
         ],
-        "source_equivalence_and_remaining_limits": "Need a licensed independent annotation snapshot with complete MANE feature/tag semantics. Any new exclusion for malformed or incomplete models must be reported as an authored eligibility choice; the source prompt alone does not authorize changing its transcript denominator.",
+        "source_equivalence_and_remaining_limits": "MANE 1.4 GTF/summary identities and schema are inspected; the file has no UTR rows and five transcript-tag omissions. It is shared public reference annotation, not independent assay data. A distinct authored query, region-completeness checks and native/Harbor validation remain; the source benchmark used v1.3, so eligibility differences must be explicit.",
         "format_references": [
           "gencode-gtf",
           "bedtools-merge"
@@ -2380,6 +2386,11 @@
           "gtf-5-utr-median-len-q1": "3a3d44c045df5d2b12d879d52260e9fff701283b8054a607426be64c2892c2ed"
         },
         "status": "specified-for-independent-input-authoring; not-implemented-or-validated"
+      },
+      "candidate_input_collection": {
+        "file": "workflow_designs/source_collections.json",
+        "collection_id": "mane-1.4-curated-transcript-reference",
+        "status": "schema-verified-shared-reference; authored-query-and-runtime-pending"
       }
     },
     {
@@ -3195,7 +3206,12 @@
       ],
       "relationship_to_exact_dataset_specific_answer": "Workflow adaptation to independent observed data; does not reproduce the source dataset-specific answer or establish benchmark coverage.",
       "scientific_question_on_independent_observations": "Which annotated coding frame of an observed mRNA is supported by translation and reference annotation?",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "candidate_input_collection": {
+        "file": "workflow_designs/source_collections.json",
+        "collection_id": "mane-1.4-curated-transcript-reference",
+        "status": "schema-verified-shared-reference; authored-query-and-runtime-pending"
+      }
     },
     {
       "proposed_id": "compbio-design-public-genotype-site",
