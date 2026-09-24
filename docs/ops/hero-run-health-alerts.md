@@ -49,7 +49,7 @@ a training run with no signal that it happened. That is what `iris_state_stale` 
 | `router_bias` | Newest bound over 400 from zero | `train_router_bias_max`, `train_router_bias_min` |
 | `throughput_low` | Most of 15 minutes below 2.0M tokens per second | `throughput_tokens_per_second` |
 | `mfu_low` | Most of 15 minutes below 15% | `throughput_mfu` |
-| `eval_regressed` | Newest evaluation, within 30 minutes, worse than two evaluations ago or over 2% worse than the preceding evaluation | `eval_dropless_paloma_macro_loss` |
+| `eval_regressed` | Newest evaluation, within 30 minutes, worse than two evaluations ago or over 2% worse than the preceding evaluation | W&B `eval_dropless/paloma/macro_loss` |
 | `iris_state_stale` | Newest `iris.task_state` row for the root over 5 minutes old | `iris.task_state` |
 | `task_retried` | A controller retry or gang requeue in the last 15 minutes | `iris.task_event` |
 
@@ -59,16 +59,23 @@ The 7% drop limit sits above the intermittent 5% spikes a healthy MoE run shows.
 The enrollment query discovers phase heartbeats over the one-hour enrollment window and returns the
 latest `execution_uid` with each one. If Iris still reports a run whose phase heartbeat is older, the
 bridge recovers its execution identity with a separate 24-hour query restricted to that exact
-cluster and `run_id`. This keeps the silent-run check without making healthy evaluations scan a day
+cluster and `run_id`. This keeps the silent-run check without making healthy runs scan a day
 of every hero partition. One subsequent, bounded `levanter.metrics` scan per bridge cache interval
 feeds all three rules, using exact cluster, run, and execution predicates rather than scanning the
 table again to rediscover the attempt. `loss_jump` reads its two loss windows against each other, so
 it filters them to that same execution. A retry keeps the run ID and takes a new `execution_uid`, so
-partitioning on the run alone would sum one attempt's skipped steps into the next and compare
-evaluations across a restore that redid steps. Process zero is the stable choice because Levanter
-publishes tracker metrics only from it. The evaluation check retains the newest three samples from
-that execution. A check reads a newest sample only while it is under 15 minutes old, except
-evaluations, which remain fresh for 30 minutes.
+partitioning on the run alone would sum one attempt's skipped steps into the next. Process zero is
+the stable choice because Levanter publishes tracker metrics only from it. A check reads a newest
+sample only while it is under 15 minutes old.
+
+`eval_regressed` reads W&B, not finelog. Levanter's finelog tracker publishes metrics other than the
+training loss only on steps divisible by ten, and hero evaluations land on steps such as 149999, so
+finelog never holds them. The bridge reads each watched run's three newest evaluations from W&B, in
+step order. A hero relaunch is a W&B fork, and a fork's history carries its parent's evaluations up
+to the branch, so the first evaluation after a relaunch is compared with the parent's last two. W&B
+drops a step logged below the run's high point, so a restore that redoes steps keeps the first
+evaluation at each step. The newest evaluation stays fresh for 30 minutes. If W&B is unavailable,
+the bridge skips the evaluation check and logs a warning, and the other checks still run.
 
 The throughput checks count how much of the window sat below the floor rather than averaging it —
 the median comparison the Pushover monitor makes, which keeps one restart step at zero from reading
