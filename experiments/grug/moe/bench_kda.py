@@ -163,6 +163,21 @@ def main():
     dv = int(os.environ.get("KDA_DV", "128"))
     lengths = [int(x) for x in os.environ.get("KDA_LENS", "8192").split(",")]
 
+    if os.environ.get("KDA_UNROLL") == "1":
+        c = int(os.environ.get("KDA_C", "128"))
+        args = _make_inputs(b, h, lengths[0], dk, dv)
+        for mode in ("fwd", "fwd_bwd"):
+            for u in (int(x) for x in os.environ.get("KDA_UNROLLS", "1,2,4,8,16").split(",")):
+                kern = functools.partial(chunk_kda, matmul_dtype=jnp.bfloat16, scan_unroll=u)
+                _try(f"bf16 unroll={u}", kern, args, c, _H100_BF16_PEAK, mode)
+        marker = "###KDA_RESULTS###"
+        print("\n" + marker, flush=True)
+        for ln in RESULTS:
+            print(ln, flush=True)
+        print(marker, flush=True)
+        sys.stdout.flush()
+        sys.exit(3)
+
     if os.environ.get("KDA_DECOMPOSE") == "1":
         for c in (int(x) for x in os.environ.get("KDA_SWEEP", "64,128").split(",")):
             _decompose(b, h, lengths[0], dk, dv, c)

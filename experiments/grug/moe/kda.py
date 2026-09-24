@@ -188,6 +188,7 @@ def chunk_kda(
     initial_state: jax.Array | None = None,
     use_qk_l2norm: bool = True,
     matmul_dtype: jnp.dtype | None = jnp.bfloat16,
+    scan_unroll: int = 1,
 ) -> tuple[Float[Array, "... L Dv"], jax.Array]:
     """Chunkwise-parallel per-channel gated delta rule (KDA train/prefill kernel).
 
@@ -308,7 +309,7 @@ def chunk_kda(
         s_new = s_prev * decay_tail[..., :, None] + add
         return s_new, out_i
 
-    state, out_chunks = lax.scan(chunk_step, state, scan_inputs)
+    state, out_chunks = lax.scan(chunk_step, state, scan_inputs, unroll=scan_unroll)
     out = jnp.moveaxis(out_chunks, 0, -3)  # (..., n, C, d_v)
     out = out.reshape(*lead, n_chunks * c, dv)
     if pad:
