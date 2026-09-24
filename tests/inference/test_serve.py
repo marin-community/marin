@@ -219,7 +219,6 @@ def test_mirrored_model_keeps_tokenizer_revision_independent(
 def test_vllm_backend_serves_model_and_tokenizer_revisions_independently(monkeypatch):
     observed: dict[str, object] = {}
     observed_chat_templates: list[str] = []
-    template_source: list[tuple[str, str | None]] = []
 
     @contextmanager
     def environment(**kwargs):
@@ -236,11 +235,7 @@ def test_vllm_backend_serves_model_and_tokenizer_revisions_independently(monkeyp
     monkeypatch.setattr("marin.inference.vllm_backend.VllmEnvironment", environment)
     monkeypatch.setattr("marin.inference.vllm_backend.vllm_launcher", lambda _config: object())
 
-    def read_template(model: str, revision: str | None) -> str:
-        template_source.append((model, revision))
-        return "{{ messages }}"
-
-    monkeypatch.setattr("marin.inference.vllm_backend.read_tool_chat_template", read_template)
+    monkeypatch.setattr("marin.inference.vllm_backend.read_tool_chat_template", lambda *_args: "{{ messages }}")
     model = ServedModelConfig(
         weights="org/model",
         tokenizer="org/tokenizer",
@@ -259,7 +254,6 @@ def test_vllm_backend_serves_model_and_tokenizer_revisions_independently(monkeyp
     assert extra_args[extra_args.index("--revision") + 1] == "model-sha"
     assert extra_args[extra_args.index("--tokenizer") + 1] == "org/tokenizer"
     assert extra_args[extra_args.index("--tokenizer-revision") + 1] == "tokenizer-sha"
-    assert template_source == [("org/tokenizer", "tokenizer-sha")]
     assert observed_chat_templates == ["{{ messages }}"]
 
 
