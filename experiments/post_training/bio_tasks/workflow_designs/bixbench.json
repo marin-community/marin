@@ -3540,7 +3540,72 @@
       ],
       "gseapy_version": "1.3.0",
       "gseapy_release_metadata_sha256": "5362d8cd94609c80854941e747b6ecfa3b843666aa9e27b9bb808f8d1a67b503",
-      "remaining_source_check": "DOSE 4.4.0 metadata is pinned, but its archive failed the bounded-download checksum check and was not accepted; a subsequent metadata request timed out and the attempted GitHub release branch did not resolve. Verify the installed source and native tested-set denominator before execution claims."
+      "remaining_source_check": "DOSE 4.4.0 source archive now matches its provider MD5. The earlier check read only the first 5,000,000 bytes of the 5,747,847-byte archive. Native source semantics are reviewed below, but the combined installed environment has not run. GOSemSim bundled graph contents still require inspection; its bytes are pinned.",
+      "dose_archive": {
+        "url": "https://bioconductor.org/packages/3.22/bioc/src/contrib/DOSE_4.4.0.tar.gz",
+        "final_url": "https://mghp.osn.xsede.org/bir190004-bucket01/archive.bioconductor.org/packages/3.22/bioc/src/contrib/DOSE_4.4.0.tar.gz",
+        "download_bytes": 5747847,
+        "sha256": "8dca7f702737c5150eeaf780c2aa05806f116a4172bceeac36c6491b27e5d434",
+        "provider_md5": "fd97f21bbbce18162934eb4b2023892b",
+        "provider_md5_verified": true,
+        "reviewed_files": [
+          {
+            "path": "DOSE/DESCRIPTION",
+            "sha256": "137b530e638d4283ea1aad55396fdca5e3e734b0ec2265a3732383e697b73454",
+            "bytes": 1998
+          },
+          {
+            "path": "DOSE/R/accessor.R",
+            "sha256": "ecf0fa7f52f2f2d0e81a29f30e28591aa194c1f197e4686777923cce490c0699",
+            "bytes": 5566
+          },
+          {
+            "path": "DOSE/R/enricher_internal.R",
+            "sha256": "ed3507b5ef1c94ef488ce7636c2a325232bc4619d5b5275af32d04b6742da7b5",
+            "bytes": 10759
+          }
+        ]
+      },
+      "gosemsim_archive": {
+        "url": "https://bioconductor.org/packages/3.22/bioc/src/contrib/GOSemSim_2.36.0.tar.gz",
+        "download_bytes": 610988,
+        "sha256": "73c383b98b5fa14c2b3031f18ffc73d8654cbdbf1f518c2882654a97d4bbbf68",
+        "provider_md5": "3d050b825e7c1de00cafe96c99f523d3",
+        "provider_md5_verified": true,
+        "reviewed_files": [
+          {
+            "path": "GOSemSim/R/WangMethod.R",
+            "sha256": "c82fbb8dd28e98cf7e6e3e90ad92e7bb0e68ef008028386d4ab2c7a051923713",
+            "bytes": 3837
+          },
+          {
+            "path": "GOSemSim/R/computeIC.R",
+            "sha256": "afcca15fb0571209702a4076f9b8466f51b8abd96f3acaa9fc56a857e39e0090",
+            "bytes": 1186
+          },
+          {
+            "path": "GOSemSim/R/godata.R",
+            "sha256": "e122be03247795fae19b6f58069b8a2a9130c01ae10254af7d09b24b996867d3",
+            "bytes": 3752
+          },
+          {
+            "path": "GOSemSim/R/termSim.R",
+            "sha256": "54718fa59620243c11017a1b484ded4036ffa3ccd1d15896d0f442f463c9a060",
+            "bytes": 1217
+          },
+          {
+            "path": "GOSemSim/R/utilities.R",
+            "bytes": 3649,
+            "sha256": "55c43d38c970d59282f28ce96ee55004b317b1246cac34bbd45c4e09f3b8734f"
+          }
+        ],
+        "bundled_relation_table": {
+          "path": "GOSemSim/data/gotbl.rda",
+          "bytes": 531372,
+          "sha256": "5ef5cec39e053f6dd7f9a62772c4ab8267e02b04bf376ca8ec89ec8f8f58b040",
+          "contents_inspected": false
+        }
+      }
     },
     "input_scope": {
       "candidate": "workflow_designs/source_collections.json:existing-mammary-observed-counts",
@@ -3552,7 +3617,8 @@
         "Pin species, stable gene IDs, mapping release, ontology graph and relation types, term memberships and annotation evidence. Preserve one-to-many/obsolete/unmapped records without multiplying count rows.",
         "A literal human KEGG_2021_Human task needs independently observed human gene data and a legitimately acquired, hash-pinned copy of that reference release. A current KEGG query, mouse library or orthology-converted list is a declared adaptation.",
         "GO_Biological_Process_2021 is a named reference requirement for a-2-8. The current mouse GO BP asset does not establish that exact library, species compatibility or semantic graph."
-      ]
+      ],
+      "annotation_source_review": "workflow_designs/source_collections.json:existing-mammary-observed-counts.annotation_source_review"
     },
     "count_model": {
       "versions": "Use DESeq2 1.50.2 and candidate apeglm 1.32.0 in a fully locked environment; preserve all transitive package versions before native execution.",
@@ -3586,7 +3652,13 @@
       "statistics": "For each eligible term report N=background size, K=term genes in background, n=selected genes in background and k=overlap; audit the hypergeometric upper tail P[X>=k]. Preserve native p.adjust and the exact set of hypotheses over which it was computed.",
       "complete_outputs": "A complete membership/status table includes zero-overlap and size-excluded sets even if the native package omits them. Such rows retain native_not_returned or size_excluded; do not silently append p=1 rows and change the native BH denominator. A separately named all-eligible BH sensitivity analysis may be supplied but cannot replace native results.",
       "semantic_simplification": "For each view simplify the native BP results passing padj<0.05, with cutoff=0.7,by=p.adjust,select_fun=min,measure=Wang and a pinned species-compatible semData. Preserve native term order, the full similarity matrix and a before/after retained-ID table.",
-      "semantic_ties": "The inspected clusterProfiler 4.18.4 source resolves equal selected values using the greatest number of ontology ancestors, then the first tied entry. It loops through local similarity neighborhoods and unions removals; this is not connected-component clustering or a guarantee of one surviving representative per removed term. Do not invent a one-to-one representative map."
+      "semantic_ties": "The inspected clusterProfiler 4.18.4 source resolves equal selected values using the greatest number of ontology ancestors, then the first tied entry. It loops through local similarity neighborhoods and unions removals; this is not connected-component clustering or a guarantee of one surviving representative per removed term. Do not invent a one-to-one representative map.",
+      "native_input_boundary": "Convert IDs to unique character vectors. Explicitly set options(enrichment_force_universe=FALSE). Intersect selected IDs with the requested background and BP-annotated domain before calling enrichGO; retain every excluded selected ID and its reason. DOSE computes n from annotation-mapped query genes before restricting term overlaps to the supplied universe, so passing out-of-background query genes can corrupt the intended denominator.",
+      "native_hypothesis_family": "DOSE constructs candidate terms from the supplied annotation-mapped query genes, then intersects their memberships with the effective universe and filters by minGSSize/maxGSSize before BH adjustment. Under the explicit pre-intersection rule every native tested term has nonzero overlap. Export those exact tested IDs and all eligible zero-overlap terms separately; do not include appended zero-overlap rows in native BH correction.",
+      "qvalue_policy": "Set seed 42 immediately before each ORA call because DOSE invokes qvalue with pi0.method=bootstrap. Export its result/status separately; deterministic acceptance and term selection use native BH p.adjust, not Storey qvalue. Preserve the raw result slot and record qvalue failures as returned NA; do not silently change the native hypothesis family.",
+      "semantic_graph": "Use the checksum-pinned GOSemSim 2.36.0 bundled gotbl.rda for Wang similarity and the separately pinned GO.db 3.22.0 ancestors for clusterProfiler tie-breaking. Inspect the bundled relation table and eligible-term representation before freezing acceptance. Do not overwrite the native table with the audited GO.db export or claim the two graphs agree without comparison.",
+      "semantic_native_conventions": "The inspected Wang source assigns weights 0.8 to is_a, 0.6 to part_of and 0.7 to other relationships. For BP it sets the universal all root contribution to zero. Its traversal retains the first duplicate ancestor entry rather than explicitly maximizing over path contributions. Preserve native table/traversal order and record this behavior; an independently implemented textbook maximum-path score is not automatically the same oracle. Use a fresh R process per task so global semantic caches cannot mix graph versions.",
+      "semantic_data": "For Wang, construct godata(annoDb=the pinned mouse OrgDb, keytype=ENTREZID, ont=BP, computeIC=FALSE, processTCSS=FALSE). Information content is not used by the inspected Wang path. This avoids an unnecessary IC fit without changing the intended native similarity method."
     },
     "kegg": {
       "source_endpoints": [
@@ -3650,13 +3722,16 @@
         "Take the five largest significant NES terms rather than the five largest absolute NES terms.",
         "Replace Wang simplification with transitive connected components or invent a representative for every removed term.",
         "Use a mouse or current KEGG library for KEGG_2021_Human.",
-        "Use the wrong p-value axis, selected genes, sign colours or labels in the machine-readable plot table."
+        "Use the wrong p-value axis, selected genes, sign colours or labels in the machine-readable plot table.",
+        "Pass annotated selected genes outside the declared universe to DOSE without pre-intersection, changing its draw count n.",
+        "Include zero-overlap terms in the native BH family or substitute Storey qvalue for BH p.adjust.",
+        "Substitute the current GO.db parent graph or a maximum-path Wang implementation for the pinned GOSemSim bundled graph and traversal."
       ]
     },
     "remaining_before_assignment": [
       "Clear independent count/annotation source lineage and rights, with appropriate species and tissue for each literal endpoint.",
-      "Acquire the necessary GO graph and named GO/KEGG snapshots; the existing mouse BP membership alone is insufficient.",
-      "Build and verify the pinned full native environment, including DOSE hypothesis-universe behavior and GSEA ranking/score semantics.",
+      "Inspect and reconcile the pinned GOSemSim bundled graph with eligible terms; export the full OrgDb universe on suitable storage. Acquire the named GO/KEGG snapshots for literal source endpoints. The GO.db 3.22.0 graph is already audited against all existing mouse memberships.",
+      "Build and verify the pinned full native environment, including the now source-reviewed DOSE pre-intersection/testing-family rules, bundled Wang graph behavior and GSEA ranking/score semantics.",
       "Calibrate numerical tolerances from native checks; implement the private oracle and verifier for the selected numerical endpoints with incorrect-output cases. Display parameters and deferred visual endpoints do not block assignment.",
       "Demonstrate complete offline Harbor runtime <=30 minutes; the existing unshrunken DESeq2 run is not evidence for this combined task."
     ],

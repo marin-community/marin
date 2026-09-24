@@ -2781,6 +2781,16 @@
         "url": "https://datadryad.org/downloads/file_stream/4868580",
         "http_status": 403,
         "date": "2026-09-24"
+      },
+      "documented_api_download_check": {
+        "metadata_url": "https://datadryad.org/api/v2/files/4868580",
+        "metadata_response_sha256": "5fb2143920fe78ed5730ac09878e27e873463b73ee25d7f59f1060d9e4a209e2",
+        "download_url": "https://datadryad.org/api/v2/files/4868580/download",
+        "download_link_source": "Public file metadata _links.stash:download.href",
+        "http_status": 401,
+        "error": "Unauthorized, must have current bearer token",
+        "date": "2026-09-24",
+        "archive_downloaded": false
       }
     },
     "primary_statements": [
@@ -2807,9 +2817,9 @@
     "rights_interpretation": {
       "confirmed": "The Dryad deposit version 4 and its named single-copy alignment/tree archives are CC0-1.0 according to Dryad\u2019s public dataset metadata.",
       "not_confirmed": "The Dryad README gives a repository-level equivalence statement but no archive member manifest or per-member checksums. The public API file manifest names and hashes the archives, not their members. No explicit license file occurs in the pinned Git tree. Consequently these 60 exact GitHub blob bytes cannot yet be identified as CC0 archive members.",
-      "practical_next_step": "Treat the mirror files as nonredistributed candidate validation inputs until archive member equality or author-granted repository license is documented. A small member listing/checksum comparison would resolve this if the Dryad archives become anonymously accessible; the earlier download endpoints returned 401/403 and were not retried here."
+      "practical_next_step": "Defer this input candidate: the browser download returned 403 and the documented public-metadata download link returned 401 requiring a bearer token. No credentials were sought. Retain the existing nonredistributed native-check evidence; resume only with an authorized archive download or explicit mirror redistribution evidence, then compare exact members. Advance unrelated candidates now."
     },
-    "metadata_requests_made": 2,
+    "metadata_requests_made": 3,
     "large_archives_downloaded": 0
   },
   "native_audit": {

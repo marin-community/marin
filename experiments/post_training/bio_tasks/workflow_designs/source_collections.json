@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
-  "reviewed_at": "2026-09-24",
-  "scope": "Observed-assay and curated-reference input planning. Inspected a Lawlor cell-annotation CSV, existing mammary counts/sample metadata, and MANE 1.4 GTF/summary with assembly aliases. No new task is implemented or candidate cleared for training export.",
+  "reviewed_at": "2026-09-24T20:36:04.606278+00:00",
+  "scope": "Observed-assay and curated-reference input planning. Inspected a Lawlor cell-annotation CSV, existing mammary counts/sample metadata, and MANE 1.4 GTF/summary with assembly aliases. No new task is implemented or candidate cleared for training export. The pinned GO.db reference graph was also audited against the existing mouse membership asset.",
   "policy": {
     "reuse_unit": "Share acquisition, identity reconciliation and native environment preparation across compatible questions. Each task still answers one coherent question and retains its own complete private oracle/verifier contract.",
     "realism": "Keep the biological replicate count and observation structure needed by the estimand. Bound cells, loci or genomic regions by declared outcome-independent eligibility, not by selecting observations that force a desired answer.",
     "single_split": "The corpus has one train split. Held-out subjects, cells or observations inside a predictive task are part of its scientific evaluation protocol, with evaluation labels private to the verifier.",
     "no_automatic_coverage": "A source's availability or a question's eligibility does not establish benchmark endpoint equivalence. Preserve benchmark biological-context and method departures explicitly.",
     "lineage_screen": "Check accessions, DOI, project IDs, originating cohorts and known mirrors against all permitted ID-source metadata before authoring. Absence of an identifier match is only a preliminary screen. Uninspected/gated source fixtures prevent a universal nonoverlap claim. Do not deanonymize OOD inputs.",
-    "metadata_only": "Inspected primary manifests, one Lawlor cell-annotation CSV, existing vendored GSE60450 counts/GEO metadata and provider sample sheets, plus MANE reference GTF/transcript summary and an assembly report. No new expression/protein matrix, raw read, genomic FASTA, image or benchmark answer was fetched in this source review."
+    "metadata_only": "Inspected primary manifests, one Lawlor cell-annotation CSV, existing vendored GSE60450 counts/GEO metadata and provider sample sheets, plus MANE reference GTF/transcript summary and an assembly report. No new expression/protein matrix, raw read, genomic FASTA, image or benchmark answer was fetched in this source review. A GO.db reference database was downloaded and source-audited; the full mouse OrgDb extraction failed for local disk space and its partial files were removed."
   },
   "collections": [
     {
@@ -632,7 +632,7 @@
         "The Zenodo tutorial FASTQs contain 1,000 reads each and cannot substantiate a full raw-read workflow. The observed gene-count matrix retains the original count totals.",
         "Expanded benchmark-cohort lineage review remains open. Sample-sheet agreement and a public license do not establish independence from every ID benchmark input."
       ],
-      "planning_status": "counts-and-sample-identities-verified; count-model-input-contract-specified; enrichment-annotations-native-methods-and-lineage-pending",
+      "planning_status": "counts-sample-join-and-go-database-verified; native-semantic-graph-full-gene-universe-and-lineage-pending",
       "candidate_question_or_card_ids": [
         "count-contrast-enrichment",
         "portfolio-liu-single-cell-count-model-differential-expression"
@@ -745,7 +745,7 @@
             "change a semantic representative",
             "substitute raw p for adjusted p in a required plot"
           ],
-          "unresolved_inputs": "A compatible frozen ontology graph and gene mapping for semantic similarity; a licensed/versioned KEGG snapshot for KEGG-specific targets; expanded source-cohort lineage.",
+          "unresolved_inputs": "Reconcile the checksum-pinned GOSemSim bundled relation table with the eligible GO terms; obtain the full genome-wide gene universe from the pinned OrgDb on suitable storage; acquire licensed/versioned human KEGG and named GO snapshots for literal endpoints; complete expanded source-cohort lineage. The existing GO.db graph now matches every term and label in the observed-gene membership asset.",
           "runtime_requirement": "Measure the complete offline Harbor oracle and verifier within the 30-minute target. No inference from the existing unshrunken fit runtime.",
           "status": "candidate-input-contract; full-group-coverage-unsupported",
           "validated_mappings_added": 0,
@@ -763,7 +763,94 @@
           "status": "candidate-input-contract; native-run-pending",
           "validated_mappings_added": 0
         }
-      ]
+      ],
+      "annotation_source_review": {
+        "status": "go-database-and-membership-reconciled; native-semantic-graph-not-yet-reconciled",
+        "go_database": {
+          "package": {
+            "Package": "GO.db",
+            "Version": "3.22.0",
+            "Depends": "R (>= 2.7.0), methods, AnnotationDbi (>= 1.71.1)",
+            "Suggests": "DBI",
+            "License": "Artistic-2.0",
+            "MD5sum": "5ae5557afa56227c4c9c145907b1f585",
+            "NeedsCompilation": "no"
+          },
+          "package_index_url": "https://bioconductor.org/packages/3.22/data/annotation/src/contrib/PACKAGES.gz",
+          "package_index_sha256": "c02ddd4a7307fed261598ef7b945e9b4c1e215a34e272889ad7789d56fdeca09",
+          "url": "https://bioconductor.org/packages/3.22/data/annotation/src/contrib/GO.db_3.22.0.tar.gz",
+          "archive_bytes": 25248437,
+          "archive_sha256": "aec6fae909caaa323fde5cba15aedfc8a63ddfa3b47b0381550834c162a03ed2",
+          "provider_md5_verified": true,
+          "sqlite_bytes": 73560064,
+          "sqlite_sha256": "ccdb10199a59103c051dabe04f4f89445be1fb804d7b8889eed4f75b0a9b787b",
+          "matches_existing_native_database": true,
+          "metadata": {
+            "GOSOURCENAME": "Gene Ontology",
+            "GOSOURCEURL": "http://current.geneontology.org/ontology/go-basic.obo",
+            "GOSOURCEDATE": "2025-07-22",
+            "Db type": "GODb",
+            "package": "AnnotationDbi",
+            "DBSCHEMA": "GO_DB",
+            "GOEGSOURCEDATE": "2025-Sep24",
+            "GOEGSOURCENAME": "Entrez Gene",
+            "GOEGSOURCEURL": "ftp://ftp.ncbi.nlm.nih.gov/gene/DATA",
+            "DBSCHEMAVERSION": "2.1"
+          },
+          "bp_graph": {
+            "biological_process_terms": 25699,
+            "graph_nodes": 25700,
+            "universal_root_edge": {
+              "child": "GO:0008150",
+              "parent": "all",
+              "relationship": "isa"
+            },
+            "parent_edges": 57462,
+            "relationship_counts": {
+              "isa": 44495,
+              "regulates": 2980,
+              "part of": 4772,
+              "negatively regulates": 2607,
+              "positively regulates": 2608
+            },
+            "roots": [
+              "all"
+            ],
+            "acyclic": true,
+            "edge_export_sha256": "0e2ddc33a26c9098a456b043fc87f0919af364cece75b646b4fa0579b2a07f29",
+            "edge_export_bytes": 1619654,
+            "export_query": "SELECT child.go_id,parent.go_id,p.relationship_type FROM go_bp_parents AS p JOIN go_term AS child ON child._id=p._id JOIN go_term AS parent ON parent._id=p._parent_id ORDER BY p.rowid"
+          },
+          "existing_asset_reconciliation": {
+            "membership_rows": 1334105,
+            "genes": 21921,
+            "membership_terms": 15164,
+            "missing_graph_terms": [],
+            "bp_labels": 15164,
+            "label_mismatches": []
+          },
+          "limitations": [
+            "Source and graph audit only; no native GOSemSim execution or new task validation.",
+            "The existing membership asset covers observed count genes only; it cannot supply a genome-wide ORA universe. Full org.Mm.eg.db extraction ran out of local disk and was removed."
+          ]
+        },
+        "orgdb_candidate": {
+          "package": {
+            "Package": "org.Mm.eg.db",
+            "Version": "3.22.0",
+            "Depends": "R (>= 2.7.0), methods, AnnotationDbi (>= 1.71.1)",
+            "Suggests": "DBI, annotate, RUnit",
+            "License": "Artistic-2.0",
+            "MD5sum": "cc19f63b25a7a8018e46f71e42e2f83f",
+            "NeedsCompilation": "no"
+          },
+          "url": "https://bioconductor.org/packages/3.22/data/annotation/src/contrib/org.Mm.eg.db_3.22.0.tar.gz",
+          "content_length": "92817018"
+        },
+        "orgdb_access_result": "The 92,817,018-byte archive passed its provider MD5 check. Extraction failed for insufficient local disk; no complete SQLite audit was obtained, and both temporary files were removed. Use remote disk for the complete database. No package was installed.",
+        "native_graph_boundary": "GOSemSim 2.36.0 loads its bundled data/gotbl.rda for Wang similarity; GO.db supplies ancestor counts for clusterProfiler tie-breaking. The audited GO.db graph cannot be assumed identical to the bundled graph. Pin both and inspect the native relation table before execution claims.",
+        "verified_new_native_runs": 0
+      }
     },
     {
       "id": "existing-observed-multilocus-alignments",
@@ -779,10 +866,11 @@
         "Precomputed ortholog alignments/trees do not exercise discovery, raw sequence alignment or de novo inference.",
         "Preserve the diagnosed native rooting behavior and its explicit reference convention; do not silently change metric semantics."
       ],
-      "planning_status": "existing-source-assessment; provenance-and-full-question-contract-pending",
+      "planning_status": "deferred-input-access; exact-mirror-member-redistribution-unresolved",
       "candidate_question_or_card_ids": [
         "ortholog-signal-comparison"
-      ]
+      ],
+      "deferral_evidence": "workflow_designs/multilocus_source.json:rights_review.versioned_file_manifest.documented_api_download_check"
     },
     {
       "id": "mane-1.4-curated-transcript-reference",

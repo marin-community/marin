@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T20:19:20.985223+00:00",
+  "updated_at": "2026-09-24T20:36:42.222266+00:00",
   "scope": "Full question-proposal portfolio for the 32 currently inventoried provisional-ID agentic releases. This planning index resolves every question card and records conditional consolidation; it creates no training task or validated coverage. Nine source leads without inventories remain outside the enumerated denominator.",
   "counts": {
     "source_releases": 32,
@@ -31,7 +31,7 @@
     },
     {
       "path": "workflow_designs/bixbench.json",
-      "sha256": "f603e09eb0e8f249169d8a4d01011ccd07a442b7ff1028e9c41111ff01b8abea"
+      "sha256": "765d8200a07ec7cc624f4732642a845efd33f40400cfa5e899f4a3ccd51c7601"
     },
     {
       "path": "workflow_designs/compbiobench.json",
@@ -206,13 +206,13 @@
         "complete_artifacts": "Complete gene effects before/after shrinkage; eligible universe and identifier map; GO/KEGG memberships; every ORA/GSEA result and semantic-reduction map; numeric plot data.",
         "deterministic_acceptance": "Native DESeq2 and pinned enrichment methods; independent contrast, overlap, ranking, FDR and universe checks. Freeze ontology release, tie handling, set sizes and undefined-result rules.",
         "required_incorrect_output_checks": "Use significant genes as the enrichment background; reverse rank direction; substitute ORA for GSEA; omit nonsignificant sets.",
-        "unresolved_before_assignment": "See workflow_designs/bixbench.json:expression_enrichment_contract. Human KEGG, fibroblast context, annotation graphs/releases and the full native numerical environment remain unresolved. Deferred visual endpoints do not block ready numerical tasks.",
+        "unresolved_before_assignment": "See workflow_designs/bixbench.json:expression_enrichment_contract. Native DOSE source semantics and the GO.db graph are audited. Bundled GOSemSim graph reconciliation, full gene universe, human KEGG, fibroblast context, source lineage and the combined native environment remain unresolved. Deferred visual endpoints do not block ready numerical tasks.",
         "status": "17-source-endpoints-reviewed; complete-input-and-runtime-contract-unresolved"
       },
       "source_input_review": {
         "collection_id": "existing-mammary-observed-counts",
         "review_path": "workflow_designs/source_collections.json",
-        "status": "observed-counts-and-sample-join-verified; method-and-annotation-contracts-pending",
+        "status": "counts-sample-join-and-go-graph-audited; native-semantic-graph-full-universe-and-lineage-pending",
         "validated_mappings_added": 0
       },
       "judge_free_scoring_dispositions": {
@@ -10855,11 +10855,11 @@
   },
   "source_collection_plan": {
     "path": "workflow_designs/source_collections.json",
-    "sha256": "4b8d8d1ef58d8b75140e00ea2fc88679ed8d0213802884d87ddafcadcb1b65d9",
+    "sha256": "502863048c2dcb0164995e4304c5cd26352aae71de0559e3adf6af0bfc45ca51",
     "candidate_collections": 7,
-    "new_biological_payloads_downloaded": 3,
+    "new_biological_payloads_downloaded": 4,
     "cleared_for_training": 0,
-    "inspected_payload_kind": "One new cell-annotation CSV plus MANE GTF and transcript-summary payloads; assembly aliases reconciled. Existing mammary counts/GEO metadata checked against provider sample sheets. Zero new expression matrices or raw reads."
+    "inspected_payload_kind": "One new cell-annotation CSV, MANE GTF and transcript summary, plus a GO.db reference database; existing mammary counts and provider sample sheets reconciled. No new expression matrices or raw reads. A full mouse OrgDb extraction failed for local disk space and was removed."
   },
   "source_endpoint_review_updates": [
     {

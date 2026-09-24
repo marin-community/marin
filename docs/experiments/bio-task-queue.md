@@ -37,10 +37,12 @@ scientific question, input requirements, proposed outputs and a verification
 approach. These checks establish a planning baseline, not executable acceptance.
 The portfolio's `planning_readiness` audit records the evidence and its limits.
 
-The next preparation target is the ortholog-signal comparison: resolve exact input
-rights and lineage, then verify that the observed alignments support the complete
-47-endpoint contract. Its existing native tree checks provide a starting point;
-they do not complete the task. No implementation packet or worker is assigned.
+The next preparation target is count-contrast enrichment, using the verified
+observed-count candidate while preserving the conditional group's species, tissue
+and reference-release limits. The ortholog input candidate is deferred: Dryad's
+documented archive-download link returns 401, leaving exact mirror-member
+redistribution unresolved. Its native checks remain recorded. No implementation
+packet or worker is assigned.
 Freeze the selected inputs, methods, artifacts and deterministic acceptance before
 implementation. If a candidate cannot satisfy those requirements, record the gap
 and advance to another feasible candidate without weakening its endpoints.
@@ -123,8 +125,17 @@ fibroblast-specific contrast. Those inputs remain explicit requirements of the
 conditional group. The inspected clusterProfiler source also shows that semantic
 term removal is not connected-component clustering and does not guarantee a single
 surviving representative for every removed term. Native similarity neighborhoods,
-tie decisions and retained term IDs must be preserved. The full environment and
-annotation snapshots still need validation before assignment.
+tie decisions and retained term IDs must be preserved.
+
+The checksum-verified DOSE source requires explicit pre-intersection of selected
+genes with the background to preserve the intended hypergeometric draw count. Its
+native BH family contains query-associated terms passing size filters; report
+zero-overlap terms separately. The GO.db 3.22.0 graph reconciles all 15,164 terms
+in the existing mouse membership asset, with no missing terms or label mismatches.
+GOSemSim 2.36.0 uses its own bundled relation table for Wang similarity, so this
+GO.db audit does not establish native semantic-graph equivalence. The bundled table
+is hash-pinned but still needs inspection. The full genome-wide gene universe,
+combined native environment and source-specific annotation releases remain open.
 
 The connected ortholog proposal specifies all 47 source endpoints individually:
 within-locus tip/pair summaries, across-locus reductions, ordered rank tests,
