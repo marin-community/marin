@@ -303,9 +303,10 @@ benchmark answers and biological fixtures are excluded from training authoring.
 | [TxBench-PP](../../experiments/post_training/bio_tasks/benchmark_tasks/txbench-pp.json) | All 12 public prompts; input schemas and grader behavior uninspected | 100 |
 | [TxBench-Ab](../../experiments/post_training/bio_tasks/benchmark_tasks/txbench-ab.json) | All six public prompts; inputs, ground truth and graders withheld | 100 |
 | [TxBench-OD](../../experiments/post_training/bio_tasks/benchmark_tasks/txbench-od.json) | All four public prompts; inputs, ground truth and graders withheld | 113 |
+| [DrugDiscoveryBench](../../experiments/post_training/bio_tasks/benchmark_tasks/drugdiscoverybench.json) | All 82 complete public prompts and endpoints assessed | 82; full-release ID equality unverified |
 
-Of these 2,224 ID task/protocol/definition records, 47 have manually assessed component mappings,
-2,176 are unmapped and one is excluded from authoring. None is marked workflow-validated. Other eligible sources
+Of these 2,306 ID task/protocol/definition records, 47 have manually assessed component mappings,
+2,258 are unmapped and one is excluded from authoring. None is marked workflow-validated. Other eligible sources
 still need task-level inspection. The 90
 [BioMysteryBench identifiers](../../experiments/post_training/bio_tasks/benchmark_tasks/biomysterybench.json)
 are tracked separately as OOD, without workflow patterns or training mappings.
@@ -328,6 +329,13 @@ scientific evidence remains unreviewed. The inspected evaluator uses determinist
 answer checks, including a permissive gene-list intersection check. It has not
 been executed, and no recipe coverage is assigned. Answers and benchmark sequence
 fixtures are excluded from authoring.
+
+DrugDiscoveryBench adds 27 patterns covering structural chemistry, assay selection,
+multisource target evidence, sequence analysis and connected omics decisions.
+Six questions require attachments absent from the public preview; four shared
+structure accessions are tracked separately from task counts.
+Full-release rubrics use an LLM judge; independent tasks need quantitative artifact
+contracts. No mappings are assigned from category or tool-name similarity.
 
 LABBench2's pinned dataset card declares 1,912 rows in its `all` configuration.
 The public harness and card are inspected, but existing access lacks the dataset

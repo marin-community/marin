@@ -1,0 +1,1555 @@
+{
+  "benchmark": "DrugDiscoveryBench public preview",
+  "source_revision": "c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48",
+  "scope": "All 82 task identifiers from the public prompts-and-metadata preview. Agentic provisional ID; full-release answers and grading rubrics were not accessed.",
+  "assessment_scope": "All 82 complete public prompts reviewed and manually classified into 27 workflow patterns. External scientific sources, six referenced attachment bundles, biological inputs and native grading rubrics remain uninspected. No solutions were produced.",
+  "inventory_completeness": {
+    "public_preview_ids": 82,
+    "advertised_suite_tasks": 82,
+    "unique_ids": 82,
+    "full_release_identity_match": "not checked; gated full release not retrieved",
+    "categories": {
+      "molecular_biology": 7,
+      "structural_reasoning": 19,
+      "sar_affinity": 7,
+      "database_screening": 14,
+      "target_id_genetics": 12,
+      "cheminformatics": 10,
+      "patent_mining": 13
+    }
+  },
+  "license_and_contamination": "Public preview is CC-BY-4.0 and explicitly for inspecting distribution and prompts. Do not train on benchmark data. This inventory contains identifiers, prompt hashes and abstract analysis patterns only; prompts, canary text, sequences, molecule structures, answers and rubrics are not copied into training authoring.",
+  "source_files": [
+    {
+      "path": "README.md",
+      "url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/README.md",
+      "bytes": 2068,
+      "sha256": "29f1bcde7a28d3ea8e40b7d2e1a75b5e75420fcc2235662e3e63c6fe130c2976"
+    },
+    {
+      "path": "tasks.jsonl",
+      "url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "bytes": 71699,
+      "sha256": "e9523c354873b624ac6c8cc36d6f98f6d26872020d27f079163dd43ddd4438a5"
+    }
+  ],
+  "input_access": "Six questions explicitly reference attachments absent from the preview file listing; external biological databases and papers were not retrieved. All public prompt IDs are enumerated, but input availability is incomplete.",
+  "native_scoring": "The full dataset card describes LLM-graded outcome and process rubrics. Their implementation and task-specific ground truth were not accessed or executed. Deterministic adaptation requires independently defined artifact contracts.",
+  "task_defaults": {
+    "status": "unmapped",
+    "training_mapping_allowed": true,
+    "assessment": "Complete public prompt and requested endpoint manually assessed; no benchmark answers or biological fixtures used for authoring.",
+    "recipes": [],
+    "independent_data_sources": [],
+    "validation_evidence": [],
+    "runtime_seconds": null,
+    "remaining_gaps": [
+      "Inspect native input schemas and the underlying scientific evidence; reconcile time cutoffs, missing attachments and unresolved methodological choices.",
+      "Use independent observed biological inputs with documented reuse and lineage checks. Keep benchmark prompts, answers and fixtures out of training.",
+      "Specify complete intermediate artifacts, deterministic decision rules and negative controls, then validate an offline connected oracle within 30 minutes."
+    ]
+  },
+  "patterns": {
+    "cohort-proportions": {
+      "required_stages": [
+        "define the patient denominator and treatment classes",
+        "deduplicate historical patient records",
+        "compare proportions under a declared difference rule"
+      ],
+      "required_formats": [
+        "clinical cohort table",
+        "published cohort definitions"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "Patient and event records need distinct denominators; descriptive differences do not establish treatment effects."
+      ]
+    },
+    "sequence-construct-accounting": {
+      "required_stages": [
+        "resolve sequence version and annotated boundaries",
+        "track component order and cleavage or tag bookkeeping",
+        "check complete sequence or mass outputs"
+      ],
+      "required_formats": [
+        "sequence annotations",
+        "FASTA"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "A construction endpoint needs separate review before authoring; observed-sequence analysis does not by itself cover engineered constructs."
+      ]
+    },
+    "ligand-charge-state": {
+      "required_stages": [
+        "identify the relevant ligand, chain and chemical component",
+        "resolve protonation, tautomer and covalent state",
+        "export charge, formula or bond-order evidence"
+      ],
+      "required_formats": [
+        "PDB or mmCIF",
+        "chemical component definitions"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "A deposited chemical component and the bound chemical state may differ; hydrogen placement and pH assumptions must be explicit."
+      ]
+    },
+    "structure-affinity-ranking": {
+      "required_stages": [
+        "map analog identities and structural changes",
+        "compare ligand interactions in a specified binding site",
+        "rank affinity hypotheses with their evidence"
+      ],
+      "required_formats": [
+        "molecular structures",
+        "protein-ligand coordinates"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "A predicted ranking is not measured affinity; an independent deterministic task needs observed affinity evidence or a frozen model and clearly scoped claims."
+      ]
+    },
+    "structure-catalog-filtering": {
+      "required_stages": [
+        "freeze structural database release and inclusion rules",
+        "resolve species, methods, chains and sequence variants",
+        "export all qualifying structure identities"
+      ],
+      "required_formats": [
+        "structure metadata",
+        "PDB or mmCIF",
+        "reference sequence"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "Date cutoff, entity versus chain, mutation count and species mixtures change the eligible structure set."
+      ]
+    },
+    "clinical-compound-catalog": {
+      "required_stages": [
+        "reconcile parent compounds and mechanism identities",
+        "join clinical development or regulatory evidence at a date cutoff",
+        "export a deduplicated compound table"
+      ],
+      "required_formats": [
+        "compound and mechanism tables",
+        "dated clinical or regulatory records"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "Development phase metadata alone does not establish regulatory approval; alternate forms and targets need explicit deduplication."
+      ]
+    },
+    "ligand-identity": {
+      "required_stages": [
+        "select the deposited ligand entity or author chain",
+        "reconstruct connectivity and stereochemistry under the stated state convention",
+        "export a canonical chemical identifier"
+      ],
+      "required_formats": [
+        "PDB or mmCIF",
+        "chemical component definitions",
+        "SMILES or InChIKey"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "A coordinate fragment, covalent intermediate and free precursor are different chemical objects."
+      ]
+    },
+    "molecular-descriptors": {
+      "required_stages": [
+        "resolve molecular connectivity and state",
+        "calculate the requested descriptor under pinned definitions",
+        "export values or alert identities with units and rounding"
+      ],
+      "required_formats": [
+        "molecular graph",
+        "SMILES",
+        "PDB or mmCIF"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "Pin descriptor definitions, alert catalogs, stereochemistry and ion/adduct conventions; an exact string can hide a wrong molecular identity."
+      ]
+    },
+    "target-evidence-ranking": {
+      "required_stages": [
+        "freeze gene, target and evidence identifiers",
+        "join the required variant, expression, function or bioactivity evidence",
+        "apply eligibility, ranking and tie rules",
+        "export the selected target and an exclusion ledger"
+      ],
+      "required_formats": [
+        "gene and variant annotations",
+        "expression or bioactivity tables"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "Evidence types, accession versions, species and target identity must survive joins; association scores do not establish causal mechanisms."
+      ]
+    },
+    "ligand-contact-geometry": {
+      "required_stages": [
+        "select coordinates, chain, conformer and relevant atoms",
+        "apply donor, acceptor, distance and angular criteria",
+        "enumerate every qualifying interaction and aggregate it"
+      ],
+      "required_formats": [
+        "PDB or mmCIF",
+        "atom and chemical component definitions"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "Hydrogen placement, waters, intra/intermolecular contacts and metal coordination need explicit counting rules."
+      ]
+    },
+    "binding-site-comparison": {
+      "required_stages": [
+        "align structures and reconcile residue or atom identities",
+        "measure local conformations or pocket geometry",
+        "export the selected residue, atom or bond with measurements"
+      ],
+      "required_formats": [
+        "PDB or mmCIF",
+        "molecular graph"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "Nearest geometry alone does not prove a chemical modification will improve binding; validation needs a defined geometric decision."
+      ]
+    },
+    "annotated-peptide-processing": {
+      "required_stages": [
+        "resolve canonical sequence and annotated boundaries",
+        "apply cleavage and modification rules",
+        "export peptide sequence or mass-to-charge values"
+      ],
+      "required_formats": [
+        "versioned protein sequence",
+        "feature annotations"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "Keep mature-chain boundaries, cleavage exceptions, modification sites and charge conventions explicit."
+      ]
+    },
+    "structure-metal-survey": {
+      "required_stages": [
+        "filter dated structure metadata",
+        "identify active-site metals and coordinating atoms per chain",
+        "aggregate chain-level distances and export provenance"
+      ],
+      "required_formats": [
+        "PDB or mmCIF",
+        "structure metadata"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "Per-chain means and pooled atom means differ; structural-resolution filters do not replace chemical coordination rules."
+      ]
+    },
+    "bioactivity-selection": {
+      "required_stages": [
+        "join compound, assay and publication identities",
+        "normalize endpoint, relation and units",
+        "select and rank eligible measured activities",
+        "export complete measurement and provenance rows"
+      ],
+      "required_formats": [
+        "bioactivity table",
+        "CSV or database snapshot"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "Censored and exact measurements cannot be ranked interchangeably; replicate and parent-compound aggregation needs a specified rule."
+      ]
+    },
+    "patent-descriptor-selection": {
+      "required_stages": [
+        "freeze the publication version",
+        "extract compound identities and assay tables",
+        "apply missingness, censoring, ratio or percentile selection",
+        "calculate descriptors for the selected structures"
+      ],
+      "required_formats": [
+        "patent or paper",
+        "assay tables",
+        "chemical structures"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "Quantile definitions, ties and censored values can change the selected compound; structure extraction must be independently checked."
+      ]
+    },
+    "multisource-network-joins": {
+      "required_stages": [
+        "link literature-defined biological entities to versioned identifiers",
+        "join expression, association and interaction evidence",
+        "carry dependent selections into structural or model analysis",
+        "export the full decision chain"
+      ],
+      "required_formats": [
+        "literature records",
+        "expression and interaction tables",
+        "structure or model inputs"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "A network association is not causal evidence; every dependent selection and model output needs explicit provenance."
+      ]
+    },
+    "assay-regression-influence": {
+      "required_stages": [
+        "join complete paired assay measurements",
+        "transform potency into consistent units",
+        "fit specified regressions under leave-one-out omissions",
+        "compare fit criteria and identify the influential observation"
+      ],
+      "required_formats": [
+        "paired assay tables",
+        "compound identifiers"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "Leaving one observation out and evaluating predictive cross-validation are different procedures; the intended statistic must be specified."
+      ]
+    },
+    "patent-compound-selection": {
+      "required_stages": [
+        "pin publication and extract compound assay rows",
+        "apply endpoint, censoring and selectivity rules",
+        "resolve ties and selected structure identity",
+        "export canonical identity and supporting assay values"
+      ],
+      "required_formats": [
+        "patent or paper",
+        "assay tables",
+        "SMILES"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "Values at assay limits require the stated censoring interpretation; never treat a reported bound as an exact potency."
+      ]
+    },
+    "target-to-chemical-neighbors": {
+      "required_stages": [
+        "rank eligible biological targets",
+        "map the selected target to bioactivity records",
+        "select a measured compound under tie rules",
+        "search structural neighbors with explicit duplicate exclusions"
+      ],
+      "required_formats": [
+        "target evidence tables",
+        "bioactivity tables",
+        "molecular fingerprints"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "The query compound, salts, isotopologues and stereoisomers can dominate similarity results unless the exclusion policy is defined."
+      ]
+    },
+    "transcript-folding": {
+      "required_stages": [
+        "resolve literature entities to versioned transcript accessions",
+        "retrieve complete observed transcript sequences",
+        "run a pinned folding model with stated conditions",
+        "export transcript identities, lengths and predicted energies"
+      ],
+      "required_formats": [
+        "transcript FASTA",
+        "literature metadata",
+        "folding output"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "Predicted free energy is a computational result; transcript selection, thermodynamic parameters and date consistency require validation."
+      ]
+    },
+    "protein-identity-ranking": {
+      "required_stages": [
+        "identify the experimentally supported candidate proteins",
+        "reconcile species and sequence isoforms",
+        "align sequences under a fixed method",
+        "rank identities with explicit denominators"
+      ],
+      "required_formats": [
+        "protein FASTA",
+        "literature candidate list"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "Local/global alignment and identity denominators can change the ordering."
+      ]
+    },
+    "assay-selected-common-substructure": {
+      "required_stages": [
+        "freeze the exact patent publication",
+        "select compounds using measured assays and censoring rules",
+        "compute a common substructure under explicit graph matching options",
+        "export the structure and selection ledger"
+      ],
+      "required_formats": [
+        "patent assay table",
+        "molecular graph",
+        "SMILES or SMARTS"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "A maximum common substructure may be nonunique; define atom/bond matching, connection-point notation and acceptable alternatives."
+      ]
+    },
+    "target-affinity-model": {
+      "required_stages": [
+        "select eligible compounds and clinical targets",
+        "resolve canonical target sequences and species fallback",
+        "run a pinned affinity model",
+        "rank outputs with declared units and uncertainty limits"
+      ],
+      "required_formats": [
+        "SMILES",
+        "protein FASTA",
+        "model output"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "Frozen model scores are not observed affinities or evidence of efficacy/toxicity; model weights, units and deterministic inference remain to be inspected."
+      ]
+    },
+    "rnaseq-to-homology": {
+      "required_stages": [
+        "select the donor cohort and expression libraries",
+        "fit a declared count model and identify upregulated precursors",
+        "screen cross-species homologs",
+        "join mature products and export sequence features with statistics"
+      ],
+      "required_formats": [
+        "RNA count matrix",
+        "donor metadata",
+        "miRNA sequence annotations"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "Raw and adjusted p-values differ; preserve donor replication, precursor-to-mature multiplicity, alignment denominator and source versions."
+      ]
+    },
+    "epigenetic-marker-evidence": {
+      "required_stages": [
+        "join regions across independent cohorts",
+        "filter directional effects, uncertainty and complete performance data",
+        "intersect genomic annotations using a fixed assembly",
+        "join independent literature evidence and rank candidates",
+        "export accepted and rejected candidates"
+      ],
+      "required_formats": [
+        "BED",
+        "TSV",
+        "genome annotation",
+        "literature evidence"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "Preserve cohort independence, interval conventions and ranking order; diagnostic evidence needs specimen context and cannot be inferred from an overlap."
+      ]
+    },
+    "domain-confidence-comparison": {
+      "required_stages": [
+        "extract alternative domain boundaries from publications",
+        "map each boundary convention to a versioned sequence and structure",
+        "aggregate per-residue prediction confidence",
+        "export all ranges and the selected sequence"
+      ],
+      "required_formats": [
+        "PDF",
+        "predicted structure",
+        "protein FASTA"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "Prediction confidence does not establish binding or biological activity; numbering offsets and inclusive boundaries must be resolved."
+      ]
+    },
+    "screen-hit-artifact-filtering": {
+      "required_stages": [
+        "join screen responses, viability and compound identities",
+        "exclude assay artifacts and contradictory pharmacology under explicit rules",
+        "join independent drug catalogs",
+        "export complete hit and exclusion tables"
+      ],
+      "required_formats": [
+        "screen assay table",
+        "CSV drug catalogs"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "Cell death can mimic activity; missing or contradictory evidence must not silently become an active call."
+      ]
+    }
+  },
+  "workflow_patterns": {
+    "cohort-proportions": [
+      "69b025e20c10fe76b7aaf812"
+    ],
+    "sequence-construct-accounting": [
+      "69b03699a937c74c3ac42225",
+      "69b43e08f5a8ac5b38e3c611",
+      "69b43e08f5a8ac5b38e3c626"
+    ],
+    "ligand-charge-state": [
+      "69b03699a937c74c3ac4222a",
+      "69b34fde93a696047cbf9c77",
+      "69b43e08f5a8ac5b38e3c60e",
+      "69b43e08f5a8ac5b38e3c637",
+      "69b43e08f5a8ac5b38e3c63b",
+      "69e6b5dade74c4d1f5fa9351",
+      "69e6b5dade74c4d1f5fa9360",
+      "69fa3ea7653acbc6d63b0184"
+    ],
+    "structure-affinity-ranking": [
+      "69b03699a937c74c3ac4222b",
+      "69b43e08f5a8ac5b38e3c5e2",
+      "69b43e08f5a8ac5b38e3c5f5",
+      "69b43e08f5a8ac5b38e3c5f6",
+      "69b43e08f5a8ac5b38e3c5f8",
+      "69b43e08f5a8ac5b38e3c5f9",
+      "69b43e08f5a8ac5b38e3c5fc"
+    ],
+    "structure-catalog-filtering": [
+      "69b03699a937c74c3ac4222c",
+      "69b43e08f5a8ac5b38e3c62b",
+      "69fa3ea7653acbc6d63b017f"
+    ],
+    "target-evidence-ranking": [
+      "69b03699a937c74c3ac4222f",
+      "69b03699a937c74c3ac42233",
+      "69b43e08f5a8ac5b38e3c5e9",
+      "69b43e08f5a8ac5b38e3c5f0",
+      "6a1d2459970e88cd7cd5b551"
+    ],
+    "ligand-contact-geometry": [
+      "69b34fde93a696047cbf9c6d",
+      "69b43e08f5a8ac5b38e3c5fb",
+      "69b43e08f5a8ac5b38e3c603",
+      "69b43e08f5a8ac5b38e3c615",
+      "69e6b5dade74c4d1f5fa9371"
+    ],
+    "binding-site-comparison": [
+      "69b34fde93a696047cbf9c73",
+      "69b43e08f5a8ac5b38e3c634",
+      "69b43e08f5a8ac5b38e3c638"
+    ],
+    "molecular-descriptors": [
+      "69b34fde93a696047cbf9c76",
+      "69b34fde93a696047cbf9c7f",
+      "69e6b5dade74c4d1f5fa9335",
+      "69e6b5dade74c4d1f5fa933a",
+      "69e6b5dade74c4d1f5fa933c",
+      "69e6b5dade74c4d1f5fa9368",
+      "69e6b5dade74c4d1f5fa936a",
+      "69e6b5dade74c4d1f5fa9387",
+      "69fa3ea7653acbc6d63b0183"
+    ],
+    "clinical-compound-catalog": [
+      "69b34fde93a696047cbf9c78",
+      "69b43e08f5a8ac5b38e3c61f"
+    ],
+    "ligand-identity": [
+      "69b34fde93a696047cbf9c7c",
+      "69e6b5dade74c4d1f5fa937e",
+      "69fa3ea7653acbc6d63b0177",
+      "69fa3ea7653acbc6d63b01b2"
+    ],
+    "annotated-peptide-processing": [
+      "69b43e08f5a8ac5b38e3c5f1",
+      "69e6b5dade74c4d1f5fa934c"
+    ],
+    "structure-metal-survey": [
+      "69b43e08f5a8ac5b38e3c5f3"
+    ],
+    "bioactivity-selection": [
+      "69b43e08f5a8ac5b38e3c5fa",
+      "69b43e08f5a8ac5b38e3c63e",
+      "69b43e08f5a8ac5b38e3c642",
+      "6a19dd9c5446b4eb01f76209",
+      "6a1d2459970e88cd7cd5b558"
+    ],
+    "patent-descriptor-selection": [
+      "69b43e08f5a8ac5b38e3c600",
+      "69b43e08f5a8ac5b38e3c606",
+      "69e6b5dade74c4d1f5fa9329",
+      "69e6b5dade74c4d1f5fa935f",
+      "69fa3ea7653acbc6d63b01b5",
+      "69fa3ea7653acbc6d63b01c1"
+    ],
+    "multisource-network-joins": [
+      "69b43e08f5a8ac5b38e3c60b",
+      "69b43e08f5a8ac5b38e3c620"
+    ],
+    "assay-regression-influence": [
+      "69b43e08f5a8ac5b38e3c616"
+    ],
+    "patent-compound-selection": [
+      "69b43e08f5a8ac5b38e3c617",
+      "69e6b5dade74c4d1f5fa9338",
+      "69fa3ea7653acbc6d63b0192",
+      "69fa3ea7653acbc6d63b01ab"
+    ],
+    "target-to-chemical-neighbors": [
+      "69b43e08f5a8ac5b38e3c618",
+      "69b43e08f5a8ac5b38e3c625"
+    ],
+    "transcript-folding": [
+      "69b43e08f5a8ac5b38e3c63f"
+    ],
+    "protein-identity-ranking": [
+      "69e6b5dade74c4d1f5fa9350"
+    ],
+    "assay-selected-common-substructure": [
+      "69fa3ea7653acbc6d63b017a",
+      "69fa3ea7653acbc6d63b01b1"
+    ],
+    "target-affinity-model": [
+      "6a172cd01d78a1a5ec9f5bc7"
+    ],
+    "rnaseq-to-homology": [
+      "6a172cd01d78a1a5ec9f5bca"
+    ],
+    "epigenetic-marker-evidence": [
+      "6a19dd9c5446b4eb01f7620b"
+    ],
+    "domain-confidence-comparison": [
+      "6a1d2459970e88cd7cd5b556"
+    ],
+    "screen-hit-artifact-filtering": [
+      "6a232796afa0e46251ad3d57"
+    ]
+  },
+  "tasks": [
+    {
+      "task_id": "69b025e20c10fe76b7aaf812",
+      "source_category": "molecular_biology",
+      "workflow_family": "cohort-proportions",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "7cb0915e217cba2053ed1ad4468c84393e400df317522b7a449f0397d7768d9e",
+      "instruction_review": "full-question-reviewed",
+      "endpoint_caveats": [
+        "Define the treatment-category rule; use one record per patient when a clinical dataset repeats subjects for distinct events."
+      ],
+      "required_output_kind": "binary comparison and both cohort percentages"
+    },
+    {
+      "task_id": "69b03699a937c74c3ac42225",
+      "source_category": "molecular_biology",
+      "workflow_family": "sequence-construct-accounting",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "50597803d11f40007941883e9a2e05ce10ab566fd835f28dcabaf3f592a11b57",
+      "instruction_review": "full-question-reviewed",
+      "endpoint_caveats": [
+        "Affinity capture, cleavage-site presence and retained protein interactions are separate requirements beyond construct sequence bookkeeping."
+      ],
+      "required_output_kind": "complete sequence records or ordered protein masses"
+    },
+    {
+      "task_id": "69b03699a937c74c3ac4222a",
+      "source_category": "structural_reasoning",
+      "workflow_family": "ligand-charge-state",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "bad0a634c68e8a84b613a20ed283b14905ffa41a74cfb00ab101bf16f69a2e99",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "signed charge, formula or named-atom bond property",
+      "declared_structure_accessions": [
+        "7RT2"
+      ]
+    },
+    {
+      "task_id": "69b03699a937c74c3ac4222b",
+      "source_category": "sar_affinity",
+      "workflow_family": "structure-affinity-ranking",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "f0290ae0a970e29d3dc37ad7d4754915692f5dc70c695f0c75fda2fa8a5739f3",
+      "instruction_review": "full-question-reviewed",
+      "endpoint_caveats": [
+        "The prompt specifies pose, torsion and electrostatic ranking choices; required force-field, charge and sampling details need resolution."
+      ],
+      "required_output_kind": "ordered compound labels",
+      "declared_structure_accessions": [
+        "7K6O"
+      ]
+    },
+    {
+      "task_id": "69b03699a937c74c3ac4222c",
+      "source_category": "database_screening",
+      "workflow_family": "structure-catalog-filtering",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "96095f06cdeafcc97ae9a60273e414661ae5c781ec98919d4b120b90886925a8",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "eligible structure identities and requested metadata"
+    },
+    {
+      "task_id": "69b03699a937c74c3ac4222f",
+      "source_category": "target_id_genetics",
+      "workflow_family": "target-evidence-ranking",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "0e549fcd8de698b3cfc6ab02859f516668c6ceba196fe2a51d08ae8ae63cc18f",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "ranked target or compound identity with requested evidence"
+    },
+    {
+      "task_id": "69b03699a937c74c3ac42233",
+      "source_category": "target_id_genetics",
+      "workflow_family": "target-evidence-ranking",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "3af1139b61fdfa91353df4a0cc5f8cc86b7fe5ff0db6a090beba820248d3f4ae",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "ranked target or compound identity with requested evidence"
+    },
+    {
+      "task_id": "69b34fde93a696047cbf9c6d",
+      "source_category": "structural_reasoning",
+      "workflow_family": "ligand-contact-geometry",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "38982427225cff9eb5f1738eaea3d107c03e97d80290f12f58836e6ae49e8b6b",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "interaction count or aggregate distance",
+      "declared_structure_accessions": [
+        "7BUC"
+      ]
+    },
+    {
+      "task_id": "69b34fde93a696047cbf9c73",
+      "source_category": "structural_reasoning",
+      "workflow_family": "binding-site-comparison",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "db273e238be110283461ce9dc94123d01502b0625965b0c7708a72504aa0d0fa",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "residue identity, atom identity or atom pair",
+      "declared_structure_accessions": [
+        "6USX",
+        "6UT0"
+      ]
+    },
+    {
+      "task_id": "69b34fde93a696047cbf9c76",
+      "source_category": "cheminformatics",
+      "workflow_family": "molecular-descriptors",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "f7c077ef1bb9c6b30965524ca02530a9722d5e4d3c50dd740e9c787a0429622f",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "descriptor values or alert identifiers",
+      "declared_structure_accessions": [
+        "8GD4"
+      ]
+    },
+    {
+      "task_id": "69b34fde93a696047cbf9c77",
+      "source_category": "cheminformatics",
+      "workflow_family": "ligand-charge-state",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "e8b489b549262a6085c0861bbb55322499512cf2268e22a77e7b08e9426e2b68",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "signed charge, formula or named-atom bond property"
+    },
+    {
+      "task_id": "69b34fde93a696047cbf9c78",
+      "source_category": "database_screening",
+      "workflow_family": "clinical-compound-catalog",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "9a6457e7072462338cc8070f1b336348f9b9efbb2feaeba34265c5976112a3a8",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "deduplicated compound identities and clinical evidence"
+    },
+    {
+      "task_id": "69b34fde93a696047cbf9c7c",
+      "source_category": "structural_reasoning",
+      "workflow_family": "ligand-identity",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "61936be980e726c4d02c8f53a7fe156378031d8b46b49dc8c74f19ca3c430c6f",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "canonical molecular identifier",
+      "declared_structure_accessions": [
+        "7EGU"
+      ]
+    },
+    {
+      "task_id": "69b34fde93a696047cbf9c7f",
+      "source_category": "cheminformatics",
+      "workflow_family": "molecular-descriptors",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "1c1a4425fe85e7fa955a8560b245d85dd5fd4e4d23a77c466807c8057ec32ac5",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "descriptor values or alert identifiers",
+      "declared_structure_accessions": [
+        "8B0E"
+      ]
+    },
+    {
+      "task_id": "69b43e08f5a8ac5b38e3c5e2",
+      "source_category": "sar_affinity",
+      "workflow_family": "structure-affinity-ranking",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "9cc504cf398287e897d5cc4e3e118b4cd6d1b08cbbf89ed477befafffe68f0cc",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "ordered compound labels",
+      "declared_structure_accessions": [
+        "6UL5"
+      ]
+    },
+    {
+      "task_id": "69b43e08f5a8ac5b38e3c5e9",
+      "source_category": "target_id_genetics",
+      "workflow_family": "target-evidence-ranking",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "6d7c0300144def13df30164d787b3e0c6c9cbc9bd05ae525d5c38f9f0eea610b",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "ranked target or compound identity with requested evidence"
+    },
+    {
+      "task_id": "69b43e08f5a8ac5b38e3c5f0",
+      "source_category": "target_id_genetics",
+      "workflow_family": "target-evidence-ranking",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "a2207cdf4ef7268b04cd346dccc2a1e20e12fe8b0dc8fd955f78e3fbe3f13758",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "ranked target or compound identity with requested evidence"
+    },
+    {
+      "task_id": "69b43e08f5a8ac5b38e3c5f1",
+      "source_category": "molecular_biology",
+      "workflow_family": "annotated-peptide-processing",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "c3b1a759e0e527548aaf1c019e9fdc022f15327baf3cda5740702cdc67dc518c",
+      "instruction_review": "full-question-reviewed",
+      "endpoint_caveats": [
+        "Map the homologous residue across species before digestion; theoretical peptide mass alone cannot establish site-localized phosphorylation."
+      ],
+      "required_output_kind": "peptide sequence or mass-to-charge values"
+    },
+    {
+      "task_id": "69b43e08f5a8ac5b38e3c5f3",
+      "source_category": "database_screening",
+      "workflow_family": "structure-metal-survey",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "e90092c62214ec27c21f644f3f5cddfa6b54f42dd234b1d8fae6580e8800f379",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "complete structure, coordination and provenance table"
+    },
+    {
+      "task_id": "69b43e08f5a8ac5b38e3c5f5",
+      "source_category": "sar_affinity",
+      "workflow_family": "structure-affinity-ranking",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "13aee661d8c18acd872403a67d8369c3a600579eace823dc43d94d91bbed85dd",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "ordered compound labels",
+      "declared_structure_accessions": [
+        "6KPS"
+      ]
+    },
+    {
+      "task_id": "69b43e08f5a8ac5b38e3c5f6",
+      "source_category": "sar_affinity",
+      "workflow_family": "structure-affinity-ranking",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "37d436f3890ef88b343ecbffad03f64e7a5495ea929bfb37df137e823c407b95",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "ordered compound labels",
+      "declared_structure_accessions": [
+        "8G44"
+      ]
+    },
+    {
+      "task_id": "69b43e08f5a8ac5b38e3c5f8",
+      "source_category": "sar_affinity",
+      "workflow_family": "structure-affinity-ranking",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "f1ab9c4f50fcb58a9adfa957d72f50715b9096e9dae0442caefc3687b15f1940",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "ordered compound labels",
+      "declared_structure_accessions": [
+        "7K6M"
+      ]
+    },
+    {
+      "task_id": "69b43e08f5a8ac5b38e3c5f9",
+      "source_category": "sar_affinity",
+      "workflow_family": "structure-affinity-ranking",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "8ffe8a40701d740aed9d63390d01405483894b7c37aebdf774e8ec014de8ea29",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "ordered compound labels",
+      "declared_structure_accessions": [
+        "7SLX"
+      ]
+    },
+    {
+      "task_id": "69b43e08f5a8ac5b38e3c5fa",
+      "source_category": "database_screening",
+      "workflow_family": "bioactivity-selection",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "495dcdf5fe9a0820f42c188bdf992dd4a31e7d4dfbaeae3e9443bac54e162586",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "ranked activity rows, identifiers or selected-compound properties"
+    },
+    {
+      "task_id": "69b43e08f5a8ac5b38e3c5fb",
+      "source_category": "structural_reasoning",
+      "workflow_family": "ligand-contact-geometry",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "7fae356503c21ad5e045ba3e513b46a3b1803feaa779966c917846ddf3aeb17a",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "interaction count or aggregate distance",
+      "declared_structure_accessions": [
+        "7K6M"
+      ]
+    },
+    {
+      "task_id": "69b43e08f5a8ac5b38e3c5fc",
+      "source_category": "sar_affinity",
+      "workflow_family": "structure-affinity-ranking",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "48110bb5492bc63244ce72ee54e804f93690fbccf82b845abb075a5dd9dbadeb",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "ordered compound labels",
+      "declared_structure_accessions": [
+        "6TPX"
+      ]
+    },
+    {
+      "task_id": "69b43e08f5a8ac5b38e3c600",
+      "source_category": "patent_mining",
+      "workflow_family": "patent-descriptor-selection",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "f1591256d83f50e19ea8a18f5b1d1f9ea4cd57d7e7d46fc6b6dd6850c2bff281",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "descriptors of the eligible selected compound"
+    },
+    {
+      "task_id": "69b43e08f5a8ac5b38e3c603",
+      "source_category": "structural_reasoning",
+      "workflow_family": "ligand-contact-geometry",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "ac24a2eeb3093726071642e787f7877cae35ad4009cf060ef12502f439143bee",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "interaction count or aggregate distance",
+      "declared_structure_accessions": [
+        "6UO5"
+      ]
+    },
+    {
+      "task_id": "69b43e08f5a8ac5b38e3c606",
+      "source_category": "patent_mining",
+      "workflow_family": "patent-descriptor-selection",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "d5a700193bb3ce0ec837e0f89d41cb1d3a51914aee1b98db3ae64bd2e65e147c",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "descriptors of the eligible selected compound"
+    },
+    {
+      "task_id": "69b43e08f5a8ac5b38e3c60b",
+      "source_category": "target_id_genetics",
+      "workflow_family": "multisource-network-joins",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "51d61163e316498e609d4f2f7f2bbb08cf6b77a68bff7c3ea55bbe41165b4afe",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "selected interaction evidence or model prediction table"
+    },
+    {
+      "task_id": "69b43e08f5a8ac5b38e3c60e",
+      "source_category": "structural_reasoning",
+      "workflow_family": "ligand-charge-state",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "a5cb8cbedbaaaef416b9626808bdd52d51c5283813f3b0a5a0002b406e1872d9",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "signed charge, formula or named-atom bond property",
+      "declared_structure_accessions": [
+        "7KYF"
+      ]
+    },
+    {
+      "task_id": "69b43e08f5a8ac5b38e3c611",
+      "source_category": "molecular_biology",
+      "workflow_family": "sequence-construct-accounting",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "dcc6ebcd3517d0e49226d1230129c2f5ab89159336ef967e2486fc48cb7e5a89",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "complete sequence records or ordered protein masses"
+    },
+    {
+      "task_id": "69b43e08f5a8ac5b38e3c615",
+      "source_category": "structural_reasoning",
+      "workflow_family": "ligand-contact-geometry",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "960c3e2ac41bc6f00e33c58668875d2a0b787036e9129961b9a60363efa00469",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "interaction count or aggregate distance",
+      "declared_structure_accessions": [
+        "6UL5"
+      ]
+    },
+    {
+      "task_id": "69b43e08f5a8ac5b38e3c616",
+      "source_category": "patent_mining",
+      "workflow_family": "assay-regression-influence",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "955bb54e8e11c3c0607bb784073b5fae48733e588ca1879e35aff6302b879d8f",
+      "instruction_review": "full-question-reviewed",
+      "endpoint_caveats": [
+        "Clarify whether the omitted compound optimizes in-sample fit after deletion or a cross-validated predictive statistic; they are not interchangeable."
+      ],
+      "required_output_kind": "chemical identifier for the selected observation"
+    },
+    {
+      "task_id": "69b43e08f5a8ac5b38e3c617",
+      "source_category": "patent_mining",
+      "workflow_family": "patent-compound-selection",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "9a51c2c744c0ccef574b7831d620a2e8b8c1804f58d0b5e4ccefca489ff647fe",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "canonical identifier for the assay-selected compound"
+    },
+    {
+      "task_id": "69b43e08f5a8ac5b38e3c618",
+      "source_category": "target_id_genetics",
+      "workflow_family": "target-to-chemical-neighbors",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "d7f89edf0f69b445bee72818746f65a2d6288fd208321ea155946c430d3b50d6",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "compound identities, activity and structural similarity"
+    },
+    {
+      "task_id": "69b43e08f5a8ac5b38e3c61f",
+      "source_category": "database_screening",
+      "workflow_family": "clinical-compound-catalog",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "ad8288db86ededde77288d6238b849f5745cbbcf8e83f275907be2ef080a4c68",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "deduplicated compound identities and clinical evidence"
+    },
+    {
+      "task_id": "69b43e08f5a8ac5b38e3c620",
+      "source_category": "target_id_genetics",
+      "workflow_family": "multisource-network-joins",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "1b849fd988da3b12fc4cd767c99ac774198895ff5716f2dd8cf1a8a42e5929fb",
+      "instruction_review": "full-question-reviewed",
+      "endpoint_caveats": [
+        "The title says six steps, while the full prompt enumerates seven; the final metabolism prediction has an unspecified model."
+      ],
+      "required_output_kind": "selected interaction evidence or model prediction table"
+    },
+    {
+      "task_id": "69b43e08f5a8ac5b38e3c625",
+      "source_category": "target_id_genetics",
+      "workflow_family": "target-to-chemical-neighbors",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "a38057e3cc143ff227693537ab2f30af6da8016f1409b3c12e468cb0a11bbdaa",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "compound identities, activity and structural similarity"
+    },
+    {
+      "task_id": "69b43e08f5a8ac5b38e3c626",
+      "source_category": "molecular_biology",
+      "workflow_family": "sequence-construct-accounting",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "87aa7a394ecb5950154bc55dc6de959cbf056f84070d354c05a5bae39d20302c",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "complete sequence records or ordered protein masses"
+    },
+    {
+      "task_id": "69b43e08f5a8ac5b38e3c62b",
+      "source_category": "database_screening",
+      "workflow_family": "structure-catalog-filtering",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "854150ea57d762beef17cd0c391249921ab54bda16c9e197bd0c6f9aa001bb3e",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "eligible structure identities and requested metadata"
+    },
+    {
+      "task_id": "69b43e08f5a8ac5b38e3c634",
+      "source_category": "structural_reasoning",
+      "workflow_family": "binding-site-comparison",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "fc6c54aa14ffda8ccc9fb2ff746f32d120e0364ea631151e5f078378b0c92ebd",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "residue identity, atom identity or atom pair",
+      "declared_structure_accessions": [
+        "5V9U",
+        "6P8Z"
+      ]
+    },
+    {
+      "task_id": "69b43e08f5a8ac5b38e3c637",
+      "source_category": "structural_reasoning",
+      "workflow_family": "ligand-charge-state",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "206ed7a4ca8f49f2f11bd84748068af9b95221c18eadc3b462eec2ea67578b60",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "signed charge, formula or named-atom bond property",
+      "declared_structure_accessions": [
+        "5J1E"
+      ]
+    },
+    {
+      "task_id": "69b43e08f5a8ac5b38e3c638",
+      "source_category": "structural_reasoning",
+      "workflow_family": "binding-site-comparison",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "ee58a14ef99c9b14c16f4da3edbab1dd8852c0f2346cb6a0cb5c1faad18cb2d2",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "residue identity, atom identity or atom pair",
+      "declared_structure_accessions": [
+        "6PGP"
+      ]
+    },
+    {
+      "task_id": "69b43e08f5a8ac5b38e3c63b",
+      "source_category": "structural_reasoning",
+      "workflow_family": "ligand-charge-state",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "eb8eb25892bf3a3896c038ee0fb20894442100aeedb196f7ed178fbb8ec9f9f4",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "signed charge, formula or named-atom bond property",
+      "declared_structure_accessions": [
+        "6ZE8"
+      ]
+    },
+    {
+      "task_id": "69b43e08f5a8ac5b38e3c63e",
+      "source_category": "database_screening",
+      "workflow_family": "bioactivity-selection",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "a93a0ca57642d2729ecc9504e70d2913276910323c01a63d82e7be1a01683165",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "ranked activity rows, identifiers or selected-compound properties"
+    },
+    {
+      "task_id": "69b43e08f5a8ac5b38e3c63f",
+      "source_category": "molecular_biology",
+      "workflow_family": "transcript-folding",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "cb1990861a3cd442bc68106c3c4b72fd1ac0333b4faceffe1407b4ea9687b2ff",
+      "instruction_review": "full-question-reviewed",
+      "endpoint_caveats": [
+        "Verify that the cited publication existed at the requested historical cutoff before treating its entities as available."
+      ],
+      "required_output_kind": "transcript identity, length and predicted energy table"
+    },
+    {
+      "task_id": "69b43e08f5a8ac5b38e3c642",
+      "source_category": "database_screening",
+      "workflow_family": "bioactivity-selection",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "b387a510c70e2f56c5e71af7373b0e7bfb574ff8a0c1dd88134240581981d040",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "ranked activity rows, identifiers or selected-compound properties"
+    },
+    {
+      "task_id": "69e6b5dade74c4d1f5fa9329",
+      "source_category": "patent_mining",
+      "workflow_family": "patent-descriptor-selection",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "4bcfb25e582d1273b636edb39ed8297c223d2da9e48d97066b491d79a4c2b38d",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "descriptors of the eligible selected compound"
+    },
+    {
+      "task_id": "69e6b5dade74c4d1f5fa9335",
+      "source_category": "cheminformatics",
+      "workflow_family": "molecular-descriptors",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "407fc1c080c4125eae61699c29494654707e0a9a8b152d60f94d8c73548f2f16",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "descriptor values or alert identifiers",
+      "declared_structure_accessions": [
+        "9PZY"
+      ]
+    },
+    {
+      "task_id": "69e6b5dade74c4d1f5fa9338",
+      "source_category": "patent_mining",
+      "workflow_family": "patent-compound-selection",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "4c546c52fcf7653b21a5733118af1ace7649e731f345081f0ed5a9bb52209cc7",
+      "instruction_review": "full-question-reviewed",
+      "endpoint_caveats": [
+        "The prompt gives a special censoring rule at an enzyme-assay reporting limit; it must be applied before ratio comparisons."
+      ],
+      "required_output_kind": "canonical identifier for the assay-selected compound"
+    },
+    {
+      "task_id": "69e6b5dade74c4d1f5fa933a",
+      "source_category": "cheminformatics",
+      "workflow_family": "molecular-descriptors",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "887484f09b8a8513c83c0ef4a5d930445eb3112f70c71ebe8efb629201a131eb",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "descriptor values or alert identifiers",
+      "declared_structure_accessions": [
+        "9C80"
+      ]
+    },
+    {
+      "task_id": "69e6b5dade74c4d1f5fa933c",
+      "source_category": "cheminformatics",
+      "workflow_family": "molecular-descriptors",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "461a836ab2560bc46745a411105a0536115693876a83d81103a2c8bee1ddd750",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "descriptor values or alert identifiers",
+      "declared_structure_accessions": [
+        "6NR0"
+      ]
+    },
+    {
+      "task_id": "69e6b5dade74c4d1f5fa934c",
+      "source_category": "molecular_biology",
+      "workflow_family": "annotated-peptide-processing",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "695d1d61e8bc938b334a6fa8ae6c71ea2be57ed7437a3b06e4672646ac983bd6",
+      "instruction_review": "full-question-reviewed",
+      "endpoint_caveats": [
+        "Digest the complete precursor before selecting peptides wholly inside an annotated mature chain; boundary-first digestion is a different operation."
+      ],
+      "required_output_kind": "peptide sequence or mass-to-charge values"
+    },
+    {
+      "task_id": "69e6b5dade74c4d1f5fa9350",
+      "source_category": "target_id_genetics",
+      "workflow_family": "protein-identity-ranking",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "f99f64bc7c4519121844cc0ca03d67d91c0e9c943047e0edf8df99669830cf24",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "selected experimentally supported protein target"
+    },
+    {
+      "task_id": "69e6b5dade74c4d1f5fa9351",
+      "source_category": "structural_reasoning",
+      "workflow_family": "ligand-charge-state",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "a5db1aa78027f4a8fad3d7190c29c380963c18c352c6e0e3cb13bcf08ddee094",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "signed charge, formula or named-atom bond property",
+      "declared_structure_accessions": [
+        "1N5X"
+      ]
+    },
+    {
+      "task_id": "69e6b5dade74c4d1f5fa935f",
+      "source_category": "patent_mining",
+      "workflow_family": "patent-descriptor-selection",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "daf98cf0d8114a99c5516563a10dd21f677072d499a0115e5c769793ceede71a",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "descriptors of the eligible selected compound"
+    },
+    {
+      "task_id": "69e6b5dade74c4d1f5fa9360",
+      "source_category": "structural_reasoning",
+      "workflow_family": "ligand-charge-state",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "153b16cf5ce2e0111e4d4006511eda7ba2890b4ff278b0f0f3e4e889c50799f4",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "signed charge, formula or named-atom bond property",
+      "declared_structure_accessions": [
+        "6NR0"
+      ]
+    },
+    {
+      "task_id": "69e6b5dade74c4d1f5fa9368",
+      "source_category": "cheminformatics",
+      "workflow_family": "molecular-descriptors",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "e0d3fe10e0f0e0ce2bf93cee43148a38175765a8057b7bf256c3f0e66ec6c352",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "descriptor values or alert identifiers",
+      "declared_structure_accessions": [
+        "7RT3"
+      ]
+    },
+    {
+      "task_id": "69e6b5dade74c4d1f5fa936a",
+      "source_category": "cheminformatics",
+      "workflow_family": "molecular-descriptors",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "970263b67df7b87613ca60ebbff31002af054ef189aed690c80ca2c888d36c69",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "descriptor values or alert identifiers",
+      "declared_structure_accessions": [
+        "9D2K"
+      ]
+    },
+    {
+      "task_id": "69e6b5dade74c4d1f5fa9371",
+      "source_category": "structural_reasoning",
+      "workflow_family": "ligand-contact-geometry",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "1ff5a0d4a309623eeacfaf83315bfff6bedb2de88fc3eaf006dff69ae56d2ea2",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "interaction count or aggregate distance",
+      "declared_structure_accessions": [
+        "7RT5"
+      ]
+    },
+    {
+      "task_id": "69e6b5dade74c4d1f5fa937e",
+      "source_category": "structural_reasoning",
+      "workflow_family": "ligand-identity",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "3435d2571133620adefefc42f51b4cfa676bd2acb930e168af576af48b4d3810",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "canonical molecular identifier",
+      "declared_structure_accessions": [
+        "5KRE"
+      ]
+    },
+    {
+      "task_id": "69e6b5dade74c4d1f5fa9387",
+      "source_category": "cheminformatics",
+      "workflow_family": "molecular-descriptors",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "03841225cb7c9e57ac278187b222b14970e64f1a12d6a3d0b246eca1bfa930ab",
+      "instruction_review": "full-question-reviewed",
+      "endpoint_caveats": [
+        "The requested polar surface area is an area quantity, while the prompt writes a length unit; resolve this in an independent contract."
+      ],
+      "required_output_kind": "descriptor values or alert identifiers",
+      "declared_structure_accessions": [
+        "2XOW"
+      ]
+    },
+    {
+      "task_id": "69fa3ea7653acbc6d63b0177",
+      "source_category": "structural_reasoning",
+      "workflow_family": "ligand-identity",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "ed80d0f765be43b8863b9165e76f23b67fa68d78e5d67f05d35330d90e7f2a4c",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "canonical molecular identifier",
+      "declared_structure_accessions": [
+        "9L3Q"
+      ]
+    },
+    {
+      "task_id": "69fa3ea7653acbc6d63b017a",
+      "source_category": "patent_mining",
+      "workflow_family": "assay-selected-common-substructure",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "ccb2a7c2a8fa9d55030f404a27108d0989830c50c48dbabd556a306fa6555940",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "common graph representation with connection points"
+    },
+    {
+      "task_id": "69fa3ea7653acbc6d63b017f",
+      "source_category": "database_screening",
+      "workflow_family": "structure-catalog-filtering",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "deb4af2960ce55a36672fcbc575aa83aa43b4fb2df7e7112158eb24c1e7a26b6",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "eligible structure identities and requested metadata"
+    },
+    {
+      "task_id": "69fa3ea7653acbc6d63b0183",
+      "source_category": "cheminformatics",
+      "workflow_family": "molecular-descriptors",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "ce2d6b617d2f42acd1cc2b56e0e9d54e4aae854a05073d67b0af8608eac5b8fb",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "descriptor values or alert identifiers",
+      "declared_structure_accessions": [
+        "8B0E"
+      ]
+    },
+    {
+      "task_id": "69fa3ea7653acbc6d63b0184",
+      "source_category": "structural_reasoning",
+      "workflow_family": "ligand-charge-state",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "576c193701d6b6cafe909cfc752cae2970c3fa611befa51ae93f4d4ffbb1885a",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "signed charge, formula or named-atom bond property",
+      "declared_structure_accessions": [
+        "2PIY"
+      ]
+    },
+    {
+      "task_id": "69fa3ea7653acbc6d63b0192",
+      "source_category": "patent_mining",
+      "workflow_family": "patent-compound-selection",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "2800a8cbb37a4a01ebe0e961e46b813d7d709e216bd98c0b2b51b0c62899a069",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "canonical identifier for the assay-selected compound"
+    },
+    {
+      "task_id": "69fa3ea7653acbc6d63b01ab",
+      "source_category": "patent_mining",
+      "workflow_family": "patent-compound-selection",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "f4f6dbf04e514762d4faad95a21935d9b8712c6f02a984f3e57f77b2c4ea088a",
+      "instruction_review": "full-question-reviewed",
+      "unavailable_prompt_attachments": [
+        "Chuang_et_al_2021.pdf"
+      ],
+      "required_output_kind": "canonical identifier for the assay-selected compound"
+    },
+    {
+      "task_id": "69fa3ea7653acbc6d63b01b1",
+      "source_category": "patent_mining",
+      "workflow_family": "assay-selected-common-substructure",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "f736c54d978283fcbdcddd266f1f3953e3ff97a75b9e27e32d4aa278bd3be650",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "common graph representation with connection points"
+    },
+    {
+      "task_id": "69fa3ea7653acbc6d63b01b2",
+      "source_category": "structural_reasoning",
+      "workflow_family": "ligand-identity",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "36094a1d8a2f21a513c5555802ef179ef8a4087e8ae0fc0bb1df322388935672",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "canonical molecular identifier",
+      "declared_structure_accessions": [
+        "6HZC"
+      ]
+    },
+    {
+      "task_id": "69fa3ea7653acbc6d63b01b5",
+      "source_category": "patent_mining",
+      "workflow_family": "patent-descriptor-selection",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "b1d32b9702bdc5d24d8602010f3657dfb32bb8862e4951a7f84d2d31f2103707",
+      "instruction_review": "full-question-reviewed",
+      "endpoint_caveats": [
+        "Ring perception and molecular state affect macrocycle membership and descriptor ranking; report the selected graph conventions."
+      ],
+      "required_output_kind": "descriptors of the eligible selected compound"
+    },
+    {
+      "task_id": "69fa3ea7653acbc6d63b01c1",
+      "source_category": "patent_mining",
+      "workflow_family": "patent-descriptor-selection",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "8ba92e9233a92b5bad95ed62258ea89efda8d412227ae3162dedc0f6a3fab984",
+      "instruction_review": "full-question-reviewed",
+      "endpoint_caveats": [
+        "Resolve largest-ring atom counts, tie breaking and graph conventions before assigning a unique descriptor-selected winner."
+      ],
+      "required_output_kind": "descriptors of the eligible selected compound"
+    },
+    {
+      "task_id": "6a172cd01d78a1a5ec9f5bc7",
+      "source_category": "database_screening",
+      "workflow_family": "target-affinity-model",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "9978f211ee4e1767e4a9f6070779f3bf3ee36dbb591bd4e8f5ddc095a9ac331e",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "ranked compound identities and predicted affinities with units"
+    },
+    {
+      "task_id": "6a172cd01d78a1a5ec9f5bca",
+      "source_category": "target_id_genetics",
+      "workflow_family": "rnaseq-to-homology",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "7e2b61581332abbb284c578a32b45c7381c8c83865be949805e50f6df9cdbe7c",
+      "instruction_review": "full-question-reviewed",
+      "endpoint_caveats": [
+        "Preserve donor-level cohort selection and precursor-to-mature one-to-many mappings. The source requests raw p-values, so an adjusted-p-value recipe is only a partial analogy."
+      ],
+      "required_output_kind": "mature miRNA identifiers, sequence features and differential-expression statistics"
+    },
+    {
+      "task_id": "6a19dd9c5446b4eb01f76209",
+      "source_category": "database_screening",
+      "workflow_family": "bioactivity-selection",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "33ecc1a35be96a651faee14c305b8152d5c241495bca475a39869dc2c5759973",
+      "instruction_review": "full-question-reviewed",
+      "unavailable_prompt_attachments": [
+        "cMYC_G4_ChEMBL35_snapshot.csv"
+      ],
+      "required_output_kind": "ranked activity rows, identifiers or selected-compound properties"
+    },
+    {
+      "task_id": "6a19dd9c5446b4eb01f7620b",
+      "source_category": "target_id_genetics",
+      "workflow_family": "epigenetic-marker-evidence",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "fd872b27dd4ddf9851c11d273a7098a93a6a5dd2c5af7b14f326042bb4503f92",
+      "instruction_review": "full-question-reviewed",
+      "unavailable_prompt_attachments": [
+        "nsclc_cfDNA_dmrs.bed",
+        "nsclc_marker_auc.tsv"
+      ],
+      "required_output_kind": "selected genomic interval, cohort performance, evidence and rejected candidate"
+    },
+    {
+      "task_id": "6a1d2459970e88cd7cd5b551",
+      "source_category": "database_screening",
+      "workflow_family": "target-evidence-ranking",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "55704c31691360f5edd316792165ec009bb8eca01dd50a02f5855eb9a49eecd8",
+      "instruction_review": "full-question-reviewed",
+      "required_output_kind": "ranked target or compound identity with requested evidence"
+    },
+    {
+      "task_id": "6a1d2459970e88cd7cd5b556",
+      "source_category": "target_id_genetics",
+      "workflow_family": "domain-confidence-comparison",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "fbbea6e8cd6da588db6b210a223624d7e36f66a8d11a532bc4174625f470aed6",
+      "instruction_review": "full-question-reviewed",
+      "unavailable_prompt_attachments": [
+        "domain_boundaries.pdf"
+      ],
+      "endpoint_caveats": [
+        "Author numbering, sequence offsets and inclusion of boundary residues must be resolved separately for each proposed range."
+      ],
+      "required_output_kind": "selected boundaries, residue count, average confidence and sequence"
+    },
+    {
+      "task_id": "6a1d2459970e88cd7cd5b558",
+      "source_category": "database_screening",
+      "workflow_family": "bioactivity-selection",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "78271649dcaa22dc001f6a63a98f434d9ee36a7401c10c19e28801ce2c2c857c",
+      "instruction_review": "full-question-reviewed",
+      "unavailable_prompt_attachments": [
+        "unnamed affinity attachment"
+      ],
+      "required_output_kind": "ranked activity rows, identifiers or selected-compound properties"
+    },
+    {
+      "task_id": "6a232796afa0e46251ad3d57",
+      "source_category": "database_screening",
+      "workflow_family": "screen-hit-artifact-filtering",
+      "source_metadata_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "source_prompt_sha256": "8037ae6ac2291c8201151764ea507f6aed1270d0b09fde82f76734c2f48fb9c4",
+      "instruction_review": "full-question-reviewed",
+      "unavailable_prompt_attachments": [
+        "dbfda-substances.csv",
+        "fda-substances.csv"
+      ],
+      "required_output_kind": "compound classifications, measured response and catalog membership"
+    }
+  ],
+  "shared_structure_inputs": {
+    "8B0E": [
+      "69b34fde93a696047cbf9c7f",
+      "69fa3ea7653acbc6d63b0183"
+    ],
+    "6UL5": [
+      "69b43e08f5a8ac5b38e3c5e2",
+      "69b43e08f5a8ac5b38e3c615"
+    ],
+    "7K6M": [
+      "69b43e08f5a8ac5b38e3c5f8",
+      "69b43e08f5a8ac5b38e3c5fb"
+    ],
+    "6NR0": [
+      "69e6b5dade74c4d1f5fa933c",
+      "69e6b5dade74c4d1f5fa9360"
+    ]
+  },
+  "overlap_scope": "Declared PDB accessions are recorded for exclusion and overlap auditing only. Repeated structures show that task IDs are not independent biological inputs. Other shared publications, compounds, cohorts and cross-benchmark overlap remain unassessed."
+}

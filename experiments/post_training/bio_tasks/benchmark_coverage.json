@@ -384,6 +384,19 @@
       "task_inventory_status": "all-identifiers-and-source-categories; 100-sequence-database-question-endpoints-reviewed",
       "workflow_patterns": 20,
       "source_evaluator_executed": false
+    },
+    "DrugDiscoveryBench public preview": {
+      "revision": "c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48",
+      "source_url": "https://huggingface.co/datasets/ScaleAI/DrugDiscoveryBench-Preview/blob/c1efe5e7120f37734ae04d68ee17a6d7dbaa6e48/tasks.jsonl",
+      "metadata_sha256": "e9523c354873b624ac6c8cc36d6f98f6d26872020d27f079163dd43ddd4438a5",
+      "inventory_count": 82,
+      "public_inventory_count": 82,
+      "training_mapping_allowed": true,
+      "distribution": "ID",
+      "tasks_file": "benchmark_tasks/drugdiscoverybench.json",
+      "source_inventory_name": "DrugDiscoveryBench",
+      "task_inventory_status": "all 82 public prompts and endpoints assessed; biological inputs and scoring uninspected",
+      "advertised_full_suite_count": 82
     }
   },
   "assessment_policy": "ID workflow prerequisites are manually inferred from permitted task descriptions. Shared family stages may exceed an individual endpoint; assess that endpoint before claiming coverage. Benchmark answers and biological fixtures are excluded from authoring."
