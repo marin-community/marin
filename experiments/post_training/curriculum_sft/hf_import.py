@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import dataclasses
-import os
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -33,6 +32,7 @@ from marin.utils import get_directory_friendly_name
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.june_tpu_67b_a2b.moe.model import Block, GrugModelConfig, Transformer
+from experiments.post_training.curriculum_sft.grug_pipeline import GRUG_CHECKPOINTS_DIR
 
 _CHECKPOINT_STEP = 0
 _CONVERSION_ENV = {"XLA_PYTHON_CLIENT_PREALLOCATE": "false"}
@@ -67,10 +67,7 @@ def import_snowball_hf_weights(
 ) -> tuple[Transformer, jax.Array]:
     """Build the historical stacked Grug model and its QB state from canonical HF tensors.
 
-    Snowball HF exports contain the *effective* router biases after the source checkpoint's pending
-    QB update was applied. The historical trainer applies ``pending_qb_betas`` at the start of every
-    step, so the inverse bias is reconstructed here. Centering is functionally exact because adding a
-    per-layer scalar to every expert logit changes neither top-k selection nor combine weights.
+    The returned QB state preserves the effective routing of the HF export.
     """
     if not config.use_array_stacked_blocks:
         raise ValueError("Snowball SFT import requires use_array_stacked_blocks=True")
@@ -87,6 +84,8 @@ def import_snowball_hf_weights(
     stacked_blocks = _stack_blocks(loaded.blocks, target.stacked_blocks)
 
     router_bias = stacked_blocks.stacked.mlp.router_bias
+    # The trainer applies pending QB betas before routing. A per-layer bias shift
+    # changes neither top-k selection nor combine weights, so center the inverse.
     centered_router_bias = router_bias - jnp.mean(router_bias, axis=-1, keepdims=True)
     stacked_blocks = eqx.tree_at(
         lambda value: value.stacked.mlp.router_bias,
@@ -116,12 +115,6 @@ class SnowballHfToGrugConfig:
     model_config: dict[str, Any]
     output_path: str
     resources: ResourceConfig
-
-
-@dataclass(frozen=True)
-class SnowballHfToGrugCheckpoint:
-    step: ArtifactStep[LevanterCheckpoint]
-    model: GrugModelConfig
 
 
 def _run_snowball_hf_to_grug(config: SnowballHfToGrugConfig) -> None:
@@ -169,7 +162,7 @@ def _run_snowball_hf_to_grug(config: SnowballHfToGrugConfig) -> None:
             {"params": model, "pending_qb_betas": pending_qb_betas},
             step=_CHECKPOINT_STEP,
             checkpoint_path=prefix_join(
-                prefix_join(config.output_path, "checkpoints"),
+                prefix_join(config.output_path, GRUG_CHECKPOINTS_DIR),
                 f"step-{_CHECKPOINT_STEP}",
             ),
             manager=manager,
@@ -180,9 +173,7 @@ def _run_snowball_hf_to_grug(config: SnowballHfToGrugConfig) -> None:
     tokenizer = load_tokenizer(config.hf_id, revision=config.hf_revision)
     with tempfile.TemporaryDirectory(prefix="snowball-grug-tokenizer-") as tokenizer_dir:
         tokenizer.save_pretrained(tokenizer_dir)
-        for name in os.listdir(tokenizer_dir):
-            if not name.startswith("."):
-                StoragePath(prefix_join(config.output_path, name)).upload_from(os.path.join(tokenizer_dir, name))
+        StoragePath(config.output_path).upload_from(tokenizer_dir + "/", recursive=True)
 
 
 def _convert_job(config: SnowballHfToGrugConfig) -> None:
@@ -196,7 +187,7 @@ def snowball_hf_to_grug(
     model: GrugModelConfig,
     version: str,
     resources: ResourceConfig,
-) -> SnowballHfToGrugCheckpoint:
+) -> ArtifactStep[LevanterCheckpoint]:
     """Materialize one immutable HF export as a native stacked Grug weights checkpoint."""
     name = user_owned_name(f"checkpoints/hf-to-stacked-grug/{get_directory_friendly_name(hf_id)}")
 
@@ -209,7 +200,7 @@ def snowball_hf_to_grug(
             resources=ctx.runtime_arg("convert_resources"),
         )
 
-    step: ArtifactStep[LevanterCheckpoint] = ArtifactStep(
+    return ArtifactStep(
         name=name,
         version=version,
         artifact_type=LevanterCheckpoint,
@@ -217,4 +208,3 @@ def snowball_hf_to_grug(
         build_config=build_config,
         runtime_args={"convert_resources": resources},
     )
-    return SnowballHfToGrugCheckpoint(step=step, model=model)

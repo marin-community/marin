@@ -257,6 +257,7 @@ def generate_conversations(config: GenerateCurriculumSFTConfig) -> Artifact:
 def generate_curriculum_sft(
     capability_id: str,
     *,
+    catalog: ArtifactStep[TaskCurriculumCatalogArtifact] = TASK_CURRICULUM,
     version: str,
     requested_examples: int,
     accepted_examples: int,
@@ -268,7 +269,7 @@ def generate_curriculum_sft(
 
     def build_config(ctx: StepContext) -> GenerateCurriculumSFTConfig:
         return GenerateCurriculumSFTConfig(
-            catalog_path=ctx.artifact_path(TASK_CURRICULUM),
+            catalog_path=ctx.artifact_path(catalog),
             output_path=ctx.output_path,
             capability_id=capability_id,
             requested_examples=requested_examples,
@@ -285,5 +286,5 @@ def generate_curriculum_sft(
         artifact_type=Artifact,
         run=generate_conversations,
         build_config=build_config,
-        deps=(TASK_CURRICULUM,),
+        deps=(catalog,),
     )

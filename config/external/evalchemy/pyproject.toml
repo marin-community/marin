@@ -8,5 +8,4 @@ dependencies = ["evalchemy"]
 package = false
 
 [tool.uv.sources]
-# Pin the judge-free OlympiadBench task while marin-community/evalchemy#178 is under review.
-evalchemy = { git = "https://github.com/marin-community/evalchemy.git", rev = "a8cc29a5587903e0b9780892db5c809a45299b33" }
+evalchemy = { git = "https://github.com/marin-community/evalchemy.git", rev = "40c9861487a16088f650f49886a9cf69d7475295" }

@@ -4,7 +4,6 @@
 """Export a stacked Grug SFT checkpoint for the evaluation vLLM backend."""
 
 import dataclasses
-import os
 import tempfile
 from dataclasses import dataclass
 
@@ -27,6 +26,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from experiments.grug.moe.model import GrugModelConfig as ExportModelConfig
 from experiments.grug.moe.model import Transformer as ExportTransformer
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig, Transformer
+from experiments.post_training.curriculum_sft.grug_pipeline import GRUG_CHECKPOINTS_DIR
 
 _EXPORT_ENV = {"XLA_PYTHON_CLIENT_PREALLOCATE": "false"}
 
@@ -93,12 +93,7 @@ def export_grug_checkpoint(config: GrugHfExportConfig) -> Artifact:
         )
         with tempfile.TemporaryDirectory(prefix="curriculum-grug-hf-") as export_dir:
             converter.save_pretrained(_export_model(params, export_config), export_dir, dtype=jnp.bfloat16)
-            output = StoragePath(config.output_path)
-            output.mkdirs()
-            for filename in sorted(os.listdir(export_dir)):
-                source = os.path.join(export_dir, filename)
-                if os.path.isfile(source):
-                    (output / filename).upload_from(source)
+            StoragePath(config.output_path).upload_from(export_dir + "/", recursive=True)
     return Artifact(path=config.output_path)
 
 
@@ -118,7 +113,7 @@ def grug_hf_export(
 
     def build_config(ctx: StepContext) -> GrugHfExportConfig:
         return GrugHfExportConfig(
-            checkpoint_path=prefix_join(ctx.artifact_path(checkpoint), "checkpoints"),
+            checkpoint_path=prefix_join(ctx.artifact_path(checkpoint), GRUG_CHECKPOINTS_DIR),
             tokenizer=ctx.artifact_path(tokenizer),
             model_config=draccus.encode(model),
             output_path=ctx.output_path,

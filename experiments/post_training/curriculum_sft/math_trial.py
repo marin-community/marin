@@ -13,19 +13,29 @@ from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
+from marin.experiment.namespacing import user_owned_name
 from marin.training.training import LevanterCheckpoint
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.evaluation.models import SNOWBALL_VLLM_ARGS
 from experiments.evaluation.pipeline import EvaluationResult, eval_step
 from experiments.june_tpu_67b_a2b.moe.optimizer import GrugMoeAdamHConfig
-from experiments.post_training.curriculum_sft.generation import generate_curriculum_sft
-from experiments.post_training.curriculum_sft.grug_pipeline import curriculum_grug_sft, september_grug_model
+from experiments.post_training.curriculum_sft.grug_pipeline import (
+    GRUG_CHECKPOINTS_DIR,
+    CurriculumGenerationSpec,
+    curriculum_generation_steps,
+    curriculum_grug_sft,
+    september_grug_model,
+)
 from experiments.post_training.curriculum_sft.hf_export import grug_hf_export
 from experiments.post_training.curriculum_sft.hf_import import snowball_hf_to_grug
+from experiments.post_training.task_curriculum.catalog_artifact import TaskCurriculumCatalogArtifact
 
 HF_MODEL = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.20"
 HF_REVISION = "9f2ee50f3d4a12c79b0808bb2414ddba2cdf0098"
 CLUSTER = "cw-rno2a"
+GCS_TRIAL_PREFIX = "gs://marin-us-central2/tmp/ttl=30d/curriculum-math-20260924"
+S3_TRIAL_PREFIX = "s3://marin-us-east-02a/tmp/ttl=30d/curriculum-math-20260924"
 CURRICULUM_IDS = (
     "d01.algebra.exact-symbolic-evaluation",
     "d01.algebra.scalar-equations",
@@ -39,11 +49,25 @@ STEPS = 4
 ACCEPTED_PER_CAPABILITY = 256
 REQUESTED_PER_CAPABILITY = 320
 SEED = 17
+MAX_COMPLETION_TOKENS = 4096
 TASK_SPECIFICATION = (
     "Create an original, self-contained, exact mathematics problem in this capability. "
     "Make the answer unique and require several reasoning steps. Avoid published contest questions, "
     "external facts, and proof-only prompts. End the assistant solution with one final answer in "
     "\\boxed{...} notation. Check the answer by substitution or an independent calculation."
+)
+GENERATION = CurriculumGenerationSpec(
+    requested_examples=REQUESTED_PER_CAPABILITY,
+    accepted_examples=ACCEPTED_PER_CAPABILITY,
+    seed=SEED,
+    max_completion_tokens=MAX_COMPLETION_TOKENS,
+    task_specification=TASK_SPECIFICATION,
+)
+GCS_CATALOG = ArtifactStep.adopt(
+    name="post-training/task-curriculum/catalog",
+    version="2026.09.20.2",
+    source=prefix_join(GCS_TRIAL_PREFIX, "catalog"),
+    kind=TaskCurriculumCatalogArtifact,
 )
 
 
@@ -99,20 +123,26 @@ def _eval_model(name: str, location: str, revision: str | None) -> ModelConfig:
     )
 
 
+def build_generation(version: str) -> dict[str, ArtifactStep[Artifact]]:
+    """Generate small conversation artifacts beside the GLM relay on Marin."""
+    return curriculum_generation_steps(CURRICULUM_IDS, version=version, generation=GENERATION, catalog=GCS_CATALOG)
+
+
+def _staged_generation(version: str) -> dict[str, ArtifactStep[Artifact]]:
+    sources: dict[str, ArtifactStep[Artifact]] = {}
+    for capability_id in CURRICULUM_IDS:
+        name = user_owned_name(f"documents/curriculum-sft/{capability_id}/generated-chat")
+        sources[capability_id] = ArtifactStep.adopt(
+            name=name,
+            version=version,
+            source=prefix_join(S3_TRIAL_PREFIX, f"{name}/{version}"),
+            kind=Artifact,
+        )
+    return sources
+
+
 def build_trial(version: str) -> dict[str, ArtifactStep]:
     """Bind a baseline evaluation, packed SFT, export, and matched re-evaluation."""
-    generated = {
-        f"generate/{capability_id}": generate_curriculum_sft(
-            capability_id,
-            version=version,
-            requested_examples=REQUESTED_PER_CAPABILITY,
-            accepted_examples=ACCEPTED_PER_CAPABILITY,
-            seed=SEED,
-            max_completion_tokens=4096,
-            task_specification=TASK_SPECIFICATION,
-        )
-        for capability_id in CURRICULUM_IDS
-    }
     training_model = september_grug_model(CONTEXT_LENGTH)
     imported = snowball_hf_to_grug(
         HF_MODEL,
@@ -124,14 +154,11 @@ def build_trial(version: str) -> dict[str, ArtifactStep]:
     trained: ArtifactStep[LevanterCheckpoint] = curriculum_grug_sft(
         CURRICULUM_IDS,
         version=version,
-        requested_examples=REQUESTED_PER_CAPABILITY,
-        accepted_examples=ACCEPTED_PER_CAPABILITY,
-        seed=SEED,
-        max_completion_tokens=4096,
-        task_specification=TASK_SPECIFICATION,
-        checkpoint=imported.step,
-        checkpoint_subpath="checkpoints",
-        tokenizer=imported.step,
+        generation=GENERATION,
+        generated=_staged_generation(version),
+        checkpoint=imported,
+        checkpoint_subpath=GRUG_CHECKPOINTS_DIR,
+        tokenizer=imported,
         optimizer=_optimizer(),
         resources=_gpu_resources(8),
         context_length=CONTEXT_LENGTH,
@@ -142,7 +169,7 @@ def build_trial(version: str) -> dict[str, ArtifactStep]:
     exported: ArtifactStep[Artifact] = grug_hf_export(
         trained,
         model=dataclasses.replace(training_model, max_seq_len=EXPORT_CONTEXT_LENGTH),
-        tokenizer=imported.step,
+        tokenizer=imported,
         version=version,
         resources=_gpu_resources(1),
     )
@@ -168,7 +195,7 @@ def build_trial(version: str) -> dict[str, ArtifactStep]:
         submission_cluster=CLUSTER,
         federated_cluster=CLUSTER,
     )
-    return {**generated, "baseline": baseline, "train": trained, "export": exported, "after": after}
+    return {"baseline": baseline, "train": trained, "export": exported, "after": after}
 
 
 @click.command()
@@ -178,9 +205,9 @@ def build_trial(version: str) -> dict[str, ArtifactStep]:
 @build_options
 def main(stage: str) -> dict[str, ArtifactStep]:
     version = resolve_version("curriculum-math-sep20", None)
-    trial = build_trial(version)
     if stage == "generate":
-        return {name: step for name, step in trial.items() if name.startswith("generate/")}
+        return build_generation(version)
+    trial = build_trial(version)
     if stage == "full":
         return {"baseline": trial["baseline"], "after": trial["after"]}
     return {stage: trial[stage]}

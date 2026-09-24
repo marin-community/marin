@@ -26,6 +26,7 @@ from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig
 from experiments.june_tpu_67b_a2b.moe.sft_launch import GrugMoeSFTConfig, run_grug_moe_sft_trial
 from experiments.june_tpu_67b_a2b.moe.train import GrugTrainerConfig
 from experiments.post_training.curriculum_sft.generation import generate_curriculum_sft
+from experiments.post_training.task_curriculum.catalog_artifact import TASK_CURRICULUM, TaskCurriculumCatalogArtifact
 
 SEPTEMBER_GRUG_CHECKPOINT = ArtifactStep.adopt(
     name="models/grug-67b-sft-20260920-native",
@@ -42,6 +43,16 @@ SEPTEMBER_GRUG_TOKENIZER = ArtifactStep.adopt(
     source="gs://marin-us-central2/grug_sft/tokenizer/2026.09.18",
     kind=Artifact,
 )
+GRUG_CHECKPOINTS_DIR = "checkpoints"
+
+
+@dataclass(frozen=True)
+class CurriculumGenerationSpec:
+    requested_examples: int
+    accepted_examples: int
+    seed: int
+    max_completion_tokens: int
+    task_specification: str
 
 
 @dataclass(frozen=True)
@@ -98,15 +109,35 @@ def september_grug_model(context_length: int) -> GrugModelConfig:
     )
 
 
+def curriculum_generation_steps(
+    curriculum_ids: Sequence[str],
+    *,
+    version: str,
+    generation: CurriculumGenerationSpec,
+    catalog: ArtifactStep[TaskCurriculumCatalogArtifact] = TASK_CURRICULUM,
+) -> dict[str, ArtifactStep[Artifact]]:
+    """Bind one GLM generation artifact per capability."""
+    return {
+        capability_id: generate_curriculum_sft(
+            capability_id,
+            catalog=catalog,
+            version=version,
+            requested_examples=generation.requested_examples,
+            accepted_examples=generation.accepted_examples,
+            seed=generation.seed,
+            max_completion_tokens=generation.max_completion_tokens,
+            task_specification=generation.task_specification,
+        )
+        for capability_id in curriculum_ids
+    }
+
+
 def curriculum_grug_sft(
     curriculum_ids: Sequence[str],
     *,
     version: str,
-    requested_examples: int,
-    accepted_examples: int,
-    seed: int,
-    max_completion_tokens: int,
-    task_specification: str,
+    generation: CurriculumGenerationSpec,
+    generated: Mapping[str, ArtifactStep[Artifact]] | None = None,
     checkpoint: ArtifactStep[LevanterCheckpoint],
     checkpoint_subpath: str,
     tokenizer: ArtifactStep,
@@ -126,17 +157,13 @@ def curriculum_grug_sft(
     if not ids or len(set(ids)) != len(ids):
         raise ValueError("curriculum_ids must be nonempty and distinct")
     curriculum_key = hashlib.sha256(json.dumps(ids).encode()).hexdigest()[:12]
+    if generated is None:
+        generated = curriculum_generation_steps(ids, version=version, generation=generation)
+    if set(generated) != set(ids):
+        raise ValueError("generated sources must match curriculum_ids")
     rendered = tuple(
         _render_step(
-            generate_curriculum_sft(
-                capability_id,
-                version=version,
-                requested_examples=requested_examples,
-                accepted_examples=accepted_examples,
-                seed=seed,
-                max_completion_tokens=max_completion_tokens,
-                task_specification=task_specification,
-            ),
+            generated[capability_id],
             capability_id=capability_id,
             version=version,
         )
@@ -162,7 +189,7 @@ def curriculum_grug_sft(
             resources=resources,
             steps=steps,
             batch_size=batch_size,
-            seed=seed,
+            seed=generation.seed,
             mp="params=float32,compute=bfloat16,output=bfloat16",
             tracker=WandbConfig(project="marin_moe_sft"),
             optimizer=optimizer,
