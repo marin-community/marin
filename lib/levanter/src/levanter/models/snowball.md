@@ -7,8 +7,9 @@ segment masks and optional per-example position IDs. `capacity_factor` controls
 capacity in the backend selected by `moe_implementation` and must be finite and
 positive. For `ragged_all_to_all`, capacity is based on local token count ×
 experts selected per token, multiplied by this factor, then divided and rounded
-across local expert chunks. Padding consumes capacity. Other backends retain
-their existing capacity rules.
+across local expert chunks. Padding is excluded from logical capacity and
+counted separately as skipped assignments. Other backends retain their
+existing capacity rules.
 
 The adapter accepts Levanter's structured causal `AttentionMask` with segment
 IDs; explicit dense masks are rejected. Tokens can attend only to earlier or
