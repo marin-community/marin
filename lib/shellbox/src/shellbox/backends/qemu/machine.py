@@ -20,6 +20,7 @@ from pathlib import Path
 from shellbox.backends.qemu.image import QemuAssets, stage_qemu_image
 from shellbox.image import DockerfileSource, PreparedImage, RegistryImage, process_image_cache
 from shellbox.machine import (
+    DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES,
     Command,
     ExitReason,
     MachineSpec,
@@ -54,7 +55,9 @@ class QemuShellSession:
         self._next_id = 1
         self._read_lock = asyncio.Lock()
 
-    async def execute(self, command: str, *, wait: float = 120, output_limit_bytes: int = 1_048_576) -> ShellUpdate:
+    async def execute(
+        self, command: str, *, wait: float = 120, output_limit_bytes: int = DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES
+    ) -> ShellUpdate:
         if self._active_id is not None:
             raise RuntimeError("Previous Bash command is still running")
         command_id = str(self._next_id)
@@ -64,7 +67,9 @@ class QemuShellSession:
         await self.writer.drain()
         return await self.read(wait=wait, output_limit_bytes=output_limit_bytes)
 
-    async def read(self, *, wait: float = 0, output_limit_bytes: int = 1_048_576) -> ShellUpdate:
+    async def read(
+        self, *, wait: float = 0, output_limit_bytes: int = DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES
+    ) -> ShellUpdate:
         if self._active_id is None:
             raise RuntimeError("No Bash command is running")
         async with self._read_lock:

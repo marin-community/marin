@@ -11,6 +11,7 @@ from typing import Protocol, runtime_checkable
 from shellbox.image import DockerfileSource, PreparedImage, RegistryImage
 
 HARBOR_EXEC_OUTPUT_LIMIT_BYTES = 128 * 1024 * 1024
+DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES = 1_048_576
 
 
 class NetworkPolicy(StrEnum):
@@ -43,9 +44,13 @@ class ShellSession(Protocol):
     @property
     def interactive(self) -> bool: ...
 
-    async def execute(self, command: str, *, wait: float = 120, output_limit_bytes: int = 1_048_576) -> ShellUpdate: ...
+    async def execute(
+        self, command: str, *, wait: float = 120, output_limit_bytes: int = DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES
+    ) -> ShellUpdate: ...
 
-    async def read(self, *, wait: float = 0, output_limit_bytes: int = 1_048_576) -> ShellUpdate: ...
+    async def read(
+        self, *, wait: float = 0, output_limit_bytes: int = DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES
+    ) -> ShellUpdate: ...
 
     async def write(self, data: bytes) -> None: ...
 
@@ -92,7 +97,7 @@ class Command:
     env: dict[str, str] = field(default_factory=dict)
     stdin: bytes = b""
     timeout: float | None = None
-    output_limit_bytes: int = 1_048_576
+    output_limit_bytes: int = DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES
 
 
 @dataclass(frozen=True)

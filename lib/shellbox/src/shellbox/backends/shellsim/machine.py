@@ -14,6 +14,7 @@ from pathlib import Path, PurePosixPath
 import shellsim
 
 from shellbox.machine import (
+    DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES,
     Command,
     ExitReason,
     MachineSpec,
@@ -40,7 +41,9 @@ class ShellSimShellSession:
     def __init__(self, machine: "ShellSimMachine"):
         self.machine = machine
 
-    async def execute(self, command: str, *, wait: float = 120, output_limit_bytes: int = 1_048_576) -> ShellUpdate:
+    async def execute(
+        self, command: str, *, wait: float = 120, output_limit_bytes: int = DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES
+    ) -> ShellUpdate:
         result = await self.machine._run_source(command)
         output = result.stdout + result.stderr
         return ShellUpdate(
@@ -50,7 +53,9 @@ class ShellSimShellSession:
             len(output) > output_limit_bytes,
         )
 
-    async def read(self, *, wait: float = 0, output_limit_bytes: int = 1_048_576) -> ShellUpdate:
+    async def read(
+        self, *, wait: float = 0, output_limit_bytes: int = DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES
+    ) -> ShellUpdate:
         raise UnsupportedMachineSpec("ShellSim completes each Bash action; BashRead is unavailable")
 
     async def write(self, data: bytes) -> None:
