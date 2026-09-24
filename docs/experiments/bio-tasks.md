@@ -1,6 +1,6 @@
 # Synthetic biology task generation
 
-The generators in `experiments/post_training/bio_tasks/` implement 141
+The generators in `experiments/post_training/bio_tasks/` implement 142
 recipes from [the biology data program](https://github.com/marin-community/marin/issues/9257).
 They combine independently sourced real observations with synthetic correctness controls, establish references,
 execute separate input-reading oracle solutions, and package tasks for Harbor.
@@ -11,7 +11,7 @@ the original 2026-07-28 downloads/stars/citations. The maintained
 format coverage, with the original adoption inventory preserved as a separate file.
 
 The [implemented recipe list](bio-task-recipes.md) records every operation, skill,
-format profile, and repository mapping. The 141 recipes span 13 domains:
+format profile, and repository mapping. The 142 recipes span 13 domains:
 
 | Domain | Recipes |
 |---|---:|
@@ -24,13 +24,13 @@ format profile, and repository mapping. The 141 recipes span 13 domains:
 | assembly and ecology | 8 |
 | imaging and spatial | 7 |
 | statistics | 11 |
-| structures and proteomics | 9 |
+| structures and proteomics | 10 |
 | networks | 6 |
 | assays and metabolomics | 7 |
 | workflow and identifiers | 2 |
 
-The default build contains one task per recipe: 141 authoring examples, comprising
-26 real-data candidates and 115 simulated controls. Add another task from a recipe
+The default build contains one task per recipe: 142 authoring examples, comprising
+27 real-data candidates and 115 simulated controls. Add another task from a recipe
 only when its dataset, study design, modality or scientific decision contributes
 meaningful coverage. Deterministic generators can still produce extra validation
 cases without adding them to training. The manifest marks
@@ -65,12 +65,12 @@ models biological/technical read routing from a CSV ledger; it does not read an 
 
 Every source repository has a scientific-operation mapping in
 `repository_coverage.json`. Actual CLI/API execution remains a distinct requirement
-for all 50 repositories. 37 packages have passing checks: 34 on three reference cases each,
-and IQ-TREE, FastTree and RAxML on one shared observed COX1 alignment. The
+for all 50 repositories. 38 packages have passing checks: 34 on three reference cases each,
+IQ-TREE, FastTree and RAxML on one shared observed COX1 alignment, and HMMER on a complete observed bacterial proteome. The
 first CoreWeave run passed 22 packages; corrections on an existing TRC host passed
 12 more, with captured outputs downloaded from regional GCS. Picard quality-yield and
 fastp paired-filter checks pass on observed reads. MAFFT and MUSCLE passed three real-protein alignments each; the MAFFT channel
-correction and earlier installation failure are retained. Thirteen other repositories
+correction and earlier installation failure are retained. Twelve other repositories
 still need scripts. `native_validation.json` indexes separate checksum-pinned
 files under `native_validation_runs/`; earlier failures and resolved environments
 remain in that history. The three real-data recipes checked with MUSCLE, fastp and Picard now have
@@ -85,6 +85,15 @@ Separate recipes now cover multi-exon GTF splicing and GFF3 CDS phase, retaining
 the format distinctions instead of converting every annotation to CSV.
 
 ## Build and inspect
+
+`real-proteome-domain-search` runs HMMER over all 4,403 proteins in the observed
+E. coli K-12 reference proteome and three unchanged Pfam profiles. It checks every
+reported domain sequence, alignment/envelope boundary, score and E-value, and
+all protein coverage rows including zero-hit proteins. Overlapping aligned
+positions count once. Biopython reference measurements and the independent
+parser pass; changed sequences and false no-hit coverage fail. Native evidence
+is recorded, while packaged and Harbor checks remain pending. Three profiles
+do not establish complete functional annotation.
 
 The full GSE81682 candidate has 1,920 cells, 46,078 endogenous features and 92 ERCC
 controls. Sparse conversion preserved all 22,590,142 nonzero counts and their

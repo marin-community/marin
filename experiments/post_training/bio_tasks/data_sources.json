@@ -1126,27 +1126,7 @@
           "uri": "gs://marin-us-central2/bio-tasks/sources/sha256/c926b3accc702c40dd871d7dbd133917f7841974db1065cb951b1b13cd5f6769"
         }
       }
-    }
-  },
-  "excluded_candidate_lineages": [
-    {
-      "lineage": "Zeisel-2015-cortex-3005",
-      "status": "excluded-benchmark-input",
-      "benchmark": "Liu-single-cell",
-      "task_ids": [
-        "gimvi"
-      ],
-      "reason": "The public benchmark prompt uses the scvi cortex loader. The official scVI dataset description identifies its 3005-cell cortex data as Zeisel et al. (2015). A separately downloaded copy or subset would retain this biological lineage.",
-      "evidence_urls": [
-        "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
-        "https://docs.scvi-tools.org/en/1.1.4/api/reference/scvi.data.cortex.html",
-        "https://scvi-tools.org/blog/autotune/"
-      ],
-      "candidate_download_status": "not downloaded or used in task inputs",
-      "screened_at": "2026-09-24"
-    }
-  ],
-  "candidate_sources": {
+    },
     "UniProt:UP000000625-20260924": {
       "landing_page": "https://www.uniprot.org/proteomes/UP000000625",
       "lineage": "UniProt:UP000000625",
@@ -1189,17 +1169,29 @@
           "content_bytes": 4644,
           "vendored_bytes": 2091,
           "transformation": "Content unchanged; gzip mtime normalized to zero."
+        },
+        "ecoli-k12-domain-reference.json.gz": {
+          "url": "gs://marin-us-central2/bio-tasks/authoring/sha256/cbbad6ea78d8c6e82ba538629423cd56dd57201c88c77f262341b107317bd695/outputs.tar.zst",
+          "content_sha256": "d8b3df3bc328eb0101014c5fc0985f9ca006b1f945ce242d2474aa7759f68ce0",
+          "vendored_sha256": "cb5f241d8e59835c26fe77f87005feca268ee863d1ba2cd866f9001e6ac761d2",
+          "content_bytes": 660517,
+          "vendored_bytes": 29356,
+          "transformation": "Private HMMER reference measured by Biopython and independently verified from unchanged inputs; never supplied to the solver."
         }
       },
       "validation": "FASTA and metadata identifiers match exactly; all sequence lengths agree; downloaded proteome proteinCount agrees. All returned proteins retained without sequence modification.",
       "intended_workflow": "Search a frozen small set of Pfam profiles against the full proteome, retain all domain boundaries and scores, extract aligned domains, and reconcile per-model and per-protein coverage.",
       "remaining_checks": [
-        "Actual pinned HMMER execution and independent output parsing",
-        "Complete artifact contract, oracle and negative controls",
         "Benchmark data-lineage screening",
-        "Container and runtime validation"
+        "Packaged task and Harbor validation"
       ],
-      "limits": "Three selected profiles do not annotate all protein families. A no-hit under this profile set does not establish absence of domains or biological function."
+      "limits": "Three selected profiles do not annotate all protein families. A no-hit under this profile set does not establish absence of domains or biological function.",
+      "status": "native-reference-and-independent-artifact-checks-passed; candidate-training-recipe",
+      "native_check": {
+        "checks_file": "native_validation_runs/a619ee74f5b8.json",
+        "checks_sha256": "a619ee74f5b83667286a885d8eda388904c0b94f6dea139fed16531d8dc65ab5",
+        "source_revision": "22d240c8a1be1242d79f570a47c8759ca99e045d"
+      }
     },
     "Pfam:selected-models-20260924": {
       "landing_page": "https://pfam-docs.readthedocs.io/en/latest/pfam-entry.html",
@@ -1267,8 +1259,36 @@
           "transformation": "Complete HMM bytes unchanged; gzip mtime normalized to zero."
         }
       },
-      "execution_status": "not-yet-run",
-      "limits": "Frozen curated models; no benchmark task inputs or answers used. Selected model coverage is not a complete Pfam annotation."
+      "execution_status": "passed native HMMER reference and independent artifact parser",
+      "limits": "Frozen curated models; no benchmark task inputs or answers used. Selected model coverage is not a complete Pfam annotation.",
+      "status": "native-reference-and-independent-artifact-checks-passed; candidate-training-recipe",
+      "native_check": {
+        "checks_file": "native_validation_runs/a619ee74f5b8.json",
+        "checks_sha256": "a619ee74f5b83667286a885d8eda388904c0b94f6dea139fed16531d8dc65ab5",
+        "source_revision": "22d240c8a1be1242d79f570a47c8759ca99e045d"
+      },
+      "lineage": "Pfam:PF00042.29+PF00109.33+PF00115.26",
+      "citation": "Pfam/InterPro; unchanged individual models PF00042.29, PF00109.33 and PF00115.26.",
+      "data_origin": "real"
     }
-  }
+  },
+  "excluded_candidate_lineages": [
+    {
+      "lineage": "Zeisel-2015-cortex-3005",
+      "status": "excluded-benchmark-input",
+      "benchmark": "Liu-single-cell",
+      "task_ids": [
+        "gimvi"
+      ],
+      "reason": "The public benchmark prompt uses the scvi cortex loader. The official scVI dataset description identifies its 3005-cell cortex data as Zeisel et al. (2015). A separately downloaded copy or subset would retain this biological lineage.",
+      "evidence_urls": [
+        "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+        "https://docs.scvi-tools.org/en/1.1.4/api/reference/scvi.data.cortex.html",
+        "https://scvi-tools.org/blog/autotune/"
+      ],
+      "candidate_download_status": "not downloaded or used in task inputs",
+      "screened_at": "2026-09-24"
+    }
+  ],
+  "candidate_sources": {}
 }

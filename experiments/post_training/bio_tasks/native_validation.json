@@ -1020,6 +1020,42 @@
         "md5": "VfKutzrvh38jLSiww2JI/A==",
         "generation": "1790234998081364"
       }
+    },
+    {
+      "checked_at": "2026-09-24",
+      "source_revision": "22d240c8a1be1242d79f570a47c8759ca99e045d",
+      "environment_kind": "Checksum-locked serial HMMER on a reserved TRC CPU; Biopython reference and independent standard-library artifact parser",
+      "region": "us-central2",
+      "storage_backend": "GCS",
+      "job_id": "/exedev/bio-singlecell-domain-package-20260924-074636",
+      "parent_job_state": "failed",
+      "parent_failure": "Single-cell packaging import required SciPy; HMMER reference and validation stages passed before this failure.",
+      "base_image": "python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c",
+      "resources": {
+        "cpu": 1,
+        "memory_gib": 16,
+        "disk_gib": 48,
+        "job_timeout_seconds": 3600,
+        "automatic_retries": 0
+      },
+      "input_bundle_sha256": "97131349ff6a18e77c8e6bbb26bfc4dd2c3545c75f6ed786ef72f0dfd0cd2afe",
+      "output_archive_sha256": "cbbad6ea78d8c6e82ba538629423cd56dd57201c88c77f262341b107317bd695",
+      "output_archive_bytes": 140491,
+      "output_archive_url": "gs://marin-us-central2/bio-tasks/authoring/sha256/cbbad6ea78d8c6e82ba538629423cd56dd57201c88c77f262341b107317bd695/outputs.tar.zst",
+      "archive_storage_status": "uploaded; provider size and MD5 verified",
+      "checks_file": "native_validation_runs/a619ee74f5b8.json",
+      "checks_sha256": "a619ee74f5b83667286a885d8eda388904c0b94f6dea139fed16531d8dc65ab5",
+      "summary": {
+        "expected_repositories": 50,
+        "attempted_repositories": 1,
+        "passed_repositories": 1,
+        "execution_failed_repositories": 0,
+        "planned_cases": 1,
+        "completed_cases": 1,
+        "passing_cases": 1,
+        "distinct_biological_inputs": 1
+      },
+      "limitations": "Complete 4,403-protein observed proteome, but only three supplied Pfam models. A no-hit result is not absence of biological domains or functions. Biopython and the independent standard-library parser measure the same native HMMER search. Package/Harbor task validation and benchmark-lineage review remain pending."
     }
   ],
   "numerical_portability": [
@@ -1531,6 +1567,17 @@
         ]
       },
       "decision": "Convert the Boolean feature mask to a NumPy array before SciPy indexing; preserve exact packages, inputs and scientific criteria for the corrected run."
+    },
+    {
+      "job_id": "/exedev/bio-singlecell-domain-package-20260924-074636",
+      "source_revision": "22d240c8a1be1242d79f570a47c8759ca99e045d",
+      "status": "failed",
+      "failed_phase": "singlecell-package",
+      "error": "ModuleNotFoundError: scipy during eager import of real_clinical by the recipe registry",
+      "scientific_stages": "HMMER reference and independent validation passed",
+      "output_archive_url": "gs://marin-us-central2/bio-tasks/authoring/sha256/cbbad6ea78d8c6e82ba538629423cd56dd57201c88c77f262341b107317bd695/outputs.tar.zst",
+      "output_archive_sha256": "cbbad6ea78d8c6e82ba538629423cd56dd57201c88c77f262341b107317bd695",
+      "correction": "Add scipy==1.17.0 to the remote builder environment; task inputs and verifiers unchanged."
     }
   ]
 }

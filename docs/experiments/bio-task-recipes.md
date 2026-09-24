@@ -39,6 +39,7 @@ correctness controls. See [provenance and limitations](bio-task-catalog.md#id-wo
 | `protein-local-search` | fasta | query-coverage, local-search, identity | BLAST+, DIAMOND |
 | `alignment-sum-of-pairs` | aligned-fasta | alignment-scoring, gap-policy, residue-correspondence | MAFFT, MUSCLE |
 | `hmmer-domain-extraction` | fasta, hmmer-domtblout | domtblout, alignment-versus-envelope, domain-identities | HMMER |
+| `real-proteome-domain-search` | FASTA, Pfam HMM, HMMER domtblout, TSV protein metadata, JSON query | profile search, domain coordinates, sequence extraction, overlap-aware proteome coverage | HMMER |
 | `sequence-identity-clusters` | fasta | sequence-clustering, transitive-membership, coverage-policy | MMseqs2 |
 | `fasta-indexed-regions` | fasta, fai, csv-header | fasta-index, line-wrapping, coordinate-conversion | HTSlib |
 

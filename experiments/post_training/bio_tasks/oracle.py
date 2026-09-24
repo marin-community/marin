@@ -20,6 +20,7 @@ from experiments.post_training.bio_tasks.solvers.phylogeny import SOLVERS as PHY
 from experiments.post_training.bio_tasks.solvers.protein_alignment import OUTPUT_SOLVERS as ALIGNMENT_OUTPUT_SOLVERS
 from experiments.post_training.bio_tasks.solvers.reads import SOLVERS as READ_SOLVERS
 from experiments.post_training.bio_tasks.solvers.real_clinical import SOLVERS as REAL_CLINICAL_SOLVERS
+from experiments.post_training.bio_tasks.solvers.real_domains import solve_domains
 from experiments.post_training.bio_tasks.solvers.real_expression import SOLVERS as REAL_EXPRESSION_SOLVERS
 from experiments.post_training.bio_tasks.solvers.real_genomes import SOLVERS as REAL_GENOMES_SOLVERS
 from experiments.post_training.bio_tasks.solvers.real_phylogeny import solve_phylogeny as solve_cox1_phylogeny
@@ -41,6 +42,7 @@ OUTPUT_SOLVERS = {
     **RNASEQ_OUTPUT_SOLVERS,
     "real-cox1-tree-comparison": solve_cox1_phylogeny,
     "real-singlecell-read-qc": solve_singlecell,
+    "real-proteome-domain-search": solve_domains,
 }
 
 

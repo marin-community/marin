@@ -6,7 +6,7 @@ program decisions, collection policy, and results; this file holds the detailed
 coverage and source evidence. [Generator documentation](bio-tasks.md) lists the
 implemented recipes and how to inspect their examples.
 
-The implementation has **141 recipes across 13 domains**, with one task per
+The implementation has **142 recipes across 13 domains**, with one task per
 recipe by default and one train split. The [implemented recipe matrix](bio-task-recipes.md)
 records the supplied formats, skills, and source-repository mappings. Sections below
 also retain candidate capabilities beyond the current implementation. Source inspection
@@ -43,13 +43,13 @@ of biological outputs. A recipe mapping, a successful import, or a version comma
 does not satisfy that requirement. Runtime tests must execute a bounded data operation,
 record the package version and environment digest, and retain the output and grading result.
 
-The current authoring recipes use independent Python solvers. Native CLI/API
-execution is recorded separately below. **37 of 50 packages have passing native checks**: 34 on three reference cases each,
-and IQ-TREE, FastTree and RAxML on one shared observed COX1 alignment. The first CoreWeave run passed 22 packages; correction batches
+The authoring recipes have input-reading Python, R or native-tool oracles.
+Native CLI/API execution is recorded separately below. **38 of 50 packages have passing native checks**: 34 on three reference cases each,
+IQ-TREE, FastTree and RAxML on one shared observed COX1 alignment, and HMMER on a complete observed bacterial proteome. The first CoreWeave run passed 22 packages; correction batches
 on an existing reserved TRC host in `us-central2` passed 12 more, with outputs
 retrieved from regional GCS. MAFFT and MUSCLE each passed three real-protein alignments. MAFFT required the
 same version from conda-forge after a Bioconda channel-priority conflict; the failed
-installation remains in the evidence. Thirteen repositories still need scripts. Picard and fastp passed on
+installation remains in the evidence. Twelve repositories still need scripts. Picard and fastp passed on
 observed ENA ERR266411 read pairs; fastp verification checks complete output FASTQ
 records as well as the JSON selection summary.
 The [machine-readable evidence](../../experiments/post_training/bio_tasks/native_validation.json)
@@ -89,7 +89,7 @@ Downloads, stars, and citations remain available in the unchanged
 | 8 | [GATK](https://github.com/broadinstitute/gatk/blob/0cde69eed30339f5978cbb1ac6e5cf3662f9e1f8/src/test/java/org/broadinstitute/hellbender/tools/walkers/filters/VariantFiltrationIntegrationTest.java) | `vcf-site-filtering`, `vcf-genotype-masking` | 3 reference checks passed (`vcf-site-filtering`) |
 | 9 | [pysam](https://github.com/pysam-developers/pysam/blob/ba2e6c124398bdcd963db741d6f01164fed4f9b7/tests/AlignmentFilePileup_test.py) | `sam-allele-pileup`, `sam-inclusion` | 3 reference checks passed (`sam-cigar-coverage`) |
 | 10 | [MAFFT](https://github.com/GSLBiotech/mafft/blob/26ecaba0130b533cf06a29200f0fb40829c00101/test/script) | `alignment-sum-of-pairs`, `alignment-column-filter`, `real-protein-alignment`, `real-cox1-tree-comparison` | 3 reference checks passed (`real-protein-alignment`) |
-| 11 | [HMMER](https://github.com/EddyRivasLab/hmmer/blob/9acd8b6758a0ca5d21db6d167e0277484341929b/testsuite/i13-msa-integrity.pl) | `hmmer-domain-extraction` | Pending |
+| 11 | [HMMER](https://github.com/EddyRivasLab/hmmer/blob/9acd8b6758a0ca5d21db6d167e0277484341929b/testsuite/i13-msa-integrity.pl) | `hmmer-domain-extraction`, `real-proteome-domain-search` | 1 observed proteome reference and artifact check passed |
 | 12 | [Seurat](https://github.com/satijalab/seurat/blob/586015abde10618ecb32d3fe632267a83317a08d/tests/testthat/test_data_manipulation.R) | `matrixmarket-log-normalization`, `matrixmarket-feature-filtering` | 3 reference checks passed (`matrixmarket-log-normalization`) |
 | 13 | [minimap2](https://github.com/lh3/minimap2/blob/3c28777e7e2dcc90f825de1b9f17a89cca7d4452/example.c) | `paf-query-coverage`, `dna-unique-mapping` | 3 reference checks passed (`dna-unique-mapping`) |
 | 14 | [BCFtools](https://github.com/samtools/bcftools/blob/edf7fd96c5da562ecfd99fb7f9e4b9eb597aeae8/test/fill-tags-VAF.out) | `vcf-allelic-depth`, `vcf-multiallelic-splitting`, `vcf-minimal-representation` | 3 reference checks passed (`vcf-allelic-depth`) |
@@ -101,7 +101,7 @@ Downloads, stars, and citations remain available in the unchanged
 | 20 | [Nextflow](https://github.com/nextflow-io/nextflow/blob/17f18779266767b16bca51af71522e28adf5cff6/modules/nextflow/src/test/groovy/nextflow/extension/GroupTupleOpTest.groovy) | `sample-sheet-lanes` | 3 reference checks passed (`sample-sheet-lanes`) |
 | 21 | [DIAMOND](https://github.com/bbuchfink/diamond/blob/5e25acaf40e6b9883636c5c564306fe77210de53/CMakeLists.txt) | `protein-local-search` | 3 reference checks passed (`protein-local-search`) |
 | 22 | [PLINK / PLINK 2](https://github.com/chrchang/plink-ng/blob/a25a0d6438b61b1951cd6d7eb209db8b79687581/2.0/Tests/TEST_GRM_MAF/run_tests.sh) | `vcf-sample-qc`, `genotype-hwe` | 3 reference checks passed (`vcf-sample-qc`) |
-| 23 | [Scanpy](https://github.com/scverse/scanpy/blob/0d5fd16234865619d2f5097d33fc4281900a2bc2/tests/test_qc_metrics.py) | `matrixmarket-cell-qc`, `donor-counts`, `cell-fractions` | 3 reference checks passed (`matrixmarket-cell-qc`) |
+| 23 | [Scanpy](https://github.com/scverse/scanpy/blob/0d5fd16234865619d2f5097d33fc4281900a2bc2/tests/test_qc_metrics.py) | `matrixmarket-cell-qc`, `donor-counts`, `cell-fractions`, `real-singlecell-read-qc` | 3 small checks and 1 full observed study passed |
 | 24 | [MultiQC](https://github.com/MultiQC/MultiQC/blob/fdc68d394849f69b67b6e6e13ebe907504ed534b/multiqc/modules/samtools/tests/test_flagstat.py) | `fastqc-report-reconciliation`, `real-fastq-cycle-quality`, `real-fastq-quality-yield` | 3 reference checks passed (`fastqc-report-reconciliation`) |
 | 25 | [edgeR](https://github.com/bioconductor-source/edgeR/blob/8986864d8f92dac37925ef641fcd6c4161130551/R/cpm.R) | `bulk-cpm-filter`, `real-rnaseq-library-qc`, `real-rnaseq-cpm-filter` | 3 reference checks passed (`bulk-cpm-filter`) |
 | 26 | [limma](https://github.com/bioconductor-source/limma/blob/14eabaeb695945b45ceb885ac8d4c61232639ea5/R/contrasts.R) | `adjusted-linear-effect`, `paired-treatment-effect` | 3 reference checks passed (`adjusted-linear-effect`) |
@@ -204,11 +204,24 @@ supplies imaging operations. Distinguish measuring supplied masks from segmentin
 
 ## ID workflow coverage and input realism
 
-The 141 recipes include twenty-six using real observations and 115 simulated component
+The 142 recipes include twenty-seven using real observations and 115 simulated component
 controls. They do **not** establish coverage of complete ID benchmark workflows. Repository count, format count, and successful
 package checks measure different things from workflow coverage. The following
 assessment uses public benchmark descriptions and the program's prior source
 inspection; it is a qualitative gap analysis, not a benchmark coverage score.
+
+The observed protein-domain workflow searches all 4,403 reviewed proteins of
+E. coli K-12 with three pinned Pfam models. HMMER 3.4 found six domains; Biopython
+reference measurements and an independent parser agree on domain boundaries,
+sequences, scores and all protein coverage rows. Corrupted domain sequences and
+false coverage on an unmatched protein fail. The
+[native record](../../experiments/post_training/bio_tasks/native_validation_runs/a619ee74f5b8.json)
+retains exact model/proteome hashes and the serial package build. The reference
+and validation each took under one second on a reserved TRC CPU. Only the supplied
+profiles are searched; this is not complete functional annotation. Both phases
+passed before the parent job failed during unrelated single-cell packaging due
+to a missing SciPy import dependency. That failure is preserved. Packaged task and
+Harbor checks remain pending.
 
 The full observed GSE81682 QC workflow supplies 1,920 cells and 46,170 features.
 Actual Scanpy and an independent streaming oracle agree on both complete QC tables
@@ -368,7 +381,7 @@ unresolved. The inspection browser retains those validation references and recor
 generated-example checks separately in `example_validation_evidence`. These timings
 are solver-check runtimes, not teacher latency measurements.
 
-Twenty-five recipes supply unchanged biological observations or declared observed subsets:
+Twenty-seven recipes supply unchanged biological observations or declared observed subsets:
 
 - **GSE60450:** 27,179 genes and 12 libraries from mouse mammary basal/luminal cells,
   with two biological replicates per population and stage. Tasks cover library QC,

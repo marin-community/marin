@@ -206,15 +206,20 @@
       "index": 11,
       "name": "HMMER",
       "recipes": [
-        "hmmer-domain-extraction"
+        "hmmer-domain-extraction",
+        "real-proteome-domain-search"
       ],
       "source_url": "https://github.com/EddyRivasLab/hmmer/blob/9acd8b6758a0ca5d21db6d167e0277484341929b/testsuite/i13-msa-integrity.pl",
       "tool_execution": {
-        "status": "pending",
-        "evidence": null
+        "status": "passed",
+        "evidence": "native_validation_runs/a619ee74f5b8.json",
+        "source_revision": "22d240c8a1be1242d79f570a47c8759ca99e045d",
+        "instances": 1,
+        "passing_instances": 1,
+        "scope": "real-proteome-domain-search"
       },
-      "scope": "Extract and reconcile protein domain sequences from a supplied domain table and alignment.",
-      "limitations": "Slice fresh FASTA using domain coordinates, remove alignment gaps, and compare IDs and residues. This checks domain bookkeeping; full profile-search significance requires a pinned profile, search space, and statistical reference."
+      "scope": "Run profile searches over a complete observed proteome; extract aligned domain sequences and reconcile domain, protein and model coverage.",
+      "limitations": "Complete 4,403-protein observed proteome, but only three supplied Pfam models. A no-hit result is not absence of biological domains or functions. Biopython and the independent standard-library parser measure the same native HMMER search. Package/Harbor task validation and benchmark-lineage review remain pending."
     },
     {
       "index": 12,

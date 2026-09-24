@@ -1,0 +1,660 @@
+{
+  "schema_version": 1,
+  "source_revision": "22d240c8a1be1242d79f570a47c8759ca99e045d",
+  "scope": "Native observed-proteome search and independent artifact measurement. Parent job failed later in unrelated single-cell packaging because SciPy was missing; both domain phases completed successfully. No model calls.",
+  "checks": [
+    {
+      "repository_index": 11,
+      "repository": "HMMER",
+      "recipe": "real-proteome-domain-search",
+      "status": "passed",
+      "execution": "completed",
+      "cases": [
+        {
+          "case_id": "UP000000625-three-Pfam-models",
+          "recipe": "real-proteome-domain-search",
+          "execution": "completed",
+          "input_artifacts": {
+            "query.json": {
+              "bytes": 99,
+              "sha256": "73f86dfa99f20d648a166cc98c1bec06da61dd2bfec02e47efcf26b34e74ee83"
+            },
+            "models.hmm": {
+              "bytes": 377934,
+              "sha256": "bae24a07fb9ed4ed985b6a0b4d133515cca2bd49bdc154cd6291c5751f3b649f"
+            },
+            "proteins.tsv": {
+              "bytes": 188547,
+              "sha256": "b0ef6b7faef4b3b06cd96f844710dc193c3ab748ff3c3bdd0b5a6e0937ef1590"
+            },
+            "proteins.fa": {
+              "bytes": 1891178,
+              "sha256": "a8052a607a98d2444c9d5dd685bd1370150df8c5570c3116811544bbf3d093a2"
+            }
+          },
+          "query": {
+            "seed": 42,
+            "model_accessions": [
+              "PF00042.29",
+              "PF00109.33",
+              "PF00115.26"
+            ]
+          },
+          "summary": {
+            "PF00042.29": {
+              "searched_proteins": 4403,
+              "matched_proteins": 1,
+              "domains": 1,
+              "covered_residues": 104
+            },
+            "PF00109.33": {
+              "searched_proteins": 4403,
+              "matched_proteins": 4,
+              "domains": 4,
+              "covered_residues": 570
+            },
+            "PF00115.26": {
+              "searched_proteins": 4403,
+              "matched_proteins": 1,
+              "domains": 1,
+              "covered_residues": 449
+            }
+          },
+          "command": {
+            "argv": [
+              "hmmsearch",
+              "--cpu",
+              "1",
+              "--seed",
+              "42",
+              "--cut_ga",
+              "--noali",
+              "--domtblout",
+              "/iris/outputs/domains/reference/domains.domtblout",
+              "/app/bio-sc-domain-ib51eznt/domain-inputs/models.hmm",
+              "/app/bio-sc-domain-ib51eznt/domain-inputs/proteins.fa"
+            ],
+            "seconds": 0.16427645199291874
+          },
+          "artifacts": {
+            "reference/reference.json.gz": {
+              "bytes": 29356,
+              "sha256": "cb5f241d8e59835c26fe77f87005feca268ee863d1ba2cd866f9001e6ac761d2"
+            },
+            "reference/answer.json": {
+              "bytes": 334,
+              "sha256": "c98f9f63b1100296fc0c62fb26f3fe6b83a348b6833170b6ce0fa84543f19365"
+            },
+            "reference/proteins.tsv": {
+              "bytes": 87656,
+              "sha256": "6f449d60e59921c1f1ae07310e9d1043a2092adf69647a8291cf43162c56c377"
+            },
+            "reference/domains.tsv": {
+              "bytes": 1840,
+              "sha256": "d876b1a1bd4c936366dcc49336675e54aac65ce4805597be400b55298d8b728c"
+            },
+            "reference/domains.domtblout": {
+              "bytes": 2812,
+              "sha256": "97b1b703cd016486d2ebe9b3858a2aefcd23ff4fba16228a839587da455a9748"
+            },
+            "reference/hmmsearch.stderr": {
+              "bytes": 0,
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "reference/hmmsearch.stdout": {
+              "bytes": 8335,
+              "sha256": "26713b93a6c09a021f7ca87f720d3e642655e02d6fcca4a90c456e0066229396"
+            },
+            "oracle/answer.json": {
+              "bytes": 334,
+              "sha256": "c98f9f63b1100296fc0c62fb26f3fe6b83a348b6833170b6ce0fa84543f19365"
+            },
+            "oracle/proteins.tsv": {
+              "bytes": 83252,
+              "sha256": "5f45c4022bbe007e4773b374cb9adf876482bf57264fbe72db87592c4b06cb15"
+            },
+            "oracle/domains.tsv": {
+              "bytes": 1833,
+              "sha256": "2f7e9cac7167649534dc862cd3cce402f7669d54827564f6823dda65cc1480eb"
+            },
+            "oracle/domains.domtblout": {
+              "bytes": 2809,
+              "sha256": "9af49c04ca7952aaab7e5cf84f7d16e87cf90d6e7198b12650ccb9aafc324e34"
+            },
+            "oracle/hmmsearch.stderr": {
+              "bytes": 0,
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            "oracle/hmmsearch.stdout": {
+              "bytes": 8333,
+              "sha256": "3ecd907b40d35bb94400c824f0b4afde1e6e332ec378c9ae781c5a4efae4b984"
+            }
+          },
+          "verification": {
+            "reference": {
+              "reward": 1.0,
+              "status": "scored",
+              "detail": {
+                "checks": [
+                  {
+                    "id": "PF00042.29",
+                    "field": "searched_proteins",
+                    "passed": true,
+                    "expected": 4403,
+                    "actual": 4403
+                  },
+                  {
+                    "id": "PF00042.29",
+                    "field": "matched_proteins",
+                    "passed": true,
+                    "expected": 1,
+                    "actual": 1
+                  },
+                  {
+                    "id": "PF00042.29",
+                    "field": "domains",
+                    "passed": true,
+                    "expected": 1,
+                    "actual": 1
+                  },
+                  {
+                    "id": "PF00042.29",
+                    "field": "covered_residues",
+                    "passed": true,
+                    "expected": 104,
+                    "actual": 104
+                  },
+                  {
+                    "id": "PF00109.33",
+                    "field": "searched_proteins",
+                    "passed": true,
+                    "expected": 4403,
+                    "actual": 4403
+                  },
+                  {
+                    "id": "PF00109.33",
+                    "field": "matched_proteins",
+                    "passed": true,
+                    "expected": 4,
+                    "actual": 4
+                  },
+                  {
+                    "id": "PF00109.33",
+                    "field": "domains",
+                    "passed": true,
+                    "expected": 4,
+                    "actual": 4
+                  },
+                  {
+                    "id": "PF00109.33",
+                    "field": "covered_residues",
+                    "passed": true,
+                    "expected": 570,
+                    "actual": 570
+                  },
+                  {
+                    "id": "PF00115.26",
+                    "field": "searched_proteins",
+                    "passed": true,
+                    "expected": 4403,
+                    "actual": 4403
+                  },
+                  {
+                    "id": "PF00115.26",
+                    "field": "matched_proteins",
+                    "passed": true,
+                    "expected": 1,
+                    "actual": 1
+                  },
+                  {
+                    "id": "PF00115.26",
+                    "field": "domains",
+                    "passed": true,
+                    "expected": 1,
+                    "actual": 1
+                  },
+                  {
+                    "id": "PF00115.26",
+                    "field": "covered_residues",
+                    "passed": true,
+                    "expected": 449,
+                    "actual": 449
+                  }
+                ],
+                "artifact_checks": {
+                  "domains.tsv": {
+                    "passed": true,
+                    "rows": 6,
+                    "missing": [],
+                    "failures": []
+                  },
+                  "proteins.tsv": {
+                    "passed": true,
+                    "rows": 4403,
+                    "missing": [],
+                    "failures": []
+                  }
+                }
+              }
+            },
+            "oracle": {
+              "reward": 1.0,
+              "status": "scored",
+              "detail": {
+                "checks": [
+                  {
+                    "id": "PF00042.29",
+                    "field": "searched_proteins",
+                    "passed": true,
+                    "expected": 4403,
+                    "actual": 4403
+                  },
+                  {
+                    "id": "PF00042.29",
+                    "field": "matched_proteins",
+                    "passed": true,
+                    "expected": 1,
+                    "actual": 1
+                  },
+                  {
+                    "id": "PF00042.29",
+                    "field": "domains",
+                    "passed": true,
+                    "expected": 1,
+                    "actual": 1
+                  },
+                  {
+                    "id": "PF00042.29",
+                    "field": "covered_residues",
+                    "passed": true,
+                    "expected": 104,
+                    "actual": 104
+                  },
+                  {
+                    "id": "PF00109.33",
+                    "field": "searched_proteins",
+                    "passed": true,
+                    "expected": 4403,
+                    "actual": 4403
+                  },
+                  {
+                    "id": "PF00109.33",
+                    "field": "matched_proteins",
+                    "passed": true,
+                    "expected": 4,
+                    "actual": 4
+                  },
+                  {
+                    "id": "PF00109.33",
+                    "field": "domains",
+                    "passed": true,
+                    "expected": 4,
+                    "actual": 4
+                  },
+                  {
+                    "id": "PF00109.33",
+                    "field": "covered_residues",
+                    "passed": true,
+                    "expected": 570,
+                    "actual": 570
+                  },
+                  {
+                    "id": "PF00115.26",
+                    "field": "searched_proteins",
+                    "passed": true,
+                    "expected": 4403,
+                    "actual": 4403
+                  },
+                  {
+                    "id": "PF00115.26",
+                    "field": "matched_proteins",
+                    "passed": true,
+                    "expected": 1,
+                    "actual": 1
+                  },
+                  {
+                    "id": "PF00115.26",
+                    "field": "domains",
+                    "passed": true,
+                    "expected": 1,
+                    "actual": 1
+                  },
+                  {
+                    "id": "PF00115.26",
+                    "field": "covered_residues",
+                    "passed": true,
+                    "expected": 449,
+                    "actual": 449
+                  }
+                ],
+                "artifact_checks": {
+                  "domains.tsv": {
+                    "passed": true,
+                    "rows": 6,
+                    "missing": [],
+                    "failures": []
+                  },
+                  "proteins.tsv": {
+                    "passed": true,
+                    "rows": 4403,
+                    "missing": [],
+                    "failures": []
+                  }
+                }
+              }
+            },
+            "changed:domains.tsv": {
+              "reward": 0.0,
+              "status": "scored",
+              "detail": {
+                "checks": [
+                  {
+                    "id": "PF00042.29",
+                    "field": "searched_proteins",
+                    "passed": true,
+                    "expected": 4403,
+                    "actual": 4403
+                  },
+                  {
+                    "id": "PF00042.29",
+                    "field": "matched_proteins",
+                    "passed": true,
+                    "expected": 1,
+                    "actual": 1
+                  },
+                  {
+                    "id": "PF00042.29",
+                    "field": "domains",
+                    "passed": true,
+                    "expected": 1,
+                    "actual": 1
+                  },
+                  {
+                    "id": "PF00042.29",
+                    "field": "covered_residues",
+                    "passed": true,
+                    "expected": 104,
+                    "actual": 104
+                  },
+                  {
+                    "id": "PF00109.33",
+                    "field": "searched_proteins",
+                    "passed": true,
+                    "expected": 4403,
+                    "actual": 4403
+                  },
+                  {
+                    "id": "PF00109.33",
+                    "field": "matched_proteins",
+                    "passed": true,
+                    "expected": 4,
+                    "actual": 4
+                  },
+                  {
+                    "id": "PF00109.33",
+                    "field": "domains",
+                    "passed": true,
+                    "expected": 4,
+                    "actual": 4
+                  },
+                  {
+                    "id": "PF00109.33",
+                    "field": "covered_residues",
+                    "passed": true,
+                    "expected": 570,
+                    "actual": 570
+                  },
+                  {
+                    "id": "PF00115.26",
+                    "field": "searched_proteins",
+                    "passed": true,
+                    "expected": 4403,
+                    "actual": 4403
+                  },
+                  {
+                    "id": "PF00115.26",
+                    "field": "matched_proteins",
+                    "passed": true,
+                    "expected": 1,
+                    "actual": 1
+                  },
+                  {
+                    "id": "PF00115.26",
+                    "field": "domains",
+                    "passed": true,
+                    "expected": 1,
+                    "actual": 1
+                  },
+                  {
+                    "id": "PF00115.26",
+                    "field": "covered_residues",
+                    "passed": true,
+                    "expected": 449,
+                    "actual": 449
+                  }
+                ],
+                "artifact_checks": {
+                  "domains.tsv": {
+                    "passed": false,
+                    "rows": 6,
+                    "missing": [],
+                    "failures": [
+                      {
+                        "id": "PF00042.29:P24232:1",
+                        "field": "sequence"
+                      }
+                    ]
+                  },
+                  "proteins.tsv": {
+                    "passed": true,
+                    "rows": 4403,
+                    "missing": [],
+                    "failures": []
+                  }
+                }
+              }
+            },
+            "changed:proteins.tsv": {
+              "reward": 0.0,
+              "status": "scored",
+              "detail": {
+                "checks": [
+                  {
+                    "id": "PF00042.29",
+                    "field": "searched_proteins",
+                    "passed": true,
+                    "expected": 4403,
+                    "actual": 4403
+                  },
+                  {
+                    "id": "PF00042.29",
+                    "field": "matched_proteins",
+                    "passed": true,
+                    "expected": 1,
+                    "actual": 1
+                  },
+                  {
+                    "id": "PF00042.29",
+                    "field": "domains",
+                    "passed": true,
+                    "expected": 1,
+                    "actual": 1
+                  },
+                  {
+                    "id": "PF00042.29",
+                    "field": "covered_residues",
+                    "passed": true,
+                    "expected": 104,
+                    "actual": 104
+                  },
+                  {
+                    "id": "PF00109.33",
+                    "field": "searched_proteins",
+                    "passed": true,
+                    "expected": 4403,
+                    "actual": 4403
+                  },
+                  {
+                    "id": "PF00109.33",
+                    "field": "matched_proteins",
+                    "passed": true,
+                    "expected": 4,
+                    "actual": 4
+                  },
+                  {
+                    "id": "PF00109.33",
+                    "field": "domains",
+                    "passed": true,
+                    "expected": 4,
+                    "actual": 4
+                  },
+                  {
+                    "id": "PF00109.33",
+                    "field": "covered_residues",
+                    "passed": true,
+                    "expected": 570,
+                    "actual": 570
+                  },
+                  {
+                    "id": "PF00115.26",
+                    "field": "searched_proteins",
+                    "passed": true,
+                    "expected": 4403,
+                    "actual": 4403
+                  },
+                  {
+                    "id": "PF00115.26",
+                    "field": "matched_proteins",
+                    "passed": true,
+                    "expected": 1,
+                    "actual": 1
+                  },
+                  {
+                    "id": "PF00115.26",
+                    "field": "domains",
+                    "passed": true,
+                    "expected": 1,
+                    "actual": 1
+                  },
+                  {
+                    "id": "PF00115.26",
+                    "field": "covered_residues",
+                    "passed": true,
+                    "expected": 449,
+                    "actual": 449
+                  }
+                ],
+                "artifact_checks": {
+                  "domains.tsv": {
+                    "passed": true,
+                    "rows": 6,
+                    "missing": [],
+                    "failures": []
+                  },
+                  "proteins.tsv": {
+                    "passed": false,
+                    "rows": 4403,
+                    "missing": [],
+                    "failures": [
+                      {
+                        "id": "A0A385XJ53",
+                        "field": "covered_residues"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "resources": {
+            "domain-reference": {
+              "module": "experiments.post_training.bio_tasks.sources.prepare_domains",
+              "status": "passed",
+              "seconds": 0.5538547089963686,
+              "peak_rss_kib": 60980,
+              "finished_at": "2026-09-24T07:47:34.876542+00:00"
+            },
+            "domain-validation": {
+              "module": "validate_domains",
+              "status": "passed",
+              "seconds": 0.65590538700053,
+              "peak_rss_kib": 44432,
+              "finished_at": "2026-09-24T07:47:35.593290+00:00"
+            }
+          }
+        }
+      ],
+      "environment": {
+        "resolved_packages": [
+          {
+            "name": "_openmp_mutex",
+            "version": "4.5",
+            "build": "20_gnu",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda",
+            "sha256": "1dd3fffd892081df9726d7eb7e0dea6198962ba775bd88842135a4ddb4deb3c9",
+            "md5": "a9f577daf3de00bca7c3c76c0ecbd1de",
+            "size_bytes": 28948,
+            "metadata_url": "https://api.anaconda.org/release/conda-forge/_openmp_mutex/4.5",
+            "metadata_sha256": "199c29f9fb97a50ac731aae270495d119d59f9863ad113aaf4811778ef5d8406"
+          },
+          {
+            "name": "libgcc",
+            "version": "16.2.0",
+            "build": "ha9f2e26_5",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libgcc-16.2.0-ha9f2e26_5.conda",
+            "sha256": "33d1b5d57c5a55a474330c5ec41fe7001a5aa600d9639389e8ce5edafae216a4",
+            "md5": "3b62b92f0f082b67c59618ebf07617a7",
+            "size_bytes": 1057064,
+            "metadata_url": "https://api.anaconda.org/release/conda-forge/libgcc/16.2.0",
+            "metadata_sha256": "7b520bddd5281f155390f74e2268ae82594ed0a53136fb7e6f97a1776f6a201a"
+          },
+          {
+            "name": "libgomp",
+            "version": "16.2.0",
+            "build": "he0feb66_5",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libgomp-16.2.0-he0feb66_5.conda",
+            "sha256": "224a5a09e258a1a257089a9af310e9336e1d36834959718a9fab8679742dd822",
+            "md5": "af44890f8a2beefd3a83805a59a65014",
+            "size_bytes": 641644,
+            "metadata_url": "https://api.anaconda.org/release/conda-forge/libgomp/16.2.0",
+            "metadata_sha256": "de4772c7a4f8e8719d5ddfceaafe8811ce0cb2e700e641e032824e5575cfc24c"
+          },
+          {
+            "name": "libstdcxx",
+            "version": "16.2.0",
+            "build": "h934c35e_5",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/conda-forge/linux-64/libstdcxx-16.2.0-h934c35e_5.conda",
+            "sha256": "38cadde30fad8f7c101f9eec79f60bf03fc99310c7195d23f8b30832516d666f",
+            "md5": "75b43a2912a0354204696708e4f34b8d",
+            "size_bytes": 6618916,
+            "metadata_url": "https://api.anaconda.org/release/conda-forge/libstdcxx/16.2.0",
+            "metadata_sha256": "524aa65a1f014534100d1adc8bee2112c105b5ea8547c0fc964e3810809258f9"
+          },
+          {
+            "name": "hmmer",
+            "version": "3.4",
+            "build": "h503566f_3",
+            "subdir": "linux-64",
+            "url": "https://conda.anaconda.org/bioconda/linux-64/hmmer-3.4-h503566f_3.tar.bz2",
+            "sha256": "d3c37ebbd6254cded0937c1f3d389f8c8c0ca59986aa61846c476e41a82e3c27",
+            "md5": "0536103ba1af5d75454868affd7575c1",
+            "size_bytes": 11627027,
+            "metadata_url": "https://api.anaconda.org/release/bioconda/hmmer/3.4",
+            "metadata_sha256": "2d36d24ed37b49c3e841769a54dd9e68ab9cafef3d0cd2a6c25fc1bbd1422feb"
+          }
+        ],
+        "runtime_lock_sha256": "a71b166938087d7b0c6c4fc0a158b8ff35f6b62d122947ec45f983cd277fdc7e",
+        "versions": {
+          "hmmer": "3.4",
+          "biopython": "1.86"
+        },
+        "build_note": "HMMER 3.4 h503566f_3 is the serial Bioconda build. Its exact five-package dependency closure is provider-checksummed. No MPI dependency; one CPU. Scanpy installation is represented by its previously validated package lock in the packaged task."
+      },
+      "limits": "Complete 4,403-protein observed proteome, but only three supplied Pfam models. A no-hit result is not absence of biological domains or functions. Biopython and the independent standard-library parser measure the same native HMMER search. Package/Harbor task validation and benchmark-lineage review remain pending."
+    }
+  ]
+}
