@@ -214,8 +214,6 @@ only its assigned applet behind the same authentication. Its root redirects
 to `/v/<current>/` on that host; assets, queries, and Python APIs remain pinned
 to that revision. Existing URLs on `MARINA_APPLET_ORIGIN` remain valid.
 
-Zephyr's execution dashboard is a checked-in app at `https://marina.oa.dev/zephyr/`.
-
 ## Deploying
 
 ```bash
