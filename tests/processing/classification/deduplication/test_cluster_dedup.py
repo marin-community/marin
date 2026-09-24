@@ -7,8 +7,11 @@ from itertools import permutations
 
 import pytest
 from marin.processing.classification.deduplication.cluster_dedup import (
+    CandidateDuplicate,
     ClusterDedupParams,
-    find_duplicates,
+    Removal,
+    find_candidate_duplicates,
+    resolve_duplicate_clusters,
 )
 
 ORIGINAL = (
@@ -38,10 +41,19 @@ BLANK = " \n\t" * 100
 no n-gram."""
 
 
+def _removals(documents: dict[str, str], params: ClusterDedupParams | None = None) -> list[Removal]:
+    document_texts = list(documents.values())
+    params = params or ClusterDedupParams()
+    candidates = find_candidate_duplicates(document_texts, params)
+    return resolve_duplicate_clusters(document_texts, candidates, params)
+
+
 def _removed_by(documents: dict[str, str], params: ClusterDedupParams | None = None) -> dict[str, str]:
     """Map the id of each removed document to the id of the survivor that holds it."""
-    removals = find_duplicates(list(documents.values()), params or ClusterDedupParams())
-    return {list(documents)[removal.member_index]: list(documents)[removal.representative_index] for removal in removals}
+    return {
+        list(documents)[removal.member_index]: list(documents)[removal.representative_index]
+        for removal in _removals(documents, params)
+    }
 
 
 NESTED_EXCERPTS = {
@@ -57,7 +69,7 @@ NESTED_EXCERPTS = {
 def test_lightly_edited_copy_is_removed_at_the_default_threshold():
     documents = {"original": ORIGINAL, "copy": SHORTER_COPY}
 
-    (removal,) = find_duplicates(list(documents.values()), ClusterDedupParams())
+    (removal,) = _removals(documents)
 
     assert list(documents)[removal.member_index] == "copy"
     assert list(documents)[removal.representative_index] == "original"
@@ -100,7 +112,7 @@ def test_near_duplicate_pair_removes_only_the_shorter_document(copy_text, expect
 def test_strict_excerpt_is_removed_with_no_novel_tokens():
     documents = {"original": ORIGINAL, "excerpt": EXCERPT}
 
-    (removal,) = find_duplicates(list(documents.values()), ClusterDedupParams())
+    (removal,) = _removals(documents)
 
     assert list(documents)[removal.member_index] == "excerpt"
     assert list(documents)[removal.representative_index] == "original"
@@ -202,6 +214,45 @@ def test_production_candidate_cap_applies_before_removed_representatives_are_exc
     removed = _removed_by(documents, params)
 
     assert removed == {"bridge": "representative"}
+
+
+def test_resolver_uses_external_candidates_and_skips_removed_representatives():
+    documents = [ORIGINAL, SHORTER_COPY, EXCERPT]
+    candidate_groups = [
+        (
+            CandidateDuplicate(
+                member_index=1,
+                representative_index=0,
+                containment=26 / 29,
+                jaccard=26 / 32,
+            ),
+        ),
+        (
+            CandidateDuplicate(member_index=2, representative_index=1, containment=1.0, jaccard=14 / 29),
+            CandidateDuplicate(member_index=2, representative_index=0, containment=1.0, jaccard=14 / 29),
+        ),
+    ]
+
+    removals = resolve_duplicate_clusters(documents, candidate_groups, ClusterDedupParams())
+
+    assert removals == [
+        Removal(
+            member_index=1,
+            representative_index=0,
+            containment=26 / 29,
+            jaccard=26 / 32,
+            novel_tokens=1,
+            comparisons=1,
+        ),
+        Removal(
+            member_index=2,
+            representative_index=0,
+            containment=1.0,
+            jaccard=14 / 29,
+            novel_tokens=0,
+            comparisons=1,
+        ),
+    ]
 
 
 @pytest.mark.parametrize("ngram_size", [3, 5])

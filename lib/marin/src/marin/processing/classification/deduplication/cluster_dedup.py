@@ -19,7 +19,7 @@ Common postings remain eligible when every posting exceeds the limit. Indexed
 candidate ties use NumPy selection order, which can change across NumPy versions.
 """
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
@@ -72,6 +72,16 @@ class Removal:
     """Comparisons for this member through its first accepted representative."""
 
 
+@dataclass(frozen=True)
+class CandidateDuplicate:
+    """Scores for one possible member and representative pair."""
+
+    member_index: int
+    representative_index: int
+    containment: float
+    jaccard: float
+
+
 def ngram_hashes(text: str, ngram_size: int) -> np.ndarray:
     """Sorted unique 64-bit hashes of the case-folded word n-grams.
 
@@ -106,15 +116,16 @@ def _prepare(documents: Sequence[str], params: ClusterDedupParams) -> list[_Prep
 
 
 def _novel_token_count(
-    member: _PreparedDocument,
-    representative: _PreparedDocument,
+    member_index: int,
+    representative_index: int,
+    documents: Sequence[str],
     cache: dict[int, frozenset[str]],
 ) -> int:
     """Words of the member that the representative does not hold."""
-    for document in (member, representative):
-        if document.index not in cache:
-            cache[document.index] = frozenset(document.text.casefold().split())
-    return len(cache[member.index] - cache[representative.index])
+    for index in (member_index, representative_index):
+        if index not in cache:
+            cache[index] = frozenset(documents[index].casefold().split())
+    return len(cache[member_index] - cache[representative_index])
 
 
 def _overlap(left: np.ndarray, right: np.ndarray) -> int:
@@ -195,16 +206,24 @@ def _index_candidates(
     return distinct[np.argsort(-shared)].astype(np.int32)
 
 
-def find_duplicates(
+def find_candidate_duplicates(
     documents: Sequence[str],
     params: ClusterDedupParams,
-) -> list[Removal]:
-    """Find a subset of duplicate members against earlier surviving documents.
+) -> Iterator[tuple[CandidateDuplicate, ...]]:
+    """Find scored candidates for each member in comparison order.
 
     Representatives have at least as many characters as their members.
     Input order resolves equal-length processing ties. Indexed candidates use
-    shared probe counts, including NumPy tie order, to select a representative.
-    Removed documents cannot act as representatives.
+    shared probe counts, including NumPy tie order, to order representatives.
+
+    Args:
+        documents: Text for each cluster member.
+        params: Duplicate-rule thresholds and work bounds.
+
+    Yields:
+        One tuple for each member that has possible representatives. A tuple
+        includes scores below the containment threshold so the resolver can
+        calculate the comparison count.
     """
     prepared = _prepare(documents, params)
     order = sorted(range(len(prepared)), key=lambda index: (-prepared[index].chars, index))
@@ -212,11 +231,7 @@ def find_duplicates(
     rank[order] = np.arange(len(order))
     ngram_index = _build_index(prepared) if len(prepared) > params.exact_scan_maximum else None
 
-    removed = np.zeros(len(prepared), dtype=bool)
-    removals: list[Removal] = []
-    token_cache: dict[int, frozenset[str]] = {}
     for position, member in enumerate(order):
-        comparisons = 0
         member_prepared = prepared[member]
         if member_prepared.ngrams.size == 0:
             continue
@@ -225,25 +240,64 @@ def find_duplicates(
             if ngram_index is None
             else _index_candidates(member_prepared, ngram_index, rank, params).tolist()
         )
+        candidate_duplicates = []
         for representative in candidates:
-            if removed[representative]:
-                continue
             other = prepared[representative]
-            comparisons += 1
             shared = _overlap(member_prepared.ngrams, other.ngrams)
             containment = shared / member_prepared.ngrams.size
-            if containment < params.minimum_containment:
-                continue
-            novel_tokens = _novel_token_count(member_prepared, other, token_cache)
             union = member_prepared.ngrams.size + other.ngrams.size - shared
-            removed[member] = True
-            removals.append(
-                Removal(
+            candidate_duplicates.append(
+                CandidateDuplicate(
                     member_index=member,
                     representative_index=representative,
                     containment=containment,
                     jaccard=shared / union if union else 1.0,
-                    novel_tokens=novel_tokens,
+                )
+            )
+        if candidate_duplicates:
+            yield tuple(candidate_duplicates)
+
+
+def resolve_duplicate_clusters(
+    documents: Sequence[str],
+    candidate_groups: Iterable[Sequence[CandidateDuplicate]],
+    params: ClusterDedupParams,
+) -> list[Removal]:
+    """Select cluster representatives from scored candidate groups.
+
+    Args:
+        documents: Text for each cluster member.
+        candidate_groups: Groups in member processing order. Each group holds
+            one member's candidates in representative comparison order.
+        params: Duplicate-rule thresholds and work bounds.
+
+    Returns:
+        The removed members and their selected representatives.
+    """
+    removed = np.zeros(len(documents), dtype=bool)
+    removals: list[Removal] = []
+    token_cache: dict[int, frozenset[str]] = {}
+    for candidates in candidate_groups:
+        comparisons = 0
+        for candidate in candidates:
+            if removed[candidate.representative_index]:
+                continue
+            comparisons += 1
+            if candidate.containment < params.minimum_containment:
+                continue
+            removed[candidate.member_index] = True
+            removals.append(
+                Removal(
+                    member_index=candidate.member_index,
+                    representative_index=candidate.representative_index,
+                    containment=candidate.containment,
+                    jaccard=candidate.jaccard,
+                    novel_tokens=_novel_token_count(
+                        candidate.member_index,
+                        candidate.representative_index,
+                        documents,
+                        token_cache,
+                    ),
                     comparisons=comparisons,
                 )
             )
