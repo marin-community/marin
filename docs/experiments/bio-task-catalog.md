@@ -279,6 +279,7 @@ benchmark answers and biological fixtures are excluded from training authoring.
 | [BixBench](../../experiments/post_training/bio_tasks/benchmark_tasks/bixbench.json) | 205 | — |
 | [CompBioBench](../../experiments/post_training/bio_tasks/benchmark_tasks/compbiobench.json) | 100 | — |
 | [BiomniBench-DA](../../experiments/post_training/bio_tasks/benchmark_tasks/biomnibench-da.json) | 50 | — |
+| [Biomni-Eval1, tool-enabled](../../experiments/post_training/bio_tasks/benchmark_tasks/biomni-eval1.json) | All 433 IDs and source categories; 100 sequence/database endpoints assessed | — |
 | [BioAgent](../../experiments/post_training/bio_tasks/benchmark_tasks/bioagent.json) | 10 | — |
 | [scBench](../../experiments/post_training/bio_tasks/benchmark_tasks/scbench.json) | 6 | 195 |
 | [SpatialBench](../../experiments/post_training/bio_tasks/benchmark_tasks/spatialbench.json) | 16 | 159 |
@@ -303,11 +304,26 @@ benchmark answers and biological fixtures are excluded from training authoring.
 | [TxBench-Ab](../../experiments/post_training/bio_tasks/benchmark_tasks/txbench-ab.json) | All six public prompts; inputs, ground truth and graders withheld | 100 |
 | [TxBench-OD](../../experiments/post_training/bio_tasks/benchmark_tasks/txbench-od.json) | All four public prompts; inputs, ground truth and graders withheld | 113 |
 
-Of these 1,791 ID task/protocol/definition records, 46 have manually assessed component mappings,
-1,744 are unmapped and one is excluded from authoring. None is marked workflow-validated. Other eligible sources
+Of these 2,224 ID task/protocol/definition records, 46 have manually assessed component mappings,
+2,177 are unmapped and one is excluded from authoring. None is marked workflow-validated. Other eligible sources
 still need task-level inspection. The 90
 [BioMysteryBench identifiers](../../experiments/post_training/bio_tasks/benchmark_tasks/biomysterybench.json)
 are tracked separately as OOD, without workflow patterns or training mappings.
+
+Biomni-Eval1 has ten source categories and 20 assessed workflow patterns. Its
+compound task name and task-specific ID identify an evaluation item; the global
+row ID is a different field. The 100 LAB-Bench-derived questions cover sequence
+operations and database queries. Other categories include association evidence,
+perturbation screens and phenotype-based prioritization; their instance-specific
+scientific evidence remains unreviewed. The inspected evaluator uses deterministic
+answer checks, including a permissive gene-list intersection check. It has not
+been executed, and no recipe coverage is assigned. Answers and benchmark sequence
+fixtures are excluded from authoring.
+
+LABBench2's pinned dataset card declares 1,912 rows in its `all` configuration.
+The public harness and card are inspected, but existing access lacks the dataset
+gate grant. Its task rows are not included in the inventory count. Category
+subsets and image/PDF variants must be reconciled before counting distinct tasks.
 
 The COX1 recipe supplies per-tree treeness, length and pair-distance components
 for 18 original BixBench endpoints and five overlapping Verified-50 protocols.

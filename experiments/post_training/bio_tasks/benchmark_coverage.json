@@ -370,6 +370,20 @@
       "tasks_file": "benchmark_tasks/txbench-od.json",
       "source_inventory_name": "TxBench-OD \u2014 oligonucleotide discovery",
       "task_inventory_status": "public-subset-patterns-assessed; full suite unavailable"
+    },
+    "Biomni-Eval1 tool-enabled": {
+      "revision": "51f97feb9e377fac7384faae49046bc067283c38",
+      "source_url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "metadata_sha256": "d6c7844f32b3eef655e0f83f2357f873a4bc14c1566e4fba76a051bbc6c9bf02",
+      "inventory_count": 433,
+      "public_inventory_count": 433,
+      "training_mapping_allowed": true,
+      "distribution": "ID",
+      "tasks_file": "benchmark_tasks/biomni-eval1.json",
+      "source_inventory_name": "Biomni-Eval1 \u2014 tool-enabled",
+      "task_inventory_status": "all-identifiers-and-source-categories; 100-sequence-database-question-endpoints-reviewed",
+      "workflow_patterns": 20,
+      "source_evaluator_executed": false
     }
   },
   "assessment_policy": "ID workflow prerequisites are manually inferred from permitted task descriptions. Shared family stages may exceed an individual endpoint; assess that endpoint before claiming coverage. Benchmark answers and biological fixtures are excluded from authoring."
