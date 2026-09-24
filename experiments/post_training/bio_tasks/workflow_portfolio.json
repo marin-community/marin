@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T16:35:25.945983+00:00",
+  "updated_at": "2026-09-24T16:41:59.435199+00:00",
   "scope": "Full question-proposal portfolio for the 31 currently inventoried provisional-ID agentic releases. This planning index resolves every question card and records conditional consolidation; it creates no training task or validated coverage. Eleven source leads without inventories remain outside the enumerated denominator.",
   "counts": {
     "source_releases": 31,
@@ -46,7 +46,7 @@
     },
     {
       "path": "workflow_designs/biomni-eval1.json",
-      "sha256": "864673bb49d1935b5843bb0fbae0da0e3ce504a186dc46068c00bd27d31c7d6c"
+      "sha256": "7f8b41d2dfae49cb233c15292afb625232c290221f3e0baf05af30eb3ffcd27b"
     },
     {
       "path": "workflow_designs/biokgbench.json",
@@ -5552,7 +5552,7 @@
     },
     {
       "proposed_task_id": "portfolio-biomni-eval1-gwas-variant-evidence",
-      "scientific_question": "Which independent association variants retain support after allele, assembly, credible-set and functional-evidence reconciliation?",
+      "scientific_question": "Which candidate variants have the strongest reproducible association evidence for an independently selected phenotype under an explicit study and ranking rule?",
       "question_card_ids": [
         "portfolio-biomni-eval1-gwas-variant-evidence"
       ],
@@ -5567,7 +5567,7 @@
     },
     {
       "proposed_task_id": "portfolio-biomni-eval1-gwas-causal-gene-evidence",
-      "scientific_question": "Which gene hypotheses are supported by an independently observed association locus under an explicit evidence hierarchy that separates proximity from causal support?",
+      "scientific_question": "Which candidate genes have the strongest independently sourced locus-to-gene evidence, and where do proximity, association and functional evidence disagree?",
       "question_card_ids": [
         "portfolio-biomni-eval1-gwas-causal-gene-evidence"
       ],
@@ -5582,7 +5582,7 @@
     },
     {
       "proposed_task_id": "portfolio-biomni-eval1-screen-context-gene-retrieval",
-      "scientific_question": "Which genes meet a prespecified observed screen phenotype after experimental context, hit thresholds and negative controls are reconciled?",
+      "scientific_question": "Which candidate genes have the strongest measured perturbation effect in an independently observed screen with matching experimental context?",
       "question_card_ids": [
         "portfolio-biomni-eval1-screen-context-gene-retrieval"
       ],
@@ -5597,7 +5597,7 @@
     },
     {
       "proposed_task_id": "portfolio-biomni-eval1-phenotype-gene-prioritization",
-      "scientific_question": "Which candidate genes remain compatible with an independently curated phenotype profile and observed variant evidence under explicit scoring rules?",
+      "scientific_question": "Which candidate genes best match independently observed phenotype profiles under a declared ontology-aware evidence model?",
       "question_card_ids": [
         "portfolio-biomni-eval1-phenotype-gene-prioritization"
       ],
@@ -5612,7 +5612,7 @@
     },
     {
       "proposed_task_id": "portfolio-biomni-eval1-rare-disease-evidence",
-      "scientific_question": "Which structured gene-disease hypotheses are supported or unresolved by a frozen independent phenotype, inheritance and variant-evidence record?",
+      "scientific_question": "Which disease hypotheses remain supported by independently observed phenotypes and a supplied gene under an explicit, versioned evidence model?",
       "question_card_ids": [
         "portfolio-biomni-eval1-rare-disease-evidence"
       ],
@@ -5627,7 +5627,7 @@
     },
     {
       "proposed_task_id": "portfolio-biomni-eval1-delivery-method-selection",
-      "scientific_question": "Which generic delivery-method claims are supported by independently published assay measurements under explicit cell-context and measurement criteria?",
+      "scientific_question": "Which delivery-method comparisons are supported by independently published measurements in a matched biological context under explicit outcome criteria?",
       "question_card_ids": [
         "portfolio-biomni-eval1-delivery-method-selection"
       ],
@@ -10328,6 +10328,13 @@
       "family_contracts_refined": 7,
       "design_file": "workflow_designs/biomni-eval1.json",
       "limits": "Restore translation-efficiency endpoint and retain its observed-measurement adaptation gap. Preserve per-ID digest, ORF, amplicon and cloning query modes; independent inputs, conventions and runtime remain unresolved. Counts and validated coverage unchanged."
+    },
+    {
+      "source": "Biomni-Eval1 prioritization and context-choice protocols",
+      "prompt_structures_audited": 333,
+      "family_contracts_refined": 6,
+      "design_file": "workflow_designs/biomni-eval1.json",
+      "limits": "Per-instance biological evidence remains unreviewed. Ten groups of identical prompts remain separately inventoried without independent-context credit. Causal, disease and delivery conclusions are not proved by deterministic ranking alone. Counts and validated coverage unchanged."
     }
   ]
 }

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T16:35:25.945983+00:00",
-  "scope": "Question planning for 433 Biomni-Eval1 tool-enabled records in 20 families. All 100 DBQA/SeqQA question stems have endpoint-specific proposed contracts across 14 families; other family inspection limits remain. No implementation or validated coverage.",
+  "updated_at": "2026-09-24T16:41:59.435199+00:00",
+  "scope": "Question planning for 433 Biomni-Eval1 tool-enabled records in 20 families. All 100 DBQA/SeqQA stems are reviewed; the other 333 prompt structures are audited across eight protocols and six families. All families have proposed endpoint-specific contracts, but individual biological evidence, independent inputs and runtime remain unresolved. No implementation or validated coverage.",
   "basis_revision": "26e308ecb2",
   "counts": {
     "source_releases": 1,
@@ -11,7 +11,9 @@
     "dbqa_question_stems_reviewed": 50,
     "dbqa_family_contracts_refined": 7,
     "seqqa_question_stems_reviewed": 50,
-    "seqqa_family_contracts_refined": 7
+    "seqqa_family_contracts_refined": 7,
+    "additional_prompt_structures_audited": 333,
+    "additional_family_contracts_refined": 6
   },
   "defaults": {
     "data": "Independent observed inputs and native data formats; preserve real biological replication and lineage. No source benchmark fixtures, expected labels or answer text used for task authoring.",
@@ -30,7 +32,7 @@
     {
       "proposed_id": "portfolio-biomni-eval1-gwas-variant-evidence",
       "benchmark": "Biomni-Eval1 tool-enabled",
-      "scientific_question": "Which independent association variants retain support after allele, assembly, credible-set and functional-evidence reconciliation?",
+      "scientific_question": "Which candidate variants have the strongest reproducible association evidence for an independently selected phenotype under an explicit study and ranking rule?",
       "source_family": "gwas-variant-evidence",
       "benchmark_targets": [
         {
@@ -249,41 +251,112 @@
           "source_task_name": "gwas_variant_prioritization"
         }
       ],
-      "source_inspection_tier": "shared-pattern-only",
+      "source_inspection_tier": "all-prompt-structures-audited-individual-biological-evidence-unreviewed",
       "source_planning_disposition": "instance-endpoint-and-evidence-review",
       "matching_workstreams": [
         "variant-evidence"
       ],
       "required_endpoint_stages": [
-        "normalize phenotype and variant identifiers",
-        "retrieve versioned association evidence",
-        "compare the provided candidates using explicit evidence rules",
-        "report candidate ranking and provenance"
+        "Resolve the phenotype concept, candidate variant identities, genome assembly and eligible studies.",
+        "Align each association to its actual effect allele, cohort and measured phenotype, preserving ambiguous or missing matches.",
+        "Compute the complete candidate evidence ranking using a declared statistic and study-selection rule.",
+        "Keep association strength, fine-mapping probability and functional evidence in separate fields; preserve ties and unsupported candidates."
       ],
       "observed_input_requirements": [
-        "Observed variants, matching reference/annotation, frozen consequence/frequency/clinical evidence and provenance; observed assays for functional validation."
+        "Observed association summary statistics or source association records, trait ontology mappings, study/cohort metadata and versioned rs-to-allele mappings. Source prompts supply a trait and rs candidates, not individual genotypes; a VCF is optional only when allele harmonization requires it."
       ],
       "required_formats": [
-        "phenotype description",
-        "rs identifiers",
-        "versioned association tables"
+        "GWAS summary-statistic TSV or documented association export",
+        "trait ontology mapping",
+        "rs/allele/reference mapping"
       ],
       "proposed_artifact_requirements": [
-        "Normalized VCF, consequence transcript table, evidence rows with accession/date, exclusion rationale and sequence products where appropriate"
+        "candidate_identity.tsv: query_id, candidate_id, rs_id, assembly, chromosome, position, alleles, mapping_status",
+        "association_evidence.tsv: query_id, candidate_id, study_id, trait_id, ancestry, sample_size, effect_allele, effect_type, effect, standard_error, p_value, source_record_id",
+        "candidate_ranking.tsv: query_id, candidate_id, eligible_evidence_count, ranking_statistic, rank, tie_group, disposition",
+        "analysis_spec.json: trait matching, eligible studies, allele rules and candidate-selection criterion"
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "Define what strongest means before observing outcomes; do not mix p-values, fine-mapping probabilities and effect magnitudes into an unstated score.",
+        "Handle multiple cohorts and repeated publication records without pseudoreplication; related traits are not interchangeable.",
+        "Preserve p-value precision, censored values and odds-ratio versus beta semantics; ambiguous alleles must not receive invented effect directions."
+      ],
       "deterministic_verification_approach": [
-        "Actual annotation package plus independent coordinate/translation checks; deterministic evidence rules with unknown/conflicting outcomes; verify function only against observed assays."
+        "Use a pinned native summary-statistic parser/harmonizer and independent identity, eligibility and ranking checks. Compare all evidence rows and all candidate ranks; validate any numerical transformation with explicit tolerances."
       ],
-      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "status": "shared-schema-contract-planned-individual-evidence-and-inputs-unresolved",
       "validated_new_mappings": 0,
-      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
-      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+      "evaluation_contract": "Verify complete candidate evidence and outputs under frozen scientific rules, including ambiguity, missingness and all declared selection constraints. A deterministic algorithm output does not independently establish biological causality or clinical truth.",
+      "source_protocol_limits": "The 43 source prompts request one associated rs identifier without specifying evidence rules. The authored rule must be explicit; reproducing a database rank does not prove a causal variant. Instance-specific source evidence and label provenance remain unreviewed.",
+      "endpoint_contract_review": {
+        "schema_audited_task_ids": [
+          "gwas_variant_prioritization:134",
+          "gwas_variant_prioritization:178",
+          "gwas_variant_prioritization:197",
+          "gwas_variant_prioritization:63",
+          "gwas_variant_prioritization:54",
+          "gwas_variant_prioritization:107",
+          "gwas_variant_prioritization:50",
+          "gwas_variant_prioritization:174",
+          "gwas_variant_prioritization:211",
+          "gwas_variant_prioritization:169",
+          "gwas_variant_prioritization:58",
+          "gwas_variant_prioritization:48",
+          "gwas_variant_prioritization:88",
+          "gwas_variant_prioritization:21",
+          "gwas_variant_prioritization:57",
+          "gwas_variant_prioritization:160",
+          "gwas_variant_prioritization:207",
+          "gwas_variant_prioritization:187",
+          "gwas_variant_prioritization:129",
+          "gwas_variant_prioritization:37",
+          "gwas_variant_prioritization:157",
+          "gwas_variant_prioritization:203",
+          "gwas_variant_prioritization:1",
+          "gwas_variant_prioritization:52",
+          "gwas_variant_prioritization:149",
+          "gwas_variant_prioritization:130",
+          "gwas_variant_prioritization:151",
+          "gwas_variant_prioritization:103",
+          "gwas_variant_prioritization:99",
+          "gwas_variant_prioritization:116",
+          "gwas_variant_prioritization:87",
+          "gwas_variant_prioritization:202",
+          "gwas_variant_prioritization:74",
+          "gwas_variant_prioritization:121",
+          "gwas_variant_prioritization:214",
+          "gwas_variant_prioritization:20",
+          "gwas_variant_prioritization:188",
+          "gwas_variant_prioritization:71",
+          "gwas_variant_prioritization:106",
+          "gwas_variant_prioritization:14",
+          "gwas_variant_prioritization:92",
+          "gwas_variant_prioritization:179",
+          "gwas_variant_prioritization:102"
+        ],
+        "source_metadata_sha256": "d6c7844f32b3eef655e0f83f2357f873a4bc14c1566e4fba76a051bbc6c9bf02",
+        "source_protocols": {
+          "gwas_variant_prioritization": {
+            "records": 43,
+            "normalized_prompt_shapes": 1,
+            "normalized_prompt_shape_sha256": "d55fd29736fdb6b1488552267a03d5fa13d8785a80afc16e29ab8a519772f3a5"
+          }
+        },
+        "review_scope": "All prompt structures audited against the shared source templates; representative biological contexts and delivery descriptions reviewed. Individual association, screen and case evidence has not been reviewed. No source answer column inspected.",
+        "required_incorrect_output_checks": [
+          "Rank by smallest p-value from an unrelated phenotype or incompatible study.",
+          "Flip an allele without updating effect direction.",
+          "Hide unmatched candidates or break a tie by file order."
+        ],
+        "next_input_decision": "Select independent observed studies or cases with permitted reuse; inspect exact schemas, evidence completeness, lineage and endpoint fidelity before implementation.",
+        "runtime_boundary": "Freeze bounded offline evidence bundles and selected native method/model; measure <=30-minute runtime instead of assuming it.",
+        "implementation_ready": false
+      }
     },
     {
       "proposed_id": "portfolio-biomni-eval1-gwas-causal-gene-evidence",
       "benchmark": "Biomni-Eval1 tool-enabled",
-      "scientific_question": "Which gene hypotheses are supported by an independently observed association locus under an explicit evidence hierarchy that separates proximity from causal support?",
+      "scientific_question": "Which candidate genes have the strongest independently sourced locus-to-gene evidence, and where do proximity, association and functional evidence disagree?",
       "source_family": "gwas-causal-gene-evidence",
       "benchmark_targets": [
         {
@@ -1037,41 +1110,230 @@
           "source_task_name": "gwas_causal_gene_gwas_catalog"
         }
       ],
-      "source_inspection_tier": "shared-pattern-only",
+      "source_inspection_tier": "all-prompt-structures-audited-individual-biological-evidence-unreviewed",
       "source_planning_disposition": "instance-endpoint-and-evidence-review",
       "matching_workstreams": [
         "variant-evidence"
       ],
       "required_endpoint_stages": [
-        "resolve phenotype and locus candidates",
-        "join versioned gene and trait evidence",
-        "distinguish association, proximity and causal support",
-        "report a candidate ranking with supporting evidence"
+        "Resolve phenotype, locus and candidate gene identities without assuming the nearest gene is causal.",
+        "Join separate evidence classes by study, locus, allele and biological context.",
+        "Run a pinned, explicitly chosen prioritization method or frozen model and return all candidate features and rankings.",
+        "Audit support, disagreement and missing evidence; retain three source protocol origins separately when assessing endpoint fidelity."
       ],
       "observed_input_requirements": [
-        "Observed variants, matching reference/annotation, frozen consequence/frequency/clinical evidence and provenance; observed assays for functional validation."
+        "Independent observed GWAS loci with versioned candidate gene mappings, credible-set or association evidence and compatible molecular/functional evidence. Preserve the lineage of every study and distinguish model predictions from observations."
       ],
       "required_formats": [
-        "gene symbols and Ensembl identifiers",
-        "phenotype description",
-        "versioned evidence tables"
+        "association/credible-set TSV or Parquet",
+        "gene annotation GTF/GFF3",
+        "QTL/colocalization or functional-evidence export",
+        "trait mappings"
       ],
       "proposed_artifact_requirements": [
-        "Normalized VCF, consequence transcript table, evidence rows with accession/date, exclusion rationale and sequence products where appropriate"
+        "locus_gene_map.tsv: query_id, locus_id, gene_id, source_symbol, mapping_status",
+        "evidence.tsv: query_id, locus_id, gene_id, evidence_class, study_id, tissue, source_record_id, value, unit, observed_or_predicted",
+        "candidate_features.tsv: query_id, gene_id, method_feature_values, missingness",
+        "candidate_ranking.tsv: query_id, gene_id, model_or_rule_version, score, rank, tie_group, support_status"
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "The three source categories contain 50 records each: Pharmaprojects, Open Targets and GWAS Catalog. A shared prompt shape does not establish shared label semantics or evidence accessibility.",
+        "Freeze the prioritization model/release, feature definitions, candidate universe, missingness policy and tie handling. Do not reweight evidence after seeing the preferred result.",
+        "Record model-training overlap and source-resource restrictions. A predicted locus-to-gene score is not a directly observed causal outcome; mapped/reported genes need distinct fields."
+      ],
       "deterministic_verification_approach": [
-        "Actual annotation package plus independent coordinate/translation checks; deterministic evidence rules with unknown/conflicting outcomes; verify function only against observed assays."
+        "Run the actual selected native prioritization method or frozen model; independently verify full evidence joins, candidate feature inputs and ordering. Validate observed functional outcomes only against independent assay data, never against the model score itself."
       ],
-      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "status": "shared-schema-contract-planned-individual-evidence-and-inputs-unresolved",
       "validated_new_mappings": 0,
-      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
-      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+      "evaluation_contract": "Verify complete candidate evidence and outputs under frozen scientific rules, including ambiguity, missingness and all declared selection constraints. A deterministic algorithm output does not independently establish biological causality or clinical truth.",
+      "source_protocol_limits": "The 150 records span three named source protocols with repeated prompt texts. A deterministic ranking supplies an auditable computation, not proof of every requested causal conclusion. Evidence provenance, resource access and independent biological endpoints remain unresolved.",
+      "endpoint_contract_review": {
+        "schema_audited_task_ids": [
+          "gwas_causal_gene_pharmaprojects:1475",
+          "gwas_causal_gene_pharmaprojects:959",
+          "gwas_causal_gene_pharmaprojects:1588",
+          "gwas_causal_gene_pharmaprojects:283",
+          "gwas_causal_gene_pharmaprojects:797",
+          "gwas_causal_gene_pharmaprojects:1378",
+          "gwas_causal_gene_pharmaprojects:225",
+          "gwas_causal_gene_pharmaprojects:26",
+          "gwas_causal_gene_pharmaprojects:1497",
+          "gwas_causal_gene_pharmaprojects:437",
+          "gwas_causal_gene_pharmaprojects:1645",
+          "gwas_causal_gene_pharmaprojects:229",
+          "gwas_causal_gene_pharmaprojects:37",
+          "gwas_causal_gene_pharmaprojects:749",
+          "gwas_causal_gene_pharmaprojects:1045",
+          "gwas_causal_gene_pharmaprojects:469",
+          "gwas_causal_gene_pharmaprojects:1435",
+          "gwas_causal_gene_pharmaprojects:1662",
+          "gwas_causal_gene_pharmaprojects:687",
+          "gwas_causal_gene_pharmaprojects:1554",
+          "gwas_causal_gene_pharmaprojects:639",
+          "gwas_causal_gene_pharmaprojects:1453",
+          "gwas_causal_gene_pharmaprojects:1218",
+          "gwas_causal_gene_pharmaprojects:1158",
+          "gwas_causal_gene_pharmaprojects:1403",
+          "gwas_causal_gene_pharmaprojects:1300",
+          "gwas_causal_gene_pharmaprojects:1538",
+          "gwas_causal_gene_pharmaprojects:800",
+          "gwas_causal_gene_pharmaprojects:160",
+          "gwas_causal_gene_pharmaprojects:956",
+          "gwas_causal_gene_pharmaprojects:1186",
+          "gwas_causal_gene_pharmaprojects:821",
+          "gwas_causal_gene_pharmaprojects:1463",
+          "gwas_causal_gene_pharmaprojects:877",
+          "gwas_causal_gene_pharmaprojects:913",
+          "gwas_causal_gene_pharmaprojects:152",
+          "gwas_causal_gene_pharmaprojects:1549",
+          "gwas_causal_gene_pharmaprojects:509",
+          "gwas_causal_gene_pharmaprojects:1135",
+          "gwas_causal_gene_pharmaprojects:1250",
+          "gwas_causal_gene_pharmaprojects:1612",
+          "gwas_causal_gene_pharmaprojects:103",
+          "gwas_causal_gene_pharmaprojects:586",
+          "gwas_causal_gene_pharmaprojects:1572",
+          "gwas_causal_gene_pharmaprojects:1143",
+          "gwas_causal_gene_pharmaprojects:53",
+          "gwas_causal_gene_pharmaprojects:151",
+          "gwas_causal_gene_pharmaprojects:403",
+          "gwas_causal_gene_pharmaprojects:1640",
+          "gwas_causal_gene_pharmaprojects:207",
+          "gwas_causal_gene_opentargets:767",
+          "gwas_causal_gene_opentargets:619",
+          "gwas_causal_gene_opentargets:760",
+          "gwas_causal_gene_opentargets:645",
+          "gwas_causal_gene_opentargets:755",
+          "gwas_causal_gene_opentargets:556",
+          "gwas_causal_gene_opentargets:812",
+          "gwas_causal_gene_opentargets:577",
+          "gwas_causal_gene_opentargets:85",
+          "gwas_causal_gene_opentargets:242",
+          "gwas_causal_gene_opentargets:159",
+          "gwas_causal_gene_opentargets:524",
+          "gwas_causal_gene_opentargets:35",
+          "gwas_causal_gene_opentargets:540",
+          "gwas_causal_gene_opentargets:170",
+          "gwas_causal_gene_opentargets:654",
+          "gwas_causal_gene_opentargets:728",
+          "gwas_causal_gene_opentargets:720",
+          "gwas_causal_gene_opentargets:801",
+          "gwas_causal_gene_opentargets:95",
+          "gwas_causal_gene_opentargets:563",
+          "gwas_causal_gene_opentargets:240",
+          "gwas_causal_gene_opentargets:574",
+          "gwas_causal_gene_opentargets:690",
+          "gwas_causal_gene_opentargets:460",
+          "gwas_causal_gene_opentargets:553",
+          "gwas_causal_gene_opentargets:745",
+          "gwas_causal_gene_opentargets:206",
+          "gwas_causal_gene_opentargets:392",
+          "gwas_causal_gene_opentargets:397",
+          "gwas_causal_gene_opentargets:721",
+          "gwas_causal_gene_opentargets:217",
+          "gwas_causal_gene_opentargets:4",
+          "gwas_causal_gene_opentargets:642",
+          "gwas_causal_gene_opentargets:761",
+          "gwas_causal_gene_opentargets:612",
+          "gwas_causal_gene_opentargets:546",
+          "gwas_causal_gene_opentargets:683",
+          "gwas_causal_gene_opentargets:98",
+          "gwas_causal_gene_opentargets:573",
+          "gwas_causal_gene_opentargets:406",
+          "gwas_causal_gene_opentargets:502",
+          "gwas_causal_gene_opentargets:47",
+          "gwas_causal_gene_opentargets:32",
+          "gwas_causal_gene_opentargets:200",
+          "gwas_causal_gene_opentargets:134",
+          "gwas_causal_gene_opentargets:27",
+          "gwas_causal_gene_opentargets:817",
+          "gwas_causal_gene_opentargets:230",
+          "gwas_causal_gene_opentargets:489",
+          "gwas_causal_gene_gwas_catalog:630",
+          "gwas_causal_gene_gwas_catalog:591",
+          "gwas_causal_gene_gwas_catalog:541",
+          "gwas_causal_gene_gwas_catalog:85",
+          "gwas_causal_gene_gwas_catalog:242",
+          "gwas_causal_gene_gwas_catalog:159",
+          "gwas_causal_gene_gwas_catalog:35",
+          "gwas_causal_gene_gwas_catalog:170",
+          "gwas_causal_gene_gwas_catalog:543",
+          "gwas_causal_gene_gwas_catalog:535",
+          "gwas_causal_gene_gwas_catalog:601",
+          "gwas_causal_gene_gwas_catalog:95",
+          "gwas_causal_gene_gwas_catalog:240",
+          "gwas_causal_gene_gwas_catalog:460",
+          "gwas_causal_gene_gwas_catalog:557",
+          "gwas_causal_gene_gwas_catalog:206",
+          "gwas_causal_gene_gwas_catalog:392",
+          "gwas_causal_gene_gwas_catalog:397",
+          "gwas_causal_gene_gwas_catalog:536",
+          "gwas_causal_gene_gwas_catalog:217",
+          "gwas_causal_gene_gwas_catalog:4",
+          "gwas_causal_gene_gwas_catalog:568",
+          "gwas_causal_gene_gwas_catalog:98",
+          "gwas_causal_gene_gwas_catalog:406",
+          "gwas_causal_gene_gwas_catalog:502",
+          "gwas_causal_gene_gwas_catalog:47",
+          "gwas_causal_gene_gwas_catalog:32",
+          "gwas_causal_gene_gwas_catalog:200",
+          "gwas_causal_gene_gwas_catalog:134",
+          "gwas_causal_gene_gwas_catalog:27",
+          "gwas_causal_gene_gwas_catalog:559",
+          "gwas_causal_gene_gwas_catalog:230",
+          "gwas_causal_gene_gwas_catalog:489",
+          "gwas_causal_gene_gwas_catalog:378",
+          "gwas_causal_gene_gwas_catalog:288",
+          "gwas_causal_gene_gwas_catalog:418",
+          "gwas_causal_gene_gwas_catalog:391",
+          "gwas_causal_gene_gwas_catalog:498",
+          "gwas_causal_gene_gwas_catalog:138",
+          "gwas_causal_gene_gwas_catalog:62",
+          "gwas_causal_gene_gwas_catalog:471",
+          "gwas_causal_gene_gwas_catalog:128",
+          "gwas_causal_gene_gwas_catalog:623",
+          "gwas_causal_gene_gwas_catalog:520",
+          "gwas_causal_gene_gwas_catalog:64",
+          "gwas_causal_gene_gwas_catalog:14",
+          "gwas_causal_gene_gwas_catalog:156",
+          "gwas_causal_gene_gwas_catalog:40",
+          "gwas_causal_gene_gwas_catalog:492",
+          "gwas_causal_gene_gwas_catalog:379"
+        ],
+        "source_metadata_sha256": "d6c7844f32b3eef655e0f83f2357f873a4bc14c1566e4fba76a051bbc6c9bf02",
+        "source_protocols": {
+          "gwas_causal_gene_gwas_catalog": {
+            "records": 50,
+            "normalized_prompt_shapes": 1,
+            "normalized_prompt_shape_sha256": "fe1a9c4ad0542d2319cb6d76e3c613a709d42a0ada164cf4077c4fe047a06c2c"
+          },
+          "gwas_causal_gene_opentargets": {
+            "records": 50,
+            "normalized_prompt_shapes": 1,
+            "normalized_prompt_shape_sha256": "fe1a9c4ad0542d2319cb6d76e3c613a709d42a0ada164cf4077c4fe047a06c2c"
+          },
+          "gwas_causal_gene_pharmaprojects": {
+            "records": 50,
+            "normalized_prompt_shapes": 1,
+            "normalized_prompt_shape_sha256": "fe1a9c4ad0542d2319cb6d76e3c613a709d42a0ada164cf4077c4fe047a06c2c"
+          }
+        },
+        "review_scope": "All prompt structures audited against the shared source templates; representative biological contexts and delivery descriptions reviewed. Individual association, screen and case evidence has not been reviewed. No source answer column inspected.",
+        "required_incorrect_output_checks": [
+          "Select the nearest gene without the required evidence.",
+          "Treat a model prediction, reported gene and experimentally supported effector as the same evidence class.",
+          "Omit candidates with missing features or reuse evaluation loci in fitting the ranking model."
+        ],
+        "next_input_decision": "Select independent observed studies or cases with permitted reuse; inspect exact schemas, evidence completeness, lineage and endpoint fidelity before implementation.",
+        "runtime_boundary": "Freeze bounded offline evidence bundles and selected native method/model; measure <=30-minute runtime instead of assuming it.",
+        "implementation_ready": false
+      }
     },
     {
       "proposed_id": "portfolio-biomni-eval1-screen-context-gene-retrieval",
       "benchmark": "Biomni-Eval1 tool-enabled",
-      "scientific_question": "Which genes meet a prespecified observed screen phenotype after experimental context, hit thresholds and negative controls are reconciled?",
+      "scientific_question": "Which candidate genes have the strongest measured perturbation effect in an independently observed screen with matching experimental context?",
       "source_family": "screen-context-gene-retrieval",
       "benchmark_targets": [
         {
@@ -1325,41 +1587,118 @@
           "source_task_name": "screen_gene_retrieval"
         }
       ],
-      "source_inspection_tier": "shared-pattern-only",
+      "source_inspection_tier": "all-prompt-structures-audited-individual-biological-evidence-unreviewed",
       "source_planning_disposition": "instance-endpoint-and-evidence-review",
       "matching_workstreams": [
         "crispr-screen-pathway"
       ],
       "required_endpoint_stages": [
-        "identify the relevant study and assay context",
-        "align screen, cell, condition and gene identifiers",
-        "define effect direction and compare candidates",
-        "preserve supporting measurements and a selected gene"
+        "Match experimental context and candidate identities to a specific observed screen.",
+        "Verify perturbation type, measured phenotype, effect direction, time point and comparison group before combining measurements.",
+        "Use published eligible effect estimates or run a specified native screen method on raw observations, retaining all candidates and uncertainty.",
+        "Rank candidates by a prespecified signed or absolute effect rule and report missing, tied or incomparable results."
       ],
       "observed_input_requirements": [
-        "Observed guide counts before/after perturbation, biological replicates, guide-to-gene map, controls and frozen pathways."
+        "An independent published benign cellular-phenotype screen with per-gene measurements, exact assay/condition/time metadata and biological replicates. Use guide-count inputs only when a raw-screen analysis is explicitly part of the authored workflow."
       ],
       "required_formats": [
-        "candidate gene symbols",
-        "research-context text",
-        "screen metadata and measurements"
+        "screen measurement or guide-count TSV",
+        "guide-to-gene map when needed",
+        "sample/condition metadata"
       ],
       "proposed_artifact_requirements": [
-        "Guide eligibility and counts, normalization, guide and gene effects, control diagnostics, complete pathway results"
+        "context_match.tsv: query_id, screen_id, biological_system, perturbation_type, condition, time_point, measured_phenotype, match_status",
+        "candidate_effects.tsv: query_id, gene_id, replicate_id, effect, unit, uncertainty, control_reference, eligibility",
+        "candidate_ranking.tsv: query_id, gene_id, eligible_replicates, aggregate_effect, ranking_rule, rank, tie_group, disposition"
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "Strongest perturbation effect must specify direction, scale and relevant contrast. Largest absolute effect and strongest effect in a desired direction are different endpoints.",
+        "Do not mix assay units, times or conditions; guides are not biological replicates. A screen-method recomputation must use the same declared control/normalization design.",
+        "Choose independent benign observed contexts for authoring and retain a fidelity gap for source cases whose experimental context cannot be matched."
+      ],
       "deterministic_verification_approach": [
-        "Run the actual screen package; independently verify joins, guide aggregation, normalization controls and full ranked outputs; guide observations are not biological replicates."
+        "Run the actual selected screen-analysis package when raw counts are used; otherwise parse the source measurement export natively. Independently verify context/identity joins, candidate eligibility, replicate aggregation and complete ordering."
       ],
-      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "status": "shared-schema-contract-planned-individual-evidence-and-inputs-unresolved",
       "validated_new_mappings": 0,
-      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
-      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+      "evaluation_contract": "Verify complete candidate evidence and outputs under frozen scientific rules, including ambiguity, missingness and all declared selection constraints. A deterministic algorithm output does not independently establish biological causality or clinical truth.",
+      "source_protocol_limits": "All 50 source records provide a narrative context and candidate genes, without the screen measurements. The schema audit does not review each study or establish that raw guide counts exist. A generic CRISPR pipeline cannot receive full context-specific coverage automatically.",
+      "endpoint_contract_review": {
+        "schema_audited_task_ids": [
+          "screen_gene_retrieval:302",
+          "screen_gene_retrieval:236",
+          "screen_gene_retrieval:207",
+          "screen_gene_retrieval:212",
+          "screen_gene_retrieval:317",
+          "screen_gene_retrieval:251",
+          "screen_gene_retrieval:339",
+          "screen_gene_retrieval:318",
+          "screen_gene_retrieval:269",
+          "screen_gene_retrieval:201",
+          "screen_gene_retrieval:161",
+          "screen_gene_retrieval:43",
+          "screen_gene_retrieval:217",
+          "screen_gene_retrieval:190",
+          "screen_gene_retrieval:259",
+          "screen_gene_retrieval:105",
+          "screen_gene_retrieval:53",
+          "screen_gene_retrieval:1",
+          "screen_gene_retrieval:49",
+          "screen_gene_retrieval:80",
+          "screen_gene_retrieval:205",
+          "screen_gene_retrieval:34",
+          "screen_gene_retrieval:263",
+          "screen_gene_retrieval:91",
+          "screen_gene_retrieval:52",
+          "screen_gene_retrieval:264",
+          "screen_gene_retrieval:241",
+          "screen_gene_retrieval:13",
+          "screen_gene_retrieval:88",
+          "screen_gene_retrieval:273",
+          "screen_gene_retrieval:166",
+          "screen_gene_retrieval:342",
+          "screen_gene_retrieval:134",
+          "screen_gene_retrieval:306",
+          "screen_gene_retrieval:334",
+          "screen_gene_retrieval:243",
+          "screen_gene_retrieval:54",
+          "screen_gene_retrieval:50",
+          "screen_gene_retrieval:174",
+          "screen_gene_retrieval:189",
+          "screen_gene_retrieval:346",
+          "screen_gene_retrieval:187",
+          "screen_gene_retrieval:169",
+          "screen_gene_retrieval:58",
+          "screen_gene_retrieval:48",
+          "screen_gene_retrieval:235",
+          "screen_gene_retrieval:252",
+          "screen_gene_retrieval:21",
+          "screen_gene_retrieval:313",
+          "screen_gene_retrieval:160"
+        ],
+        "source_metadata_sha256": "d6c7844f32b3eef655e0f83f2357f873a4bc14c1566e4fba76a051bbc6c9bf02",
+        "source_protocols": {
+          "screen_gene_retrieval": {
+            "records": 50,
+            "normalized_prompt_shapes": 1,
+            "normalized_prompt_shape_sha256": "dd6670df0a26915f03ccaee4f3213f5d3d99e8e502499618353de7b2cf3148de"
+          }
+        },
+        "review_scope": "All prompt structures audited against the shared source templates; representative biological contexts and delivery descriptions reviewed. Individual association, screen and case evidence has not been reviewed. No source answer column inspected.",
+        "required_incorrect_output_checks": [
+          "Rank a different condition or use an effect with the opposite interpretation.",
+          "Treat guide counts as independent biological replicates.",
+          "Rank a missing measurement as zero effect or discard candidates whose results conflict with the proposed explanation."
+        ],
+        "next_input_decision": "Select independent observed studies or cases with permitted reuse; inspect exact schemas, evidence completeness, lineage and endpoint fidelity before implementation.",
+        "runtime_boundary": "Freeze bounded offline evidence bundles and selected native method/model; measure <=30-minute runtime instead of assuming it.",
+        "implementation_ready": false
+      }
     },
     {
       "proposed_id": "portfolio-biomni-eval1-phenotype-gene-prioritization",
       "benchmark": "Biomni-Eval1 tool-enabled",
-      "scientific_question": "Which candidate genes remain compatible with an independently curated phenotype profile and observed variant evidence under explicit scoring rules?",
+      "scientific_question": "Which candidate genes best match independently observed phenotype profiles under a declared ontology-aware evidence model?",
       "source_family": "phenotype-gene-prioritization",
       "benchmark_targets": [
         {
@@ -1613,41 +1952,127 @@
           "source_task_name": "patient_gene_detection"
         }
       ],
-      "source_inspection_tier": "shared-pattern-only",
+      "source_inspection_tier": "all-prompt-structures-audited-individual-biological-evidence-unreviewed",
       "source_planning_disposition": "instance-endpoint-and-evidence-review",
       "matching_workstreams": [
         "variant-evidence"
       ],
       "required_endpoint_stages": [
-        "normalize HPO terms and candidate identifiers",
-        "resolve versioned phenotype-gene evidence",
-        "score candidates with explicit missingness and inheritance assumptions",
-        "return the selected gene and reproducible ranking"
+        "Normalize present, absent and unknown phenotypes while retaining observation provenance and ontology version.",
+        "Resolve all candidate gene identifiers and retrieve compatible annotation evidence.",
+        "Run a prespecified phenotype-prioritization method with explicit information-content and missing-data rules.",
+        "Report every candidate score and contribution, then select the permitted number of genes while retaining ambiguity."
       ],
       "observed_input_requirements": [
-        "Observed variants, matching reference/annotation, frozen consequence/frequency/clinical evidence and provenance; observed assays for functional validation."
+        "Permitted, independently observed phenotype case records or phenopackets, versioned HPO ontology and phenotype-gene/disease annotations, plus candidate identifiers. Do not manufacture a patient by sampling terms from a known diagnosis. Source input contains no patient VCF."
       ],
       "required_formats": [
-        "Ensembl candidate identifiers",
-        "HPO identifiers",
-        "JSON gene list"
+        "Phenopacket JSON or documented observed-case phenotype table",
+        "HPO OBO/OWL and annotation TSV",
+        "gene identifier mappings"
       ],
       "proposed_artifact_requirements": [
-        "Normalized VCF, consequence transcript table, evidence rows with accession/date, exclusion rationale and sequence products where appropriate"
+        "phenotypes.tsv: case_id, original_term, resolved_hpo_id, observation_status, onset, source_record_id",
+        "candidate_evidence.tsv: case_id, gene_id, disease_id, phenotype_term, annotation_source, frequency, evidence_status",
+        "candidate_scores.tsv: case_id, gene_id, score, matched_terms, unmatched_terms, conflict_terms, rank, tie_group",
+        "selection.json: case_id, selected_gene_ids, unresolved_reason"
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "The 50 source cases have 8-40 HPO terms and 8-22 candidate genes. Preserve the ranking problem; a one-gene association lookup is insufficient.",
+        "Freeze ontology closure, information-content corpus, term weighting, negation/frequency treatment, score method and candidate cardinality. Lack of a reported phenotype does not mean it is absent.",
+        "A VCF-based pipeline is an optional connected extension. It cannot replace phenotype-only reasoning or fabricate genotype evidence absent from the case."
+      ],
       "deterministic_verification_approach": [
-        "Actual annotation package plus independent coordinate/translation checks; deterministic evidence rules with unknown/conflicting outcomes; verify function only against observed assays."
+        "Run a pinned native phenotype-similarity/prioritization tool and independently verify ontology expansion, evidence joins, score components and complete ranks. Enforce declared selection cardinality and candidate membership; verify expected case outcomes only from independently observed records."
       ],
-      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "status": "shared-schema-contract-planned-individual-evidence-and-inputs-unresolved",
       "validated_new_mappings": 0,
-      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
-      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+      "evaluation_contract": "Verify complete candidate evidence and outputs under frozen scientific rules, including ambiguity, missingness and all declared selection constraints. A deterministic algorithm output does not independently establish biological causality or clinical truth.",
+      "source_protocol_limits": "The source evaluator accepts any nonempty intersection with its gene list, which is weaker than the stated one-gene task. Do not copy that acceptance loophole. Phenotype similarity is a prioritization result; a causal diagnosis requires separate evidence.",
+      "endpoint_contract_review": {
+        "schema_audited_task_ids": [
+          "patient_gene_detection:212",
+          "patient_gene_detection:295",
+          "patient_gene_detection:457",
+          "patient_gene_detection:251",
+          "patient_gene_detection:488",
+          "patient_gene_detection:486",
+          "patient_gene_detection:303",
+          "patient_gene_detection:350",
+          "patient_gene_detection:269",
+          "patient_gene_detection:201",
+          "patient_gene_detection:161",
+          "patient_gene_detection:43",
+          "patient_gene_detection:217",
+          "patient_gene_detection:401",
+          "patient_gene_detection:190",
+          "patient_gene_detection:309",
+          "patient_gene_detection:259",
+          "patient_gene_detection:105",
+          "patient_gene_detection:53",
+          "patient_gene_detection:389",
+          "patient_gene_detection:1",
+          "patient_gene_detection:441",
+          "patient_gene_detection:482",
+          "patient_gene_detection:49",
+          "patient_gene_detection:419",
+          "patient_gene_detection:80",
+          "patient_gene_detection:205",
+          "patient_gene_detection:34",
+          "patient_gene_detection:263",
+          "patient_gene_detection:427",
+          "patient_gene_detection:366",
+          "patient_gene_detection:91",
+          "patient_gene_detection:339",
+          "patient_gene_detection:473",
+          "patient_gene_detection:52",
+          "patient_gene_detection:345",
+          "patient_gene_detection:264",
+          "patient_gene_detection:241",
+          "patient_gene_detection:13",
+          "patient_gene_detection:315",
+          "patient_gene_detection:88",
+          "patient_gene_detection:387",
+          "patient_gene_detection:273",
+          "patient_gene_detection:166",
+          "patient_gene_detection:328",
+          "patient_gene_detection:492",
+          "patient_gene_detection:134",
+          "patient_gene_detection:306",
+          "patient_gene_detection:480",
+          "patient_gene_detection:319"
+        ],
+        "source_metadata_sha256": "d6c7844f32b3eef655e0f83f2357f873a4bc14c1566e4fba76a051bbc6c9bf02",
+        "source_protocols": {
+          "patient_gene_detection": {
+            "records": 50,
+            "normalized_prompt_shapes": 1,
+            "normalized_prompt_shape_sha256": "d9adf174d80f8156e42b4cb6ca57fa1208c916c8f74b837882b153f997513e82",
+            "phenotype_term_count_range": [
+              8,
+              40
+            ],
+            "candidate_gene_count_range": [
+              8,
+              22
+            ]
+          }
+        },
+        "review_scope": "All prompt structures audited against the shared source templates; representative biological contexts and delivery descriptions reviewed. Individual association, screen and case evidence has not been reviewed. No source answer column inspected.",
+        "required_incorrect_output_checks": [
+          "Return every candidate to obtain one correct intersection.",
+          "Treat unreported HPO terms as explicitly absent or collapse obsolete terms incorrectly.",
+          "Use an observed diagnosis as a ranking input while claiming independent prediction."
+        ],
+        "next_input_decision": "Select independent observed studies or cases with permitted reuse; inspect exact schemas, evidence completeness, lineage and endpoint fidelity before implementation.",
+        "runtime_boundary": "Freeze bounded offline evidence bundles and selected native method/model; measure <=30-minute runtime instead of assuming it.",
+        "implementation_ready": false
+      }
     },
     {
       "proposed_id": "portfolio-biomni-eval1-rare-disease-evidence",
       "benchmark": "Biomni-Eval1 tool-enabled",
-      "scientific_question": "Which structured gene-disease hypotheses are supported or unresolved by a frozen independent phenotype, inheritance and variant-evidence record?",
+      "scientific_question": "Which disease hypotheses remain supported by independently observed phenotypes and a supplied gene under an explicit, versioned evidence model?",
       "source_family": "rare-disease-evidence",
       "benchmark_targets": [
         {
@@ -1801,41 +2226,107 @@
           "source_task_name": "rare_disease_diagnosis"
         }
       ],
-      "source_inspection_tier": "shared-pattern-only",
+      "source_inspection_tier": "all-prompt-structures-audited-individual-biological-evidence-unreviewed",
       "source_planning_disposition": "instance-endpoint-and-evidence-review",
       "matching_workstreams": [
         "variant-evidence"
       ],
       "required_endpoint_stages": [
-        "normalize HPO and candidate gene identifiers",
-        "join a versioned disease-phenotype-gene resource",
-        "rank disease hypotheses and retain supporting evidence",
-        "emit a structured disease identifier"
+        "Resolve supplied gene, present/absent phenotypes and disease concept identifiers.",
+        "Enumerate all eligible disease hypotheses for the gene, preserving subtypes and inheritance contexts.",
+        "Score each disease against the full phenotype profile under a declared model and report conflicting or missing evidence.",
+        "Return a structured disease identifier and supporting ranking, including unresolved or tied outcomes."
       ],
       "observed_input_requirements": [
-        "Observed variants, matching reference/annotation, frozen consequence/frequency/clinical evidence and provenance; observed assays for functional validation."
+        "Independent observed phenotype cases with permitted reuse, a supplied gene, HPO/disease annotations, disease identifiers and evidence provenance. Freeze resource permissions and keep diagnostic labels private when evaluating ranking."
       ],
       "required_formats": [
-        "HPO identifiers",
-        "JSON disease identifiers",
-        "candidate genes"
+        "Phenopacket JSON or observed-case phenotype table",
+        "HPO annotations",
+        "gene-disease and disease-identifier crosswalks"
       ],
       "proposed_artifact_requirements": [
-        "Normalized VCF, consequence transcript table, evidence rows with accession/date, exclusion rationale and sequence products where appropriate"
+        "case_identity.tsv: case_id, gene_id, phenotype_record_id, normalization_status",
+        "disease_evidence.tsv: case_id, disease_id, disease_namespace, phenotype_id, annotation_status, frequency, inheritance, source_record_id",
+        "disease_ranking.tsv: case_id, disease_id, score, rank, tie_group, support_status",
+        "selection.json: case_id, disease_id, disease_name, identifier_version, unresolved_reason"
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "Each of the 30 source cases supplies exactly one gene and 1-23 phenotype terms. The source endpoint is disease discrimination, not candidate-gene selection.",
+        "Freeze disease namespace/crosswalk, ontology version, subtype policy, inheritance handling and phenotype score. Do not infer unprovided inheritance or allele data.",
+        "Versioned OMIM use and redistribution need confirmation; substituting a different disease resource may change the endpoint and must remain explicit."
+      ],
       "deterministic_verification_approach": [
-        "Actual annotation package plus independent coordinate/translation checks; deterministic evidence rules with unknown/conflicting outcomes; verify function only against observed assays."
+        "Use the actual selected native phenotype/disease-prioritization method; independently check complete hypothesis enumeration, identifier crosswalks, evidence contributions and ordering. Enforce consistent disease name and ID in the authored artifacts."
       ],
-      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "status": "shared-schema-contract-planned-individual-evidence-and-inputs-unresolved",
       "validated_new_mappings": 0,
-      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
-      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+      "evaluation_contract": "Verify complete candidate evidence and outputs under frozen scientific rules, including ambiguity, missingness and all declared selection constraints. A deterministic algorithm output does not independently establish biological causality or clinical truth.",
+      "source_protocol_limits": "The source evaluator checks OMIM_ID alone. The proposed complete evidence contract is stronger, but deterministic disease ranking does not by itself validate a clinical diagnosis. Independent observed cases, case-label provenance and source-resource access remain open.",
+      "endpoint_contract_review": {
+        "schema_audited_task_ids": [
+          "rare_disease_diagnosis:90",
+          "rare_disease_diagnosis:48",
+          "rare_disease_diagnosis:88",
+          "rare_disease_diagnosis:107",
+          "rare_disease_diagnosis:21",
+          "rare_disease_diagnosis:57",
+          "rare_disease_diagnosis:75",
+          "rare_disease_diagnosis:32",
+          "rare_disease_diagnosis:140",
+          "rare_disease_diagnosis:59",
+          "rare_disease_diagnosis:63",
+          "rare_disease_diagnosis:132",
+          "rare_disease_diagnosis:37",
+          "rare_disease_diagnosis:136",
+          "rare_disease_diagnosis:1",
+          "rare_disease_diagnosis:52",
+          "rare_disease_diagnosis:130",
+          "rare_disease_diagnosis:103",
+          "rare_disease_diagnosis:99",
+          "rare_disease_diagnosis:116",
+          "rare_disease_diagnosis:87",
+          "rare_disease_diagnosis:74",
+          "rare_disease_diagnosis:121",
+          "rare_disease_diagnosis:145",
+          "rare_disease_diagnosis:20",
+          "rare_disease_diagnosis:71",
+          "rare_disease_diagnosis:106",
+          "rare_disease_diagnosis:14",
+          "rare_disease_diagnosis:92",
+          "rare_disease_diagnosis:102"
+        ],
+        "source_metadata_sha256": "d6c7844f32b3eef655e0f83f2357f873a4bc14c1566e4fba76a051bbc6c9bf02",
+        "source_protocols": {
+          "rare_disease_diagnosis": {
+            "records": 30,
+            "normalized_prompt_shapes": 1,
+            "normalized_prompt_shape_sha256": "3ddb2cb885c0d61156c78a69dad94aed2b2333dc52810405ab8787afc497fc9b",
+            "phenotype_term_count_range": [
+              1,
+              23
+            ],
+            "candidate_gene_count_range": [
+              1,
+              1
+            ]
+          }
+        },
+        "review_scope": "All prompt structures audited against the shared source templates; representative biological contexts and delivery descriptions reviewed. Individual association, screen and case evidence has not been reviewed. No source answer column inspected.",
+        "required_incorrect_output_checks": [
+          "Return a gene identifier instead of the disease hypothesis.",
+          "Collapse multiple gene-associated diseases into one label without phenotype comparison.",
+          "Return a correct-looking disease name with an incompatible identifier or infer inheritance from no observations."
+        ],
+        "next_input_decision": "Select independent observed studies or cases with permitted reuse; inspect exact schemas, evidence completeness, lineage and endpoint fidelity before implementation.",
+        "runtime_boundary": "Freeze bounded offline evidence bundles and selected native method/model; measure <=30-minute runtime instead of assuming it.",
+        "implementation_ready": false
+      }
     },
     {
       "proposed_id": "portfolio-biomni-eval1-delivery-method-selection",
       "benchmark": "Biomni-Eval1 tool-enabled",
-      "scientific_question": "Which generic delivery-method claims are supported by independently published assay measurements under explicit cell-context and measurement criteria?",
+      "scientific_question": "Which delivery-method comparisons are supported by independently published measurements in a matched biological context under explicit outcome criteria?",
       "source_family": "delivery-method-selection",
       "benchmark_targets": [
         {
@@ -1889,35 +2380,73 @@
           "source_task_name": "crispr_delivery"
         }
       ],
-      "source_inspection_tier": "shared-pattern-only",
+      "source_inspection_tier": "all-prompt-structures-audited-individual-biological-evidence-unreviewed",
       "source_planning_disposition": "instance-endpoint-and-evidence-review",
       "matching_workstreams": [
         "clinical-safety-evidence"
       ],
       "required_endpoint_stages": [
-        "identify the experimental system",
-        "retrieve source-supported delivery constraints",
-        "compare permitted method categories",
-        "record the selected category and evidence"
+        "Resolve biological context and the exact outcome to compare.",
+        "Assess whether observed methods were compared under compatible assay designs and retain noncomparability.",
+        "Compute a declared comparative statistic or constrained ranking from measured outcomes, retaining uncertainty and tradeoffs.",
+        "Report the evidence-supported choice, tie or insufficient-evidence result without inventing a universally optimal category."
       ],
       "observed_input_requirements": [
-        "Observed preclinical/clinical assay tables with units, tissue, compartment, timing, dose, censoring and source provenance."
+        "Independent published benign assay measurements with cell/tissue context, delivery category, measured editing/delivery outcome, viability and study design. A context label alone is insufficient; no fabricated comparative performance measurements."
       ],
       "required_formats": [
-        "case description",
-        "categorical alternatives"
+        "published assay tables",
+        "study/sample metadata",
+        "method-category mapping"
       ],
       "proposed_artifact_requirements": [
-        "Study/assay compatibility matrix, unit/time/compartment joins, censored estimates, complete exclusions and bounded quantitative comparisons"
+        "comparability.tsv: study_id, context_id, method_category, outcome, unit, design, comparison_status",
+        "measured_outcomes.tsv: study_id, method_category, replicate_id, delivery_or_editing_measurement, viability_measurement, uncertainty",
+        "comparison.tsv: context_id, method_category, criterion, estimate, rank_or_pareto_status, supporting_study_ids, disposition"
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "The ten source prompts contain only a context and six method alternatives. They do not specify an outcome, cargo, comparative evidence or objective function sufficient for a unique scientific optimum.",
+        "Define measured endpoint, comparability rules and decision constraints before inspecting rankings. Different outcomes can imply different choices; allow unresolved tradeoffs.",
+        "Two source IDs have identical prompt text; keep their identities without counting them as two independent contexts."
+      ],
       "deterministic_verification_approach": [
-        "Independent comparability and censoring rules with native statistical outputs; explicit unsupported/unknown outcomes; no broad safety or treatment recommendation."
+        "Use a pinned native statistical package for the declared observed-outcome comparison and independently check units, replicate identities, normalization, complete candidate comparisons and decision rules. No model judge or canned cell-type-to-category lookup."
       ],
-      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "status": "shared-schema-contract-planned-individual-evidence-and-inputs-unresolved",
       "validated_new_mappings": 0,
-      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
-      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+      "evaluation_contract": "Verify complete candidate evidence and outputs under frozen scientific rules, including ambiguity, missingness and all declared selection constraints. A deterministic algorithm output does not independently establish biological causality or clinical truth.",
+      "source_protocol_limits": "This is an observed-assay adaptation with an unresolved fidelity gap to the source category-choice task. The sparse source prompts do not support an unqualified deterministic scientific answer; keep all ten target IDs pending rather than awarding coverage for a hand-written rule.",
+      "endpoint_contract_review": {
+        "schema_audited_task_ids": [
+          "crispr_delivery:10",
+          "crispr_delivery:22",
+          "crispr_delivery:18",
+          "crispr_delivery:49",
+          "crispr_delivery:20",
+          "crispr_delivery:7",
+          "crispr_delivery:42",
+          "crispr_delivery:14",
+          "crispr_delivery:28",
+          "crispr_delivery:38"
+        ],
+        "source_metadata_sha256": "d6c7844f32b3eef655e0f83f2357f873a4bc14c1566e4fba76a051bbc6c9bf02",
+        "source_protocols": {
+          "crispr_delivery": {
+            "records": 10,
+            "normalized_prompt_shapes": 1,
+            "normalized_prompt_shape_sha256": "8eb3bd150100643298eff98a588c59780526bed7f033dd950577a20bed69a6d3"
+          }
+        },
+        "review_scope": "All prompt structures audited against the shared source templates; representative biological contexts and delivery descriptions reviewed. Individual association, screen and case evidence has not been reviewed. No source answer column inspected.",
+        "required_incorrect_output_checks": [
+          "Select a method from cell-type keywords without comparative evidence.",
+          "Combine incomparable assay endpoints into a single unstated score.",
+          "Treat untested methods as failures or suppress uncertainty to force one answer."
+        ],
+        "next_input_decision": "Select independent observed studies or cases with permitted reuse; inspect exact schemas, evidence completeness, lineage and endpoint fidelity before implementation.",
+        "runtime_boundary": "Freeze bounded offline evidence bundles and selected native method/model; measure <=30-minute runtime instead of assuming it.",
+        "implementation_ready": false
+      }
     },
     {
       "proposed_id": "portfolio-biomni-eval1-restriction-digest",
@@ -3465,6 +3994,106 @@
     {
       "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC11326257/",
       "use": "Primary study metadata describes matched RNA/ribosome profiling and occupancy-per-mRNA estimands. Search-index text inspected; full-page fetch hit a browser challenge. Candidate data records and schemas remain uninspected."
+    },
+    {
+      "url": "https://github.com/snap-stanford/Biomni/blob/400c1f366b96a35ca253e13c9b06c5076af41d65/biomni/eval/biomni_eval1.py",
+      "use": "Static evaluator inspection only: patient-gene list intersection, disease-ID equality and category/identifier matching are weaker than complete scientific artifact validation; no evaluator execution or answer data read."
+    },
+    {
+      "url": "https://platform-docs.opentargets.org/gentropy/locus-to-gene-l2g",
+      "use": "Locus-to-gene model uses multiple evidence classes and changes by release; preserve model/version and distinguish prediction from observed evidence."
+    },
+    {
+      "url": "https://www.ebi.ac.uk/gwas/docs/fileheaders/",
+      "use": "Separate study association fields, reported genes and mapped genes; database annotation does not establish a unique causal effector."
+    },
+    {
+      "url": "https://obophenotype.github.io/human-phenotype-ontology/annotations/frequency/",
+      "use": "HPO annotations retain observed frequencies; do not treat absent documentation as an observed negative phenotype."
     }
-  ]
+  ],
+  "prompt_identity_review": {
+    "scope": "333 non-LAB-Bench records only",
+    "metadata_sha256": "d6c7844f32b3eef655e0f83f2357f873a4bc14c1566e4fba76a051bbc6c9bf02",
+    "identical_prompt_groups": [
+      {
+        "task_ids": [
+          "crispr_delivery:7",
+          "crispr_delivery:42"
+        ],
+        "prompt_sha256": "0981a5638692b33f06ad1ca6ccf829589996410f9e26c27e494bd3c14255dfe9"
+      },
+      {
+        "task_ids": [
+          "gwas_causal_gene_gwas_catalog:543",
+          "gwas_causal_gene_gwas_catalog:95",
+          "gwas_causal_gene_gwas_catalog:14"
+        ],
+        "prompt_sha256": "4c2ef9a3bcf3591a81db86fc3170c8a0a031fe08c3f3530ee262e162a24985af"
+      },
+      {
+        "task_ids": [
+          "gwas_causal_gene_gwas_catalog:392",
+          "gwas_causal_gene_gwas_catalog:134",
+          "gwas_causal_gene_gwas_catalog:230",
+          "gwas_causal_gene_gwas_catalog:156"
+        ],
+        "prompt_sha256": "13b32c98c5b2e1a53d12ebbb6a828b4c84c088718c24a6b4df064f29e4a5ce64"
+      },
+      {
+        "task_ids": [
+          "gwas_causal_gene_gwas_catalog:397",
+          "gwas_causal_gene_gwas_catalog:288"
+        ],
+        "prompt_sha256": "360ff025670f377507880eb25d2f3cbd76f9fa3ac92bbee2dc6f2561fcea1c0d"
+      },
+      {
+        "task_ids": [
+          "gwas_causal_gene_gwas_catalog:32",
+          "gwas_causal_gene_gwas_catalog:128"
+        ],
+        "prompt_sha256": "7ae3aae35d8af733de4216a046d4c0f144a855f6a227aa4d9ed8a722d5210cad"
+      },
+      {
+        "task_ids": [
+          "gwas_causal_gene_gwas_catalog:62",
+          "gwas_causal_gene_gwas_catalog:623"
+        ],
+        "prompt_sha256": "c1e3e5a0a8807e8bd74c0f04a309c1d3f2561b41b18d59f1c5e43daa1734f575"
+      },
+      {
+        "task_ids": [
+          "gwas_causal_gene_opentargets:619",
+          "gwas_causal_gene_opentargets:574"
+        ],
+        "prompt_sha256": "5774620883a9ef8a1e8b22ca0eea7e079bc3f62f3f7d171511402fee777583a0"
+      },
+      {
+        "task_ids": [
+          "gwas_causal_gene_opentargets:645",
+          "gwas_causal_gene_opentargets:397"
+        ],
+        "prompt_sha256": "de1e798c4e3fa3deaac29ca02c785f0d43d1450f696c05829742d8eb055d5e83"
+      },
+      {
+        "task_ids": [
+          "gwas_causal_gene_opentargets:35",
+          "gwas_causal_gene_opentargets:801"
+        ],
+        "prompt_sha256": "40c7ab7274f3354aa4b2e48bbb3d02bc6da1f4ec107055d1ba0d6e64d2c8c905"
+      },
+      {
+        "task_ids": [
+          "gwas_causal_gene_opentargets:460",
+          "gwas_causal_gene_opentargets:392",
+          "gwas_causal_gene_opentargets:573"
+        ],
+        "prompt_sha256": "5bf44f882205d5f9269f4a994995883aed5e3ca3844943f1fbca4106c13fefd4"
+      }
+    ],
+    "records_in_identical_prompt_groups": 24,
+    "identical_prompt_groups_count": 10,
+    "distinct_prompt_texts": 319,
+    "interpretation": "Prompt-text identity is verified; answer/evidence equivalence is uninspected. Preserve every source ID and do not automatically alter cross-release alias counts or validated coverage. Repeated prompts are not independent scientific contexts."
+  }
 }

@@ -122,15 +122,16 @@ for every card. The two simulated/planted source constructions retain explicit
 observed-data adaptation limits. These contracts support planning; source answers
 and fixed grader literals are not used to author training inputs or rewards.
 
-## Biomni-Eval1 database and sequence contracts
+## Biomni-Eval1 endpoint contracts
 
 The [Biomni-Eval1 designs](../../experiments/post_training/bio_tasks/workflow_designs/biomni-eval1.json)
-now specify complete artifacts and incorrect-output checks for all 14 DBQA/SeqQA
-families, following review of their 100 question stems. Independent inputs,
-redistribution rights, exact schemas, scientific conventions and runtime remain
-unresolved. This review adds no tasks or validated mappings; the other 333 records
-retain their existing inspection limits. SeqQA contracts assign each source ID to
-its exact query mode, so a simpler operation cannot silently cover a whole family.
+specify complete artifacts and incorrect-output checks for all 20 families.
+The review covers 100 DBQA/SeqQA question stems and a structural audit of the
+remaining 333 prompts across eight source protocols. Individual study and case
+evidence remains unreviewed. Independent inputs, redistribution rights, exact
+schemas, scientific conventions and runtime remain unresolved; no tasks or
+validated mappings are added. SeqQA contracts assign each source ID to its exact
+query mode, so a simpler operation cannot silently cover a whole family.
 
 | Family | Source records | Required distinction |
 |---|---:|---|
@@ -148,6 +149,12 @@ its exact query mode, so a simpler operation cannot silently cover a whole famil
 | Restriction-cloning compatibility | 8 | Six primer-choice and two enzyme-choice queries preserve end polarity, internal cuts and complete products. |
 | GC calculation | 4 | Grade exact base counts and percent before integer rounding, with explicit ambiguity and denominator rules. |
 | Translation efficiency | 4 | Sequence-context predictions and measured translation are distinct; an amino-acid translation does not answer the source endpoint. |
+| Associated-variant prioritization | 43 | Preserve trait, study, allele and ranking rules; a source prompt supplies candidate rs IDs without defining a unique evidence statistic. |
+| Locus-to-gene prioritization | 150 | Retain three 50-record source protocols and distinguish proximity, reported genes, model scores and observed functional support. |
+| Screen-effect retrieval | 50 | Match experimental context and effect direction before ranking all candidates; raw guide counts are not supplied by the source prompts. |
+| Phenotype-to-gene prioritization | 50 | Rank 8–22 candidate genes using observed profiles and explicit ontology rules; a patient VCF is not a source input. |
+| Rare-disease discrimination | 30 | Every source case supplies one gene; the endpoint distinguishes diseases using 1–23 phenotype terms. |
+| Delivery-method comparison | 10 | Context-only category choice lacks a defined comparative outcome; retain the observed-assay adaptation gap. |
 
 Protein substitutions can match multiple nucleotide variants, and classification
 depends on record level and assertion type. The contracts preserve that ambiguity
@@ -162,6 +169,13 @@ context. Ribosome occupancy per mRNA needs a declared estimand and is not automa
 a direct protein-production rate ([primary study](https://pmc.ncbi.nlm.nih.gov/articles/PMC11326257/)).
 Feature-only scoring remains component coverage. Sequence-oracle agreement establishes
 the specified computation, not laboratory yield or measured expression.
+
+The 333 structurally audited records contain 319 distinct prompt texts: ten
+identical-prompt groups comprise 24 records. Their IDs and hashes remain in the
+design file; answer equivalence has not been inspected, so canonical alias and
+coverage counts are unchanged. The gene-selection evaluator accepts any nonempty
+intersection with its reference list. Authored tasks instead require the declared
+selection cardinality and full candidate evidence ([pinned evaluator](https://github.com/snap-stanford/Biomni/blob/400c1f366b96a35ca253e13c9b06c5076af41d65/biomni/eval/biomni_eval1.py)).
 
 ## Broader question portfolio
 

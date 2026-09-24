@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T16:35:25.945983+00:00",
+  "updated_at": "2026-09-24T16:41:59.435199+00:00",
   "basis_revision": "952929c306",
   "scope": "Agentic provisional-ID benchmarks only; preserve all existing OOD exclusions. Plan the broad task set before further recipe implementation.",
   "authoring_unit": "One coherent observed-data task per recipe by default. Proposed questions are separate task designs, not repeated instances. They may be split or merged after endpoint and runtime checks.",
@@ -13250,11 +13250,11 @@
     },
     {
       "path": "workflow_designs/biomni-eval1.json",
-      "sha256": "864673bb49d1935b5843bb0fbae0da0e3ce504a186dc46068c00bd27d31c7d6c",
+      "sha256": "7f8b41d2dfae49cb233c15292afb625232c290221f3e0baf05af30eb3ffcd27b",
       "benchmark_id": "Biomni-Eval1 tool-enabled",
       "inventory_records_assigned": 433,
       "proposed_question_cards": 20,
-      "inspection_basis": "All 100 DBQA/SeqQA question stems reviewed with 14 family contracts and exact SeqQA query-mode assignments. Other records retain shared-protocol review and unreviewed evidence.",
+      "inspection_basis": "100 DBQA/SeqQA stems reviewed; 333 other prompt structures audited. All 20 families have proposed endpoint contracts; independent inputs, instance-specific scientific evidence and runtime remain unresolved.",
       "relationship_to_workstream_questions": "Refines existing workstreams; no independent task count or completed coverage forecast."
     },
     {
@@ -13367,7 +13367,7 @@
   "authoring_phase": "question-portfolio-planning",
   "portfolio_index": {
     "path": "workflow_portfolio.json",
-    "sha256": "2ceac4cef82e641991911e00eccbade18722a3447068dc91da8ba38d7c519783",
+    "sha256": "679cb6e6e351435f0a13d35420183627a599877896850af7dea6425833657fee",
     "counts": {
       "source_releases": 31,
       "inventory_records": 4332,
