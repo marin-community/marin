@@ -5,8 +5,8 @@
   "counts": {
     "source_releases": 32,
     "inventory_records": 5133,
-    "question_cards": 692,
-    "proposed_task_groups": 651,
+    "question_cards": 699,
+    "proposed_task_groups": 658,
     "conditional_consolidations": 25,
     "non_alias_records_linked_to_questions": 3058,
     "known_cross_release_alias_records": 50,
@@ -55,7 +55,7 @@
     },
     {
       "path": "workflow_designs/promptbio-bench.json",
-      "sha256": "5d03daf718a8bd845a26481488b61eb6c86bf2ba975738f3d95c2ac5410f6de0"
+      "sha256": "6c9a07307aa8ea3619772a640c4a8dc37d4fc0b0ed20963e33eeafbcbd81a6cd"
     },
     {
       "path": "workflow_designs/bixbench3.json",
@@ -195,9 +195,9 @@
       "condition_for_one_task": "Keep ranked GSEA and selected-list overrepresentation as distinct outputs with their own universes and multiplicity rules; preserve GO/KEGG version and semantic-reduction requirements. All named native methods must run.",
       "benchmark_record_scope": {
         "BixBench": 9,
-        "PromptBio-Bench": 9
+        "PromptBio-Bench": 8
       },
-      "scope_record_count": 18,
+      "scope_record_count": 17,
       "workstreams": [
         "rna-seq-contrast-enrichment"
       ],
@@ -206,7 +206,7 @@
         "complete_artifacts": "Complete gene effects before/after shrinkage; eligible universe and identifier map; GO/KEGG memberships; every ORA/GSEA result and semantic-reduction map; numeric plot data.",
         "deterministic_acceptance": "Native DESeq2 and pinned enrichment methods; independent contrast, overlap, ranking, FDR and universe checks. Freeze ontology release, tie handling, set sizes and undefined-result rules.",
         "required_incorrect_output_checks": "Use significant genes as the enrichment background; reverse rank direction; substitute ORA for GSEA; omit nonsignificant sets.",
-        "unresolved_before_assignment": "GSE60450 supports an explicitly adapted developmental count question, not disease context or all 18 endpoints. Freeze semantic-graph/KEGG snapshots and native shrinkage/GSEA contracts. PromptBio b-10-8 needs distinct predicted/reference observations; it remains unsupported by this candidate.",
+        "unresolved_before_assignment": "GSE60450 supports an adapted developmental count question, not disease context or all 17 endpoints. Freeze semantic-graph/KEGG snapshots and native shrinkage/GSEA contracts. The predicted/reference oncogene-set comparison has its own question card.",
         "status": "planning-contract-not-executed"
       },
       "source_input_review": {
@@ -6424,15 +6424,30 @@
       ]
     },
     {
-      "proposed_task_id": "promptbio-design-expression-dependency-association",
-      "scientific_question": "Which expression-response and dependency associations remain after cell-line identities and assay contexts are reconciled?",
+      "proposed_task_id": "promptbio-design-expression-essentiality-association",
+      "scientific_question": "Which gene-expression levels correlate with their measured gene-essentiality effects across matched cell lines?",
       "question_card_ids": [
-        "promptbio-design-expression-dependency-association"
+        "promptbio-design-expression-essentiality-association"
       ],
       "consolidation": "retain-distinct-question",
-      "scope_record_count": 2,
+      "scope_record_count": 1,
       "benchmark_record_scope": {
-        "PromptBio-Bench": 2
+        "PromptBio-Bench": 1
+      },
+      "workstreams": [
+        "target-evidence"
+      ]
+    },
+    {
+      "proposed_task_id": "promptbio-design-expression-drug-response-association",
+      "scientific_question": "Which measured drug responses correlate with EGFR expression across matched cell lines?",
+      "question_card_ids": [
+        "promptbio-design-expression-drug-response-association"
+      ],
+      "consolidation": "retain-distinct-question",
+      "scope_record_count": 1,
+      "benchmark_record_scope": {
+        "PromptBio-Bench": 1
       },
       "workstreams": [
         "target-evidence"
@@ -6994,15 +7009,60 @@
       ]
     },
     {
-      "proposed_task_id": "promptbio-design-forecasting-observed-outcomes",
-      "scientific_question": "Which forecasts explain future observed biological or care-process measurements under ordered windows and expanding-time evaluation?",
+      "proposed_task_id": "promptbio-design-icu-occupancy-forecast",
+      "scientific_question": "How well can a bounded recurrent model forecast seven days of observed ICU occupancy from the previous 21 days?",
       "question_card_ids": [
-        "promptbio-design-forecasting-observed-outcomes"
+        "promptbio-design-icu-occupancy-forecast"
       ],
       "consolidation": "retain-distinct-question",
-      "scope_record_count": 4,
+      "scope_record_count": 1,
       "benchmark_record_scope": {
-        "PromptBio-Bench": 4
+        "PromptBio-Bench": 1
+      },
+      "workstreams": [
+        "physiological-timeseries"
+      ]
+    },
+    {
+      "proposed_task_id": "promptbio-design-monthly-seasonal-decomposition",
+      "scientific_question": "Which seasonal component can be separated from an observed monthly biological or care-process series under an additive model?",
+      "question_card_ids": [
+        "promptbio-design-monthly-seasonal-decomposition"
+      ],
+      "consolidation": "retain-distinct-question",
+      "scope_record_count": 1,
+      "benchmark_record_scope": {
+        "PromptBio-Bench": 1
+      },
+      "workstreams": [
+        "physiological-timeseries"
+      ]
+    },
+    {
+      "proposed_task_id": "promptbio-design-patient-glucose-forecast",
+      "scientific_question": "How accurately can a patient-specific random forest forecast the next three hourly glucose measurements from six previous hours?",
+      "question_card_ids": [
+        "promptbio-design-patient-glucose-forecast"
+      ],
+      "consolidation": "retain-distinct-question",
+      "scope_record_count": 1,
+      "benchmark_record_scope": {
+        "PromptBio-Bench": 1
+      },
+      "workstreams": [
+        "physiological-timeseries"
+      ]
+    },
+    {
+      "proposed_task_id": "promptbio-design-hospital-admissions-forecast",
+      "scientific_question": "How stable is next-day hospital-admission prediction across five expanding-window evaluation periods?",
+      "question_card_ids": [
+        "promptbio-design-hospital-admissions-forecast"
+      ],
+      "consolidation": "retain-distinct-question",
+      "scope_record_count": 1,
+      "benchmark_record_scope": {
+        "PromptBio-Bench": 1
       },
       "workstreams": [
         "physiological-timeseries"
@@ -7054,15 +7114,45 @@
       ]
     },
     {
-      "proposed_task_id": "promptbio-design-bayesian-assay-updates",
-      "scientific_question": "How do observed assay counts and independently measured test characteristics update prespecified probability models and uncertainty?",
+      "proposed_task_id": "promptbio-design-diagnostic-probability-update",
+      "scientific_question": "How do measured test sensitivity, specificity and target-population prevalence determine the probability of a disorder after a positive test?",
       "question_card_ids": [
-        "promptbio-design-bayesian-assay-updates"
+        "promptbio-design-diagnostic-probability-update"
       ],
       "consolidation": "retain-distinct-question",
-      "scope_record_count": 3,
+      "scope_record_count": 1,
       "benchmark_record_scope": {
-        "PromptBio-Bench": 3
+        "PromptBio-Bench": 1
+      },
+      "workstreams": [
+        "data-statistics-visualization"
+      ]
+    },
+    {
+      "proposed_task_id": "promptbio-design-crispr-editing-posterior",
+      "scientific_question": "How do observed independent editing trials update uncertainty about two CRISPR guides under a declared binomial model?",
+      "question_card_ids": [
+        "promptbio-design-crispr-editing-posterior"
+      ],
+      "consolidation": "retain-distinct-question",
+      "scope_record_count": 1,
+      "benchmark_record_scope": {
+        "PromptBio-Bench": 1
+      },
+      "workstreams": [
+        "data-statistics-visualization"
+      ]
+    },
+    {
+      "proposed_task_id": "promptbio-design-antibody-binding-posterior",
+      "scientific_question": "What is the posterior probability that one antibody has a higher observed binding-success rate than another under a declared binomial model?",
+      "question_card_ids": [
+        "promptbio-design-antibody-binding-posterior"
+      ],
+      "consolidation": "retain-distinct-question",
+      "scope_record_count": 1,
+      "benchmark_record_scope": {
+        "PromptBio-Bench": 1
       },
       "workstreams": [
         "data-statistics-visualization"
@@ -10225,6 +10315,21 @@
       "workstreams": [
         "evidence-meta-analysis"
       ]
+    },
+    {
+      "proposed_task_id": "promptbio-design-oncogene-set-overlap",
+      "scientific_question": "How much does an observed cancer-versus-normal differential-expression selection overlap an independently curated oncogene set?",
+      "question_card_ids": [
+        "promptbio-design-oncogene-set-overlap"
+      ],
+      "consolidation": "retain-distinct-question",
+      "scope_record_count": 1,
+      "benchmark_record_scope": {
+        "PromptBio-Bench": 1
+      },
+      "workstreams": [
+        "rna-seq-contrast-enrichment"
+      ]
     }
   ],
   "planning_review_order": [
@@ -10603,7 +10708,7 @@
   },
   "source_collection_plan": {
     "path": "workflow_designs/source_collections.json",
-    "sha256": "33a9be3c8821d166497fafc3aadb33031f033d48c32649b91ea7219a759e22a9",
+    "sha256": "35d6184cc6c06d42561670ace525edddb6bb758f68a772006c416c8a0d51cc97",
     "candidate_collections": 6,
     "new_biological_payloads_downloaded": 1,
     "cleared_for_training": 0,

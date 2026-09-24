@@ -12,14 +12,14 @@
   "counts": {
     "source_records": 244,
     "validated_new_mappings": 0,
-    "question_cards": 94
+    "question_cards": 101
   },
   "defaults": {
     "unit": "One coherent question per recipe; file manipulation, plotting and scalar summaries should normally be stages in a connected biological analysis.",
     "reward": "Use a native input-reading baseline and deterministic schema/numeric/structural checks. Learned predictions may vary: grade a frozen held-out metric and complete prediction identities rather than exact model outputs. Calibrate any success criterion before solver attempts. No LLM judge.",
     "plotting": "Validate complete plotting data, axes, units, labels and required graphical elements. A checked source table alone does not prove the rendered plot is correct; visual-style equivalence remains unresolved where it cannot be checked faithfully.",
     "data_reality": "Real observed input sequences, measurements, cohorts and images. Designed sequence outputs are labelled computational designs; simulated nulls or uncertainty draws are analysis procedures, never substituted for observed biological inputs.",
-    "consolidation": "These 80 proposals overlap the earlier benchmark-specific cards. Merge only when input types, scientific estimands and required native methods agree; do not sum proposal counts into dataset size."
+    "consolidation": "These proposals overlap earlier benchmark-specific cards. Merge only when inputs, scientific estimands and required native methods agree; do not sum proposal counts into dataset size."
   },
   "questions": [
     {
@@ -780,8 +780,7 @@
       "target_ids": [
         "a-2-9",
         "a-11-6",
-        "a-11-10",
-        "b-10-8"
+        "a-11-10"
       ],
       "source_endpoint_patterns": [
         {
@@ -819,18 +818,6 @@
               "description": "rows as KEGG pathways, columns should include Gene_set, Term, Overlap, P-value, Adjusted P-value, Odds Ratio, Combined Score, Genes"
             }
           ]
-        },
-        {
-          "task_id": "b-10-8",
-          "pattern": "Compare predicted and reference gene sets with overlap metrics",
-          "source_metadata_sha256": "93686b80f99cd29afa932007fe013b7447cef8b8a1a19a09931d2818e02d2792",
-          "source_output_artifacts": [
-            {
-              "file": "jaccard_score.csv",
-              "type": "csv",
-              "description": "rows as metrics, columns should include Metric, Value"
-            }
-          ]
         }
       ],
       "matching_workstreams": [
@@ -853,7 +840,7 @@
       "verifier_design": [
         "Native DESeq2/edgeR reference plus independent contrast, multiplicity and set checks; retain every gene and pathway, including undefined estimates; test interaction directly."
       ],
-      "connected_workflow_rationale": "Use the same independent observed study and retain each listed endpoint as an intermediate or final artifact. Source-specific methods, parameter choices, cohorts and output contracts remain separate when they differ. Split this proposal if one coherent study cannot support all endpoints.",
+      "connected_workflow_rationale": "Compare selected-list GO/KEGG enrichment using explicitly defined annotation universes and complete term outputs. Gene-set overlap against an oncogene catalogue is a separate question.",
       "remaining_decisions": [
         "Choose independent observed inputs with enough biological replication and native-format detail; exclude source benchmark studies and fixtures.",
         "Freeze every source-specific threshold, feature universe, model and output schema before claiming endpoint equivalence.",
@@ -861,6 +848,64 @@
       ],
       "status": "question-portfolio-proposal-no-coverage-credit",
       "input_contract_limit": "The routed workstream supplies an input search boundary. Preserve every exact source stage and native format in source_endpoint_patterns; input manifest and final schema still need endpoint-specific design."
+    },
+    {
+      "proposed_id": "promptbio-design-oncogene-set-overlap",
+      "scientific_question": "How much does an observed cancer-versus-normal differential-expression selection overlap an independently curated oncogene set?",
+      "target_ids": [
+        "b-10-8"
+      ],
+      "source_endpoint_patterns": [
+        {
+          "task_id": "b-10-8",
+          "pattern": "Compare predicted and reference gene sets with overlap metrics",
+          "source_metadata_sha256": "93686b80f99cd29afa932007fe013b7447cef8b8a1a19a09931d2818e02d2792",
+          "source_output_artifacts": [
+            {
+              "file": "jaccard_score.csv",
+              "type": "csv",
+              "description": "rows as metrics, columns should include Metric, Value"
+            }
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "rna-seq-contrast-enrichment"
+      ],
+      "input_requirements": [
+        "Independent observed cancer/normal expression-derived gene selection plus a versioned, redistribution-compatible oncogene catalogue. Record study, selection rule and curation evidence; do not invent a reference set from the same differential-expression ranks."
+      ],
+      "native_format_requirements": [
+        "csv"
+      ],
+      "named_method_requirements": [
+        "set intersection",
+        "Jaccard similarity"
+      ],
+      "proposed_artifact_requirements": [
+        "Canonical identifier map, deduplicated input sets, unmapped IDs, intersection/union members and counts, Jaccard value. Define empty-union behavior and preserve ambiguous mappings as unresolved."
+      ],
+      "verifier_design": [
+        "Independently recompute complete sets and |intersection|/|union|. Reject duplicate-inflated counts, intersection divided by the smaller set and a pathway-enrichment table substituted for overlap."
+      ],
+      "connected_workflow_rationale": "Join observed inputs, audit eligibility, perform the specified analysis and verify all outputs for this single scientific question. Shared arithmetic does not merge different assay targets or biological units.",
+      "remaining_decisions": [
+        "Pin independent observed source, rights, checksum and source-cohort lineage.",
+        "Freeze all declared parameter choices, native package versions and complete artifact schemas; calibrate tolerances and any learned-model acceptance before solver attempts.",
+        "Measure the complete offline Harbor workflow within the 30-minute target."
+      ],
+      "status": "question-portfolio-proposal-no-coverage-credit",
+      "input_contract_limit": "Exact task stem and required artifact specifications reviewed at the inventory-pinned revision; source input files and expected-answer contents were not read. Independent real-data acquisition remains open.",
+      "source_specific_parameters_and_departures": "Source compares top 50 differential genes with 30 COSMIC oncogenes. Preserve set intersection and Jaccard semantics. Different set sizes or a different licensed catalogue are explicit adaptations; never claim COSMIC coverage from an unrelated GO set.",
+      "source_question_review": {
+        "source_metadata_sha256": "93686b80f99cd29afa932007fe013b7447cef8b8a1a19a09931d2818e02d2792",
+        "reviewed_fields": [
+          "question",
+          "input_files",
+          "expected_output"
+        ],
+        "expected_output_scope": "Artifact names/types/descriptions only, not reference answer contents."
+      }
     },
     {
       "proposed_id": "promptbio-design-ortholog-phylogeny",
@@ -3476,11 +3521,10 @@
       "input_contract_limit": "The routed workstream supplies an input search boundary. Preserve every exact source stage and native format in source_endpoint_patterns; input manifest and final schema still need endpoint-specific design."
     },
     {
-      "proposed_id": "promptbio-design-expression-dependency-association",
-      "scientific_question": "Which expression-response and dependency associations remain after cell-line identities and assay contexts are reconciled?",
+      "proposed_id": "promptbio-design-expression-essentiality-association",
+      "scientific_question": "Which gene-expression levels correlate with their measured gene-essentiality effects across matched cell lines?",
       "target_ids": [
-        "a-11-7",
-        "b-3-6"
+        "a-11-7"
       ],
       "source_endpoint_patterns": [
         {
@@ -3504,7 +3548,54 @@
               "description": "gene expression as x-axis, inverted essentiality score as y-axis, Spearman r and adjusted p-value in title"
             }
           ]
-        },
+        }
+      ],
+      "matching_workstreams": [
+        "target-evidence"
+      ],
+      "input_requirements": [
+        "Independent matched cell-line expression and measured CRISPR gene-effect matrices, with stable cell-line/gene IDs and assay release metadata. The benchmark names DepMap-like files; pin source lineage before selecting another release or overlapping cell lines."
+      ],
+      "native_format_requirements": [
+        "csv",
+        "png"
+      ],
+      "named_method_requirements": [
+        "Spearman correlation",
+        "Benjamini-Hochberg adjustment"
+      ],
+      "proposed_artifact_requirements": [
+        "Complete gene-wise sample counts/correlations/p/q, joint sample and feature maps, top and bottom five with tie policy, complete scatter-plot data and the labelled plot."
+      ],
+      "verifier_design": [
+        "Independently reconstruct joins, ranks and the BH family. Reject Pearson substitution, row-order joins, a sign inversion applied only to the reported ranking, omitted constant genes and adjustment over only the displayed top ten."
+      ],
+      "connected_workflow_rationale": "Join observed inputs, audit eligibility, perform the specified analysis and verify all outputs for this single scientific question. Shared arithmetic does not merge different assay targets or biological units.",
+      "remaining_decisions": [
+        "Pin independent observed source, rights, checksum and source-cohort lineage.",
+        "Freeze all declared parameter choices, native package versions and complete artifact schemas; calibrate tolerances and any learned-model acceptance before solver attempts.",
+        "Measure the complete offline Harbor workflow within the 30-minute target."
+      ],
+      "status": "question-portfolio-proposal-no-coverage-credit",
+      "input_contract_limit": "Exact task stem and required artifact specifications reviewed at the inventory-pinned revision; source input files and expected-answer contents were not read. Independent real-data acquisition remains open.",
+      "source_specific_parameters_and_departures": "Source ranks gene-wise Spearman correlations, reports p and adjusted p, and plots expression against inverted essentiality. Freeze score sign for fitting separately from plot inversion, pairwise missingness, minimum observations, BH family and tie order; undefined correlations remain explicit.",
+      "source_question_review": {
+        "source_metadata_sha256": "e2d353db21da813af2907a2e80e38fb7d234a9d0fdf8b604b4974609dd9dbe76",
+        "reviewed_fields": [
+          "question",
+          "input_files",
+          "expected_output"
+        ],
+        "expected_output_scope": "Artifact names/types/descriptions only, not reference answer contents."
+      }
+    },
+    {
+      "proposed_id": "promptbio-design-expression-drug-response-association",
+      "scientific_question": "Which measured drug responses correlate with EGFR expression across matched cell lines?",
+      "target_ids": [
+        "b-3-6"
+      ],
+      "source_endpoint_patterns": [
         {
           "task_id": "b-3-6",
           "pattern": "Join expression and drug response, rank correlations and visualize extremes",
@@ -3527,27 +3618,39 @@
         "target-evidence"
       ],
       "input_requirements": [
-        "Frozen public target, genetics, dependency, expression and compound evidence; measured effects with tissue, direction and release metadata."
+        "Observed EGFR expression and drug-specific IC50 measurements with matched cell-line IDs, assay conditions, units and censoring flags. Preserve biological cell-line units and prespecify technical replicate aggregation."
       ],
       "native_format_requirements": [
         "csv",
         "png"
       ],
-      "named_method_requirements": [],
+      "named_method_requirements": [
+        "Pearson correlation"
+      ],
       "proposed_artifact_requirements": [
-        "Identifier/release map, source evidence rows, direction/effect tables, confounder checks, ranked candidates and uncertainty flags"
+        "Complete cell-line/drug joins, excluded/censored observations, each eligible drug correlation and sample count, signed top lists, numeric plot data and full bar chart."
       ],
       "verifier_design": [
-        "Independent joins and declared ranking arithmetic; check evidence direction and source provenance; preserve conflicting/absent evidence rather than generating narrative ground truth."
+        "Recompute correlation on the declared scale. Reject IC50/AUC substitution, selecting six by absolute correlation without preserving signs, sample misjoins and silent removal of undefined drugs."
       ],
-      "connected_workflow_rationale": "Use the same independent observed study and retain each listed endpoint as an intermediate or final artifact. Source-specific methods, parameter choices, cohorts and output contracts remain separate when they differ. Split this proposal if one coherent study cannot support all endpoints.",
+      "connected_workflow_rationale": "Join observed inputs, audit eligibility, perform the specified analysis and verify all outputs for this single scientific question. Shared arithmetic does not merge different assay targets or biological units.",
       "remaining_decisions": [
-        "Choose independent observed inputs with enough biological replication and native-format detail; exclude source benchmark studies and fixtures.",
-        "Freeze every source-specific threshold, feature universe, model and output schema before claiming endpoint equivalence.",
-        "Measure the complete offline analysis against the 30-minute budget without discarding biological sample structure."
+        "Pin independent observed source, rights, checksum and source-cohort lineage.",
+        "Freeze all declared parameter choices, native package versions and complete artifact schemas; calibrate tolerances and any learned-model acceptance before solver attempts.",
+        "Measure the complete offline Harbor workflow within the 30-minute target."
       ],
       "status": "question-portfolio-proposal-no-coverage-credit",
-      "input_contract_limit": "The routed workstream supplies an input search boundary. Preserve every exact source stage and native format in source_endpoint_patterns; input manifest and final schema still need endpoint-specific design."
+      "input_contract_limit": "Exact task stem and required artifact specifications reviewed at the inventory-pinned revision; source input files and expected-answer contents were not read. Independent real-data acquisition remains open.",
+      "source_specific_parameters_and_departures": "Source uses Pearson correlation of EGFR versus IC50 and highlights the three strongest positive and three strongest negative drugs. Freeze the IC50 scale, censoring/eligibility rules and ties; no substitution of gene-effect scores, AUC or Spearman statistics. Fewer qualifying signs must produce explicit short lists.",
+      "source_question_review": {
+        "source_metadata_sha256": "1e314283795eee675ef26fa3ae38126aa7857b484f3601684f30a87493e9722b",
+        "reviewed_fields": [
+          "question",
+          "input_files",
+          "expected_output"
+        ],
+        "expected_output_scope": "Artifact names/types/descriptions only, not reference answer contents."
+      }
     },
     {
       "proposed_id": "promptbio-design-phylogenetic-trait-comparison",
@@ -6420,13 +6523,10 @@
       "refines_prior_question_id": "promptbio-design-sparse-methylation-regression"
     },
     {
-      "proposed_id": "promptbio-design-forecasting-observed-outcomes",
-      "scientific_question": "Which forecasts explain future observed biological or care-process measurements under ordered windows and expanding-time evaluation?",
+      "proposed_id": "promptbio-design-icu-occupancy-forecast",
+      "scientific_question": "How well can a bounded recurrent model forecast seven days of observed ICU occupancy from the previous 21 days?",
       "target_ids": [
-        "b-8-5",
-        "b-12-1",
-        "b-12-2",
-        "b-12-5"
+        "b-8-5"
       ],
       "source_endpoint_patterns": [
         {
@@ -6440,7 +6540,53 @@
               "description": "rows as metrics (1 row), columns should include Metric, Value"
             }
           ]
-        },
+        }
+      ],
+      "matching_workstreams": [
+        "physiological-timeseries"
+      ],
+      "input_requirements": [
+        "Observed daily ICU occupancy at a documented hospital or fixed hospital aggregate, with dates, stable reporting units and missing/revised-record flags. Preserve a contiguous sufficient series and calendar gaps; occupancy is a stock, not daily admissions."
+      ],
+      "native_format_requirements": [
+        "csv"
+      ],
+      "named_method_requirements": [
+        "MinMaxScaler",
+        "two-layer LSTM"
+      ],
+      "proposed_artifact_requirements": [
+        "Dated input/target window manifest, partition boundaries, scaler parameters, model configuration/checkpoint, training history, every test forecast by horizon, per-horizon and pooled RMSE on original occupancy units, persistence baseline."
+      ],
+      "verifier_design": [
+        "Private measured targets determine recomputed errors; native reference checks architecture and window construction. Reject future-fitted scaling, crossing a target boundary, shuffled time splits, omitted horizons and RMSE on normalized units. Calibrate model acceptance before solver calls; do not require identical learned weights."
+      ],
+      "connected_workflow_rationale": "Join observed inputs, audit eligibility, perform the specified analysis and verify all outputs for this single scientific question. Shared arithmetic does not merge different assay targets or biological units.",
+      "remaining_decisions": [
+        "Pin independent observed source, rights, checksum and source-cohort lineage.",
+        "Freeze all declared parameter choices, native package versions and complete artifact schemas; calibrate tolerances and any learned-model acceptance before solver attempts.",
+        "Measure the complete offline Harbor workflow within the 30-minute target."
+      ],
+      "status": "question-portfolio-proposal-no-coverage-credit",
+      "input_contract_limit": "Exact task stem and required artifact specifications reviewed at the inventory-pinned revision; source input files and expected-answer contents were not read. Independent real-data acquisition remains open.",
+      "source_specific_parameters_and_departures": "Source specifies MinMaxScaler; LSTM(64, ReLU), Dropout(.2), LSTM(32, ReLU), Dropout(.2), Dense(16, ReLU), Dense(7); Adam/MSE, batch 32, at most 100 epochs, patience 10, chronological 80/20 windows with 20% internal validation. Freeze sequence shapes, seeds and package versions. Fit scaling on training observations. Purge overlapping target dates at train/validation/test boundaries; record this leakage-prevention departure from literal window splitting.",
+      "source_question_review": {
+        "source_metadata_sha256": "26a9a2309a5ac271d577f2b6aad49e3440b126cdf3b4d87306ffbc85a4799564",
+        "reviewed_fields": [
+          "question",
+          "input_files",
+          "expected_output"
+        ],
+        "expected_output_scope": "Artifact names/types/descriptions only, not reference answer contents."
+      }
+    },
+    {
+      "proposed_id": "promptbio-design-monthly-seasonal-decomposition",
+      "scientific_question": "Which seasonal component can be separated from an observed monthly biological or care-process series under an additive model?",
+      "target_ids": [
+        "b-12-1"
+      ],
+      "source_endpoint_patterns": [
         {
           "task_id": "b-12-1",
           "pattern": "Decompose a seasonal series and remove its seasonal component",
@@ -6452,7 +6598,52 @@
               "description": "rows as monthly time points, columns should include Date, Original, Trend, Seasonal, Residual, Seasonally_Adjusted"
             }
           ]
-        },
+        }
+      ],
+      "matching_workstreams": [
+        "physiological-timeseries"
+      ],
+      "input_requirements": [
+        "Observed regular monthly measurements with documented units and at least two complete annual cycles. Specify the process, aggregation rule and missing-month policy; preserve observations instead of filling a simulated periodic signal."
+      ],
+      "native_format_requirements": [
+        "csv"
+      ],
+      "named_method_requirements": [
+        "additive seasonal decomposition"
+      ],
+      "proposed_artifact_requirements": [
+        "Every date with original, trend, seasonal, residual and seasonally adjusted values, including explicitly undefined edge estimates; sampling/calendar audit."
+      ],
+      "verifier_design": [
+        "Native numerical reference plus Original = Trend + Seasonal + Residual and Adjusted = Original - Seasonal where defined. Reject multiplicative decomposition, period changes, shifted dates and fabricated finite edge values."
+      ],
+      "connected_workflow_rationale": "Join observed inputs, audit eligibility, perform the specified analysis and verify all outputs for this single scientific question. Shared arithmetic does not merge different assay targets or biological units.",
+      "remaining_decisions": [
+        "Pin independent observed source, rights, checksum and source-cohort lineage.",
+        "Freeze all declared parameter choices, native package versions and complete artifact schemas; calibrate tolerances and any learned-model acceptance before solver attempts.",
+        "Measure the complete offline Harbor workflow within the 30-minute target."
+      ],
+      "status": "question-portfolio-proposal-no-coverage-credit",
+      "input_contract_limit": "Exact task stem and required artifact specifications reviewed at the inventory-pinned revision; source input files and expected-answer contents were not read. Independent real-data acquisition remains open.",
+      "source_specific_parameters_and_departures": "Source uses additive seasonal decomposition with period 12. Freeze the native implementation, centered/two-sided trend, endpoint extrapolation and missing-value policy. This is retrospective decomposition; a centered smoother is not a prospective forecast.",
+      "source_question_review": {
+        "source_metadata_sha256": "b453c766668f6fef96bdf9018a2e7804bc395dafb6cb7fd7ade1875f01ab8076",
+        "reviewed_fields": [
+          "question",
+          "input_files",
+          "expected_output"
+        ],
+        "expected_output_scope": "Artifact names/types/descriptions only, not reference answer contents."
+      }
+    },
+    {
+      "proposed_id": "promptbio-design-patient-glucose-forecast",
+      "scientific_question": "How accurately can a patient-specific random forest forecast the next three hourly glucose measurements from six previous hours?",
+      "target_ids": [
+        "b-12-2"
+      ],
+      "source_endpoint_patterns": [
         {
           "task_id": "b-12-2",
           "pattern": "Build patient-specific lag features and multi-horizon forecasts",
@@ -6464,7 +6655,52 @@
               "description": "rows as patient prediction windows, columns should include PatientID, Start_Hour, Pred_Hour+1, Pred_Hour+2, Pred_Hour+3"
             }
           ]
-        },
+        }
+      ],
+      "matching_workstreams": [
+        "physiological-timeseries"
+      ],
+      "input_requirements": [
+        "Independent observed patient glucose series with patient ID, timestamps, units, measurement type and gap flags. Require enough observations per patient and avoid interpolation across an unobserved target interval."
+      ],
+      "native_format_requirements": [
+        "csv"
+      ],
+      "named_method_requirements": [
+        "multi-output random forest"
+      ],
+      "proposed_artifact_requirements": [
+        "Patient/date window identities, eligibility and partition manifest, every three-horizon prediction, per-patient/horizon RMSE, complete pooled metrics with explicit patient weighting, persistence baseline."
+      ],
+      "verifier_design": [
+        "Native seeded forest reference and independent patient/time/target checks. Reject windows crossing patients or gaps, future data in predictors, overlapping training and evaluation target times, and metrics omitting difficult patients."
+      ],
+      "connected_workflow_rationale": "Join observed inputs, audit eligibility, perform the specified analysis and verify all outputs for this single scientific question. Shared arithmetic does not merge different assay targets or biological units.",
+      "remaining_decisions": [
+        "Pin independent observed source, rights, checksum and source-cohort lineage.",
+        "Freeze all declared parameter choices, native package versions and complete artifact schemas; calibrate tolerances and any learned-model acceptance before solver attempts.",
+        "Measure the complete offline Harbor workflow within the 30-minute target."
+      ],
+      "status": "question-portfolio-proposal-no-coverage-credit",
+      "input_contract_limit": "Exact task stem and required artifact specifications reviewed at the inventory-pinned revision; source input files and expected-answer contents were not read. Independent real-data acquisition remains open.",
+      "source_specific_parameters_and_departures": "Source specifies six-hour lookback, +1/+2/+3-hour targets, RandomForestRegressor(n_estimators=100, random_state=42), and random 80/20 windows. Proposed real-data task uses chronological within-patient evaluation with disjoint target times; this changes the source evaluation protocol and must remain labelled as an adaptation. Freeze resampling and window index convention.",
+      "source_question_review": {
+        "source_metadata_sha256": "5c3f36c451730c671e45114104534b11f1b533d76a9ccbb720a9e09633482a1a",
+        "reviewed_fields": [
+          "question",
+          "input_files",
+          "expected_output"
+        ],
+        "expected_output_scope": "Artifact names/types/descriptions only, not reference answer contents."
+      }
+    },
+    {
+      "proposed_id": "promptbio-design-hospital-admissions-forecast",
+      "scientific_question": "How stable is next-day hospital-admission prediction across five expanding-window evaluation periods?",
+      "target_ids": [
+        "b-12-5"
+      ],
+      "source_endpoint_patterns": [
         {
           "task_id": "b-12-5",
           "pattern": "Evaluate lagged regression with expanding-window cross-validation",
@@ -6482,26 +6718,39 @@
         "physiological-timeseries"
       ],
       "input_requirements": [
-        "Observed EEG/ECG/calcium or related time series with sampling rate, channel units, event labels, recording and subject identities."
+        "Observed daily admission counts for a fixed service/population, dates, reporting coverage and known corrections. Document missing days without treating them as zero admissions."
       ],
       "native_format_requirements": [
         "csv"
       ],
-      "named_method_requirements": [],
+      "named_method_requirements": [
+        "linear regression",
+        "expanding-window evaluation"
+      ],
       "proposed_artifact_requirements": [
-        "Signal/event alignment, QC masks, filtered signals or sufficient bounded features, group splits, predictions and full metrics"
+        "All lag windows and dates, five train/test manifests and fitted coefficients, every fold prediction, fold RMSE, unweighted mean and declared standard deviation, remainder accounting and naive baseline."
       ],
       "verifier_design": [
-        "Independent timing/filter/feature checks, native numerical reference and subject-level leakage audit; preserve uncertainty and missing channels."
+        "Independent fold reconstruction and RMSE arithmetic plus native regression. Reject random folds, future-target features, dropped folds and pooled RMSE presented as the unweighted fold mean."
       ],
-      "connected_workflow_rationale": "Use the same independent observed study and retain each listed endpoint as an intermediate or final artifact. Source-specific methods, parameter choices, cohorts and output contracts remain separate when they differ. Split this proposal if one coherent study cannot support all endpoints.",
+      "connected_workflow_rationale": "Join observed inputs, audit eligibility, perform the specified analysis and verify all outputs for this single scientific question. Shared arithmetic does not merge different assay targets or biological units.",
       "remaining_decisions": [
-        "Choose independent observed inputs with enough biological replication and native-format detail; exclude source benchmark studies and fixtures.",
-        "Freeze every source-specific threshold, feature universe, model and output schema before claiming endpoint equivalence.",
-        "Measure the complete offline analysis against the 30-minute budget without discarding biological sample structure."
+        "Pin independent observed source, rights, checksum and source-cohort lineage.",
+        "Freeze all declared parameter choices, native package versions and complete artifact schemas; calibrate tolerances and any learned-model acceptance before solver attempts.",
+        "Measure the complete offline Harbor workflow within the 30-minute target."
       ],
       "status": "question-portfolio-proposal-no-coverage-credit",
-      "input_contract_limit": "The routed workstream supplies an input search boundary. Preserve every exact source stage and native format in source_endpoint_patterns; input manifest and final schema still need endpoint-specific design."
+      "input_contract_limit": "Exact task stem and required artifact specifications reviewed at the inventory-pinned revision; source input files and expected-answer contents were not read. Independent real-data acquisition remains open.",
+      "source_specific_parameters_and_departures": "Source uses seven previous days as features and linear regression. After windowing N observations, define six chronological segments of floor(N/6) rows; fold i trains on first i segments and tests segment i+1, i=1..5. Freeze the remainder policy and standard-deviation degrees of freedom; retain any remainder rows in an explicit unused manifest. Lag observations available at forecast time can cross the fold boundary; future targets cannot.",
+      "source_question_review": {
+        "source_metadata_sha256": "e23c4c86a7968fa77243c3b5a3ce151ae48996c6b1e884c2f6d4a741b21f5267",
+        "reviewed_fields": [
+          "question",
+          "input_files",
+          "expected_output"
+        ],
+        "expected_output_scope": "Artifact names/types/descriptions only, not reference answer contents."
+      }
     },
     {
       "proposed_id": "promptbio-design-nonlinear-covariate-regression",
@@ -6707,12 +6956,10 @@
       "input_contract_limit": "The routed workstream supplies an input search boundary. Preserve every exact source stage and native format in source_endpoint_patterns; input manifest and final schema still need endpoint-specific design."
     },
     {
-      "proposed_id": "promptbio-design-bayesian-assay-updates",
-      "scientific_question": "How do observed assay counts and independently measured test characteristics update prespecified probability models and uncertainty?",
+      "proposed_id": "promptbio-design-diagnostic-probability-update",
+      "scientific_question": "How do measured test sensitivity, specificity and target-population prevalence determine the probability of a disorder after a positive test?",
       "target_ids": [
-        "b-11-1",
-        "b-11-2",
-        "b-11-3"
+        "b-11-1"
       ],
       "source_endpoint_patterns": [
         {
@@ -6726,7 +6973,53 @@
               "description": "labeled values: prior probability, likelihood, marginal probability, posterior probability"
             }
           ]
-        },
+        }
+      ],
+      "matching_workstreams": [
+        "data-statistics-visualization"
+      ],
+      "input_requirements": [
+        "Observed diagnostic validation counts with independently established disease status plus target-population prevalence with an explicit denominator. Document study/assay compatibility and transport assumptions; case-control sampling prevalence is not automatically population prevalence."
+      ],
+      "native_format_requirements": [
+        "csv",
+        "txt"
+      ],
+      "named_method_requirements": [
+        "Bayes rule"
+      ],
+      "proposed_artifact_requirements": [
+        "Observed confusion counts, prevalence evidence/denominator, derived sensitivity/specificity, prior, likelihood, positive-test marginal and posterior with named units and assumptions."
+      ],
+      "verifier_design": [
+        "Recompute conditional rates and probability identities. Reject specificity used as false-positive rate, reversing conditional probability and using enriched validation prevalence as the target-population prior."
+      ],
+      "connected_workflow_rationale": "Join observed inputs, audit eligibility, perform the specified analysis and verify all outputs for this single scientific question. Shared arithmetic does not merge different assay targets or biological units.",
+      "remaining_decisions": [
+        "Pin independent observed source, rights, checksum and source-cohort lineage.",
+        "Freeze all declared parameter choices, native package versions and complete artifact schemas; calibrate tolerances and any learned-model acceptance before solver attempts.",
+        "Measure the complete offline Harbor workflow within the 30-minute target."
+      ],
+      "status": "question-portfolio-proposal-no-coverage-credit",
+      "input_contract_limit": "Exact task stem and required artifact specifications reviewed at the inventory-pinned revision; source input files and expected-answer contents were not read. Independent real-data acquisition remains open.",
+      "source_specific_parameters_and_departures": "Source supplies hypothetical prevalence/sensitivity/specificity. Replace those with independently observed inputs and label the adaptation. Compute the probability of a positive test under each disease state and their prevalence-weighted marginal, then apply Bayes rule. These are estimates conditional on the measured inputs, not a diagnosis or a causal claim.",
+      "source_question_review": {
+        "source_metadata_sha256": "9a1386a4f625d4b41ea1c84bf219193ded876f53ea9136a94a3315e1950c2f10",
+        "reviewed_fields": [
+          "question",
+          "input_files",
+          "expected_output"
+        ],
+        "expected_output_scope": "Artifact names/types/descriptions only, not reference answer contents."
+      }
+    },
+    {
+      "proposed_id": "promptbio-design-crispr-editing-posterior",
+      "scientific_question": "How do observed independent editing trials update uncertainty about two CRISPR guides under a declared binomial model?",
+      "target_ids": [
+        "b-11-2"
+      ],
+      "source_endpoint_patterns": [
         {
           "task_id": "b-11-2",
           "pattern": "Update binomial efficacy priors and compare posterior distributions",
@@ -6743,7 +7036,53 @@
               "description": "rows as guide RNAs, columns should include Guide, Posterior_Alpha, Posterior_Beta, Posterior_Mean_Efficiency"
             }
           ]
-        },
+        }
+      ],
+      "matching_workstreams": [
+        "data-statistics-visualization"
+      ],
+      "input_requirements": [
+        "Observed guide-level editing successes and eligible trials with guide sequence/identity, assay protocol and biological replicate provenance. Distinguish independent trials from PCR reads or repeated measurements of the same edited clone; clustered outcomes require an explicit model change."
+      ],
+      "native_format_requirements": [
+        "csv",
+        "png"
+      ],
+      "named_method_requirements": [
+        "Beta-binomial conjugate update"
+      ],
+      "proposed_artifact_requirements": [
+        "Trial inclusion/count audit, guide identity map, all prior/posterior parameters and means, complete density grid and labelled density comparison plot."
+      ],
+      "verifier_design": [
+        "Independent conjugate arithmetic and native beta density checks. Reject failure-count errors, swapped guide labels, averaging replicate proportions without denominators and plot curves inconsistent with posterior parameters."
+      ],
+      "connected_workflow_rationale": "Join observed inputs, audit eligibility, perform the specified analysis and verify all outputs for this single scientific question. Shared arithmetic does not merge different assay targets or biological units.",
+      "remaining_decisions": [
+        "Pin independent observed source, rights, checksum and source-cohort lineage.",
+        "Freeze all declared parameter choices, native package versions and complete artifact schemas; calibrate tolerances and any learned-model acceptance before solver attempts.",
+        "Measure the complete offline Harbor workflow within the 30-minute target."
+      ],
+      "status": "question-portfolio-proposal-no-coverage-credit",
+      "input_contract_limit": "Exact task stem and required artifact specifications reviewed at the inventory-pinned revision; source input files and expected-answer contents were not read. Independent real-data acquisition remains open.",
+      "source_specific_parameters_and_departures": "Source uses independent Beta(1,1) priors, posterior alpha = 1 + successes and beta = 1 + trials - successes. Retain those modelling choices and replace hypothetical successes/trials with observed counts. Freeze exclusion and pooling rules without pretending read depth creates biological replication.",
+      "source_question_review": {
+        "source_metadata_sha256": "123d84d723a8501168bfb2eff5108a6f4e5acb59e340b155c9d604d263bb2286",
+        "reviewed_fields": [
+          "question",
+          "input_files",
+          "expected_output"
+        ],
+        "expected_output_scope": "Artifact names/types/descriptions only, not reference answer contents."
+      }
+    },
+    {
+      "proposed_id": "promptbio-design-antibody-binding-posterior",
+      "scientific_question": "What is the posterior probability that one antibody has a higher observed binding-success rate than another under a declared binomial model?",
+      "target_ids": [
+        "b-11-3"
+      ],
+      "source_endpoint_patterns": [
         {
           "task_id": "b-11-3",
           "pattern": "Update binding-efficiency priors and simulate posterior comparisons",
@@ -6766,28 +7105,40 @@
         "data-statistics-visualization"
       ],
       "input_requirements": [
-        "Observed biological tables with native schema, identifiers, units, sampling design and documented missing/censored values."
+        "Observed independent binary binding trials under matched antigen/concentration/protocol with antibody IDs, denominators and excluded-trial evidence. Continuous affinity or fluorescence cannot be silently recoded as Bernoulli outcomes; any threshold needs prior assay justification."
       ],
       "native_format_requirements": [
         "csv",
-        "png",
         "txt"
       ],
-      "named_method_requirements": [],
+      "named_method_requirements": [
+        "Beta-binomial conjugate update",
+        "posterior Monte Carlo comparison"
+      ],
       "proposed_artifact_requirements": [
-        "Join/exclusion audit, analysis-ready table, model matrices, full estimates/predictions, plot-source data and semantic figure metadata"
+        "Trial/count audit, all prior/posterior parameters and means, RNG/seed/draw count, comparison fraction and numerical-integration cross-check."
       ],
       "verifier_design": [
-        "Independent identity, arithmetic and statistical checks; verify axes, grouping, uncertainty and data completeness without requiring pixel-identical images."
+        "Verify conjugate updates and the full simulation procedure. Reject shared identical random draws that induce dependence between antibody samples, reversed comparison, wrong denominators and an unlabelled affinity-to-success threshold."
       ],
-      "connected_workflow_rationale": "Use the same independent observed study and retain each listed endpoint as an intermediate or final artifact. Source-specific methods, parameter choices, cohorts and output contracts remain separate when they differ. Split this proposal if one coherent study cannot support all endpoints.",
+      "connected_workflow_rationale": "Join observed inputs, audit eligibility, perform the specified analysis and verify all outputs for this single scientific question. Shared arithmetic does not merge different assay targets or biological units.",
       "remaining_decisions": [
-        "Choose independent observed inputs with enough biological replication and native-format detail; exclude source benchmark studies and fixtures.",
-        "Freeze every source-specific threshold, feature universe, model and output schema before claiming endpoint equivalence.",
-        "Measure the complete offline analysis against the 30-minute budget without discarding biological sample structure."
+        "Pin independent observed source, rights, checksum and source-cohort lineage.",
+        "Freeze all declared parameter choices, native package versions and complete artifact schemas; calibrate tolerances and any learned-model acceptance before solver attempts.",
+        "Measure the complete offline Harbor workflow within the 30-minute target."
       ],
       "status": "question-portfolio-proposal-no-coverage-credit",
-      "input_contract_limit": "The routed workstream supplies an input search boundary. Preserve every exact source stage and native format in source_endpoint_patterns; input manifest and final schema still need endpoint-specific design."
+      "input_contract_limit": "Exact task stem and required artifact specifications reviewed at the inventory-pinned revision; source input files and expected-answer contents were not read. Independent real-data acquisition remains open.",
+      "source_specific_parameters_and_departures": "Source uses Beta(1,1) priors and 10,000 independent posterior draws per antibody. Freeze RNG implementation and seed for a reproducible simulation; compare P(X>Y) against an independent numerical integration with prespecified Monte Carlo tolerance. Use observed trial counts, not the benchmark hypothetical counts.",
+      "source_question_review": {
+        "source_metadata_sha256": "d14b71a0ed9734b41101f54242287fffb3d84ae0113e9055e43482352461518b",
+        "reviewed_fields": [
+          "question",
+          "input_files",
+          "expected_output"
+        ],
+        "expected_output_scope": "Artifact names/types/descriptions only, not reference answer contents."
+      }
     },
     {
       "proposed_id": "promptbio-design-observed-state-transitions",
@@ -6840,5 +7191,5 @@
       "input_contract_limit": "The routed workstream supplies an input search boundary. Preserve every exact source stage and native format in source_endpoint_patterns; input manifest and final schema still need endpoint-specific design."
     }
   ],
-  "consolidation_review": "Manually replaced broad inherited workstream routing with endpoint-specific routing. Split seven oversized/mixed-contract bundles by estimand, modality or model comparison; all 244 task IDs remain assigned once."
+  "consolidation_review": "All 244 task IDs remain assigned once. Earlier review split seven mixed-contract bundles; direct review of ten more pinned task stems separates gene-set overlap, expression/essentiality versus drug response, four time-series targets and three assay probability models. Temporal-evaluation adaptations are explicit."
 }

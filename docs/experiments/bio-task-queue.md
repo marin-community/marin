@@ -8,7 +8,7 @@ SciGym systems, 1,451 ScholarQA-Bio questions and 223 LAB-Bench questions as
 individual-endpoint review gaps, and retains one excluded objective. Nine provisional-ID
 source leads still lack task inventories.
 
-The portfolio contains **692 question cards and 651 proposed task groups**, including
+The portfolio contains **699 question cards and 658 proposed task groups**, including
 25 conditional combinations of question cards. These are planning units, with
 substantial differences in source inspection depth. They add zero validated mappings
 and do not set a target dataset size. Each combined question retains all member
@@ -212,7 +212,7 @@ The expanded portfolio also includes the following source-specific plans:
 | [BioML-bench](../../experiments/post_training/bio_tasks/workflow_designs/biomlbench.json) | 406 | 25 | Registry/configuration review; 24 definitions appear in the released experiment list |
 | [Biomni-Eval1](../../experiments/post_training/bio_tasks/workflow_designs/biomni-eval1.json) | 433 | 20 | Shared protocols plus reviewed sequence/database questions; individual evidence remains unreviewed |
 | [BioKGBench](../../experiments/post_training/bio_tasks/workflow_designs/biokgbench.json) | 225 | 3 | Structured graph evidence can be verified; unrestricted literature entailment and absence claims remain gaps |
-| [PromptBio-Bench](../../experiments/post_training/bio_tasks/workflow_designs/promptbio-bench.json) | 244 | 94 | Exact versioned patterns and artifact specifications; assay and numeric decisions remain |
+| [PromptBio-Bench](../../experiments/post_training/bio_tasks/workflow_designs/promptbio-bench.json) | 244 | 101 | Exact versioned patterns and artifact specifications; assay and numeric decisions remain |
 | [BixBench3](../../experiments/post_training/bio_tasks/workflow_designs/bixbench3.json) | 20 | 19 | Nineteen endpoint proposals; one excluded objective retained |
 | [DrugDiscoveryBench](../../experiments/post_training/bio_tasks/workflow_designs/drugdiscoverybench.json) | 82 | 27 | Public-preview endpoint-stage review; independent evidence and inputs needed |
 | [Liu single-cell](../../experiments/post_training/bio_tasks/workflow_designs/liu-single-cell.json) | 63 | 49 | Native method requirements and shared prompt variants retained |
@@ -310,9 +310,19 @@ titles alone establish valid training data or acceptance rules.
 
 PromptBio's original classifier bundle was split into linear, tree, kernel/neighbor
 and imbalance/ensemble questions. Methylation read counts, composition-adjusted
-associations and chromosome density also remain separate. Each of its 244 source IDs
-is still assigned once. Required packages remain explicit: the Liu PyDESeq2 endpoint
-requires native PyDESeq2 execution even if an R DESeq2 cross-check is available.
+associations and chromosome density also remain separate. Direct inspection of ten
+additional pinned task stems separates oncogene-set overlap from enrichment,
+expression/essentiality from drug-response correlation, four time-series targets,
+and three distinct assay-probability questions. All 244 source IDs remain assigned
+once across 101 cards; these are proposals, not generated tasks.
+
+The time-series cards retain the specified LSTM, random forest, seasonal decomposition
+and expanding-window regression requirements. Proposed changes to overlapping or
+random temporal windows are explicit adaptations; hospital occupancy, admissions
+and patient glucose are different outcomes. Assay cards require observed diagnostic,
+editing or binding evidence with real denominators. They cannot share invented
+binomial counts. Native methods remain explicit elsewhere too: the Liu PyDESeq2
+endpoint requires PyDESeq2 execution even if an R DESeq2 cross-check is available.
 
 The 25 retained proposed combinations include ortholog metrics, donor pseudobulk expression,
 count contrasts and enrichment, reference-cell classification, paired RNA/protein

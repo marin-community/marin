@@ -735,7 +735,7 @@
           "native_contract": "Run pinned DESeq2 with an explicit coefficient for apeglm shrinkage. Report both unshrunken Wald statistics and shrunken effects without silently changing p-values. Run the specified clusterProfiler enrichment/semantic methods and a pinned GSEA method against frozen offline annotations; existing unshrunken references cannot stand in for these runs.",
           "set_contract": "ORA background is the eligible, tested and identifier-mapped population, explicitly intersected with the declared annotation domain. Preserve excluded/unmapped IDs. GSEA uses every eligible finite signed Wald statistic, with deterministic tie ordering, duplicate-ID resolution, set-size bounds and a frozen random seed when applicable. Test all eligible sets and state each multiplicity family.",
           "complete_artifacts": "Counts/metadata join and filter decisions; design and coefficient; all gene statistics and shrinkage results; identifier map; complete term memberships, universe, ORA and GSEA outputs including nonsignificant/undefined rows; semantic representatives with provenance; numeric plot tables and viewable plots.",
-          "source_endpoint_limits": "Bix disease context is not reproduced. GO BP cannot replace another ontology or KEGG. PromptBio b-10-8 needs independently defined predicted/reference gene sets and is unsupported by these counts alone. Raw-p and adjusted-p volcano endpoints require distinct axes/masks; a single substituted plot cannot satisfy both.",
+          "source_endpoint_limits": "Bix disease context is not reproduced. GO BP cannot replace another ontology or KEGG. PromptBio b-10-8 is assigned to the separate oncogene-set-overlap question; this count/enrichment group makes no claim for it. Raw-p and adjusted-p volcano endpoints require distinct axes/masks; a single substituted plot cannot satisfy both.",
           "deterministic_rejection_cases": [
             "shuffle sample labels without changing counts",
             "reverse the contrast or ranking sign",
@@ -745,7 +745,7 @@
             "change a semantic representative",
             "substitute raw p for adjusted p in a required plot"
           ],
-          "unresolved_inputs": "A compatible frozen ontology graph and gene mapping for semantic similarity; a licensed/versioned KEGG snapshot for KEGG-specific targets; separate observed predicted/reference inputs for the Jaccard endpoint; expanded source-cohort lineage.",
+          "unresolved_inputs": "A compatible frozen ontology graph and gene mapping for semantic similarity; a licensed/versioned KEGG snapshot for KEGG-specific targets; expanded source-cohort lineage.",
           "runtime_requirement": "Measure the complete offline Harbor oracle and verifier within the 30-minute target. No inference from the existing unshrunken fit runtime.",
           "status": "candidate-input-contract; full-group-coverage-unsupported",
           "validated_mappings_added": 0

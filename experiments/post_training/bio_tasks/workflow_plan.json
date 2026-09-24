@@ -71,8 +71,8 @@
     "proposed_task_questions": 147,
     "validated_coverage_added_by_plan": 0,
     "unrouted_family_groups": 0,
-    "detailed_question_cards": 692,
-    "proposed_task_groups_after_conditional_consolidation": 651
+    "detailed_question_cards": 699,
+    "proposed_task_groups_after_conditional_consolidation": 658
   },
   "workstreams": [
     {
@@ -13435,11 +13435,11 @@
     },
     {
       "path": "workflow_designs/promptbio-bench.json",
-      "sha256": "5d03daf718a8bd845a26481488b61eb6c86bf2ba975738f3d95c2ac5410f6de0",
+      "sha256": "6c9a07307aa8ea3619772a640c4a8dc37d4fc0b0ed20963e33eeafbcbd81a6cd",
       "benchmark_id": "PromptBio-Bench",
       "inventory_records_assigned": 244,
-      "proposed_question_cards": 94,
-      "inspection_basis": "All versioned endpoint patterns and artifact specifications grouped; full-source numeric/assay details still require reconciliation.",
+      "proposed_question_cards": 101,
+      "inspection_basis": "All endpoint patterns/artifacts reviewed; ten additional task stems resolve assay, method and temporal-split details. Independent inputs and remaining parameters still need review.",
       "relationship_to_workstream_questions": "Connected question refinements with exact source-task assignments; no completed coverage or independent task-count forecast."
     },
     {
@@ -13543,12 +13543,12 @@
   "authoring_phase": "question-portfolio-planning",
   "portfolio_index": {
     "path": "workflow_portfolio.json",
-    "sha256": "97beb7507013af4546860f3fc325c699373890794d44395c0e5fbe8694ae76f7",
+    "sha256": "d6b2157956940f54d69a1f2723f7174993d3449525f5612495543af8d82b6669",
     "counts": {
       "source_releases": 32,
       "inventory_records": 5133,
-      "question_cards": 692,
-      "proposed_task_groups": 651,
+      "question_cards": 699,
+      "proposed_task_groups": 658,
       "conditional_consolidations": 25,
       "non_alias_records_linked_to_questions": 3058,
       "known_cross_release_alias_records": 50,
