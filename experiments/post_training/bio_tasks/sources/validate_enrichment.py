@@ -43,24 +43,35 @@ def probability_matches(actual: float, expected: float) -> None:
         assert actual > 0 and abs(math.log(actual) - math.log(expected)) < 1e-8, (actual, expected)
 
 
-def verify(source: Path, input_bundle: Path) -> dict:
+def verify(source: Path, input_bundle: Path, population: str) -> dict:
     plan = json.loads((source / "launch-plan.json").read_text())
     assert (
         hashlib.sha256((source / "prepare_enrichment.R").read_bytes()).hexdigest()
         == plan["file_hashes"]["prepare_enrichment.R"]
     )
     assert json.loads((source / "namespace-preflight.json").read_text())["exit_code"] == 0
-    assert json.loads((source / "analysis.json").read_text())["exit_code"] == 124
+    exit_code = json.loads((source / "analysis.json").read_text())["exit_code"]
+    assert exit_code in [0, 124]
+    assert hashlib.sha256(input_bundle.read_bytes()).hexdigest() == plan["bundle_sha256"]
     data = source / "references"
     assert not (data / "raw_genome-simplified.tsv.gz").exists()
-    assert not (source / "result.json").exists()
+    if exit_code == 124:
+        assert not (source / "result.json").exists()
+        assert (data / "adjusted_tested-simplified.tsv.gz").exists()
+    else:
+        metadata = json.loads((data / "native-result.json").read_text())
+        assert metadata["population"] == population
     genes = {}
     for row in rows(data / "gene-results.tsv.gz"):
         assert row["gene"] not in genes
         genes[row["gene"]] = row
     eligible = identifiers(data / "eligibility.tsv.gz")
     eligible_fit = {row["gene"] for row in rows(data / "eligibility.tsv.gz") if row["eligible"] == "TRUE"}
-    assert len(eligible) == 27179 and set(genes) == eligible_fit and len(genes) == 16659
+    assert (
+        len(eligible) == 27179
+        and set(genes) == eligible_fit
+        and len(genes) == {"luminal": 16659, "basal": 17361}[population]
+    )
     selected_raw = {gene for gene, row in genes.items() if finite(row["pvalue"]) and float(row["pvalue"]) < 0.05}
     selected_adjusted = {gene for gene, row in genes.items() if finite(row["padj"]) and float(row["padj"]) < 0.05}
     finite_genes = {gene for gene, row in genes.items() if finite(row["pvalue"])}
@@ -70,7 +81,7 @@ def verify(source: Path, input_bundle: Path) -> dict:
     seen_input = set()
     with tarfile.open(input_bundle, "r:gz") as bundle:
         samples = list(csv.DictReader(io.TextIOWrapper(bundle.extractfile("inputs/samples.tsv")), delimiter="\t"))
-        selected_samples = sorted(r["sample"] for r in samples if r["population"] == "luminal")
+        selected_samples = sorted(r["sample"] for r in samples if r["population"] == population)
         assert len(selected_samples) == 6 and set(factors) == set(selected_samples)
         reader = csv.DictReader(io.TextIOWrapper(bundle.extractfile("inputs/counts.tsv")), delimiter="\t")
         gene_column = reader.fieldnames[0]
@@ -136,13 +147,13 @@ def verify(source: Path, input_bundle: Path) -> dict:
             running_adjusted = min(running_adjusted, len(native) * float(row["pvalue"]) / (index + 1))
             probability_matches(float(row["p.adjust"]), running_adjusted)
         significant = {row["ID"] for row in native if float(row["p.adjust"]) < 0.05}
-        if name == "raw_genome":
+        if not (data / f"{name}-simplified.tsv.gz").exists():
             reports[name] = {
                 "background": len(background),
                 "selected": len(selections[name]),
                 "native_tests": len(terms),
                 "significant": len(significant),
-                "semantic_reduction": "not completed; analysis timed out",
+                "semantic_reduction": "separate native-contribution check",
             }
             continue
         retained = list(rows(data / f"{name}-retained.tsv.gz"))
@@ -163,7 +174,9 @@ def verify(source: Path, input_bundle: Path) -> dict:
             "retained": len(simplified),
         }
     return {
-        "status": "completed-stages-audited-from-timed-out-run",
+        "status": "native-count-ora-audited" if exit_code == 0 else "completed-stages-audited-from-timed-out-run",
+        "population": population,
+        "native_analysis_exit_code": exit_code,
         "input_genes": len(eligible),
         "fitted_genes": len(genes),
         "full_annotation_genes": len(annotation_genes),
@@ -174,7 +187,7 @@ def verify(source: Path, input_bundle: Path) -> dict:
             "check (or 1e-290 for reference underflow)."
         ),
         "limits": [
-            "The native job timed out; raw-genome semantic reduction is incomplete.",
+            "Semantic reduction is audited separately; this check covers count statistics and ORA.",
             "No Harbor task or solver run.",
             "Wang reduction recomputation and bundled graph reconciliation remain separate checks.",
             "GSEA not run by this preparation.",
@@ -188,8 +201,9 @@ def main() -> None:
     parser.add_argument("source", type=Path)
     parser.add_argument("--report", required=True, type=Path)
     parser.add_argument("--input-bundle", required=True, type=Path)
+    parser.add_argument("--population", choices=["luminal", "basal"], required=True)
     args = parser.parse_args()
-    report = verify(args.source, args.input_bundle)
+    report = verify(args.source, args.input_bundle, args.population)
     args.report.write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, indent=2))
 

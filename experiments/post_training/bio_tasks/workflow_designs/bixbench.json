@@ -3789,7 +3789,7 @@
     "remaining_before_assignment": [
       "Clear independent observed input lineage/rights and record source-to-authored biological context adaptations. Preserve each selected endpoint's methods, decisions and output semantics; the original disease/tissue label is not required.",
       "The full 25,730-gene BP annotation universe and both graphs are inspected; native contribution vectors/ancestor counts and sampled pair scores match the independent calculation. Keep the explicit equivalent-computation adaptation for the larger reduction. Compatible frozen KEGG inputs remain unresolved and do not block GO-only endpoints.",
-      "Native count/shrinkage and both ORAs pass scoped independent checks. GO reduction completes with the audited equivalent computation; GSEA score/leading-edge checks pass. Finish the fresh GSEA repeat and a complete successful count-fit reference, preserving model/filter diagnostics missing from the timed-out parent run.",
+      "Native count/shrinkage and both ORAs pass scoped independent checks; GO reduction completes with the audited equivalent computation; GSEA passes independent walk checks and exact fresh-environment repeatability. Complete successful luminal and basal count/ORA references with all model/filter diagnostics; the timed-out parent omitted final metadata.",
       "Calibrate numerical tolerances from native checks; implement the private oracle and verifier for the selected numerical endpoints with incorrect-output cases. Display parameters and deferred visual endpoints do not block assignment.",
       "Demonstrate complete offline Harbor runtime <=30 minutes; the existing unshrunken DESeq2 run is not evidence for this combined task."
     ],
@@ -4159,7 +4159,7 @@
       "validated_new_mappings": 0
     },
     "gsea_native_preparation": {
-      "status": "Native GO prerank preparation succeeded; independent enrichment-score and exact leading-edge checks passed. Repeatability, null/NES/FDR cross-checks and Harbor validation remain pending; no new coverage.",
+      "status": "Native GO prerank preparation and fresh-environment repeat passed. Every statistic, leading-edge list, rank/library identity and top-term selection matched. Enrichment scores and leading edges were also independently checked. Null-distribution arithmetic was not independently reimplemented; Harbor validation and task coverage remain pending.",
       "script": "sources/prepare_gsea.py",
       "script_sha256": "d67e6df94dc917a9a939c892a36d0bb62098384d3c80fcc945271ed778c5b6a9",
       "requirements": "sources/gseapy-preparation.requirements.txt",
@@ -4260,7 +4260,7 @@
       },
       "repeatability_attempt": {
         "job_id": "/exedev/bio-gsea-repeat-20260924-221432",
-        "status": "submitted; not yet observed",
+        "status": "SUCCEEDED; complete native statistics and identities matched exactly across two fresh environments",
         "bundle_sha256": "69f87c0c3c6035ff00adb8da9f9e13b084d2429c348c5d9f207b832f45057315",
         "comparison_script_path": "sources/compare_gsea.py",
         "comparison_script_sha256": "f04a4f07e7311bc4c1b4f88a6dde0e8243815923dfece2735d96b49063cfed61",
@@ -4282,7 +4282,68 @@
             "rejected": true
           }
         ],
-        "scope": "Compare all native statistics and identities from two separate executions; local comparator checks alone do not establish native repeatability."
+        "scope": "Compare all native statistics and identities from two separate executions; local comparator checks alone do not establish native repeatability.",
+        "archive_sha256": "5f0bfe5c6c2ce4193310ddce300dc94e7ebb3b40153eb633812547aa019b6dc3",
+        "archive_bytes": 3869256,
+        "comparison": {
+          "status": "pinned-native-repeatability-passed",
+          "tables": {
+            "gsea-results.tsv": {
+              "rows": 4720,
+              "maximum_absolute_errors": {
+                "ES": 0.0,
+                "NES": 0.0,
+                "NOM p-val": 0.0,
+                "FDR q-val": 0.0,
+                "FWER p-val": 0.0
+              }
+            },
+            "top5-absolute-nes.tsv": {
+              "rows": 5,
+              "maximum_absolute_errors": {
+                "ES": 0.0,
+                "NES": 0.0,
+                "NOM p-val": 0.0,
+                "FDR q-val": 0.0,
+                "FWER p-val": 0.0
+              }
+            },
+            "top10-significant.tsv": {
+              "rows": 10,
+              "maximum_absolute_errors": {
+                "ES": 0.0,
+                "NES": 0.0,
+                "NOM p-val": 0.0,
+                "FDR q-val": 0.0,
+                "FWER p-val": 0.0
+              }
+            }
+          },
+          "rank_and_library_identity": "Exact ranks, set eligibility and decompressed GMT matched.",
+          "limits": "Two native runs with the same inputs, seed and package lock; no independent null-distribution audit."
+        },
+        "analysis": {
+          "exit_code": 0,
+          "seconds": 383.4746677450021,
+          "cumulative_child_peak_rss_kib": 4886924
+        },
+        "worker_result": {
+          "status": "prepared",
+          "source_revision": "3d69b621358fdfcf3eec167a1f33abd4f47a587c",
+          "model_calls": 0,
+          "file_hashes": {
+            "references/file-hashes.json": "fa80104f57305b99c599ef609b557c2cb8d0db9177929833f09232b0538bf452",
+            "references/go-bp.gmt.gz": "d1710e9384a7849489921447ea8c9331dcc10e856bf468d25ebb7799cfb64a3b",
+            "references/gsea-results.tsv": "896fc2dfcf2f960683d9a323baa66e05a9651ed9799e3c177363c94a832fc6a6",
+            "references/native-gsea-result.json": "89d2e8ab96d792bffd52be17a1551b7cbc4844033c312733d187a6667ab2df49",
+            "references/ranking.tsv": "3594e19beb193708974c426b3a5f22824697b6e13d9b9a6b9e91814ef19487f6",
+            "references/repeatability.json": "13aede5e256aea1f4a014ab2a48e79c7cea686438fca6fbdedbd67ac6789759a",
+            "references/set-status.tsv": "4e3132c75c7c69fc76829240c4ece8555ddadd44d1ba965679b6119b4da8bf8f",
+            "references/top10-significant.tsv": "b9e1bbc9ad77b4e3f15bb799c275e011b99d8168833ec50c3d276f6b86e020b7",
+            "references/top5-absolute-nes.tsv": "b32e44df11e9874d6b3be0a079882b0c5526d4ba66285272689c43a86d9e6eeb"
+          },
+          "finished_at": "2026-09-24T22:21:32.905134+00:00"
+        }
       }
     }
   }

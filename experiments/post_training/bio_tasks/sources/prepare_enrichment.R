@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Native input and method preparation; Harbor task validation is a separate step.
+# Native count/ORA preparation. Semantic reduction and Harbor validation are separate stages.
 suppressPackageStartupMessages(library(DESeq2))
 suppressPackageStartupMessages(library(apeglm))
 suppressPackageStartupMessages(library(clusterProfiler))
@@ -9,8 +9,9 @@ suppressPackageStartupMessages(library(GOSemSim))
 suppressPackageStartupMessages(library(org.Mm.eg.db))
 suppressPackageStartupMessages(library(GO.db))
 args <- commandArgs(TRUE)
-stopifnot(length(args) == 2)
-input <- args[1]; output <- args[2]
+stopifnot(length(args) == 3)
+input <- args[1]; output <- args[2]; population <- args[3]
+stopifnot(population %in% c("luminal", "basal"))
 dir.create(output, recursive=TRUE, showWarnings=FALSE)
 options(digits=17, enrichment_force_universe=FALSE)
 versions <- c(DESeq2="1.50.2",apeglm="1.32.0",clusterProfiler="4.18.4",DOSE="4.4.0",GOSemSim="2.36.0",org.Mm.eg.db="3.22.0",GO.db="3.22.0")
@@ -26,13 +27,13 @@ raw <- read.delim(file.path(input,"counts.tsv"),row.names=1,check.names=FALSE)
 samples <- read.delim(file.path(input,"samples.tsv"),stringsAsFactors=FALSE)
 stopifnot(nrow(raw)==27179,nrow(samples)==12,!anyDuplicated(rownames(raw)),!anyDuplicated(samples$sample))
 stopifnot(setequal(setdiff(colnames(raw),"Length"),samples$sample))
-s <- samples[samples$population=="luminal",,drop=FALSE]
+s <- samples[samples$population==population,,drop=FALSE]
 s <- s[order(s$sample),,drop=FALSE];rownames(s)<-s$sample
 s$stage<-factor(s$stage,levels=c("virgin","18.5 dP","2 dL"))
 counts<-as.matrix(raw[,s$sample,drop=FALSE])
 stopifnot(ncol(counts)==6,all(table(s$stage)==2),all(is.finite(counts)),all(counts>=0),all(counts==floor(counts)))
 storage.mode(counts)<-"integer";keep<-rowSums(counts)>=10
-stopifnot(sum(keep)==16659)
+stopifnot(sum(keep)==c(luminal=16659,basal=17361)[[population]])
 write_tsv(s,"samples")
 write_tsv(data.frame(gene=rownames(counts),eligible=keep,count_sum=rowSums(counts)),"eligibility")
 step("Fit DESeq2 and apeglm")
@@ -75,7 +76,6 @@ valid_bp<-names(AnnotationDbi::Ontology(GOTERM))[AnnotationDbi::Ontology(GOTERM)
 go<-go[go$term %in% valid_bp,,drop=FALSE]
 write_tsv(go,"full-bp-membership")
 write_tsv(AnnotationDbi::select(org.Mm.eg.db,keys=rownames(raw),keytype="ENTREZID",columns="SYMBOL"),"gene-symbols")
-sem<-godata(annoDb=org.Mm.eg.db,keytype="ENTREZID",ont="BP",computeIC=FALSE,processTCSS=FALSE)
 rel_env<-new.env();utils::data(list="gotbl",package="GOSemSim",envir=rel_env)
 bundled<-rel_env$gotbl
 write_tsv(bundled,"gosemsim-bundled-graph")
@@ -87,7 +87,7 @@ adj_selected<-stats$gene[is.finite(stats$padj)&stats$padj<.05]
 views<-list(adjusted_tested=list(selected=adj_selected,background=finite_p),raw_genome=list(selected=raw_selected,background=annotation_genes))
 view_records<-list()
 for (name in names(views)) {
- step(paste("Native ORA and semantic reduction",name))
+ step(paste("Native ORA",name))
  v<-views[[name]];background<-intersect(as.character(v$background),annotation_genes)
  selected<-intersect(as.character(v$selected),background)
  stopifnot(length(background)>0,length(selected)>0,all(selected %in% background))
@@ -106,14 +106,13 @@ for (name in names(views)) {
  stopifnot(isTRUE(all.equal(result$pvalue,phyper(k-1,K,N-K,n,lower.tail=FALSE),tolerance=1e-12)))
  stopifnot(isTRUE(all.equal(result$p.adjust,p.adjust(result$pvalue,"BH"),tolerance=1e-12)))
  significant<-result[is.finite(result$p.adjust)&result$p.adjust<.05,,drop=FALSE]
- significant_object<-ora;significant_object@result<-significant
- # This diagnostic measures the complete retained-term reduction; no top-k truncation.
- reduced<-if(nrow(significant)>0) simplify(significant_object,cutoff=.7,by="p.adjust",select_fun=min,measure="Wang",semData=sem) else significant_object
- write_tsv(reduced@result,paste0(name,"-simplified"))
- write_tsv(data.frame(term=significant$ID,retained=significant$ID %in% reduced@result$ID),paste0(name,"-retained"))
- view_records[[name]]<-list(background=N,selected=n,tested=nrow(result),significant=nrow(significant),retained=nrow(reduced@result),seconds=proc.time()[[3]]-run_start)
+ # The original full simplify call exceeded the runtime budget. The separate
+ # contribution-vector reference checks the equivalent complete reduction.
+ view_records[[name]]<-list(background=N,selected=n,tested=nrow(result),significant=nrow(significant),
+                           semantic_reduction="separate native-contribution reference",
+                           seconds=proc.time()[[3]]-run_start)
 }
-metadata<-list(both_compared_groups_zero=rownames(res)[both_groups_zero],versions=as.list(versions),coefficient=coef_name,fit_seconds=fit_seconds,filter_threshold=metadata(res)$filterThreshold,filter_theta=metadata(res)$filterTheta,filter_num_rej=metadata(res)$filterNumRej,views=view_records,raw_significant=sum(is.finite(stats$pvalue)&stats$pvalue<.05),adjusted_significant=sum(is.finite(stats$padj)&stats$padj<.05),native_graph_columns=colnames(bundled),native_graph_rows=nrow(bundled),go_metadata=AnnotationDbi::metadata(GO.db),org_metadata=AnnotationDbi::metadata(org.Mm.eg.db),status="native-preparation-only; no Harbor or coverage validation")
+metadata<-list(population=population,both_compared_groups_zero=rownames(res)[both_groups_zero],versions=as.list(versions),coefficient=coef_name,fit_seconds=fit_seconds,filter_threshold=metadata(res)$filterThreshold,filter_theta=metadata(res)$filterTheta,filter_num_rej=metadata(res)$filterNumRej,views=view_records,raw_significant=sum(is.finite(stats$pvalue)&stats$pvalue<.05),adjusted_significant=sum(is.finite(stats$padj)&stats$padj<.05),native_graph_columns=colnames(bundled),native_graph_rows=nrow(bundled),go_metadata=AnnotationDbi::metadata(GO.db),org_metadata=AnnotationDbi::metadata(org.Mm.eg.db),status="native-count-and-ora-preparation-only; semantic/GSEA/Harbor checks separate")
 jsonlite::write_json(metadata,file.path(output,"native-result.json"),pretty=TRUE,auto_unbox=TRUE,na="null",digits=16)
 capture.output(sessionInfo(),file=file.path(output,"session-info.txt"))
 step("Native preparation completed")

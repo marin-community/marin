@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "reviewed_at": "2026-09-24T22:16:43.621630+00:00",
+  "reviewed_at": "2026-09-24T22:26:00.604392+00:00",
   "scope": "Observed-assay and curated-reference input planning. Inspected a Lawlor cell-annotation CSV, existing mammary counts/sample metadata, and MANE 1.4 GTF/summary with assembly aliases. No new task is implemented or candidate cleared for training export. The pinned GO.db reference graph was also audited against the existing mouse membership asset.",
   "policy": {
     "reuse_unit": "Share acquisition, identity reconciliation and native environment preparation across compatible questions. Each task still answers one coherent question and retains its own complete private oracle/verifier contract.",
@@ -627,13 +627,13 @@
         "There are two libraries per population and developmental stage. Replicate numbers do not establish donor pairing across stages or basal/luminal populations; do not invent a donor block or treat the stages as repeated measures.",
         "Inspected metadata provides no documented failed replicate. Removing one sample leaves only one in that stage, so this source is rejected for the proposed evidence-backed replicate-QC exclusion question.",
         "Bulk sorted populations do not exercise single-cell preprocessing or pseudobulk aggregation. The Liu PyDESeq2 task is an explicit count-model adaptation.",
-        "Native count/shrinkage, ORA and GSEA walk checks pass. Every native semantic contribution vector and ancestor count matches the independent reduction; the larger result uses that equivalent calculation because the full package call timed out. Complete count-fit reference metadata, GSEA repeatability and Harbor validation remain pending; coverage is unchanged.",
+        "Native count/shrinkage, ORA and GSEA walk checks pass; two fresh GSEA runs match exactly. Native semantic contributions match the complete equivalent reduction. Complete count-fit diagnostics, separate basal analysis and Harbor validation remain pending; coverage is unchanged.",
         "The existing mouse GO membership asset is BP-only. The term-label table has no ontology edges; neither supplies a complete semantic graph or a KEGG snapshot.",
         "Count bytes match the Zenodo record declared CC BY 4.0. Retain the deposit and original study citations. This does not confer redistribution rights on additional ontology/pathway snapshots.",
         "The Zenodo tutorial FASTQs contain 1,000 reads each and cannot substantiate a full raw-read workflow. The observed gene-count matrix retains the original count totals.",
         "Expanded benchmark-cohort lineage review remains open. Sample-sheet agreement and a public license do not establish independence from every ID benchmark input."
       ],
-      "planning_status": "native-count-ora-gsea-and-semantic-components-audited; complete-reference-repeatability-harbor-and-lineage-pending",
+      "planning_status": "native-count-ora-semantic-and-repeatable-gsea-components-audited; complete-reference-harbor-and-lineage-pending",
       "candidate_question_or_card_ids": [
         "count-contrast-enrichment",
         "portfolio-liu-single-cell-count-model-differential-expression"
@@ -748,7 +748,7 @@
           ],
           "unresolved_inputs": "Full annotation and both graph exports are available and inspected. Finish native semantic intermediate comparisons; compatible KEGG inputs and unnamed benchmark-input lineage remain unresolved. Species/reference-release adaptations are explicit.",
           "runtime_requirement": "Measure the complete offline Harbor oracle and verifier within the 30-minute target. No inference from the existing unshrunken fit runtime.",
-          "status": "native-count-ora-gsea-and-semantic-components-audited; complete-reference-repeatability-harbor-and-lineage-pending",
+          "status": "native-count-ora-semantic-and-repeatable-gsea-components-audited; complete-reference-harbor-and-lineage-pending",
           "validated_mappings_added": 0,
           "acceptance_contract_reference": "workflow_designs/bixbench.json:expression_enrichment_contract",
           "visual_scoring_scope": "Grade the numerical biological and plot-data outputs; defer subjective or unsupported figure scoring, preserve component-only mappings, and do not delay viable numerical tasks.",
