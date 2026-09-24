@@ -277,11 +277,26 @@
         "native_evidence": "native_validation_runs/5436d9bd3811.json",
         "oracle_independence": "Reference uses the DESeq wrapper and differences between observed design rows. Fresh oracle executes explicit fitting stages and coefficient-name contrasts with the same pinned DESeq2 engine. QC and gene decisions are independently derived in Python.",
         "remaining_checks": [
-          "packaged-task verification",
           "Harbor oracle and corruption controls",
           "complete benchmark-lineage screening",
           "scientific review before training selection"
         ]
+      },
+      "interaction_packaged_validation": {
+        "job_id": "/exedev/bio-interaction-package-20260924-102749",
+        "source_revision": "2b0cf12509f1a90ca91be82b4a79fc20bb2b4904",
+        "archive": {
+          "archive_uri": "gs://marin-us-central2/bio-tasks/authoring/sha256/7c6906ec22024726296daf5fb50cd367fc8e10e4191986365190a8aeb1f23bfc/outputs.tar.zst",
+          "size_bytes": 13778418,
+          "sha256": "7c6906ec22024726296daf5fb50cd367fc8e10e4191986365190a8aeb1f23bfc",
+          "md5": "74cy/26QjWg7C6TiDG/xQw==",
+          "verification": "Provider size and MD5 match the locally verified archive.",
+          "generation": "1790246431454504"
+        },
+        "manifest_sha256": "aa4c311173c447def9be389368e6d44f3b15ccc1e1341a83d0ee630fd379cdec",
+        "positive_checks": 2,
+        "negative_checks": 33,
+        "seconds": 55.32449324299523
       }
     },
     "PDB:1UBQ": {

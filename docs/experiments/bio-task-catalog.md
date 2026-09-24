@@ -318,7 +318,8 @@ within-population effects and a direct test of response differences. The
 passed two positive and 33 negative controls. Its two mouse populations and
 developmental stages do not cover the four-human-cell-type drug-response endpoint,
 dose/time/vehicle selection, HDF5 handling or biological interpretation.
-Packaged-task checks, container execution and complete lineage screening remain pending.
+The committed task package also passed both positive and all 33 negative checks
+in 55.3 seconds. Container execution and complete lineage screening remain pending.
 
 Biomni-Eval1 has ten source categories and 20 assessed workflow patterns. Its
 compound task name and task-specific ID identify an evaluation item; the global

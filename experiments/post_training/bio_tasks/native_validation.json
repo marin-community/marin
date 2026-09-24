@@ -1773,6 +1773,78 @@
         ]
       },
       "snapshot_limit": "Host package validation. Harbor and scientific validation remain separate."
+    },
+    {
+      "job_id": "/exedev/bio-interaction-package-20260924-102749",
+      "source_revision": "2b0cf12509f1a90ca91be82b4a79fc20bb2b4904",
+      "scope": "One real-rnaseq-population-interaction task from the 144-recipe registry; one train instance. Not a full-corpus rebuild or training release.",
+      "archive": {
+        "archive_uri": "gs://marin-us-central2/bio-tasks/authoring/sha256/7c6906ec22024726296daf5fb50cd367fc8e10e4191986365190a8aeb1f23bfc/outputs.tar.zst",
+        "size_bytes": 13778418,
+        "sha256": "7c6906ec22024726296daf5fb50cd367fc8e10e4191986365190a8aeb1f23bfc",
+        "md5": "74cy/26QjWg7C6TiDG/xQw==",
+        "verification": "Provider size and MD5 match the locally verified archive.",
+        "generation": "1790246431454504"
+      },
+      "result": {
+        "status": "passed",
+        "source_revision": "2b0cf12509f1a90ca91be82b4a79fc20bb2b4904",
+        "model_calls": 0,
+        "manifest_sha256": "aa4c311173c447def9be389368e6d44f3b15ccc1e1341a83d0ee630fd379cdec"
+      },
+      "build_execution": {
+        "argv": [
+          "/app/bio-interaction-package-lv9c60z0/python/bin/python",
+          "/app/phase.py",
+          "/iris/outputs/package-resource.json",
+          "experiments.post_training.bio_tasks.build",
+          "--output",
+          "/iris/outputs/corpus",
+          "--tool-ref",
+          "2b0cf12509f1a90ca91be82b4a79fc20bb2b4904",
+          "--base-image",
+          "python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c",
+          "--seed",
+          "20260923",
+          "--instances-per-recipe",
+          "1",
+          "--recipes",
+          "real-rnaseq-population-interaction"
+        ],
+        "exit_code": 0,
+        "seconds": 55.537725240006694
+      },
+      "resources": {
+        "module": "experiments.post_training.bio_tasks.build",
+        "status": "passed",
+        "seconds": 55.32449324299523,
+        "peak_rss_kib": 341556,
+        "finished_at": "2026-09-24T10:30:33.587147+00:00",
+        "measurement_scope": "Peak RSS is the Python authoring process only (RUSAGE_SELF); excludes the R oracle child. Native R child memory is recorded in the separate native run."
+      },
+      "positive_checks": 2,
+      "negative_checks": 33,
+      "input_hashes_reverified_for_tasks": 1,
+      "instances_per_recipe": 1,
+      "controller_placement": {
+        "job_id": "/exedev/bio-interaction-package-20260924-102749",
+        "state": "succeeded",
+        "worker_id": "marin-tpu-v4-reserved-256-us-central2-b-20260922-2317-8259d330-worker-28",
+        "execution_cluster_id": "local",
+        "backend_id": "default",
+        "checked_at": "2026-09-24T10:39:28.432645+00:00",
+        "worker_metadata": [
+          {
+            "worker_id": "marin-tpu-v4-reserved-256-us-central2-b-20260922-2317-8259d330-worker-28",
+            "scale_group": "tpu_v4-reserved_256-us-central2-b",
+            "backend_id": "default",
+            "tpu_name": "t1v-n-9a98788d",
+            "gce_zone": "",
+            "gce_instance_name": "t1v-n-9a98788d-w-28"
+          }
+        ]
+      },
+      "snapshot_limit": "Host package validation; Harbor and scientific review remain separate."
     }
   ],
   "preparation_runs": [

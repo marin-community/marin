@@ -1042,8 +1042,19 @@
       "scoring_access": "Public grading",
       "source_url": "https://arxiv.org/abs/2507.02083",
       "data_url": "https://huggingface.co/datasets/h4duan/scigym-eval",
-      "inspection": "sheet metadata reviewed; source release and task-level inventory require verification",
-      "training_mapping_allowed": true
+      "inspection": "Paper v2 and public evaluation dataset schema inspected. The task release is scigym-sbml (350 systems: 137 small and 213 large); scigym-eval has 2,466 model-run rows over 137 system IDs, not 2,466 independent tasks. Task IDs have not yet been enumerated into the coverage index.",
+      "training_mapping_allowed": true,
+      "task_release_url": "https://huggingface.co/datasets/h4duan/scigym-sbml",
+      "release_evidence": {
+        "paper": "https://arxiv.org/html/2507.02083v2",
+        "code": "https://github.com/h4duan/SciGym",
+        "advertised_systems": 350,
+        "evaluated_systems": 137,
+        "evaluation_run_rows": 2466,
+        "evaluation_schema_url": "https://huggingface.co/datasets/h4duan/scigym-eval",
+        "checked_at": "2026-09-24"
+      },
+      "authoring_assessment": "Borrow iterative experiment-design, SBML and held-out dynamics-validation patterns. The source observations are simulated from curated models, so direct reuse does not meet the final real-observation training requirement. Full task-release and scorer implementation inspection remain pending."
     },
     {
       "sheet": "Agentic (Harbor)",

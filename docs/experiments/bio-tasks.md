@@ -39,8 +39,9 @@ cases without adding them to training. The manifest marks
 The population-interaction addition fits all twelve GSE60450 libraries and checks
 every result for 18,418 genes. The native reference and fresh oracle passed two
 positive and 33 negative controls; the seven output tables include sample QC,
-design, contrasts, all gene effects and decisions. Packaged-task and Harbor
-validation remain pending for this addition.
+design, contrasts, all gene effects and decisions. The committed package passed
+the same two positive and 33 negative checks in 55.3 seconds. Its 13.8 MB archive
+is preserved in regional GCS. Harbor validation remains pending for this addition.
 
 The full 142-task snapshot at `5c5b253bde` passed 284 positive checks and 796 negative
 controls in 28.5 minutes on one reserved TRC CPU, with 1.13 GiB peak RSS. Every
