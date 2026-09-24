@@ -171,7 +171,7 @@ def test_load_oversized_uses_the_required_split_count(tmp_path: Path) -> None:
         ],
     )
 
-    assert load_oversized(plan, max_cluster_size=100, candidate_path="/candidates") == (
+    assert load_oversized(plan, max_cluster_size=100) == (
         {"one-over": 2, "large": 3},
         351,
     )
@@ -185,18 +185,7 @@ def test_load_oversized_rejects_a_planner_threshold_above_the_cap(tmp_path: Path
     _write_parquet(sizes, [{"dup_cluster_id": "large", "size": 250}])
 
     with pytest.raises(ValueError, match="above the materializer cap"):
-        load_oversized(plan, max_cluster_size=100, candidate_path="/candidates")
-
-
-def test_load_oversized_rejects_a_different_candidate_artifact(tmp_path: Path) -> None:
-    sizes = tmp_path / "large-clusters.parquet"
-    plan = LargeClusterPlan(
-        candidates="/other", counts_path=str(sizes), params=LargeClusterParams(minimum_size=100), counters={}
-    )
-    _write_parquet(sizes, [{"dup_cluster_id": "large", "size": 250}])
-
-    with pytest.raises(ValueError, match=r"candidates.*do not match"):
-        load_oversized(plan, max_cluster_size=100, candidate_path="/candidates")
+        load_oversized(plan, max_cluster_size=100)
 
 
 def test_cluster_sort_preserves_production_document_id_order() -> None:
@@ -374,7 +363,6 @@ def test_cluster_steps_build_from_dependencies_and_persist_grouped_text(tmp_path
     )
     materialized = cluster_text_step(
         name="text",
-        candidates=candidate,
         plan=plan,
         params=ClusterTextParams(max_cluster_size=2, output_shards=1, groups_per_shard=1),
         max_workers=1,

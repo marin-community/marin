@@ -243,10 +243,8 @@ def build_shards(
     ]
 
 
-def load_oversized(plan: LargeClusterPlan, max_cluster_size: int, candidate_path: str) -> tuple[dict[str, int], int]:
+def load_oversized(plan: LargeClusterPlan, max_cluster_size: int) -> tuple[dict[str, int], int]:
     """Return split counts and estimated members from the candidate plan."""
-    if plan.candidates != candidate_path:
-        raise ValueError(f"Large-cluster plan candidates {plan.candidates!r} do not match {candidate_path!r}")
     if plan.params.minimum_size > max_cluster_size:
         raise ValueError("Large-cluster plan threshold is above the materializer cap")
     with StoragePath(plan.counts_path).open("rb") as handle:
@@ -264,7 +262,6 @@ def load_oversized(plan: LargeClusterPlan, max_cluster_size: int, candidate_path
 def materialize_cluster_text(
     *,
     prefix: str,
-    candidates: str,
     normalized_sources: Sequence[CopartitionedSource],
     plan: LargeClusterPlan,
     output_path: str,
@@ -279,9 +276,9 @@ def materialize_cluster_text(
     """Join normalized text to candidates and write groups with explicit lineage."""
     if shards_per_task < 1 or max_workers < 1:
         raise ValueError("shards_per_task and max_workers must be positive")
-    shards = build_shards(prefix, candidates, output_path, normalized_sources)
-    candidate_path = resolve_data_path(prefix, candidates)
-    oversized, oversized_cluster_members = load_oversized(plan, params.max_cluster_size, candidate_path)
+    candidate_path = resolve_data_path(prefix, plan.candidates)
+    shards = build_shards(prefix, candidate_path, output_path, normalized_sources)
+    oversized, oversized_cluster_members = load_oversized(plan, params.max_cluster_size)
     logger.info(
         "Grouping %d shards; %d clusters exceed %d members and will be split",
         len(shards),
@@ -355,7 +352,6 @@ def materialize_cluster_text(
 def cluster_text_step(
     *,
     name: str,
-    candidates: StepSpec,
     plan: StepSpec,
     params: ClusterTextParams = ClusterTextParams(),
     shards_per_task: int = 8,
@@ -365,19 +361,19 @@ def cluster_text_step(
     reduce_task_resources: ResourceConfig | None = None,
     max_shard_failures: int = DEFAULT_MAX_SHARD_FAILURES,
 ) -> StepSpec:
-    """Create a text shuffle with candidate and planner dependencies."""
+    """Create a text shuffle from a cluster plan."""
 
     def build(output_path: str) -> ClusterTextData:
         prefix = marin_prefix()
-        candidate_artifact = read_artifact(candidates.output_path, FuzzyDupsAttrData)
+        plan_artifact = read_artifact(plan.output_path, LargeClusterPlan)
+        candidate_artifact = read_artifact(plan_artifact.candidates, FuzzyDupsAttrData)
         return materialize_cluster_text(
             prefix=prefix,
-            candidates=candidates.output_path,
             normalized_sources=[
                 CopartitionedSource(source_key=key, input_dir=resolve_data_path(prefix, key))
                 for key in sorted(candidate_artifact.sources)
             ],
-            plan=read_artifact(plan.output_path, LargeClusterPlan),
+            plan=plan_artifact,
             output_path=output_path,
             params=params,
             shards_per_task=shards_per_task,
@@ -390,7 +386,7 @@ def cluster_text_step(
 
     return StepSpec(
         name=name,
-        deps=[candidates, plan],
+        deps=[plan],
         hash_attrs={"version": 1, "params": params.model_dump(mode="json")},
         fn=build,
     )

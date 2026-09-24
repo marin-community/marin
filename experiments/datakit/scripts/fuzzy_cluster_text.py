@@ -22,7 +22,6 @@ from marin.processing.classification.deduplication.materialize_cluster_text impo
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--prefix", required=True)
-    parser.add_argument("--candidates", required=True)
     parser.add_argument("--large-clusters", required=True, help="Artifact root from fuzzy_large_clusters.py")
     parser.add_argument("--out", required=True)
     parser.add_argument("--max-cluster-size", type=int, default=ClusterTextParams().max_cluster_size)
@@ -53,15 +52,15 @@ def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     os.environ["MARIN_PREFIX"] = args.prefix
     logging.basicConfig(level=logging.INFO)
-    candidates = read_artifact(resolve_data_path(args.prefix, args.candidates), FuzzyDupsAttrData)
+    plan = read_artifact(resolve_data_path(args.prefix, args.large_clusters), LargeClusterPlan)
+    candidates = read_artifact(plan.candidates, FuzzyDupsAttrData)
     result = materialize_cluster_text(
         prefix=args.prefix,
-        candidates=args.candidates,
         normalized_sources=[
             CopartitionedSource(source_key=key, input_dir=resolve_data_path(args.prefix, key))
             for key in sorted(candidates.sources)
         ],
-        plan=read_artifact(resolve_data_path(args.prefix, args.large_clusters), LargeClusterPlan),
+        plan=plan,
         output_path=args.out,
         params=ClusterTextParams(
             max_cluster_size=args.max_cluster_size,
