@@ -15,7 +15,7 @@ SCHEMA_VERSION = 1
 
 @dataclass(frozen=True)
 class CapturedRollout:
-    """A complete rollout batch admitted to the offline GRPO learner.
+    """A complete rollout batch stored for offline GRPO learning.
 
     Sequences and attention masks include prompts. Response-aligned arrays
     include every sampled response position, including positions excluded from
@@ -34,7 +34,7 @@ class CapturedRollout:
     reference_logprobs: np.ndarray | None = None
 
     def validate(self) -> None:
-        """Check that arrays form one complete, learner-ready rollout batch."""
+        """Check capture dimensions, IDs, and response-mask bounds."""
         if self.old_logprobs.ndim != 2:
             raise ValueError("old_logprobs must be a nonempty trajectory-by-response array")
         batch, width = self.old_logprobs.shape

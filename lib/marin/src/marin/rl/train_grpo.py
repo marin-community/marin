@@ -9,6 +9,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from functools import partial
+from typing import Any
 
 import draccus
 import equinox as eqx
@@ -25,8 +26,8 @@ from levanter.main.model_init import load_model_from_source, prepare_model_init_
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.models.qwen import Qwen3Config
 from levanter.optim.config import AdamConfig
+from levanter.schedule import IntSchedule
 from levanter.trainer import Trainer, TrainerConfig, initialize
-from levanter.utils.types import FilterTree
 from rigging.filesystem.storage_path import StoragePath
 from transformers import AutoTokenizer
 
@@ -62,10 +63,6 @@ class OfflineGrpoConfig:
     use_hf_model_config: bool = True
     stop_after: int | None = None
     """Stop at this absolute learner step, preserving the full schedule for resumption."""
-
-    def trainable_filter(self, _model: LmHeadModel) -> FilterTree:
-        """Return an Equinox filter tree; model adapters may select individual leaves."""
-        return True
 
 
 def prepare_grpo_example(rollout: CapturedRollout, *, normalize_by_std: bool) -> GrpoExample:
@@ -158,12 +155,35 @@ def score_grpo_batch(trainer: Trainer, model: LmHeadModel, batch: GrpoExample, *
     return eqx.tree_at(lambda x: x.old_logprobs, batch, old_logprobs)
 
 
-def _capture_identity(uri: str) -> dict[str, str]:
+@dataclass(frozen=True)
+class _CaptureIdentity:
+    uri: str
+    sha256: str
+
+
+@dataclass(frozen=True)
+class _ContinuationContract:
+    captures: list[_CaptureIdentity]
+    initial_model: str
+    tokenizer: str
+    optimizer: dict[str, Any]
+    grpo: dict[str, Any]
+    normalize_by_std: bool
+    num_train_steps: int
+    model: dict[str, Any]
+    mp: str
+    seed: int
+    train_batch_size: int | IntSchedule
+    microbatch_size: int
+    vocab_block_size: int
+
+
+def _capture_identity(uri: str) -> _CaptureIdentity:
     digest = hashlib.sha256()
     with StoragePath(uri).open("rb") as source:
         for chunk in iter(partial(source.read, 1024 * 1024), b""):
             digest.update(chunk)
-    return {"uri": uri, "sha256": digest.hexdigest()}
+    return _CaptureIdentity(uri, digest.hexdigest())
 
 
 def _validate_config(config: OfflineGrpoConfig) -> None:
@@ -177,36 +197,37 @@ def _validate_config(config: OfflineGrpoConfig) -> None:
         raise ValueError("stop_after must select a step in the ordered capture stream")
 
 
-def _continuation_contract(config: OfflineGrpoConfig, microbatch_size: int) -> dict:
-    return {
-        "captures": [_capture_identity(uri) for uri in config.captures],
-        "initial_model": config.initial_model,
-        "tokenizer": config.tokenizer,
-        "optimizer": draccus.encode(config.optimizer),
-        "grpo": draccus.encode(config.grpo),
-        "normalize_by_std": config.normalize_by_std,
-        "num_train_steps": config.trainer.num_train_steps,
-        "model": draccus.encode(config.model),
-        "mp": str(config.trainer.mp),
-        "seed": config.trainer.seed,
-        "train_batch_size": config.trainer.train_batch_size,
-        "microbatch_size": microbatch_size,
-        "vocab_block_size": config.vocab_block_size,
-    }
+def _continuation_contract(config: OfflineGrpoConfig, microbatch_size: int) -> _ContinuationContract:
+    return _ContinuationContract(
+        captures=[_capture_identity(uri) for uri in config.captures],
+        initial_model=config.initial_model,
+        tokenizer=config.tokenizer,
+        optimizer=draccus.encode(config.optimizer),
+        grpo=draccus.encode(config.grpo),
+        normalize_by_std=config.normalize_by_std,
+        num_train_steps=config.trainer.num_train_steps,
+        model=draccus.encode(config.model),
+        mp=str(config.trainer.mp),
+        seed=config.trainer.seed,
+        train_batch_size=config.trainer.train_batch_size,
+        microbatch_size=microbatch_size,
+        vocab_block_size=config.vocab_block_size,
+    )
 
 
-def _validate_or_write_continuation_contract(trainer: Trainer, contract: dict) -> None:
+def _validate_or_write_continuation_contract(trainer: Trainer, contract: _ContinuationContract) -> None:
     contract_path = StoragePath(trainer.checkpoint_path) / "offline-grpo.json"
+    payload = dataclasses.asdict(contract)
     if contract_path.exists():
         with contract_path.open("r") as source:
-            if json.load(source) != contract:
+            if json.load(source) != payload:
                 raise ValueError("Offline continuation requires the same capture stream and training recipe")
     elif is_checkpoint_path(trainer.checkpoint_path):
         raise ValueError("Existing checkpoints need their offline capture-stream contract")
     elif jax.process_index() == 0:
         contract_path.parent.mkdirs()
         with contract_path.open("wt") as output:
-            json.dump(contract, output, indent=2)
+            json.dump(payload, output, indent=2)
 
 
 def _initial_state(trainer: Trainer, config: OfflineGrpoConfig, context, tokenizer: AutoTokenizer):
@@ -214,7 +235,7 @@ def _initial_state(trainer: Trainer, config: OfflineGrpoConfig, context, tokeniz
     model_key, training_key = jax.random.split(jax.random.PRNGKey(config.trainer.seed))
     return trainer.initial_state(
         training_key,
-        is_trainable=config.trainable_filter(eqx.filter_eval_shape(context.model.build, Vocab, key=model_key)),
+        is_trainable=True,
         model_init=partial(
             load_model_from_source,
             context=context,
