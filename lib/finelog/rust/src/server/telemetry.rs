@@ -221,8 +221,8 @@ struct ExplicitHistogramBody {
     bucket_counts: Vec<i64>,
     count: i64,
     sum: f64,
-    producer_epoch: String,
-    sequence: i64,
+    producer_epoch: Option<String>,
+    sequence: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -816,12 +816,20 @@ fn validate_histogram_body(root: &Value, record_index: usize) -> Result<(), ApiE
             "records[{record_index}].body has an unsupported histogram encoding or temporality"
         )));
     }
-    validate_string(
-        &body.producer_epoch,
-        &format!("records[{record_index}].body.producer_epoch"),
-        false,
-    )?;
-    if body.sequence < 0 || body.count < 0 || !body.sum.is_finite() {
+    if body.producer_epoch.is_some() != body.sequence.is_some() {
+        return Err(ApiError::bad_request(format!(
+            "records[{record_index}].body requires producer_epoch and sequence together"
+        )));
+    }
+    if let Some(producer_epoch) = &body.producer_epoch {
+        validate_string(
+            producer_epoch,
+            &format!("records[{record_index}].body.producer_epoch"),
+            false,
+        )?;
+    }
+    if body.sequence.is_some_and(|sequence| sequence < 0) || body.count < 0 || !body.sum.is_finite()
+    {
         return Err(ApiError::bad_request(format!(
             "records[{record_index}].body has an invalid sequence, count, or sum"
         )));

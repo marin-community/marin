@@ -10,9 +10,10 @@ oversized scrape cannot exhaust the export queue.
 """
 
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import pairwise
+from typing import TypeVar
 
 from rigging import telemetry
 from rigging.telemetry import serialization
@@ -38,12 +39,12 @@ class HistogramSnapshot:
     explicit_bounds: tuple[float, ...]
     bucket_counts: tuple[int, ...]
     count: int
-    total: float
+    sum: float
     unit: str
     attributes: Mapping[str, str]
     timestamp_ms: int
-    producer_epoch: str
-    sequence: int
+    producer_epoch: str | None = None
+    sequence: int | None = None
 
 
 @dataclass(frozen=True)
@@ -58,6 +59,27 @@ class MetricPublishResult:
     enqueued_records: int
     sample_limit_dropped_records: int
     telemetry_lost_records: int
+
+
+_Snapshot = TypeVar("_Snapshot")
+
+
+def _publish_snapshots(
+    snapshots: Sequence[_Snapshot],
+    max_records: int,
+    enqueue: Callable[["telemetry._Runtime", _Snapshot], int],
+) -> MetricPublishResult:
+    runtime = telemetry._runtime
+    if runtime is None:
+        return MetricPublishResult(False, 0, 0, 0)
+    selected = snapshots[:max_records]
+    enqueued = sum(enqueue(runtime, snapshot) for snapshot in selected)
+    return MetricPublishResult(
+        configured=True,
+        enqueued_records=enqueued,
+        sample_limit_dropped_records=len(snapshots) - len(selected),
+        telemetry_lost_records=len(selected) - enqueued,
+    )
 
 
 class MetricSnapshotPublisher:
@@ -78,19 +100,7 @@ class MetricSnapshotPublisher:
 
     def publish(self, snapshots: Sequence[MetricSnapshot]) -> MetricPublishResult:
         """Validate and enqueue at most ``max_records`` snapshots without blocking."""
-        input_records = len(snapshots)
-        runtime = telemetry._runtime
-        if runtime is None:
-            return MetricPublishResult(False, 0, 0, 0)
-
-        selected = snapshots[: self._max_records]
-        enqueued = sum(self._enqueue(runtime, snapshot) for snapshot in selected)
-        return MetricPublishResult(
-            configured=True,
-            enqueued_records=enqueued,
-            sample_limit_dropped_records=max(0, input_records - len(selected)),
-            telemetry_lost_records=len(selected) - enqueued,
-        )
+        return _publish_snapshots(snapshots, self._max_records, self._enqueue)
 
     def _enqueue(self, runtime: "telemetry._Runtime", snapshot: MetricSnapshot) -> int:
         """Return 1 when ``snapshot`` enters the queue, else 0, counting any loss."""
@@ -133,13 +143,17 @@ def _histogram_body(snapshot: HistogramSnapshot) -> dict[str, object]:
         or not 0 <= snapshot.timestamp_ms <= _MAX_HISTOGRAM_INTEGER
     ):
         raise ValueError("timestamp_ms must be a nonnegative signed-64 integer")
-    if (
-        isinstance(snapshot.sequence, bool)
-        or not isinstance(snapshot.sequence, int)
-        or not 0 <= snapshot.sequence <= _MAX_HISTOGRAM_INTEGER
-    ):
-        raise ValueError("sequence must be a nonnegative signed-64 integer")
-    serialization.validate_string(snapshot.producer_epoch, "producer_epoch")
+    if (snapshot.producer_epoch is None) != (snapshot.sequence is None):
+        raise ValueError("producer_epoch and sequence must be provided together")
+    if snapshot.producer_epoch is not None:
+        serialization.validate_string(snapshot.producer_epoch, "producer_epoch")
+    if snapshot.sequence is not None:
+        if (
+            isinstance(snapshot.sequence, bool)
+            or not isinstance(snapshot.sequence, int)
+            or not 0 <= snapshot.sequence <= _MAX_HISTOGRAM_INTEGER
+        ):
+            raise ValueError("sequence must be a nonnegative signed-64 integer")
     bounds = snapshot.explicit_bounds
     if len(bounds) > _MAX_HISTOGRAM_BOUNDS or any(
         isinstance(bound, bool) or not isinstance(bound, (int, float)) or not math.isfinite(bound) for bound in bounds
@@ -157,22 +171,20 @@ def _histogram_body(snapshot: HistogramSnapshot) -> dict[str, object]:
         raise ValueError("count must equal the sum of bucket counts")
     if snapshot.count > _MAX_HISTOGRAM_INTEGER:
         raise ValueError("count exceeds the signed-64 range")
-    if (
-        isinstance(snapshot.total, bool)
-        or not isinstance(snapshot.total, (int, float))
-        or not math.isfinite(snapshot.total)
-    ):
+    if isinstance(snapshot.sum, bool) or not isinstance(snapshot.sum, (int, float)) or not math.isfinite(snapshot.sum):
         raise ValueError("sum must be finite")
-    return {
+    body: dict[str, object] = {
         "encoding": "explicit_bucket_v1",
         "aggregation_temporality": "cumulative",
         "explicit_bounds": list(bounds),
         "bucket_counts": list(counts),
         "count": snapshot.count,
-        "sum": snapshot.total,
-        "producer_epoch": snapshot.producer_epoch,
-        "sequence": snapshot.sequence,
+        "sum": snapshot.sum,
     }
+    if snapshot.producer_epoch is not None:
+        body["producer_epoch"] = snapshot.producer_epoch
+        body["sequence"] = snapshot.sequence
+    return body
 
 
 class HistogramSnapshotPublisher:
@@ -188,17 +200,7 @@ class HistogramSnapshotPublisher:
 
     def publish(self, snapshots: Sequence[HistogramSnapshot]) -> MetricPublishResult:
         """Admit at most ``max_records`` whole families, counting any rejected family."""
-        runtime = telemetry._runtime
-        if runtime is None:
-            return MetricPublishResult(False, 0, 0, 0)
-        selected = snapshots[: self._max_records]
-        enqueued = sum(self._enqueue(runtime, snapshot) for snapshot in selected)
-        return MetricPublishResult(
-            configured=True,
-            enqueued_records=enqueued,
-            sample_limit_dropped_records=max(0, len(snapshots) - len(selected)),
-            telemetry_lost_records=len(selected) - enqueued,
-        )
+        return _publish_snapshots(snapshots, self._max_records, self._enqueue)
 
     def _enqueue(self, runtime: "telemetry._Runtime", snapshot: HistogramSnapshot) -> int:
         try:

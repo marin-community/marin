@@ -282,7 +282,7 @@ def test_histogram_queue_pressure_loses_a_whole_family(monkeypatch: pytest.Monke
             explicit_bounds=(0.01,),
             bucket_counts=(sequence, 0),
             count=sequence,
-            total=0.0,
+            sum=0.0,
             unit="s",
             attributes={"engine": "engine-a"},
             timestamp_ms=1_700_000_000_000 + sequence,

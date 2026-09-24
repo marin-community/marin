@@ -915,6 +915,21 @@ async fn structured_histogram_round_trips_alongside_scalar_histogram() {
                 "unit": "s",
                 "value": 0.25,
                 "attributes": {}
+            },
+            {
+                "timestamp_ms": 1_700_000_000_002_i64,
+                "kind": "histogram",
+                "name": "request_duration_seconds",
+                "unit": "s",
+                "body": {
+                    "encoding": "explicit_bucket_v1",
+                    "aggregation_temporality": "cumulative",
+                    "explicit_bounds": [0.1],
+                    "bucket_counts": [2, 1],
+                    "count": 3,
+                    "sum": 0.2
+                },
+                "attributes": {}
             }
         ]
     }))
@@ -939,7 +954,7 @@ async fn structured_histogram_round_trips_alongside_scalar_histogram() {
         "SELECT value, body_json FROM \"telemetry_v1.marinskyrl\" ORDER BY record_index",
     )
     .await;
-    assert_eq!(rows.iter().map(|batch| batch.num_rows()).sum::<usize>(), 2);
+    assert_eq!(rows.iter().map(|batch| batch.num_rows()).sum::<usize>(), 3);
     let values = rows[0]
         .column(0)
         .as_primitive::<arrow::datatypes::Float64Type>();
@@ -950,6 +965,9 @@ async fn structured_histogram_round_trips_alongside_scalar_histogram() {
     assert_eq!(point["count"].as_i64(), Some(exact_count + 5));
     assert!(bodies.is_null(1));
     assert_eq!(values.value(1), 0.25);
+    let generic: Value = serde_json::from_str(bodies.value(2)).unwrap();
+    assert_eq!(generic["bucket_counts"], json!([2, 1]));
+    assert!(generic.get("producer_epoch").is_none());
 }
 
 #[tokio::test]
