@@ -1122,55 +1122,73 @@
       "name": "LABBench2",
       "source_url": "https://github.com/EdisonScientific/labbench2",
       "priority_score": null,
-      "reason": "Task enumeration and endpoint inspection are required before ranking."
+      "reason": "The pinned Hugging Face card lists 1,912 rows; the existing authorized credential previously lacked this dataset grant. Public harness availability does not expose those question rows.",
+      "status": "dataset-access-gap",
+      "disposition_source": "benchmark_sources.json: sources[name].inventory_disposition"
     },
     {
       "name": "BioSecBench-Surveillance",
       "source_url": "https://github.com/latchbio/biosecbench-surveillance",
       "priority_score": null,
-      "reason": "Public README declares seven examples and a restricted 100-evaluation suite; input data, graders and ground truth are withheld. Only release metadata inspected. Plan benign surveillance/data-QC patterns only after exact public-endpoint review; no coverage assigned from category names."
+      "reason": "The reviewed public release overview distinguishes seven examples from the restricted 100-evaluation suite; input data, grading and reference answers are withheld.",
+      "status": "restricted-suite-and-public-example-review-gap",
+      "disposition_source": "benchmark_sources.json: sources[name].inventory_disposition"
     },
     {
       "name": "BioSecBench-Function",
       "source_url": "https://github.com/latchbio/biosecbench-function",
       "priority_score": null,
-      "reason": "Public README declares seven examples and a restricted 111-evaluation suite; inputs, graders and ground truth withheld. Only release metadata inspected. Independent benign assay/QC analysis may supply limited components. Threat-property optimization is outside training authoring; do not convert source category counts into coverage."
+      "reason": "The reviewed public release overview distinguishes seven examples from the restricted 111-evaluation suite; task inputs and grading are withheld.",
+      "status": "restricted-suite-and-public-example-review-gap",
+      "disposition_source": "benchmark_sources.json: sources[name].inventory_disposition"
     },
     {
       "name": "BioSecBench-Refusal \u2014 direct framing",
       "source_url": "https://github.com/latchbio/biosecbench-refusal",
       "priority_score": null,
-      "reason": "Public README describes 61 Routine and 46 Red-Team tasks, with two public paired examples. Only release metadata inspected. Refusal/risk recognition and fictional scenarios do not directly map to an observed-data analysis recipe. Retain a source-objective gap; no full coverage claim."
+      "reason": "The reviewed release overview describes Routine and Red-Team tasks and paired public examples. Its refusal objective differs from successful analysis of observed data.",
+      "status": "source-objective-gap",
+      "disposition_source": "benchmark_sources.json: sources[name].inventory_disposition"
     },
     {
       "name": "LifeSciBench",
       "source_url": "https://openai.com/index/introducing-life-sci-bench/",
       "priority_score": null,
-      "reason": "Primary overview describes free-response tasks with expert-authored multi-criterion rubrics and multiple artifact types; no full task manifest was retrieved. Use exact artifact analysis as a component only; do not claim subjective scientific judgment is covered by a numeric proxy."
+      "reason": "Primary overview reports 750 tasks. Paper section 3.3 describes one prompt/artifact submission and one final response; Appendix A.5 says release may be limited. No complete versioned task manifest was found in the inspected overview/paper.",
+      "status": "release-manifest-and-acceptance-gap",
+      "disposition_source": "benchmark_sources.json: sources[name].inventory_disposition"
     },
     {
       "name": "TargetVal (Popper)",
       "source_url": "https://arxiv.org/abs/2502.09858",
       "priority_score": null,
-      "reason": "Task enumeration and endpoint inspection are required before ranking."
+      "reason": "Pinned constructor selects top absolute-score genes from external ground_truth_IL2.csv or ground_truth_IFNG.csv, or samples them with seed 42 for permuted controls. Requested sample counts are not a released identity manifest.",
+      "status": "task-identity-manifest-gap",
+      "disposition_source": "benchmark_sources.json: sources[name].inventory_disposition"
     },
     {
       "name": "ABC-Bench (SecureBio)",
       "source_url": "https://arxiv.org/abs/2606.11150",
       "priority_score": null,
-      "reason": "Primary abstract describes three task families including robot code, DNA assembly and synthesis-screening evasion. No task-level manifest inspected. Screening evasion is outside training authoring. Benign static protocol-accounting components would require independent observed records and explicit validation limits."
+      "reason": "The inspected primary abstract distinguishes robot-code, DNA-assembly and synthesis-screening-evasion families; no task-level manifest has been inspected.",
+      "status": "restricted-manifest-and-objective-gap",
+      "disposition_source": "benchmark_sources.json: sources[name].inventory_disposition"
     },
     {
       "name": "ABLE \u2014 agentic biological AI tool use",
       "source_url": "https://arxiv.org/abs/2609.05818",
       "priority_score": null,
-      "reason": "Primary abstract describes structure retrieval, sequence generation and design validation using biological AI tools; no task-level manifest inspected. Observed-structure retrieval and artifact validation may inform limited components; generated designs are not observed biological outcomes and do not establish full source coverage."
+      "reason": "The inspected primary abstract describes structure retrieval, sequence generation and design validation with biological AI tools; no task-level manifest has been inspected.",
+      "status": "task-manifest-and-observed-outcome-gap",
+      "disposition_source": "benchmark_sources.json: sources[name].inventory_disposition"
     },
     {
       "name": "BioASQ \u2014 retrieval / end-to-end QA",
       "source_url": "https://www.bioasq.org/",
       "priority_score": null,
-      "reason": "Official challenge page distinguishes article/snippet retrieval, exact answers, ideal summaries and iterative expert-feedback Synergy tasks, with automatic and expert assessment. No release/year-specific IDs inspected. Choose the agentic retrieval/end-to-end protocol and release before enumeration. Structured retrieval/exact-answer metrics do not establish ideal-summary quality."
+      "reason": "Official Synergy guidelines specify iterative retrieval against versioned PubMed snapshots with expert feedback. The official Synergy 2025 dataset link redirects to the participant login; no rows were retrieved.",
+      "status": "dataset-access-and-expert-feedback-gap",
+      "disposition_source": "benchmark_sources.json: sources[name].inventory_disposition"
     }
   ],
   "execution_policy": {

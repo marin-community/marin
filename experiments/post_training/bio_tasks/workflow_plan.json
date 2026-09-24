@@ -13,7 +13,7 @@
     },
     {
       "path": "experiments/post_training/bio_tasks/benchmark_sources.json",
-      "sha256": "aa0ed6d55e0f1451dc198bdc0598bcbffd742a2382dc167f5b1bdda8ba7bac09"
+      "sha256": "a1bb3400e5528486420975c85322b21d4a35d68bfc922d428360e282dc26b17c"
     }
   ],
   "question_inspection_evidence": {
@@ -13250,80 +13250,48 @@
   "id_source_rows_without_inventory": [
     {
       "name": "LABBench2",
-      "inspection": "Pinned public harness tree and dataset card inspected. Card declares 1,912 rows in the all configuration; existing credential lacks the dataset gate grant, so no task content was retrieved.",
-      "source_url": "https://github.com/EdisonScientific/labbench2",
-      "data_url": "https://github.com/EdisonScientific/labbench2/blob/c028ecdcf144b55ffcd92b68be45081df5628c20/evals/evaluators.py",
-      "scoring_access": "Gated grading"
+      "status": "dataset-access-gap",
+      "disposition_source": "benchmark_sources.json: sources[name].inventory_disposition"
     },
     {
       "name": "BioSecBench-Surveillance",
-      "inspection": "Public README declares seven examples and a restricted 100-evaluation suite; input data, graders and ground truth are withheld. Only release metadata inspected.",
-      "source_url": "https://github.com/latchbio/biosecbench-surveillance",
-      "data_url": "https://github.com/latchbio/biosecbench-surveillance/blob/main/METHODS.md",
-      "scoring_access": "Restricted access",
-      "planning_boundary": "Plan benign surveillance/data-QC patterns only after exact public-endpoint review; no coverage assigned from category names.",
-      "reviewed_primary_url": "https://github.com/latchbio/biosecbench-surveillance"
+      "status": "restricted-suite-and-public-example-review-gap",
+      "disposition_source": "benchmark_sources.json: sources[name].inventory_disposition"
     },
     {
       "name": "BioSecBench-Function",
-      "inspection": "Public README declares seven examples and a restricted 111-evaluation suite; inputs, graders and ground truth withheld. Only release metadata inspected.",
-      "source_url": "https://github.com/latchbio/biosecbench-function",
-      "data_url": "https://github.com/latchbio/biosecbench-function/blob/main/METHODS.md",
-      "scoring_access": "Restricted access",
-      "planning_boundary": "Independent benign assay/QC analysis may supply limited components. Threat-property optimization is outside training authoring; do not convert source category counts into coverage.",
-      "reviewed_primary_url": "https://github.com/latchbio/biosecbench-function"
+      "status": "restricted-suite-and-public-example-review-gap",
+      "disposition_source": "benchmark_sources.json: sources[name].inventory_disposition"
     },
     {
       "name": "BioSecBench-Refusal \u2014 direct framing",
-      "inspection": "Public README describes 61 Routine and 46 Red-Team tasks, with two public paired examples. Only release metadata inspected.",
-      "source_url": "https://github.com/latchbio/biosecbench-refusal",
-      "data_url": "https://github.com/latchbio/biosecbench-refusal/blob/main/METHODS.md",
-      "scoring_access": "Restricted access",
-      "planning_boundary": "Refusal/risk recognition and fictional scenarios do not directly map to an observed-data analysis recipe. Retain a source-objective gap; no full coverage claim.",
-      "reviewed_primary_url": "https://github.com/latchbio/biosecbench-refusal"
+      "status": "source-objective-gap",
+      "disposition_source": "benchmark_sources.json: sources[name].inventory_disposition"
     },
     {
       "name": "LifeSciBench",
-      "inspection": "Primary overview describes free-response tasks with expert-authored multi-criterion rubrics and multiple artifact types; no full task manifest was retrieved.",
-      "source_url": "https://openai.com/index/introducing-life-sci-bench/",
-      "data_url": "https://cdn.openai.com/pdf/b4299379-0a97-4ffa-8b9b-c3fbb299caa9/lifescibench_preprint.pdf",
-      "scoring_access": "Restricted access",
-      "planning_boundary": "Use exact artifact analysis as a component only; do not claim subjective scientific judgment is covered by a numeric proxy.",
-      "reviewed_primary_url": "https://openai.com/index/introducing-life-sci-bench/"
+      "status": "release-manifest-and-acceptance-gap",
+      "disposition_source": "benchmark_sources.json: sources[name].inventory_disposition"
     },
     {
       "name": "TargetVal (Popper)",
-      "inspection": "Pinned task constructor and experiment runner assessed. Stable gene-level task identities depend on external ground-truth tables and have not been enumerated; no task-count or workflow-coverage credit.",
-      "source_url": "https://arxiv.org/abs/2502.09858",
-      "data_url": "https://github.com/snap-stanford/POPPER/tree/59611864e09dd15d7528e240ad87c7ddbb4a701c",
-      "scoring_access": "Public grading"
+      "status": "task-identity-manifest-gap",
+      "disposition_source": "benchmark_sources.json: sources[name].inventory_disposition"
     },
     {
       "name": "ABC-Bench (SecureBio)",
-      "inspection": "Primary abstract describes three task families including robot code, DNA assembly and synthesis-screening evasion. No task-level manifest inspected.",
-      "source_url": "https://arxiv.org/abs/2606.11150",
-      "data_url": "https://arxiv.org/abs/2606.11150",
-      "scoring_access": "Restricted access",
-      "planning_boundary": "Screening evasion is outside training authoring. Benign static protocol-accounting components would require independent observed records and explicit validation limits.",
-      "reviewed_primary_url": "https://arxiv.org/abs/2606.11150"
+      "status": "restricted-manifest-and-objective-gap",
+      "disposition_source": "benchmark_sources.json: sources[name].inventory_disposition"
     },
     {
       "name": "ABLE \u2014 agentic biological AI tool use",
-      "inspection": "Primary abstract describes structure retrieval, sequence generation and design validation using biological AI tools; no task-level manifest inspected.",
-      "source_url": "https://arxiv.org/abs/2609.05818",
-      "data_url": "https://arxiv.org/abs/2609.05818",
-      "scoring_access": "Restricted access",
-      "planning_boundary": "Observed-structure retrieval and artifact validation may inform limited components; generated designs are not observed biological outcomes and do not establish full source coverage.",
-      "reviewed_primary_url": "https://arxiv.org/abs/2609.05818"
+      "status": "task-manifest-and-observed-outcome-gap",
+      "disposition_source": "benchmark_sources.json: sources[name].inventory_disposition"
     },
     {
       "name": "BioASQ \u2014 retrieval / end-to-end QA",
-      "inspection": "Official challenge page distinguishes article/snippet retrieval, exact answers, ideal summaries and iterative expert-feedback Synergy tasks, with automatic and expert assessment. No release/year-specific IDs inspected.",
-      "source_url": "https://www.bioasq.org/",
-      "data_url": "https://github.com/BioASQ/Evaluation-Measures/tree/8c8e689068a41c1370fec55260e5fbfe3a6a6016",
-      "scoring_access": "Task-dependent access",
-      "planning_boundary": "Choose the agentic retrieval/end-to-end protocol and release before enumeration. Structured retrieval/exact-answer metrics do not establish ideal-summary quality.",
-      "reviewed_primary_url": "https://www.bioasq.org/"
+      "status": "dataset-access-and-expert-feedback-gap",
+      "disposition_source": "benchmark_sources.json: sources[name].inventory_disposition"
     }
   ],
   "implementation_sequence": [

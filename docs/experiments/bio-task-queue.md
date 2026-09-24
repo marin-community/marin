@@ -6,7 +6,8 @@ across 32 ID releases**. It links 3,058 records to scientific question proposals
 links 50 known BixBench-Verified aliases to their original designs, preserves 350
 SciGym systems, 1,451 ScholarQA-Bio questions and 223 LAB-Bench questions as
 individual-endpoint review gaps, and retains one excluded objective. Nine provisional-ID
-source leads still lack task inventories.
+source leads still lack task inventories; each now has an explicit access, identity,
+endpoint or scope disposition in the source catalog.
 
 The portfolio contains **699 question cards and 658 proposed task groups**, including
 25 conditional combinations of question cards. These are planning units, with
@@ -248,11 +249,27 @@ scientific entailment. Prioritize executable endpoints in the analytical ID benc
 before these unresolved synthesis contracts; use the component ideas where they
 strengthen an independently justified workflow.
 
-The remaining source leads now retain publication-level boundaries in the source
-inventory. BioASQ requires selecting a specific agentic protocol and release; its
-retrieval/exact-answer metrics do not cover ideal-summary quality. Restricted suites and
-model-judged scientific opinions remain explicit gaps, with no invented task count
-or coverage.
+The nine remaining source leads have explicit dispositions in
+[benchmark sources](../../experiments/post_training/bio_tasks/benchmark_sources.json).
+They remain provisionally ID and add no invented task IDs or coverage.
+
+| Source | Current planning boundary |
+|---|---|
+| LABBench2 | Pinned metadata is available; the existing credential lacks the task-data grant. |
+| TargetVal | The task constructor selects genes using external scores; requested sample counts do not enumerate the selected identities. |
+| BioSecBench Surveillance / Function | Public example descriptions need individual review; restricted suites remain unenumerated. Only benign observed-data analysis can inform authoring. |
+| BioSecBench Refusal | Refusal behavior is a different objective from successful observed-data analysis. |
+| LifeSciBench | No complete manifest found in the overview/paper; tool-enabled scope and full deterministic acceptance remain unverified. |
+| ABC-Bench | No inspected task manifest; physical execution claims need their own evidence. Screening evasion is excluded. |
+| ABLE | No inspected task manifest; generated designs do not supply observed biological-performance labels. |
+| BioASQ | Synergy 2025 selected for inventory; its official download redirects to login. Retrieval metrics cannot certify expert feedback or ideal summaries. |
+
+BioASQ's [Synergy protocol](https://participants-area.bioasq.org/general_information/TaskSynergy26/)
+uses versioned questions, PubMed snapshots and iterative expert feedback. Preserve
+edition/round/question identity and answer-readiness state when inspecting a release;
+the 2025 README must confirm its specific conventions. An offline feedback replay
+would be an explicit adaptation. These source limits do not block planning the
+already inventoried analytical workflows.
 
 The LAB-Bench source is scoped to public DbQA (520), LitQA2 (199) and SuppQA (82)
 questions. All IDs, question hashes and twelve source subtask labels are inventoried;

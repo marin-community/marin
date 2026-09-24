@@ -479,7 +479,17 @@
         "metadata_access": "existing credential has no dataset gate grant"
       },
       "advertised_task_count": 1912,
-      "public_task_rows_inspected": 0
+      "public_task_rows_inspected": 0,
+      "inventory_disposition": {
+        "reviewed_at": "2026-09-24",
+        "status": "dataset-access-gap",
+        "evidence": "The pinned Hugging Face card lists 1,912 rows; the existing authorized credential previously lacked this dataset grant. Public harness availability does not expose those question rows.",
+        "authoring_boundary": "No task IDs, patterns or coverage inferred from tag counts. Keep sequence/artifact contracts separate from rubric-based research assessment.",
+        "next_evidence_required": "Revisit the pinned dataset through its official access path when the dataset grant changes; project only IDs, task stems and input/output metadata. Do not repeat the failed download unchanged.",
+        "task_ids_inventoried": 0,
+        "validated_mappings_added": 0,
+        "distribution_unchanged": "ID"
+      }
     },
     {
       "sheet": "Agentic (Harbor)",
@@ -779,6 +789,16 @@
         "planning_boundary": "Plan benign surveillance/data-QC patterns only after exact public-endpoint review; no coverage assigned from category names.",
         "task_content_reviewed": false,
         "validated_mappings_added": 0
+      },
+      "inventory_disposition": {
+        "reviewed_at": "2026-09-24",
+        "status": "restricted-suite-and-public-example-review-gap",
+        "evidence": "The reviewed public release overview distinguishes seven examples from the restricted 100-evaluation suite; input data, grading and reference answers are withheld.",
+        "authoring_boundary": "Benign surveillance/data-QC components may be eligible. Neither the seven-example count nor category names establish the full suite inventory or faithful endpoint coverage.",
+        "next_evidence_required": "Review permitted benign public endpoint descriptions and record each actual ID; retain all unavailable suite endpoints as unenumerated. Do not extrapolate example mappings to the restricted suite.",
+        "task_ids_inventoried": 0,
+        "validated_mappings_added": 0,
+        "distribution_unchanged": "ID"
       }
     },
     {
@@ -803,6 +823,16 @@
         "planning_boundary": "Independent benign assay/QC analysis may supply limited components. Threat-property optimization is outside training authoring; do not convert source category counts into coverage.",
         "task_content_reviewed": false,
         "validated_mappings_added": 0
+      },
+      "inventory_disposition": {
+        "reviewed_at": "2026-09-24",
+        "status": "restricted-suite-and-public-example-review-gap",
+        "evidence": "The reviewed public release overview distinguishes seven examples from the restricted 111-evaluation suite; task inputs and grading are withheld.",
+        "authoring_boundary": "Only independent benign assay/measurement-QC components are candidate authoring material. Threat-property optimization is excluded from task creation; benign substitutions are not full endpoint matches.",
+        "next_evidence_required": "Review permitted benign public endpoint metadata individually. Preserve unenumerated restricted objectives and excluded objectives without assigning a fabricated task count.",
+        "task_ids_inventoried": 0,
+        "validated_mappings_added": 0,
+        "distribution_unchanged": "ID"
       }
     },
     {
@@ -827,6 +857,16 @@
         "planning_boundary": "Refusal/risk recognition and fictional scenarios do not directly map to an observed-data analysis recipe. Retain a source-objective gap; no full coverage claim.",
         "task_content_reviewed": false,
         "validated_mappings_added": 0
+      },
+      "inventory_disposition": {
+        "reviewed_at": "2026-09-24",
+        "status": "source-objective-gap",
+        "evidence": "The reviewed release overview describes Routine and Red-Team tasks and paired public examples. Its refusal objective differs from successful analysis of observed data.",
+        "authoring_boundary": "Retain the provisional ID source row, but do not convert refusal behavior or fictional scenarios into real-data analytical coverage. No equivalent question card is claimed.",
+        "next_evidence_required": "Reconsider only an exact benign analysis endpoint with independently verifiable artifacts; refusal classification itself remains outside this dataset objective.",
+        "task_ids_inventoried": 0,
+        "validated_mappings_added": 0,
+        "distribution_unchanged": "ID"
       }
     },
     {
@@ -943,15 +983,34 @@
       "scoring_access": "Restricted access",
       "source_url": "https://openai.com/index/introducing-life-sci-bench/",
       "data_url": "https://cdn.openai.com/pdf/b4299379-0a97-4ffa-8b9b-c3fbb299caa9/lifescibench_preprint.pdf",
-      "inspection": "sheet metadata reviewed; source release and task-level inventory require verification",
+      "inspection": "Primary overview reports 750 tasks. Paper section 3.3 describes one prompt/artifact submission and one final response; Appendix A.5 says release may be limited. No complete versioned task manifest was found in the inspected overview/paper.",
       "training_mapping_allowed": true,
       "planning_source_review": {
         "reviewed_at": "2026-09-24",
         "primary_url": "https://openai.com/index/introducing-life-sci-bench/",
-        "evidence": "Primary overview describes free-response tasks with expert-authored multi-criterion rubrics and multiple artifact types; no full task manifest was retrieved.",
-        "planning_boundary": "Use exact artifact analysis as a component only; do not claim subjective scientific judgment is covered by a numeric proxy.",
-        "task_content_reviewed": false,
-        "validated_mappings_added": 0
+        "evidence": "Primary overview reports 750 tasks. Paper section 3.3 describes one prompt/artifact submission and one final response; Appendix A.5 says release may be limited. No complete versioned task manifest was found in the inspected overview/paper.",
+        "planning_boundary": "Keep the sheet row provisionally ID, with agentic execution eligibility unverified. Exact artifact calculations could support component tasks; deterministic arithmetic cannot certify the full scientific-judgment rubric. Paper examples include reference rubrics and were not copied into training plans or inputs.",
+        "validated_mappings_added": 0,
+        "task_inventory_reviewed": false,
+        "public_paper_examples_included": true
+      },
+      "inventory_disposition": {
+        "reviewed_at": "2026-09-24",
+        "status": "release-manifest-and-acceptance-gap",
+        "evidence": "Primary overview reports 750 tasks. Paper section 3.3 describes one prompt/artifact submission and one final response; Appendix A.5 says release may be limited. No complete versioned task manifest was found in the inspected overview/paper.",
+        "authoring_boundary": "Keep the sheet row provisionally ID, with agentic execution eligibility unverified. Exact artifact calculations could support component tasks; deterministic arithmetic cannot certify the full scientific-judgment rubric. Paper examples include reference rubrics and were not copied into training plans or inputs.",
+        "next_evidence_required": "Use an official permitted ID/question manifest and verify the tool-enabled execution protocol before enumerating agentic tasks. Inspect each complete endpoint before proposing deterministic coverage.",
+        "task_ids_inventoried": 0,
+        "validated_mappings_added": 0,
+        "distribution_unchanged": "ID",
+        "primary_sources": [
+          "https://openai.com/index/introducing-life-sci-bench/",
+          "https://cdn.openai.com/pdf/b4299379-0a97-4ffa-8b9b-c3fbb299caa9/lifescibench_preprint.pdf"
+        ],
+        "paper_sections": [
+          "3.3 Task Formulation",
+          "A.5 Data Availability and Safety Disclosure"
+        ]
       }
     },
     {
@@ -1188,6 +1247,16 @@
           "Verify source data lineage and test independence before claiming error control or scientific workflow coverage."
         ],
         "execution": "not run; no source inputs, ground-truth tables or model calls used"
+      },
+      "inventory_disposition": {
+        "reviewed_at": "2026-09-24",
+        "status": "task-identity-manifest-gap",
+        "evidence": "Pinned constructor selects top absolute-score genes from external ground_truth_IL2.csv or ground_truth_IFNG.csv, or samples them with seed 42 for permuted controls. Requested sample counts are not a released identity manifest.",
+        "authoring_boundary": "The sequential statistical protocol is reviewed, but gene-level identities are absent. No invented gene IDs, no counting model repetitions as tasks, and no permuted observations used as real training data.",
+        "next_evidence_required": "Locate an official permitted question-identity projection for the exact endpoint/mode/sample-count configuration; keep scores and labels out of training authoring. A generic gene list cannot reconstruct the selected questions.",
+        "task_ids_inventoried": 0,
+        "validated_mappings_added": 0,
+        "distribution_unchanged": "ID"
       }
     },
     {
@@ -1287,6 +1356,16 @@
         "planning_boundary": "Screening evasion is outside training authoring. Benign static protocol-accounting components would require independent observed records and explicit validation limits.",
         "task_content_reviewed": false,
         "validated_mappings_added": 0
+      },
+      "inventory_disposition": {
+        "reviewed_at": "2026-09-24",
+        "status": "restricted-manifest-and-objective-gap",
+        "evidence": "The inspected primary abstract distinguishes robot-code, DNA-assembly and synthesis-screening-evasion families; no task-level manifest has been inspected.",
+        "authoring_boundary": "Screening evasion is excluded from authoring. Benign artifact/protocol accounting may supply components, but static validation cannot certify physical robot execution or biological assembly outcomes.",
+        "next_evidence_required": "Inspect an official permitted benign task manifest with exact identities and native output contracts. Keep inaccessible and excluded objectives explicit rather than replacing them with a generic sequence exercise.",
+        "task_ids_inventoried": 0,
+        "validated_mappings_added": 0,
+        "distribution_unchanged": "ID"
       }
     },
     {
@@ -1311,6 +1390,16 @@
         "planning_boundary": "Observed-structure retrieval and artifact validation may inform limited components; generated designs are not observed biological outcomes and do not establish full source coverage.",
         "task_content_reviewed": false,
         "validated_mappings_added": 0
+      },
+      "inventory_disposition": {
+        "reviewed_at": "2026-09-24",
+        "status": "task-manifest-and-observed-outcome-gap",
+        "evidence": "The inspected primary abstract describes structure retrieval, sequence generation and design validation with biological AI tools; no task-level manifest has been inspected.",
+        "authoring_boundary": "Independent observed-structure retrieval and benign artifact validation may support components. Generated sequences are designs, not measured biological outcomes; model confidence alone does not establish activity or full task success.",
+        "next_evidence_required": "Inspect an official permitted benign task manifest and its exact success criteria; require observed reference measurements for any biological-performance claim.",
+        "task_ids_inventoried": 0,
+        "validated_mappings_added": 0,
+        "distribution_unchanged": "ID"
       }
     },
     {
@@ -1419,15 +1508,33 @@
       "scoring_access": "Task-dependent access",
       "source_url": "https://www.bioasq.org/",
       "data_url": "https://github.com/BioASQ/Evaluation-Measures/tree/8c8e689068a41c1370fec55260e5fbfe3a6a6016",
-      "inspection": "sheet metadata reviewed; source release and task-level inventory require verification",
+      "inspection": "Official Synergy guidelines specify iterative retrieval against versioned PubMed snapshots with expert feedback. The official Synergy 2025 dataset link redirects to the participant login; no rows were retrieved.",
       "training_mapping_allowed": true,
       "planning_source_review": {
         "reviewed_at": "2026-09-24",
-        "primary_url": "https://www.bioasq.org/",
-        "evidence": "Official challenge page distinguishes article/snippet retrieval, exact answers, ideal summaries and iterative expert-feedback Synergy tasks, with automatic and expert assessment. No release/year-specific IDs inspected.",
-        "planning_boundary": "Choose the agentic retrieval/end-to-end protocol and release before enumeration. Structured retrieval/exact-answer metrics do not establish ideal-summary quality.",
+        "primary_url": "https://participants-area.bioasq.org/general_information/TaskSynergy26/",
+        "evidence": "Official Synergy guidelines specify iterative retrieval against versioned PubMed snapshots with expert feedback. The official Synergy 2025 dataset link redirects to the participant login; no rows were retrieved.",
+        "planning_boundary": "Select Synergy 2025 as the inventory candidate, preserving edition, round, question ID/version and readiness-to-answer state. Repeated IDs/versions and distinct expert IDs are not automatically independent workflows. Standalone indexing/NER and other non-agentic tracks are outside this source scope.",
         "task_content_reviewed": false,
         "validated_mappings_added": 0
+      },
+      "inventory_disposition": {
+        "reviewed_at": "2026-09-24",
+        "status": "dataset-access-and-expert-feedback-gap",
+        "evidence": "Official Synergy guidelines specify iterative retrieval against versioned PubMed snapshots with expert feedback. The official Synergy 2025 dataset link redirects to the participant login; no rows were retrieved.",
+        "authoring_boundary": "Select Synergy 2025 as the inventory candidate, preserving edition, round, question ID/version and readiness-to-answer state. Repeated IDs/versions and distinct expert IDs are not automatically independent workflows. Standalone indexing/NER and other non-agentic tracks are outside this source scope.",
+        "next_evidence_required": "Obtain official authorized access or an official public question-only release; project IDs, stems, types and round metadata without answer/feedback payloads. Numeric retrieval/exact-answer checks can cover components, but cannot certify ideal-summary quality or replace expert feedback.",
+        "task_ids_inventoried": 0,
+        "validated_mappings_added": 0,
+        "distribution_unchanged": "ID",
+        "primary_sources": [
+          "https://participants-area.bioasq.org/datasets/",
+          "https://participants-area.bioasq.org/general_information/TaskSynergy26/",
+          "https://participants-area.bioasq.org/datasets/download/training_dataset/synergy13"
+        ],
+        "candidate_release": "Synergy 2025; exact downloaded revision/hash unavailable",
+        "protocol_version_limit": "2026 public guidelines establish the iterative scope. Validate the 2025 release README before transferring round, scoring or snapshot conventions.",
+        "expected_artifact_contract": "Ranked PubMed IDs and title/abstract snippet offsets tied to a frozen snapshot; exact answers only when permitted by the round state; ideal prose remains a separate unresolved grading objective. Frozen feedback for offline replay would be a protocol adaptation."
       }
     },
     {
