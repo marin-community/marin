@@ -1789,8 +1789,8 @@
           "authored_lookup": {
             "source_gene_symbol": "GRIK5",
             "authored_gene_symbol": "Grik5",
-            "stable_id": null,
-            "status": "Resolve unique mouse identifier from the pinned OrgDb before authoring; do not choose by significance."
+            "stable_id": "14809",
+            "status": "Unique Grik5 mapping in the native OrgDb export; gene is present in the fitted/shrunken result. No endpoint validation or coverage promotion yet."
           }
         },
         {
@@ -1816,8 +1816,8 @@
           "authored_lookup": {
             "source_gene_symbol": "GRIK5",
             "authored_gene_symbol": "Grik5",
-            "stable_id": null,
-            "status": "Resolve unique mouse identifier from the pinned OrgDb before authoring; do not choose by significance."
+            "stable_id": "14809",
+            "status": "Unique Grik5 mapping in the native OrgDb export; gene is present in the fitted/shrunken result. No endpoint validation or coverage promotion yet."
           }
         }
       ],
@@ -3713,7 +3713,8 @@
       "qvalue_policy": "Set seed 42 immediately before each ORA call because DOSE invokes qvalue with pi0.method=bootstrap. Export its result/status separately; deterministic acceptance and term selection use native BH p.adjust, not Storey qvalue. Preserve the raw result slot and record qvalue failures as returned NA; do not silently change the native hypothesis family.",
       "semantic_graph": "Use the checksum-pinned GOSemSim 2.36.0 bundled gotbl.rda for Wang similarity and the separately pinned GO.db 3.22.0 ancestors for clusterProfiler tie-breaking. Inspect the bundled relation table and eligible-term representation before freezing acceptance. Do not overwrite the native table with the audited GO.db export or claim the two graphs agree without comparison.",
       "semantic_native_conventions": "The inspected Wang source assigns weights 0.8 to is_a, 0.6 to part_of and 0.7 to other relationships. For BP it sets the universal all root contribution to zero. Its traversal retains the first duplicate ancestor entry rather than explicitly maximizing over path contributions. Preserve native table/traversal order and record this behavior; an independently implemented textbook maximum-path score is not automatically the same oracle. Use a fresh R process per task so global semantic caches cannot mix graph versions. GOSemSim mgoSim rounds the similarity matrix to three decimals before clusterProfiler applies the strict >0.7 comparison; reproduce that rounding boundary.",
-      "semantic_data": "For Wang, construct godata(annoDb=the pinned mouse OrgDb, keytype=ENTREZID, ont=BP, computeIC=FALSE, processTCSS=FALSE). Information content is not used by the inspected Wang path. This avoids an unnecessary IC fit without changing the intended native similarity method."
+      "semantic_data": "For Wang, construct godata(annoDb=the pinned mouse OrgDb, keytype=ENTREZID, ont=BP, computeIC=FALSE, processTCSS=FALSE). Information content is not used by the inspected Wang path. This avoids an unnecessary IC fit without changing the intended native similarity method.",
+      "semantic_observed_behavior": "The native BP table has isa, part of and regulation labels; none equals getSV's literal is_a or part_of keys, so all observed BP edges receive 0.7. The bundled graph has 28,749 nodes and 66,947 edges versus GO.db's 25,700/57,462. Two of 406 adjusted-view significant terms and 32 of 3786 raw-view terms are absent from the bundle. Preserve this pinned behavior and report mismatches; do not normalize edge labels silently. Independent reconstruction matched all 181 retained adjusted-view terms, but full native S-value/pair comparisons remain pending."
     },
     "kegg": {
       "source_endpoints": [
@@ -3787,8 +3788,8 @@
     },
     "remaining_before_assignment": [
       "Clear independent observed input lineage/rights and record source-to-authored biological context adaptations. Preserve each selected endpoint's methods, decisions and output semantics; the original disease/tissue label is not required.",
-      "Inspect and reconcile the pinned GOSemSim bundled graph with eligible terms; export the full OrgDb universe. Acquire compatible frozen GO/KEGG inputs for the selected methods, with explicit species/release adaptations. The GO.db 3.22.0 graph is audited against existing mouse memberships.",
-      "Build and verify the pinned full native environment, including the now source-reviewed DOSE pre-intersection/testing-family rules, bundled Wang graph behavior and GSEA ranking/score semantics.",
+      "The full 25,730-gene BP annotation universe and both graph exports are inspected. Preserve the observed literal-label weights, three-decimal rounding and missing-term behavior; compare native intermediate S-values/pairs before adopting the fast reconstruction for the larger case. Compatible frozen KEGG inputs remain unresolved.",
+      "Native count/shrinkage and both ORAs pass scoped independent checks. Native GSEA passed enrichment-score/leading-edge checks in 391.8 seconds including Python audit; validate repeatability and finish raw-genome semantic reduction without term truncation. The combined R attempt hit its 1200-second analysis limit.",
       "Calibrate numerical tolerances from native checks; implement the private oracle and verifier for the selected numerical endpoints with incorrect-output cases. Display parameters and deferred visual endpoints do not block assignment.",
       "Demonstrate complete offline Harbor runtime <=30 minutes; the existing unshrunken DESeq2 run is not evidence for this combined task."
     ],
@@ -3800,7 +3801,7 @@
       "script_sha256": "07a5c3e2f0858fd12df0d9fbd6883382b84e6c7684298604f04872b4c561bbcf",
       "environment_lock": "sources/enrichment-preparation.lock.json",
       "environment_lock_sha256": "70516dbbc397f2de03a1ca49b338321550193de0816229b54bec177a2cca6f09",
-      "status": "Second attempt failed before analysis because alphabetic explicit-package order ran annotation post-link scripts before yq. Correct dependency order and database/namespace preflight prepared; recovery not submitted. No native enrichment or Harbor result.",
+      "status": "Count fit/apeglm, full annotation export, both ORA tables and adjusted-tested reduction audited. The run timed out after 1200 analysis seconds in raw-genome simplification; that output is incomplete. No Harbor validation or new coverage credit.",
       "failed_attempt": {
         "job_id": "/exedev/bio-enrichment-native-20260924-204426",
         "terminal_state": "FAILED",
@@ -3866,7 +3867,180 @@
           "go_db_index_zero_based": 261
         },
         "automatic_retries": 0
-      }
+      },
+      "ordered_install_attempt": {
+        "job_id": "/exedev/bio-enrichment-native-20260924-211357",
+        "terminal_state": "FAILED",
+        "analysis_exit_code": 124,
+        "bundle_sha256": "04cef7615cc9ddef2520e361a7de487dfe53374bd7f184fd1219d560ee329ced",
+        "executed_script_sha256": "07a5c3e2f0858fd12df0d9fbd6883382b84e6c7684298604f04872b4c561bbcf",
+        "archive_sha256": "bd418edca3703c7307ff5084c09573060bf5f373ebc8b586a52389d8d258d5c0",
+        "archive_bytes": 10369057,
+        "installation_seconds": 64.35374431699165,
+        "namespace_preflight_seconds": 9.58238127498771,
+        "analysis_seconds": 1200.2148195700138,
+        "cumulative_child_peak_rss_kib": 3687604,
+        "diagnosis": "Raw-p selection/full-annotation background yielded 3786 significant terms for semantic reduction (14333796 ordered term pairs); the adjusted-p/tested-gene view completed with 406 significant and 181 retained terms. Selection mask and background both differ between these views.",
+        "input_reuse_scope": "Only independently checked completed-stage outputs are inputs to the GSEA preparation. The parent job is not a successful complete workflow.",
+        "validation": {
+          "status": "completed-stages-audited-from-timed-out-run",
+          "input_genes": 27179,
+          "fitted_genes": 16659,
+          "full_annotation_genes": 25730,
+          "membership_rows": 1400728,
+          "views": {
+            "adjusted_tested": {
+              "background": 14624,
+              "selected": 7927,
+              "native_tests": 5898,
+              "zero_overlap_eligible": 0,
+              "significant": 406,
+              "retained": 181
+            },
+            "raw_genome": {
+              "background": 25730,
+              "selected": 8532,
+              "native_tests": 6437,
+              "significant": 3786,
+              "semantic_reduction": "not completed; analysis timed out"
+            }
+          },
+          "probability_comparison": "Absolute log difference <1e-8 above 1e-290; lower tails receive only a 1e-280 upper-bound check (or 1e-290 for reference underflow).",
+          "limits": [
+            "The native job timed out; raw-genome semantic reduction is incomplete.",
+            "No Harbor task or solver run.",
+            "Wang reduction recomputation and bundled graph reconciliation remain separate checks.",
+            "GSEA not run by this preparation.",
+            "No new validated benchmark mapping."
+          ]
+        },
+        "independent_scipy_version": "1.17.0",
+        "native_output_files": {
+          "references/adjusted_tested-background.tsv.gz": "f4109d5aba6b87014ef6e6b2f1bdd28422fe0bfbbd565fc851e634781a98cd9b",
+          "references/adjusted_tested-ora.tsv.gz": "9cb3a93a6c550a0a4106bb051439bd9d1a9c1eba5ba49468885785da4f581ac9",
+          "references/adjusted_tested-retained.tsv.gz": "f5be0ba4665ced6683c33c93e98113b1f45f27695db53bb4bdf5df1cffa3f56c",
+          "references/adjusted_tested-selected.tsv.gz": "18d25bb802733d6b0c16a1aef94db1a30fa96bfce26e8afe15c737f36971fe6a",
+          "references/adjusted_tested-simplified.tsv.gz": "93ba3e91410cd07eeb5569513ef206213b5e291fc8916fced2906d3858819ab3",
+          "references/contrast-interface-audit.tsv.gz": "a079f616d72edc7b3330652afd4450d33db462cf09f5e32ddb7538f43481bbab",
+          "references/cooks.tsv.gz": "759b322541f923b9420c92ad2fc03910a121d6c40b7774272c57c706ea90211d",
+          "references/dispersions.tsv.gz": "9446d96b0db4dad4171317ee5018f0b2f52a4d828a438113bf461a5b11cff50c",
+          "references/eligibility.tsv.gz": "699cb5d3ed26f9d3b75d51602f3e80fe21603942b57a87212334a0435d57ad18",
+          "references/full-bp-membership.tsv.gz": "62ef8b17232713b58569b85249a20777bffdd3ff4a5c9be2047382105e008996",
+          "references/gene-results.tsv.gz": "b1e7c503a9718cc8e6e0ad515f86402cc7cdd5ee82e5d4122c16e6aa291c7a2b",
+          "references/gene-symbols.tsv.gz": "5c9b143fbbf4c1a19d1e9aca3417d8cc012d6dca083e134752003b93ad463255",
+          "references/go-db-bp-parents.tsv.gz": "72ce0e59e3bde76253ff78b9dbe86d02f7d60a99d41572f8fb5f0d4212064273",
+          "references/gosemsim-bundled-graph.tsv.gz": "d6b9b205e1e6ef25325cb591dc478e6e8fba0c443504d4cbff8342097f9bd8a6",
+          "references/raw_genome-background.tsv.gz": "83b1a62e6b0bc2112ce7129cb386955a23ff3b1ec25784abc63e2c45288d90e2",
+          "references/raw_genome-ora.tsv.gz": "f1aeec96fcf8a579ca1476370bc35bd153986b62591ea4cadef81b8e340bbf23",
+          "references/raw_genome-selected.tsv.gz": "9eeb27dc5414fd7788d328802eebe8dcd143ae78bdde3bd2bf7b2535ffc71e58",
+          "references/samples.tsv.gz": "985e7b33731497fda75989f9c55c27f0642b30b3e1c99ee28b50e7596257ae44",
+          "references/size-factors.tsv.gz": "64616c4faf1eabee520a97c7d9bc57afd0c5cc319f218684d163b2a104246ede"
+        },
+        "archive_timestamps": "Iris normalized member timestamps to epoch zero; they cannot establish per-stage timing."
+      },
+      "graph_audit": {
+        "status": "native-bundled-graph-inspected",
+        "bundled_bp_terms_including_parents": 28749,
+        "bundled_unique_bp_edges": 66947,
+        "bundled_bp_relationship_counts": {
+          "isa": 53016,
+          "regulates": 3216,
+          "part of": 5191,
+          "negatively regulates": 2768,
+          "positively regulates": 2756
+        },
+        "effective_native_weight_by_literal_label": {
+          "isa": 0.7,
+          "regulates": 0.7,
+          "part of": 0.7,
+          "negatively regulates": 0.7,
+          "positively regulates": 0.7
+        },
+        "go_db_bp_terms_including_parents": 25700,
+        "go_db_unique_bp_edges": 57462,
+        "exact_edges_only_in_bundle": 14508,
+        "exact_edges_only_in_go_db": 5023,
+        "bundled_graph_acyclic": true,
+        "views": {
+          "adjusted_tested": {
+            "significant_terms": 406,
+            "absent_from_bundled_graph": [
+              "GO:0140895",
+              "GO:0170062"
+            ],
+            "absent_from_go_db_graph": []
+          },
+          "raw_genome": {
+            "significant_terms": 3786,
+            "absent_from_bundled_graph": [
+              "GO:0106380",
+              "GO:0140627",
+              "GO:0140632",
+              "GO:0140694",
+              "GO:0140861",
+              "GO:0140888",
+              "GO:0140894",
+              "GO:0140895",
+              "GO:0140896",
+              "GO:0140928",
+              "GO:0140962",
+              "GO:0141084",
+              "GO:0141085",
+              "GO:0141086",
+              "GO:0141087",
+              "GO:0141091",
+              "GO:0141162",
+              "GO:0141188",
+              "GO:0141193",
+              "GO:0160049",
+              "GO:0160075",
+              "GO:0160240",
+              "GO:0170033",
+              "GO:0170034",
+              "GO:0170035",
+              "GO:0170038",
+              "GO:0170039",
+              "GO:0170040",
+              "GO:0170041",
+              "GO:0170062",
+              "GO:0180046",
+              "GO:0180064"
+            ],
+            "absent_from_go_db_graph": []
+          }
+        },
+        "export_schema_note": "GO.db toTable has duplicate go_id column names; consume child/parent by position or rename explicitly before dictionary parsing.",
+        "weight_note": "The actual bundled labels are interpreted literally by pinned getSV. It treats every label except is_a and part_of as other (0.7). Do not silently normalize labels when reproducing native Wang scores.",
+        "file_sha256": {
+          "gosemsim-bundled-graph.tsv.gz": "d6b9b205e1e6ef25325cb591dc478e6e8fba0c443504d4cbff8342097f9bd8a6",
+          "go-db-bp-parents.tsv.gz": "72ce0e59e3bde76253ff78b9dbe86d02f7d60a99d41572f8fb5f0d4212064273"
+        },
+        "limits": "No independent full similarity-matrix or retained-term recomputation yet; no benchmark mapping promoted."
+      },
+      "semantic_audit": {
+        "status": "native-adjusted-tested-retained-set-reproduced",
+        "significant_terms": 406,
+        "retained": 181,
+        "ordered_pair_comparisons": 164836,
+        "seconds": 0.2098586279898882,
+        "closest_similarity_to_rounding_boundary": 3.465052136120139e-05,
+        "method": "The observed native BP bundle uses only labels that getSV maps to other (0.7). First duplicate ancestors then equal shortest-path depths; reconstruct contributions by breadth-first traversal, apply native three-decimal rounding and local-neighborhood min-p/ancestor-count tie-breaking.",
+        "limits": "Matches the complete retained-term set for the 406-term native case. Does not compare every native similarity value and does not validate the unfinished 3786-term case."
+      },
+      "audit_scripts": [
+        {
+          "path": "sources/validate_enrichment.py",
+          "sha256": "13765ae99f719a7ce271f4a85aa9bb110f9f1d3837074a9a1e9614b9a7f3d3d0"
+        },
+        {
+          "path": "sources/audit_go_graph.py",
+          "sha256": "86ee37f9e55f7e11796be2078ebafa469991abc358b61272a7cd2add64eda704"
+        },
+        {
+          "path": "sources/audit_go_semantics.py",
+          "sha256": "b38331d0738d46c56d624ccfa1d18e68874873cb6d902a5d94119dc12c59e503"
+        }
+      ]
     },
     "context_adaptation": {
       "coverage_policy": "benchmark_coverage.json:workflow_adaptation_policy",
@@ -3884,7 +4058,7 @@
       "validated_new_mappings": 0
     },
     "gsea_native_preparation": {
-      "status": "Prepared only; native execution and Harbor validation pending.",
+      "status": "Native GO prerank preparation succeeded; independent enrichment-score and exact leading-edge checks passed. Repeatability, null/NES/FDR cross-checks and Harbor validation remain pending; no new coverage.",
       "script": "sources/prepare_gsea.py",
       "script_sha256": "d67e6df94dc917a9a939c892a36d0bb62098384d3c80fcc945271ed778c5b6a9",
       "requirements": "sources/gseapy-preparation.requirements.txt",
@@ -3898,6 +4072,90 @@
         "member": "gseapy-1.3.0/gseapy/__init__.py",
         "member_sha256": "81b470c47057c9303b1c7f3a299532fbd8f6179cda278ba85c29f91d69d65075",
         "finding": "prerank forwards the explicit method=permutation argument to Prerank; species is explicitly mouse and gene sets are supplied locally."
+      },
+      "permutation_source_review": {
+        "archive_sha256": "bc5daa80376751c42c0beb5cfbb42131ad2de3c9426f97a415df37d713ceaae3",
+        "files": [
+          {
+            "member": "gseapy-1.3.0/src/lib.rs",
+            "sha256": "55c38bca8a4672e3e96255b268447e49c7e6c2c6e9450fb1337ee2edf9a1597b"
+          },
+          {
+            "member": "gseapy-1.3.0/src/stats.rs",
+            "sha256": "96d6a8d41f1efbba9bc472f0f393c741bbb899af88bcb44e4a192925fe97152c"
+          },
+          {
+            "member": "gseapy-1.3.0/src/algorithm.rs",
+            "sha256": "53e8eedba91c343e4fafac70c5b2165c07cf3a5c76ea5a14c656bddaea398d63"
+          },
+          {
+            "member": "gseapy-1.3.0/src/utils.rs",
+            "sha256": "e89598e75f1964f049357a986db02f1540ced80c6edf3769baf5848c9e1b5f34"
+          }
+        ],
+        "findings": [
+          "EnrichmentScore seeds SmallRng once; it retains the observed ordering plus the requested number of shuffled rankings.",
+          "prerank generates the shared permutation list before iterating the gene-set HashMap, so term iteration order does not assign different random streams to individual sets.",
+          "Permutation FDR pools and sorts normalized null scores before counting tail probabilities. Keep this native quantity distinct from BH-adjusted nominal p."
+        ],
+        "limits": "This is a source review of permutation/ranking paths, not a full review of these files or an empirical repeatability result. Native execution and repeated-run comparison remain pending."
+      },
+      "job_id": "/exedev/bio-gsea-native-20260924-214006",
+      "parent_input_scope": "Only independently checked completed-stage outputs are inputs to the GSEA preparation. The parent job is not a successful complete workflow.",
+      "completed_attempt": {
+        "job_id": "/exedev/bio-gsea-native-20260924-214006",
+        "terminal_state": "SUCCEEDED",
+        "bundle_sha256": "c49be0f3b1f036c420ad9b7ebadccdd56c165b5c256464de38e2087e04b10212",
+        "archive_sha256": "a64837f1cd0e2160f93876d5fa5321b8a474ffac8ce28888d1fd28e60fe104fa",
+        "archive_bytes": 3870136,
+        "native_result": {
+          "status": "native-preparation-and-enrichment-walk-audit-only",
+          "gseapy_version": "1.3.0",
+          "ranked_genes": 16659,
+          "nonfinite_statistic_genes": [],
+          "unannotated_ranked_genes": 2035,
+          "genes_without_eligible_set": 4379,
+          "gene_sets": 15169,
+          "eligible_gene_sets": 4720,
+          "native_seconds": 380.835579511011,
+          "maximum_absolute_es_error": 2.2182256032010628e-13,
+          "top5_rows": 5,
+          "top10_rows": 10,
+          "limits": [
+            "No Harbor task validation.",
+            "Native NES/p/FDR have finite/range checks; null distributions are not independently recomputed.",
+            "No benchmark coverage promoted."
+          ]
+        },
+        "worker_result": {
+          "status": "prepared",
+          "source_revision": "e5b160fae5deda9d989624c0a1b61645cd9d9b19",
+          "model_calls": 0,
+          "file_hashes": {
+            "references/file-hashes.json": "417dd99c4c9c3cab18e6fbd14a815d9338a401602c14ff173514154c0ca395f8",
+            "references/go-bp.gmt.gz": "ce0a6ed1ff69972f9190c7b59e1798f626b9cdcc184be80f17b461e015efd0e2",
+            "references/gsea-results.tsv": "feb40d562f92c9cd13f763b8f992073d463e7b56a987b9a5f729b739ec8a10ad",
+            "references/native-gsea-result.json": "196375a51029f657dd86089f3b7a97d7c946f9bc104996093e0f8b6890649049",
+            "references/ranking.tsv": "3594e19beb193708974c426b3a5f22824697b6e13d9b9a6b9e91814ef19487f6",
+            "references/set-status.tsv": "4e3132c75c7c69fc76829240c4ece8555ddadd44d1ba965679b6119b4da8bf8f",
+            "references/top10-significant.tsv": "b9e1bbc9ad77b4e3f15bb799c275e011b99d8168833ec50c3d276f6b86e020b7",
+            "references/top5-absolute-nes.tsv": "b32e44df11e9874d6b3be0a079882b0c5526d4ba66285272689c43a86d9e6eeb"
+          },
+          "finished_at": "2026-09-24T21:47:04.501501+00:00"
+        },
+        "installation": {
+          "exit_code": 0,
+          "seconds": 19.79197735901107,
+          "cumulative_child_peak_rss_kib": 115276
+        },
+        "analysis": {
+          "exit_code": 0,
+          "seconds": 391.785211356997,
+          "cumulative_child_peak_rss_kib": 4886560
+        },
+        "pip_report_sha256": "3a204b273235ba0d34e20325ad56fdc62a46add431fd8fa661ff8a3b6268d972",
+        "environment_validation": "All 19 installed wheel hashes occur in the committed requirements lock; pip check passed. Executed script and lock match committed files; all archived reference hashes verified.",
+        "memory_scope": "The worker peak is cumulative child RSS, not an isolated GSEA allocation measurement."
       }
     }
   }

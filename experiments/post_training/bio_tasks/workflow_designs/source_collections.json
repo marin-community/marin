@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "reviewed_at": "2026-09-24T20:53:17.512864+00:00",
+  "reviewed_at": "2026-09-24T22:00:16.536092+00:00",
   "scope": "Observed-assay and curated-reference input planning. Inspected a Lawlor cell-annotation CSV, existing mammary counts/sample metadata, and MANE 1.4 GTF/summary with assembly aliases. No new task is implemented or candidate cleared for training export. The pinned GO.db reference graph was also audited against the existing mouse membership asset.",
   "policy": {
     "reuse_unit": "Share acquisition, identity reconciliation and native environment preparation across compatible questions. Each task still answers one coherent question and retains its own complete private oracle/verifier contract.",
@@ -627,13 +627,13 @@
         "There are two libraries per population and developmental stage. Replicate numbers do not establish donor pairing across stages or basal/luminal populations; do not invent a donor block or treat the stages as repeated measures.",
         "Inspected metadata provides no documented failed replicate. Removing one sample leaves only one in that stage, so this source is rejected for the proposed evidence-backed replicate-QC exclusion question.",
         "Bulk sorted populations do not exercise single-cell preprocessing or pseudobulk aggregation. The Liu PyDESeq2 task is an explicit count-model adaptation.",
-        "Existing native/oracle/Harbor evidence covers the authored RNA task only. The R preparation uses betaPrior=FALSE and does not run apeglm, PyDESeq2, GSEA or semantic term reduction.",
+        "New native preparation passes scoped count/shrinkage/ORA checks and GSEA enrichment-score/leading-edge checks. Only adjusted-tested semantic reduction completed; full raw-genome reduction, GSEA repeatability and new Harbor validation remain pending. Coverage is unchanged.",
         "The existing mouse GO membership asset is BP-only. The term-label table has no ontology edges; neither supplies a complete semantic graph or a KEGG snapshot.",
         "Count bytes match the Zenodo record declared CC BY 4.0. Retain the deposit and original study citations. This does not confer redistribution rights on additional ontology/pathway snapshots.",
         "The Zenodo tutorial FASTQs contain 1,000 reads each and cannot substantiate a full raw-read workflow. The observed gene-count matrix retains the original count totals.",
         "Expanded benchmark-cohort lineage review remains open. Sample-sheet agreement and a public license do not establish independence from every ID benchmark input."
       ],
-      "planning_status": "counts-sample-join-and-go-database-verified; native-semantic-graph-full-gene-universe-and-lineage-pending",
+      "planning_status": "native-count-shrinkage-ora-and-gsea-audited; adjusted-semantic-result-reproduced; raw-semantic-repeatability-harbor-and-lineage-pending",
       "candidate_question_or_card_ids": [
         "count-contrast-enrichment",
         "portfolio-liu-single-cell-count-model-differential-expression"
@@ -748,7 +748,7 @@
           ],
           "unresolved_inputs": "Reconcile the pinned native semantic graph, obtain the full annotation universe, acquire compatible frozen pathway inputs and complete source-cohort lineage. Record species/reference-release adaptations explicitly; the original human labels are not an input gate.",
           "runtime_requirement": "Measure the complete offline Harbor oracle and verifier within the 30-minute target. No inference from the existing unshrunken fit runtime.",
-          "status": "candidate-input-contract; full-group-coverage-unsupported",
+          "status": "native-count-shrinkage-ora-and-gsea-audited; adjusted-semantic-result-reproduced; raw-semantic-repeatability-harbor-and-lineage-pending",
           "validated_mappings_added": 0,
           "acceptance_contract_reference": "workflow_designs/bixbench.json:expression_enrichment_contract",
           "visual_scoring_scope": "Grade the numerical biological and plot-data outputs; defer subjective or unsupported figure scoring, preserve component-only mappings, and do not delay viable numerical tasks.",
@@ -767,7 +767,7 @@
         }
       ],
       "annotation_source_review": {
-        "status": "go-database-and-membership-reconciled; native-semantic-graph-not-yet-reconciled",
+        "status": "Full OrgDb BP universe and both graph exports inspected; native relation-label conventions and graph differences recorded in the shared acceptance contract.",
         "go_database": {
           "package": {
             "Package": "GO.db",
@@ -849,9 +849,9 @@
           "url": "https://bioconductor.org/packages/3.22/data/annotation/src/contrib/org.Mm.eg.db_3.22.0.tar.gz",
           "content_length": "92817018"
         },
-        "orgdb_access_result": "The 92,817,018-byte archive passed its provider MD5 check. Extraction failed for insufficient local disk; no complete SQLite audit was obtained, and both temporary files were removed. Use remote disk for the complete database. No package was installed.",
-        "native_graph_boundary": "GOSemSim 2.36.0 loads its bundled data/gotbl.rda for Wang similarity; GO.db supplies ancestor counts for clusterProfiler tie-breaking. The audited GO.db graph cannot be assumed identical to the bundled graph. Pin both and inspect the native relation table before execution claims.",
-        "verified_new_native_runs": 0
+        "orgdb_access_result": "The provider archive passed its MD5 check; the earlier local extraction ran out of disk and was removed. The reserved-CPU installation now passed the expected SQLite hash check and namespace loading, and its complete BP export (25,730 genes, 1,400,728 memberships) passed the scoped independent audit. The full SQLite file was not copied to this VM.",
+        "native_graph_boundary": "The native BP table has isa, part of and regulation labels; none equals getSV's literal is_a or part_of keys, so all observed BP edges receive 0.7. The bundled graph has 28,749 nodes and 66,947 edges versus GO.db's 25,700/57,462. Two of 406 adjusted-view significant terms and 32 of 3786 raw-view terms are absent from the bundle. Preserve this pinned behavior and report mismatches; do not normalize edge labels silently. Independent reconstruction matched all 181 retained adjusted-view terms, but full native S-value/pair comparisons remain pending.",
+        "verified_new_native_runs": "The ordered-install attempt passed database hash and namespace checks. Completed count/ORA/adjusted-semantic outputs passed scoped audits; the overall job timed out in raw-genome reduction. See bixbench.json:expression_enrichment_contract.native_preparation."
       }
     },
     {
