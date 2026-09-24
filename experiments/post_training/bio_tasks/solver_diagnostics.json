@@ -1,0 +1,204 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-09-24T13:02:07.620235+00:00",
+  "purpose": "Two generated real-data task diagnostics; not an ID benchmark score or teacher collection campaign. Inspect complete solver traces and deterministic artifact grades.",
+  "model": "GLM-5.3",
+  "reasoning_effort": "high",
+  "agent": "Terminus-2",
+  "harbor_revision": "d072bef08e54050880b484eb81d892944d1d82fb",
+  "attempts_per_task": 1,
+  "concurrent_trials": 1,
+  "automatic_retries": 0,
+  "max_input_tokens": 65536,
+  "max_output_tokens": 32768,
+  "agent_timeout_seconds": 1800,
+  "request_audit": {
+    "requests": 22,
+    "all_high_reasoning": true,
+    "all_max_tokens_32768": true,
+    "sha256": "6e3b8e0da69609fed5f693ed815c3d64d9d2f78431ebb27c58f1c16145d02652",
+    "server_max_model_len": "not exposed",
+    "weights_revision": "not exposed",
+    "rendered_template": "not inspected"
+  },
+  "results": [
+    {
+      "task_id": "real-phix-assembly-v1-20260923-00000",
+      "recipe": "real-phix-assembly",
+      "task_sha256": "2aadc40d4f1feda3dc73c69f246eed789df09b00d0a1ae161bdda70a73398929",
+      "reward": 1.0,
+      "exception_info": null,
+      "agent_seconds": 151.545338,
+      "trial_seconds": 161.717999,
+      "episodes": 9,
+      "input_tokens": 129124,
+      "cached_input_tokens": 103360,
+      "output_tokens": 17758,
+      "summarizations": 0,
+      "stop_reason": "task_complete",
+      "trajectory_sha256": "c7aaf6a3b7a677bc68d95bd8cd3440020c4f86f346f0a21d2bc34765afac0392",
+      "verdict_sha256": "6c2240eb00f018c2c566fc22d7788d39e6b28cf20e6b04097427526cb5e84597",
+      "inspection_url": "https://codex-main.exe.xyz:8757/solver-checks/20260924/real-phix-assembly-v1-20260923-00000.html",
+      "finding": "Passed all 18 summary fields and every FASTA/TSV artifact check. Trace runs SPAdes and minimap2 on observed reads; solver repairs its mate-header parsing, TSV delimiter and aligned-contig counting errors before completion.",
+      "artifact_checks": {
+        "contigs.fa": {
+          "passed": true,
+          "records": 4,
+          "residues": 6364
+        },
+        "read_qc.tsv": {
+          "passed": true,
+          "rows": 2,
+          "missing": [],
+          "failures": []
+        },
+        "contig_metrics.tsv": {
+          "passed": true,
+          "rows": 4,
+          "missing": [],
+          "failures": []
+        },
+        "alignments.tsv": {
+          "passed": true,
+          "rows": 2,
+          "missing": [],
+          "failures": []
+        },
+        "reference_coverage.tsv": {
+          "passed": true,
+          "rows": 5386,
+          "missing": [],
+          "failures": []
+        }
+      },
+      "review_limits": "Two selected tasks, one attempt each; no estimate of benchmark accuracy or general training benefit. No full-weight revision or rendered chat-template confirmation was exposed by the service."
+    },
+    {
+      "task_id": "real-rnaseq-population-interaction-v1-20260923-00000",
+      "recipe": "real-rnaseq-population-interaction",
+      "task_sha256": "aa3fbaae8d1f8806ace7118cbfaa5d8de91d1b93f3a89b055dbc4c36d31c4b6b",
+      "reward": 0.0,
+      "exception_info": null,
+      "agent_seconds": 317.587618,
+      "trial_seconds": 344.743165,
+      "episodes": 13,
+      "input_tokens": 193401,
+      "cached_input_tokens": 164096,
+      "output_tokens": 26654,
+      "summarizations": 0,
+      "stop_reason": "task_complete",
+      "trajectory_sha256": "1be102e34c62fd7a2232946349a991fdc6d94a1d734c51c0af3d17d5dc752c18",
+      "verdict_sha256": "105b399a690f0e4b45d54f9968656d6b3da1960ba26fb57c4e5c1cb131b2fc67",
+      "inspection_url": "https://codex-main.exe.xyz:8757/solver-checks/20260924/real-rnaseq-population-interaction-v1-20260923-00000.html",
+      "finding": "Native reward remains 0: six correct summary values were written as six separate records instead of one id=comparison record. All seven saved TSVs match canonical outputs under unchanged tolerances in a separate read-only comparison; no formal regrade.",
+      "native_failure_reason": "record_schema",
+      "read_only_artifact_comparison": {
+        "method": "Read-only csv.DictReader stream over saved TSVs against reference.json expected rows; exact headers, IDs, integer values and nulls; number fields checked using declared abs(actual-reference) <= atol + rtol*abs(reference).",
+        "results": {
+          "sample_qc.tsv": {
+            "expected_rows": 12,
+            "actual_rows": 12,
+            "header_match": true,
+            "missing_ids": 0,
+            "extra_ids": 0,
+            "duplicate_ids": 0,
+            "field_mismatches": 0
+          },
+          "design.tsv": {
+            "expected_rows": 12,
+            "actual_rows": 12,
+            "header_match": true,
+            "missing_ids": 0,
+            "extra_ids": 0,
+            "duplicate_ids": 0,
+            "field_mismatches": 0
+          },
+          "contrast_weights.tsv": {
+            "expected_rows": 3,
+            "actual_rows": 3,
+            "header_match": true,
+            "missing_ids": 0,
+            "extra_ids": 0,
+            "duplicate_ids": 0,
+            "field_mismatches": 0
+          },
+          "basal_results.tsv": {
+            "expected_rows": 18418,
+            "actual_rows": 18418,
+            "header_match": true,
+            "missing_ids": 0,
+            "extra_ids": 0,
+            "duplicate_ids": 0,
+            "field_mismatches": 0
+          },
+          "luminal_results.tsv": {
+            "expected_rows": 18418,
+            "actual_rows": 18418,
+            "header_match": true,
+            "missing_ids": 0,
+            "extra_ids": 0,
+            "duplicate_ids": 0,
+            "field_mismatches": 0
+          },
+          "interaction_results.tsv": {
+            "expected_rows": 18418,
+            "actual_rows": 18418,
+            "header_match": true,
+            "missing_ids": 0,
+            "extra_ids": 0,
+            "duplicate_ids": 0,
+            "field_mismatches": 0
+          },
+          "gene_calls.tsv": {
+            "expected_rows": 18418,
+            "actual_rows": 18418,
+            "header_match": true,
+            "missing_ids": 0,
+            "extra_ids": 0,
+            "duplicate_ids": 0,
+            "field_mismatches": 0
+          }
+        },
+        "resource_peak_child_rss_kib": 66764,
+        "formal_regrade_performed": false,
+        "limitation": "The native verifier stopped at record_schema, so this independent comparison does not change or assert the formal reward."
+      },
+      "summary_values_match": true,
+      "review_limits": "Two selected tasks, one attempt each; no estimate of benchmark accuracy or general training benefit. No full-weight revision or rendered chat-template confirmation was exposed by the service."
+    }
+  ],
+  "expected_attempts": 2,
+  "attempted": 2,
+  "scored": 2,
+  "passed": 1,
+  "llm_judge": false,
+  "cleanup_remaining_sandboxes": 0,
+  "archive": {
+    "uri": "gs://marin-us-central2/bio-tasks/solver-diagnostics/bio-glm-diagnostics-20260924-124122/diagnostics.tar.gz",
+    "sha256": "8e214555448fa0a23868e700f999986e0387c21eb1a7ab0c944953f7e0894b9d",
+    "bytes": 3474950,
+    "provider_md5": "0EGMKiH4lujysrwR2ECUUw=="
+  },
+  "trace_findings": [
+    "Both solvers inspect authentic input formats and execute the actual pinned scientific packages. No recorded command accesses private /tests, /solution or reference.json.",
+    "Both spend early turns finding installed binaries under /opt/bio/bin because the interactive terminal PATH omits that directory.",
+    "Assembly recovers from self-generated parsing and output-format mistakes. RNA recovers from R syntax/assertion errors and fits the specified interaction model.",
+    "RNA self-checks repeat its mistaken JSON record structure; existing wording gives the comparison ID but a prominent schema/example would remove avoidable uncertainty.",
+    "The schema-first verifier returns before artifact checks on the RNA failure; future diagnostics should report artifact checks even when the summary schema is invalid, while preserving the binary reward."
+  ],
+  "next_interface_changes": [
+    {
+      "id": "interactive-native-tool-path",
+      "action": "Make the native tool environment discoverable in the actual login shell and validate command -v under the agent terminal."
+    },
+    {
+      "id": "explicit-summary-schema",
+      "action": "State the exact expected record IDs and show a value-free output shape or JSON Schema; retain the current numerical contract."
+    },
+    {
+      "id": "complete-failure-diagnostics",
+      "action": "Retain summary-schema failure and also report complete artifact checks; never promote a failed original attempt or relax tolerances to pass it."
+    }
+  ],
+  "interpretation": "The two traces demonstrate intended scientific tool workflows within the budget. One strict success and one schema failure do not establish general solvability, benchmark coverage or training benefit."
+}

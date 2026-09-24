@@ -16,6 +16,10 @@ partial ID mappings, and repositories with passing native execution evidence.
 The [authoring queue](bio-task-queue.md) ranks assessed candidates by the additional
 distinct missing ID tasks their connected workflow could complete. Recompute the
 remaining targets after each result; related protocol variants add no rank credit.
+The [full design plan](../../experiments/post_training/bio_tasks/workflow_plan.json)
+contains 147 proposed questions across 52 scientific workstreams and keeps all
+inventoried ID endpoints and unresolved source gaps visible. Proposed assignments
+add no validated coverage.
 
 The implementation has **145 recipes across 13 domains**, with one task per
 recipe by default and one train split. The [implemented recipe matrix](bio-task-recipes.md)

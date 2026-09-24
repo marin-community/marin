@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T12:43:12.296878+00:00",
+  "updated_at": "2026-09-24T13:09:51.130879+00:00",
   "basis_revision": "cda940f675d7d81252cabd76d6b11dfd6696c15e",
   "scope": "Provisional ID agentic benchmarks only. This queue selects new authoring work; it does not change benchmark coverage states.",
   "selection_policy": {
@@ -23,7 +23,7 @@
     "scope_limit": "Ranks compare the currently assessed candidate set, not all possible workflows in all releases. Source-review backlog entries remain explicit and can change the ranking."
   },
   "selected_candidate": null,
-  "selection_reason": "Pause new recipe implementation while completing an ID-wide candidate portfolio and two solver diagnostics on existing canonical tasks. Select the next implementation only after reviewing both evidence streams.",
+  "selection_reason": "The full provisional plan and two completed solver diagnostics are available. Repair the demonstrated task interface friction and review task-specific endpoint assignments and independent inputs across the portfolio before selecting the next recipe.",
   "candidates": [
     {
       "id": "multi-locus-phylogenomic-signal",
@@ -1193,21 +1193,8 @@
       "Do not run heavy local work in both lead and worker simultaneously; honor shared-node load, memory and locking requirements.",
       "Do not repeat failed installations or compute jobs without diagnosis and existing authorization."
     ],
-    "current_assignment": {
-      "id": "whole-id-workflow-planning-20260924",
-      "model": "gpt-6-sol",
-      "status": "expanding-first-pass",
-      "deliverable": "Candidate portfolio and exact target references across every inventoried ID release, with explicit gaps for uninspected endpoints and inaccessible sources.",
-      "limits": {
-        "active_children": 1,
-        "compute_jobs": 0,
-        "model_api_calls": 0,
-        "repository_edits": 0
-      },
-      "review_required": "Lead reviews endpoint contracts, scientific coherence, distinct gain, independent input design and verifier feasibility before implementation."
-    },
     "solver_diagnostics": {
-      "status": "submitted",
+      "status": "completed-and-reviewed",
       "task_ids": [
         "real-phix-assembly-v1-20260923-00000",
         "real-rnaseq-population-interaction-v1-20260923-00000"
@@ -1223,7 +1210,21 @@
       "concurrent_trials": 1,
       "automatic_retries": 0,
       "llm_judge": false,
-      "purpose": "Inspect solver traces, complete artifact grades, instruction ambiguity, runtime and token use before further recipe implementation. Existing task bytes and graders are unchanged."
-    }
-  }
+      "purpose": "Inspect solver traces, complete artifact grades, instruction ambiguity, runtime and token use before further recipe implementation. Existing task bytes and graders are unchanged.",
+      "report": "solver_diagnostics.json",
+      "inspection_url": "https://codex-main.exe.xyz:8757/solver-checks/20260924/index.html",
+      "result": "Assembly reward 1; RNA population-interaction reward 0 for summary record shape. A separate read-only comparison matches all seven RNA artifact tables; original reward remains unchanged."
+    },
+    "next_actions": [
+      {
+        "id": "task-interface-repair",
+        "work": "Fix interactive native-tool PATH, show exact summary IDs/shape and retain artifact diagnostics for malformed summaries. Validate without additional teacher attempts."
+      },
+      {
+        "id": "portfolio-endpoint-review",
+        "work": "Turn proposed workstream questions into exact endpoint assignments. Preserve study/assay differences and known aliases; freeze independent observed inputs before estimating completed-task gain."
+      }
+    ]
+  },
+  "portfolio_plan": "workflow_plan.json"
 }
