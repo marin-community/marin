@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T14:45:54.881042+00:00",
+  "updated_at": "2026-09-24T15:24:08.927757+00:00",
   "basis_revision": "952929c306",
   "scope": "Agentic provisional-ID benchmarks only; preserve all existing OOD exclusions. Plan the broad task set before further recipe implementation.",
   "authoring_unit": "One coherent observed-data task per recipe by default. Proposed questions are separate task designs, not repeated instances. They may be split or merged after endpoint and runtime checks.",
@@ -59,7 +59,9 @@
     "scientific_workstreams": 52,
     "proposed_task_questions": 147,
     "validated_coverage_added_by_plan": 0,
-    "unrouted_family_groups": 0
+    "unrouted_family_groups": 0,
+    "detailed_question_cards": 662,
+    "proposed_task_groups_after_conditional_consolidation": 605
   },
   "workstreams": [
     {
@@ -13134,7 +13136,7 @@
   "detailed_design_files": [
     {
       "path": "workflow_designs/biomnibench-da.json",
-      "sha256": "b5d33a52d8440880aea14f19344c62386bd4646a57104c2f53fdc01a69be3b04",
+      "sha256": "8f32f5c2d0042c91bfae663d94300f4fbbbd8926a7977faf7967711cb9c24a8d",
       "benchmark_id": "BiomniBench-DA",
       "reviewed_question_ids": 50,
       "proposed_designs": 45,
@@ -13158,7 +13160,7 @@
     },
     {
       "path": "workflow_designs/additional_benchmarks.json",
-      "sha256": "936bb2d3f22fbe01ebba58145d8488301ec7db5e81804fec4a01a549fa5cd3e2",
+      "sha256": "7c733ea364993c88b62576c4daaf7f7e87c4bd486b384d9650a1318b593cc153",
       "benchmark_ids": [
         "BioAgent",
         "EpiBench",
@@ -13180,7 +13182,132 @@
       "proposed_question_cards": 160,
       "inspection_basis": "Existing versioned inventories and endpoint-stage reviews; per-record source inspection limits preserved. No new full-prompt inspection implied.",
       "relationship_to_workstream_questions": "These question cards refine or split the existing 147 broad questions. They overlap the three existing detailed-design files and one another across benchmarks; do not sum them into an independent task count or a coverage forecast."
+    },
+    {
+      "path": "workflow_designs/biomlbench.json",
+      "sha256": "491ad2e31d7b63bbb6b5c8409664d97fe5728af55181490615f4f0560f69893f",
+      "benchmark_id": "BioML-bench",
+      "inventory_records_assigned": 406,
+      "proposed_question_cards": 25,
+      "inspection_basis": "Shared-protocol/configuration/question-family review, not individual evidence review. Source limits remain attached.",
+      "relationship_to_workstream_questions": "Refines existing workstreams; no independent task count or completed coverage forecast."
+    },
+    {
+      "path": "workflow_designs/biomni-eval1.json",
+      "sha256": "5df501a9d192243704a943363e94fad24de11f206b91bdd2814f3691613e99fc",
+      "benchmark_id": "Biomni-Eval1 tool-enabled",
+      "inventory_records_assigned": 433,
+      "proposed_question_cards": 20,
+      "inspection_basis": "Shared-protocol/configuration/question-family review, not individual evidence review. Source limits remain attached.",
+      "relationship_to_workstream_questions": "Refines existing workstreams; no independent task count or completed coverage forecast."
+    },
+    {
+      "path": "workflow_designs/biokgbench.json",
+      "sha256": "45093bdd7448e8fd7ad8045630f9150ebc1c8acbd2c35fd0d234ae7847ca15ce",
+      "benchmark_id": "BioKGBench KGCheck",
+      "inventory_records_assigned": 225,
+      "proposed_question_cards": 3,
+      "inspection_basis": "Shared-protocol/configuration/question-family review, not individual evidence review. Source limits remain attached.",
+      "relationship_to_workstream_questions": "Refines existing workstreams; no independent task count or completed coverage forecast."
+    },
+    {
+      "path": "workflow_designs/promptbio-bench.json",
+      "sha256": "7b740fa2b5616993f50d43f3f9acc9e557d73443d7272de5709d369be777caaf",
+      "benchmark_id": "PromptBio-Bench",
+      "inventory_records_assigned": 244,
+      "proposed_question_cards": 92,
+      "inspection_basis": "All versioned endpoint patterns and artifact specifications grouped; full-source numeric/assay details still require reconciliation.",
+      "relationship_to_workstream_questions": "Connected question refinements with exact source-task assignments; no completed coverage or independent task-count forecast."
+    },
+    {
+      "path": "workflow_designs/bixbench3.json",
+      "sha256": "e336b62fcdeb70023ae1106d33797e9523645421affcef1d8d642af8436ee020",
+      "benchmark_id": "BixBench3",
+      "inventory_records_assigned": 19,
+      "excluded_records": 1,
+      "proposed_question_cards": 19,
+      "inspection_basis": "Question proposals use the inventory endpoint-stage review; original full prompt, output and method limits remain attached. No new runtime or source-data validation implied.",
+      "relationship_to_workstream_questions": "Refines the 147 broad questions and overlaps other benchmark-specific proposals; no independent task count or coverage forecast."
+    },
+    {
+      "path": "workflow_designs/drugdiscoverybench.json",
+      "sha256": "78bd1eebc2a0072dcbf6c395292eaad1744bbf035d48a257c054ed092972aeef",
+      "benchmark_id": "DrugDiscoveryBench public preview",
+      "inventory_records_assigned": 82,
+      "excluded_records": 0,
+      "proposed_question_cards": 27,
+      "inspection_basis": "Question proposals use the inventory endpoint-stage review; original full prompt, output and method limits remain attached. No new runtime or source-data validation implied.",
+      "relationship_to_workstream_questions": "Refines the 147 broad questions and overlaps other benchmark-specific proposals; no independent task count or coverage forecast."
+    },
+    {
+      "path": "workflow_designs/liu-single-cell.json",
+      "sha256": "52d3f0f2dcf56ffa015510c62e2d6398a447fdecead7d2220cf80ce61c874077",
+      "benchmark_id": "Liu-single-cell",
+      "inventory_records_assigned": 63,
+      "excluded_records": 0,
+      "proposed_question_cards": 49,
+      "inspection_basis": "Question proposals use the inventory endpoint-stage review; original full prompt, output and method limits remain attached. No new runtime or source-data validation implied.",
+      "relationship_to_workstream_questions": "Refines the 147 broad questions and overlaps other benchmark-specific proposals; no independent task count or coverage forecast."
+    },
+    {
+      "path": "workflow_designs/bio-task-bench.json",
+      "sha256": "9f0df4b95b19aaf840e2dd20684f53e39f9c0e42da3c5a5c685add27f5f5e2d4",
+      "benchmark_id": "Bio-Task Bench",
+      "inventory_records_assigned": 34,
+      "excluded_records": 0,
+      "proposed_question_cards": 10,
+      "inspection_basis": "Question proposals use the inventory endpoint-stage review; original full prompt, output and method limits remain attached. No new runtime or source-data validation implied.",
+      "relationship_to_workstream_questions": "Refines the 147 broad questions and overlaps other benchmark-specific proposals; no independent task count or coverage forecast."
+    },
+    {
+      "path": "workflow_designs/bioxarena.json",
+      "sha256": "140332394376532e1300f45a9e9acf9043617cf4f7065f861ed568a84f9182d0",
+      "benchmark_id": "BioXArena",
+      "inventory_records_assigned": 76,
+      "proposed_question_cards": 76,
+      "inspection_basis": "Catalog and scorers only; full prompts and schemas unresolved. Question proposals are conditional, not endpoint-equivalent coverage."
+    },
+    {
+      "path": "workflow_designs/cellbench.json",
+      "sha256": "1fa182b0641294c9f97a7cb5170f69b480b7d55852a3c45b8101c98948e10074",
+      "benchmark_id": "CellBench",
+      "inventory_records_assigned": 50,
+      "proposed_question_cards": 22,
+      "inspection_basis": "Observed research-context questions reviewed; executable adaptations do not cover the original open-ended planning quality objective."
+    },
+    {
+      "path": "workflow_designs/scigym.json",
+      "sha256": "36e3567222d8fbd1ab5c1a66201006e720dd0dad33a2c82bae38e24502673818",
+      "benchmark_id": "SciGym",
+      "inventory_records_with_gap_dispositions": 350,
+      "proposed_shared_protocol_questions": 3,
+      "inspection_basis": "System identities and shared protocol only. No individual endpoint assignments or coverage prediction."
+    },
+    {
+      "path": "workflow_designs/bixbench-verified-50.json",
+      "sha256": "5d420a146dd4b0bd19bc80f88f880f83bd71419a887aa6e6b3658cb2ff462f49",
+      "benchmark_id": "BixBench-Verified-50",
+      "inventory_records_alias_linked": 50,
+      "additional_independent_questions": 0,
+      "inspection_basis": "All question revisions previously inspected; known identity aliases linked to original designs while preserving protocol differences."
     }
   ],
-  "authoring_phase": "question-portfolio-planning"
+  "authoring_phase": "question-portfolio-planning",
+  "portfolio_index": {
+    "path": "workflow_portfolio.json",
+    "sha256": "300766ccfb81d06234e292e575fc8359744a5f4424944814c91ee9be6eda3097",
+    "counts": {
+      "source_releases": 30,
+      "inventory_records": 2881,
+      "question_cards": 662,
+      "proposed_task_groups": 605,
+      "conditional_consolidations": 30,
+      "non_alias_records_linked_to_questions": 2480,
+      "known_cross_release_alias_records": 50,
+      "identity_only_records_with_gap_dispositions": 350,
+      "excluded_records": 1,
+      "validated_new_mappings": 0
+    },
+    "status": "question-portfolio-with-conditional-consolidation-input-and-acceptance-designs-pending"
+  }
 }

@@ -142,8 +142,8 @@
       ],
       "required_formats": [
         "count matrix",
-        "pathway annotations",
-        "sample metadata"
+        "sample metadata",
+        "pathway annotations"
       ],
       "native_package_leads": [
         "DESeq2",
@@ -191,8 +191,8 @@
         "Newick"
       ],
       "native_package_leads": [
-        "aligner",
         "ortholog clustering",
+        "aligner",
         "tree inference"
       ],
       "proposed_artifact_requirements": [
@@ -232,9 +232,9 @@
         "Observed variants, matching reference/annotation, frozen consequence/frequency/clinical evidence and provenance; observed assays for functional validation."
       ],
       "required_formats": [
-        "GFF/FASTA",
         "VCF",
-        "pedigree"
+        "pedigree",
+        "GFF/FASTA"
       ],
       "native_package_leads": [
         "variant annotation"
@@ -276,13 +276,13 @@
         "Observed counts, sample metadata and frozen annotation; biological replication for each requested contrast, with donor/block identifiers only when documented."
       ],
       "required_formats": [
-        "FASTA/GTF",
         "FASTQ",
+        "FASTA/GTF",
         "count matrix"
       ],
       "native_package_leads": [
-        "DESeq2",
-        "aligner"
+        "aligner",
+        "DESeq2"
       ],
       "proposed_artifact_requirements": [
         "Sample QC, filtered counts, design and contrast matrices, complete effect/uncertainty tables, all tested pathways, set membership and sensitivity comparisons"
@@ -321,8 +321,8 @@
         "Observed bacterial isolate reads, matched reference/annotation and sample identities; observed truth or replicate evidence when accuracy is requested."
       ],
       "required_formats": [
-        "BAM",
         "FASTQ",
+        "BAM",
         "VCF"
       ],
       "native_package_leads": [
@@ -366,8 +366,8 @@
         "Observed bacterial isolate reads, matched reference/annotation and sample identities; observed truth or replicate evidence when accuracy is requested."
       ],
       "required_formats": [
-        "BAM",
         "FASTQ",
+        "BAM",
         "VCF"
       ],
       "native_package_leads": [
@@ -497,8 +497,8 @@
         "Matching observed reference FASTA, GFF3/GTF and release cross-references; splice evidence from real reads for transcript discovery."
       ],
       "required_formats": [
-        "FASTA",
         "FASTQ",
+        "FASTA",
         "quantification table"
       ],
       "native_package_leads": [
@@ -541,8 +541,8 @@
         "Observed short/long reads with source identities; independently supported reference or taxonomic evidence when evaluating correctness."
       ],
       "required_formats": [
-        "FASTA",
         "FASTQ",
+        "FASTA",
         "alignment report"
       ],
       "native_package_leads": [
@@ -634,8 +634,8 @@
       "required_formats": [
         "BAM",
         "BED",
-        "FASTA",
         "coverage tracks",
+        "FASTA",
         "motif database"
       ],
       "native_package_leads": [],
@@ -680,8 +680,8 @@
       ],
       "required_formats": [
         "BED",
-        "GTF",
-        "differential-expression tables"
+        "differential-expression tables",
+        "GTF"
       ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
@@ -723,9 +723,9 @@
         "Observed methylated/unmethylated read counts and expression from matched samples, with array probe or genomic coordinates and assembly version."
       ],
       "required_formats": [
+        "methylation matrix",
         "RNA counts",
         "chromatin-state intervals",
-        "methylation matrix",
         "sample pairing"
       ],
       "native_package_leads": [],
@@ -857,9 +857,9 @@
         "Observed ChIP/CUT&Tag reads with biological replicates, controls, matched genome/annotation; observed contact matrices for contact questions."
       ],
       "required_formats": [
-        "GTF",
+        "narrowPeak",
         "broadPeak",
-        "narrowPeak"
+        "GTF"
       ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
@@ -946,9 +946,9 @@
         "Observed variants, matching reference/annotation, frozen consequence/frequency/clinical evidence and provenance; observed assays for functional validation."
       ],
       "required_formats": [
-        "QTL-summary-statistics",
         "credible-set-table",
-        "variant-consequence-table"
+        "variant-consequence-table",
+        "QTL-summary-statistics"
       ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
@@ -990,9 +990,9 @@
         "Observed VCF/BCF and population/pedigree metadata with missingness, ploidy and release-aware allele definitions."
       ],
       "required_formats": [
-        "BAM",
+        "VCF",
         "BED-PAR-regions",
-        "VCF"
+        "BAM"
       ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
@@ -1035,8 +1035,8 @@
       ],
       "required_formats": [
         "BAM",
-        "FASTA-reference",
-        "tandem-repeat-catalog"
+        "tandem-repeat-catalog",
+        "FASTA-reference"
       ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
@@ -1079,10 +1079,10 @@
         "Observed variants, matching reference/annotation, frozen consequence/frequency/clinical evidence and provenance; observed assays for functional validation."
       ],
       "required_formats": [
+        "VCF",
         "BAM",
         "FASTA",
-        "GFF3/GTF",
-        "VCF"
+        "GFF3/GTF"
       ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
@@ -1124,8 +1124,8 @@
         "Observed variants, matching reference/annotation, frozen consequence/frequency/clinical evidence and provenance; observed assays for functional validation."
       ],
       "required_formats": [
-        "FASTA-index",
-        "SV-VCF"
+        "SV-VCF",
+        "FASTA-index"
       ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
@@ -3355,8 +3355,8 @@
       ],
       "required_formats": [
         "CSV",
-        "JSON answer",
-        "Python encoder"
+        "Python encoder",
+        "JSON answer"
       ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
@@ -3441,8 +3441,8 @@
         "Observed preclinical/clinical assay tables with units, tissue, compartment, timing, dose, censoring and source provenance."
       ],
       "required_formats": [
-        "JSON answer",
-        "radiolabel biodistribution table (encoding uninspected)"
+        "radiolabel biodistribution table (encoding uninspected)",
+        "JSON answer"
       ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
@@ -3484,9 +3484,9 @@
         "Observed preclinical/clinical assay tables with units, tissue, compartment, timing, dose, censoring and source provenance."
       ],
       "required_formats": [
-        "JSON answer",
         "concentration and fractionation tables",
-        "fluorescence microscopy (encodings uninspected)"
+        "fluorescence microscopy (encodings uninspected)",
+        "JSON answer"
       ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
@@ -3528,9 +3528,9 @@
         "Observed preclinical/clinical assay tables with units, tissue, compartment, timing, dose, censoring and source provenance."
       ],
       "required_formats": [
-        "JSON answer",
+        "per-cell intensity table",
         "live-cell microscopy movies (encodings uninspected)",
-        "per-cell intensity table"
+        "JSON answer"
       ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
@@ -3573,8 +3573,8 @@
       ],
       "required_formats": [
         "JSON",
-        "JSON answer",
-        "NONMEM-style .mod control stream"
+        "NONMEM-style .mod control stream",
+        "JSON answer"
       ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
@@ -3616,8 +3616,8 @@
         "De-identified observed cohort with outcome timing, covariates, subject identifiers and documented missingness; no clinical decision support output."
       ],
       "required_formats": [
-        "JSON answer",
-        "sequencing assay packages (encodings uninspected)"
+        "sequencing assay packages (encodings uninspected)",
+        "JSON answer"
       ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
@@ -3659,8 +3659,8 @@
         "Observed preclinical/clinical assay tables with units, tissue, compartment, timing, dose, censoring and source provenance."
       ],
       "required_formats": [
-        "JSON answer",
-        "screen table and study narrative (encodings uninspected)"
+        "screen table and study narrative (encodings uninspected)",
+        "JSON answer"
       ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
@@ -3702,9 +3702,9 @@
         "Observed preclinical/clinical assay tables with units, tissue, compartment, timing, dose, censoring and source provenance."
       ],
       "required_formats": [
+        "patent-derived nested clinical-chemistry table (encoding uninspected)",
         "HELM annotations where present",
-        "JSON answer",
-        "patent-derived nested clinical-chemistry table (encoding uninspected)"
+        "JSON answer"
       ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
@@ -3746,8 +3746,8 @@
         "Observed preclinical/clinical assay tables with units, tissue, compartment, timing, dose, censoring and source provenance."
       ],
       "required_formats": [
-        "JSON answer",
-        "bioanalytical concentration-time table (encoding uninspected)"
+        "bioanalytical concentration-time table (encoding uninspected)",
+        "JSON answer"
       ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
@@ -3789,8 +3789,8 @@
         "Observed concentration/time response with biological replicates, plate positions, controls and measurement units."
       ],
       "required_formats": [
-        "JSON answer",
-        "assay bundle (file encodings uninspected)"
+        "assay bundle (file encodings uninspected)",
+        "JSON answer"
       ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
@@ -3832,8 +3832,8 @@
         "Frozen public target, genetics, dependency, expression and compound evidence; measured effects with tissue, direction and release metadata."
       ],
       "required_formats": [
-        "JSON answer",
-        "compound, cell-line and response tables (encodings uninspected)"
+        "compound, cell-line and response tables (encodings uninspected)",
+        "JSON answer"
       ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
@@ -3875,8 +3875,8 @@
         "Observed concentration/time response with biological replicates, plate positions, controls and measurement units."
       ],
       "required_formats": [
-        "JSON answer",
-        "pooled viability and compound tables (encodings uninspected)"
+        "pooled viability and compound tables (encodings uninspected)",
+        "JSON answer"
       ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
@@ -3918,9 +3918,9 @@
         "Observed preclinical/clinical assay tables with units, tissue, compartment, timing, dose, censoring and source provenance."
       ],
       "required_formats": [
-        "JSON answer",
         "SMARTS",
-        "compound and target tables (encodings uninspected)"
+        "compound and target tables (encodings uninspected)",
+        "JSON answer"
       ],
       "native_package_leads": [
         "RDKit"
@@ -3964,8 +3964,8 @@
         "Frozen public target, genetics, dependency, expression and compound evidence; measured effects with tissue, direction and release metadata."
       ],
       "required_formats": [
-        "JSON answer",
-        "raw single-cell counts and metadata (encodings uninspected)"
+        "raw single-cell counts and metadata (encodings uninspected)",
+        "JSON answer"
       ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
@@ -4007,8 +4007,8 @@
         "Observed EEG/ECG/calcium or related time series with sampling rate, channel units, event labels, recording and subject identities."
       ],
       "required_formats": [
-        "JSON answer",
-        "calcium-imaging source tables (encodings uninspected)"
+        "calcium-imaging source tables (encodings uninspected)",
+        "JSON answer"
       ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
@@ -4050,8 +4050,8 @@
         "Frozen public target, genetics, dependency, expression and compound evidence; measured effects with tissue, direction and release metadata."
       ],
       "required_formats": [
-        "JSON answer",
-        "dependency, mutation, copy-number and annotation tables (encodings uninspected)"
+        "dependency, mutation, copy-number and annotation tables (encodings uninspected)",
+        "JSON answer"
       ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
@@ -4136,8 +4136,8 @@
         "Frozen public target, genetics, dependency, expression and compound evidence; measured effects with tissue, direction and release metadata."
       ],
       "required_formats": [
-        "JSON answer",
-        "NanoBRET assay tables (encodings uninspected)"
+        "NanoBRET assay tables (encodings uninspected)",
+        "JSON answer"
       ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
@@ -4179,8 +4179,8 @@
         "Observed microscopy/histology images with pixel size, section/subject identifiers and measured annotations; temporal images for dynamics."
       ],
       "required_formats": [
-        "JSON answer",
-        "multiplex immunofluorescence images (encoding uninspected)"
+        "multiplex immunofluorescence images (encoding uninspected)",
+        "JSON answer"
       ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
@@ -4222,8 +4222,8 @@
         "Observed microscopy/histology images with pixel size, section/subject identifiers and measured annotations; temporal images for dynamics."
       ],
       "required_formats": [
-        "JSON answer",
-        "brightfield image montage (encoding uninspected)"
+        "brightfield image montage (encoding uninspected)",
+        "JSON answer"
       ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
@@ -4266,8 +4266,8 @@
       ],
       "required_formats": [
         "CSV",
-        "JSON answer",
-        "PNG"
+        "PNG",
+        "JSON answer"
       ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
@@ -4954,8 +4954,8 @@
       ],
       "required_formats": [
         "H5AD",
-        "JSON-vocabulary",
-        "spatial-coordinates"
+        "spatial-coordinates",
+        "JSON-vocabulary"
       ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
@@ -4997,11 +4997,11 @@
         "Observed spatial coordinates, counts, image/segmentation metadata and multiple sections or samples where comparisons require replication."
       ],
       "required_formats": [
-        "JSON-vocabulary",
         "Visium",
         "histology-image",
         "registered-stain-measurements",
-        "spatial-coordinates"
+        "spatial-coordinates",
+        "JSON-vocabulary"
       ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
@@ -5043,10 +5043,10 @@
         "Observed spatial coordinates, counts, image/segmentation metadata and multiple sections or samples where comparisons require replication."
       ],
       "required_formats": [
-        "JSON-vocabulary",
-        "lineage-barcode-table",
+        "spatial-expression-matrix",
         "spatial-coordinates",
-        "spatial-expression-matrix"
+        "lineage-barcode-table",
+        "JSON-vocabulary"
       ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
@@ -5088,10 +5088,10 @@
         "Independent observed scRNA reference and spatial measurements with gene panel overlap and measured validation labels or held-out features."
       ],
       "required_formats": [
-        "JSON-vocabulary",
-        "Xenium",
         "single-cell-expression-matrix",
-        "spatial-coordinates"
+        "Xenium",
+        "spatial-coordinates",
+        "JSON-vocabulary"
       ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
@@ -5393,8 +5393,8 @@
         "Observed ATAC fragments or BAMs, biological replicates, peak regions, matching annotation and frozen motif models."
       ],
       "required_formats": [
-        "ATAC-fragments-TSV-gzip",
         "H5AD",
+        "ATAC-fragments-TSV-gzip",
         "JSON-vocabulary"
       ],
       "native_package_leads": [],
@@ -5437,10 +5437,10 @@
         "Observed AIRR/VDJ annotations paired to sample/cell identities, receptor chains and transcriptomes when joint analyses require them."
       ],
       "required_formats": [
-        "JSON-vocabulary",
+        "single-cell-expression-matrix",
         "TCR-contig-table",
         "cell-metadata",
-        "single-cell-expression-matrix"
+        "JSON-vocabulary"
       ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
@@ -5482,11 +5482,11 @@
         "Replicated sender/receiver expression with tissue/condition labels, frozen ligand-receptor evidence and spatial measurements if proximity is claimed."
       ],
       "required_formats": [
-        "JSON-vocabulary",
+        "single-cell-expression-matrix",
         "cell-metadata",
-        "interaction-priors",
         "orthology-table",
-        "single-cell-expression-matrix"
+        "interaction-priors",
+        "JSON-vocabulary"
       ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
@@ -5528,10 +5528,10 @@
         "De-identified observed cohort with outcome timing, covariates, subject identifiers and documented missingness; no clinical decision support output."
       ],
       "required_formats": [
-        "JSON-vocabulary",
+        "single-cell-expression-matrix",
         "cell-metadata",
         "gene-program-table",
-        "single-cell-expression-matrix"
+        "JSON-vocabulary"
       ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
@@ -6718,16 +6718,26 @@
       "matching_workstreams": [
         "single-cell-annotation"
       ],
-      "required_endpoint_stages": [],
+      "required_endpoint_stages": [
+        "join cell and donor metadata",
+        "establish expression scale",
+        "summarize the specified feature by cell type",
+        "report detection and abundance denominators"
+      ],
       "observed_input_requirements": [
         "Independent observed single-cell data plus frozen marker/reference evidence and hierarchical labels; distinguish measured labels from inferred identities."
       ],
-      "required_formats": [],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
         "Marker statistics, cell-by-label scores, hierarchy-consistent annotations, abstentions, detection denominators, cross-study confusion tables"
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "A detected transcript is not a demonstrated protein activity or causal mechanism."
+      ],
       "deterministic_verification_approach": [
         "Independent marker/count calculations; deterministic classifier or prespecified score contract; evaluate label agreement where external labels exist, and grade evidence consistency elsewhere."
       ],
@@ -6751,16 +6761,25 @@
       "matching_workstreams": [
         "rna-seq-contrast-enrichment"
       ],
-      "required_endpoint_stages": [],
+      "required_endpoint_stages": [
+        "join donor, condition and tissue labels",
+        "separate compositional changes from within-cell-type expression",
+        "compare compartment-specific summaries"
+      ],
       "observed_input_requirements": [
         "Observed counts, sample metadata and frozen annotation; biological replication for each requested contrast, with donor/block identifiers only when documented."
       ],
-      "required_formats": [],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
         "Sample QC, filtered counts, design and contrast matrices, complete effect/uncertainty tables, all tested pathways, set membership and sensitivity comparisons"
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "Use donor-level replication and interactions; expression and cell abundance can change together."
+      ],
       "deterministic_verification_approach": [
         "Native DESeq2/edgeR reference plus independent contrast, multiplicity and set checks; retain every gene and pathway, including undefined estimates; test interaction directly."
       ],
@@ -6894,16 +6913,26 @@
       "matching_workstreams": [
         "single-cell-composition"
       ],
-      "required_endpoint_stages": [],
+      "required_endpoint_stages": [
+        "join biological-sample and cell labels",
+        "count eligible cells by sample",
+        "define denominator",
+        "compare group proportions with sample-level replication"
+      ],
       "observed_input_requirements": [
         "Observed cells from replicated donors/animals, tissues and conditions with unambiguous denominators and timepoint metadata."
       ],
-      "required_formats": [],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
         "Cell/sample joins, donor-by-population counts and fractions, eligibility decisions, model matrix, contrasts and uncertainty"
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "Cells are nested within donors; proportions depend on captured populations and cannot establish tissue prevalence without sampling evidence."
+      ],
       "deterministic_verification_approach": [
         "Recompute denominators and sample-level contrasts independently; reject cell-as-replicate analyses; verify interaction and time ordering."
       ],
@@ -6962,16 +6991,26 @@
       "matching_workstreams": [
         "single-cell-qc-embedding"
       ],
-      "required_endpoint_stages": [],
+      "required_endpoint_stages": [
+        "pin gene-set membership and gene identifiers",
+        "choose expression layer and matched controls",
+        "score modules by cell",
+        "aggregate by donor and cell type"
+      ],
       "observed_input_requirements": [
         "Observed count matrix with feature identities, mitochondrial annotation, sample/batch labels and QC metadata; native H5AD/Matrix Market inputs."
       ],
-      "required_formats": [],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
         "H5AD layers, cell/feature inclusion tables, normalization factors, PCA loadings, neighbor graph, cluster and QC tables"
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "Module scores depend on background and normalization; transcript scores do not establish pathway activation."
+      ],
       "deterministic_verification_approach": [
         "Check counts and sparse shapes, sample joins and exclusion arithmetic; verify subspaces/graphs up to appropriate symmetries, not exact UMAP coordinates; use observed labels only where supported."
       ],
@@ -7105,16 +7144,27 @@
       "matching_workstreams": [
         "evidence-meta-analysis"
       ],
-      "required_endpoint_stages": [],
+      "required_endpoint_stages": [
+        "state the biological claim",
+        "identify measurable consequences",
+        "analyze independent observations",
+        "join explicit external evidence",
+        "separate observation from mechanism"
+      ],
       "observed_input_requirements": [
         "Frozen independent study records, tables and methods with accession/DOI, observed sample sizes, effects, units and eligibility criteria."
       ],
-      "required_formats": [],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
         "Source-linked extraction table, eligibility and cohort-overlap records, effect/variance derivations, pooled and sensitivity estimates"
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "The stem requests an interpretation that may not be identifiable from the supplied matrix. Author an explicit numerical evidence contract before adapting; no LLM judge."
+      ],
       "deterministic_verification_approach": [
         "Check declared table/span references, quantitative extraction and meta-analytic arithmetic; independently review factual entailment where it cannot be mechanically established."
       ],
@@ -7283,16 +7333,26 @@
       "matching_workstreams": [
         "single-cell-annotation"
       ],
-      "required_endpoint_stages": [],
+      "required_endpoint_stages": [
+        "resolve cell subtypes",
+        "compare marker and module profiles",
+        "join donor and condition context",
+        "report reproducible state features"
+      ],
       "observed_input_requirements": [
         "Independent observed single-cell data plus frozen marker/reference evidence and hierarchical labels; distinguish measured labels from inferred identities."
       ],
-      "required_formats": [],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
         "Marker statistics, cell-by-label scores, hierarchy-consistent annotations, abstentions, detection denominators, cross-study confusion tables"
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "A named state needs marker and contextual evidence; an embedding or cluster ID alone is insufficient."
+      ],
       "deterministic_verification_approach": [
         "Independent marker/count calculations; deterministic classifier or prespecified score contract; evaluate label agreement where external labels exist, and grade evidence consistency elsewhere."
       ],
@@ -7411,16 +7471,27 @@
       "matching_workstreams": [
         "single-cell-pseudobulk"
       ],
-      "required_endpoint_stages": [],
+      "required_endpoint_stages": [
+        "join cell and donor identities",
+        "select relevant populations",
+        "preserve biological replicates",
+        "fit condition or interaction contrast",
+        "adjust multiple tests"
+      ],
       "observed_input_requirements": [
         "Observed raw counts, donor/sample identifiers, conditions and cell identities; matched pairing where documented."
       ],
-      "required_formats": [],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
         "Sample-by-cell-type count matrices, donor inclusion, designs, complete gene effects, enrichment universe and pathway outputs"
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "Define covariates, expression layer, tested universe and effect direction; avoid treating cells as independent subjects."
+      ],
       "deterministic_verification_approach": [
         "Verify sums from raw cells, library eligibility and contrasts independently; native differential-expression fit; panel-aware multiplicity and uncertainty checks."
       ],
@@ -7444,16 +7515,26 @@
       "matching_workstreams": [
         "single-cell-composition"
       ],
-      "required_endpoint_stages": [],
+      "required_endpoint_stages": [
+        "identify source assay and feature identities",
+        "audit background and negative controls",
+        "calculate sample-level signal and detection limits",
+        "report evidence and uncertainty"
+      ],
       "observed_input_requirements": [
         "Observed cells from replicated donors/animals, tissues and conditions with unambiguous denominators and timepoint metadata."
       ],
-      "required_formats": [],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
         "Cell/sample joins, donor-by-population counts and fractions, eligibility decisions, model matrix, contrasts and uncertainty"
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "A sparse zero does not demonstrate biological absence; raw read evidence may be required beyond a processed expression matrix."
+      ],
       "deterministic_verification_approach": [
         "Recompute denominators and sample-level contrasts independently; reject cell-as-replicate analyses; verify interaction and time ordering."
       ],
@@ -7512,16 +7593,27 @@
       "matching_workstreams": [
         "cell-communication"
       ],
-      "required_endpoint_stages": [],
+      "required_endpoint_stages": [
+        "assign sender and receiver populations",
+        "pin ligand-receptor database",
+        "quantify compatible expression",
+        "compare samples or conditions",
+        "export interactions and support"
+      ],
       "observed_input_requirements": [
         "Replicated sender/receiver expression with tissue/condition labels, frozen ligand-receptor evidence and spatial measurements if proximity is claimed."
       ],
-      "required_formats": [],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
         "Eligible ligand/receptor expression, sender-receiver scores, sample-level contrasts, permutation/null results, spatial proximity evidence"
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "Ligand-receptor coexpression suggests a hypothesis; transcriptomic associations do not demonstrate communication or causation."
+      ],
       "deterministic_verification_approach": [
         "Independently recompute eligibility, complex-subunit rules, joins, null statistics and multiplicity; distinguish association from demonstrated signaling."
       ],
@@ -7580,16 +7672,27 @@
       "matching_workstreams": [
         "single-cell-pseudobulk"
       ],
-      "required_endpoint_stages": [],
+      "required_endpoint_stages": [
+        "fit replicate-aware cell-type contrast",
+        "pin gene mappings and gene-set release",
+        "define background or ranking",
+        "calculate enrichment and multiplicity",
+        "report complete results"
+      ],
       "observed_input_requirements": [
         "Observed raw counts, donor/sample identifiers, conditions and cell identities; matched pairing where documented."
       ],
-      "required_formats": [],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
         "Sample-by-cell-type count matrices, donor inclusion, designs, complete gene effects, enrichment universe and pathway outputs"
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "Do not interchange overrepresentation and rank-based enrichment or reuse cells as biological replicates."
+      ],
       "deterministic_verification_approach": [
         "Verify sums from raw cells, library eligibility and contrasts independently; native differential-expression fit; panel-aware multiplicity and uncertainty checks."
       ],
@@ -7623,16 +7726,27 @@
       "matching_workstreams": [
         "population-genetics"
       ],
-      "required_endpoint_stages": [],
+      "required_endpoint_stages": [
+        "pin risk loci or gene evidence",
+        "resolve locus-to-gene mapping",
+        "measure cell-type expression or enrichment",
+        "compare the specified background",
+        "report uncertainty"
+      ],
       "observed_input_requirements": [
         "Observed VCF/BCF and population/pedigree metadata with missingness, ploidy and release-aware allele definitions."
       ],
-      "required_formats": [],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
         "VCF/BCF/TBI, genotype/sample eligibility, allele counts, PCA/frequency statistics, haplotypes and pedigree checks"
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "Expression of a risk-associated gene does not establish the causal cell type; locus mapping and comparison universe matter."
+      ],
       "deterministic_verification_approach": [
         "Independent allele/ploidy/missingness counts; pinned statistical methods; native bcftools/PLINK-style operation with full result checks."
       ],
@@ -7731,16 +7845,27 @@
       "matching_workstreams": [
         "single-cell-annotation"
       ],
-      "required_endpoint_stages": [],
+      "required_endpoint_stages": [
+        "identify relevant cells",
+        "contrast candidate subtypes",
+        "quantify marker detection and specificity",
+        "retain donor context",
+        "report supporting and contradictory markers"
+      ],
       "observed_input_requirements": [
         "Independent observed single-cell data plus frozen marker/reference evidence and hierarchical labels; distinguish measured labels from inferred identities."
       ],
-      "required_formats": [],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
         "Marker statistics, cell-by-label scores, hierarchy-consistent annotations, abstentions, detection denominators, cross-study confusion tables"
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "Pin the comparison populations and specificity rule; a known marker name alone is not a validated annotation."
+      ],
       "deterministic_verification_approach": [
         "Independent marker/count calculations; deterministic classifier or prespecified score contract; evaluate label agreement where external labels exist, and grade evidence consistency elsewhere."
       ],
@@ -7914,16 +8039,27 @@
       "matching_workstreams": [
         "single-cell-annotation"
       ],
-      "required_endpoint_stages": [],
+      "required_endpoint_stages": [
+        "inspect count layer and QC",
+        "normalize and select features",
+        "cluster or transfer reference labels",
+        "resolve marker-supported cell identities",
+        "report cell labels and hierarchy-aware uncertainty"
+      ],
       "observed_input_requirements": [
         "Independent observed single-cell data plus frozen marker/reference evidence and hierarchical labels; distinguish measured labels from inferred identities."
       ],
-      "required_formats": [],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
         "Marker statistics, cell-by-label scores, hierarchy-consistent annotations, abstentions, detection denominators, cross-study confusion tables"
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "Cluster counts and labels depend on preprocessing and annotation resolution; saved source labels are not independent validation."
+      ],
       "deterministic_verification_approach": [
         "Independent marker/count calculations; deterministic classifier or prespecified score contract; evaluate label agreement where external labels exist, and grade evidence consistency elsewhere."
       ],
@@ -7957,16 +8093,27 @@
       "matching_workstreams": [
         "single-cell-composition"
       ],
-      "required_endpoint_stages": [],
+      "required_endpoint_stages": [
+        "join samples to outcomes and timepoints",
+        "quantify cell or module features per donor",
+        "define association model and covariates",
+        "estimate uncertainty",
+        "report confounding limits"
+      ],
       "observed_input_requirements": [
         "Observed cells from replicated donors/animals, tissues and conditions with unambiguous denominators and timepoint metadata."
       ],
-      "required_formats": [],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
         "Cell/sample joins, donor-by-population counts and fractions, eligibility decisions, model matrix, contrasts and uncertainty"
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "Repeated samples need paired or longitudinal treatment; observational associations do not justify a treatment claim."
+      ],
       "deterministic_verification_approach": [
         "Recompute denominators and sample-level contrasts independently; reject cell-as-replicate analyses; verify interaction and time ordering."
       ],
@@ -8010,16 +8157,27 @@
       "matching_workstreams": [
         "single-cell-trajectory"
       ],
-      "required_endpoint_stages": [],
+      "required_endpoint_stages": [
+        "select relevant cells and states",
+        "construct neighborhood or trajectory model",
+        "justify root and direction with independent evidence",
+        "test changing features",
+        "report stability"
+      ],
       "observed_input_requirements": [
         "Observed developmental or perturbation time course with biological replication; spliced/unspliced counts or lineage evidence only for endpoints requiring them."
       ],
-      "required_formats": [],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
         "State graph, root evidence, pseudotime/fate matrices, full gene/regulon tests, biological-validation tables"
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "Pseudotime is not elapsed time or demonstrated lineage; cross-sectional data may not determine direction."
+      ],
       "deterministic_verification_approach": [
         "Verify graph/ordering invariants and native outputs with seeded tolerances; independently check associations with held-out observed time/lineage evidence; do not grade causality from expression."
       ],
@@ -8043,16 +8201,26 @@
       "matching_workstreams": [
         "spatial-expression"
       ],
-      "required_endpoint_stages": [],
+      "required_endpoint_stages": [
+        "identify cell states from expression",
+        "link measured anatomical or spatial metadata",
+        "quantify localization evidence",
+        "report uncertainty"
+      ],
       "observed_input_requirements": [
         "Observed spatial coordinates, counts, image/segmentation metadata and multiple sections or samples where comparisons require replication."
       ],
-      "required_formats": [],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
         "Coordinate transforms, segmentation/QC masks, H5AD, region/cell expression tables, neighborhood edges and null distributions"
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "Anatomical proximity requires measured spatial evidence or explicit external references; expression alone is insufficient."
+      ],
       "deterministic_verification_approach": [
         "Check physical units, section boundaries, segmentation-to-cell joins, geometric distances and full null-model outputs; compare images through underlying numerical artifacts."
       ],
@@ -8096,16 +8264,26 @@
       "matching_workstreams": [
         "single-cell-annotation"
       ],
-      "required_endpoint_stages": [],
+      "required_endpoint_stages": [
+        "harmonize feature identities and measured layers",
+        "retain species, donor and batch metadata",
+        "align comparable populations",
+        "quantify concordance with controls"
+      ],
       "observed_input_requirements": [
         "Independent observed single-cell data plus frozen marker/reference evidence and hierarchical labels; distinguish measured labels from inferred identities."
       ],
-      "required_formats": [],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
         "Marker statistics, cell-by-label scores, hierarchy-consistent annotations, abstentions, detection denominators, cross-study confusion tables"
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "Batch correction must preserve the biological contrast; cross-species comparisons require explicit ortholog mapping."
+      ],
       "deterministic_verification_approach": [
         "Independent marker/count calculations; deterministic classifier or prespecified score contract; evaluate label agreement where external labels exist, and grade evidence consistency elsewhere."
       ],
@@ -8134,16 +8312,26 @@
       "matching_workstreams": [
         "gene-program-factorization"
       ],
-      "required_endpoint_stages": [],
+      "required_endpoint_stages": [
+        "select eligible cells and layer",
+        "declare detection thresholds",
+        "intersect expressed-feature sets",
+        "report numerator and denominator by sample"
+      ],
       "observed_input_requirements": [
         "Observed expression or multiomic matrices with biological sample identities, condition labels and frozen annotations."
       ],
-      "required_formats": [],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
         "Feature eligibility, loadings/modules, complete per-feature scores, sample-level validation, gene-set memberships and null statistics"
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "Dropout, library depth and threshold choice affect observed co-detection; coexpression does not establish functional interaction."
+      ],
       "deterministic_verification_approach": [
         "Independent feature score, correlation and enrichment arithmetic plus native model references; test subspaces and reconstructed data rather than arbitrary factor labels."
       ],
@@ -8172,16 +8360,26 @@
       "matching_workstreams": [
         "chromatin-regulatory"
       ],
-      "required_endpoint_stages": [],
+      "required_endpoint_stages": [
+        "pin TF-target or motif evidence",
+        "quantify target/module expression",
+        "compare relevant cell states or conditions",
+        "distinguish predicted regulation from perturbation evidence"
+      ],
       "observed_input_requirements": [
         "Observed ATAC fragments or BAMs, biological replicates, peak regions, matching annotation and frozen motif models."
       ],
-      "required_formats": [],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
         "BAM/fragment QC, BED peaks, count matrices, motif matches/backgrounds, gene links and sample-level effects"
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "Gene-expression association alone does not establish a regulatory edge or direction."
+      ],
       "deterministic_verification_approach": [
         "Run native peak/motif tools; independently check intervals, fragment counts, background selection, matched sample joins and multiplicity."
       ],
@@ -8205,16 +8403,26 @@
       "matching_workstreams": [
         "single-cell-trajectory"
       ],
-      "required_endpoint_stages": [],
+      "required_endpoint_stages": [
+        "define progenitor and outcome identities",
+        "identify lineage or perturbation measurements",
+        "quantify observed outcomes",
+        "compare to expression-based hypotheses"
+      ],
       "observed_input_requirements": [
         "Observed developmental or perturbation time course with biological replication; spliced/unspliced counts or lineage evidence only for endpoints requiring them."
       ],
-      "required_formats": [],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
         "State graph, root evidence, pseudotime/fate matrices, full gene/regulon tests, biological-validation tables"
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "A transcriptional state does not establish differentiation potential without lineage or functional evidence."
+      ],
       "deterministic_verification_approach": [
         "Verify graph/ordering invariants and native outputs with seeded tolerances; independently check associations with held-out observed time/lineage evidence; do not grade causality from expression."
       ],
@@ -8248,16 +8456,26 @@
       "matching_workstreams": [
         "rna-seq-contrast-enrichment"
       ],
-      "required_endpoint_stages": [],
+      "required_endpoint_stages": [
+        "join expression samples to intervention or protein measurements",
+        "define observed endpoint and controls",
+        "quantify concordance",
+        "separate assays in the output"
+      ],
       "observed_input_requirements": [
         "Observed counts, sample metadata and frozen annotation; biological replication for each requested contrast, with donor/block identifiers only when documented."
       ],
-      "required_formats": [],
+      "required_formats": [
+        "H5AD expression data",
+        "cell and biological-sample metadata"
+      ],
       "native_package_leads": [],
       "proposed_artifact_requirements": [
         "Sample QC, filtered counts, design and contrast matrices, complete effect/uncertainty tables, all tested pathways, set membership and sensitivity comparisons"
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "The question needs measurements beyond RNA expression; do not invent functional, plasma-protein or intervention outcomes from H5AD alone."
+      ],
       "deterministic_verification_approach": [
         "Native DESeq2/edgeR reference plus independent contrast, multiplicity and set checks; retain every gene and pathway, including undefined estimates; test interaction directly."
       ],
@@ -8464,12 +8682,12 @@
         "Observed variants, matching reference/annotation, frozen consequence/frequency/clinical evidence and provenance; observed assays for functional validation."
       ],
       "required_formats": [
-        "FASTA",
-        "GTF",
-        "HLA-typing",
-        "RSEM-results",
         "VCF",
         "copy-number-segments",
+        "FASTA",
+        "GTF",
+        "RSEM-results",
+        "HLA-typing",
         "annotated-VCF"
       ],
       "native_package_leads": [],

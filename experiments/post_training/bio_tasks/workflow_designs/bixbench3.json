@@ -1,0 +1,1370 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-09-24T15:03:56.263110+00:00",
+  "scope": "Provisional-ID agentic question planning from permitted versioned inventory metadata. Original fixture/answer content is not used.",
+  "source": {
+    "benchmark": "BixBench3",
+    "inventory_path": "benchmark_tasks/bixbench3.json",
+    "inventory_sha256": "c8afe307e2e9ad2826c713da597da36e6dca1e3e1ccd84d3d41f041ef0e35d29",
+    "source_revision": "3be006a68327e1fd04cd2c5fc87a703e53ca67cd",
+    "inspection_limit": "Question proposals use the inventory endpoint-stage review; original full prompt, output and method limits remain attached. No new runtime or source-data validation implied."
+  },
+  "counts": {
+    "records": 20,
+    "question_assignments": 19,
+    "question_cards": 19,
+    "excluded_records": 1,
+    "validated_new_mappings": 0
+  },
+  "defaults": {
+    "authoring_unit": "One coherent question on independently observed biological inputs; combine bookkeeping and component summaries into its connected analysis.",
+    "required_before_implementation": "Freeze independent source lineage, biological sample structure, exact input boundary, method versions, complete artifact schemas and deterministic acceptance. Keep corpus train-only and expected solve time <=30 minutes.",
+    "native_reference": "Reference scripts execute the actual required packages; private oracles read supplied inputs. Independently verify identities, algebraic invariants and all required artifacts. No LLM-as-a-judge.",
+    "learned_output_acceptance": "Grade complete finite predictions against private observed labels with a frozen metric/criterion. Accept equivalent cluster/topic label permutations. Model uncertainty and counterfactual claims require endpoint-specific checks.",
+    "runtime_boundary": "For long original pipelines, explicitly choose a bounded observed-data start boundary. Precomputed alignments or counts cover downstream analysis only; do not claim full raw-data pipeline coverage. GPU/weight-dependent methods and large reference resources remain feasibility questions.",
+    "consolidation": "Review overlaps with earlier question cards before implementation. Distinct assays, statistical estimands and named native methods cannot be silently substituted."
+  },
+  "questions": [
+    {
+      "proposed_id": "portfolio-bixbench3-expression-damid-integration",
+      "scientific_question": "Which observed expression responses coincide with control-normalized DamID binding after replicate and gene-identity reconciliation?",
+      "target_ids": [
+        "10.1101_2025.06.17.659900_v1"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "10.1101_2025.06.17.659900_v1",
+          "source_task_record_sha256": "c9b9dddb24ac239b420bb8d8e46770e16117528fee9295d4983ff7e7bcaa56d1",
+          "source_metadata_sha256": "41b0bf23a7125da42d90927405aa8344f3be4cf50b3b10618416f16e9033c186",
+          "output_contract_review": {
+            "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.06.17.659900_v1/agent/prompt.md",
+            "source_sha256": "ce9fc2f8933d2b62d254f7082531d77df0b1802271e0e36b66c82c41383c3a35",
+            "artifact_count": 12,
+            "formats": {
+              "tsv": 12
+            },
+            "scope": "All required-output sections inspected for identities, row universes, units and artifact relationships. Task-specific grading specifications packaged with ground truth have not been retrieved.",
+            "scientific_decisions": [
+              "Count rows use annotation-native IDs; differential-expression and response sets use different gene namespaces. Replicate and averaged target sets are separate artifacts."
+            ]
+          },
+          "source_accessions_mentioned": []
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-integration"
+      ],
+      "source_inspection_tiers": [
+        "question-and-output-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "join assay-specific biological replicates",
+        "quantify strand-specific expression",
+        "fit genotype contrast",
+        "map long-read DamID",
+        "normalize to paired controls and call peaks",
+        "join target genes and response gene sets"
+      ],
+      "observed_input_requirements": [
+        "Observed multi-donor or multi-study counts with documented biological conditions and batch overlap; paired modalities only where cells/samples are matched."
+      ],
+      "required_formats": [
+        "FASTQ",
+        "FASTA",
+        "GFF2",
+        "BAM",
+        "bedGraph",
+        "TSV"
+      ],
+      "native_method_requirements": [
+        "HTSeq",
+        "DESeq2",
+        "minimap2",
+        "damidseq_pipeline"
+      ],
+      "source_specific_decisions": [
+        "Keep annotation-native gene IDs distinct from stable database IDs; quantify enrichment from matched controls."
+      ],
+      "proposed_artifact_requirements": [
+        "Cell/sample/feature matches, split membership, latent coordinates/loadings, complete held-out reconstructions and batch/biology diagnostics"
+      ],
+      "deterministic_verifier_design": [
+        "Verify identity and group separation, count/layer semantics and reconstruction metrics; compare latent geometry with invariants; measure preservation and removal jointly."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-bixbench3-bulk-expression-communication",
+      "scientific_question": "Which replicated bulk-expression effects, pathways and ligand-receptor associations agree after direction-aware normalization and annotation?",
+      "target_ids": [
+        "10.64898_2026.02.11.704850_v1"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "10.64898_2026.02.11.704850_v1",
+          "source_task_record_sha256": "b4c90c46428798ae51daead5f772d8fa7097a07f18571a004769091c428af4f1",
+          "source_metadata_sha256": "86990ba7b8832cc76ac97b3ac2a138f9e467f3505c5f68916fac56bd3464de01",
+          "output_contract_review": {
+            "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.64898_2026.02.11.704850_v1/agent/prompt.md",
+            "source_sha256": "05ee38e221dae85d96be776dcfe6e17f5407f2f6d559ee35901fe2ee52308a81",
+            "artifact_count": 10,
+            "formats": {
+              "tsv": 1,
+              "csv": 9
+            },
+            "scope": "All required-output sections inspected for identities, row universes, units and artifact relationships. Task-specific grading specifications packaged with ground truth have not been retrieved.",
+            "scientific_decisions": [
+              "Communication deltas use magnitude plus direction in the output tables; this differs from the signed delta described in method prose. Count and expression tables also use different gene identifiers."
+            ]
+          },
+          "source_accessions_mentioned": []
+        }
+      ],
+      "matching_workstreams": [
+        "cell-communication"
+      ],
+      "source_inspection_tiers": [
+        "question-and-output-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "quantify paired bulk libraries",
+        "collapse duplicate gene symbols",
+        "fit full condition model and shrink effects",
+        "enrich direction-specific gene sets",
+        "simplify ontology terms",
+        "score directional ligand-receptor pairs"
+      ],
+      "observed_input_requirements": [
+        "Replicated sender/receiver expression with tissue/condition labels, frozen ligand-receptor evidence and spatial measurements if proximity is claimed."
+      ],
+      "required_formats": [
+        "FASTQ",
+        "FASTA",
+        "GTF",
+        "TSV"
+      ],
+      "native_method_requirements": [
+        "HISAT2",
+        "featureCounts",
+        "DESeq2",
+        "clusterProfiler",
+        "ICELLNET"
+      ],
+      "source_specific_decisions": [
+        "Preserve similar-looking sample identifiers; expression-based communication scores do not establish causal signaling."
+      ],
+      "proposed_artifact_requirements": [
+        "Eligible ligand/receptor expression, sender-receiver scores, sample-level contrasts, permutation/null results, spatial proximity evidence"
+      ],
+      "deterministic_verifier_design": [
+        "Independently recompute eligibility, complex-subunit rules, joins, null statistics and multiplicity; distinguish association from demonstrated signaling."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-bixbench3-repeated-subject-expression",
+      "scientific_question": "Which expression contrasts remain estimable when repeated subjects, anatomical regions and surrogate covariates are represented explicitly?",
+      "target_ids": [
+        "10.1101_2025.08.16.670679_v1"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "10.1101_2025.08.16.670679_v1",
+          "source_task_record_sha256": "ee9e4a4650d18182c922e3369b11358204af41af6ad83f217551d934fbb9e199",
+          "source_metadata_sha256": "c673d4630642875b197581297098cfb9b615313878d5a99a33551e1627909db2",
+          "output_contract_review": {
+            "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.08.16.670679_v1/agent/prompt.md",
+            "source_sha256": "cf801263a0eeed556cedd29e613ebaf0ac9a4e82c44458fd66352dc2f14b2145",
+            "artifact_count": 4,
+            "formats": {
+              "csv": 4
+            },
+            "scope": "All required-output sections inspected for identities, row universes, units and artifact relationships. Task-specific grading specifications packaged with ground truth have not been retrieved.",
+            "scientific_decisions": [
+              "Coefficients, anatomical positions and genes form composite keys. Count, model, enrichment and directional-summary artifacts require consistent cohort and coefficient definitions."
+            ]
+          },
+          "source_accessions_mentioned": []
+        }
+      ],
+      "matching_workstreams": [
+        "rna-seq-contrast-enrichment"
+      ],
+      "source_inspection_tiers": [
+        "question-and-output-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "count annotated alignments and remaining reads",
+        "apply sample and expression QC",
+        "normalize and estimate surrogate covariates",
+        "fit repeated-bird contrasts",
+        "rank coefficients",
+        "enrich and prune pathways"
+      ],
+      "observed_input_requirements": [
+        "Observed counts, sample metadata and frozen annotation; biological replication for each requested contrast, with donor/block identifiers only when documented."
+      ],
+      "required_formats": [
+        "BAM",
+        "FASTQ",
+        "GFF3",
+        "TSV"
+      ],
+      "native_method_requirements": [
+        "featureCounts",
+        "edgeR",
+        "limma",
+        "sva",
+        "fgsea"
+      ],
+      "source_specific_decisions": [
+        "Preserve bird and anatomical-region dependence; imputation, model coefficients and enrichment direction share one design."
+      ],
+      "proposed_artifact_requirements": [
+        "Sample QC, filtered counts, design and contrast matrices, complete effect/uncertainty tables, all tested pathways, set membership and sensitivity comparisons"
+      ],
+      "deterministic_verifier_design": [
+        "Native DESeq2/edgeR reference plus independent contrast, multiplicity and set checks; retain every gene and pathway, including undefined estimates; test interaction directly."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-bixbench3-expression-variant-ancestry",
+      "scientific_question": "How do expression abundance and observed genotype ancestry agree across independently measured parental and mixed populations?",
+      "target_ids": [
+        "10.64898_2026.02.03.703548_v1"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "10.64898_2026.02.03.703548_v1",
+          "source_task_record_sha256": "146e6a9122658016aceb359c3a4e42e66ed969d66daa453c2c08bff53934dfa7",
+          "source_metadata_sha256": "8ff5d6830ab6c1d7eabbd0b69f3e6d7c53fa8ec9a9c74a05eade3b6bfa2a7095",
+          "output_contract_review": {
+            "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.64898_2026.02.03.703548_v1/agent/prompt.md",
+            "source_sha256": "3fe98770f33c4bda2ebcc52c23157f67a0f535d32909984935ba1a3f7c4bf085",
+            "artifact_count": 4,
+            "formats": {
+              "csv": 4
+            },
+            "scope": "All required-output sections inspected for identities, row universes, units and artifact relationships. Task-specific grading specifications packaged with ground truth have not been retrieved.",
+            "scientific_decisions": [
+              "Raw and length-normalized matrices must share their feature universe. The field named percent_missing is a fraction, and ancestry components require an explicit orientation."
+            ]
+          },
+          "source_accessions_mentioned": [
+            "PRJNA914055"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "variant-evidence"
+      ],
+      "source_inspection_tiers": [
+        "question-and-output-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "quantify transcript clusters",
+        "calculate length-aware abundance",
+        "assemble and jointly genotype mixed library types",
+        "filter and prune variants",
+        "infer ancestry and population structure",
+        "compare parental and mixed genotypes"
+      ],
+      "observed_input_requirements": [
+        "Observed variants, matching reference/annotation, frozen consequence/frequency/clinical evidence and provenance; observed assays for functional validation."
+      ],
+      "required_formats": [
+        "FASTQ",
+        "FASTA",
+        "GFF",
+        "BAM",
+        "VCF",
+        "PLINK",
+        "HDF5",
+        "Newick"
+      ],
+      "native_method_requirements": [
+        "HISAT2",
+        "featureCounts",
+        "Trinity",
+        "GATK",
+        "bcftools",
+        "PLINK2",
+        "ADMIXTURE",
+        "IQ-TREE"
+      ],
+      "source_specific_decisions": [
+        "Separate host and focal-species libraries; orient ancestry labels using explicit populations and preserve missing genotypes."
+      ],
+      "proposed_artifact_requirements": [
+        "Normalized VCF, consequence transcript table, evidence rows with accession/date, exclusion rationale and sequence products where appropriate"
+      ],
+      "deterministic_verifier_design": [
+        "Actual annotation package plus independent coordinate/translation checks; deterministic evidence rules with unknown/conflicting outcomes; verify function only against observed assays."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-bixbench3-small-rna-orthology",
+      "scientific_question": "Which observed small-RNA loci show conserved sequence, abundance and target evidence after structural-RNA filtering and accession reconciliation?",
+      "target_ids": [
+        "10.1101_2025.07.20.665670_v1"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "10.1101_2025.07.20.665670_v1",
+          "source_task_record_sha256": "37482909d14ef6fe936e9c9aab172d4ca11effcb055621ef957e90ae157e2cc2",
+          "source_metadata_sha256": "93b89239c1f6ec07f3aff2157cada3e119f99e34e9f7bca36d99fac390b0da31",
+          "output_contract_review": {
+            "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.07.20.665670_v1/agent/prompt.md",
+            "source_sha256": "7063b28f60c89c71f904185f9e2828996a76af1a03a018509ba4fd82b5f922cd",
+            "artifact_count": 10,
+            "formats": {
+              "csv": 10
+            },
+            "scope": "All required-output sections inspected for identities, row universes, units and artifact relationships. Task-specific grading specifications packaged with ground truth have not been retrieved.",
+            "scientific_decisions": [
+              "Target-prediction tables include scores on both sides of the selection threshold. Count unique sequences separately from reads; interval and orthogroup artifacts use different matching semantics."
+            ]
+          },
+          "source_accessions_mentioned": []
+        }
+      ],
+      "matching_workstreams": [
+        "small-rna-sequence-structure"
+      ],
+      "source_inspection_tiers": [
+        "question-and-output-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "trim and length-filter small RNAs",
+        "remove structural-RNA reads",
+        "map to accession-specific genomes",
+        "identify homolog groups",
+        "quantify locus-level abundance",
+        "compare conserved loci and target-prediction scores"
+      ],
+      "observed_input_requirements": [
+        "Observed RNA sequences and small-RNA/mRNA measurements with matching annotation; structural measurements where comparing predictions to biology."
+      ],
+      "required_formats": [
+        "FASTQ",
+        "FASTA",
+        "GFF",
+        "TSV"
+      ],
+      "native_method_requirements": [
+        "Cutadapt",
+        "Bowtie",
+        "BLAST+",
+        "GSTAr"
+      ],
+      "source_specific_decisions": [
+        "Multiple genomic alignments and total-read normalization use different denominators; preserve accession-specific identifier namespaces."
+      ],
+      "proposed_artifact_requirements": [
+        "FASTA/GTF joins, processed sequence and structure files, complete expression/target results, predicted-versus-observed measurements"
+      ],
+      "deterministic_verifier_design": [
+        "Native RNA/folding reference plus independent sequence, coordinate and score checks; label predictions separately from experimentally supported structure."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-bixbench3-perturbation-multiome-damid",
+      "scientific_question": "Which observed regulatory responses agree across guide assignment, paired RNA/accessibility, mitochondrial alleles and control-normalized DamID evidence?",
+      "target_ids": [
+        "10.1101_2025.07.08.663208_v1"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "10.1101_2025.07.08.663208_v1",
+          "source_task_record_sha256": "584e81320cb4d417330997f64de0d5247f8a5f4cb00c85172cd3df8c8fee1e11",
+          "source_metadata_sha256": "a68e174825911c858dc7810407cdc0fcd362c174b9b42c656e977f7effcc73be",
+          "output_contract_review": {
+            "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.07.08.663208_v1/agent/prompt.md",
+            "source_sha256": "efbb4324bd8df941fd6b36f88d0f511ea834f220b66ae5dd6627371f5dd0638b",
+            "artifact_count": 4,
+            "formats": {
+              "csv": 3,
+              "tsv": 1
+            },
+            "scope": "All required-output sections inspected for identities, row universes, units and artifact relationships. Task-specific grading specifications packaged with ground truth have not been retrieved.",
+            "scientific_decisions": [
+              "Cell identity includes replicate prefixes and a normalized barcode. Consensus peak intervals and unique target-gene sets require separate checks; arbitrary peak IDs cannot establish coordinate correctness."
+            ]
+          },
+          "source_accessions_mentioned": []
+        }
+      ],
+      "matching_workstreams": [
+        "chromatin-regulatory"
+      ],
+      "source_inspection_tiers": [
+        "question-and-output-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "quantify bulk expression",
+        "jointly filter RNA and accessibility cells",
+        "integrate modalities and assign guides",
+        "estimate mitochondrial allele fractions",
+        "normalize and call DamID peaks",
+        "require replicate support and annotate targets"
+      ],
+      "observed_input_requirements": [
+        "Observed ATAC fragments or BAMs, biological replicates, peak regions, matching annotation and frozen motif models."
+      ],
+      "required_formats": [
+        "FASTQ",
+        "FASTA",
+        "GTF",
+        "BAM",
+        "BED",
+        "sparse counts",
+        "fragment tables"
+      ],
+      "native_method_requirements": [
+        "Cell Ranger ARC",
+        "Seurat",
+        "Signac",
+        "mgatk",
+        "MACS3",
+        "IDR"
+      ],
+      "source_specific_decisions": [
+        "Preserve cell barcode and biological-replicate identity across modalities; guide assignment, perturbation response and allelic depth are separate evidence."
+      ],
+      "proposed_artifact_requirements": [
+        "BAM/fragment QC, BED peaks, count matrices, motif matches/backgrounds, gene links and sample-level effects"
+      ],
+      "deterministic_verifier_design": [
+        "Run native peak/motif tools; independently check intervals, fragment counts, background selection, matched sample joins and multiplicity."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-bixbench3-cross-platform-methylation",
+      "scientific_question": "Which methylation effects reproduce across paired sequencing and array measurements after sample, chip and genomic-annotation reconciliation?",
+      "target_ids": [
+        "10.1101_2025.07.28.666515_v1"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "10.1101_2025.07.28.666515_v1",
+          "source_task_record_sha256": "7d4f0f2144a0ea582de90b69403ae714031e7e7f5e2825562a8cad0282638aae",
+          "source_metadata_sha256": "63d0c13d15ff359375d1ef4a273bcd34d6f456f6504a9edb0d72635dea38f3c4",
+          "output_contract_review": {
+            "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.07.28.666515_v1/agent/prompt.md",
+            "source_sha256": "2526ffd4f8ffd3f2d583895a0b630a55d56e42c79775d6b052fb95d8a0f3020f",
+            "artifact_count": 4,
+            "formats": {
+              "csv": 4
+            },
+            "scope": "All required-output sections inspected for identities, row universes, units and artifact relationships. Task-specific grading specifications packaged with ground truth have not been retrieved.",
+            "scientific_decisions": [
+              "The array genotype table includes tested probes, while pathology tables retain significant sites. Missing gene-level combined evidence remains missing when one analysis contributes no selected sites."
+            ]
+          },
+          "source_accessions_mentioned": []
+        }
+      ],
+      "matching_workstreams": [
+        "methylation-expression"
+      ],
+      "source_inspection_tiers": [
+        "question-and-output-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "reconcile runs and biological samples",
+        "quantify RRBS methylation",
+        "QC and normalize array intensities",
+        "fit genotype-age and pathology models",
+        "harmonize genomic annotations",
+        "combine dependent site-level evidence"
+      ],
+      "observed_input_requirements": [
+        "Observed methylated/unmethylated read counts and expression from matched samples, with array probe or genomic coordinates and assembly version."
+      ],
+      "required_formats": [
+        "FASTQ",
+        "IDAT",
+        "FASTA",
+        "GTF",
+        "coverage tables",
+        "array manifest",
+        "TSV"
+      ],
+      "native_method_requirements": [
+        "Bismark",
+        "BiSeq",
+        "minfi",
+        "SeSaMe",
+        "betareg",
+        "glmmTMB",
+        "EmpiricalBrownsMethod"
+      ],
+      "source_specific_decisions": [
+        "Array and sequencing filters differ; repeated tissues and chip effects must remain visible when combining CpG evidence."
+      ],
+      "proposed_artifact_requirements": [
+        "Coverage/QC tables, locus and region effects, probe/assembly mapping, matched expression joins and full association tests"
+      ],
+      "deterministic_verifier_design": [
+        "Independent proportion and interval arithmetic; native model plus full coverage/missingness checks; do not infer paired measurements from shared labels."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-bixbench3-xenograft-and-tumorsphere-expression",
+      "scientific_question": "Which treatment-associated expression and pathway effects persist after host-species disambiguation and assay-specific quantification?",
+      "target_ids": [
+        "10.1038_s42003-022-03654-9_v1"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "10.1038_s42003-022-03654-9_v1",
+          "source_task_record_sha256": "4ed762b9b4eb5a91777a8e6f4f5a5d33d7589b8ff414c2844bf4c75b131f5f13",
+          "source_metadata_sha256": "50eee5e646d963dd651ccdea0a131924457513c549361ec4222ae4820bfd96d2",
+          "output_contract_review": {
+            "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1038_s42003-022-03654-9_v1/agent/prompt.md",
+            "source_sha256": "d4ded016ecfc4484d2d71331eab3f71a4c0ba44cd427d291f043835ace1ef53c",
+            "artifact_count": 12,
+            "formats": {
+              "csv": 12
+            },
+            "scope": "All required-output sections inspected for identities, row universes, units and artifact relationships. Task-specific grading specifications packaged with ground truth have not been retrieved.",
+            "scientific_decisions": [
+              "Some gene tables contain the full tested universe and another only the significant subset. Shrunken contrast tables omit the unshrunk statistic column; leading-edge outputs include ranked membership information."
+            ]
+          },
+          "source_accessions_mentioned": []
+        }
+      ],
+      "matching_workstreams": [
+        "rna-seq-contrast-enrichment"
+      ],
+      "source_inspection_tiers": [
+        "question-and-output-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "separate species in xenograft alignments",
+        "quantify human genes",
+        "quantify decoy-aware tumorsphere transcripts",
+        "fit replicated drug contrasts",
+        "shrink effects",
+        "compute ranked pathway and leading-edge outputs"
+      ],
+      "observed_input_requirements": [
+        "Observed counts, sample metadata and frozen annotation; biological replication for each requested contrast, with donor/block identifiers only when documented."
+      ],
+      "required_formats": [
+        "FASTQ",
+        "FASTA",
+        "GTF",
+        "BAM",
+        "quantification tables",
+        "GMT"
+      ],
+      "native_method_requirements": [
+        "HISAT2",
+        "XenofilteR",
+        "featureCounts",
+        "Salmon",
+        "tximport",
+        "DESeq2"
+      ],
+      "source_specific_decisions": [
+        "Human and host reads require explicit disambiguation; assay-specific quantifiers and reference versions must not be mixed."
+      ],
+      "proposed_artifact_requirements": [
+        "Sample QC, filtered counts, design and contrast matrices, complete effect/uncertainty tables, all tested pathways, set membership and sensitivity comparisons"
+      ],
+      "deterministic_verifier_design": [
+        "Native DESeq2/edgeR reference plus independent contrast, multiplicity and set checks; retain every gene and pathway, including undefined estimates; test interaction directly."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-bixbench3-tagseq-clone-signatures",
+      "scientific_question": "Which clone-associated expression signatures recur after technical-run merging, tag-read processing and replicated contrasts?",
+      "target_ids": [
+        "10_1186_s12915_024_01879_0_v1"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "10_1186_s12915_024_01879_0_v1",
+          "source_task_record_sha256": "cbcd1aac6e5bc3e03634af1f2629e03a19acde97cb3570cb4344e23a39e77abc",
+          "source_metadata_sha256": "834af9eee3188c2f6b42da5d2884b7cb4ea35049c9f5fe3192a2432da088c733",
+          "output_contract_review": {
+            "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10_1186_s12915_024_01879_0_v1/agent/prompt.md",
+            "source_sha256": "1c4226ca86e9e2a69a4ab7ae06275d63af875dd64e7524610e4d5732cc16e667",
+            "artifact_count": 14,
+            "formats": {
+              "tsv": 1,
+              "csv": 13
+            },
+            "scope": "All required-output sections inspected for identities, row universes, units and artifact relationships. Task-specific grading specifications packaged with ground truth have not been retrieved.",
+            "scientific_decisions": [
+              "Raw count IDs preserve annotation version suffixes, whereas selected differential-expression tables drop them. Shared signatures must retain regulation direction."
+            ]
+          },
+          "source_accessions_mentioned": []
+        }
+      ],
+      "matching_workstreams": [
+        "cell-lineage-barcodes"
+      ],
+      "source_inspection_tiers": [
+        "question-and-output-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "merge technical runs within biological samples",
+        "clip and deduplicate tag reads",
+        "align and count stranded genes",
+        "fit clone-specific contrasts",
+        "intersect direction-consistent signatures",
+        "test clone-specific gene-set enrichment"
+      ],
+      "observed_input_requirements": [
+        "Observed cellular genotypes, microsatellite or heritable-barcode reads with cell/sample identity, error evidence and independently measured lineage/timepoint labels where available."
+      ],
+      "required_formats": [
+        "FASTQ",
+        "FASTA",
+        "GTF",
+        "BAM",
+        "TSV"
+      ],
+      "native_method_requirements": [
+        "Cutadapt",
+        "HISAT2",
+        "featureCounts",
+        "DESeq2",
+        "clusterProfiler"
+      ],
+      "source_specific_decisions": [
+        "Technical lanes are not biological replicates; gene-set intersections must preserve direction and comparison context."
+      ],
+      "proposed_artifact_requirements": [
+        "Read/barcode/genotype eligibility, cell-clone membership, lineage graph with uncertainty, sample-aware expression joins and complete comparisons"
+      ],
+      "deterministic_verifier_design": [
+        "Independent read-count, sequence identity and graph consistency checks; native lineage inference with stated ambiguities; external observed labels required for biological lineage accuracy."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-bixbench3-transcript-level-compound-controls",
+      "scientific_question": "Which transcript and repeat effects distinguish an observed active treatment from matched control compounds and vehicle?",
+      "target_ids": [
+        "10.1038_s41467-023-44243-6_v1"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "10.1038_s41467-023-44243-6_v1",
+          "source_task_record_sha256": "14086503d33c8d5de7b04cb3d3faabf0a1dfe38553381b82a2078f5501fe4872",
+          "source_metadata_sha256": "99e06b55234dc5b952a26e752ed0178dc0a92498da335416df5d7512138cf493",
+          "output_contract_review": {
+            "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1038_s41467-023-44243-6_v1/agent/prompt.md",
+            "source_sha256": "6f5fc012b993a93c9af29e4fa8c511edb316ee1940177f5a30328caab5bedf25",
+            "artifact_count": 4,
+            "formats": {
+              "csv": 4
+            },
+            "scope": "All required-output sections inspected for identities, row universes, units and artifact relationships. Task-specific grading specifications packaged with ground truth have not been retrieved.",
+            "scientific_decisions": [
+              "The required effect is an ordinary treatment/control ratio, not a log fold change. Raw transcript and repeat-feature counts remain separate from modeled statistics."
+            ]
+          },
+          "source_accessions_mentioned": []
+        }
+      ],
+      "matching_workstreams": [
+        "molecular-property"
+      ],
+      "source_inspection_tiers": [
+        "question-and-output-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "assign independent biological replicates",
+        "align to pinned genome",
+        "count transcript and repeat features",
+        "fit active and control compound contrasts",
+        "retain feature identities and effect directions"
+      ],
+      "observed_input_requirements": [
+        "Measured compound assays, structures, censoring/units, replicate and scaffold identities, plus an independent external or grouped holdout."
+      ],
+      "required_formats": [
+        "FASTQ",
+        "FASTA",
+        "GTF",
+        "BAM",
+        "TSV"
+      ],
+      "native_method_requirements": [
+        "STAR",
+        "HOMER",
+        "edgeR"
+      ],
+      "source_specific_decisions": [
+        "Distinguish active treatment, related control compound and vehicle; verify cited package versions before requiring execution."
+      ],
+      "proposed_artifact_requirements": [
+        "SDF/SMILES normalization, assay/replicate table, descriptors, split membership, held-out predictions and full metrics"
+      ],
+      "deterministic_verifier_design": [
+        "Native RDKit descriptor reference; independently verify scaffold/group separation, measured labels, censoring and metric arithmetic; all split tables are internal task inputs, while the training corpus remains one train split."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-bixbench3-probe-transcriptomics-pathways",
+      "scientific_question": "Which dose-associated expression and pathway results persist after probe-level counting, timepoint separation and ortholog mapping?",
+      "target_ids": [
+        "10.1016_j.crtox.2021.01.003_v1"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "10.1016_j.crtox.2021.01.003_v1",
+          "source_task_record_sha256": "708bc9bc294aa159135cc72481d59d60f0160c64337190556b7d6c1cd64b6c07",
+          "source_metadata_sha256": "dfe32457b444965a3356ab0f6a9f1334b5ab3675b8eed66030b160283a053d62",
+          "output_contract_review": {
+            "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1016_j.crtox.2021.01.003_v1/agent/prompt.md",
+            "source_sha256": "0c346d124895fcbb1a01ac90349ebf5492874cb50f436ba8f29fe356a7ba74ea",
+            "artifact_count": 5,
+            "formats": {
+              "csv": 5
+            },
+            "scope": "All required-output sections inspected for identities, row universes, units and artifact relationships. Task-specific grading specifications packaged with ground truth have not been retrieved.",
+            "scientific_decisions": [
+              "Rows combine dose, time, direction and gene-set identity. The curated response table requires the complete declared contrast-by-set product, unlike significance-filtered pathway outputs."
+            ]
+          },
+          "source_accessions_mentioned": [
+            "GSE154899"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "rna-seq-contrast-enrichment"
+      ],
+      "source_inspection_tiers": [
+        "question-and-output-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "align reads to assay-specific probes",
+        "retain probe-level counts",
+        "fit within-timepoint dose contrasts",
+        "map ortholog identifiers",
+        "run ranked and selected-set enrichment",
+        "test curated response sets"
+      ],
+      "observed_input_requirements": [
+        "Observed counts, sample metadata and frozen annotation; biological replication for each requested contrast, with donor/block identifiers only when documented."
+      ],
+      "required_formats": [
+        "FASTQ",
+        "probe CSV",
+        "TSV",
+        "XLSX",
+        "GMT"
+      ],
+      "native_method_requirements": [
+        "QuasR",
+        "DESeq2",
+        "biomaRt",
+        "PIANO"
+      ],
+      "source_specific_decisions": [
+        "Probe IDs remain separate from gene symbols; curated gene-set backgrounds and cross-species mappings require frozen provenance."
+      ],
+      "proposed_artifact_requirements": [
+        "Sample QC, filtered counts, design and contrast matrices, complete effect/uncertainty tables, all tested pathways, set membership and sensitivity comparisons"
+      ],
+      "deterministic_verifier_design": [
+        "Native DESeq2/edgeR reference plus independent contrast, multiplicity and set checks; retain every gene and pathway, including undefined estimates; test interaction directly."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-bixbench3-probiotic-timecourse-expression",
+      "scientific_question": "Which treatment-associated expression changes recur across observed timepoints after strand-aware counting and replicate checks?",
+      "target_ids": [
+        "10.1101_2025.06.02.657493_v1"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "10.1101_2025.06.02.657493_v1",
+          "source_task_record_sha256": "815a36d96d284636f322f6c0673d7fe7ee837e18360be7dc5f7579dffe0a7a18",
+          "source_metadata_sha256": "8e750ad1072d93e4ed1925fb1bdb3cc6da119be2785be7bffb57b9ad53e416b9",
+          "output_contract_review": {
+            "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.06.02.657493_v1/agent/prompt.md",
+            "source_sha256": "2bb4df4f084176addc7fea5d6dd81f49b1f9f7f1eb6edd664b3527f597b83bfe",
+            "artifact_count": 5,
+            "formats": {
+              "csv": 5
+            },
+            "scope": "All required-output sections inspected for identities, row universes, units and artifact relationships. Task-specific grading specifications packaged with ground truth have not been retrieved.",
+            "scientific_decisions": [
+              "The raw matrix includes all treatment-timepoint replicates; the four selected contrast outputs contain only the declared significant loci. Locus keys retain annotation provenance."
+            ]
+          },
+          "source_accessions_mentioned": []
+        }
+      ],
+      "matching_workstreams": [
+        "rna-seq-contrast-enrichment"
+      ],
+      "source_inspection_tiers": [
+        "question-and-output-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "QC and trim reads",
+        "align to annotated genome",
+        "count strand-specific loci",
+        "fit within-timepoint treatment contrasts",
+        "shrink effects and classify directions",
+        "check assignment rates and replicate structure"
+      ],
+      "observed_input_requirements": [
+        "Observed counts, sample metadata and frozen annotation; biological replication for each requested contrast, with donor/block identifiers only when documented."
+      ],
+      "required_formats": [
+        "FASTQ",
+        "FASTA",
+        "GFF3",
+        "BAM",
+        "TSV"
+      ],
+      "native_method_requirements": [
+        "Trimmomatic",
+        "Bowtie2",
+        "featureCounts",
+        "DESeq2"
+      ],
+      "source_specific_decisions": [
+        "Overlapping genes, multimapping and reverse-stranded counting have distinct counting rules; do not pool timepoints."
+      ],
+      "proposed_artifact_requirements": [
+        "Sample QC, filtered counts, design and contrast matrices, complete effect/uncertainty tables, all tested pathways, set membership and sensitivity comparisons"
+      ],
+      "deterministic_verifier_design": [
+        "Native DESeq2/edgeR reference plus independent contrast, multiplicity and set checks; retain every gene and pathway, including undefined estimates; test interaction directly."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-bixbench3-microsatellite-cell-lineage",
+      "scientific_question": "Which observed cellular lineage relationships are supported by repeat-spanning reads after allelic-dropout and comparable-locus checks?",
+      "target_ids": [
+        "10.64898_2026.03.10.709901_v1"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "10.64898_2026.03.10.709901_v1",
+          "source_task_record_sha256": "d60028297b613012e5606fceb5716e81327c4db58a3a3e38b15f3eff4d29ee2e",
+          "source_metadata_sha256": "b4a4a0a592f9f808b95b15f63ec9a4edfe9a678e72ff05f48f3b01f76b63f7b0",
+          "output_contract_review": {
+            "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.64898_2026.03.10.709901_v1/agent/prompt.md",
+            "source_sha256": "502850a53b58bbb2be08e24c4dc4d6f163b651eb4794b399dcec1d79933cbbfe",
+            "artifact_count": 4,
+            "formats": {
+              "csv": 3,
+              "tsv": 1
+            },
+            "scope": "All required-output sections inspected for identities, row universes, units and artifact relationships. Task-specific grading specifications packaged with ground truth have not been retrieved.",
+            "scientific_decisions": [
+              "Report all cell-library QC rows but restrict both axes of the distance matrix to the same passing cells. Triplet counts and percentage summaries must agree after removing unresolved comparisons."
+            ]
+          },
+          "source_accessions_mentioned": []
+        }
+      ],
+      "matching_workstreams": [
+        "cell-lineage-barcodes"
+      ],
+      "source_inspection_tiers": [
+        "question-and-output-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "process each amplicon panel",
+        "align and measure full-locus coverage",
+        "filter cells and call repeat genotypes",
+        "handle allelic dropout in pairwise distances",
+        "infer a rooted lineage tree",
+        "compare resolvable clone triplets"
+      ],
+      "observed_input_requirements": [
+        "Observed cellular genotypes, microsatellite or heritable-barcode reads with cell/sample identity, error evidence and independently measured lineage/timepoint labels where available."
+      ],
+      "required_formats": [
+        "FASTQ",
+        "FASTA",
+        "BED",
+        "BAM",
+        "VCF",
+        "distance matrix",
+        "Newick"
+      ],
+      "native_method_requirements": [
+        "Nextflow",
+        "BWA",
+        "SAMtools",
+        "HipSTR",
+        "scikit-bio"
+      ],
+      "source_specific_decisions": [
+        "Missing alleles change the comparable-locus denominator; unresolved triplets cannot be counted as agreement or disagreement."
+      ],
+      "proposed_artifact_requirements": [
+        "Read/barcode/genotype eligibility, cell-clone membership, lineage graph with uncertainty, sample-aware expression joins and complete comparisons"
+      ],
+      "deterministic_verifier_design": [
+        "Independent read-count, sequence identity and graph consistency checks; native lineage inference with stated ambiguities; external observed labels required for biological lineage accuracy."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-bixbench3-mrna-mirna-tumor-contrasts",
+      "scientific_question": "Which directional mRNA and mature-miRNA responses agree across observed conditions after assay-specific quantification?",
+      "target_ids": [
+        "10.1101_2025.07.21.665972_v1"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "10.1101_2025.07.21.665972_v1",
+          "source_task_record_sha256": "f6c97bce8d71943588f83f44e8a04b06ee3e6eefc4f26c238c2ff3fcc2f1a9ae",
+          "source_metadata_sha256": "46d01784e110481ec4a1ba16b2ed954974a3fa1a97e52cafb545d0a16462ee3e",
+          "output_contract_review": {
+            "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.07.21.665972_v1/agent/prompt.md",
+            "source_sha256": "0e8ac250987d1b1b9b478e3961d3071be04821f7f46a454c66b0d841c18e5b78",
+            "artifact_count": 4,
+            "formats": {
+              "csv": 4
+            },
+            "scope": "All required-output sections inspected for identities, row universes, units and artifact relationships. Task-specific grading specifications packaged with ground truth have not been retrieved.",
+            "scientific_decisions": [
+              "The mRNA outputs contain selected genes, while microRNA outputs retain all tested features. One common significance-only output filter would be incorrect."
+            ]
+          },
+          "source_accessions_mentioned": []
+        }
+      ],
+      "matching_workstreams": [
+        "small-rna-sequence-structure"
+      ],
+      "source_inspection_tiers": [
+        "question-and-output-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "combine technical runs by biological sample",
+        "process paired mRNA and single-end small RNA separately",
+        "quantify transcripts and mature microRNAs",
+        "fit each assay over all condition groups",
+        "retain directional contrast tables"
+      ],
+      "observed_input_requirements": [
+        "Observed RNA sequences and small-RNA/mRNA measurements with matching annotation; structural measurements where comparing predictions to biology."
+      ],
+      "required_formats": [
+        "FASTQ",
+        "FASTA",
+        "GTF",
+        "GFF3",
+        "quantification tables"
+      ],
+      "native_method_requirements": [
+        "Kallisto",
+        "tximport",
+        "PatMaN",
+        "DESeq2"
+      ],
+      "source_specific_decisions": [
+        "Do not mix assay count matrices; transcript-to-gene aggregation and mature-miRNA identities define different row universes."
+      ],
+      "proposed_artifact_requirements": [
+        "FASTA/GTF joins, processed sequence and structure files, complete expression/target results, predicted-versus-observed measurements"
+      ],
+      "deterministic_verifier_design": [
+        "Native RNA/folding reference plus independent sequence, coordinate and score checks; label predictions separately from experimentally supported structure."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-bixbench3-transposable-elements-splicing-isoforms",
+      "scientific_question": "Which repeat-expression and intron-usage changes are supported by replicated short reads and independently observed long-read transcripts?",
+      "target_ids": [
+        "10.64898_2026.01.09.698641_v1"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "10.64898_2026.01.09.698641_v1",
+          "source_task_record_sha256": "29ef6e76f2bad02d9bfbd1be9718673b65519eb5962b79e1b821e8fb0702c898",
+          "source_metadata_sha256": "6a2be5ef4b5c41d632a2294e7e4629639c709510180340760ca290f5d02cfe63",
+          "output_contract_review": {
+            "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.64898_2026.01.09.698641_v1/agent/prompt.md",
+            "source_sha256": "be60095f851be18d15e69695625d723cb85da558dda67ad6a18026b8bc2ed243",
+            "artifact_count": 7,
+            "formats": {
+              "csv": 7
+            },
+            "scope": "All required-output sections inspected for identities, row universes, units and artifact relationships. Task-specific grading specifications packaged with ground truth have not been retrieved.",
+            "scientific_decisions": [
+              "Keep missing adjusted probabilities. Stable genomic intron keys exclude transient cluster labels, and splice-usage direction differs from the expression contrast direction. Long-read transcript categories require provenance."
+            ]
+          },
+          "source_accessions_mentioned": []
+        }
+      ],
+      "matching_workstreams": [
+        "repeat-expression-splicing"
+      ],
+      "source_inspection_tiers": [
+        "question-and-output-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "retain multi-mapping evidence",
+        "quantify genes and repeat families",
+        "fit replicated short-read contrasts",
+        "test differential intron usage",
+        "discover and quantify long-read transcripts"
+      ],
+      "observed_input_requirements": [
+        "Observed replicated RNA reads/counts, repeat annotation and matched transcript reference; use long reads only for endpoints that require observed isoform support."
+      ],
+      "required_formats": [
+        "FASTQ",
+        "FASTA",
+        "GTF",
+        "BAM",
+        "junction tables"
+      ],
+      "native_method_requirements": [
+        "STAR",
+        "TEtranscripts",
+        "DESeq2",
+        "Leafcutter",
+        "minimap2",
+        "bambu"
+      ],
+      "source_specific_decisions": [
+        "Stable intron coordinates differ from run-specific cluster labels; one long-read library per condition does not support replicated significance."
+      ],
+      "proposed_artifact_requirements": [
+        "Read eligibility and multimapping audit, repeat counts, design/contrast matrices, full differential tables, intron-usage tables and transcript support"
+      ],
+      "deterministic_verifier_design": [
+        "Pinned quantification/splicing packages plus independent joins, usage denominators and contrast checks; retain uncertainty and every tested feature."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-bixbench3-chromatin-reporter-integration",
+      "scientific_question": "Which chromatin classes coincide with independently observed reporter activity after library-factor normalization and integration-site QC?",
+      "target_ids": [
+        "10.1101_2025.07.18.664654_v1"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "10.1101_2025.07.18.664654_v1",
+          "source_task_record_sha256": "3fa1e35110a1049a44846c6d7299372473ed83b9552bf21b03d165618bfe7d0f",
+          "source_metadata_sha256": "ac92dcaec68ace8ed2edb95fdce7ea9e81ebc7460f88468cf09dc30e0287ebee",
+          "output_contract_review": {
+            "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.1101_2025.07.18.664654_v1/agent/prompt.md",
+            "source_sha256": "4ce586412d7499ffb226aecaf01fd57342de394b8f724bd25c1a41098a04fde4",
+            "artifact_count": 4,
+            "formats": {
+              "csv": 4
+            },
+            "scope": "All required-output sections inspected for identities, row universes, units and artifact relationships. Task-specific grading specifications packaged with ground truth have not been retrieved.",
+            "scientific_decisions": [
+              "Genomic windows, reporter identity and promoter labels define distinct joins. Cluster labels require biological anchoring rather than numeric k-means labels."
+            ]
+          },
+          "source_accessions_mentioned": []
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-integration"
+      ],
+      "source_inspection_tiers": [
+        "question-and-output-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "align paired chromatin reads",
+        "normalize signal with experimental library factors",
+        "filter input artifacts and summarize windows",
+        "assign chromatin classes",
+        "recover replicate-consistent reporter integrations",
+        "normalize reporter abundance and join genomic classes"
+      ],
+      "observed_input_requirements": [
+        "Observed multi-donor or multi-study counts with documented biological conditions and batch overlap; paired modalities only where cells/samples are matched."
+      ],
+      "required_formats": [
+        "FASTQ",
+        "FASTA",
+        "BAM",
+        "bedGraph",
+        "BED",
+        "TSV"
+      ],
+      "native_method_requirements": [
+        "Bowtie2",
+        "SAMtools",
+        "MACS3",
+        "BEDTools",
+        "TASK"
+      ],
+      "source_specific_decisions": [
+        "Preserve terminal partial windows and normalization constants; reporter DNA abundance is distinct from transcript abundance."
+      ],
+      "proposed_artifact_requirements": [
+        "Cell/sample/feature matches, split membership, latent coordinates/loadings, complete held-out reconstructions and batch/biology diagnostics"
+      ],
+      "deterministic_verifier_design": [
+        "Verify identity and group separation, count/layer semantics and reconstruction metrics; compare latent geometry with invariants; measure preservation and removal jointly."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-bixbench3-expression-accessibility-integration",
+      "scientific_question": "Which expression and accessibility changes remain concordant after assembly harmonization, gene-model reconciliation and replicate-aware testing?",
+      "target_ids": [
+        "10.64898_2026.01.02.697332_v1"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "10.64898_2026.01.02.697332_v1",
+          "source_task_record_sha256": "051938de4ac6af6dfb95f0b769424ec254187f032e8d48abb9ba8189559f8ac5",
+          "source_metadata_sha256": "ae7be29b02e4c7049f07aa2047e9eda5003d32ca386f383a2cc59432bbbd7d4b",
+          "output_contract_review": {
+            "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.64898_2026.01.02.697332_v1/agent/prompt.md",
+            "source_sha256": "fbf18ff02e3cd5fedd900799803725d6f4c8de13b969592496c06ccdd2312902",
+            "artifact_count": 6,
+            "formats": {
+              "csv": 4,
+              "bed": 2
+            },
+            "scope": "All required-output sections inspected for identities, row universes, units and artifact relationships. Task-specific grading specifications packaged with ground truth have not been retrieved.",
+            "scientific_decisions": [
+              "Three-column BED outputs use interval matching; chromosome alone is not a unique record ID. Raw gene matrices retain zero rows, whereas fitted contrasts have explicitly filtered universes."
+            ]
+          },
+          "source_accessions_mentioned": []
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-integration"
+      ],
+      "source_inspection_tiers": [
+        "question-and-output-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "construct merged gene models",
+        "quantify expression and fit filtered contrasts",
+        "trim and align accessibility reads",
+        "merge and blacklist peaks",
+        "count fragments and test accessibility"
+      ],
+      "observed_input_requirements": [
+        "Observed multi-donor or multi-study counts with documented biological conditions and batch overlap; paired modalities only where cells/samples are matched."
+      ],
+      "required_formats": [
+        "FASTQ",
+        "FASTA",
+        "GTF",
+        "BAM",
+        "BED",
+        "count matrices"
+      ],
+      "native_method_requirements": [
+        "STAR",
+        "featureCounts",
+        "edgeR",
+        "MACS2",
+        "BEDTools",
+        "DESeq2"
+      ],
+      "source_specific_decisions": [
+        "The two assays use different genome assemblies; coordinate joins require explicit harmonization and biological-replicate preservation."
+      ],
+      "proposed_artifact_requirements": [
+        "Cell/sample/feature matches, split membership, latent coordinates/loadings, complete held-out reconstructions and batch/biology diagnostics"
+      ],
+      "deterministic_verifier_design": [
+        "Verify identity and group separation, count/layer semantics and reconstruction metrics; compare latent geometry with invariants; measure preservation and removal jointly."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-bixbench3-paired-small-rna-mrna-regulation",
+      "scientific_question": "Which observed small-RNA and mRNA changes support a directional regulatory association after paired-sample and target-identity checks?",
+      "target_ids": [
+        "10.64898_2026.01.31.702960_v1"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "10.64898_2026.01.31.702960_v1",
+          "source_task_record_sha256": "1559d9eb066a5d481aba0be8ac2136ac2314b52dfb2fd8fd7bf939c6de727164",
+          "source_metadata_sha256": "8b67abbad80fa9d5500985c40abf11c2f481c972692eae82b7a60734d09c4d3c",
+          "output_contract_review": {
+            "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.64898_2026.01.31.702960_v1/agent/prompt.md",
+            "source_sha256": "54b92eb966e21af506024bf45e002084c5bfc80ce4a671566eb57e5d28593a74",
+            "artifact_count": 14,
+            "formats": {
+              "csv": 14
+            },
+            "scope": "All required-output sections inspected for identities, row universes, units and artifact relationships. Task-specific grading specifications packaged with ground truth have not been retrieved.",
+            "scientific_decisions": [
+              "Small-RNA keys combine identifier, class and feature name; gene IDs alone can collide. Separate complete fits, direction-filtered sets and paired-regulation subsets."
+            ]
+          },
+          "source_accessions_mentioned": [
+            "PRJNA13758"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "small-rna-sequence-structure"
+      ],
+      "source_inspection_tiers": [
+        "question-and-output-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "quantify mRNA and small-RNA classes separately",
+        "fit both mutant contrasts against shared controls",
+        "identify direction-consistent changes",
+        "pair class-specific small-RNA targets with mRNA",
+        "compare opposing effect directions"
+      ],
+      "observed_input_requirements": [
+        "Observed RNA sequences and small-RNA/mRNA measurements with matching annotation; structural measurements where comparing predictions to biology."
+      ],
+      "required_formats": [
+        "FASTQ",
+        "FASTA",
+        "GTF",
+        "GFF3",
+        "feature-rule CSV",
+        "count matrices"
+      ],
+      "native_method_requirements": [
+        "fastp",
+        "STAR",
+        "RSEM",
+        "tinyRNA",
+        "DESeq2",
+        "RNA-integrate"
+      ],
+      "source_specific_decisions": [
+        "Keep small-RNA classes attached to gene identities; opposing transcript changes are associations, not evidence of a direct mechanism."
+      ],
+      "proposed_artifact_requirements": [
+        "FASTA/GTF joins, processed sequence and structure files, complete expression/target results, predicted-versus-observed measurements"
+      ],
+      "deterministic_verifier_design": [
+        "Native RNA/folding reference plus independent sequence, coordinate and score checks; label predictions separately from experimentally supported structure."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-bixbench3-observed-community-and-growth-model",
+      "scientific_question": "Which community-growth model explains independently observed abundance trajectories under explicit identifiability and held-out-time checks?",
+      "target_ids": [
+        "10.64898_2026.02.04.703711_v1"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "10.64898_2026.02.04.703711_v1",
+          "source_task_record_sha256": "f67aa191c680d2703594e5db46d8326db06791bf1192f3d35fddfb4356d2e15d",
+          "source_metadata_sha256": "3a1819ab13b37f3e3ff56a4458c14de7c9d03c922dafb70c2e1fea6084a1c2ba",
+          "output_contract_review": {
+            "source_url": "https://huggingface.co/datasets/EdisonScientific/BixBench3/blob/3be006a68327e1fd04cd2c5fc87a703e53ca67cd/cases/10.64898_2026.02.04.703711_v1/agent/prompt.md",
+            "source_sha256": "ca56e5ddda0c91ca657d199e2bfe2a4ecebfec2d4d35b429aea90a94516c0e42",
+            "artifact_count": 4,
+            "formats": {
+              "csv": 4
+            },
+            "scope": "All required-output sections inspected for identities, row universes, units and artifact relationships. Task-specific grading specifications packaged with ground truth have not been retrieved.",
+            "scientific_decisions": [
+              "ASV matrix columns depend on inferred sequences. Taxon tables include explicit zeros and designated inocula; measured productivity and simulated trajectories use different composite keys and scopes."
+            ]
+          },
+          "source_accessions_mentioned": []
+        }
+      ],
+      "matching_workstreams": [
+        "observed-dynamics"
+      ],
+      "source_inspection_tiers": [
+        "question-and-output-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "infer amplicon sequence variants",
+        "remove chimeras and assign taxa",
+        "correct operon copy-number bias",
+        "combine composition with measured counts and biomass",
+        "summarize biological replicates",
+        "compare measured growth with a parameterized null model"
+      ],
+      "observed_input_requirements": [
+        "Observed intervention or time-course measurements with units, timing, replicates and an independently documented model family; observed runs withheld for evaluation."
+      ],
+      "required_formats": [
+        "FASTQ",
+        "FASTA",
+        "microscopy images",
+        "flow counts",
+        "growth curves",
+        "TSV",
+        "MATLAB parameters"
+      ],
+      "native_method_requirements": [
+        "Cutadapt",
+        "DADA2",
+        "phyloseq",
+        "GNU Octave"
+      ],
+      "source_specific_decisions": [
+        "An experimentally assembled community still yields real observations; stochastic null-model trajectories are derived simulations and need separate reproducibility checks."
+      ],
+      "proposed_artifact_requirements": [
+        "Observation/condition table, SBML or explicit equations, fitted parameters, held-out trajectories, residuals and identifiability profiles"
+      ],
+      "deterministic_verifier_design": [
+        "Check numerical integration and likelihood independently; evaluate against observed held-out trajectories; for selection tasks reveal only pre-recorded experimental observations."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    }
+  ],
+  "excluded": [
+    {
+      "task_id": "10.1101_2025.07.31.667834_v1",
+      "status": "restricted/excluded",
+      "reason": [
+        "No training adaptation of the pathogen-enhancement objective."
+      ]
+    }
+  ]
+}

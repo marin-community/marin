@@ -93,7 +93,9 @@
       ],
       "scientific_question_on_independent_observations": "How do sequence composition and fixed predictor scores distinguish independently labeled protein assembly classes?",
       "matching_existing_question_ids": [],
-      "matching_existing_workstream_ids": [],
+      "matching_existing_workstream_ids": [
+        "protein-sequence-model-evaluation"
+      ],
       "existing_question_fit_by_target": {
         "da-10-1": {
           "question_ids": [],
@@ -112,7 +114,8 @@
       "deterministic_verifier_design": "Recompute sequence fractions, membership and ROC/PR from complete score rows; verify all declared predictors and classes.",
       "negative_controls": "Reverse a nonconstant score vector without updating its metrics, and duplicate a protein across fit/evaluation groups; reject both when the frozen design separates those groups.",
       "unresolved_independent_data_and_runtime_assumptions": "Independent experimental class labels and predictor score availability may be limiting; fixed scores keep task within 30 minutes.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "routing_limit": "Scientific index only; this endpoint retains its detailed standalone contract and does not become covered by another workstream question."
     },
     {
       "proposed_id": "biomni-design-04-protein-participant-screening",
@@ -121,7 +124,9 @@
       ],
       "scientific_question_on_independent_observations": "Do frozen sequence predictors distinguish observed condensate participants better than membrane-organelle controls under one negative universe?",
       "matching_existing_question_ids": [],
-      "matching_existing_workstream_ids": [],
+      "matching_existing_workstream_ids": [
+        "protein-sequence-model-evaluation"
+      ],
       "existing_question_fit_by_target": {
         "da-10-3": {
           "question_ids": [],
@@ -140,7 +145,8 @@
       "deterministic_verifier_design": "Recompute each dataset ROC/PR against exactly the same negatives and compare complete dataset-by-predictor grid.",
       "negative_controls": "Substitute a different negative universe or flip a membership label in the submitted artifacts; reject against the frozen inputs.",
       "unresolved_independent_data_and_runtime_assumptions": "Need independently curated positive and organelle-control sets sharing identifiers and available frozen scores.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "routing_limit": "Scientific index only; this endpoint retains its detailed standalone contract and does not become covered by another workstream question."
     },
     {
       "proposed_id": "biomni-design-05-cell-communication",
@@ -294,7 +300,9 @@
       ],
       "scientific_question_on_independent_observations": "Do treatment-associated protein effects overlap independent population sex associations after matching the measured protein universe?",
       "matching_existing_question_ids": [],
-      "matching_existing_workstream_ids": [],
+      "matching_existing_workstream_ids": [
+        "proteomics-metabolomics"
+      ],
       "existing_question_fit_by_target": {
         "da-13-5": {
           "question_ids": [],
@@ -313,7 +321,8 @@
       "deterministic_verifier_design": "Independent identifier join and overlap/sign arithmetic over all measured proteins, not selected hits only.",
       "negative_controls": "Reverse a nonzero submitted effect or remove a measured null protein from the matched universe; reject orientation or eligibility mismatch.",
       "unresolved_independent_data_and_runtime_assumptions": "Need two independent cohorts with mappable common proteins and enough complete measures.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "routing_limit": "Scientific index only; this endpoint retains its detailed standalone contract and does not become covered by another workstream question."
     },
     {
       "proposed_id": "biomni-design-10-gaht-menopause-concordance",
@@ -322,7 +331,9 @@
       ],
       "scientific_question_on_independent_observations": "How do longitudinal treatment-protein changes compare separately with menopausal transitions and hormone-treatment effects in independent cohorts?",
       "matching_existing_question_ids": [],
-      "matching_existing_workstream_ids": [],
+      "matching_existing_workstream_ids": [
+        "proteomics-metabolomics"
+      ],
       "existing_question_fit_by_target": {
         "da-13-6": {
           "question_ids": [],
@@ -341,7 +352,8 @@
       "deterministic_verifier_design": "Recompute all matched effect pairs and comparator-specific direction/correlation summaries.",
       "negative_controls": "Swap comparator IDs in the submitted paired-effect table or pool the two comparator summaries; reject against their distinct source contrasts.",
       "unresolved_independent_data_and_runtime_assumptions": "Three assay-compatible observed cohorts may be difficult to source; precomputed effects must retain raw-study provenance.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "routing_limit": "Scientific index only; this endpoint retains its detailed standalone contract and does not become covered by another workstream question."
     },
     {
       "proposed_id": "biomni-design-11-signature-clustering",
@@ -350,7 +362,9 @@
       ],
       "scientific_question_on_independent_observations": "Which prespecified immune signatures have similar score profiles across independently observed sepsis patients?",
       "matching_existing_question_ids": [],
-      "matching_existing_workstream_ids": [],
+      "matching_existing_workstream_ids": [
+        "gene-program-factorization"
+      ],
       "existing_question_fit_by_target": {
         "da-14-1": {
           "question_ids": [],
@@ -369,7 +383,8 @@
       "deterministic_verifier_design": "Recompute every signature pair, distance, deterministic linkage and complete signature membership.",
       "negative_controls": "Submit patient IDs as tree leaves or omit an eligible signature pair; reject axis or completeness errors.",
       "unresolved_independent_data_and_runtime_assumptions": "Need enough signatures/patients and stable scores; source cohort must be independent.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "routing_limit": "Scientific index only; this endpoint retains its detailed standalone contract and does not become covered by another workstream question."
     },
     {
       "proposed_id": "biomni-design-12-immune-subgroup-proportions",
@@ -867,7 +882,9 @@
       ],
       "scientific_question_on_independent_observations": "How similar are baseline transcriptional profiles of independently observed primary cell populations before any compound exposure?",
       "matching_existing_question_ids": [],
-      "matching_existing_workstream_ids": [],
+      "matching_existing_workstream_ids": [
+        "gene-program-factorization"
+      ],
       "existing_question_fit_by_target": {
         "da-20-1": {
           "question_ids": [],
@@ -886,7 +903,8 @@
       "deterministic_verifier_design": "Recompute full cell-type similarity matrix and PCA subspace from eligible samples.",
       "negative_controls": "Include treated samples in the submitted baseline table or duplicate a donor; reject eligibility and aggregation errors.",
       "unresolved_independent_data_and_runtime_assumptions": "Independent primary-cell study must include comparable untreated samples across types.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "routing_limit": "Scientific index only; this endpoint retains its detailed standalone contract and does not become covered by another workstream question."
     },
     {
       "proposed_id": "biomni-design-27-primary-cell-pathway-response",
@@ -963,7 +981,9 @@
       ],
       "scientific_question_on_independent_observations": "For two explicitly named metabolites in an independent cohort, is their genetic association shared under a prespecified summary-statistic method?",
       "matching_existing_question_ids": [],
-      "matching_existing_workstream_ids": [],
+      "matching_existing_workstream_ids": [
+        "population-genetics"
+      ],
       "existing_question_fit_by_target": {
         "da-24-3": {
           "question_ids": [],
@@ -981,7 +1001,8 @@
       "deterministic_verifier_design": "For a chosen alternative, independently recompute allele harmonization and the complete native statistic; reject mixing estimands.",
       "negative_controls": "Flip an effect allele without harmonizing its signed effect, or claim an LD reference with the wrong declared ancestry; reject harmonization/provenance errors. Freeze the selected statistic before numeric mutations are designed.",
       "unresolved_independent_data_and_runtime_assumptions": "Public question is underspecified; these are named alternatives, not an exact benchmark mapping. Independent GWAS/LD access and runtime unvalidated.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "routing_limit": "Scientific index only; this endpoint retains its detailed standalone contract and does not become covered by another workstream question."
     },
     {
       "proposed_id": "biomni-design-30-tumor-variant-stage",
@@ -1342,7 +1363,9 @@
       ],
       "scientific_question_on_independent_observations": "Which independently observed organs have similar *changes* after endurance training on a common measured molecular feature universe?",
       "matching_existing_question_ids": [],
-      "matching_existing_workstream_ids": [],
+      "matching_existing_workstream_ids": [
+        "proteomics-metabolomics"
+      ],
       "existing_question_fit_by_target": {
         "da-6-5": {
           "question_ids": [],
@@ -1360,7 +1383,8 @@
       "deterministic_verifier_design": "Recompute organ-specific effects and similarity only from matched measured features.",
       "negative_controls": "Substitute baseline abundance for a training-change effect or count a feature not measured in both organs; reject effect provenance and shared-universe errors.",
       "unresolved_independent_data_and_runtime_assumptions": "Requires independent multi-organ pre/post study; cannot infer coordination from baseline differences.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "routing_limit": "Scientific index only; this endpoint retains its detailed standalone contract and does not become covered by another workstream question."
     },
     {
       "proposed_id": "biomni-design-41-bread-spiker-metabolites",
@@ -1369,7 +1393,9 @@
       ],
       "scientific_question_on_independent_observations": "Within a prospectively defined high-glucose-response subgroup in an independent meal study, which measured metabolites have positive adjusted association with systolic pressure?",
       "matching_existing_question_ids": [],
-      "matching_existing_workstream_ids": [],
+      "matching_existing_workstream_ids": [
+        "clinical-response-model"
+      ],
       "existing_question_fit_by_target": {
         "da-8-1": {
           "question_ids": [],
@@ -1388,7 +1414,8 @@
       "deterministic_verifier_design": "Recompute meal rises, subject mean, cohort median/subgroup and every regression from eligible participants.",
       "negative_controls": "Include a preload meal in the unmitigated subgroup calculation or put a negative coefficient in the positive top-10 table; reject subgroup and direction errors.",
       "unresolved_independent_data_and_runtime_assumptions": "Independent cohort needs replicated meals, metabolomics and BP; selection must precede association fitting.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "routing_limit": "Scientific index only; this endpoint retains its detailed standalone contract and does not become covered by another workstream question."
     },
     {
       "proposed_id": "biomni-design-42-crossover-preload-interaction",
@@ -1397,7 +1424,9 @@
       ],
       "scientific_question_on_independent_observations": "Does baseline metabolic status modify the within-participant difference in glucose-peak reduction between two observed preloads?",
       "matching_existing_question_ids": [],
-      "matching_existing_workstream_ids": [],
+      "matching_existing_workstream_ids": [
+        "clinical-response-model"
+      ],
       "existing_question_fit_by_target": {
         "da-8-2": {
           "question_ids": [],
@@ -1415,7 +1444,8 @@
       "deterministic_verifier_design": "Recompute per-person reductions/differences and fitted preload-by-status interaction.",
       "negative_controls": "Join challenges from different participants or reverse the declared interaction contrast; reject pairing and coefficient mismatch.",
       "unresolved_independent_data_and_runtime_assumptions": "Independent crossover data with enough paired participants per status required; measured interaction not causal mechanism.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "routing_limit": "Scientific index only; this endpoint retains its detailed standalone contract and does not become covered by another workstream question."
     },
     {
       "proposed_id": "biomni-design-43-metabolite-mediation",
@@ -1424,7 +1454,9 @@
       ],
       "scientific_question_on_independent_observations": "Which lipid features differ between independently measured meal-response phenotypes, and do prespecified mediator models explain any association with metabolic outcomes?",
       "matching_existing_question_ids": [],
-      "matching_existing_workstream_ids": [],
+      "matching_existing_workstream_ids": [
+        "multimodal-clinical-discovery"
+      ],
       "existing_question_fit_by_target": {
         "da-8-3": {
           "question_ids": [],
@@ -1443,7 +1475,8 @@
       "deterministic_verifier_design": "Recompute complete differential table, selected top 10 and indirect-effect arithmetic under frozen models.",
       "negative_controls": "Add a lipid outside the frozen eligible top-10 set to the mediation results or omit an eligible model; reject selection and completeness errors.",
       "unresolved_independent_data_and_runtime_assumptions": "Observational mediation needs temporal/confounding assumptions and cannot certify causality; independent suitable cohort required.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "routing_limit": "Scientific index only; this endpoint retains its detailed standalone contract and does not become covered by another workstream question."
     },
     {
       "proposed_id": "biomni-design-44-baseline-tcell-survival",

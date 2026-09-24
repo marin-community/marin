@@ -1,0 +1,918 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-09-24T15:03:56.269055+00:00",
+  "scope": "Provisional-ID agentic question planning from permitted versioned inventory metadata. Original fixture/answer content is not used.",
+  "source": {
+    "benchmark": "Bio-Task Bench",
+    "inventory_path": "benchmark_tasks/bio-task-bench.json",
+    "inventory_sha256": "4a57d1f711e32b135ab59323ef09fa529be85e63477080f57890c7592359635e",
+    "source_revision": null,
+    "inspection_limit": "Question proposals use the inventory endpoint-stage review; original full prompt, output and method limits remain attached. No new runtime or source-data validation implied."
+  },
+  "counts": {
+    "records": 34,
+    "question_assignments": 34,
+    "question_cards": 10,
+    "excluded_records": 0,
+    "validated_new_mappings": 0
+  },
+  "defaults": {
+    "authoring_unit": "One coherent question on independently observed biological inputs; combine bookkeeping and component summaries into its connected analysis.",
+    "required_before_implementation": "Freeze independent source lineage, biological sample structure, exact input boundary, method versions, complete artifact schemas and deterministic acceptance. Keep corpus train-only and expected solve time <=30 minutes.",
+    "native_reference": "Reference scripts execute the actual required packages; private oracles read supplied inputs. Independently verify identities, algebraic invariants and all required artifacts. No LLM-as-a-judge.",
+    "learned_output_acceptance": "Grade complete finite predictions against private observed labels with a frozen metric/criterion. Accept equivalent cluster/topic label permutations. Model uncertainty and counterfactual claims require endpoint-specific checks.",
+    "runtime_boundary": "For long original pipelines, explicitly choose a bounded observed-data start boundary. Precomputed alignments or counts cover downstream analysis only; do not claim full raw-data pipeline coverage. GPU/weight-dependent methods and large reference resources remain feasibility questions.",
+    "consolidation": "Review overlaps with earlier question cards before implementation. Distinct assays, statistical estimands and named native methods cannot be silently substituted."
+  },
+  "questions": [
+    {
+      "proposed_id": "portfolio-bio-task-bench-chipseq",
+      "scientific_question": "Which distal regulatory differences remain after controlled peak calling, replicate normalization, motif analysis and promoter/blacklist/CNV checks?",
+      "target_ids": [
+        "chipseq-001",
+        "chipseq-002",
+        "chipseq-003",
+        "chipseq-004",
+        "chipseq-005"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "chipseq-001",
+          "source_task_record_sha256": "2a88c34acd0dd758f43f469a215ee5646ec29721e5765453210c3671d2c2034a",
+          "source_metadata_sha256": "f7345a2298059c18a08398b46f0e593541b928f3f9ca554089ba5879044c8e4d",
+          "source_suggested_tools": [
+            "MACS2",
+            "MACS3",
+            "HOMER"
+          ]
+        },
+        {
+          "task_id": "chipseq-002",
+          "source_task_record_sha256": "345f4e52d18580a17a53741e39d195e0b7281981f1bbd7e1bcbc11818fb4ea83",
+          "source_metadata_sha256": "424df1b875d6e0be7ad0fe33db25fcf5eb756fdb184fa0c30b0f9eb5ac5356aa",
+          "source_suggested_tools": [
+            "HOMER",
+            "MEME suite"
+          ]
+        },
+        {
+          "task_id": "chipseq-003",
+          "source_task_record_sha256": "bd55302cbe05586df138c74191fe1029211045bd79edbd2c8bde55205f6156ac",
+          "source_metadata_sha256": "d277fb70864b1240ccd8867ff513ffa9b3043dfe979927d55c037fdd6cabfa9d",
+          "source_suggested_tools": [
+            "HOMER",
+            "ChIPseeker",
+            "bedtools"
+          ]
+        },
+        {
+          "task_id": "chipseq-004",
+          "source_task_record_sha256": "face244d27784fbcbfadc886835a4e77f58767c6409f8a71003adb784880b18d",
+          "source_metadata_sha256": "fbf67e9587e7e0cca78f8f642766f9fcc1f072efe8ac8029a48ffc4598312913",
+          "source_suggested_tools": [
+            "DESeq2",
+            "edgeR",
+            "limma",
+            "scipy"
+          ]
+        },
+        {
+          "task_id": "chipseq-005",
+          "source_task_record_sha256": "80851560a5482f1a2aa72f2c53f718727709d95f4a0d46bd96c88ce1a15bd0fd",
+          "source_metadata_sha256": "85dd2487f29634c3c18ffba6c9389146edad87ebea25c80d12dd394f4bcd5799",
+          "source_suggested_tools": [
+            "MACS3",
+            "bedtools",
+            "samtools",
+            "DESeq2",
+            "edgeR",
+            "limma",
+            "scipy",
+            "statsmodels"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "chromatin-regulatory",
+        "differential-binding"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "read treatment and matched control",
+        "choose assay-appropriate peak model",
+        "call and export genomic peaks",
+        "read peak sequences",
+        "choose sequence background",
+        "discover motifs",
+        "quantify enrichment and sequence prevalence",
+        "join peak and annotation assembly",
+        "derive strand-aware transcript starts",
+        "assign feature classes",
+        "report closest transcription start",
+        "join replicated count columns",
+        "normalize counts",
+        "fit condition contrast",
+        "adjust multiple tests",
+        "export all regions",
+        "call replicate peaks against controls",
+        "construct consensus universe",
+        "apply spike-in normalization",
+        "exclude promoter, blacklist and CNV effects",
+        "quantify distal differences",
+        "annotate genes"
+      ],
+      "observed_input_requirements": [
+        "Observed ATAC fragments or BAMs, biological replicates, peak regions, matching annotation and frozen motif models.",
+        "Observed ChIP/CUT&Tag reads with biological replicates, controls, matched genome/annotation; observed contact matrices for contact questions."
+      ],
+      "required_formats": [
+        "BED6/tagAlign",
+        "FASTA",
+        "BED",
+        "GTF",
+        "TSV"
+      ],
+      "native_method_requirements": [],
+      "source_specific_decisions": [
+        "Control background and coordinate conventions must be explicit.",
+        "Control sequence composition and define motif equivalence.",
+        "Resolve overlapping feature classes, transcript multiplicity, distance sign and ties.",
+        "Use biological replicates and raw counts; preserve effect direction and tested universe.",
+        "Nearest genes are annotations, not established enhancer targets. Declare the consensus and spike-in conventions."
+      ],
+      "proposed_artifact_requirements": [
+        "BAM/fragment QC, BED peaks, count matrices, motif matches/backgrounds, gene links and sample-level effects",
+        "Signal/control QC, native BED/bigWig or contact matrices, region counts, full differential results and gene context"
+      ],
+      "deterministic_verifier_design": [
+        "Run native peak/motif tools; independently check intervals, fragment counts, background selection, matched sample joins and multiplicity.",
+        "Native package reference, independent interval/count/normalization checks and explicit background; distinguish occupancy from regulatory causation."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-bio-task-bench-crispr",
+      "scientific_question": "Which gene-level screen effects remain after observed guide-count QC, negative controls, replicate aggregation and multiplicity correction?",
+      "target_ids": [
+        "crispr-001",
+        "crispr-002",
+        "crispr-003"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "crispr-001",
+          "source_task_record_sha256": "19d058e132bf1e88912334c6414e20c8910464d5e2027172846cafde84b09bdf",
+          "source_metadata_sha256": "3c13d98c4aa47cc1b4e5a7b9c5e4af33761441eb4ecb05dde4068065a5c5d319",
+          "source_suggested_tools": [
+            "Python",
+            "R"
+          ]
+        },
+        {
+          "task_id": "crispr-002",
+          "source_task_record_sha256": "5fdf93eed0a1501bae15a9b9a362d17f5e90c69897247c6c36460035198ef32b",
+          "source_metadata_sha256": "de2b35e2fbb9fa4aeac57620b38a497ef206d302235b9f7c9b7d88fdaefb08cd",
+          "source_suggested_tools": [
+            "Python",
+            "R"
+          ]
+        },
+        {
+          "task_id": "crispr-003",
+          "source_task_record_sha256": "15eca4ba563939c908a0ce54772216c537cc23be70581d6bf1869cd775238f72",
+          "source_metadata_sha256": "9d28ab407d69b558ea6dc581fd7b867ccb04ca06ec53ada173a270a3b465f4d2",
+          "source_suggested_tools": [
+            "Python",
+            "R",
+            "scipy"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "crispr-screen-pathway",
+        "target-evidence"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "read guide effects",
+        "summarize distribution",
+        "classify dropout",
+        "report denominator",
+        "read gene scores",
+        "establish score direction",
+        "rank genes with ties",
+        "export selected genes",
+        "join counts to guide library",
+        "retain replicate and guide identities",
+        "estimate guide effects",
+        "aggregate genes",
+        "test and adjust hypotheses"
+      ],
+      "observed_input_requirements": [
+        "Observed guide counts before/after perturbation, biological replicates, guide-to-gene map, controls and frozen pathways.",
+        "Frozen public target, genetics, dependency, expression and compound evidence; measured effects with tissue, direction and release metadata."
+      ],
+      "required_formats": [
+        "TSV"
+      ],
+      "native_method_requirements": [],
+      "source_specific_decisions": [
+        "This begins at supplied guide effects; it does not exercise screen normalization or inference.",
+        "A ranking of supplied scores does not establish differential essentiality.",
+        "Review the biological replication unit; guide-level pooling must not silently replace replicate-aware inference."
+      ],
+      "proposed_artifact_requirements": [
+        "Guide eligibility and counts, normalization, guide and gene effects, control diagnostics, complete pathway results",
+        "Identifier/release map, source evidence rows, direction/effect tables, confounder checks, ranked candidates and uncertainty flags"
+      ],
+      "deterministic_verifier_design": [
+        "Run the actual screen package; independently verify joins, guide aggregation, normalization controls and full ranked outputs; guide observations are not biological replicates.",
+        "Independent joins and declared ranking arithmetic; check evidence direction and source provenance; preserve conflicting/absent evidence rather than generating narrative ground truth."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-bio-task-bench-assembly",
+      "scientific_question": "Which assembly contiguity, proposed joins and error summaries are supported by observed contigs and aligned-read evidence?",
+      "target_ids": [
+        "assembly-001",
+        "assembly-002",
+        "assembly-003"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "assembly-001",
+          "source_task_record_sha256": "efdd23940d1a3569a37e6e0a1b31ced776eb80ae88d66d3faba81b4f118357f1",
+          "source_metadata_sha256": "8f582cd0c84c3715e49360373fbbecbf1e53d744c55b24810f4e17b2d455327d",
+          "source_suggested_tools": [
+            "Python",
+            "R",
+            "QUAST"
+          ]
+        },
+        {
+          "task_id": "assembly-002",
+          "source_task_record_sha256": "9b5e876a43d01753b24ec73d248da3568d43fc81acf3145d4e55a47b29f873d5",
+          "source_metadata_sha256": "82b4f6f534bb4dc42d65d3b7ff50293ecd439b4abc0d8b8d99d04f274198bad2",
+          "source_suggested_tools": [
+            "Python",
+            "R"
+          ]
+        },
+        {
+          "task_id": "assembly-003",
+          "source_task_record_sha256": "97a9ad0c1ea330f41bd1147c505b3d4bf1b5d9344762d264a857914dbc87175b",
+          "source_metadata_sha256": "15dad2a743caeac42dff62e67b6270e38843db65039699f8afee8287cf1c9e5b",
+          "source_suggested_tools": [
+            "Python",
+            "R"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "assembly-qc"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "read contig lengths",
+        "sum assembled bases",
+        "compute length-weighted N50",
+        "report contig counts",
+        "read overlap candidates",
+        "combine aligned extent and identity",
+        "rank candidate joins",
+        "retain contig identities",
+        "join aligned base totals and mismatches",
+        "calculate error rates",
+        "classify contigs"
+      ],
+      "observed_input_requirements": [
+        "Observed short/long reads with source identities; independently supported reference or taxonomic evidence when evaluating correctness."
+      ],
+      "required_formats": [
+        "TSV"
+      ],
+      "native_method_requirements": [],
+      "source_specific_decisions": [
+        "Contiguity does not establish sequence accuracy or completeness.",
+        "Candidate scores do not establish that a join is biologically valid.",
+        "Declare the aligned-base denominator and unaligned sequence policy."
+      ],
+      "proposed_artifact_requirements": [
+        "FASTA, FASTQ QC, contig metrics, alignments, coverage, taxonomic evidence and repeat/read support"
+      ],
+      "deterministic_verifier_design": [
+        "Native assembly/classification reference with independent contiguity and coverage arithmetic; N50 alone does not establish correct assembly or taxonomy."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-bio-task-bench-lrs",
+      "scientific_question": "Which observed long reads retain support after length, extended-CIGAR and indel-error accounting?",
+      "target_ids": [
+        "lrs-001",
+        "lrs-002",
+        "lrs-003"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "lrs-001",
+          "source_task_record_sha256": "3f872915b81c52dfe80ee61d4255205b575a3e1ba28f3ae0663caf7dda9dd292",
+          "source_metadata_sha256": "8f66874d510259d2092942a98c6b275efeb28dd4f92dbe3d6fee7b80a4b57223",
+          "source_suggested_tools": [
+            "Python",
+            "R",
+            "NanoStat"
+          ]
+        },
+        {
+          "task_id": "lrs-002",
+          "source_task_record_sha256": "f8f408fedc9feec3402569b119d87cfc986bd7ab8c5415d39e7252bce197daf2",
+          "source_metadata_sha256": "767c5d0036ea6dbe5732d57df8f3c08466ceb3b65bb0163f12029306dbf44994",
+          "source_suggested_tools": [
+            "Python",
+            "R",
+            "awk"
+          ]
+        },
+        {
+          "task_id": "lrs-003",
+          "source_task_record_sha256": "d39f20f177473ed39211e6b4039660fb3a9697711e3e31a0469728d515160420",
+          "source_metadata_sha256": "3c8b1e0a2eafb3143706d16f6bad7284f6d12858fa9792ae223f19818920eb15",
+          "source_suggested_tools": [
+            "Python",
+            "R",
+            "pysam"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "assembly-qc"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "read length distribution",
+        "calculate count and mean",
+        "compute base-weighted N50",
+        "join insertion and deletion summaries",
+        "calculate indel burden",
+        "rank reads",
+        "parse extended CIGAR",
+        "accumulate matches, mismatches, indels and clipping",
+        "compute error denominator",
+        "classify reads"
+      ],
+      "observed_input_requirements": [
+        "Observed short/long reads with source identities; independently supported reference or taxonomic evidence when evaluating correctness."
+      ],
+      "required_formats": [
+        "TSV"
+      ],
+      "native_method_requirements": [],
+      "source_specific_decisions": [
+        "Read N50 and mean use different weighting.",
+        "Keep event counts distinct from affected bases.",
+        "Soft clipping is not an aligned-base error; ordinary M operations cannot distinguish matches and mismatches."
+      ],
+      "proposed_artifact_requirements": [
+        "FASTA, FASTQ QC, contig metrics, alignments, coverage, taxonomic evidence and repeat/read support"
+      ],
+      "deterministic_verifier_design": [
+        "Native assembly/classification reference with independent contiguity and coverage arithmetic; N50 alone does not establish correct assembly or taxonomy."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-bio-task-bench-metab",
+      "scientific_question": "Which observed metabolite effects remain after intensity normalization, replicate-aware contrasts and multiple testing?",
+      "target_ids": [
+        "metab-001",
+        "metab-002",
+        "metab-003"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "metab-001",
+          "source_task_record_sha256": "af39a1bd925448ef7b47811903f0828cbbacff388ef912ae8371f9fd1272d215",
+          "source_metadata_sha256": "0a43d8a84042d4d697903443c964b33d9b77e4e40b84fc443481260cc03bcdd9",
+          "source_suggested_tools": [
+            "Python",
+            "R"
+          ]
+        },
+        {
+          "task_id": "metab-002",
+          "source_task_record_sha256": "66e0ce9a6778f96b6ed8a7e0ee310be2e8b5a4051020fa92b5c7c50a0c414d7b",
+          "source_metadata_sha256": "c72f19d600a3bc147d2a469ef3cc54343a923829e9501c02b273e8bdd5290ef1",
+          "source_suggested_tools": [
+            "Python",
+            "R"
+          ]
+        },
+        {
+          "task_id": "metab-003",
+          "source_task_record_sha256": "39ca812bf9d86b15cf5091e8258fcc48a631a80202dfaf3ddcdd8e98ef96a5f6",
+          "source_metadata_sha256": "4479d88cf011f71deb89bbb9288cb188758f30326e1d658fdc138af0a9545628",
+          "source_suggested_tools": [
+            "Python",
+            "R",
+            "scipy",
+            "statsmodels"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "dose-response",
+        "proteomics-metabolomics"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "read feature intensities",
+        "establish logarithm scale",
+        "summarize abundance distribution",
+        "join condition-level feature means",
+        "compute directional and absolute differences",
+        "rank features",
+        "join sample metadata",
+        "transform measured intensities",
+        "fit group comparisons",
+        "adjust multiple tests",
+        "export full results"
+      ],
+      "observed_input_requirements": [
+        "Observed concentration/time response with biological replicates, plate positions, controls and measurement units.",
+        "Observed intensity/count matrices with sample, batch, replicate, missingness, feature identity and assay metadata; matched modalities for cross-omics claims."
+      ],
+      "required_formats": [
+        "TSV"
+      ],
+      "native_method_requirements": [],
+      "source_specific_decisions": [
+        "Use observed assay values and explicit handling of missing or censored intensities.",
+        "Ranking supplied means does not establish statistical significance.",
+        "Preserve replicates and specify missingness, zeros and the statistical model."
+      ],
+      "proposed_artifact_requirements": [
+        "Plate/sample maps, raw and normalized responses, control diagnostics, fitted curves/uncertainty and complete hit decisions",
+        "Feature/sample joins, normalized measurements, missingness masks, complete effects, pathways and matched associations"
+      ],
+      "deterministic_verifier_design": [
+        "Independent normalization and model-prediction residuals; actual curve fitting; observed replicate units and multiple-testing rules; no invented response points.",
+        "Independent joins and model contrasts; native numerical reference with censored/missing values preserved; mediation is a model assumption, not automatic causality."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-bio-task-bench-meth",
+      "scientific_question": "Which observed methylation differences remain after CpG eligibility and per-sample coverage checks?",
+      "target_ids": [
+        "meth-001",
+        "meth-002",
+        "meth-003"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "meth-001",
+          "source_task_record_sha256": "976be449279963721c8a949c88a3796c19a8da8f624d9a263c942d87b7f924d9",
+          "source_metadata_sha256": "ee977a4fdd532ce938e25618b9ac8e1da04f8c6586eb5b422f5bb569e218c6a9",
+          "source_suggested_tools": [
+            "Python",
+            "R",
+            "methylKit"
+          ]
+        },
+        {
+          "task_id": "meth-002",
+          "source_task_record_sha256": "e91eda8f774c282d5f47546b1a1ffe94034b14a8bac6bc21cd3b981fd1bf559c",
+          "source_metadata_sha256": "80c00fb39b504591181c5a56051744b33bd0b21cc1a5caad27d47fe5d62f5b59",
+          "source_suggested_tools": [
+            "Python",
+            "R",
+            "methylKit"
+          ]
+        },
+        {
+          "task_id": "meth-003",
+          "source_task_record_sha256": "e94a48e0b9ccf63829277f1faf3a37b239d9219b27fe808b752b6b5f3ebd9ee0",
+          "source_metadata_sha256": "f3bacb6742ade4b57a2ede390e2102f3d8b1ee979b34a99a58214ca993226eca",
+          "source_suggested_tools": [
+            "Python",
+            "R",
+            "scipy",
+            "statsmodels"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "methylation-expression"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "read per-site methylation fractions",
+        "establish eligible sites",
+        "summarize methylation",
+        "join condition-level CpG estimates",
+        "calculate absolute methylation shifts",
+        "rank sites",
+        "derive fractions from methylated and total reads",
+        "filter by per-sample coverage",
+        "compare biological groups",
+        "adjust multiple tests"
+      ],
+      "observed_input_requirements": [
+        "Observed methylated/unmethylated read counts and expression from matched samples, with array probe or genomic coordinates and assembly version."
+      ],
+      "required_formats": [
+        "TSV"
+      ],
+      "native_method_requirements": [],
+      "source_specific_decisions": [
+        "Distinguish site-weighted and coverage-weighted summaries.",
+        "A large shift alone does not establish differential methylation.",
+        "Keep coverage and biological replication distinct; justify the statistical model for fractions."
+      ],
+      "proposed_artifact_requirements": [
+        "Coverage/QC tables, locus and region effects, probe/assembly mapping, matched expression joins and full association tests"
+      ],
+      "deterministic_verifier_design": [
+        "Independent proportion and interval arithmetic; native model plus full coverage/missingness checks; do not infer paired measurements from shared labels."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-bio-task-bench-moi",
+      "scientific_question": "Which transcript/protein effects and pathways agree after observed feature identity, scale and direction reconciliation?",
+      "target_ids": [
+        "moi-001",
+        "moi-002",
+        "moi-003"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "moi-001",
+          "source_task_record_sha256": "98a2857dbaa89841eabb5bfe10c80773935ef1a3112fd8d6f97feac24f3d6129",
+          "source_metadata_sha256": "7e6819663c46094194e1782fdff162a197d645b8fd4e827893ed155a603c5712",
+          "source_suggested_tools": [
+            "scipy",
+            "numpy",
+            "pandas",
+            "R"
+          ]
+        },
+        {
+          "task_id": "moi-002",
+          "source_task_record_sha256": "5c28da0f527ce50df73fb3674fdc88dc0ede234f2e7adb48c09b8be306305383",
+          "source_metadata_sha256": "09dbe39934fcfc0b7fe21812aa0f9ad3e04b0ed267ed0063e7142cabea9b32f1",
+          "source_suggested_tools": [
+            "scipy",
+            "numpy",
+            "pandas",
+            "R"
+          ]
+        },
+        {
+          "task_id": "moi-003",
+          "source_task_record_sha256": "4b0f5131b8de6576ecb57c040106090ba7182da42eea87d81334f7fda577d96b",
+          "source_metadata_sha256": "1fad21d041f0321d4864aa34a98615d3faef559db45e7d6ec5daa4fceb5f4c36",
+          "source_suggested_tools": [
+            "scipy",
+            "numpy",
+            "pandas",
+            "R"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "proteomics-metabolomics"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "match gene identities across modalities",
+        "calculate rank association",
+        "report uncertainty and direction",
+        "join transcript and protein effects",
+        "align units",
+        "combine effect magnitudes",
+        "rank features",
+        "join pathway summaries",
+        "calculate declared joint signal",
+        "classify concordance"
+      ],
+      "observed_input_requirements": [
+        "Observed intensity/count matrices with sample, batch, replicate, missingness, feature identity and assay metadata; matched modalities for cross-omics claims."
+      ],
+      "required_formats": [
+        "TSV"
+      ],
+      "native_method_requirements": [],
+      "source_specific_decisions": [
+        "Across-gene association is not a patient-level causal relationship.",
+        "A combined magnitude score can hide opposite effect directions.",
+        "A minimum-signal proxy does not establish a biochemical bottleneck or pathway activation."
+      ],
+      "proposed_artifact_requirements": [
+        "Feature/sample joins, normalized measurements, missingness masks, complete effects, pathways and matched associations"
+      ],
+      "deterministic_verifier_design": [
+        "Independent joins and model contrasts; native numerical reference with censored/missing values preserved; mediation is a model assumption, not automatic causality."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-bio-task-bench-popgen",
+      "scientific_question": "Which observed population differences remain after genotype eligibility, allele-frequency, equilibrium and sample-outlier checks?",
+      "target_ids": [
+        "popgen-001",
+        "popgen-002",
+        "popgen-003",
+        "popgen-004"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "popgen-001",
+          "source_task_record_sha256": "b793e0e66c8ef56781508652e9b1352dcb303b29ee072dcd3ec64c5fe5adf5b5",
+          "source_metadata_sha256": "b85bc0ca4156c1b98c3c25a27da5382fa1663bdbb4127bf48ae43068163ab600",
+          "source_suggested_tools": [
+            "Python",
+            "R",
+            "scikit-allel",
+            "VCFtools"
+          ]
+        },
+        {
+          "task_id": "popgen-002",
+          "source_task_record_sha256": "522aaf76c5ccc9c08163242c8c5cef754ea6eed82c58d6f112fa936ddf796c20",
+          "source_metadata_sha256": "b07a9329cb1c63bba3e414425ede897d3d6f05e236d672350e409a251c57b2b8",
+          "source_suggested_tools": [
+            "Python",
+            "R",
+            "awk"
+          ]
+        },
+        {
+          "task_id": "popgen-003",
+          "source_task_record_sha256": "13b576288c7f622249990230dc2a6d3134339618f6e6099408c706df68c9d922",
+          "source_metadata_sha256": "d5f16d8666f7013a21f0f458f2ac4963e3b47b986f2be3c684a6ef6fa847a852",
+          "source_suggested_tools": [
+            "Python",
+            "R",
+            "PLINK"
+          ]
+        },
+        {
+          "task_id": "popgen-004",
+          "source_task_record_sha256": "ce9deb25476f719c594c1b64f0955c660fe8e7cf1c2529aa1dcedcc4d2dd1089",
+          "source_metadata_sha256": "71658d70ca69503e490f61706719516c450d588dcce2821035365fd553a32329",
+          "source_suggested_tools": [
+            "Python",
+            "R",
+            "PLINK"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "population-genetics"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "join allele frequencies and sample sizes",
+        "calculate declared Fst components",
+        "aggregate across loci",
+        "summarize differentiated sites",
+        "align allele definitions",
+        "compare population frequencies",
+        "rank loci",
+        "derive allele frequencies from genotype counts",
+        "calculate equilibrium test",
+        "report site decisions",
+        "prepare dosage matrix",
+        "select centering and scaling",
+        "compute sample PCs",
+        "standardize scores",
+        "flag outliers"
+      ],
+      "observed_input_requirements": [
+        "Observed VCF/BCF and population/pedigree metadata with missingness, ploidy and release-aware allele definitions."
+      ],
+      "required_formats": [
+        "TSV"
+      ],
+      "native_method_requirements": [],
+      "source_specific_decisions": [
+        "Pin the estimator and locus aggregation; unequal population sizes matter.",
+        "Align reference/alternate alleles before comparing frequencies.",
+        "State exact versus asymptotic testing and rare-genotype handling.",
+        "Specify missingness, scaling and PCA sign equivalence; outliers are not automatically erroneous samples."
+      ],
+      "proposed_artifact_requirements": [
+        "VCF/BCF/TBI, genotype/sample eligibility, allele counts, PCA/frequency statistics, haplotypes and pedigree checks"
+      ],
+      "deterministic_verifier_design": [
+        "Independent allele/ploidy/missingness counts; pinned statistical methods; native bcftools/PLINK-style operation with full result checks."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-bio-task-bench-prot",
+      "scientific_question": "Which observed protein-abundance effects remain after assay-scale reconciliation, normalization and replicated comparisons?",
+      "target_ids": [
+        "prot-001",
+        "prot-002",
+        "prot-003"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "prot-001",
+          "source_task_record_sha256": "b7a3efb3c1baa4124a83b59592c4f7e9d2e0feee78ca2b2c94ec602ce413513c",
+          "source_metadata_sha256": "ea291c83074e7293c28f0a8a29e221eb934e2b33610cf7e018395f7ec2b260c8",
+          "source_suggested_tools": [
+            "Python",
+            "R"
+          ]
+        },
+        {
+          "task_id": "prot-002",
+          "source_task_record_sha256": "2f6c0a4e07fa1ff910ee76d908adf4e5d8d72961e353919a89c12ad2b385a845",
+          "source_metadata_sha256": "d766c94db648a4be0461a1de98c3ccaa4613a5843f566f9f77a2aa05245faff8",
+          "source_suggested_tools": [
+            "Python",
+            "R"
+          ]
+        },
+        {
+          "task_id": "prot-003",
+          "source_task_record_sha256": "92606c919748f48d5f803c2309332f6cf8b6e766601431960c2a67bbab864473",
+          "source_metadata_sha256": "fde0c29892954fcd878dfd205a2cfbdd78c6e2cd108bf7268c1a0d0bf40cd779",
+          "source_suggested_tools": [
+            "Python",
+            "R",
+            "scipy",
+            "statsmodels",
+            "limma"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "dose-response",
+        "proteomics-metabolomics"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "read measured protein intensities",
+        "establish logarithm scale",
+        "summarize abundance distribution",
+        "join condition-level protein means",
+        "compute effect magnitude",
+        "rank proteins",
+        "join sample groups",
+        "log-transform and normalize intensities",
+        "fit group comparisons",
+        "adjust multiple tests"
+      ],
+      "observed_input_requirements": [
+        "Observed concentration/time response with biological replicates, plate positions, controls and measurement units.",
+        "Observed intensity/count matrices with sample, batch, replicate, missingness, feature identity and assay metadata; matched modalities for cross-omics claims."
+      ],
+      "required_formats": [
+        "TSV"
+      ],
+      "native_method_requirements": [],
+      "source_specific_decisions": [
+        "Use observed assay values and explicit missing-intensity handling.",
+        "Ranking supplied means does not establish statistical significance.",
+        "Handle missingness and detection limits explicitly; preserve biological replicates."
+      ],
+      "proposed_artifact_requirements": [
+        "Plate/sample maps, raw and normalized responses, control diagnostics, fitted curves/uncertainty and complete hit decisions",
+        "Feature/sample joins, normalized measurements, missingness masks, complete effects, pathways and matched associations"
+      ],
+      "deterministic_verifier_design": [
+        "Independent normalization and model-prediction residuals; actual curve fitting; observed replicate units and multiple-testing rules; no invented response points.",
+        "Independent joins and model contrasts; native numerical reference with censored/missing values preserved; mediation is a model assumption, not automatic causality."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-bio-task-bench-stx",
+      "scientific_question": "Which observed spatial-expression and cell-composition patterns persist across explicit tissue regions and coordinate summaries?",
+      "target_ids": [
+        "stx-001",
+        "stx-002",
+        "stx-003",
+        "stx-004"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "stx-001",
+          "source_task_record_sha256": "38d699e4082c9e0db49147e8cadecc3c0cf24c0c60884f9647fc45b3ad737fd3",
+          "source_metadata_sha256": "b8919f2927ece5148b8542b4f207f68799b50f3299d61214597755399c42054b",
+          "source_suggested_tools": [
+            "Python",
+            "R",
+            "Scanpy"
+          ]
+        },
+        {
+          "task_id": "stx-002",
+          "source_task_record_sha256": "48f878fb6e3920b07d83848018b02a22e8a52c1e8c7566b16d1740c9105a03cc",
+          "source_metadata_sha256": "cde72cbd243df85f040bbaf3069470c4dfec4e3d40716c1ae6db2a66310c9e69",
+          "source_suggested_tools": [
+            "Python",
+            "R",
+            "Squidpy"
+          ]
+        },
+        {
+          "task_id": "stx-003",
+          "source_task_record_sha256": "085ba4e49180be09ccc9feef6df7790d586f49b3968160b4f8a24641678c8478",
+          "source_metadata_sha256": "229ab95c1cd546568dc4cd883fc76508ac12c726f6f1454f5010cb2191cc5c35",
+          "source_suggested_tools": [
+            "Python",
+            "R",
+            "Scanpy"
+          ]
+        },
+        {
+          "task_id": "stx-004",
+          "source_task_record_sha256": "d0d30af66ddacb85ef7f9672750c8b8dd0a7ca267d82264167f9c4e3c46a823c",
+          "source_metadata_sha256": "9794183095061948ac8712513f80ee9515ac287ee74361c0f30035b99821cf84",
+          "source_suggested_tools": [
+            "Python",
+            "R",
+            "pandas"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "spatial-expression"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "join expression to coordinates",
+        "estimate axis-expression association",
+        "report direction and uncertainty",
+        "align expression and coordinates",
+        "define tissue center and distance groups",
+        "compare local expression",
+        "rank genes",
+        "join cluster membership and coordinates",
+        "aggregate expression and positions",
+        "classify cluster summaries",
+        "assign spatial regions",
+        "count cell types within regions",
+        "compute region-specific fractions"
+      ],
+      "observed_input_requirements": [
+        "Observed spatial coordinates, counts, image/segmentation metadata and multiple sections or samples where comparisons require replication."
+      ],
+      "required_formats": [
+        "TSV"
+      ],
+      "native_method_requirements": [],
+      "source_specific_decisions": [
+        "A spatial gradient is descriptive unless the dependence structure is modeled.",
+        "Geometric center is a chosen spatial statistic, not an anatomical niche definition.",
+        "Preserve tissue/sample identity and distinguish supplied labels from inferred clusters.",
+        "Coordinate quadrants are geometric regions; they need biological justification before being called tissue niches."
+      ],
+      "proposed_artifact_requirements": [
+        "Coordinate transforms, segmentation/QC masks, H5AD, region/cell expression tables, neighborhood edges and null distributions"
+      ],
+      "deterministic_verifier_design": [
+        "Check physical units, section boundaries, segmentation-to-cell joins, geometric distances and full null-model outputs; compare images through underlying numerical artifacts."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    }
+  ],
+  "excluded": []
+}

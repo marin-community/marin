@@ -1,0 +1,677 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-09-24T15:12:07.450515+00:00",
+  "scope": "Benchmark-wide question planning only; no implementation, source biological fixture reuse, or validated coverage added.",
+  "source": {
+    "benchmark": "BixBench-Verified-50",
+    "inventory_path": "benchmark_tasks/bixbench-verified-50.json",
+    "inventory_sha256": "2521fbbc67d7fa8e57e3c3f20820d71c92c0cb2477a4f541bb8a465cd473682f",
+    "source_revision": "c77fc8ea4611b546947b8a4710ed36ab72ee233c"
+  },
+  "defaults": {
+    "data": "Independent observed biological inputs with pinned rights, provenance and transformations. A corpus train split can contain a task-internal held-out evaluation; task-internal labels remain private.",
+    "acceptance": "Freeze complete output schemas, identity and eligibility rules, numerical or metric criteria and independent checks before solver evaluation. No LLM judge.",
+    "reference": "Native package scripts read the supplied observations; a passing reference proves feasibility, not that every model must produce identical predictions.",
+    "runtime": "Bound a scientifically meaningful question for a measured <=30-minute solve. Publish any preprocessing/start-boundary adaptation and do not claim stages that the task does not execute.",
+    "status": "Planning only; full endpoint equivalence, independent input selection and runtime remain unresolved."
+  },
+  "aliases": [
+    {
+      "task_id": "bix-12-q2",
+      "source_task_record_sha256": "03d44957871c59964f5f63c1a6fab48ecb323b03bc717920000e0f8d59361991",
+      "source_question_sha256": "085e3f73ddd484f748df5c59fa5c61ffa2e228f7893b1846397406701bfb1612",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-12-q2",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-alignment-signal-comparison",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-11-q1",
+      "source_task_record_sha256": "6ab5156d887a9e03c770d4f0eed9e51d1b7a688abf4d245ad66d623256f94fc5",
+      "source_question_sha256": "7090b016cbd816db05d2b35b139e6207bd2ed959cb4d268907f2a22157aef96b",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-11-q1",
+        "relation": "revised-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-ortholog-tree-comparison",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-35-q1",
+      "source_task_record_sha256": "ec696ba7f80eca8a44052a4c307cfeedc3c7d8811762199203bb7256d907aeed",
+      "source_question_sha256": "48254ebcfa94f663e75554a2bf7448962ddbc910f7b508d5f7b750fb32672c60",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-35-q1",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-ortholog-tree-comparison",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-43-q2",
+      "source_task_record_sha256": "b673d59fe6c429df561578559f52e7ecc0049564074ccafa683b71e7f5322090",
+      "source_question_sha256": "c258c8a3ca257a3560561d14e72a365b001dc9d546993b0f33af79d9af761801",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-43-q2",
+        "relation": "revised-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-combination-rna-enrichment",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-28-q3",
+      "source_task_record_sha256": "ba292b2eee8cd3a0fdeea52f6e08f506a9f63baf942b4cc8a86253d6f55949d5",
+      "source_question_sha256": "dc1b507a7f261ef2ac3e0c05a0d19d4973eca1bfed9a71ce656d9244f42be048",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-28-q3",
+        "relation": "revised-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-ortholog-tree-comparison",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-34-q2",
+      "source_task_record_sha256": "5c1d5348ca32b2ecbc441efa17e59ef877ca1a96b2f7809f220731e7cca666f7",
+      "source_question_sha256": "ddb16c5feb7a007c384a9afd4c6f304c8ad1dc24c44285f723bcd2a2da2b5690",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-34-q2",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-ortholog-tree-comparison",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-52-q2",
+      "source_task_record_sha256": "5c4f1f7a9b42c0e647ffca4258a1060a6e6bc7a4247e8e5aa6ec8bbbaa81964f",
+      "source_question_sha256": "834d809effea09d1b90f3dac2c83adb4dbeb902422e61fe83d203546f4c0e8df",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-52-q2",
+        "relation": "revised-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-methylation-genome-density",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-52-q6",
+      "source_task_record_sha256": "109485a35abb463b673aab39ff4d0966b283d089baae9e516daed5fa0fae7681",
+      "source_question_sha256": "a374fe13571c82e3f360ed04a6dc24f79f746bb573bb731d2f271cf27d4ab346",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-52-q6",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-methylation-genome-density",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-49-q4",
+      "source_task_record_sha256": "764f8e6f7fac1a56beb8a8fd471aacc7e53ccf5890f41f03af1340311be1600b",
+      "source_question_sha256": "454dfcbd3592c4c447c769097b2c74413e646e11073f2119503003a3ced697b8",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-49-q4",
+        "relation": "revised-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-case-control-go",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-6-q4",
+      "source_task_record_sha256": "ca332171414c103a6ead0487ce0770d64a1f9964196e48bde3d110cfeee0cbb8",
+      "source_question_sha256": "a450578a2e0f939cf328d0ea73121337defa4de54f49707ab7fae0d316b37663",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-6-q4",
+        "relation": "revised-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-replicated-crispr-enrichment",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-61-q5",
+      "source_task_record_sha256": "abf8de608f4dcd7ea08d3bb348afac1b2f6820807da44c6174239f311d070c4c",
+      "source_question_sha256": "95687365a900102efd02376e04fb1a7f73f8ede849af664abc00111f4d4ef533",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-61-q5",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-paired-bacterial-variant-workflow",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-53-q2",
+      "source_task_record_sha256": "a9c2ba5834968345d8862f9190813052043d0cbd6e034d2cdb2f180cf6428db3",
+      "source_question_sha256": "d646675d321001e0793d4416e5c24c3d04c38f5202af533bc9366b0d7d4f05cd",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-53-q2",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-rna-replicate-sensitivity",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-27-q5",
+      "source_task_record_sha256": "8d4251364712f6ee81e2ab5d4ae84e3a6061c552a6af5c6c854bb9d508187d3d",
+      "source_question_sha256": "a02db1d74da568fc366256ec02d8819b07c7a741a2d0878dafba9365391e1514",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-27-q5",
+        "relation": "revised-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-consensus-expression-subtypes",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-54-q7",
+      "source_task_record_sha256": "ff85c8cfc965147040b3afca26637b08c6e45de02f21871a44a1a5e9d5ec879e",
+      "source_question_sha256": "7e574faf7675858781681036b914c1b025b857beb2a4e94c2555dc297642830b",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-54-q7",
+        "relation": "revised-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-colony-mixture-response",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-51-q2",
+      "source_task_record_sha256": "1826b93877ea7aa55b756bfd3fa0fb99ccbb041f1ef75921bcbf81a062f24f9c",
+      "source_question_sha256": "414c51bf9b9c3e6c3765222cc8f31bafc0118c2c1ac7ad85bfc45b2c0b176af2",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-51-q2",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-binary-clinical-response",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-12-q5",
+      "source_task_record_sha256": "ac677470040b261f508d6b43820fa68303c894abcf57f80384ae004b72014d1e",
+      "source_question_sha256": "721d0bf417e7a57c8deb3f689d9e4ae97d9339690d7c4f1c7962022059ffd133",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-12-q5",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-alignment-signal-comparison",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-30-q3",
+      "source_task_record_sha256": "529d0c9faeb0dfee79110c804ccff124a5aa776d8039d647b2ab343c47402baf",
+      "source_question_sha256": "c88e82a8baa3a4b78724c5776238ff33f19a705a12514fe9224b9c04e38faf95",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-30-q3",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-mirna-multiplicity",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-31-q2",
+      "source_task_record_sha256": "e09b2cda4d1b3ee20b73ddbda18141a27c95d5805456908fc869c8d187fc3c2f",
+      "source_question_sha256": "704cdc4a94320dcbd776bef074c082eb788a5139657699fc573ef2182b894b44",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-31-q2",
+        "relation": "revised-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-sex-by-cell-expression",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-47-q3",
+      "source_task_record_sha256": "cc25929c7566b753e92b5019f3db0695157dad99c5fea84d351b862a38fbbf0b",
+      "source_question_sha256": "2fc7fa331349bba70edbd5fda631f6e67ddcf6e6dfd5978212280191d182478c",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-47-q3",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-clinical-exome-variant-audit",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-26-q3",
+      "source_task_record_sha256": "cc6594f1ebf06e2af3c6ab14dae47b2f15f907a5a54c073463b36c3c4242b5c6",
+      "source_question_sha256": "e51e8254441995fcd0a1d8f32351c030e6b16e447841cea298f33781d4147ea1",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-26-q3",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-factorial-microbial-rna",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-35-q2",
+      "source_task_record_sha256": "3c49463f83dab7811ebae81abb612118020d553c64c3180f59b2c6cb54ef39db",
+      "source_question_sha256": "e84f6f8bed540c111cd60416697ee0a4aa9b4d0a0d8f542b85610bf820dc3d4f",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-35-q2",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-ortholog-tree-comparison",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-34-q5",
+      "source_task_record_sha256": "d6b03e4483a3230a9b2078264eb7146ace8004ebd7d8474b21238bc996038b8a",
+      "source_question_sha256": "1d030254eae14b7f694a6939a50bac8cc08106b5d1dbb8bb447efd7d79864bc3",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-34-q5",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-ortholog-tree-comparison",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-16-q3",
+      "source_task_record_sha256": "9239a2eb0ba096c4b9509d035add4a223a090b467d5d7dd0f719b37fa4edf157",
+      "source_question_sha256": "2387b2b52bf15f41b0fd22f959ee67924d0a61a91ede3bb8d385864a8a39ca16",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-16-q3",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-dependency-expression-association",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-14-q1",
+      "source_task_record_sha256": "0a4db4db7875e00525434175b6b7d1842eb335ad3405f79dde5d79118b9202d7",
+      "source_question_sha256": "a7ba9c94388b2c7286c5ae25cf90907e4e7d3dedaa8df69526eb5ad9905533b7",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-14-q1",
+        "relation": "revised-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-clinical-exome-variant-audit",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-20-q3",
+      "source_task_record_sha256": "73508621e76f74f8e9ad7971d713488a0f59c67cfd11fe4f96e0f3685b63df68",
+      "source_question_sha256": "160936c9bdd9a7d8956ab31105f6f3128182812a795fe90c4593217920a4844a",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-20-q3",
+        "relation": "revised-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-clinical-exome-variant-audit",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-55-q1",
+      "source_task_record_sha256": "b1042dfba2c22e5badaf0f972865ea24fd083472896a8b47668892839f9eb2a8",
+      "source_question_sha256": "8734df9eb29d17df07b3e7d736bdfb2e5d782eb323dd4d1088891733f112aa03",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-55-q1",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-ortholog-discovery-qc",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-32-q2",
+      "source_task_record_sha256": "722f47e1e973e9ba3d4ee95641f71b110444d945b2b4bbf1f62272162c941acd",
+      "source_question_sha256": "26e7dbb0b0345d6599159145551c2dd28e72e7ef13a0a57f73003e73de247611",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-32-q2",
+        "relation": "revised-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-factorial-microbial-rna",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-53-q5",
+      "source_task_record_sha256": "ee481e839af49864a727f4f5be8e96f1ca06d2181fa24c77039d7e7baeb98bf8",
+      "source_question_sha256": "b6511359d1cccf7be33e51ac84ce8533d20989b777c5b79573c6ca781c795723",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-53-q5",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-rna-replicate-sensitivity",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-12-q4",
+      "source_task_record_sha256": "eb3145047193b7fc2abd0043d545a3d3277ce683849cf1c9233695c2b1e685aa",
+      "source_question_sha256": "9c63cfe85d3c0507d07ce63b23b0124180dc231d873137d6853dcbe312ce384b",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-12-q4",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-alignment-signal-comparison",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-16-q1",
+      "source_task_record_sha256": "8edd77e368812c1c7156aa4ec1d872dda6acfbe518bf85e6f5f848496b59fc95",
+      "source_question_sha256": "96172fa75a517be5982ae85a348c984d2f6c524a6411f55ea9260e68e47b5a6b",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-16-q1",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-dependency-expression-association",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-41-q5",
+      "source_task_record_sha256": "ca393bb4f9817c4aa25fb002102248217968c4adec143a754685384fb9776be3",
+      "source_question_sha256": "9360bb14a4cb50974e4a90149468c858a3029813ebedf543116bc6cbc1075308",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-41-q5",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-colony-morphology-contrasts",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-43-q4",
+      "source_task_record_sha256": "2508aa1705ee1fab441e94d7152458d7f8e07aedfaefd301127c056f6a56e7fe",
+      "source_question_sha256": "3ce76c51b9affea0a18c6bc2f2c125f3d7ca24605eac5158827cc321a210a8af",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-43-q4",
+        "relation": "revised-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-combination-rna-enrichment",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-37-q1",
+      "source_task_record_sha256": "38c9cd58afc124b884bd464b1ace4da77a2296747f5b0a85be5d88d001b60a5e",
+      "source_question_sha256": "bc88f1264d6174df1563bd648b823816b89d04bb388cc69ea31724788640f7fd",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-37-q1",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-paired-protein-abundance",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-52-q7",
+      "source_task_record_sha256": "e46b3af53ce5399bddb894b2ec4b940db77d53a11bd0ac93dd75fec67cdbcff7",
+      "source_question_sha256": "d167ebfab9d62283e9fedc241a62a91a2f6ddcc3f9b705898906391c6a9c3a76",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-52-q7",
+        "relation": "revised-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-methylation-genome-density",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-22-q1",
+      "source_task_record_sha256": "ab39c7e44c5f195b43bd45fd151258859c518b0f96fde6974348c9d67733798a",
+      "source_question_sha256": "d95b7f1d74b6b4aca3af321f5666cd6f91cc3155587df90902d9e4e5cb0e3ede",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-22-q1",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-gene-length-expression",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-12-q6",
+      "source_task_record_sha256": "87df799f3ce4284c343595f9ad6da6fe38f2906b3d94843fa902a792546d69a2",
+      "source_question_sha256": "55d18c0b3a7551ec2e47852f0ef59e8740ad23e4b03d2e981a1559127683fee9",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-12-q6",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-alignment-signal-comparison",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-24-q2",
+      "source_task_record_sha256": "a2eb42a0b6408809780f18f53c9a0ad10b2dfc384ec0393a39c0620e5e2614e7",
+      "source_question_sha256": "10cb354b99b0f43ba02ffec58edba710158d0ca6f23b773c94c6f8c56dfb2f33",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-24-q2",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-combination-rna-enrichment",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-46-q4",
+      "source_task_record_sha256": "3865ba2f2b641d722c985a5425b3e8aa57276a7426bd8a6c96978144eedbb994",
+      "source_question_sha256": "6ca10a7c484e10f9b16abe36e0d924118447b5b317ee2bf885efb455466905de",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-46-q4",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-factorial-microbial-rna",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-37-q4",
+      "source_task_record_sha256": "a314aef9eedb5707ce5cd051847746355918010db0148a4910ed797a07b69ba8",
+      "source_question_sha256": "1aba0c2693042713187e6d671c68ac8bfd3a3d0d299ea5b72907cc4c770e7959",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-37-q4",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-paired-protein-abundance",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-26-q5",
+      "source_task_record_sha256": "b61879e8cb6837606c342de4dc5a5a7cf7599c4466a578479dcf180ced82fe91",
+      "source_question_sha256": "d2f03458b81354c568e5abed77f690f627dba9e3c4eae0ec272d23007fa40135",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-26-q5",
+        "relation": "revised-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-factorial-microbial-rna",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-38-q1",
+      "source_task_record_sha256": "1914f028de57f6639e5da58a9ce04374515fb59387b0ea3cf7894513854a4511",
+      "source_question_sha256": "ec990d710671599243484f14b24ea7058f29098a543ae97c1f98d1a9ff87f5e0",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-38-q1",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-ortholog-tree-comparison",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-45-q1",
+      "source_task_record_sha256": "0e9189a7a4e15539577626c83dde9229308677e4486a120501b3cb53d530ef58",
+      "source_question_sha256": "1df8d6c0f542932f84cf83f458daea32ed0a31659802ab967550a3ccbe232397",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-45-q1",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-alignment-signal-comparison",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-18-q3",
+      "source_task_record_sha256": "abc8407c12729f95ba61326c6d329200374032db222547bfc4334a835826bb87",
+      "source_question_sha256": "5516c318cf254fc2b26034f58dae41427e2b66b3cc414a0726509e73087634c3",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-18-q3",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-colony-morphology-contrasts",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-11-q2",
+      "source_task_record_sha256": "9dad0638868c0293d59a655a03a381eec09f0a3deec70489502c6dbc0d3d984d",
+      "source_question_sha256": "a27bb10febe8a1e0d206ecee482bf61f8c3b7757ebbc1db0878a59aeae847f62",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-11-q2",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-ortholog-tree-comparison",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-16-q4",
+      "source_task_record_sha256": "7fbb52f93a3524ace24909665d051bde4889401feb13dfa1c66434eb898a97bf",
+      "source_question_sha256": "41e8fc2121acfa5068af2a5f6cbe9d4970320d27b3134595070d3d2c4d350f8e",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-16-q4",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-dependency-expression-association",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-22-q4",
+      "source_task_record_sha256": "043bdcaa88bebaf4ec2e2bf44068dc6573060fc475e656873007d7bb27789453",
+      "source_question_sha256": "d835f729dcd6b7e0b15b6df32b528cbd843733913eaf37fee2ebc6ab1be552a7",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-22-q4",
+        "relation": "revised-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-gene-length-expression",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-61-q2",
+      "source_task_record_sha256": "65273fa1ea1c6b0ae88dcf5dd39718679c4d6e51b4d4cd14d10c851fa3ec93cc",
+      "source_question_sha256": "9bb2a23bce033101b00e64658923441ba15253384b65f6b874dad9af48b43cda",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-61-q2",
+        "relation": "revised-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-paired-bacterial-variant-workflow",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-51-q8",
+      "source_task_record_sha256": "7e9eeb66b502bf6e4722dcb80db0ec423326443324e70197e2f9557c1249c198",
+      "source_question_sha256": "c7bb46cc2e7abc72a546beb2d86a9d9ac291de498bd6c693cc2696f099beaf3a",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-51-q8",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-binary-clinical-response",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-17-q2",
+      "source_task_record_sha256": "d64c66df61ba3d0420c76ce40399506f3ef48a85d857e266d80d77690e5c5bed",
+      "source_question_sha256": "476f359c946b088141523c758381625bffc8217b14ddac02984efde972527320",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-17-q2",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-clinical-exome-variant-audit",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    },
+    {
+      "task_id": "bix-18-q1",
+      "source_task_record_sha256": "818df41ffe8377bae271998582b7a59c69f859293012a6666c1cb332db9e8786",
+      "source_question_sha256": "619b0c8047389540594821429420bb5d5e9de62cdcf1a7ba0d84e25760a5ec5b",
+      "related_original": {
+        "benchmark": "BixBench",
+        "task_id": "bix-18-q1",
+        "relation": "identical-question",
+        "input_equivalence_verified": false
+      },
+      "original_design_id": "bix-design-colony-morphology-contrasts",
+      "acceptance_review": "Retain the revised question and protocol separately; an identical ID does not prove identical input, metric or acceptance. No additional distinct-task gain for this known alias."
+    }
+  ],
+  "counts": {
+    "records": 50,
+    "alias_links": 50,
+    "revised_question_texts": 17,
+    "additional_independent_questions": 0,
+    "validated_new_mappings": 0
+  }
+}

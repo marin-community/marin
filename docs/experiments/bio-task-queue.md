@@ -1,16 +1,28 @@
 # Biology workflow authoring queue
 
-The [full task-design plan](../../experiments/post_training/bio_tasks/workflow_plan.json)
-contains **147 proposed questions across 52 scientific workstreams**, with review
-assignments for all **2,881 inventoried task, protocol or dataset-definition records
-across 30 ID releases**. It records exact task IDs, input designs, required artifacts,
-verification approaches and unresolved data/endpoint requirements. These are
-proposals; they add **zero validated mappings**. Twelve provisional-ID source leads still
-lack task inventories and remain explicit access or enumeration gaps.
+The [question portfolio](../../experiments/post_training/bio_tasks/workflow_portfolio.json)
+accounts for all **2,881 inventoried task, protocol or dataset-definition records
+across 30 ID releases**. It links 2,480 records to scientific question proposals,
+links 50 known BixBench-Verified aliases to their original designs, preserves 350
+SciGym systems as individual-endpoint review gaps, and retains one excluded
+objective. Twelve provisional-ID source leads still lack task inventories.
 
-**Current phase: finish benchmark-wide question planning before implementing more tasks.**
-Review exact endpoints, consolidate overlapping designs and specify reusable input
-requirements before assigning bounded task-creation work. No candidate is selected.
+The portfolio contains **662 question cards and 605 proposed task groups**, including
+30 conditional combinations across benchmarks. These are planning units, with
+substantial differences in source inspection depth. They add zero validated mappings
+and do not set a target dataset size. Each combined question retains all member
+contracts; incompatible inputs, methods or estimands require separate tasks.
+
+The [workstream plan](../../experiments/post_training/bio_tasks/workflow_plan.json)
+organizes these proposals under 147 broad questions across 52 scientific workstreams.
+It records exact task IDs, required artifacts, verification approaches and unresolved
+input/endpoint requirements. Broad topic membership does not establish coverage.
+
+**Current phase: question planning and consolidation before further implementation.**
+The portfolio records a 20-item review order and an implementation assignment
+contract. No task or implementation worker is selected. Freeze independent observed
+inputs, scientific estimands, native methods and complete deterministic acceptance
+for the selected questions before assigning bounded task-creation work.
 
 When authoring resumes, choose the next coherent task by its expected gain in currently missing, distinct
 ID benchmark tasks. Recompute after each completed or rejected candidate.
@@ -73,8 +85,8 @@ Other releases retain their recorded inspection limits in the full plan.
 
 The [additional benchmark questions](../../experiments/post_training/bio_tasks/workflow_designs/additional_benchmarks.json)
 assign another **493 task/protocol records from 15 releases to 160 proposed question
-cards**. Together with the three earlier design files, 848 records across 18 of the
-30 inventoried ID releases now have explicit question proposals. These counts
+cards**. Together with the three earlier design files, these four files assign
+848 records across 18 inventoried ID releases. These counts
 measure planning assignments, not task coverage or independent training questions.
 Each card preserves its source inspection tier; several rely on question stems or
 reviewed workflow stages and still need exact endpoint decisions.
@@ -92,12 +104,48 @@ and expression-space QC share another, and caller-to-peptide analysis retains bo
 somatic-variant entry points. Cross-benchmark consolidation candidates remain
 explicit; sharing a workstream does not establish interchangeable methods or data.
 
-The remaining portfolio review should prioritize the larger BioML-bench,
-Biomni-Eval1, PromptBio-Bench and BioKGBench inventories, then the remaining public
-analysis releases. SciGym's system IDs and sources without public task content
-need an explicit feasibility disposition rather than invented questions. All
-unresolved records remain in the denominator. Finish this review and consolidate
-questions before choosing implementation work.
+The expanded portfolio also includes the following source-specific plans:
+
+| Source | Records | Question cards | Inspection or adaptation limit |
+|---|---:|---:|---|
+| [BioML-bench](../../experiments/post_training/bio_tasks/workflow_designs/biomlbench.json) | 406 | 25 | Registry/configuration review; 24 definitions appear in the released experiment list |
+| [Biomni-Eval1](../../experiments/post_training/bio_tasks/workflow_designs/biomni-eval1.json) | 433 | 20 | Shared protocols plus reviewed sequence/database questions; individual evidence remains unreviewed |
+| [BioKGBench](../../experiments/post_training/bio_tasks/workflow_designs/biokgbench.json) | 225 | 3 | Structured graph evidence can be verified; unrestricted literature entailment and absence claims remain gaps |
+| [PromptBio-Bench](../../experiments/post_training/bio_tasks/workflow_designs/promptbio-bench.json) | 244 | 92 | Exact versioned patterns and artifact specifications; assay and numeric decisions remain |
+| [BixBench3](../../experiments/post_training/bio_tasks/workflow_designs/bixbench3.json) | 20 | 19 | Nineteen endpoint proposals; one excluded objective retained |
+| [DrugDiscoveryBench](../../experiments/post_training/bio_tasks/workflow_designs/drugdiscoverybench.json) | 82 | 27 | Public-preview endpoint-stage review; independent evidence and inputs needed |
+| [Liu single-cell](../../experiments/post_training/bio_tasks/workflow_designs/liu-single-cell.json) | 63 | 49 | Native method requirements and shared prompt variants retained |
+| [Bio-Task Bench](../../experiments/post_training/bio_tasks/workflow_designs/bio-task-bench.json) | 34 | 10 | Related component outputs grouped into connected analyses |
+| [BioXArena](../../experiments/post_training/bio_tasks/workflow_designs/bioxarena.json) | 76 | 76 | Catalog/scorers inspected; full prompts and schemas remain inside uninspected data archives |
+| [CellBench](../../experiments/post_training/bio_tasks/workflow_designs/cellbench.json) | 50 | 22 | Context-inspired executable adaptations; original open-ended planning quality is not covered |
+| [SciGym](../../experiments/post_training/bio_tasks/workflow_designs/scigym.json) | 350 | 3 | Shared observed-dynamics adaptations; zero individual system endpoint assignments |
+| [BixBench-Verified-50](../../experiments/post_training/bio_tasks/workflow_designs/bixbench-verified-50.json) | 50 | 0 new | Known aliases; 17 revised question texts retain separate protocol review |
+
+BioML's 283 assay-ranking definitions need distinct measured-property and
+generalization questions, rather than automatic replication of registry entries.
+Its plan retains malformed/duplicated configurations and conflicting descriptions,
+including a pressure-prediction metric mismatch. No source configurations or task
+titles alone establish valid training data or acceptance rules.
+
+PromptBio's original classifier bundle was split into linear, tree, kernel/neighbor
+and imbalance/ensemble questions. Methylation read counts, composition-adjusted
+associations and chromosome density also remain separate. Each of its 244 source IDs
+is still assigned once. Required packages remain explicit: the Liu PyDESeq2 endpoint
+requires native PyDESeq2 execution even if an R DESeq2 cross-check is available.
+
+The 30 proposed combinations include ortholog metrics, donor pseudobulk expression,
+count contrasts and enrichment, reference-cell classification, paired RNA/protein
+prediction, receptor/state analysis and spatial neighborhoods. Every combination
+states when one independently observed study can support all its endpoints. For
+example, a two-dimensional section cannot supply a three-dimensional neighborhood
+endpoint, and a TCR-only study cannot supply BCR V/J outputs. These combinations
+remain conditional until the actual inputs and contracts are fixed.
+
+Planning priority considers exact endpoint detail, cross-benchmark reuse and
+feasibility. Predicted validated gains remain unset. When those contracts are fixed,
+rank feasible candidates by conservative gains in missing distinct endpoints,
+then benchmark breadth and implementation cost. Keep source aliases, repeated assay
+configurations and unreviewed individual cases out of automatic coverage claims.
 
 ## Solver diagnostics
 

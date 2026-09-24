@@ -1,0 +1,2069 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-09-24T14:55:14.334043+00:00",
+  "scope": "Shared-protocol question planning for three large provisional-ID agentic inventories. Original inspection limits remain; these cards are not reviewed individual biological cases or validated coverage.",
+  "basis_revision": "26e308ecb2",
+  "counts": {
+    "source_releases": 1,
+    "task_protocol_or_definition_records": 225,
+    "question_cards": 3,
+    "validated_new_mappings": 0
+  },
+  "defaults": {
+    "data": "Independent observed inputs and native data formats; preserve real biological replication and lineage. No source benchmark fixtures, expected labels or answer text used for task authoring.",
+    "consolidation": "Do not instantiate one task per registry row. Split on distinct measured properties, variant classes, leakage risks or evidence requirements, then merge compatible questions across benchmarks.",
+    "authoring_status": "Planning only. No implementation workers assigned."
+  },
+  "source_inventories": [
+    {
+      "path": "benchmark_tasks/biokgbench.json",
+      "benchmark": "BioKGBench KGCheck",
+      "sha256": "cecdac5f28f15c1cdbb79c21082c8813a32cf50b2877b143f4858c09441e0811",
+      "records": 225
+    }
+  ],
+  "questions": [
+    {
+      "proposed_id": "portfolio-biokgbench-protein-attribute-reconciliation",
+      "benchmark": "BioKGBench KGCheck",
+      "scientific_question": "Which protein attributes in an independent graph agree with the pinned source records, and which remain contradicted or unresolved?",
+      "source_family": "protein-attribute-reconciliation",
+      "benchmark_targets": [
+        {
+          "task_id": "kgcheck-dev-000",
+          "source_task_record_sha256": "144a6c415343d933746709ce85fddd6c713e06439a04598ddda1d7872ec0270c",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-dev-001",
+          "source_task_record_sha256": "30e94da44f8bdf4b9ea7149302c85515b806bf6cdd829be74afd56b4ca812211",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-dev-002",
+          "source_task_record_sha256": "5063d7cdf089d2d400600489fd1217c7b49bfdabcd9120ccaf16a8dd3a45ca8e",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-dev-003",
+          "source_task_record_sha256": "4fbdb7a9025df931b4c7a77f71656b4c327b0a1832a17ae5f561d1930f416f98",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-dev-004",
+          "source_task_record_sha256": "1137fc5d91f9e2b5dd22f51a669d68b824bf1f21ceaf775590f2429485677ae7",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-000",
+          "source_task_record_sha256": "161c4398933fc132e1893b4bf06d2df8adbf9126c510cba0ac6e766d4dea74df",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-001",
+          "source_task_record_sha256": "c2723979a69f7467f403661ddc580792a7fdfa7f9d2ee8ec0eb525ffd6524179",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-002",
+          "source_task_record_sha256": "67f905596e8dbffff742bc0697be2f9bc17d97c9d1415580f27863078100a3e9",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-003",
+          "source_task_record_sha256": "272aeb242e7c921e90455832a7f8008d69a5b69973f19c417055435b5b20745f",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-004",
+          "source_task_record_sha256": "3509d1e35fa32dba0514a94b952dda9518becf054418793dfc939d1b44dff537",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-005",
+          "source_task_record_sha256": "020d9a02b4407e791333347840e80e54b5546d02507f173b93c202979f051953",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-006",
+          "source_task_record_sha256": "8c4e584b0d77d8eb52e864d29b1f6d5efdf75bec8966ebfe4fced8d6ac10ec64",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-007",
+          "source_task_record_sha256": "3048a9ed8be2be1bc21ca23f652a11a4acfff47d5ac77fbeec1dc02f4dd6a6c1",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-008",
+          "source_task_record_sha256": "1a83a24b981500907377f83fda111e87c9a7774bcc43a344291b2a285a01535f",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-009",
+          "source_task_record_sha256": "a2ccfc43eee555630754165e5d92d59ff54e04a33bfc9d87ee23cce02358e584",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-010",
+          "source_task_record_sha256": "1cd053bd922fcb59a668dfc5177c919dac93dd00485f200f45d7089c4077c701",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-011",
+          "source_task_record_sha256": "50cd7f9f16bbbfaf4f26c90858caaa7310961d3c5a11880ca8b98c7ab00ad6e4",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-012",
+          "source_task_record_sha256": "0814f364adfd17f4ac588083b281a869e29b40e3ad3a4be76ec68f885019dba4",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-013",
+          "source_task_record_sha256": "d96f80d990c30e886f1115a284934d5507deca07ae12c03256ae8e1f007154af",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-014",
+          "source_task_record_sha256": "2563d5ebc10de044c54038b9fff4560a2357c9667030fccc0fb10e28d6971c6a",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-015",
+          "source_task_record_sha256": "a123f17e3b3f702fbb707852d9e896d4faa09dc025a48dabcca50952e2eec7f3",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-016",
+          "source_task_record_sha256": "33347b52fdf2184e7f4cbed45cca9165e3dbf2059fe96d85498c7261b76af890",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-017",
+          "source_task_record_sha256": "31066677d02340bcb62f795f7528f6d93d487f1edf7b25d27cf858118b328b40",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-018",
+          "source_task_record_sha256": "0e5fab024d5e187c8f4165056008343e0e186eedf316e0f596c49e64251db5af",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-019",
+          "source_task_record_sha256": "3ab3428a0a96e74fb3d54aebc070326ba579a94a47b734a095bd2db9b9a28ed3",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-020",
+          "source_task_record_sha256": "d9ffcf883a2a2609af9c05a90858c27be7ef9856d81858c8696306c190a83680",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-021",
+          "source_task_record_sha256": "3b16b6ecc4193159653807b1c286e4ddafc2fba4964e738aa9401d9569d37597",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-022",
+          "source_task_record_sha256": "c07ebd66bb0887723725990be27e9f99d5e7e49636f1c615c083ecaf6e9907f3",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-023",
+          "source_task_record_sha256": "071251fa8d67337e3a60e5a9598cdbd7ae7210d16e36deeb71e0a961d5a6ecf5",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-024",
+          "source_task_record_sha256": "aeac510ed8c99d65e887fd716b6ff5c479cf591b4d11437b819f81118544bcc0",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-025",
+          "source_task_record_sha256": "aff44cc3d8de43e22425dcdc17d7c6829e4ebb0d8d863f526f0be23718b2dbfa",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-026",
+          "source_task_record_sha256": "fda0d79f54d4ca05dc563749d1c701fccd48d72af54c95bc896f6f1a3cba764d",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-027",
+          "source_task_record_sha256": "43ac3b71f05b0921daf7fa8fe93636506719f608dc799ac0c9b4682ef58de417",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-028",
+          "source_task_record_sha256": "31741ba057cd5b6359ec98b84bbd53ec8add4bd814c1a5d5a87f6fe0fb10ebdb",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-029",
+          "source_task_record_sha256": "ab55f9b87f6cd4e425b160b7b45670dde6f19b0ccdc4d99f3423cbd8ebbb99ec",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-030",
+          "source_task_record_sha256": "52357bc8004e9fb52eab204f48a9ff3b238ee34382693fd6ca16b4368134e651",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-031",
+          "source_task_record_sha256": "ff81ec036a714f7cb9607c117c525712d8ee977b3d7be6e12e12a299a16608fe",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-032",
+          "source_task_record_sha256": "a1a86cb9863cb2474946554370551de4bfb15aaa0ea355a3015e2554423cbe96",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-033",
+          "source_task_record_sha256": "9818b16d1e7d1273060c900e920b860e58243ff25fb67b7361471ce79eef519e",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-034",
+          "source_task_record_sha256": "4a03208b327efe16f39db0795c77d582446cf7d4ac3d4ce010a32f9f2e7daa7b",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-035",
+          "source_task_record_sha256": "bb8e2fe0134e3e5ac7927487c82a1c4a067ac4030946c3fe90beed2fbc245919",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-036",
+          "source_task_record_sha256": "0f631adc500bae85228b9b8de67fa91cecc6db477622eade04ee0ee704420007",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-037",
+          "source_task_record_sha256": "5f3b7362ba2a09aed6c8bb4b88a1356a02fc95f946986a2cf1687bdf62812bb1",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-038",
+          "source_task_record_sha256": "e932b8cb4dd775456eda9d4948deeec5509da84171b41e4c71ea3d5834685e48",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-039",
+          "source_task_record_sha256": "6af5a7c2e2f9d8060a806f620fb44d35a1b1ddb5c9f031f4d8af25cdede8537c",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-040",
+          "source_task_record_sha256": "c128d07fc4c964ddb29b2cfd57a7b4a4f813c5007c5b751494857b1be36570aa",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-041",
+          "source_task_record_sha256": "a0223e98cd44ba4d1cb2bb635d37f75016bc05a4f5fa59308c9e12027a9cbdc2",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-042",
+          "source_task_record_sha256": "e979d545408c6e7f57351925de4c6ab5d6ebe987528b37ac740ea5837c8b5921",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-043",
+          "source_task_record_sha256": "a54ea45dbae2475c8f08e396b268b9fd767f7022bc2b51cb5decb31e1ddf7507",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-044",
+          "source_task_record_sha256": "bac982dbd7cc61b064290b3648c21eea91124860caae48aa980d27bb605048b7",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-045",
+          "source_task_record_sha256": "77aa758c508a837b9de7d4630bc8ade3233dcfe703be33f852d1b2327078d9e9",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-046",
+          "source_task_record_sha256": "256e5379d7be357cba6738deffa4c318de072fc2ddef17182db9b090da983028",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-047",
+          "source_task_record_sha256": "8b8c2b5600c17db90cb2f00b5fc338d730c7a936e60ceb3267154e28fd6f57db",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-048",
+          "source_task_record_sha256": "99fdde7feffa2fc12ebd83658531e4fb4046552551e1c8de786a04440f3853df",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-049",
+          "source_task_record_sha256": "574620859b8182c63914bb71d97d6b5a0516bdab6a561d03e6792a733dd93431",
+          "source_check_type": "node attribute",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        }
+      ],
+      "source_inspection_tier": "shared-pattern-only",
+      "source_planning_disposition": "accession-evidence-review",
+      "matching_workstreams": [
+        "database-identity-evidence"
+      ],
+      "required_endpoint_stages": [
+        "resolve protein identifier, species and source version",
+        "query the graph node and requested attribute",
+        "retrieve the corresponding database record and distinguish missing fields from missing entries",
+        "reconcile naming and identifier changes and preserve the evidence"
+      ],
+      "observed_input_requirements": [
+        "Pinned public gene/protein/variant/database exports with accession versions, species, directed relations, dates and evidence identifiers."
+      ],
+      "required_formats": [
+        "JSON reconciliation result",
+        "UniProt flatfile or equivalent pinned record",
+        "graph node/property records"
+      ],
+      "proposed_artifact_requirements": [
+        "Identity map, provenance manifest, directed edge/evidence tables, contradictions, structured answer and supporting accession/span references"
+      ],
+      "source_specific_decisions": [],
+      "deterministic_verification_approach": [
+        "Deterministic joins, direction/type checks and evidence-span linkage; unknown is allowed; a text citation match does not establish full scientific entailment."
+      ],
+      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "validated_new_mappings": 0,
+      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
+      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+    },
+    {
+      "proposed_id": "portfolio-biokgbench-database-entry-reconciliation",
+      "benchmark": "BioKGBench KGCheck",
+      "scientific_question": "Which independent biological database entries have valid identities and version-consistent existence evidence in a frozen graph?",
+      "source_family": "database-entry-reconciliation",
+      "benchmark_targets": [
+        {
+          "task_id": "kgcheck-dev-005",
+          "source_task_record_sha256": "4ffbeedfa201a3042c8ca5b0a8e8e9f52e638643099f172f76736c86453e0307",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-dev-006",
+          "source_task_record_sha256": "c90b97e5edc56f5a470f531986f823200f6431710e3d6f6758f0c8cdbb6520cc",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-dev-007",
+          "source_task_record_sha256": "01becfbd6fdd07221ddd75680b685fe48e8c647d1d44e1285cde49cc04fc9459",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-dev-008",
+          "source_task_record_sha256": "20d638e68bc6a91ea4758500fcb77693ede61844680b3461fb648a7584279227",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-dev-009",
+          "source_task_record_sha256": "b49c2e14ebe91411ad58c9d8d31b273cae3fd2f9cce22e0e8df3904dbce2ace2",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-050",
+          "source_task_record_sha256": "628d8a226f693f02484b6b7a6e8b304a088d5547b3de21eb1c71d19efc61cc90",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-051",
+          "source_task_record_sha256": "d566d9d43f51f0d9de806acfdb199d34d53a71f0ecef300bb8c4e3781891c6a5",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-052",
+          "source_task_record_sha256": "4b3d602ba28f6284f22689c5ebdfdc2c373363dbc224a997c2cff08ed89c628b",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-053",
+          "source_task_record_sha256": "caa23b49cce3255effda3e8e4ae972b5fc109c17a42a050f32573cc7cd343014",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-054",
+          "source_task_record_sha256": "4ca107ef219a4c5c4d364dd8dea7c08e5379bdf960e137df07a1b922f789d877",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-055",
+          "source_task_record_sha256": "dc644590ac69d71beaa2532ad6f221667f7d9fa60d2fd269fbdf93906eab2de1",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-056",
+          "source_task_record_sha256": "391e8755f31e93b889894caa87afa56790951a0a1e4149d184744677dc3d1ece",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-057",
+          "source_task_record_sha256": "d32ba3d72afe775390abde8098831def5d003285bead264ffca3a62acd85332f",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-058",
+          "source_task_record_sha256": "bb5582dc642889e81c2d7fcd7063a2ad6bf3babeff34425311daa6b80255b2ed",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-059",
+          "source_task_record_sha256": "5056eb07474bcbb7c88ad804ce346d1a9092bfccc2da1ccdc5d66d3a6a7f0514",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-060",
+          "source_task_record_sha256": "469f5c7ca1b1014a72f9e413f8fbcda4661c65007aa1a80b573e0fa117a6c81b",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-061",
+          "source_task_record_sha256": "3ddaa9c9b98e15b8436fc6fbeb490a369ed80aec3a0160ab7ea1aef154e35282",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-062",
+          "source_task_record_sha256": "3de54bd1d3e2dc86e9074309ae7ce3a6c5da446c8b105a93c452f5bf095381d3",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-063",
+          "source_task_record_sha256": "56339943b3b97fb233da9c5cba67c5509c14e9f5274f8c88d72c76ec50af4435",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-064",
+          "source_task_record_sha256": "d7a59330b97a9ba814d37d2f43cb4f097d1760e16c6fbc6ff8eb7261571feab9",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-065",
+          "source_task_record_sha256": "af8e58c60fc17cbf8aad7dc33e631a74fa5cbca77ab3cf25553fce0eb6725bdb",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-066",
+          "source_task_record_sha256": "9f846c4d5138e7923ecc518bbe1e93205dfa2184e7346afd06cd102ac1754268",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-067",
+          "source_task_record_sha256": "2792a6f4bbb7b52932a821f516b0794281da3dfa23123acfb515b61b2693e0ea",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-068",
+          "source_task_record_sha256": "7793d38882c9fd0244a756ac7b829adb1814d46d40722369256083be152c4697",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-069",
+          "source_task_record_sha256": "d777e2307cbf5b7de59160b6f0b8c88088f8cc808eaad2fc382290686ee16b52",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-070",
+          "source_task_record_sha256": "15ae9b5e2e34eb40888b6f291c5f8303c8098d1eee1080a0212484f4f960ffae",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-071",
+          "source_task_record_sha256": "29631449a8aa34630cf9d2bc124548f70e37ee8f37dcc529fc3d0c79377a5582",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-072",
+          "source_task_record_sha256": "5a20bdb46f0eb33e153290431dc567747801708e09f646f16406f74e67ffe3ee",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-073",
+          "source_task_record_sha256": "19469e63c6791471eb85ade94f3f86b27fdd06501fca8b312f361b8d50debe86",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-074",
+          "source_task_record_sha256": "c9d7523427ed7dfda12ce7da8da8647349313bc340762d438929da0ce6449a14",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-075",
+          "source_task_record_sha256": "eab6055cc3d5abd1b3a44092ffcf0e40eaf12b16bb76669d4baf1de63bff4421",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-076",
+          "source_task_record_sha256": "c5aefba1a6e0cfd4fb4b9703cc89ca811589ef6232faf10ee32a1395708908ff",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-077",
+          "source_task_record_sha256": "26c20ee4bfea3dad491d0a897bda63f71f403afd1434d1d1a9da15dc15f4d180",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-078",
+          "source_task_record_sha256": "58ad2e74beb045076be58f08a9b34af795f0cb298b6efb81650d385dd28edcfd",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-079",
+          "source_task_record_sha256": "9e23874e1fd979e9362a015b97c5b9a06e506fea81a1a0ee1232d6bd8a3cc134",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-080",
+          "source_task_record_sha256": "6cf12b66c72e20dce8a36b002a6201e0642cd95d39b4a0a73612a4d58a6ee529",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-081",
+          "source_task_record_sha256": "8e79530b05f19299652d8f9d7044ca5325ad0670e8b54809dd3c8dc32e669183",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-082",
+          "source_task_record_sha256": "15ea63bdf75a96cfb4ee23cde348d7a7bb904323a67440bcd2a1b9a02a04d582",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-083",
+          "source_task_record_sha256": "4703d90b1e3bbccebfd7b0629da78285c48cc1df9c5d94dc0a0f23e2baa13791",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-084",
+          "source_task_record_sha256": "efa563090464aa4a9906c94c4cdd8f8966506c40cbb0ab23f12b79bacf338c47",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-085",
+          "source_task_record_sha256": "44f7ce2bc51af7d4c2ce050ca71c3db59e9ed5bfd264ce7a258f6a32cc049137",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-086",
+          "source_task_record_sha256": "67d8b8d0ab1821d8aa42351651563c31e92c60c708090a54875d4f7cf950fd31",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-087",
+          "source_task_record_sha256": "07731a51701f36c24f83cdcf610d30a7f0edfb0ff78d053e5a66a7748b6918f8",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-088",
+          "source_task_record_sha256": "c5d1fca6ab5ee907f536e13e7e4639b6d25ae1960e914ea53c2ac39706a5c62e",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-089",
+          "source_task_record_sha256": "6cfcfcc573e4a0336be55d7b5abb8146e2dc0a7486675e0c13c2ec5447b87477",
+          "source_check_type": "existence",
+          "entity_types_in_instruction": [
+            "Protein"
+          ]
+        }
+      ],
+      "source_inspection_tier": "shared-pattern-only",
+      "source_planning_disposition": "accession-evidence-review",
+      "matching_workstreams": [
+        "database-identity-evidence"
+      ],
+      "required_endpoint_stages": [
+        "resolve canonical and isoform identifiers",
+        "query node presence in the specified graph release",
+        "check source-record presence and documented identifier history",
+        "separate missing, obsolete, redirected and inaccessible records and export reconciliation"
+      ],
+      "observed_input_requirements": [
+        "Pinned public gene/protein/variant/database exports with accession versions, species, directed relations, dates and evidence identifiers."
+      ],
+      "required_formats": [
+        "JSON reconciliation result",
+        "graph node records",
+        "versioned database record and identifier history"
+      ],
+      "proposed_artifact_requirements": [
+        "Identity map, provenance manifest, directed edge/evidence tables, contradictions, structured answer and supporting accession/span references"
+      ],
+      "source_specific_decisions": [],
+      "deterministic_verification_approach": [
+        "Deterministic joins, direction/type checks and evidence-span linkage; unknown is allowed; a text citation match does not establish full scientific entailment."
+      ],
+      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "validated_new_mappings": 0,
+      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
+      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+    },
+    {
+      "proposed_id": "portfolio-biokgbench-directed-relation-evidence",
+      "benchmark": "BioKGBench KGCheck",
+      "scientific_question": "Which directed biological graph edges are supported by independent structured experimental evidence rather than co-mention or undirected association?",
+      "source_family": "directed-relation-evidence",
+      "benchmark_targets": [
+        {
+          "task_id": "kgcheck-dev-010",
+          "source_task_record_sha256": "a3e5e46f39a2cf6ef76bf2e4729785e16315e06e54ae027993cd67cb047affd5",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-dev-011",
+          "source_task_record_sha256": "ee76934203b8256068a4c5b904865d139c3986c1d001b08027e75aa1ee0c8597",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-dev-012",
+          "source_task_record_sha256": "76703164711b65f12b4749e220683ed0a7f1c2cef6970d689b9c052b5d0a549b",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-dev-013",
+          "source_task_record_sha256": "13f3e7e49ee4da955e9e8b3c7f6d692b292100bf26768ac45227f8f5414dfd29",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-dev-014",
+          "source_task_record_sha256": "eee12f290cc8105e2f06ba783893232b9538501f85d3191d6cc9276ad92a29b4",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-dev-015",
+          "source_task_record_sha256": "abaef76fad97e87d3e0abad9140b4400ebb8d8bdd5b899033390e7b372094284",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-dev-016",
+          "source_task_record_sha256": "93c0938163a553f8b760b0baa8a75417e55c4baae28f36cc7548e30227b58ab4",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-dev-017",
+          "source_task_record_sha256": "9c5c49f861bfbede66466cf5f691014ea7a82172344da2e04d7b63bece8ab3bc",
+          "source_check_type": "existing one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Cellular_component"
+          ]
+        },
+        {
+          "task_id": "kgcheck-dev-018",
+          "source_task_record_sha256": "ff58be410f2712a72f5595d1371a25d444e31e3b212aa13d9b0ca6f56d6a0dd3",
+          "source_check_type": "existing one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Cellular_component"
+          ]
+        },
+        {
+          "task_id": "kgcheck-dev-019",
+          "source_task_record_sha256": "7e5de078ba78ce0530c3bbee59c3ed11ff36b4d864762b6c5bc284fa7a3416ac",
+          "source_check_type": "existing one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Cellular_component"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-090",
+          "source_task_record_sha256": "cb80696299663829ba59d55b90f75e9d90efb12845342c6a281c9da4bfa6a941",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-091",
+          "source_task_record_sha256": "62af9b51f59a006c6513d5a7e1cba933a052eae3576cce72090b9d25cdfaafef",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-092",
+          "source_task_record_sha256": "a78ff52435cca5b9ebcb71e861c90412f2739648f7c2ff6e173b74f0a6c868f5",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-093",
+          "source_task_record_sha256": "66cb235062ac49a9a1c40a61e8d478d7bb38f1e32094411d9dff4491a2745fc5",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-094",
+          "source_task_record_sha256": "0ed6c618d57e3066bcb36250d172d8bbc1171c836ae043e8653203a5680792b2",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-095",
+          "source_task_record_sha256": "3b156c870da6a214ac729a79c6212d4fb86890dacf4704a67b2ffd2706848fd5",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-096",
+          "source_task_record_sha256": "a2a628a42c57ad9b7efc9af034615294b0a6f8476d9be2c2e6d03d4f661e3a73",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-097",
+          "source_task_record_sha256": "cc3b912ffce18b2940d3ac1e472b284cd530afb1443e677bd084e06fbf92ca67",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-098",
+          "source_task_record_sha256": "750f12f14236b15144210d09051617bfaef65ef26f1c7448cc88389f78fd2a06",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-099",
+          "source_task_record_sha256": "df47c79b8cf0e8072e6833acbeac0be9092753247446a1e9df4f9731f7e29338",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-100",
+          "source_task_record_sha256": "01354bad4e76071ffc6fc7d885d93e0949319fbf9014aaa4cfa3d1d79491410e",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-101",
+          "source_task_record_sha256": "0bddfe3c35f2b58c5c63c8be6da4cafdec8498207d5ddd6a6dfb9b9e6a00d788",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-102",
+          "source_task_record_sha256": "81fa86363901bdcb8465d558f78cf785d8fe693bcae7f15d8b9a0a05d5e58ffd",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-103",
+          "source_task_record_sha256": "bea64778ad551f05160b8e66ec2c7a57782754d564bec0b490fd90b086e14ff5",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-104",
+          "source_task_record_sha256": "b9dac36c208c805599ca1cb88bf97481c78633927d6929144065d53b987442b5",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-105",
+          "source_task_record_sha256": "05416c803e2fe6db2f4b460d80c49e3fdf3cfc4f9091e33a91d1f73357f263cb",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-106",
+          "source_task_record_sha256": "636f4e36f892dd2c866ecdb1ffc38cd905314b975a846bf5e245b4be64c76aad",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-107",
+          "source_task_record_sha256": "d69c993b4c1e4e748c005d81c3faeb815190e11db23cf15fb334ebf9799a8878",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-108",
+          "source_task_record_sha256": "66d5ca569342d968ce8f6721c4e633440bb31e33d9cc26c7089bc4755f12df1d",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-109",
+          "source_task_record_sha256": "207e35198d5477c448a27b87330c9f28f1ed5ebb3addb1cccbcf6992e274ee34",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-110",
+          "source_task_record_sha256": "c052a5777c0bd98a00847635072655715f2811e5b1983e3a94aba291eab320ab",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-111",
+          "source_task_record_sha256": "fa9febbf0173ca979053519fb73b11aee02a7c5e8a1f0e9b2b99fffa40bc37bb",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-112",
+          "source_task_record_sha256": "c49e72991c57bbdcd55c0261fa59af2a0fa01b771e210185390fd7f1046d500d",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-113",
+          "source_task_record_sha256": "601e6b1ad23f86c3ee2f7af11f5eb5588512653e87ab3af971c516167fea235a",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-114",
+          "source_task_record_sha256": "2ccd2c0157bcbd1730e822775dc6e8591f90f2d27439eb89078de892181ce36a",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-115",
+          "source_task_record_sha256": "6ac98ccc4a58001e0e4a30e56022a90209311990396a3fe52d1068f27f6a947c",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-116",
+          "source_task_record_sha256": "94526b5da439ef08ff72f2fba37e74cf18f94bb5a5c701c24bcc76a29fcc25fe",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-117",
+          "source_task_record_sha256": "a896770c4fb9c9713845fa51c71b6d08e4c32d5e2fa8563b0be17485004103d6",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-118",
+          "source_task_record_sha256": "1ad9f547f4bb4ad7042f573a0251bae3e6cf4346d0e277b5111506e6a7321b4b",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-119",
+          "source_task_record_sha256": "8458f4fa8db899346bce954dbb8044c3be74d5d6b3b026fe34b35c8092d2ddac",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-120",
+          "source_task_record_sha256": "549d3e61929a72ea960d270fb8284114854d85ac30abeca494eb49b8f3b1d6d3",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-121",
+          "source_task_record_sha256": "d498fa1a01ca5309de9ce2c5fce284a328170f9f888827bbde579f9d40f1f5db",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-122",
+          "source_task_record_sha256": "4a42ebdfe900a9406449a0e5385d5b30e1afcc93ad90bc5fb56ffede6d084891",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-123",
+          "source_task_record_sha256": "e8aa562fd4d405a87e4f67ce03c1bb4050157f454a6e0f15d817799a62b6c64e",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-124",
+          "source_task_record_sha256": "485ab2d66cc762df776c6d1457dbfdd3f730ae4c7fb34e3ad9703f6f55a45e6d",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-125",
+          "source_task_record_sha256": "f4f8de32f5e2e5a9b4550a4bf344c619d31e82c9dc257db4ca4c61ec1612fe5d",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-126",
+          "source_task_record_sha256": "278df7bcad3d245b1b0d096c91a12662926d793cc7ba378ed2f9d852cd7735bd",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-127",
+          "source_task_record_sha256": "00ecb6bb859c950a270a1044a3da20b71859fe7d6a45760e7ea5e82bc2d60652",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-128",
+          "source_task_record_sha256": "2822544df3e04df6182702999a6f67f90efd36432b6ff39f79d9ca829bee5c98",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-129",
+          "source_task_record_sha256": "c81f4336495f39158b70236dfbe4ade7ba4c99088cdbc09eab3648d8fb096f81",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-130",
+          "source_task_record_sha256": "e6502b5430557b8e38969a9c21c1ef9c9292657880e88f9d5b89337315ee6d5f",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-131",
+          "source_task_record_sha256": "d816a751132362d1ec680d245f0cb467af2f8303c64f540c06cc2e5fd8ebe139",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-132",
+          "source_task_record_sha256": "7692ff2f77bb689d0f9f1645fdf0660e497cbdd82615696793df5e119a085cca",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-133",
+          "source_task_record_sha256": "813db95b4873898a55967e8d747859ddf96e456fe2c5b229991fc49285a3b2a8",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-134",
+          "source_task_record_sha256": "d9ac792be4e14411389a09f1f2ffbf87a7f5cb863d943766e2abde8e06b93906",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-135",
+          "source_task_record_sha256": "88a45243c3f64d3415b02790604f8205511d99c8bf86570dff76ad67e814fba5",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-136",
+          "source_task_record_sha256": "89618dea52aa4051c71d39e70db5bd3db0699cdd33c94889496ea7bf6df33b0b",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-137",
+          "source_task_record_sha256": "943bdc9dbfdad1c0ae21864f6234f9937f5c5d9799701afc1af8ac92105d78e6",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-138",
+          "source_task_record_sha256": "aa5d445dcfbea4a45992440c6c941b8b14dc0fddf740d806f966651063f8d0d7",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-139",
+          "source_task_record_sha256": "2dc54b6d37ce2767b5637156f65ad3ee18ef9488ce8b5b989fc9a9b0441ae41e",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-140",
+          "source_task_record_sha256": "4726710a91d415f8a89aa217f4630f56bb8ea501c464d916ca1e9a473ffe1174",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-141",
+          "source_task_record_sha256": "c016d731fecf2f35d7e75cd84aec9373c0629a8c12cc859ccead69c0b04ed8ec",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-142",
+          "source_task_record_sha256": "77f6839464ceb5fda45b11f7b2f9e021dd7a3c72dd49ed6ac5d1050894838e15",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-143",
+          "source_task_record_sha256": "e55a7e40aa260e6c9c69246f3e91b32741c5c0363182093a02ebd5113eabcc65",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-144",
+          "source_task_record_sha256": "8988601333d5f546376dd75f6ec3a525f483c861cf8cb7b462e10aa460844114",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-145",
+          "source_task_record_sha256": "01a0fd3b9bee5573fca1ce6fd003052e0b4b6ff6d1c270f797b0f7407f761357",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-146",
+          "source_task_record_sha256": "3d366c089d05a0129e0e171722101261ada5aff8fca2740b0dae92f11f58892d",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-147",
+          "source_task_record_sha256": "3a9184e5c984bc5aff279dd9c3b12cc3a50a63cea7039ae179ccd8dc598bae0c",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-148",
+          "source_task_record_sha256": "8c719129a1996622c5099a6e65c4841e91b296744cc80c2edc258d43c9659498",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-149",
+          "source_task_record_sha256": "8751c103c1ca55fe5576109b7353e94b106645db9c82717c050757b216129dda",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-150",
+          "source_task_record_sha256": "704c4078a29a0d789f2a4b8bef89d2a2588757a9692d9b9e5edde9396751e240",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-151",
+          "source_task_record_sha256": "7f699741e04efa1cd4a01f770a184e6536420200972a3b0c192f54b8a4c3be73",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-152",
+          "source_task_record_sha256": "25d622d4a07e6b57723ea1000cb06f230ccbcb0e4aa61daf94231925c21e7ad6",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-153",
+          "source_task_record_sha256": "c433a516d0da4a4655b736c4dab50d7502a3c4825d5d3a40979b5b4e430d5656",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-154",
+          "source_task_record_sha256": "12aa7333a7a2217cfd679a7928fb8f6dcffbb7484f98b9bf410619c82f68a6ed",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-155",
+          "source_task_record_sha256": "9dc66cf2922156e3b3ff001beeb28a271b6c1191227580fe540877bf50a7bddf",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-156",
+          "source_task_record_sha256": "9ba4959dca12544c7a82cb9e994de088722049fa0c352d0af7685aa2a77fd2ba",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-157",
+          "source_task_record_sha256": "e837a0ba5ed5e66684bd44ca06bc178283580d86aed42765d9f342e0fa7c8e2f",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-158",
+          "source_task_record_sha256": "c3fcb6bdbcc6229abaabc3f959a3501f4e31ed923d29372cd30306fe693d7fbb",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-159",
+          "source_task_record_sha256": "b1e596eb968b2955a4f801012c23a8668f59c101bcd0f4b5a1eb577405b06c6c",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-160",
+          "source_task_record_sha256": "fdfc5207b7436f30f85334cb93ce7cd0f931544dbc8f5129db5a69a55e42424a",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-161",
+          "source_task_record_sha256": "35e02627089e7799208b594b2f51b54355ecbf450cc897fc8bd2b7590d0f7b54",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-162",
+          "source_task_record_sha256": "f3a2d04380a5b78417bea8e2feeddc859b48a63ae2b6af2db1a0c65e631d229c",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-163",
+          "source_task_record_sha256": "0d445d7ccbca6bb96a897a85f5c1035d0b2ec835b8fa4434cfbb51272dc77ecf",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-164",
+          "source_task_record_sha256": "b4ca049b4b4dfdd3df7c1a1c3bd425b26ae6e19c55011b39ff581c2248126f47",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-165",
+          "source_task_record_sha256": "30553967746043345dc9e69ecfd42c1a6459b501bf9aed019ec71beaf8fcbe61",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-166",
+          "source_task_record_sha256": "15b4e87f8a1bbc675d068bb8c51c4c57a8a24463d9d717ae84326aabf723075a",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-167",
+          "source_task_record_sha256": "1b8aeaab98171ade0cdb7e7cb1e00938d1d8e26a6c4c53994257c8a6e5c6bccf",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-168",
+          "source_task_record_sha256": "bc339d835b88e54eabb117b1ea6379c7cbb7a199c6342cb785fd547ce4098c23",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-169",
+          "source_task_record_sha256": "3fc98f99c9dafc4130e327be72b856e24ea73289394a34e0fe9b00ba473cfb28",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-170",
+          "source_task_record_sha256": "8935842b85dc656df914a6996ca292809b6507725c3f5244bff119e4480ed7ab",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-171",
+          "source_task_record_sha256": "6bd443211a2c04e9eb605f25d6c9d08780acd37cb1aba250ecfec1a9c9428589",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-172",
+          "source_task_record_sha256": "0b97a7e1b9e2d13495d718ef33aabe7f17fd90770abde419a3190c0961fd6064",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-173",
+          "source_task_record_sha256": "ea4a52cb63dc02933887705fb531610d263d5cb36736e6832ffe1833425c05a0",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-174",
+          "source_task_record_sha256": "cea95c320bab7e64dedcb52fbf1aeb29e4bbaea754b977818a4384c57c98d807",
+          "source_check_type": "one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-175",
+          "source_task_record_sha256": "a0b0de726460204acf0f4fc57fbd59793b3ebda2027b853ae078252ac7482817",
+          "source_check_type": "potential one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Tissue"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-176",
+          "source_task_record_sha256": "2bed66cd6578c3951120c75379fbc71c308ed4a6e317e2b06ee51b043515518b",
+          "source_check_type": "potential one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Tissue"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-177",
+          "source_task_record_sha256": "83aa9b38c45e501e51dce37b9b9c4e9fc7f1d38e75b78fcecf74c5db5dfc5284",
+          "source_check_type": "potential one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Disease"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-178",
+          "source_task_record_sha256": "56fe594897b17f077452142a411e13658ba9dab95f0ceaf34816dd75c0d35a93",
+          "source_check_type": "potential one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Cellular_component"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-179",
+          "source_task_record_sha256": "4155761e659db98740e53b0ee76dcacd89727c72f62340a6e069da584a0b3423",
+          "source_check_type": "potential one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Disease"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-180",
+          "source_task_record_sha256": "2c0c012c817228f08b3f84455d07accf095fefcb0fc4c6473df5bc97b1477c07",
+          "source_check_type": "existing one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Tissue"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-181",
+          "source_task_record_sha256": "cfac8e04bd8b8105e8482f78bccabea815643f59a0c9e1a431fd7e994846307c",
+          "source_check_type": "existing one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Tissue"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-182",
+          "source_task_record_sha256": "4c7b972efa8b7fec0b189e4bb8b8683ab3bc81371e10bc9537a4a7cdc04482b3",
+          "source_check_type": "existing one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Cellular_component"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-183",
+          "source_task_record_sha256": "34c37426dcb5b935ced4b246091815217385540668cb022d689507492fcdbb0f",
+          "source_check_type": "existing one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Cellular_component"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-184",
+          "source_task_record_sha256": "bc5901bb408160675051cd8d33ebd779d7758372c4879347b32b404d34afea57",
+          "source_check_type": "existing one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Cellular_component"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-185",
+          "source_task_record_sha256": "7ea4dcc656827256924ed6c02e0eb832e3b7f6160b7cb58f611162e6d678c4a5",
+          "source_check_type": "existing one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Disease"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-186",
+          "source_task_record_sha256": "cc8bf774bf5253141fde3ba4c1a05c71b34cb684f3b5a8709b89091721eecf27",
+          "source_check_type": "existing one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Tissue"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-187",
+          "source_task_record_sha256": "4c201e6810764cdc6cc1c31633f91bb5fe5e87bda09c198cd77e7e0e09b02867",
+          "source_check_type": "existing one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Cellular_component"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-188",
+          "source_task_record_sha256": "5397a069e1f8664c51fda03ec3c1de223d8cdfb9dad56fdd44996f0ddb834c5d",
+          "source_check_type": "existing one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Tissue"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-189",
+          "source_task_record_sha256": "e23509fc62acda577ee0e44cd3d52b5dc0c0d33dded72d58875a7fd49b68b27c",
+          "source_check_type": "existing one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Tissue"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-190",
+          "source_task_record_sha256": "401defa18e4dc3718e9b43b2a9155358a8e91088958fef4ec03029732f3bfc84",
+          "source_check_type": "existing one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Disease"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-191",
+          "source_task_record_sha256": "9bc884a6afe3be343f77701075d2e2d92f901a63deab6d92cac46ed73398b252",
+          "source_check_type": "existing one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Tissue"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-192",
+          "source_task_record_sha256": "7e9b6454990ea61946b68f5666790ace210ff99a914ba88eb3d60a8879d2ad60",
+          "source_check_type": "existing one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Cellular_component"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-193",
+          "source_task_record_sha256": "d529cdc1784ed3e0a5e2350f27f7af62d9fc198b6748a3dfbe9cbbf39701dcc0",
+          "source_check_type": "existing one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Tissue"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-194",
+          "source_task_record_sha256": "308bd29d66fb946c466096bbd8c4a175a2aabb46703a6e33345ed3009479a28d",
+          "source_check_type": "existing one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Tissue"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-195",
+          "source_task_record_sha256": "2edd42ab29db2100f0fcac2258db6025eaa1c7db4c3d344c5447ea865bf6e3d7",
+          "source_check_type": "existing one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Disease"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-196",
+          "source_task_record_sha256": "44133a0499d4b2a32b337da53672cb34a1a556e2ec76ec97d7368efc957cb5eb",
+          "source_check_type": "existing one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Disease"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-197",
+          "source_task_record_sha256": "a2ded4c4a55b890feb3e0303aa2c5e5a98a6b056411eefee7a874c54d223eef9",
+          "source_check_type": "existing one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Tissue"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-198",
+          "source_task_record_sha256": "15b851760fa33c97d4e0bae1ba1b39813e7008a4c147e22a390c34b2b8ae3024",
+          "source_check_type": "potential one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-199",
+          "source_task_record_sha256": "6d8b0ab0a5aed58242cae20b66fdd138961fcb22ba6d90049bc50569e0105840",
+          "source_check_type": "existing one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Disease"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-200",
+          "source_task_record_sha256": "086f1e5168986e242632cae386c792baa971f92ad7a02cfe00697ae549f760ea",
+          "source_check_type": "existing one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Cellular_component"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-201",
+          "source_task_record_sha256": "6e54b030fccc6cd6847f8b401090667fa2607501bb7d2ddfd4315a967c22afd7",
+          "source_check_type": "existing one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Disease"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-202",
+          "source_task_record_sha256": "bca182bff8a5d1d9b041da688579ac583e6bb95d0cba8438f3550598230f4362",
+          "source_check_type": "existing one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Disease"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-203",
+          "source_task_record_sha256": "487df7f26bd5acef0f6d944635c63434489f4397643eadfaf79641a047ace4e5",
+          "source_check_type": "potential one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Protein"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-204",
+          "source_task_record_sha256": "170bccb10467e3f687e4f93378c079cee989d094d55c5e85940282bf509847f5",
+          "source_check_type": "existing one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Cellular_component"
+          ]
+        }
+      ],
+      "source_inspection_tier": "shared-pattern-only",
+      "source_planning_disposition": "accession-evidence-review",
+      "matching_workstreams": [
+        "database-identity-evidence"
+      ],
+      "required_endpoint_stages": [
+        "resolve both typed entities and the exact relation semantics",
+        "query directed relations, node presence and source provenance",
+        "retrieve supporting or contradicting source records and literature when required",
+        "distinguish physical interaction, association, localization and inferred annotation",
+        "export relation, evidence identifiers and a scoped conclusion"
+      ],
+      "observed_input_requirements": [
+        "Pinned public gene/protein/variant/database exports with accession versions, species, directed relations, dates and evidence identifiers."
+      ],
+      "required_formats": [
+        "JSON conclusion and evidence ledger",
+        "literature/PDF evidence where required",
+        "typed graph edges and source TSV tables",
+        "versioned database responses"
+      ],
+      "proposed_artifact_requirements": [
+        "Identity map, provenance manifest, directed edge/evidence tables, contradictions, structured answer and supporting accession/span references"
+      ],
+      "source_specific_decisions": [],
+      "deterministic_verification_approach": [
+        "Deterministic joins, direction/type checks and evidence-span linkage; unknown is allowed; a text citation match does not establish full scientific entailment."
+      ],
+      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "validated_new_mappings": 0,
+      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
+      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+    }
+  ],
+  "definition_discrepancies": []
+}

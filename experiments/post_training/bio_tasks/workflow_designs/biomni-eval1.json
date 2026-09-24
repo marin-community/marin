@@ -1,0 +1,2942 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-09-24T14:55:14.334043+00:00",
+  "scope": "Shared-protocol question planning for three large provisional-ID agentic inventories. Original inspection limits remain; these cards are not reviewed individual biological cases or validated coverage.",
+  "basis_revision": "26e308ecb2",
+  "counts": {
+    "source_releases": 1,
+    "task_protocol_or_definition_records": 433,
+    "question_cards": 20,
+    "validated_new_mappings": 0
+  },
+  "defaults": {
+    "data": "Independent observed inputs and native data formats; preserve real biological replication and lineage. No source benchmark fixtures, expected labels or answer text used for task authoring.",
+    "consolidation": "Do not instantiate one task per registry row. Split on distinct measured properties, variant classes, leakage risks or evidence requirements, then merge compatible questions across benchmarks.",
+    "authoring_status": "Planning only. No implementation workers assigned."
+  },
+  "source_inventories": [
+    {
+      "path": "benchmark_tasks/biomni-eval1.json",
+      "benchmark": "Biomni-Eval1 tool-enabled",
+      "sha256": "312dabda1c34eec6f061c33f1f1578a0847fc84fa96de4f6813e2b34ba7ae388",
+      "records": 433
+    }
+  ],
+  "questions": [
+    {
+      "proposed_id": "portfolio-biomni-eval1-gwas-variant-evidence",
+      "benchmark": "Biomni-Eval1 tool-enabled",
+      "scientific_question": "Which independent association variants retain support after allele, assembly, credible-set and functional-evidence reconciliation?",
+      "source_family": "gwas-variant-evidence",
+      "benchmark_targets": [
+        {
+          "task_id": "gwas_variant_prioritization:134",
+          "source_task_record_sha256": "fd9302557a5ef32b9cff85d5ff7f222d75b23bd95f4f9848722b3be48eac966e",
+          "source_task_name": "gwas_variant_prioritization"
+        },
+        {
+          "task_id": "gwas_variant_prioritization:178",
+          "source_task_record_sha256": "1a943c24f52a1c69d9f72c6a97eb7e4155afc21153dfca3f2a97180941b5a9a6",
+          "source_task_name": "gwas_variant_prioritization"
+        },
+        {
+          "task_id": "gwas_variant_prioritization:197",
+          "source_task_record_sha256": "1af43f91d41a33963e24fc38e43cae16f06ed037ad4f3e1d9dd335ab636eb211",
+          "source_task_name": "gwas_variant_prioritization"
+        },
+        {
+          "task_id": "gwas_variant_prioritization:63",
+          "source_task_record_sha256": "dd31076c6fe70b151200193d673f90aae01adea979ea94e92aafdecb7cae0a49",
+          "source_task_name": "gwas_variant_prioritization"
+        },
+        {
+          "task_id": "gwas_variant_prioritization:54",
+          "source_task_record_sha256": "3b95441b6de82d45e7f0595cf6b2e08129289af7a54da620817c5bc1f455c712",
+          "source_task_name": "gwas_variant_prioritization"
+        },
+        {
+          "task_id": "gwas_variant_prioritization:107",
+          "source_task_record_sha256": "dd2ff9a2970c8d3bc68d273fd4f7b4206ae9501b565d963c848aeb56c93a466a",
+          "source_task_name": "gwas_variant_prioritization"
+        },
+        {
+          "task_id": "gwas_variant_prioritization:50",
+          "source_task_record_sha256": "d21cd5b958800c5fcc717107576245925fea3e63a6e486923c6ad3e8b6701e92",
+          "source_task_name": "gwas_variant_prioritization"
+        },
+        {
+          "task_id": "gwas_variant_prioritization:174",
+          "source_task_record_sha256": "475377d7bb827320a4b93a1cb59ddc833f88d25e451ce605bbfc2d3b834aa485",
+          "source_task_name": "gwas_variant_prioritization"
+        },
+        {
+          "task_id": "gwas_variant_prioritization:211",
+          "source_task_record_sha256": "37c307adcc59de2cd2fdddb54f65f981f260159fc16352c603eb5536bb667da5",
+          "source_task_name": "gwas_variant_prioritization"
+        },
+        {
+          "task_id": "gwas_variant_prioritization:169",
+          "source_task_record_sha256": "7fb8f8918e6dc1b46f11323b2eb81fd9c68da658f575967a6770e44aea78f49b",
+          "source_task_name": "gwas_variant_prioritization"
+        },
+        {
+          "task_id": "gwas_variant_prioritization:58",
+          "source_task_record_sha256": "a63aff48cbc86ea6ab4b08ba7d15f7de86bb1548793f6cccdb7e6535868606a6",
+          "source_task_name": "gwas_variant_prioritization"
+        },
+        {
+          "task_id": "gwas_variant_prioritization:48",
+          "source_task_record_sha256": "c74049cb5c4a0c8ebb649a28972d669cd83a724f51eb20b817601f0c9ae8ad31",
+          "source_task_name": "gwas_variant_prioritization"
+        },
+        {
+          "task_id": "gwas_variant_prioritization:88",
+          "source_task_record_sha256": "3860cf4c4dccbcc86fec3a5c33088deb616620d8ef547b296475ecb1da2b0d93",
+          "source_task_name": "gwas_variant_prioritization"
+        },
+        {
+          "task_id": "gwas_variant_prioritization:21",
+          "source_task_record_sha256": "09fd544ea4a37cb1b820d8bbb5e51ee28d2257a291e58365f8b336698b2e9045",
+          "source_task_name": "gwas_variant_prioritization"
+        },
+        {
+          "task_id": "gwas_variant_prioritization:57",
+          "source_task_record_sha256": "9a05393493a5d35462e49a7cc95b7d246a32f75c72ecd4edcdc284a530f7db22",
+          "source_task_name": "gwas_variant_prioritization"
+        },
+        {
+          "task_id": "gwas_variant_prioritization:160",
+          "source_task_record_sha256": "b2bb1fadda7ce5d0d71346b1706bef2704c4f1d1915342cb399c3ab714995f27",
+          "source_task_name": "gwas_variant_prioritization"
+        },
+        {
+          "task_id": "gwas_variant_prioritization:207",
+          "source_task_record_sha256": "e2c4dcc6f592816d48b2be1377a2d2eb5172849b182d8668ba11da6cc1430e84",
+          "source_task_name": "gwas_variant_prioritization"
+        },
+        {
+          "task_id": "gwas_variant_prioritization:187",
+          "source_task_record_sha256": "7a8bc9cdd9ae418a0f4ff813c881b841499087348d746d3977992d2c31f29218",
+          "source_task_name": "gwas_variant_prioritization"
+        },
+        {
+          "task_id": "gwas_variant_prioritization:129",
+          "source_task_record_sha256": "14a27efd7fd1a148c3597196135cd3b25e1f5a0e22715738f2763d829601a92f",
+          "source_task_name": "gwas_variant_prioritization"
+        },
+        {
+          "task_id": "gwas_variant_prioritization:37",
+          "source_task_record_sha256": "b6bb4a4b3dadde05fe50d0ddad63af8fe57eadc32e18e7203371b3031a6ab8d9",
+          "source_task_name": "gwas_variant_prioritization"
+        },
+        {
+          "task_id": "gwas_variant_prioritization:157",
+          "source_task_record_sha256": "e1f1d0f959455efc60daffa1419683ea88bbb2bd8dda504c5b369e78903f429e",
+          "source_task_name": "gwas_variant_prioritization"
+        },
+        {
+          "task_id": "gwas_variant_prioritization:203",
+          "source_task_record_sha256": "d4494c0062855f9a970c4a2bfdecdebb4dc0154e94fd8200c5ce96e6858b7579",
+          "source_task_name": "gwas_variant_prioritization"
+        },
+        {
+          "task_id": "gwas_variant_prioritization:1",
+          "source_task_record_sha256": "d98ea0a41f7e41c1901a51b0f4d47b18809c8173bb666d9d9b95136640e31b2e",
+          "source_task_name": "gwas_variant_prioritization"
+        },
+        {
+          "task_id": "gwas_variant_prioritization:52",
+          "source_task_record_sha256": "f1e73bb03d0df75c867de29fef47d4ed2cb697ce1866aead8d21868ce3992614",
+          "source_task_name": "gwas_variant_prioritization"
+        },
+        {
+          "task_id": "gwas_variant_prioritization:149",
+          "source_task_record_sha256": "2298c43b7fb24d13f0dbd7c87e10a35766bf5af7ad78b1d99742f40882491702",
+          "source_task_name": "gwas_variant_prioritization"
+        },
+        {
+          "task_id": "gwas_variant_prioritization:130",
+          "source_task_record_sha256": "fa379907b440ff580b85e4428497d68ac2fff214a5624ff6eaf9bdee03ca9498",
+          "source_task_name": "gwas_variant_prioritization"
+        },
+        {
+          "task_id": "gwas_variant_prioritization:151",
+          "source_task_record_sha256": "856f849a95451e035901285a6ffbe7f3bb2724a9e123e5d05b2a2ea7957fabaa",
+          "source_task_name": "gwas_variant_prioritization"
+        },
+        {
+          "task_id": "gwas_variant_prioritization:103",
+          "source_task_record_sha256": "7bab4ce55a430c213b6a7c1b6744d9852b2d9da534001df98fdff1026593f176",
+          "source_task_name": "gwas_variant_prioritization"
+        },
+        {
+          "task_id": "gwas_variant_prioritization:99",
+          "source_task_record_sha256": "dbdcc83bc66f940054fe44e978bb729c068e3aa127e6e889ee4d8f1522432de4",
+          "source_task_name": "gwas_variant_prioritization"
+        },
+        {
+          "task_id": "gwas_variant_prioritization:116",
+          "source_task_record_sha256": "872d24eb073a55b6102e9c8e0603de6cd7d1c40bc561682abeda6c295ec5b7a8",
+          "source_task_name": "gwas_variant_prioritization"
+        },
+        {
+          "task_id": "gwas_variant_prioritization:87",
+          "source_task_record_sha256": "cecc40ba5b8fb4c098743bad7507f3ac8637a106640230ca13fa08f9b12f556c",
+          "source_task_name": "gwas_variant_prioritization"
+        },
+        {
+          "task_id": "gwas_variant_prioritization:202",
+          "source_task_record_sha256": "d1447d2f4225d18ae6f313b40b389f82325825b126aaa57c9ac75d36f62ff846",
+          "source_task_name": "gwas_variant_prioritization"
+        },
+        {
+          "task_id": "gwas_variant_prioritization:74",
+          "source_task_record_sha256": "c7a7c662e95af2c3896cc01e878fbf2deb6a18cd44784b2dde8413ba5120ca76",
+          "source_task_name": "gwas_variant_prioritization"
+        },
+        {
+          "task_id": "gwas_variant_prioritization:121",
+          "source_task_record_sha256": "fcbba27a57e058da322da8e3d61ce3510c70995364ed92eb476f0728dfb5fb36",
+          "source_task_name": "gwas_variant_prioritization"
+        },
+        {
+          "task_id": "gwas_variant_prioritization:214",
+          "source_task_record_sha256": "54ca74b62576161d64bd2ed37640be61b0766271a6be9944c633fea99227b45b",
+          "source_task_name": "gwas_variant_prioritization"
+        },
+        {
+          "task_id": "gwas_variant_prioritization:20",
+          "source_task_record_sha256": "635bbd455afa7575946766e32762d1c5889f4520bc5343d54a58cf4695b52644",
+          "source_task_name": "gwas_variant_prioritization"
+        },
+        {
+          "task_id": "gwas_variant_prioritization:188",
+          "source_task_record_sha256": "53cc249c6d583a40b5a5c113818ebb2f1577786504c7f6f0149af25ce3ef701e",
+          "source_task_name": "gwas_variant_prioritization"
+        },
+        {
+          "task_id": "gwas_variant_prioritization:71",
+          "source_task_record_sha256": "df02a4bd0836d97a5b511d8903b4c5cb90aef260088a02afd75652aae35e8466",
+          "source_task_name": "gwas_variant_prioritization"
+        },
+        {
+          "task_id": "gwas_variant_prioritization:106",
+          "source_task_record_sha256": "da48e2eabf00b7e7ec4a2bae410f6b1eb5c2418e22a05a507fb2227f2224f045",
+          "source_task_name": "gwas_variant_prioritization"
+        },
+        {
+          "task_id": "gwas_variant_prioritization:14",
+          "source_task_record_sha256": "dee6f9286d50ca785cc1dae0f6ba52c8ced79905745782eda6e8fe027db02bd0",
+          "source_task_name": "gwas_variant_prioritization"
+        },
+        {
+          "task_id": "gwas_variant_prioritization:92",
+          "source_task_record_sha256": "5105464033dd067bf231b68ee8a6762ed74d6746774a8b4985c53872a7cca198",
+          "source_task_name": "gwas_variant_prioritization"
+        },
+        {
+          "task_id": "gwas_variant_prioritization:179",
+          "source_task_record_sha256": "8308590bb40fa2b7d57cc4edeb9fbde2083248231f6b2a6a43af8c0f5a99e1e6",
+          "source_task_name": "gwas_variant_prioritization"
+        },
+        {
+          "task_id": "gwas_variant_prioritization:102",
+          "source_task_record_sha256": "946633295f82f2cc432458ff6e61e54d25e6981843653e34d8ddb201fe27b105",
+          "source_task_name": "gwas_variant_prioritization"
+        }
+      ],
+      "source_inspection_tier": "shared-pattern-only",
+      "source_planning_disposition": "instance-endpoint-and-evidence-review",
+      "matching_workstreams": [
+        "variant-evidence"
+      ],
+      "required_endpoint_stages": [
+        "normalize phenotype and variant identifiers",
+        "retrieve versioned association evidence",
+        "compare the provided candidates using explicit evidence rules",
+        "report candidate ranking and provenance"
+      ],
+      "observed_input_requirements": [
+        "Observed variants, matching reference/annotation, frozen consequence/frequency/clinical evidence and provenance; observed assays for functional validation."
+      ],
+      "required_formats": [
+        "phenotype description",
+        "rs identifiers",
+        "versioned association tables"
+      ],
+      "proposed_artifact_requirements": [
+        "Normalized VCF, consequence transcript table, evidence rows with accession/date, exclusion rationale and sequence products where appropriate"
+      ],
+      "source_specific_decisions": [],
+      "deterministic_verification_approach": [
+        "Actual annotation package plus independent coordinate/translation checks; deterministic evidence rules with unknown/conflicting outcomes; verify function only against observed assays."
+      ],
+      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "validated_new_mappings": 0,
+      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
+      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+    },
+    {
+      "proposed_id": "portfolio-biomni-eval1-gwas-causal-gene-evidence",
+      "benchmark": "Biomni-Eval1 tool-enabled",
+      "scientific_question": "Which gene hypotheses are supported by an independently observed association locus under an explicit evidence hierarchy that separates proximity from causal support?",
+      "source_family": "gwas-causal-gene-evidence",
+      "benchmark_targets": [
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:1475",
+          "source_task_record_sha256": "5cf5cd214a62f5861e4455ce68520f37c81547850765b32252b5fa73132b580d",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:959",
+          "source_task_record_sha256": "30ae80ec6b509889b22af6981bcab509f712534629721e8949830635cbf42b59",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:1588",
+          "source_task_record_sha256": "9a2ffa45d0d76e2148231cfbeff13a751db98b38bb9861aa3f97543b6a582d19",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:283",
+          "source_task_record_sha256": "7b1d7241673c54c239f0e83d79fad6b592dfd6be3f8b1afdac26675219678ceb",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:797",
+          "source_task_record_sha256": "8aaa7a67a2037dd511837fb6b270b174218d7f0c5596f54309856cb2b9aaddf7",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:1378",
+          "source_task_record_sha256": "cdc2740631ad58c4bf651692776d64ff958c9082aff301fe7675d22a49875411",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:225",
+          "source_task_record_sha256": "db862200c0361e8ca2d871361f98d60997cff9c1ddbe3d7369f140139e42825b",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:26",
+          "source_task_record_sha256": "f9a504d06ba40632e19449e1d698695a07bca3e41059e4c1dc6ae3427fa7d3d9",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:1497",
+          "source_task_record_sha256": "4b1207f863193be8fc983d9d261857c4c2256c4f3f03e6c44586612b7ca0287f",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:437",
+          "source_task_record_sha256": "aab0f5403964d9cce11dad995c13dd0219d8a12ce3285dde8e8824680856749d",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:1645",
+          "source_task_record_sha256": "7ba0bdff0167e516857bd34d216739402a05b14b452ea0d9551a7fd71f1f9f32",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:229",
+          "source_task_record_sha256": "309f0ff9a96c7adf11a8d5aeb933effc59b5b795c23915e5d55c8bf9eba38894",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:37",
+          "source_task_record_sha256": "b9872a642638bcfe4d04f8d4092e6f79311c58bd96eb57ab4a0e4f364fdf3625",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:749",
+          "source_task_record_sha256": "a297e4868e18332017cacab12a39a6c4c5dc1113a209f1ac012de25058cb2ff1",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:1045",
+          "source_task_record_sha256": "17e23eca35619f990d0669e7db88e827b05f3dd24381be2541ffeb46c7dc7956",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:469",
+          "source_task_record_sha256": "f44bbb8e3d87af7b92dfbad836fd600769abe23ce6a11e8e43ba539cf0d16ed2",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:1435",
+          "source_task_record_sha256": "869811d2083853a744479b2b13dfc95365ba86ad3d92cf4e7809db1c876820d2",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:1662",
+          "source_task_record_sha256": "e89559fca7259a78bdf56b7cbf0d8d9baaf0c36d1023eadc7550a4195b597fee",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:687",
+          "source_task_record_sha256": "dbc762e677514ee749c9aca1526dba6d9b9c0d84e9de7ff9993ccd7cae30c6d3",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:1554",
+          "source_task_record_sha256": "c29b59e187c564a6d7664b399c09195070766af190fc5e639ba658e2820849d6",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:639",
+          "source_task_record_sha256": "06cba974cd19f6f33bd15a45cd2e971d7dbbc4582ea3975d61a8937976ca188a",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:1453",
+          "source_task_record_sha256": "e324beab78a8362f6460d15444dd8b8c2b852ba339f5114b8c177b39949aa1dd",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:1218",
+          "source_task_record_sha256": "abbc6276db56cb61aa1109b89906e576659e70a1aaf106765e7a62991b7b52a7",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:1158",
+          "source_task_record_sha256": "027dca3f8d16805dd4aaafe128eff798065f7799df8caddb272de62c651e07c2",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:1403",
+          "source_task_record_sha256": "88dcb30c5444e2448677cfe5b17e9877c9f3f049399e83fff3e61517d70cd3cf",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:1300",
+          "source_task_record_sha256": "12723c09edff08bc73fe55537a6956ff3e70d91730adf010cc1aca2871fcee1f",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:1538",
+          "source_task_record_sha256": "0339676a871c68696f26d0a9b58b3ad7bb77dea4a86af5672322ab9a8c1340d8",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:800",
+          "source_task_record_sha256": "fe495f397c92bca9c22cb644a3373c34ef59bb70bc9ddbc0dab7bf709cb5ccf7",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:160",
+          "source_task_record_sha256": "9b83348eb17e68e57bb2473e8a0c6b2109ffb3f6a3f5fc3c75f338c5015195bc",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:956",
+          "source_task_record_sha256": "8397b063a2f603a197af4ee3ab5dec2ebbd62788afcbecadc425518e75794544",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:1186",
+          "source_task_record_sha256": "6949d230a16ee5380709fe7e4a854c54bd0c64bb64f9e3f8361be40108436b01",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:821",
+          "source_task_record_sha256": "01312f345dd4d06d04c70b9409984bbf4fd12124eed2b62a10d692dfac244172",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:1463",
+          "source_task_record_sha256": "e60ef6d0fbc998925f8e45c3158cde52b2d0259ac46179f4f623d817920d8e33",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:877",
+          "source_task_record_sha256": "c4a5b256bc1d907709ff8cc0a63a98807c7d897505c8300404976d3188641f72",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:913",
+          "source_task_record_sha256": "7827cf4a0d4c3f3ee61f38984753e54a9938f645541bc7cd905a50e49f0b4c0b",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:152",
+          "source_task_record_sha256": "9a7780442eff54739c4cad357848942287bb2ec741ee2582b53031e8b000a188",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:1549",
+          "source_task_record_sha256": "365c80adfa2657f63972fe4fd47000ceea0d5f563889ae4649a8c3dc25c6b94a",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:509",
+          "source_task_record_sha256": "329c3178693369186f59403348bd4e681b38d2e8bf8158e637ef68e54c92dc86",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:1135",
+          "source_task_record_sha256": "87756976c37c47fd01a1dc232221ce628bbd1a603449574f9bc91e49371f8d72",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:1250",
+          "source_task_record_sha256": "47b7052001a56531ed9210b74deb6a58d2469bbc091bf8c6e0b6710bdc924a60",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:1612",
+          "source_task_record_sha256": "61f2c46f8c6e07e326871f337ee4df4823265c3bb3d9625f6bd97c555bbe3432",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:103",
+          "source_task_record_sha256": "640768420f138d6f0cc0ac46fb6289b52c08a959db4dd66b7460fa045fc711dd",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:586",
+          "source_task_record_sha256": "32fb787462aa1fcd787fad999f3471cc40fd8233ff9bc2bbb54fb1c91d9b108e",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:1572",
+          "source_task_record_sha256": "21049fce1ea0d086ef6da730c7cda037b6988a572373122fd182bda7763f6e70",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:1143",
+          "source_task_record_sha256": "2add3f8ac47dba9c4c648fcdfbe9b00a27ac0e6bbb391bdb544ed2d4ff53725f",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:53",
+          "source_task_record_sha256": "862436a8a485aa8b045820e12ca9488ddcd1d896ac933512c6c1e4575824e0ed",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:151",
+          "source_task_record_sha256": "6de486a07ec62f1fc47ef983c8ef7bd622a59cd5c620e4a49745daf8406e99d5",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:403",
+          "source_task_record_sha256": "e931f22194dfd1a5f6a7ca6d54fcf47c64e28cc5f9ce466bc5adab6c64d3d13b",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:1640",
+          "source_task_record_sha256": "97f94ea998127d0b11d52e434901fc736ddf3d8a2ef0d9e30101cd73526a2393",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_pharmaprojects:207",
+          "source_task_record_sha256": "743d2e829ece8dbc0081247ca0200b2fee7cf98b342deee66b9b3dd784ff44b7",
+          "source_task_name": "gwas_causal_gene_pharmaprojects"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:767",
+          "source_task_record_sha256": "2a57992180d12442c45160c0df1b06d0b04d74fb0c4b669facb7a2273af2746b",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:619",
+          "source_task_record_sha256": "3a97dab7a948d526377b307baa90bf6b006dc4a668e35edab7f75fc554999695",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:760",
+          "source_task_record_sha256": "3757fe67c0013149c8d493988cff7832bb9c4ddfaa42e55b701dc92246806ce8",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:645",
+          "source_task_record_sha256": "6c1ab8389ee0004bac88440fddd4bc5ef579033a18216c3303c696bca15f6a4f",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:755",
+          "source_task_record_sha256": "a1b5f7089ecefa66fab0b0c7e48d1e53b192429e5e6df6e8b43adb30cd482b76",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:556",
+          "source_task_record_sha256": "b3e794cd8f181cb00c0a50c43f0b13d2af415c825b20c9e3e190de4b57dfc199",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:812",
+          "source_task_record_sha256": "21bb1b1bb471c248eeae087538aed72ff5f5026bb60f60203616bd6a93716562",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:577",
+          "source_task_record_sha256": "ef7069f6314f4ffac24263b707b65d6ea8192e140f0d14db19f5a9f8f8d3adbc",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:85",
+          "source_task_record_sha256": "27f1ff08707a2e64022611f3376094a254769cfc455245f4fd9ab05f88e3aef0",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:242",
+          "source_task_record_sha256": "1be3acfb47854fe3348b66eb92762f8493c12edb3c1199760ca7c133c1c4a5c3",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:159",
+          "source_task_record_sha256": "f98c040a4c95530871ad480d8b7f6ce9af2247143931c5dc07b748e52d71c2a6",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:524",
+          "source_task_record_sha256": "e486ccd93c7601dcba50ea12ce4954fd309ddff609a6c32524fbb4465c0cca98",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:35",
+          "source_task_record_sha256": "3c4b0a35d6f07aff507e0eb8932c4797e4d333f80e123cf49e42f9deb4f488b4",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:540",
+          "source_task_record_sha256": "8f1ce4b200b5f096fdbaf097fcd358db0d802ce09ab474c72be15e606c5d3efe",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:170",
+          "source_task_record_sha256": "2a1eaa674e47ed21e3f9a3f396b3ba83e2349db3d5159adc7be59f9358b2bdbb",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:654",
+          "source_task_record_sha256": "e13524735258676e07d67969408daa04ddfcf9d89ac5be7e9fb5cc636f4a26a0",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:728",
+          "source_task_record_sha256": "9c7914ec5492d6a191cbfe24cd54da95c5fac4ccab0be6007c46a674703e9c3d",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:720",
+          "source_task_record_sha256": "f3dbbc9adeeb3c511438cd99a905048c02a474766eedaca424db63350a850bbd",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:801",
+          "source_task_record_sha256": "496eb22fea61b3effbe27caf28790cf30006ab3c44b62f46af21469abfd92a2f",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:95",
+          "source_task_record_sha256": "64906d1a29126bcd89663312f53b3abadaa5c115308a18fee4e56081093843eb",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:563",
+          "source_task_record_sha256": "ef898cdf13ffe1100b9333b9c128792dea57d4b13f154bb971968f4857ae7a4e",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:240",
+          "source_task_record_sha256": "484b75006b7ca79c251ec552fbe9cee45ed453b5583900ea9728c40dc4612cc6",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:574",
+          "source_task_record_sha256": "154db36f615c769643270476e44583fa8f7b59753979b2a4473df0bae8e0abec",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:690",
+          "source_task_record_sha256": "a07da1ac4f9f3651bf41a245ba665a00916c033518386c8f97fa71900c845806",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:460",
+          "source_task_record_sha256": "15040027ea1caed418e7bc2978b4ecdfb0a1acb4e857be651305dd9c834f0fc1",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:553",
+          "source_task_record_sha256": "7cd29ff228b19c72f267544e5f3671fdf736054978727ab1fcab45d5a6b18e77",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:745",
+          "source_task_record_sha256": "2db56a3261d57ce8bd4b260cf8abbb2eeabeba2eb5be48b3ecb69e161ff58ff6",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:206",
+          "source_task_record_sha256": "81d7393b1028f0d0aa9518d5967bbcc3791def4ac9bc8e1fb2276bf4489cdc19",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:392",
+          "source_task_record_sha256": "b5f69efa7198cba5980e0195bf2e7b391b55df65a547f7eda170303f938e2bb3",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:397",
+          "source_task_record_sha256": "9f717f65888f17c52eba17796bfeaf8903a1355988687282dd958c90491032d5",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:721",
+          "source_task_record_sha256": "1de8248fc710d67640acee5c4fd8316757b03c4774e21184000cf3e7063b0637",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:217",
+          "source_task_record_sha256": "d1b9c64e9de138f5f3ea2faa9d31f6a6e89e8fa971827fdcb515b6178816d7f1",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:4",
+          "source_task_record_sha256": "6486fdae96c9514fef9243a74a95ff8713eaaf82e20a376441c9038882eeaf78",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:642",
+          "source_task_record_sha256": "956f0571787db0c9000d88e993b8ccd78cbca645df5cead9f59dbddc3c3aa91f",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:761",
+          "source_task_record_sha256": "dabacc05685a9195c1d14672b263c0f67f12d0f6399758587ee092ccbc37ff80",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:612",
+          "source_task_record_sha256": "76051001ec1405198c531002579824ef9dc1a1e96b15804a15fe144b394e048c",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:546",
+          "source_task_record_sha256": "d73f37a6afd0100ef39edd80eb119ec3727aa336ffab1cc71dd2c075d8bc81fd",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:683",
+          "source_task_record_sha256": "6848aea4690ae5aa0cde3fd32475a5844bdbd0a19dbad53aeee336332277d3a9",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:98",
+          "source_task_record_sha256": "e6b4886f88bf793e476b6d2e53a6b5d33d01170347766104f4b87655c43b2f7d",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:573",
+          "source_task_record_sha256": "d449a4747cfd99ade5aad84a497751a801fe4b3e3ca178d863381c6e192fc6f7",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:406",
+          "source_task_record_sha256": "9862abd7cc4715ed55dc2357edaf6fd83bbd80fd397ef1cc2ea3d31fcd475d64",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:502",
+          "source_task_record_sha256": "bc22723a7ae784b72ffe4cbd06e684064f18ef80a351af8ee8990ae09d6089ca",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:47",
+          "source_task_record_sha256": "7c177843717fb9dbb4143af90b17049476c4f161fb2f210e4bce9ea8695d8da6",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:32",
+          "source_task_record_sha256": "80c797b2fac663ddec7737293581b5ebd597ded9bf059c50cf42cfd5dc65fc93",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:200",
+          "source_task_record_sha256": "5e5b37142eeffabf681f6bc52c2fb7d44912b98044117ac2dbcefc56ed2c0c26",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:134",
+          "source_task_record_sha256": "e508c0b18a0cdae7af7305395eff9a8e006a12f2577357e3676e2bacf47270ad",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:27",
+          "source_task_record_sha256": "a22bd4e87c46e6a8e6881a00986ec65afd39b6310ea607339aa187af04a3384e",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:817",
+          "source_task_record_sha256": "9f3f8cff0d272df9c0d5f37d82c86883e7405259699f4229dac0021838a6576a",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:230",
+          "source_task_record_sha256": "60cb0e2db6d7453b2e31acba89c3ee8d57833678ac0f788bb941070d0b116ed2",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_opentargets:489",
+          "source_task_record_sha256": "852b3dcf7fb6885fee29c446ea8a15994b3708e042f81f17a32fd1fe3673654b",
+          "source_task_name": "gwas_causal_gene_opentargets"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:630",
+          "source_task_record_sha256": "abcb1dfbce452613d0a49e4b06c2f8dd7e0a0a5f764f2e9c3fd6008e7ece8b14",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:591",
+          "source_task_record_sha256": "43904d07095f97753477047ce020d504956b6d356d2120193a41380278371d8d",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:541",
+          "source_task_record_sha256": "d490d42ddde327b211374a411f5d078bfe7c6a0013047db3e8f1c1eee2edb1f0",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:85",
+          "source_task_record_sha256": "125dc463c4c53c6eae2e2dff7f8db3bb3b0660f3f50b3f4a46bfd906636b697e",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:242",
+          "source_task_record_sha256": "a10ff4a06681abc0eca2bee565b8889730d601f7407e0c3bc2d0e9a0aff13b6d",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:159",
+          "source_task_record_sha256": "309fa190611d3ea509f8ab93cb7b8fe3e24b1d485fdfac16bfdc2b969656f2e6",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:35",
+          "source_task_record_sha256": "119c4b9a955d1bd9e958587ca9a572d141eb7f73e10226525ebf9f038df8ae9a",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:170",
+          "source_task_record_sha256": "14e25c125472f2394f14cb852ac22ac3e4a4a594dd6990ec9f580961446c25f5",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:543",
+          "source_task_record_sha256": "aedea80ab0405e9b784032023c0f960e0d5caab911545fa6a08d88390c61fdca",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:535",
+          "source_task_record_sha256": "e0b512c11ef42dc3f1f32e95d01b8933dbf4a7ee81e3744fa49f6a6f993e4fec",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:601",
+          "source_task_record_sha256": "d9940e438b788abaf569ce1889787ad8982a05b92c385a1f95b7511d4be23808",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:95",
+          "source_task_record_sha256": "147baa044c7ec2c1ce78a7bb22a78f1fd24eaf360ae0fded670036529ba79337",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:240",
+          "source_task_record_sha256": "50a755fff010f76be2c43da0916b7928ba2052f4ac1c38eda0c736dbe6b821b5",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:460",
+          "source_task_record_sha256": "7a25329b9d874c49f36787a8967c3f0134f4a09fe5dbcdb1ac55e4d352785681",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:557",
+          "source_task_record_sha256": "a9f03895995bb1ec28deacd66e107dcb4f46f7346d8a4cb7c2dcc3dc7f4f8bec",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:206",
+          "source_task_record_sha256": "f241a53fb006e3625265d3b95232e0e8ea4a999e82878cd14880ba03bcf5d573",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:392",
+          "source_task_record_sha256": "8caf6029d42821bb0ee85ed3535645ecae657257254579eceb649e302169ef24",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:397",
+          "source_task_record_sha256": "664f161acfe7b8a76d188f37baef92c85fa81e5903b3a941a1371159a08dd6a5",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:536",
+          "source_task_record_sha256": "16e1d64cce579c3067f14e7c70d2272fbbedf269b67c6e79731b6cdc576fb557",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:217",
+          "source_task_record_sha256": "f4675841c0bb65799b8ccede74bfe22879557b8cee5695c3823d5cf956a93b81",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:4",
+          "source_task_record_sha256": "0fea8f224f9d0a7c3cb1989ed29a66aa842a7f0f73a13fd0a3c707c96d671cf1",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:568",
+          "source_task_record_sha256": "c7f8e4dcef4d024e566994aadc28b22a8ece221e4fd1e0007072223ae9607168",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:98",
+          "source_task_record_sha256": "f761d09bd0a0530dfe2299da9cd83de73a8d04bc17490d8646bc35c9704ea196",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:406",
+          "source_task_record_sha256": "4b0a0b00c3c16a7b72c50f2e85e3e08cc16cd0af138d963d2a7d41835aa0834e",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:502",
+          "source_task_record_sha256": "afb8558d797b8482d2742acc87d13e6c33a699505f0ddf6c217c8ca3d87d8828",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:47",
+          "source_task_record_sha256": "b6328fb628fcb0fcd2cb8f5e7f74453440fce3f0379dd5cf448a647ef2e163a9",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:32",
+          "source_task_record_sha256": "5fc57d504c6b2992a35492a785e207407d73dc0ef9a8ca9a5056cf2fbaff80e7",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:200",
+          "source_task_record_sha256": "3752ce166447c20be3512923f32724275d89b1881baea685da75ecae41ddc756",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:134",
+          "source_task_record_sha256": "0d3a1f7ab1c52c83f226fb76f05042f66a9ebf33d93b80302fa71ba3310c8863",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:27",
+          "source_task_record_sha256": "ea0ed8798375076b3e13e5eef0452a594141a618a700eb9602d8a2882f359f58",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:559",
+          "source_task_record_sha256": "3653814d07a46ecb9fb2448f9f31e3065c9d6bdb1fd559a7869d8e2df548bad6",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:230",
+          "source_task_record_sha256": "2bb38f03776e0c7773e43e4c2d46d06b2b16b004a2e2ccbdb4fac9216118d027",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:489",
+          "source_task_record_sha256": "7a2c86762fc993eb3afb81bc66139c9b80dc21a29f1616c1f8232348624ecaa6",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:378",
+          "source_task_record_sha256": "39382316df766dd1507f15d09496a305a83f91a207ec99de9fd88b79aa81fa08",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:288",
+          "source_task_record_sha256": "76d7948764fa7738216068ab0a7abbedeb6847a99d69b2bde502098f844282ea",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:418",
+          "source_task_record_sha256": "25210553cb045545daf2c6cc826e439daa419b0a7dd261b7bee3fbf970e31d04",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:391",
+          "source_task_record_sha256": "0f6a9d5ceb2a11af9949242ab37d79f801698ce571a8a0fb3d1d3ed756f9aa7a",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:498",
+          "source_task_record_sha256": "9d4d91cacd03ad005261f30fbca45017baf1760cccbc3f394f97b166d7bac1a8",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:138",
+          "source_task_record_sha256": "04da2e7d43812da4297deaedb0871c555ae4a38631a07f6cd6b5170adcae18a4",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:62",
+          "source_task_record_sha256": "b3ac67262636cb07e4913bf5b1f873b6da36e2cf80bf2ef8e70e68f40d89e065",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:471",
+          "source_task_record_sha256": "f9cd7d9dd1291dd1267ef9fafbbec38fc6668188d3d1cbf8169fce967197a8dd",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:128",
+          "source_task_record_sha256": "47b3f15d0ef3aa2e07e27ec023df35b9fec9bf6f0fc79d26140ee1738514ef01",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:623",
+          "source_task_record_sha256": "95b70961ca8eb297ef4cb77e704efa93295f64678afe88eff8c169f154a72ce3",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:520",
+          "source_task_record_sha256": "0e6fa9e13c543c2f15df57ae2bd316b681a2ebd145a829077f8c793d90be5552",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:64",
+          "source_task_record_sha256": "68b140b81ba6960e8ad739317cac19399d30481b31694cc4e66bde1fbb36f548",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:14",
+          "source_task_record_sha256": "e484920ac4ccd50c9c8c6a027bffffd478dbad92615f511de6409cb28c01ccb2",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:156",
+          "source_task_record_sha256": "9cb273076b1d5a4ab5c32896fbcb80a8797b947ef87988c71c3d9779e46efdbb",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:40",
+          "source_task_record_sha256": "4a5ce6370a6586a9a841800a864158c7cf5d72d4c9f908c3999b0da3ed42f3fe",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:492",
+          "source_task_record_sha256": "d7b32e1a1b1d51a1baa22c483e835dd66e1e5adeaa5e83d930cfe20a738637ea",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        },
+        {
+          "task_id": "gwas_causal_gene_gwas_catalog:379",
+          "source_task_record_sha256": "04a265d92894b2dd3a0b9a8bee07d4cfec506f1623ecdc55f797780355fdbaef",
+          "source_task_name": "gwas_causal_gene_gwas_catalog"
+        }
+      ],
+      "source_inspection_tier": "shared-pattern-only",
+      "source_planning_disposition": "instance-endpoint-and-evidence-review",
+      "matching_workstreams": [
+        "variant-evidence"
+      ],
+      "required_endpoint_stages": [
+        "resolve phenotype and locus candidates",
+        "join versioned gene and trait evidence",
+        "distinguish association, proximity and causal support",
+        "report a candidate ranking with supporting evidence"
+      ],
+      "observed_input_requirements": [
+        "Observed variants, matching reference/annotation, frozen consequence/frequency/clinical evidence and provenance; observed assays for functional validation."
+      ],
+      "required_formats": [
+        "gene symbols and Ensembl identifiers",
+        "phenotype description",
+        "versioned evidence tables"
+      ],
+      "proposed_artifact_requirements": [
+        "Normalized VCF, consequence transcript table, evidence rows with accession/date, exclusion rationale and sequence products where appropriate"
+      ],
+      "source_specific_decisions": [],
+      "deterministic_verification_approach": [
+        "Actual annotation package plus independent coordinate/translation checks; deterministic evidence rules with unknown/conflicting outcomes; verify function only against observed assays."
+      ],
+      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "validated_new_mappings": 0,
+      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
+      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+    },
+    {
+      "proposed_id": "portfolio-biomni-eval1-screen-context-gene-retrieval",
+      "benchmark": "Biomni-Eval1 tool-enabled",
+      "scientific_question": "Which genes meet a prespecified observed screen phenotype after experimental context, hit thresholds and negative controls are reconciled?",
+      "source_family": "screen-context-gene-retrieval",
+      "benchmark_targets": [
+        {
+          "task_id": "screen_gene_retrieval:302",
+          "source_task_record_sha256": "60d2e2739eeb1fafd772519cf671db7d5149a1ad588eebe9ea01640371734ddc",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:236",
+          "source_task_record_sha256": "d0842ef01aef0cb81b911949cd169247d3c996a6b75c57aa050f29dcf158ee66",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:207",
+          "source_task_record_sha256": "e3024c749937197fc9046037d0dbab0457a1e1f8fd23cb91b9081e141f1312ec",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:212",
+          "source_task_record_sha256": "80cdf0c3653d2dfd5babed40e139b8a92ba4006cec0d05b93aa79c0a9e1abbbf",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:317",
+          "source_task_record_sha256": "e30991807243d8d7d5856c82fab1db47a2e8a8105a9644e50b9445c119be9807",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:251",
+          "source_task_record_sha256": "1997d4891b301d99e6f1595bd00ab4db4ddff41f89a24b2c2ad1ad13495422eb",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:339",
+          "source_task_record_sha256": "efd977713452ca91ff12e1aee15148d2951223f81ab68d76b7e180a62e1efbd2",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:318",
+          "source_task_record_sha256": "656fbc533a6e5ca2809691bc55b40925cd96b7ceff356646c29523d568f8010d",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:269",
+          "source_task_record_sha256": "b2ad217e06cc148c8400a8cab1e94c6ba79fd0a573b806e8331707740e3e145d",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:201",
+          "source_task_record_sha256": "2ca378763bce57eb7cfd4a75149037d7c6b86918affe7447207497d2c2c6c74f",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:161",
+          "source_task_record_sha256": "aa9fe3f6795e5bbac40bdef9978c8e565a39041bd41d697cc4f70a42a22bd407",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:43",
+          "source_task_record_sha256": "43c4f0511635f61df694a9e4e8ed8d04626ea2f5fea470e4c68aeb0a77884319",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:217",
+          "source_task_record_sha256": "39f3dffa0ef5b9d5929e92c6414047cb3e5f10b2f2c573446427aeb675e5d64c",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:190",
+          "source_task_record_sha256": "38c0a259d12a8f1d7f5a816c4b165029091c60ffc100f5f942a3a8f76d6f49a1",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:259",
+          "source_task_record_sha256": "9e94d0b31e66392d4196cae7020aa32afaae7ae05e953eb94ef0eb280e69697c",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:105",
+          "source_task_record_sha256": "e2e62670c21d0c29afb2a1c349e22a0217fa7f09ef91ebe868a0fa6d757e4905",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:53",
+          "source_task_record_sha256": "9d1f0c77393af024445b7bba7536ac058625f73ac00c65e5df9a4f0d9eeb5d38",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:1",
+          "source_task_record_sha256": "758aaeafebee0fe2552078a308771981d971aba4257e2407fe553f65f8ca7464",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:49",
+          "source_task_record_sha256": "d27056d47a7fda3e9631f901e63775f86e6b9d407ebfe80dbf966c354baf87e0",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:80",
+          "source_task_record_sha256": "5e941a61bb41b217bc9642ac7a71458ca0635d4d4e75cc5c080b15a7acb9ce79",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:205",
+          "source_task_record_sha256": "5564ad0109e0ff5064e0a29d04972b86c47b730aca0cdf7ae97c124823ed0bba",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:34",
+          "source_task_record_sha256": "7afeb9f0255c2f4aab3e20440836a1986d0a439bb2887324dfac219edef47328",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:263",
+          "source_task_record_sha256": "0b1e1192b9ec316078179661fefe70a9b389044880a1dae861a3f11edc5161b8",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:91",
+          "source_task_record_sha256": "e1eaccfa56efafe1bfed3b34d51aee7148bc24e758a82ae6013bd538dee8de93",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:52",
+          "source_task_record_sha256": "7a73634b3f556bcb6e54cebb46958535ba3b81fbcbac290aafc2a4b98dc1b378",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:264",
+          "source_task_record_sha256": "bf670bd87654aa83030a28b29dae7627b423532dd9a7c2a64e08e7a5cec5eecc",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:241",
+          "source_task_record_sha256": "c51b225d1d53f68afcf1852d26db1be92046ee18ca0faf4a5b5f9d82e8ffe4ff",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:13",
+          "source_task_record_sha256": "70f919f308daa023729725a096ac9d81620f0a895a2541211f49e8266026b5c1",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:88",
+          "source_task_record_sha256": "9336eef2c45a0aafe87b9c823b0a5d11f3275dab664d646aaa214e0a341c5aac",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:273",
+          "source_task_record_sha256": "2cef784d82f5e2afc76c5a8547323729ebd589bd8c29a0608ea5b52392391104",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:166",
+          "source_task_record_sha256": "ade3e60ecc6c4b8abd4bd6f21d8393b0d93ace5295a5d1f39505f8fdd8848622",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:342",
+          "source_task_record_sha256": "782655f105f46878d10794b0f9d49eb2c9a9be424868589c3def84e1160b2bb1",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:134",
+          "source_task_record_sha256": "48966be116b01750efc9f98ed7722dc50b62c80a4dfbb22abc1d0ce55731a1fa",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:306",
+          "source_task_record_sha256": "4e47c77aaa2a050b1f78434bcf243357c73d002a1531cb6abe8e4f53223dab69",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:334",
+          "source_task_record_sha256": "b304126865198addb66e5b04adc755ad95e359166ac3dead4954587e536b0e7f",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:243",
+          "source_task_record_sha256": "129aaf690e52504718a889234dfefd41ee114cf8b8c558965cee5cc9f570f4d7",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:54",
+          "source_task_record_sha256": "e2a4a27c5a5ef04ed0dac258baf77877c2fcb896256ebeb2d2ec0c417ff83a57",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:50",
+          "source_task_record_sha256": "f4f25c4cfb35cdda41e82ce7bf89e35af7f4b1ff7acf1c6a2fd0871d9ee1b0f3",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:174",
+          "source_task_record_sha256": "ad26c49da8269ea6b3372dca6452344b37b6b88be4fa7c7f76e3245102737da1",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:189",
+          "source_task_record_sha256": "290cb4dfa056a4c39ab74e4d7f8c604a21f5faf9132520d986039766d9a70800",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:346",
+          "source_task_record_sha256": "ba34061a81ff60574ec0167bc41c4a06b94fa936151567477998a3bceb726e45",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:187",
+          "source_task_record_sha256": "2040ca02bebd2fed5ed093e08678f99f8b34674955919d6bb2419fe007dcf51e",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:169",
+          "source_task_record_sha256": "c1064de35de7d6c1098111ede7b7693d79690be44468ceee9d22ae25c26e691e",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:58",
+          "source_task_record_sha256": "c7778df5b8b673d89cd581514c9e0fad1204680d306e2a8947cd596a88821694",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:48",
+          "source_task_record_sha256": "4862685269bf751a69954651054ead4a44abcc9d6f9f23ab843d5daa7f89f9aa",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:235",
+          "source_task_record_sha256": "b945c389e30af7e34c6ad13fde3358e6fb087ddafea17695dc1536061d6ae3f8",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:252",
+          "source_task_record_sha256": "778723dfda1049af1803006739ae692aeee6ab907e0e0bc58b6eef3960c2ffb1",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:21",
+          "source_task_record_sha256": "cc5d35a539100c5011113f534487b19e13bd4d00060090557a2a748a967e2f15",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:313",
+          "source_task_record_sha256": "c8675ec9cc7c2de156cb95df2cb784bd50d5d399f9c2c00af600a3d08d496144",
+          "source_task_name": "screen_gene_retrieval"
+        },
+        {
+          "task_id": "screen_gene_retrieval:160",
+          "source_task_record_sha256": "4e3c94f736cc8afd725ce3ab7a22cb0de4042502d305d5e2447d8a80fade5fc0",
+          "source_task_name": "screen_gene_retrieval"
+        }
+      ],
+      "source_inspection_tier": "shared-pattern-only",
+      "source_planning_disposition": "instance-endpoint-and-evidence-review",
+      "matching_workstreams": [
+        "crispr-screen-pathway"
+      ],
+      "required_endpoint_stages": [
+        "identify the relevant study and assay context",
+        "align screen, cell, condition and gene identifiers",
+        "define effect direction and compare candidates",
+        "preserve supporting measurements and a selected gene"
+      ],
+      "observed_input_requirements": [
+        "Observed guide counts before/after perturbation, biological replicates, guide-to-gene map, controls and frozen pathways."
+      ],
+      "required_formats": [
+        "candidate gene symbols",
+        "research-context text",
+        "screen metadata and measurements"
+      ],
+      "proposed_artifact_requirements": [
+        "Guide eligibility and counts, normalization, guide and gene effects, control diagnostics, complete pathway results"
+      ],
+      "source_specific_decisions": [],
+      "deterministic_verification_approach": [
+        "Run the actual screen package; independently verify joins, guide aggregation, normalization controls and full ranked outputs; guide observations are not biological replicates."
+      ],
+      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "validated_new_mappings": 0,
+      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
+      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+    },
+    {
+      "proposed_id": "portfolio-biomni-eval1-phenotype-gene-prioritization",
+      "benchmark": "Biomni-Eval1 tool-enabled",
+      "scientific_question": "Which candidate genes remain compatible with an independently curated phenotype profile and observed variant evidence under explicit scoring rules?",
+      "source_family": "phenotype-gene-prioritization",
+      "benchmark_targets": [
+        {
+          "task_id": "patient_gene_detection:212",
+          "source_task_record_sha256": "55c6b9fa301b4153d2996830a013209081c2792d307f8269f83578fb433827e7",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:295",
+          "source_task_record_sha256": "98552241f49245fdfa698ea2d339911c13dc569398683c171f593a75d47534e7",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:457",
+          "source_task_record_sha256": "07f429fdc67748ad51f5c6ac521aa54c5c950849e0c812cebd9b6c42b76fdba9",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:251",
+          "source_task_record_sha256": "d688117b256c43c8f42b7ae296b9f55f5d61267c48d0e5c84b74a2ca96b1d739",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:488",
+          "source_task_record_sha256": "3fe1aa44ec596f30c655d899fbfb9370e3f86d182fdc810b6374009294ac607b",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:486",
+          "source_task_record_sha256": "be47c181f8a017edd8d3eb653a08255e6744d3a9b14a7c5fe8ebbcd78a995e64",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:303",
+          "source_task_record_sha256": "8e4f98344faf8ae8444d06e3c021c3aa7fb34a7c1827746acfd6a47a2208636b",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:350",
+          "source_task_record_sha256": "ec72f206a29f28e6718077310ae08f29ef13a03dcec9017a3836d1d93d97dd6f",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:269",
+          "source_task_record_sha256": "014818d01fd4cefa3f5962fe7f41076674a7f12bd780fc929524c71090aaf90b",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:201",
+          "source_task_record_sha256": "b5da8f33f40af0886c334089efaeb09b90280dc7d0367e529d3bfbb52cc9bb21",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:161",
+          "source_task_record_sha256": "82521cc4685a3dad13838c6cb8ed20e245a2faf2e41bea40e84053403de58a6f",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:43",
+          "source_task_record_sha256": "75c33b534928f0d4527853cabb0c34be76a938546ce70f10e744ce8249cf0336",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:217",
+          "source_task_record_sha256": "74997523d0441141daf7f7777ab110eb76a5d7665ad82c2bfefa08dab2d5b650",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:401",
+          "source_task_record_sha256": "48e61bef26b792f92cad9b160e31c738ab9503981ee9b6f32f0a9d307ac1f7ae",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:190",
+          "source_task_record_sha256": "849a4af0b740724617bf12eb95bcd670fe3984f3280e9131ead8e3fe0386c602",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:309",
+          "source_task_record_sha256": "4804f5ee38d7d9a5d5d740076a6cbe3e5e9be3da610f724ef948d45da1c4b98e",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:259",
+          "source_task_record_sha256": "0fc4ecdaee57618e47c81082a834d72d4fcf3431a60d7cda5066ae6c2c81d6cd",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:105",
+          "source_task_record_sha256": "10fedb37977e334a86abcc44c7547b9cbcaa4f4acd5f7c4c9158583a1a7b11db",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:53",
+          "source_task_record_sha256": "8a7a6772616d0a633c1032c746e545f1218b7169d5e475f29d7b08455801ddd3",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:389",
+          "source_task_record_sha256": "2cea4d835fe70bdac50b74f7ddddd4dd64ef552d3fa40bd00d8abb806ba44adb",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:1",
+          "source_task_record_sha256": "05df1393412d343894cd08f9faafa0d065b24fb5727533fa6175025983dc2b49",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:441",
+          "source_task_record_sha256": "f273310badc160fc423e3a8d69de9c6b426c5471d18adfca6b2068b5dac4f1b7",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:482",
+          "source_task_record_sha256": "daedd4453f5259e64407ce261322a45e967b43fefb52fd2cfc6d34d4a6fe583b",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:49",
+          "source_task_record_sha256": "bda6fb2a305d869ae81f67e1278a63d7c80039f1fc6235dfae1b7d9788a450c0",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:419",
+          "source_task_record_sha256": "5275438280411abf9e7240a5ad39ddb8fef4071dcb030500d1bc33e4f1934099",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:80",
+          "source_task_record_sha256": "614cdb4ad4f8257f4a614979ad8fc3746c3c438f37076404ca19e66184357236",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:205",
+          "source_task_record_sha256": "75f8cc667878564d7726afa59c6ed40883e1544f642498779b37cbb780686564",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:34",
+          "source_task_record_sha256": "5d930111f500b2b5011478ab0d99955c48b5533ba38007b98ee93a6d1614d8d8",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:263",
+          "source_task_record_sha256": "98f2acfff23171e6f31623fa4f7c2454fccba37888e66d4cf270674f095967dc",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:427",
+          "source_task_record_sha256": "9c268216519a9cc3a8301f9895aba91a3895e1d39b429d419eac428fd79d7052",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:366",
+          "source_task_record_sha256": "3199c2c7b208e729a162a482fd62faa4537f8e80984845e0fc7027dddc6035ad",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:91",
+          "source_task_record_sha256": "73d9e7b4f27ea498b33ad47b7a2e48e74d25338f8c6ed80297de9637c0b8eede",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:339",
+          "source_task_record_sha256": "c7c7c442e2248148479e1399c3415609ed2c8bbcfdc6c834e57ff89c7f019e0d",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:473",
+          "source_task_record_sha256": "ade8f033f262473078fb4bf29f5267b0e84df6b220f16d298adfaa500ad988db",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:52",
+          "source_task_record_sha256": "eb250f368fa136e577fdedd25facc9025fbc9ac74cfc1650dfc29783d6ff4aa5",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:345",
+          "source_task_record_sha256": "0519d8d273afd1127737f7194b810ff31f9e5f908a979c78eec36aa8b13f25f7",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:264",
+          "source_task_record_sha256": "9589cdb78a0d39396727a0c2260ad8e9f54ec0de350c6b9097eddf191a6503b0",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:241",
+          "source_task_record_sha256": "6f3eee656330ca8b91f3474d29b66109d147487c8257355675a333a39a9a31dd",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:13",
+          "source_task_record_sha256": "6fe1dea647b9369705255860fd4e313d08380989b2af747bf5683f6ee2f8b0a2",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:315",
+          "source_task_record_sha256": "58e2f2e55f802abbf4fd23e8c01c2bac52f3e95b0b1a53c695c968d1caf33dfc",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:88",
+          "source_task_record_sha256": "ffd6b521b70bf4f7b0555b867ef56d7dcf4a3da863864031aa6467adb6fa4a2e",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:387",
+          "source_task_record_sha256": "c1748c429269554bc2874c6f7aa098bd6af37ac8af5819d5dbad870159b9eff5",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:273",
+          "source_task_record_sha256": "56d6ecbfd41b29bb9857ae33d7084568b9320263671677e026a9b31d42243714",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:166",
+          "source_task_record_sha256": "59ae7350575ed00fe4056228cb560dd069ec64bccbdd0200d0ee8d2932ab597b",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:328",
+          "source_task_record_sha256": "095fa3608e5d51dfdc25030fa7e668dba073780b050c1df071615830e1fd9a40",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:492",
+          "source_task_record_sha256": "b50289cb3715929d8ba7aefc3680ec4e4653ffdce85eaf2068e9f013035ddadc",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:134",
+          "source_task_record_sha256": "42e6e058203975bf2116bfbb7b1d6b0a231917e229e97cbf4f5edffabec75927",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:306",
+          "source_task_record_sha256": "3f3b7c99a18a1a9955501cd84708041981f07e16701c6c9e3463e602b6d88b1e",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:480",
+          "source_task_record_sha256": "13af01dfd6b24f910246342cbd6dc9fbe93d5068fea6b4d0626faf1e98c867b2",
+          "source_task_name": "patient_gene_detection"
+        },
+        {
+          "task_id": "patient_gene_detection:319",
+          "source_task_record_sha256": "0b25c9f4f27c4d224f310faa8febb5ca282887844445cdf57c115949bcdf26d5",
+          "source_task_name": "patient_gene_detection"
+        }
+      ],
+      "source_inspection_tier": "shared-pattern-only",
+      "source_planning_disposition": "instance-endpoint-and-evidence-review",
+      "matching_workstreams": [
+        "variant-evidence"
+      ],
+      "required_endpoint_stages": [
+        "normalize HPO terms and candidate identifiers",
+        "resolve versioned phenotype-gene evidence",
+        "score candidates with explicit missingness and inheritance assumptions",
+        "return the selected gene and reproducible ranking"
+      ],
+      "observed_input_requirements": [
+        "Observed variants, matching reference/annotation, frozen consequence/frequency/clinical evidence and provenance; observed assays for functional validation."
+      ],
+      "required_formats": [
+        "Ensembl candidate identifiers",
+        "HPO identifiers",
+        "JSON gene list"
+      ],
+      "proposed_artifact_requirements": [
+        "Normalized VCF, consequence transcript table, evidence rows with accession/date, exclusion rationale and sequence products where appropriate"
+      ],
+      "source_specific_decisions": [],
+      "deterministic_verification_approach": [
+        "Actual annotation package plus independent coordinate/translation checks; deterministic evidence rules with unknown/conflicting outcomes; verify function only against observed assays."
+      ],
+      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "validated_new_mappings": 0,
+      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
+      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+    },
+    {
+      "proposed_id": "portfolio-biomni-eval1-rare-disease-evidence",
+      "benchmark": "Biomni-Eval1 tool-enabled",
+      "scientific_question": "Which structured gene-disease hypotheses are supported or unresolved by a frozen independent phenotype, inheritance and variant-evidence record?",
+      "source_family": "rare-disease-evidence",
+      "benchmark_targets": [
+        {
+          "task_id": "rare_disease_diagnosis:90",
+          "source_task_record_sha256": "51be56d15e63f06add8620b91a39d3416b6bb7e2770bde9f3cda156fae632fdb",
+          "source_task_name": "rare_disease_diagnosis"
+        },
+        {
+          "task_id": "rare_disease_diagnosis:48",
+          "source_task_record_sha256": "527dd6170c7e510c8c608bad0b0620dfa20f21fc2776f43d836ca420ea6439ca",
+          "source_task_name": "rare_disease_diagnosis"
+        },
+        {
+          "task_id": "rare_disease_diagnosis:88",
+          "source_task_record_sha256": "de29ddb5f8fc8a8b5e353ffcefad592a3ff75c07f2602470aa33da2e9233400a",
+          "source_task_name": "rare_disease_diagnosis"
+        },
+        {
+          "task_id": "rare_disease_diagnosis:107",
+          "source_task_record_sha256": "13122c6baec53ea46e337c2d626bd9e62afcd4bb89f2017c570d4887d8777a52",
+          "source_task_name": "rare_disease_diagnosis"
+        },
+        {
+          "task_id": "rare_disease_diagnosis:21",
+          "source_task_record_sha256": "229a451b39631563a96921174b04f0709bd2f938c5a3bc8da81f46f9e7de63c0",
+          "source_task_name": "rare_disease_diagnosis"
+        },
+        {
+          "task_id": "rare_disease_diagnosis:57",
+          "source_task_record_sha256": "004d37aaa2235b1bf68de67f89098ce23a5a6a156db53205968eb2c013141b87",
+          "source_task_name": "rare_disease_diagnosis"
+        },
+        {
+          "task_id": "rare_disease_diagnosis:75",
+          "source_task_record_sha256": "e43dd3879fdd6ceb20dec14fc51482e1d4eba2ee3dfbce090da7d0b41c2a20f7",
+          "source_task_name": "rare_disease_diagnosis"
+        },
+        {
+          "task_id": "rare_disease_diagnosis:32",
+          "source_task_record_sha256": "3bacf65887e98fbbd59e2673c5611acd44f48f181d506673108d30fc7afa4bca",
+          "source_task_name": "rare_disease_diagnosis"
+        },
+        {
+          "task_id": "rare_disease_diagnosis:140",
+          "source_task_record_sha256": "a0420a616e3aa77b41b778644e6f5612b91d05cd5a93926eb1912ee4295b75cb",
+          "source_task_name": "rare_disease_diagnosis"
+        },
+        {
+          "task_id": "rare_disease_diagnosis:59",
+          "source_task_record_sha256": "17f4146e3c5954783bd20e35403e6a95a818c4b430b7e28a5e6778589ef3efdb",
+          "source_task_name": "rare_disease_diagnosis"
+        },
+        {
+          "task_id": "rare_disease_diagnosis:63",
+          "source_task_record_sha256": "f8795854194d05a276c00812ea66f5f336e43d61538745fa4d5162a53ef2c6cf",
+          "source_task_name": "rare_disease_diagnosis"
+        },
+        {
+          "task_id": "rare_disease_diagnosis:132",
+          "source_task_record_sha256": "83f7730a34882397a2890b87f9073f5979ce55841c8ca5d0cc1b5638e75779b9",
+          "source_task_name": "rare_disease_diagnosis"
+        },
+        {
+          "task_id": "rare_disease_diagnosis:37",
+          "source_task_record_sha256": "866c36357adbdcdf0d85cd287d390f9e8a69602954b5da15c5b98e1ad865a192",
+          "source_task_name": "rare_disease_diagnosis"
+        },
+        {
+          "task_id": "rare_disease_diagnosis:136",
+          "source_task_record_sha256": "10d6ab692b21512064e22a48b357363e04e451eee474e4a17fb65554ae8c0551",
+          "source_task_name": "rare_disease_diagnosis"
+        },
+        {
+          "task_id": "rare_disease_diagnosis:1",
+          "source_task_record_sha256": "6347def2ae39c42f577e442d84af55fb2d84045a678af68f1dd7fb584e5d5379",
+          "source_task_name": "rare_disease_diagnosis"
+        },
+        {
+          "task_id": "rare_disease_diagnosis:52",
+          "source_task_record_sha256": "195b20de8c1192322188b1ca94ca143498699c18f471ce6c7bafef3d4c9ccbe4",
+          "source_task_name": "rare_disease_diagnosis"
+        },
+        {
+          "task_id": "rare_disease_diagnosis:130",
+          "source_task_record_sha256": "1eec174411615ed59a4b69a062f729db464fb0922e128fa83fa7bffd900faace",
+          "source_task_name": "rare_disease_diagnosis"
+        },
+        {
+          "task_id": "rare_disease_diagnosis:103",
+          "source_task_record_sha256": "47e7f43cb5f0c84881385777bdda386b7fe562369cb91eed55c652ca62f75ef9",
+          "source_task_name": "rare_disease_diagnosis"
+        },
+        {
+          "task_id": "rare_disease_diagnosis:99",
+          "source_task_record_sha256": "1d8316126b812f29719ceeac79e8c073a68d7b8533efb8d005467cc1b00edace",
+          "source_task_name": "rare_disease_diagnosis"
+        },
+        {
+          "task_id": "rare_disease_diagnosis:116",
+          "source_task_record_sha256": "00922107c685072bfbcc5ca273763892c117e900242a6cb2fbe18e3ddc3e71ae",
+          "source_task_name": "rare_disease_diagnosis"
+        },
+        {
+          "task_id": "rare_disease_diagnosis:87",
+          "source_task_record_sha256": "cad8b16c7b27cc31ddaa4f55d31d7bb72f15aea1cbd24cef4a5e262bc5a906f6",
+          "source_task_name": "rare_disease_diagnosis"
+        },
+        {
+          "task_id": "rare_disease_diagnosis:74",
+          "source_task_record_sha256": "9524c0f50f2f5065ab2655919059d64d0e3570478ec4be6dde56b0437f0c06d8",
+          "source_task_name": "rare_disease_diagnosis"
+        },
+        {
+          "task_id": "rare_disease_diagnosis:121",
+          "source_task_record_sha256": "565248708f7b64d188212d31f7a4b331448a599d374a5fcc63bab15357ebd53b",
+          "source_task_name": "rare_disease_diagnosis"
+        },
+        {
+          "task_id": "rare_disease_diagnosis:145",
+          "source_task_record_sha256": "24894be103153224e8a57fa6bb7ff42c040230a63fbef871dd8cfb7c786dc21b",
+          "source_task_name": "rare_disease_diagnosis"
+        },
+        {
+          "task_id": "rare_disease_diagnosis:20",
+          "source_task_record_sha256": "ddaa059acc079ff2c10fe0bcac63d26d58730c9ae229abb82ec50cf16db751fa",
+          "source_task_name": "rare_disease_diagnosis"
+        },
+        {
+          "task_id": "rare_disease_diagnosis:71",
+          "source_task_record_sha256": "1f76ae96f33f96347c4b8bd2a76eb7367e8d57bb2a2e81205935fd4daab461b4",
+          "source_task_name": "rare_disease_diagnosis"
+        },
+        {
+          "task_id": "rare_disease_diagnosis:106",
+          "source_task_record_sha256": "a1e400c2b08bc8e442fe496021af52150d77be33791d804fb80d4b72e8c1a4a4",
+          "source_task_name": "rare_disease_diagnosis"
+        },
+        {
+          "task_id": "rare_disease_diagnosis:14",
+          "source_task_record_sha256": "21a9652c16c7f93911a7fedad95b8bd5deecc9940e31ff968c04a5d147a22345",
+          "source_task_name": "rare_disease_diagnosis"
+        },
+        {
+          "task_id": "rare_disease_diagnosis:92",
+          "source_task_record_sha256": "782f4186d6699f9d0ba09213ac896d93724d291a1bed1bd5f09f3b4a69d6c8ea",
+          "source_task_name": "rare_disease_diagnosis"
+        },
+        {
+          "task_id": "rare_disease_diagnosis:102",
+          "source_task_record_sha256": "40a566c481c1892839050c10d863568ef0b428db28af2c675f437a792488f4ba",
+          "source_task_name": "rare_disease_diagnosis"
+        }
+      ],
+      "source_inspection_tier": "shared-pattern-only",
+      "source_planning_disposition": "instance-endpoint-and-evidence-review",
+      "matching_workstreams": [
+        "variant-evidence"
+      ],
+      "required_endpoint_stages": [
+        "normalize HPO and candidate gene identifiers",
+        "join a versioned disease-phenotype-gene resource",
+        "rank disease hypotheses and retain supporting evidence",
+        "emit a structured disease identifier"
+      ],
+      "observed_input_requirements": [
+        "Observed variants, matching reference/annotation, frozen consequence/frequency/clinical evidence and provenance; observed assays for functional validation."
+      ],
+      "required_formats": [
+        "HPO identifiers",
+        "JSON disease identifiers",
+        "candidate genes"
+      ],
+      "proposed_artifact_requirements": [
+        "Normalized VCF, consequence transcript table, evidence rows with accession/date, exclusion rationale and sequence products where appropriate"
+      ],
+      "source_specific_decisions": [],
+      "deterministic_verification_approach": [
+        "Actual annotation package plus independent coordinate/translation checks; deterministic evidence rules with unknown/conflicting outcomes; verify function only against observed assays."
+      ],
+      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "validated_new_mappings": 0,
+      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
+      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+    },
+    {
+      "proposed_id": "portfolio-biomni-eval1-delivery-method-selection",
+      "benchmark": "Biomni-Eval1 tool-enabled",
+      "scientific_question": "Which generic delivery-method claims are supported by independently published assay measurements under explicit cell-context and measurement criteria?",
+      "source_family": "delivery-method-selection",
+      "benchmark_targets": [
+        {
+          "task_id": "crispr_delivery:10",
+          "source_task_record_sha256": "45009f6a7355706421aec577243a64063f8945b4405d171c86ed006372bbc7be",
+          "source_task_name": "crispr_delivery"
+        },
+        {
+          "task_id": "crispr_delivery:22",
+          "source_task_record_sha256": "88706d4002169b13b6042f2a836dd0d9d83b1ab4dcd9fa550e8bc14faccfbf42",
+          "source_task_name": "crispr_delivery"
+        },
+        {
+          "task_id": "crispr_delivery:18",
+          "source_task_record_sha256": "45f4016d6410b0b35b191404361eb30236f64999cfeca2c3685cc06d661bf6c4",
+          "source_task_name": "crispr_delivery"
+        },
+        {
+          "task_id": "crispr_delivery:49",
+          "source_task_record_sha256": "81eefcd9bc9697ae2e4a84738221cc7ffb5cd9040cfc23a479b2a4d488d26a1f",
+          "source_task_name": "crispr_delivery"
+        },
+        {
+          "task_id": "crispr_delivery:20",
+          "source_task_record_sha256": "ca40c76d7aaeba8ea3e91c76096cd4d2cf6f3b7c776981f04cf317cf975bbc30",
+          "source_task_name": "crispr_delivery"
+        },
+        {
+          "task_id": "crispr_delivery:7",
+          "source_task_record_sha256": "e7a014d8a5be023d3a8711834aa7ecea74ce5fba9cd5fdfbc51b9f0d4ed2cd55",
+          "source_task_name": "crispr_delivery"
+        },
+        {
+          "task_id": "crispr_delivery:42",
+          "source_task_record_sha256": "d2bfa68a765b62d7fc6ea50a18d403b558d11124a6248a83eed6018b733485dd",
+          "source_task_name": "crispr_delivery"
+        },
+        {
+          "task_id": "crispr_delivery:14",
+          "source_task_record_sha256": "803143aa45928178b682606f59c66451643405ad896d4c1b431c8a05b64bfd67",
+          "source_task_name": "crispr_delivery"
+        },
+        {
+          "task_id": "crispr_delivery:28",
+          "source_task_record_sha256": "16fd219711346022f6cd4097e801c77756790d18530f9b8c07be8b74c3a76c7a",
+          "source_task_name": "crispr_delivery"
+        },
+        {
+          "task_id": "crispr_delivery:38",
+          "source_task_record_sha256": "a7c2ce04ca31d04837d382ddf5c3b4856d84f7417b96f2314fab719a7c124e32",
+          "source_task_name": "crispr_delivery"
+        }
+      ],
+      "source_inspection_tier": "shared-pattern-only",
+      "source_planning_disposition": "instance-endpoint-and-evidence-review",
+      "matching_workstreams": [
+        "clinical-safety-evidence"
+      ],
+      "required_endpoint_stages": [
+        "identify the experimental system",
+        "retrieve source-supported delivery constraints",
+        "compare permitted method categories",
+        "record the selected category and evidence"
+      ],
+      "observed_input_requirements": [
+        "Observed preclinical/clinical assay tables with units, tissue, compartment, timing, dose, censoring and source provenance."
+      ],
+      "required_formats": [
+        "case description",
+        "categorical alternatives"
+      ],
+      "proposed_artifact_requirements": [
+        "Study/assay compatibility matrix, unit/time/compartment joins, censored estimates, complete exclusions and bounded quantitative comparisons"
+      ],
+      "source_specific_decisions": [],
+      "deterministic_verification_approach": [
+        "Independent comparability and censoring rules with native statistical outputs; explicit unsupported/unknown outcomes; no broad safety or treatment recommendation."
+      ],
+      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "validated_new_mappings": 0,
+      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
+      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+    },
+    {
+      "proposed_id": "portfolio-biomni-eval1-restriction-digest",
+      "benchmark": "Biomni-Eval1 tool-enabled",
+      "scientific_question": "Which restriction fragments follow from observed annotated DNA sequences under circularity, strand and cut-site conventions?",
+      "source_family": "restriction-digest",
+      "benchmark_targets": [
+        {
+          "task_id": "lab_bench_seqqa:563",
+          "source_task_record_sha256": "06aad51c75f02a08a377f0278aab98d089a79748f7e518a041cf261ab74a0945",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:533",
+          "source_task_record_sha256": "e4a9504eb9cd998ffb734f5710d4ea6ee87e889c1140ad72565da7620c931b46",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:547",
+          "source_task_record_sha256": "61b298d6b9282102e5c3200e299c15fbfd8bcbbdf97ba650bd6306363de2a5b7",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:571",
+          "source_task_record_sha256": "35abb150fee02bbc8f78773c2226d945784a1a7110b32aeeb50beac92a9c617b",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:524",
+          "source_task_record_sha256": "ca36c390d36c9a718aab2fd72456f7975ecb3d546bc9479b8c15b73a439f5a0c",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:583",
+          "source_task_record_sha256": "088ada87d5ef585b00c7059975e50504c69e7e4740d429a636843f56223ca12b",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:520",
+          "source_task_record_sha256": "e65281352e66f6de2d06f4e9cdb38405d52b11cdaadb7fe9ef98e75dffe89f4a",
+          "source_task_name": "lab_bench_seqqa"
+        }
+      ],
+      "source_inspection_tier": "question-endpoint-reviewed",
+      "source_planning_disposition": "candidate-design-provisional",
+      "matching_workstreams": [
+        "sequence-construct"
+      ],
+      "required_endpoint_stages": [
+        "resolve sequence topology and enzyme definitions",
+        "locate strand-aware cuts",
+        "derive complete fragment boundaries",
+        "report fragment counts or lengths"
+      ],
+      "observed_input_requirements": [
+        "Benign observed reference sequences or published constructs with explicit feature/primer annotations and supported sequence provenance."
+      ],
+      "required_formats": [
+        "enzyme identifiers",
+        "sequence text"
+      ],
+      "proposed_artifact_requirements": [
+        "FASTA/GenBank records, feature/coordinate tables, translated sequences, amplicon or digest maps and sequence-consistency audit"
+      ],
+      "source_specific_decisions": [],
+      "deterministic_verification_approach": [
+        "Independent sequence algebra, restriction-site/overhang accounting and native parser checks; retain ambiguous symbols; focus on analysis of supplied observed constructs."
+      ],
+      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "validated_new_mappings": 0,
+      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
+      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+    },
+    {
+      "proposed_id": "portfolio-biomni-eval1-orf-analysis",
+      "benchmark": "Biomni-Eval1 tool-enabled",
+      "scientific_question": "Which ORFs and translated products are supported by observed sequence records under explicit frame and genetic-code rules?",
+      "source_family": "orf-analysis",
+      "benchmark_targets": [
+        {
+          "task_id": "lab_bench_seqqa:100",
+          "source_task_record_sha256": "c3862dfac6a7532938c4709fb9962012cf742801dd7209635d20f7ed5a8528a8",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:98",
+          "source_task_record_sha256": "ef0e527b97d8d2f43d794669fc2cb010dc25a5602be4be1a9ea8d8961d2dc320",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:61",
+          "source_task_record_sha256": "0dcbccd6d4ed45d9e955830f2243bd055627829994b1928046fe67354209b132",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:47",
+          "source_task_record_sha256": "ae2782c591b0f8bc9604d529cf13e6a2f16f290f68855436ff78daeffb52febd",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:32",
+          "source_task_record_sha256": "47c2d09eb2b1f15aca105a3d36ca4c3f7bffa2bd663f6bb5b22b56d1e6aea81b",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:27",
+          "source_task_record_sha256": "d94cc35d1a61628ddde4300186abd8d544ae4b01949204139738ecaa0d392798",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:62",
+          "source_task_record_sha256": "752ed6e6ad89318d0ac3e2afd3664fe84c2af478d6b5464f2ae6d2691bfe9a93",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:64",
+          "source_task_record_sha256": "de7ae236ff28484e7a398f80574dbdf23f80c2b95a70c014229b5edd55888ae2",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:14",
+          "source_task_record_sha256": "af26da56e324ed007fd4f3563c2ce0f74c4a226fe81ad7ef1549c1e2944e7593",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:40",
+          "source_task_record_sha256": "6ef26bef921d7aeca236d3b7461360f6860e69844b3919167243006faf81cd89",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:52",
+          "source_task_record_sha256": "599ba36d138721a27d1f283d5409b79fd62c7449e45dd8b5b033d38c518580a7",
+          "source_task_name": "lab_bench_seqqa"
+        }
+      ],
+      "source_inspection_tier": "question-endpoint-reviewed",
+      "source_planning_disposition": "candidate-design-provisional",
+      "matching_workstreams": [
+        "sequence-construct"
+      ],
+      "required_endpoint_stages": [
+        "declare strands, reading frames and genetic code",
+        "find starts and stops under explicit ORF rules",
+        "apply length or longest-ORF selection",
+        "translate and resolve the requested residue or protein"
+      ],
+      "observed_input_requirements": [
+        "Benign observed reference sequences or published constructs with explicit feature/primer annotations and supported sequence provenance."
+      ],
+      "required_formats": [
+        "DNA sequence text"
+      ],
+      "proposed_artifact_requirements": [
+        "FASTA/GenBank records, feature/coordinate tables, translated sequences, amplicon or digest maps and sequence-consistency audit"
+      ],
+      "source_specific_decisions": [],
+      "deterministic_verification_approach": [
+        "Independent sequence algebra, restriction-site/overhang accounting and native parser checks; retain ambiguous symbols; focus on analysis of supplied observed constructs."
+      ],
+      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "validated_new_mappings": 0,
+      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
+      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+    },
+    {
+      "proposed_id": "portfolio-biomni-eval1-amplicon-reconstruction",
+      "benchmark": "Biomni-Eval1 tool-enabled",
+      "scientific_question": "Which sequence spans are supported by observed primer and template records after orientation, mismatch and product-boundary checks?",
+      "source_family": "amplicon-reconstruction",
+      "benchmark_targets": [
+        {
+          "task_id": "lab_bench_seqqa:448",
+          "source_task_record_sha256": "743e5cfcd59bf844f4873a2d58f952fdb4103d2e971d258cf5d3351ba6227c3e",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:359",
+          "source_task_record_sha256": "c43e4fcfcfdc806b830d15ab247fa93bd037522931f1226520b5d8e62f7d0b4f",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:327",
+          "source_task_record_sha256": "53725efafff51730b76ecce240dcba33a7df1a47b226a1c5f2b1452bf1d5e0d6",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:378",
+          "source_task_record_sha256": "445661a4983ddc0691d0670eb32f56b8abc3035bad1feb630503b1add67531c8",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:391",
+          "source_task_record_sha256": "f1445d5bf9a507c2be78596cbd894d228feda5f5de518b75a3a5b760dcbe490d",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:471",
+          "source_task_record_sha256": "f3843968d279b9ca3d8157413d0a21035e1466441494c2dbc5149a3c522e2bda",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:379",
+          "source_task_record_sha256": "f77a9ee6b3b2e0ad0d848a8a1ffb9148d4b160719ff493e58b507d1a9eb881b4",
+          "source_task_name": "lab_bench_seqqa"
+        }
+      ],
+      "source_inspection_tier": "question-endpoint-reviewed",
+      "source_planning_disposition": "candidate-design-provisional",
+      "matching_workstreams": [
+        "sequence-construct"
+      ],
+      "required_endpoint_stages": [
+        "align both primer-binding regions with strand orientation",
+        "resolve the intended amplicon boundaries",
+        "derive product sequence and length",
+        "reconcile the requested candidate pair or product"
+      ],
+      "observed_input_requirements": [
+        "Benign observed reference sequences or published constructs with explicit feature/primer annotations and supported sequence provenance."
+      ],
+      "required_formats": [
+        "DNA template",
+        "primer sequences"
+      ],
+      "proposed_artifact_requirements": [
+        "FASTA/GenBank records, feature/coordinate tables, translated sequences, amplicon or digest maps and sequence-consistency audit"
+      ],
+      "source_specific_decisions": [],
+      "deterministic_verification_approach": [
+        "Independent sequence algebra, restriction-site/overhang accounting and native parser checks; retain ambiguous symbols; focus on analysis of supplied observed constructs."
+      ],
+      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "validated_new_mappings": 0,
+      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
+      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+    },
+    {
+      "proposed_id": "portfolio-biomni-eval1-gibson-primer-compatibility",
+      "benchmark": "Biomni-Eval1 tool-enabled",
+      "scientific_question": "Are published assembly-primer records consistent with observed template sequences and the stated overlap orientation?",
+      "source_family": "gibson-primer-compatibility",
+      "benchmark_targets": [
+        {
+          "task_id": "lab_bench_seqqa:256",
+          "source_task_record_sha256": "f382113b185cef53f1d1414444f79939885644fe44fe63ceae6dc8a2dff69ce0",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:226",
+          "source_task_record_sha256": "f9bae804a1617ac9cf697b01d6ae6fef48428a04969c5a7e90c5d074249f2632",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:213",
+          "source_task_record_sha256": "171cc4b3555050f63051c948f400efb01a94cc3bc0b29ba1086da603baddfac5",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:215",
+          "source_task_record_sha256": "c031a022d1733189946764533d96c664c44d5b4c77d64fe892b9a921e3ac5d45",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:267",
+          "source_task_record_sha256": "c6072c025e9458a94e112c68e060c62e2797d821e86cd939826af92910ebb561",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:200",
+          "source_task_record_sha256": "c094c984e51236ea959fb3a25027cd8b12565708476f389adac19c674d9911d2",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:230",
+          "source_task_record_sha256": "f9116c12a4f43c18ec3c518e1fe9afd07db8288b2de9259d32b4e895448fc099",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:260",
+          "source_task_record_sha256": "09170b6320781c97091cc6c30a91d5c9a5c0ac46481df7d7bce9549b040f7525",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:216",
+          "source_task_record_sha256": "daf3845ac283d947db5d4f1ed75d05d75b352319809be4bd570664b751a16fcb",
+          "source_task_name": "lab_bench_seqqa"
+        }
+      ],
+      "source_inspection_tier": "question-endpoint-reviewed",
+      "source_planning_disposition": "candidate-design-provisional",
+      "matching_workstreams": [
+        "sequence-construct"
+      ],
+      "required_endpoint_stages": [
+        "resolve versioned insert and vector sequences",
+        "derive orientation and vector endpoints",
+        "check primer-binding and overlap constraints",
+        "reconstruct the complete proposed product"
+      ],
+      "observed_input_requirements": [
+        "Benign observed reference sequences or published constructs with explicit feature/primer annotations and supported sequence provenance."
+      ],
+      "required_formats": [
+        "gene and plasmid identifiers",
+        "primer candidates"
+      ],
+      "proposed_artifact_requirements": [
+        "FASTA/GenBank records, feature/coordinate tables, translated sequences, amplicon or digest maps and sequence-consistency audit"
+      ],
+      "source_specific_decisions": [],
+      "deterministic_verification_approach": [
+        "Independent sequence algebra, restriction-site/overhang accounting and native parser checks; retain ambiguous symbols; focus on analysis of supplied observed constructs."
+      ],
+      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "validated_new_mappings": 0,
+      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
+      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+    },
+    {
+      "proposed_id": "portfolio-biomni-eval1-restriction-cloning-compatibility",
+      "benchmark": "Biomni-Eval1 tool-enabled",
+      "scientific_question": "Which published vector/insert records are internally consistent after restriction-site, overhang and reading-frame reconciliation?",
+      "source_family": "restriction-cloning-compatibility",
+      "benchmark_targets": [
+        {
+          "task_id": "lab_bench_seqqa:430",
+          "source_task_record_sha256": "bcaf18b8671d27e83a63c674083e27d20d7eee2ca0d8a8c5271073fe8aaa6242",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:171",
+          "source_task_record_sha256": "50c01d6e6500ddce960377f3389133636014a0b0bb2f38f21c953ea8d0cf1767",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:292",
+          "source_task_record_sha256": "4cb777a31f35aab9099e4e6beaaf0139b3fa59e5f3c85b6e59c7fbfc599300d8",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:406",
+          "source_task_record_sha256": "68887e9742109b56e7f5a5744f9d9a3daeb8b7060abd9f0d8c36ffbdd16e6a4b",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:417",
+          "source_task_record_sha256": "29fe6eda5e456d3d0613f4c1b265729329734fc6bfe3b4e198186eb4fb12e1e9",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:288",
+          "source_task_record_sha256": "811b280b814c548d5f48b10202ebc04c4ca62024772c761028e1a4d3f9ffc54e",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:418",
+          "source_task_record_sha256": "4ef20a3f41329ca8ec4cc77806df363816bbf6e2d7c7fb706d9220dd00120db6",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:187",
+          "source_task_record_sha256": "11a9d617b34b58e1ab57e1868b9792d266422d710a071c347fff68d483fd8e59",
+          "source_task_name": "lab_bench_seqqa"
+        }
+      ],
+      "source_inspection_tier": "question-endpoint-reviewed",
+      "source_planning_disposition": "candidate-design-provisional",
+      "matching_workstreams": [
+        "sequence-construct"
+      ],
+      "required_endpoint_stages": [
+        "resolve versioned sequence inputs",
+        "evaluate restriction sites and cut orientation",
+        "reconcile insert and vector ends",
+        "validate the complete intended product"
+      ],
+      "observed_input_requirements": [
+        "Benign observed reference sequences or published constructs with explicit feature/primer annotations and supported sequence provenance."
+      ],
+      "required_formats": [
+        "gene or insert sequence",
+        "primer and enzyme candidates",
+        "vector identifier"
+      ],
+      "proposed_artifact_requirements": [
+        "FASTA/GenBank records, feature/coordinate tables, translated sequences, amplicon or digest maps and sequence-consistency audit"
+      ],
+      "source_specific_decisions": [],
+      "deterministic_verification_approach": [
+        "Independent sequence algebra, restriction-site/overhang accounting and native parser checks; retain ambiguous symbols; focus on analysis of supplied observed constructs."
+      ],
+      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "validated_new_mappings": 0,
+      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
+      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+    },
+    {
+      "proposed_id": "portfolio-biomni-eval1-sequence-gc",
+      "benchmark": "Biomni-Eval1 tool-enabled",
+      "scientific_question": "How do GC content and eligible-base denominators differ among independently observed sequence features?",
+      "source_family": "sequence-gc",
+      "benchmark_targets": [
+        {
+          "task_id": "lab_bench_seqqa:505",
+          "source_task_record_sha256": "aaa632b309e67641a8f3c2dfe2ae9db93b242e3ace34ab2fa08bce7ff305d20b",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:489",
+          "source_task_record_sha256": "b4889d51a2328cb745abb3bd9c59da7cbc8ec7c1a72be2dd025381d8f3550042",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:498",
+          "source_task_record_sha256": "358bee06b3ceecc1abb76da12101463583bfe5ebce2797d588b4735cada94310",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:492",
+          "source_task_record_sha256": "fb2bbe51f1458cb3fa851c8daf086e3d4db49739879bd9aa5f12c1f13f5303d7",
+          "source_task_name": "lab_bench_seqqa"
+        }
+      ],
+      "source_inspection_tier": "question-endpoint-reviewed",
+      "source_planning_disposition": "candidate-design-provisional",
+      "matching_workstreams": [
+        "sequence-construct"
+      ],
+      "required_endpoint_stages": [
+        "resolve sequence and ambiguity policy",
+        "count GC and eligible residues",
+        "compute and round the fraction",
+        "preserve exact source sequence identity"
+      ],
+      "observed_input_requirements": [
+        "Benign observed reference sequences or published constructs with explicit feature/primer annotations and supported sequence provenance."
+      ],
+      "required_formats": [
+        "DNA sequence text"
+      ],
+      "proposed_artifact_requirements": [
+        "FASTA/GenBank records, feature/coordinate tables, translated sequences, amplicon or digest maps and sequence-consistency audit"
+      ],
+      "source_specific_decisions": [],
+      "deterministic_verification_approach": [
+        "Independent sequence algebra, restriction-site/overhang accounting and native parser checks; retain ambiguous symbols; focus on analysis of supplied observed constructs."
+      ],
+      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "validated_new_mappings": 0,
+      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
+      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+    },
+    {
+      "proposed_id": "portfolio-biomni-eval1-translation-context",
+      "benchmark": "Biomni-Eval1 tool-enabled",
+      "scientific_question": "Which translated products follow from observed sequence and context records after frame, start/stop and genetic-code checks?",
+      "source_family": "translation-context",
+      "benchmark_targets": [
+        {
+          "task_id": "lab_bench_seqqa:134",
+          "source_task_record_sha256": "35f0ae03fc001119315c56c4debb1ec52b66fcba619a277156483d1e2d23e728",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:138",
+          "source_task_record_sha256": "b8f46252b68e337581bae9a29b4609b9039289ed330c07f5e020bc6357539f2f",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:128",
+          "source_task_record_sha256": "ef01b37af68657f33b790eb4fc9ba1a67d8e127f45d54f71ad31e9677c5ada80",
+          "source_task_name": "lab_bench_seqqa"
+        },
+        {
+          "task_id": "lab_bench_seqqa:156",
+          "source_task_record_sha256": "f7b46b96645af2515ee7a52f7881e9b5110b33c1dbfb164137ad63cfcdda15fb",
+          "source_task_name": "lab_bench_seqqa"
+        }
+      ],
+      "source_inspection_tier": "question-endpoint-reviewed",
+      "source_planning_disposition": "candidate-design-provisional",
+      "matching_workstreams": [
+        "sequence-construct"
+      ],
+      "required_endpoint_stages": [
+        "identify candidate ORFs and starts",
+        "evaluate declared initiation-context features",
+        "compare the supplied candidates",
+        "state the limits of sequence-only prediction"
+      ],
+      "observed_input_requirements": [
+        "Benign observed reference sequences or published constructs with explicit feature/primer annotations and supported sequence provenance."
+      ],
+      "required_formats": [
+        "RNA sequence candidates"
+      ],
+      "proposed_artifact_requirements": [
+        "FASTA/GenBank records, feature/coordinate tables, translated sequences, amplicon or digest maps and sequence-consistency audit"
+      ],
+      "source_specific_decisions": [],
+      "deterministic_verification_approach": [
+        "Independent sequence algebra, restriction-site/overhang accounting and native parser checks; retain ambiguous symbols; focus on analysis of supplied observed constructs."
+      ],
+      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "validated_new_mappings": 0,
+      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
+      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+    },
+    {
+      "proposed_id": "portfolio-biomni-eval1-gene-set-membership",
+      "benchmark": "Biomni-Eval1 tool-enabled",
+      "scientific_question": "Which gene identities belong to a frozen independent annotation set after version, synonym and species reconciliation?",
+      "source_family": "gene-set-membership",
+      "benchmark_targets": [
+        {
+          "task_id": "lab_bench_dbqa:207",
+          "source_task_record_sha256": "8ea3cf6ecc234875b535bfe93f479a54c305fb0ce13919fdc7c87604e11a0901",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:212",
+          "source_task_record_sha256": "84242a0afd4f4a52c55fde0894b5bfdcc0cc11873f7ebf5eb9b58e50578aada2",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:476",
+          "source_task_record_sha256": "b83972708db10498157169fe5956d087424dbdfbfffdc683e3df81db48a0cbbd",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:477",
+          "source_task_record_sha256": "a6d26cae9dbb7536932ecb92b0a518377a37feb2a98f98cf3f3668c70fe00567",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:201",
+          "source_task_record_sha256": "0602b840b9eef9f34d303786e2054542ed44a03689ab639fbcf34f320c43edb5",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:161",
+          "source_task_record_sha256": "b78ff4b1992f945e0db685da03d04381f15a9f4fa8807407bf33e6a957a4b932",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:217",
+          "source_task_record_sha256": "fb81bf5953f55eb1faaa0fb28090dfe1d37cced79cd5be99264899e00a224335",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:190",
+          "source_task_record_sha256": "e18ecd0f44dad3602c0f1758e4ac0f96f585c2074a9ee657f3f1add9717006f7",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:460",
+          "source_task_record_sha256": "ef7d83989568c5974c7140a583b4062b251d79f30a878a2d744e5f8e2f6c0a15",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:205",
+          "source_task_record_sha256": "bc86d4cee9d4e51c0f4dec733e90d50e9912e1314a78913f809539790d58dfab",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:166",
+          "source_task_record_sha256": "d983033cb7a03f71a80ab5c6c90671a4b0d36bc9621b5111b8374f60642e5ab4",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:134",
+          "source_task_record_sha256": "eaa740a6e4c9c4d6b59c0ce2b05b6b123de8de42c17077b5a6e703ea6475273c",
+          "source_task_name": "lab_bench_dbqa"
+        }
+      ],
+      "source_inspection_tier": "question-endpoint-reviewed",
+      "source_planning_disposition": "candidate-design-provisional",
+      "matching_workstreams": [
+        "gene-program-factorization"
+      ],
+      "required_endpoint_stages": [
+        "pin the annotation collection and release",
+        "normalize gene identifiers",
+        "join all candidate memberships",
+        "retain provenance and select the supported candidate"
+      ],
+      "observed_input_requirements": [
+        "Observed expression or multiomic matrices with biological sample identities, condition labels and frozen annotations."
+      ],
+      "required_formats": [
+        "gene alternatives",
+        "gene-set identifier",
+        "versioned membership table"
+      ],
+      "proposed_artifact_requirements": [
+        "Feature eligibility, loadings/modules, complete per-feature scores, sample-level validation, gene-set memberships and null statistics"
+      ],
+      "source_specific_decisions": [],
+      "deterministic_verification_approach": [
+        "Independent feature score, correlation and enrichment arithmetic plus native model references; test subspaces and reconstructed data rather than arbitrary factor labels."
+      ],
+      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "validated_new_mappings": 0,
+      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
+      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+    },
+    {
+      "proposed_id": "portfolio-biomni-eval1-clinical-variant-evidence",
+      "benchmark": "Biomni-Eval1 tool-enabled",
+      "scientific_question": "Which structured variant-evidence claims survive assembly, transcript, date and assertion-provenance reconciliation?",
+      "source_family": "clinical-variant-evidence",
+      "benchmark_targets": [
+        {
+          "task_id": "lab_bench_dbqa:295",
+          "source_task_record_sha256": "6539ba574e703eae17d89a643f47e7a91d24153dad9389733ecb9c24b3a39bb4",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:303",
+          "source_task_record_sha256": "27d8d9a027d5467e9619c8d5ed16bb4f328f0666b749442a71ff949e25b35b5b",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:350",
+          "source_task_record_sha256": "f6941c941183b740a07cae6a3b42d8f86d1b56337e38f7ae96b03ccc5ebcdddb",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:401",
+          "source_task_record_sha256": "cdecbc72d0688cdb2eb6c9f10f67c6c75d90da16fefd11d3d2d75b85f62705f2",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:309",
+          "source_task_record_sha256": "6cea3fb01c9163b094650b5498ed073264151a0c0fea1dfa37cfb57edb1c774e",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:389",
+          "source_task_record_sha256": "c3bfa0dfec7bf59ac454922d2763e5b3e030e9c1ca0935961bb1176f41b7c010",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:419",
+          "source_task_record_sha256": "3a9d10ed0b6e9714682381faa4cb8b8f975c74bf00c1baa083cd53f10120e00e",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:430",
+          "source_task_record_sha256": "bd23a6a908f63c259e6ca03c9b7eb9ae23ea6dd965a5c42bfdd89c2e00e8f535",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:427",
+          "source_task_record_sha256": "5ab0f1555263315bf478f0bc6b6034ac2ed4e453a6d135d687d7bd10993d71a9",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:366",
+          "source_task_record_sha256": "520bcd7960f75f61295782b86eda730841c89dee35f6630e69a10b2997f68229",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:339",
+          "source_task_record_sha256": "695e6fcfa2fb09cbbb5610a2a408c0a49e7c4363f50303de4b47e40a712c7651",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:345",
+          "source_task_record_sha256": "bb13b97122e2b5c905ea747eca11a0be4a2b77defe6a5089f6011480b8b0a624",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:315",
+          "source_task_record_sha256": "b34dcda3876b70a7d42b6cff3a3fa99d31a97a09a904812b760f09ce0f55f6d2",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:387",
+          "source_task_record_sha256": "e8003f86c6a5c287b431424ed95466e68bdd6dc83d5c0692f66aeb09edd27124",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:328",
+          "source_task_record_sha256": "8cead0a9956521611895e4acbb7dee797f0a8269d5215ef71f21934e4c729173",
+          "source_task_name": "lab_bench_dbqa"
+        }
+      ],
+      "source_inspection_tier": "question-endpoint-reviewed",
+      "source_planning_disposition": "candidate-design-provisional",
+      "matching_workstreams": [
+        "variant-evidence"
+      ],
+      "required_endpoint_stages": [
+        "resolve reference sequence and variant identity",
+        "join versioned assertions with provenance",
+        "handle conflicts and review status",
+        "compare the requested classification evidence"
+      ],
+      "observed_input_requirements": [
+        "Observed variants, matching reference/annotation, frozen consequence/frequency/clinical evidence and provenance; observed assays for functional validation."
+      ],
+      "required_formats": [
+        "ClinVar-style assertions",
+        "sequence and variant candidates"
+      ],
+      "proposed_artifact_requirements": [
+        "Normalized VCF, consequence transcript table, evidence rows with accession/date, exclusion rationale and sequence products where appropriate"
+      ],
+      "source_specific_decisions": [],
+      "deterministic_verification_approach": [
+        "Actual annotation package plus independent coordinate/translation checks; deterministic evidence rules with unknown/conflicting outcomes; verify function only against observed assays."
+      ],
+      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "validated_new_mappings": 0,
+      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
+      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+    },
+    {
+      "proposed_id": "portfolio-biomni-eval1-promoter-binding-query",
+      "benchmark": "Biomni-Eval1 tool-enabled",
+      "scientific_question": "Which independently observed promoter-binding records match a named locus under explicit reference coordinates and assay context?",
+      "source_family": "promoter-binding-query",
+      "benchmark_targets": [
+        {
+          "task_id": "lab_bench_dbqa:251",
+          "source_task_record_sha256": "a1a8ecd7e43320e3bd4b2387565c03edeebbcdb0c7e1db09c339bc78faebf496",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:269",
+          "source_task_record_sha256": "fb7d2a8586f44381ae41d6585fb2bd622a4ce57173d289534d51e7dd02c50775",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:259",
+          "source_task_record_sha256": "bd79e3edc6012e77796371126356d44db57e7ebd9de5e8d5d210a1b462964df1",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:263",
+          "source_task_record_sha256": "548719e3a4d284d08b07c7113ef5ecf26ef7e967c7ae8d958acf33ef95a0d9c0",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:264",
+          "source_task_record_sha256": "8a6fd737bba7d029963e359a194c8f8174fca3d789f9190757e3a102fb0b802b",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:241",
+          "source_task_record_sha256": "3d0ca01ba4535fabf16c480e0128ea0574d86836afeefaba76e650477e87caf0",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:273",
+          "source_task_record_sha256": "4b4687b5027944898a8d15b521743aad9debb0ada777962a109fa3167250bbb6",
+          "source_task_name": "lab_bench_dbqa"
+        }
+      ],
+      "source_inspection_tier": "question-endpoint-reviewed",
+      "source_planning_disposition": "candidate-design-provisional",
+      "matching_workstreams": [
+        "database-identity-evidence"
+      ],
+      "required_endpoint_stages": [
+        "pin genome, gene and binding releases",
+        "construct strand-aware TSS intervals",
+        "join binding sites to candidate promoters",
+        "return overlap evidence and candidate identity"
+      ],
+      "observed_input_requirements": [
+        "Pinned public gene/protein/variant/database exports with accession versions, species, directed relations, dates and evidence identifiers."
+      ],
+      "required_formats": [
+        "TSS interval definition",
+        "gene candidates",
+        "versioned binding annotations"
+      ],
+      "proposed_artifact_requirements": [
+        "Identity map, provenance manifest, directed edge/evidence tables, contradictions, structured answer and supporting accession/span references"
+      ],
+      "source_specific_decisions": [],
+      "deterministic_verification_approach": [
+        "Deterministic joins, direction/type checks and evidence-span linkage; unknown is allowed; a text citation match does not establish full scientific entailment."
+      ],
+      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "validated_new_mappings": 0,
+      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
+      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+    },
+    {
+      "proposed_id": "portfolio-biomni-eval1-interaction-database-query",
+      "benchmark": "Biomni-Eval1 tool-enabled",
+      "scientific_question": "Which directed interaction claims are supported by frozen independent evidence after protein-identity and experimental-context checks?",
+      "source_family": "interaction-database-query",
+      "benchmark_targets": [
+        {
+          "task_id": "lab_bench_dbqa:511",
+          "source_task_record_sha256": "db5a2ca029a5bbed5d6333b404ffbac25aaa10275b2078e2e79f6c87ac37200f",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:505",
+          "source_task_record_sha256": "3335defa362e629006b7fd345d89af8771e802893236043c91fd047f6b154263",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:493",
+          "source_task_record_sha256": "4cc1654c35ce25239472281e3a4cf322197895525a833087659c44fd5a93b7af",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:495",
+          "source_task_record_sha256": "162ad36a71539818ad42bbc83e6d49bc051e691a6e416c5216acacb08769d2e9",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:514",
+          "source_task_record_sha256": "660bd106ebf9396bdf004fcc8ed6c4c0dcc8e0b6bb43fd39bcf7994996a2785d",
+          "source_task_name": "lab_bench_dbqa"
+        }
+      ],
+      "source_inspection_tier": "question-endpoint-reviewed",
+      "source_planning_disposition": "candidate-design-provisional",
+      "matching_workstreams": [
+        "database-identity-evidence"
+      ],
+      "required_endpoint_stages": [
+        "normalize entity identifiers",
+        "query the specified release and relation",
+        "distinguish predicted from measured support",
+        "return evidence-backed candidate matches"
+      ],
+      "observed_input_requirements": [
+        "Pinned public gene/protein/variant/database exports with accession versions, species, directed relations, dates and evidence identifiers."
+      ],
+      "required_formats": [
+        "candidate identifiers",
+        "entity descriptions",
+        "versioned interaction records"
+      ],
+      "proposed_artifact_requirements": [
+        "Identity map, provenance manifest, directed edge/evidence tables, contradictions, structured answer and supporting accession/span references"
+      ],
+      "source_specific_decisions": [],
+      "deterministic_verification_approach": [
+        "Deterministic joins, direction/type checks and evidence-span linkage; unknown is allowed; a text citation match does not establish full scientific entailment."
+      ],
+      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "validated_new_mappings": 0,
+      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
+      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+    },
+    {
+      "proposed_id": "portfolio-biomni-eval1-cytoband-gene-query",
+      "benchmark": "Biomni-Eval1 tool-enabled",
+      "scientific_question": "Which genes lie within a specified cytogenetic interval after assembly, coordinate and gene-model reconciliation?",
+      "source_family": "cytoband-gene-query",
+      "benchmark_targets": [
+        {
+          "task_id": "lab_bench_dbqa:43",
+          "source_task_record_sha256": "8124041a01780f7dce96134c55afeb77fc72bdb15118e86e11f922933d14e905",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:53",
+          "source_task_record_sha256": "9932a3fcc8cde630e46e9f4a780719dd76591b293219e772f5d37714b841fd8b",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:49",
+          "source_task_record_sha256": "ba2286431408f9d448f31f9b1322e7fd3811921e5e8ed5714974e455b1c50a6d",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:52",
+          "source_task_record_sha256": "d836199d064d336a954f2f533b8a967458488519be71858562415730668bf523",
+          "source_task_name": "lab_bench_dbqa"
+        }
+      ],
+      "source_inspection_tier": "question-endpoint-reviewed",
+      "source_planning_disposition": "candidate-design-provisional",
+      "matching_workstreams": [
+        "transcript-reference-audit"
+      ],
+      "required_endpoint_stages": [
+        "pin assembly and annotation release",
+        "normalize gene identifiers",
+        "join gene coordinates to band intervals",
+        "retain coordinate and overlap evidence"
+      ],
+      "observed_input_requirements": [
+        "Matching observed reference FASTA, GFF3/GTF and release cross-references; splice evidence from real reads for transcript discovery."
+      ],
+      "required_formats": [
+        "cytoband identifiers",
+        "gene candidates",
+        "versioned genome annotations"
+      ],
+      "proposed_artifact_requirements": [
+        "Native GFF/GTF/BED, extracted FASTA, transcript/exon/CDS tables, coordinate audit, junction evidence"
+      ],
+      "source_specific_decisions": [],
+      "deterministic_verification_approach": [
+        "Independent strand-aware sequence extraction and coordinate arithmetic; verify native annotation round trips, gene/transcript identity and actual StringTie or relevant package outputs."
+      ],
+      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "validated_new_mappings": 0,
+      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
+      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+    },
+    {
+      "proposed_id": "portfolio-biomni-eval1-mirna-target-query",
+      "benchmark": "Biomni-Eval1 tool-enabled",
+      "scientific_question": "Which miRNA-target associations have compatible independently observed evidence after mature-miRNA and transcript-identity checks?",
+      "source_family": "mirna-target-query",
+      "benchmark_targets": [
+        {
+          "task_id": "lab_bench_dbqa:105",
+          "source_task_record_sha256": "a1994b107bc9c7ff30d253b26fa46159c57cdaa0a70723fb7b6cde962dfa0cfb",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:80",
+          "source_task_record_sha256": "d5c1fd912fb05fbb0e948800ce03ec8e036550503271a7e29828b2a198d82c09",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:91",
+          "source_task_record_sha256": "6d6e7b985f4f98b4851cbcb35e91c5ba54c1c620c32a6fc411b2e1e197a18586",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:88",
+          "source_task_record_sha256": "52793e143457413dac7e758edcd6658076b5961431b8329e61e88c8611051f55",
+          "source_task_name": "lab_bench_dbqa"
+        }
+      ],
+      "source_inspection_tier": "question-endpoint-reviewed",
+      "source_planning_disposition": "candidate-design-provisional",
+      "matching_workstreams": [
+        "small-rna-sequence-structure"
+      ],
+      "required_endpoint_stages": [
+        "resolve mature microRNA naming",
+        "pin the target-prediction release",
+        "join candidate gene identifiers",
+        "return the stated prediction with provenance"
+      ],
+      "observed_input_requirements": [
+        "Observed RNA sequences and small-RNA/mRNA measurements with matching annotation; structural measurements where comparing predictions to biology."
+      ],
+      "required_formats": [
+        "gene alternatives",
+        "microRNA identifiers",
+        "target prediction records"
+      ],
+      "proposed_artifact_requirements": [
+        "FASTA/GTF joins, processed sequence and structure files, complete expression/target results, predicted-versus-observed measurements"
+      ],
+      "source_specific_decisions": [],
+      "deterministic_verification_approach": [
+        "Native RNA/folding reference plus independent sequence, coordinate and score checks; label predictions separately from experimentally supported structure."
+      ],
+      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "validated_new_mappings": 0,
+      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
+      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+    },
+    {
+      "proposed_id": "portfolio-biomni-eval1-disease-database-difference",
+      "benchmark": "Biomni-Eval1 tool-enabled",
+      "scientific_question": "Which gene-disease assertions differ between frozen database releases because of identity, evidence or inclusion-policy changes?",
+      "source_family": "disease-database-difference",
+      "benchmark_targets": [
+        {
+          "task_id": "lab_bench_dbqa:1",
+          "source_task_record_sha256": "6f0d9938077cfbae761c1c7082f9c93e18828e9536e3afdb0c00eb92da4d9888",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:34",
+          "source_task_record_sha256": "8fab304c8fb4276c693d6238aec19ba8be7d28090a558ebf0928725bc7a706a4",
+          "source_task_name": "lab_bench_dbqa"
+        },
+        {
+          "task_id": "lab_bench_dbqa:13",
+          "source_task_record_sha256": "5523452028915ffec030a53721688851d34f5aedb6c89ac1cf6dcc021f80d3da",
+          "source_task_name": "lab_bench_dbqa"
+        }
+      ],
+      "source_inspection_tier": "question-endpoint-reviewed",
+      "source_planning_disposition": "candidate-design-provisional",
+      "matching_workstreams": [
+        "database-identity-evidence"
+      ],
+      "required_endpoint_stages": [
+        "normalize disease concepts across resources",
+        "align gene identifiers and release dates",
+        "compute the requested set difference",
+        "preserve both positive and absent-source evidence"
+      ],
+      "observed_input_requirements": [
+        "Pinned public gene/protein/variant/database exports with accession versions, species, directed relations, dates and evidence identifiers."
+      ],
+      "required_formats": [
+        "candidate genes",
+        "disease descriptions",
+        "two versioned association resources"
+      ],
+      "proposed_artifact_requirements": [
+        "Identity map, provenance manifest, directed edge/evidence tables, contradictions, structured answer and supporting accession/span references"
+      ],
+      "source_specific_decisions": [],
+      "deterministic_verification_approach": [
+        "Deterministic joins, direction/type checks and evidence-span linkage; unknown is allowed; a text citation match does not establish full scientific entailment."
+      ],
+      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "validated_new_mappings": 0,
+      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
+      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+    }
+  ],
+  "definition_discrepancies": []
+}

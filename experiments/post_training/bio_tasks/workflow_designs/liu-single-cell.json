@@ -1,0 +1,2818 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-09-24T15:03:56.267745+00:00",
+  "scope": "Provisional-ID agentic question planning from permitted versioned inventory metadata. Original fixture/answer content is not used.",
+  "source": {
+    "benchmark": "Liu-single-cell",
+    "inventory_path": "benchmark_tasks/liu-single-cell.json",
+    "inventory_sha256": "d722bb44228cf72c04b1bfa6bc084f7aa2ebfb6b5218fe6614f6f19f349fbdc9",
+    "source_revision": "1605e6e38bd69307e2f7b68a4367de21043c89b6",
+    "inspection_limit": "Question proposals use the inventory endpoint-stage review; original full prompt, output and method limits remain attached. No new runtime or source-data validation implied."
+  },
+  "counts": {
+    "records": 63,
+    "question_assignments": 63,
+    "question_cards": 49,
+    "excluded_records": 0,
+    "validated_new_mappings": 0
+  },
+  "defaults": {
+    "authoring_unit": "One coherent question on independently observed biological inputs; combine bookkeeping and component summaries into its connected analysis.",
+    "required_before_implementation": "Freeze independent source lineage, biological sample structure, exact input boundary, method versions, complete artifact schemas and deterministic acceptance. Keep corpus train-only and expected solve time <=30 minutes.",
+    "native_reference": "Reference scripts execute the actual required packages; private oracles read supplied inputs. Independently verify identities, algebraic invariants and all required artifacts. No LLM-as-a-judge.",
+    "learned_output_acceptance": "Grade complete finite predictions against private observed labels with a frozen metric/criterion. Accept equivalent cluster/topic label permutations. Model uncertainty and counterfactual claims require endpoint-specific checks.",
+    "runtime_boundary": "For long original pipelines, explicitly choose a bounded observed-data start boundary. Precomputed alignments or counts cover downstream analysis only; do not claim full raw-data pipeline coverage. GPU/weight-dependent methods and large reference resources remain feasibility questions.",
+    "consolidation": "Review overlaps with earlier question cards before implementation. Distinct assays, statistical estimands and named native methods cannot be silently substituted."
+  },
+  "questions": [
+    {
+      "proposed_id": "portfolio-liu-single-cell-reference-based-cell-annotation",
+      "scientific_question": "Which observed query-cell identities are supported by a reference-trained classifier and majority-vote reconciliation?",
+      "target_ids": [
+        "celltypist"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "celltypist",
+          "source_task_record_sha256": "ab45e9a0e4983f0303b87ca78e92d735c1bf5cd03a3e936e262169a8e41b6687",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "celltypist",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-annotation"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "align gene features",
+        "train a reference classifier",
+        "predict query labels",
+        "reconcile majority votes"
+      ],
+      "observed_input_requirements": [
+        "Independent observed single-cell data plus frozen marker/reference evidence and hierarchical labels; distinguish measured labels from inferred identities."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "native_method_requirements": [
+        "celltypist"
+      ],
+      "source_specific_decisions": [
+        "Check reference/query separation, per-cell identities and label evidence."
+      ],
+      "proposed_artifact_requirements": [
+        "Marker statistics, cell-by-label scores, hierarchy-consistent annotations, abstentions, detection denominators, cross-study confusion tables"
+      ],
+      "deterministic_verifier_design": [
+        "Independent marker/count calculations; deterministic classifier or prespecified score contract; evaluate label agreement where external labels exist, and grade evidence consistency elsewhere."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-marker-enrichment-cell-annotation",
+      "scientific_question": "Which observed cell populations are supported by marker-set enrichment after count QC and neighborhood clustering?",
+      "target_ids": [
+        "decoupler",
+        "decoupler--data2"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "decoupler",
+          "source_task_record_sha256": "f2aa07bae84e4385503f3cbc80bf1f7d233e815d164bcfc0d19db97e18012d48",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "decoupler",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        },
+        {
+          "task_id": "decoupler--data2",
+          "source_task_record_sha256": "64c62089183b4d5eac6fad7e94caf9041ec78a67d0f9bd0a0f676523ed7dcd19",
+          "source_metadata_sha256": "b13de7501f18bb05671997609fec82671dbedef462d8562a9e7daa0114cbe078",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "decoupler",
+          "source_prompt_variants": [
+            "basic"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-annotation"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "QC and normalize cells",
+        "cluster the neighbor graph",
+        "score marker-set enrichment",
+        "assign supported cell labels"
+      ],
+      "observed_input_requirements": [
+        "Independent observed single-cell data plus frozen marker/reference evidence and hierarchical labels; distinguish measured labels from inferred identities."
+      ],
+      "required_formats": [
+        "H5AD",
+        "CSV-marker-table"
+      ],
+      "native_method_requirements": [
+        "decoupler"
+      ],
+      "source_specific_decisions": [
+        "Check marker/background membership and ambiguous assignments; clustered-cell labels require measured support."
+      ],
+      "proposed_artifact_requirements": [
+        "Marker statistics, cell-by-label scores, hierarchy-consistent annotations, abstentions, detection denominators, cross-study confusion tables"
+      ],
+      "deterministic_verifier_design": [
+        "Independent marker/count calculations; deterministic classifier or prespecified score contract; evaluate label agreement where external labels exist, and grade evidence consistency elsewhere."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-partition-graph-trajectory",
+      "scientific_question": "Which observed population transitions have support in a partition-connectivity graph and independent time or lineage evidence?",
+      "target_ids": [
+        "paga",
+        "paga--data2"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "paga",
+          "source_task_record_sha256": "31e42dd5f8e86c5f5dee292ee85fd23215821397c4525100a5e9500150c59f94",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "paga",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        },
+        {
+          "task_id": "paga--data2",
+          "source_task_record_sha256": "79119750a04464923fd9970bec475e056cf4d331f94158b81ab32aa90ffdfc0b",
+          "source_metadata_sha256": "b13de7501f18bb05671997609fec82671dbedef462d8562a9e7daa0114cbe078",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "paga",
+          "source_prompt_variants": [
+            "basic"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-trajectory"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "preprocess counts",
+        "build a neighbor graph",
+        "partition cells",
+        "compute inter-partition connectivity"
+      ],
+      "observed_input_requirements": [
+        "Observed developmental or perturbation time course with biological replication; spliced/unspliced counts or lineage evidence only for endpoints requiring them."
+      ],
+      "required_formats": [
+        "AnnData"
+      ],
+      "native_method_requirements": [
+        "paga"
+      ],
+      "source_specific_decisions": [
+        "Check graph topology and label-permutation equivalence; graph position alone does not establish developmental direction."
+      ],
+      "proposed_artifact_requirements": [
+        "State graph, root evidence, pseudotime/fate matrices, full gene/regulon tests, biological-validation tables"
+      ],
+      "deterministic_verifier_design": [
+        "Verify graph/ordering invariants and native outputs with seeded tolerances; independently check associations with held-out observed time/lineage evidence; do not grade causality from expression."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-splicing-dynamics-velocity",
+      "scientific_question": "Which cell-state directions are supported by observed spliced/unspliced measurements under a fitted dynamical model?",
+      "target_ids": [
+        "scvelo"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "scvelo",
+          "source_task_record_sha256": "0f6e53c0705b29492d5f93cf7033712f341293600311b6bd389622a5b9d23aca",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "scvelo",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-trajectory"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "retain spliced and unspliced layers",
+        "compute neighborhood moments",
+        "fit dynamical splicing models",
+        "assemble cell transitions"
+      ],
+      "observed_input_requirements": [
+        "Observed developmental or perturbation time course with biological replication; spliced/unspliced counts or lineage evidence only for endpoints requiring them."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "native_method_requirements": [
+        "scvelo"
+      ],
+      "source_specific_decisions": [
+        "Check fitted dynamics and transition rows; velocity-derived time is not direct longitudinal measurement."
+      ],
+      "proposed_artifact_requirements": [
+        "State graph, root evidence, pseudotime/fate matrices, full gene/regulon tests, biological-validation tables"
+      ],
+      "deterministic_verifier_design": [
+        "Verify graph/ordering invariants and native outputs with seeded tolerances; independently check associations with held-out observed time/lineage evidence; do not grade causality from expression."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-perturbation-response-prediction",
+      "scientific_question": "Which expression responses can be predicted for a held-out benign cell-condition combination from measured training contexts?",
+      "target_ids": [
+        "scgen"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "scgen",
+          "source_task_record_sha256": "a6af0373d8a72cf4992223a053f737d475a5482b59be6a3e30cfff6de53b5e28",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "scgen",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "clinical-response-model"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "exclude the held-out cell-condition combination",
+        "fit the perturbation model",
+        "infer latent responses",
+        "evaluate held-out expression"
+      ],
+      "observed_input_requirements": [
+        "De-identified observed cohort with outcome timing, covariates, subject identifiers and documented missingness; no clinical decision support output."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "native_method_requirements": [
+        "scgen"
+      ],
+      "source_specific_decisions": [
+        "The requested UMAP endpoint does not test counterfactual expression accuracy; exclude held-out observations from fitting."
+      ],
+      "proposed_artifact_requirements": [
+        "Cohort inclusion flow, subject-level model matrix, complete coefficient/uncertainty tables, held-out predictions, calibration and subgroup diagnostics"
+      ],
+      "deterministic_verifier_design": [
+        "Independent likelihood/metric checks and pinned numerical fit; verify temporal eligibility, patient disjointness and outcome encoding; retain uncertainty and missing values."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-reference-to-spatial-deconvolution",
+      "scientific_question": "How do native deconvolution methods explain observed tissue mixtures using an independently measured single-cell reference?",
+      "target_ids": [
+        "destvi",
+        "stereoscope",
+        "destvi--data2"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "destvi",
+          "source_task_record_sha256": "ebe2e5c452665197e407787b70b10da38302c49e093645ce2b80f3d086ff6af8",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "destvi",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        },
+        {
+          "task_id": "stereoscope",
+          "source_task_record_sha256": "3f0c923dbf9220906a24cf4e818515002d58e499d6adb1c26180fce9b319b926",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "stereoscope",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        },
+        {
+          "task_id": "destvi--data2",
+          "source_task_record_sha256": "f589b5fcbc14bb24b540d0ee2346b3f8ccbd0af79b146c7a5247d1ca3c37ba7d",
+          "source_metadata_sha256": "b13de7501f18bb05671997609fec82671dbedef462d8562a9e7daa0114cbe078",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "destvi",
+          "source_prompt_variants": [
+            "basic"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "spatial-reference-transfer"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "align reference and spatial genes",
+        "fit reference expression states",
+        "fit spatial mixtures",
+        "export cell-type proportions",
+        "QC reference and spatial counts",
+        "intersect measured genes",
+        "fit reference signatures",
+        "infer spatial mixture weights"
+      ],
+      "observed_input_requirements": [
+        "Independent observed scRNA reference and spatial measurements with gene panel overlap and measured validation labels or held-out features."
+      ],
+      "required_formats": [
+        "H5AD",
+        "Visium"
+      ],
+      "native_method_requirements": [
+        "destvi",
+        "stereoscope"
+      ],
+      "source_specific_decisions": [
+        "Use the declared count layer and preserve spot IDs; quantify mixture uncertainty and held-out expression fit.",
+        "Retain donor and cell-state identity; proportions must not be confused with absolute cell abundance."
+      ],
+      "proposed_artifact_requirements": [
+        "Shared-feature map, mixture weights, reconstruction, uncertainty, held-out predictions and validation metrics"
+      ],
+      "deterministic_verifier_design": [
+        "Check simplex/identity constraints and native fits; validate predictions against masked observed features; separate fit residuals from external biological accuracy."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-spatial-cell-abundance",
+      "scientific_question": "Which spatial cell-abundance differences remain supported after reference covariates and posterior uncertainty are retained?",
+      "target_ids": [
+        "cell2location"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "cell2location",
+          "source_task_record_sha256": "6cc7fd486a16e61c8a6339116bb8d0c27a872fdd7b50aba806620ec7ecbbc02f",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "cell2location",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "spatial-expression"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "fit cell-type signatures with reference covariates",
+        "match spatial features",
+        "fit a count mixture",
+        "report posterior abundance quantiles"
+      ],
+      "observed_input_requirements": [
+        "Observed spatial coordinates, counts, image/segmentation metadata and multiple sections or samples where comparisons require replication."
+      ],
+      "required_formats": [
+        "H5AD",
+        "Visium"
+      ],
+      "native_method_requirements": [
+        "cell2location"
+      ],
+      "source_specific_decisions": [
+        "Preserve abundance units and posterior quantiles; measure whether the specified training budget fits 30 minutes."
+      ],
+      "proposed_artifact_requirements": [
+        "Coordinate transforms, segmentation/QC masks, H5AD, region/cell expression tables, neighborhood edges and null distributions"
+      ],
+      "deterministic_verifier_design": [
+        "Check physical units, section boundaries, segmentation-to-cell joins, geometric distances and full null-model outputs; compare images through underlying numerical artifacts."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-three-dimensional-neighborhood-counts",
+      "scientific_question": "Which cell-class neighborhoods recur in observed three-dimensional tissue coordinates under a section-aware null?",
+      "target_ids": [
+        "squidpy"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "squidpy",
+          "source_task_record_sha256": "19c1204cfddb438a4a1a43a216bc69a1151946f9cbd7e7ba156a2d5e0642cb88",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "squidpy",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "spatial-expression"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "validate cell coordinates and slice identity",
+        "construct a 3D neighbor graph",
+        "tabulate cell-class edge counts",
+        "assess enrichment under a declared null"
+      ],
+      "observed_input_requirements": [
+        "Observed spatial coordinates, counts, image/segmentation metadata and multiple sections or samples where comparisons require replication."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "native_method_requirements": [
+        "squidpy"
+      ],
+      "source_specific_decisions": [
+        "Separate adjacency counts from null-adjusted enrichment and prevent cross-slice edges when biologically invalid."
+      ],
+      "proposed_artifact_requirements": [
+        "Coordinate transforms, segmentation/QC masks, H5AD, region/cell expression tables, neighborhood edges and null distributions"
+      ],
+      "deterministic_verifier_design": [
+        "Check physical units, section boundaries, segmentation-to-cell joins, geometric distances and full null-model outputs; compare images through underlying numerical artifacts."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-multi-sample-clustering",
+      "scientific_question": "Which cell populations recur across observed samples after barcode reconciliation, QC and doublet screening?",
+      "target_ids": [
+        "leiden",
+        "leiden--data2"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "leiden",
+          "source_task_record_sha256": "66552985cec0ab566ad6a398ed3c5f5950be2d8b24fafc8a55f9717b67d7c6ab",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "leiden",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        },
+        {
+          "task_id": "leiden--data2",
+          "source_task_record_sha256": "e0dd2cd4ee565a20a63c8f30a0c79629092e5b2497718abbcc46f6e0d917fe90",
+          "source_metadata_sha256": "b13de7501f18bb05671997609fec82671dbedef462d8562a9e7daa0114cbe078",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "leiden",
+          "source_prompt_variants": [
+            "basic"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "data-statistics-visualization"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "join sample-local cell barcodes",
+        "apply QC and doublet screening",
+        "preserve raw counts",
+        "select features and neighbors",
+        "cluster cells"
+      ],
+      "observed_input_requirements": [
+        "Observed biological tables with native schema, identifiers, units, sampling design and documented missing/censored values."
+      ],
+      "required_formats": [
+        "10x-HDF5",
+        "10x-Matrix-Market"
+      ],
+      "native_method_requirements": [
+        "leiden"
+      ],
+      "source_specific_decisions": [
+        "A UMAP array alone does not verify clustering; check cell membership and label-permutation equivalence."
+      ],
+      "proposed_artifact_requirements": [
+        "Join/exclusion audit, analysis-ready table, model matrices, full estimates/predictions, plot-source data and semantic figure metadata"
+      ],
+      "deterministic_verifier_design": [
+        "Independent identity, arithmetic and statistical checks; verify axes, grouping, uncertainty and data completeness without requiring pixel-identical images."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-cluster-assisted-doublet-detection",
+      "scientific_question": "Which observed clusters contain doublet-supported cells after hierarchical population annotation and subclustering?",
+      "target_ids": [
+        "doucling"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "doucling",
+          "source_task_record_sha256": "694481f6d4d1f18c305a5e849f94119edd6303508828ac76e3e68024636daec9",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "doucling",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-qc-embedding"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "QC cells while retaining original counts",
+        "cluster and annotate cell populations",
+        "subcluster populations",
+        "detect doublet-enriched groups"
+      ],
+      "observed_input_requirements": [
+        "Observed count matrix with feature identities, mitochondrial annotation, sample/batch labels and QC metadata; native H5AD/Matrix Market inputs."
+      ],
+      "required_formats": [
+        "10x-Matrix-Market"
+      ],
+      "native_method_requirements": [
+        "doucling"
+      ],
+      "source_specific_decisions": [
+        "Keep counts before normalization instead of reconstructing them; separate putative doublets from rare biological populations."
+      ],
+      "proposed_artifact_requirements": [
+        "H5AD layers, cell/feature inclusion tables, normalization factors, PCA loadings, neighbor graph, cluster and QC tables"
+      ],
+      "deterministic_verifier_design": [
+        "Check counts and sparse shapes, sample joins and exclusion arithmetic; verify subspaces/graphs up to appropriate symmetries, not exact UMAP coordinates; use observed labels only where supported."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-chromatin-topic-modeling",
+      "scientific_question": "Which accessibility topics explain observed peak counts and generalize to withheld cells?",
+      "target_ids": [
+        "mira"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "mira",
+          "source_task_record_sha256": "66d3d4f61d2fe364ba3ed6aa7e5b6f0ea41e71f4418ef78ec978fe3e21913a49",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "mira",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "chromatin-regulatory"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "select measured peaks and named barcodes",
+        "filter cells",
+        "fit accessibility topics",
+        "assess topic contributions on withheld cells"
+      ],
+      "observed_input_requirements": [
+        "Observed ATAC fragments or BAMs, biological replicates, peak regions, matching annotation and frozen motif models."
+      ],
+      "required_formats": [
+        "AnnData",
+        "CSV-barcodes"
+      ],
+      "native_method_requirements": [
+        "mira"
+      ],
+      "source_specific_decisions": [
+        "Randomly marking encoder peaks is a source procedure, not biological annotation; preserve peak identity and validate topic stability."
+      ],
+      "proposed_artifact_requirements": [
+        "BAM/fragment QC, BED peaks, count matrices, motif matches/backgrounds, gene links and sample-level effects"
+      ],
+      "deterministic_verifier_design": [
+        "Run native peak/motif tools; independently check intervals, fragment counts, background selection, matched sample joins and multiplicity."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-paired-multiomic-factorization",
+      "scientific_question": "Which shared factors explain independently observed paired modalities while retaining assay-specific feature identities?",
+      "target_ids": [
+        "mofa",
+        "mofa--data2"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "mofa",
+          "source_task_record_sha256": "0d538b5fd21532689f753d0d89c299c807c91be6b601562f973b809ac9823a23",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "mofa",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        },
+        {
+          "task_id": "mofa--data2",
+          "source_task_record_sha256": "692d219319b5cf3fc98ca6189f8cda5ad3b22977acffcf9bfadee8f91bf9ad9d",
+          "source_metadata_sha256": "b13de7501f18bb05671997609fec82671dbedef462d8562a9e7daa0114cbe078",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "mofa",
+          "source_prompt_variants": [
+            "basic"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "gene-program-factorization"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "align cells across modalities",
+        "preserve assay-specific features",
+        "fit shared latent factors",
+        "assess modality contributions"
+      ],
+      "observed_input_requirements": [
+        "Observed expression or multiomic matrices with biological sample identities, condition labels and frozen annotations."
+      ],
+      "required_formats": [
+        "H5MU"
+      ],
+      "native_method_requirements": [
+        "mofa"
+      ],
+      "source_specific_decisions": [
+        "Account for latent sign and rotation ambiguity; require cross-modal reconstruction or biological endpoints beyond coordinates."
+      ],
+      "proposed_artifact_requirements": [
+        "Feature eligibility, loadings/modules, complete per-feature scores, sample-level validation, gene-set memberships and null statistics"
+      ],
+      "deterministic_verifier_design": [
+        "Independent feature score, correlation and enrichment arithmetic plus native model references; test subspaces and reconstructed data rather than arbitrary factor labels."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-partially-paired-multiomic-integration",
+      "scientific_question": "Which biological groups remain aligned when RNA/accessibility measurements are partially paired and missing assays are represented explicitly?",
+      "target_ids": [
+        "scmomat"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "scmomat",
+          "source_task_record_sha256": "a97d2b7eef35545115db5b6f9e55fb321368924903f910f2ba2600a7033277fc",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "scmomat",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-integration"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "load batch-specific RNA and ATAC matrices",
+        "align gene-region links",
+        "represent missing assays explicitly",
+        "infer shared factors",
+        "construct integration graph"
+      ],
+      "observed_input_requirements": [
+        "Observed multi-donor or multi-study counts with documented biological conditions and batch overlap; paired modalities only where cells/samples are matched."
+      ],
+      "required_formats": [
+        "NPZ",
+        "TSV-feature-identifiers"
+      ],
+      "native_method_requirements": [
+        "scmomat"
+      ],
+      "source_specific_decisions": [
+        "Distinguish inferred pseudo-counts from observations and prevent cross-batch identifier collisions."
+      ],
+      "proposed_artifact_requirements": [
+        "Cell/sample/feature matches, split membership, latent coordinates/loadings, complete held-out reconstructions and batch/biology diagnostics"
+      ],
+      "deterministic_verifier_design": [
+        "Verify identity and group separation, count/layer semantics and reconstruction metrics; compare latent geometry with invariants; measure preservation and removal jointly."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-conditional-atac-representation",
+      "scientific_question": "Which observed accessibility contrasts remain under a conditional latent model with explicit read-to-fragment conversion?",
+      "target_ids": [
+        "scpoli"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "scpoli",
+          "source_task_record_sha256": "9dab6566fc77717868c63d5db47f8fdcd5bd21c6531e167c0ff9c47e9c832c17",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "scpoli",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "chromatin-regulatory"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "select ATAC features",
+        "apply detection filters",
+        "convert reads to fragments under stated conventions",
+        "fit a conditional latent model"
+      ],
+      "observed_input_requirements": [
+        "Observed ATAC fragments or BAMs, biological replicates, peak regions, matching annotation and frozen motif models."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "native_method_requirements": [
+        "scpoli"
+      ],
+      "source_specific_decisions": [
+        "Preserve sample labels, sparse storage and read/fragment units; latent coordinates alone do not establish retained biology."
+      ],
+      "proposed_artifact_requirements": [
+        "BAM/fragment QC, BED peaks, count matrices, motif matches/backgrounds, gene links and sample-level effects"
+      ],
+      "deterministic_verifier_design": [
+        "Run native peak/motif tools; independently check intervals, fragment counts, background selection, matched sample joins and multiplicity."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-velocity-connectivity-fate-kernels",
+      "scientific_question": "How do velocity and neighborhood-connectivity kernels differ in the cell-state transitions they support from observed measurements?",
+      "target_ids": [
+        "cellrank"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "cellrank",
+          "source_task_record_sha256": "14414791a2744dc9c854e8c74b6e921a962b0ca824dda460b3d43fc6fd20fc41",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "cellrank",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-trajectory"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "fit splicing dynamics",
+        "construct velocity and connectivity kernels",
+        "combine transition matrices",
+        "evaluate directional cell-state transitions"
+      ],
+      "observed_input_requirements": [
+        "Observed developmental or perturbation time course with biological replication; spliced/unspliced counts or lineage evidence only for endpoints requiring them."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "native_method_requirements": [
+        "cellrank"
+      ],
+      "source_specific_decisions": [
+        "A projected transition vector and a cell-to-cell probability matrix have different shapes and meanings; declare the required artifact."
+      ],
+      "proposed_artifact_requirements": [
+        "State graph, root evidence, pseudotime/fate matrices, full gene/regulon tests, biological-validation tables"
+      ],
+      "deterministic_verifier_design": [
+        "Verify graph/ordering invariants and native outputs with seeded tolerances; independently check associations with held-out observed time/lineage evidence; do not grade causality from expression."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-condition-aware-batch-removal",
+      "scientific_question": "Which observed biological condition signals remain after explicitly conditioned batch removal?",
+      "target_ids": [
+        "scgen-integration"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "scgen-integration",
+          "source_task_record_sha256": "a0d60cd0cf6c0e63f6540ab3d826dfdbf10722108dc582a3949fcddffbe25851",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "scgen-integration",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-integration"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "join batch and cell-type labels",
+        "fit latent representation",
+        "estimate batch correction",
+        "assess retained cell-state structure"
+      ],
+      "observed_input_requirements": [
+        "Observed multi-donor or multi-study counts with documented biological conditions and batch overlap; paired modalities only where cells/samples are matched."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "native_method_requirements": [
+        "scgen"
+      ],
+      "source_specific_decisions": [
+        "Batch mixing can erase biological effects; check biological conservation alongside removal of technical variation."
+      ],
+      "proposed_artifact_requirements": [
+        "Cell/sample/feature matches, split membership, latent coordinates/loadings, complete held-out reconstructions and batch/biology diagnostics"
+      ],
+      "deterministic_verifier_design": [
+        "Verify identity and group separation, count/layer semantics and reconstruction metrics; compare latent geometry with invariants; measure preservation and removal jointly."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-neighborhood-based-feature-selection",
+      "scientific_question": "Which locally variable genes preserve observed cell-state structure after neighborhood and depth checks?",
+      "target_ids": [
+        "triku",
+        "triku--data2"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "triku",
+          "source_task_record_sha256": "947944c6da33fdf985b8a0545c829154ef16f118e7a42e06f49364ea8ac7e476",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "triku",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        },
+        {
+          "task_id": "triku--data2",
+          "source_task_record_sha256": "03e19cf8e751d5911a3cd925ec8d1aa323d018383fa3cfcd54f347d41d32ce72",
+          "source_metadata_sha256": "b13de7501f18bb05671997609fec82671dbedef462d8562a9e7daa0114cbe078",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "triku",
+          "source_prompt_variants": [
+            "basic"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-qc-embedding"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "QC and transform counts",
+        "construct cell neighborhoods",
+        "select locally variable genes",
+        "evaluate downstream representation"
+      ],
+      "observed_input_requirements": [
+        "Observed count matrix with feature identities, mitochondrial annotation, sample/batch labels and QC metadata; native H5AD/Matrix Market inputs."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "native_method_requirements": [
+        "triku"
+      ],
+      "source_specific_decisions": [
+        "Saving sparse values alone discards coordinates and shape; require feature IDs, selection scores and matrix structure."
+      ],
+      "proposed_artifact_requirements": [
+        "H5AD layers, cell/feature inclusion tables, normalization factors, PCA loadings, neighbor graph, cluster and QC tables"
+      ],
+      "deterministic_verifier_design": [
+        "Check counts and sparse shapes, sample joins and exclusion arithmetic; verify subspaces/graphs up to appropriate symmetries, not exact UMAP coordinates; use observed labels only where supported."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-spatial-coexpression-modules",
+      "scientific_question": "Which spatial gene modules are supported by observed expression autocorrelation under an explicit neighborhood and multiplicity model?",
+      "target_ids": [
+        "hotspot",
+        "hotspot--data2"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "hotspot",
+          "source_task_record_sha256": "610074726cc9994d4f4454b5e35175cd1ce222d7ccd768895d646a7c65ba3207",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "hotspot",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        },
+        {
+          "task_id": "hotspot--data2",
+          "source_task_record_sha256": "287031459056b2bb203269628caedd79794ffea0c5973d1f228bd2c870fd0623",
+          "source_metadata_sha256": "b13de7501f18bb05671997609fec82671dbedef462d8562a9e7daa0114cbe078",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "hotspot",
+          "source_prompt_variants": [
+            "basic"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "spatial-expression"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "retain spatial coordinates and count depth",
+        "construct local neighborhoods",
+        "test gene autocorrelation",
+        "correct multiple tests",
+        "infer gene modules and scores"
+      ],
+      "observed_input_requirements": [
+        "Observed spatial coordinates, counts, image/segmentation metadata and multiple sections or samples where comparisons require replication."
+      ],
+      "required_formats": [
+        "H5AD",
+        "10x-HDF5"
+      ],
+      "native_method_requirements": [
+        "hotspot"
+      ],
+      "source_specific_decisions": [
+        "Separate spatial signal from depth and sampling density; preserve module-label equivalence and donor/slice structure."
+      ],
+      "proposed_artifact_requirements": [
+        "Coordinate transforms, segmentation/QC masks, H5AD, region/cell expression tables, neighborhood edges and null distributions"
+      ],
+      "deterministic_verifier_design": [
+        "Check physical units, section boundaries, segmentation-to-cell joins, geometric distances and full null-model outputs; compare images through underlying numerical artifacts."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-count-model-atlas-integration",
+      "scientific_question": "Does count-model integration align independent measured batches while preserving known biological populations?",
+      "target_ids": [
+        "scvi"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "scvi",
+          "source_task_record_sha256": "c9f73227c596ad327e9568a2d1c66e4d1f091d1dcd60f8c80f805378a63bc0e2",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "scvi",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-integration"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "preserve raw count layer",
+        "select batch-aware variable genes",
+        "fit a latent count model",
+        "evaluate batch integration and biological retention"
+      ],
+      "observed_input_requirements": [
+        "Observed multi-donor or multi-study counts with documented biological conditions and batch overlap; paired modalities only where cells/samples are matched."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "native_method_requirements": [
+        "scvi"
+      ],
+      "source_specific_decisions": [
+        "Do not scale counts fed to the likelihood; frozen training and held-out checks are needed for a reproducible numerical contract."
+      ],
+      "proposed_artifact_requirements": [
+        "Cell/sample/feature matches, split membership, latent coordinates/loadings, complete held-out reconstructions and batch/biology diagnostics"
+      ],
+      "deterministic_verifier_design": [
+        "Verify identity and group separation, count/layer semantics and reconstruction metrics; compare latent geometry with invariants; measure preservation and removal jointly."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-semi-supervised-atlas-integration",
+      "scientific_question": "How well does a partially labeled atlas transfer observed cell identities without leaking held-out labels?",
+      "target_ids": [
+        "scanvi",
+        "scanvi--data2"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "scanvi",
+          "source_task_record_sha256": "874e8e2307e4c8b9b75119ed6a6da3884d9f5113ac7a15cbfe5d815c6fddfd40",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "scanvi",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        },
+        {
+          "task_id": "scanvi--data2",
+          "source_task_record_sha256": "5d0474da794fe701a5b3a2c9097c3e31b5ed905db8b058d6ec4065011f7ea2df",
+          "source_metadata_sha256": "b13de7501f18bb05671997609fec82671dbedef462d8562a9e7daa0114cbe078",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "scanvi",
+          "source_prompt_variants": [
+            "basic"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-integration"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "prepare labeled and unlabeled cells",
+        "fit an unsupervised count model",
+        "refine with partial labels",
+        "assess transfer and latent structure"
+      ],
+      "observed_input_requirements": [
+        "Observed multi-donor or multi-study counts with documented biological conditions and batch overlap; paired modalities only where cells/samples are matched."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "native_method_requirements": [
+        "scanvi"
+      ],
+      "source_specific_decisions": [
+        "Keep annotation supervision separate from query labels and test unsupported cell types."
+      ],
+      "proposed_artifact_requirements": [
+        "Cell/sample/feature matches, split membership, latent coordinates/loadings, complete held-out reconstructions and batch/biology diagnostics"
+      ],
+      "deterministic_verifier_design": [
+        "Verify identity and group separation, count/layer semantics and reconstruction metrics; compare latent geometry with invariants; measure preservation and removal jointly."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-spatial-section-integration",
+      "scientific_question": "Which observed spatial domains recur across tissue sections after feature matching and section integration?",
+      "target_ids": [
+        "scanorama"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "scanorama",
+          "source_task_record_sha256": "58828af7a42edd85cd216b0ebf8c26aab9deb75fdf57a946543396bebf203e52",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "scanorama",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "spatial-expression"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "QC spatial sections",
+        "match gene features",
+        "integrate section representations",
+        "map clusters back to tissue coordinates"
+      ],
+      "observed_input_requirements": [
+        "Observed spatial coordinates, counts, image/segmentation metadata and multiple sections or samples where comparisons require replication."
+      ],
+      "required_formats": [
+        "Visium"
+      ],
+      "native_method_requirements": [
+        "scanorama"
+      ],
+      "source_specific_decisions": [
+        "Maintain section identity and cell correspondence; apparent batch mixing is not sufficient biological validation."
+      ],
+      "proposed_artifact_requirements": [
+        "Coordinate transforms, segmentation/QC masks, H5AD, region/cell expression tables, neighborhood edges and null distributions"
+      ],
+      "deterministic_verifier_design": [
+        "Check physical units, section boundaries, segmentation-to-cell joins, geometric distances and full null-model outputs; compare images through underlying numerical artifacts."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-covariate-adjusted-latent-integration",
+      "scientific_question": "Which cell populations remain after component-level batch adjustment with explicitly measured covariates?",
+      "target_ids": [
+        "harmony"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "harmony",
+          "source_task_record_sha256": "d933d60ca6707fed6a34a5a76f87cf9d7c489b5951892de2001565d9d3428410",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "harmony",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-integration"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "select variable genes",
+        "normalize and compute components",
+        "correct components for batch covariates",
+        "assess retained populations"
+      ],
+      "observed_input_requirements": [
+        "Observed multi-donor or multi-study counts with documented biological conditions and batch overlap; paired modalities only where cells/samples are matched."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "native_method_requirements": [
+        "harmony"
+      ],
+      "source_specific_decisions": [
+        "Preserve known biological covariates and quantify overcorrection; coordinates may vary under equivalent bases."
+      ],
+      "proposed_artifact_requirements": [
+        "Cell/sample/feature matches, split membership, latent coordinates/loadings, complete held-out reconstructions and batch/biology diagnostics"
+      ],
+      "deterministic_verifier_design": [
+        "Verify identity and group separation, count/layer semantics and reconstruction metrics; compare latent geometry with invariants; measure preservation and removal jointly."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-probabilistic-marker-annotation",
+      "scientific_question": "Which cell assignments and uncertainty estimates follow from observed counts and an independently curated marker reference?",
+      "target_ids": [
+        "cellassign"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "cellassign",
+          "source_task_record_sha256": "1253b18e9d2009c254b226b13603d7ec15daefea8dbd1649d3519032489b97f6",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "cellassign",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-annotation"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "join marker genes to measured features",
+        "preserve library-size factors",
+        "fit marker-driven label probabilities",
+        "export cell assignments"
+      ],
+      "observed_input_requirements": [
+        "Independent observed single-cell data plus frozen marker/reference evidence and hierarchical labels; distinguish measured labels from inferred identities."
+      ],
+      "required_formats": [
+        "H5AD",
+        "CSV-marker-table"
+      ],
+      "native_method_requirements": [
+        "cellassign"
+      ],
+      "source_specific_decisions": [
+        "Check gene alignment, label uncertainty and out-of-reference cells instead of only an annotation column."
+      ],
+      "proposed_artifact_requirements": [
+        "Marker statistics, cell-by-label scores, hierarchy-consistent annotations, abstentions, detection denominators, cross-study confusion tables"
+      ],
+      "deterministic_verifier_design": [
+        "Independent marker/count calculations; deterministic classifier or prespecified score contract; evaluate label agreement where external labels exist, and grade evidence consistency elsewhere."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-perturbation-specific-latent-variation",
+      "scientific_question": "Which latent factors distinguish observed benign perturbation responses from shared variation and cell-cycle effects?",
+      "target_ids": [
+        "contrastivevi",
+        "contrastivevi--data2"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "contrastivevi",
+          "source_task_record_sha256": "6cf7ea6e7bf7cb682d2897bc90d37aea7469ee39ba965f41a629a05fd02eb939",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "contrastivevi",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        },
+        {
+          "task_id": "contrastivevi--data2",
+          "source_task_record_sha256": "715c7a42c1a2ab12a2ceed35bebb11ccbacd5eaa7b2418296b65757d04e5cd41",
+          "source_metadata_sha256": "b13de7501f18bb05671997609fec82671dbedef462d8562a9e7daa0114cbe078",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "contrastivevi",
+          "source_prompt_variants": [
+            "basic"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-integration"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "identify measured control and perturbation groups",
+        "account for cell-cycle covariates",
+        "fit shared and salient latent structure",
+        "evaluate perturbation signal"
+      ],
+      "observed_input_requirements": [
+        "Observed multi-donor or multi-study counts with documented biological conditions and batch overlap; paired modalities only where cells/samples are matched."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "native_method_requirements": [
+        "contrastivevi"
+      ],
+      "source_specific_decisions": [
+        "Declare the control label per dataset and prevent confounded biological states from masquerading as perturbation effects."
+      ],
+      "proposed_artifact_requirements": [
+        "Cell/sample/feature matches, split membership, latent coordinates/loadings, complete held-out reconstructions and batch/biology diagnostics"
+      ],
+      "deterministic_verifier_design": [
+        "Verify identity and group separation, count/layer semantics and reconstruction metrics; compare latent geometry with invariants; measure preservation and removal jointly."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-binary-accessibility-modeling",
+      "scientific_question": "Which observed peak-accessibility differences are supported under the specified binary latent model?",
+      "target_ids": [
+        "peakvi",
+        "peakvi--data2"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "peakvi",
+          "source_task_record_sha256": "b7b679e89e8676cd85ec1b241b7adf390e77aa2c099046579b0270b8e4daab47",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "peakvi",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        },
+        {
+          "task_id": "peakvi--data2",
+          "source_task_record_sha256": "c025d0bbdd979969dad14605d6cfad2c8b0be755653b0bc72a4215adc83fecf8",
+          "source_metadata_sha256": "b13de7501f18bb05671997609fec82671dbedef462d8562a9e7daa0114cbe078",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "peakvi",
+          "source_prompt_variants": [
+            "basic"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "chromatin-regulatory"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "filter rarely detected peaks",
+        "preserve accessibility layer",
+        "fit a latent model",
+        "compare declared populations for accessibility"
+      ],
+      "observed_input_requirements": [
+        "Observed ATAC fragments or BAMs, biological replicates, peak regions, matching annotation and frozen motif models."
+      ],
+      "required_formats": [
+        "10x-peak-matrix"
+      ],
+      "native_method_requirements": [
+        "peakvi"
+      ],
+      "source_specific_decisions": [
+        "The requested embedding does not verify differential accessibility; check peak IDs, effects and uncertainty."
+      ],
+      "proposed_artifact_requirements": [
+        "BAM/fragment QC, BED peaks, count matrices, motif matches/backgrounds, gene links and sample-level effects"
+      ],
+      "deterministic_verifier_design": [
+        "Run native peak/motif tools; independently check intervals, fragment counts, background selection, matched sample joins and multiplicity."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-fragment-count-accessibility-modeling",
+      "scientific_question": "Which accessibility differences are supported by observed fragment counts under an explicit count-based model?",
+      "target_ids": [
+        "poissonvi"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "poissonvi",
+          "source_task_record_sha256": "6d2b7ddde724d85a0a41a5759cd547e0707031f1c7ad1f0edaad607d26d770fb",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "poissonvi",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "chromatin-regulatory"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "retain read counts",
+        "convert reads to fragment counts",
+        "filter peaks",
+        "fit a count-based accessibility model",
+        "test population contrasts"
+      ],
+      "observed_input_requirements": [
+        "Observed ATAC fragments or BAMs, biological replicates, peak regions, matching annotation and frozen motif models."
+      ],
+      "required_formats": [
+        "10x-peak-matrix"
+      ],
+      "native_method_requirements": [
+        "poissonvi"
+      ],
+      "source_specific_decisions": [
+        "Read-to-fragment conversion and differential accessibility require explicit outputs beyond a latent embedding."
+      ],
+      "proposed_artifact_requirements": [
+        "BAM/fragment QC, BED peaks, count matrices, motif matches/backgrounds, gene links and sample-level effects"
+      ],
+      "deterministic_verifier_design": [
+        "Run native peak/motif tools; independently check intervals, fragment counts, background selection, matched sample joins and multiplicity."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-held-out-protein-imputation",
+      "scientific_question": "How well can a joint model predict withheld observed protein measurements from RNA while preserving batch and cell identity?",
+      "target_ids": [
+        "totalvi"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "totalvi",
+          "source_task_record_sha256": "135d3592d6f58a553109f0f8e85013398b9fdf95e7ad36d67a1b2f0f7027acd5",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "totalvi",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-integration"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "align RNA and protein cell identities",
+        "mask query proteins while retaining evaluation values",
+        "fit a joint count model",
+        "predict masked proteins under a declared batch"
+      ],
+      "observed_input_requirements": [
+        "Observed multi-donor or multi-study counts with documented biological conditions and batch overlap; paired modalities only where cells/samples are matched."
+      ],
+      "required_formats": [
+        "CITE-seq-AnnData"
+      ],
+      "native_method_requirements": [
+        "totalvi"
+      ],
+      "source_specific_decisions": [
+        "An embedding alone does not validate protein imputation; hold-outs must remain inaccessible during model fitting."
+      ],
+      "proposed_artifact_requirements": [
+        "Cell/sample/feature matches, split membership, latent coordinates/loadings, complete held-out reconstructions and batch/biology diagnostics"
+      ],
+      "deterministic_verifier_design": [
+        "Verify identity and group separation, count/layer semantics and reconstruction metrics; compare latent geometry with invariants; measure preservation and removal jointly."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-partially-paired-modality-imputation",
+      "scientific_question": "Which missing-modality predictions generalize to independently withheld observed RNA/accessibility measurements?",
+      "target_ids": [
+        "multivi"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "multivi",
+          "source_task_record_sha256": "a8074e9f20e74372fdf5732714ee37a0fbfdec11a40e5d1b9549763cf5ab6ee6",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "multivi",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-integration"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "separate paired and unpaired cells",
+        "preserve assay feature types",
+        "fit a joint RNA-accessibility model",
+        "impute missing modalities"
+      ],
+      "observed_input_requirements": [
+        "Observed multi-donor or multi-study counts with documented biological conditions and batch overlap; paired modalities only where cells/samples are matched."
+      ],
+      "required_formats": [
+        "10x-multiome-matrix"
+      ],
+      "native_method_requirements": [
+        "multivi"
+      ],
+      "source_specific_decisions": [
+        "Check imputed features and paired-cell consistency; missing assays must not be treated as measured zeros."
+      ],
+      "proposed_artifact_requirements": [
+        "Cell/sample/feature matches, split membership, latent coordinates/loadings, complete held-out reconstructions and batch/biology diagnostics"
+      ],
+      "deterministic_verifier_design": [
+        "Verify identity and group separation, count/layer semantics and reconstruction metrics; compare latent geometry with invariants; measure preservation and removal jointly."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-reference-cell-to-tissue-mapping",
+      "scientific_question": "Which cell-to-tissue mappings remain supported after observed feature matching and segmentation constraints?",
+      "target_ids": [
+        "tangram"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "tangram",
+          "source_task_record_sha256": "a64cc737a76c65134f51332bbdd5bf9b48317af0134b078c360a2319b224c18c",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "tangram",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "spatial-reference-transfer"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "align reference and spatial gene panels",
+        "incorporate segmentation constraints",
+        "fit a spatial mapping",
+        "aggregate specified cell-type signals"
+      ],
+      "observed_input_requirements": [
+        "Independent observed scRNA reference and spatial measurements with gene panel overlap and measured validation labels or held-out features."
+      ],
+      "required_formats": [
+        "H5AD",
+        "spatial-image"
+      ],
+      "native_method_requirements": [
+        "tangram"
+      ],
+      "source_specific_decisions": [
+        "Resolve source descriptions that conflate spatial RNA and accessibility; check spatial mapping mass and held-out genes."
+      ],
+      "proposed_artifact_requirements": [
+        "Shared-feature map, mixture weights, reconstruction, uncertainty, held-out predictions and validation metrics"
+      ],
+      "deterministic_verifier_design": [
+        "Check simplex/identity constraints and native fits; validate predictions against masked observed features; separate fit residuals from external biological accuracy."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-cross-platform-spatial-gene-imputation",
+      "scientific_question": "How accurately can shared components predict held-out measured spatial genes across independently observed assay platforms?",
+      "target_ids": [
+        "spage"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "spage",
+          "source_task_record_sha256": "2265f955085743c1fb4351fa14dfbe176f2883cfbb596ce2fe0d8fa5945c01fb",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "spage",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "spatial-reference-transfer"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "select anatomically matched populations",
+        "align measured genes",
+        "fit shared components",
+        "evaluate withheld measured genes",
+        "predict unmeasured spatial genes"
+      ],
+      "observed_input_requirements": [
+        "Independent observed scRNA reference and spatial measurements with gene panel overlap and measured validation labels or held-out features."
+      ],
+      "required_formats": [
+        "CSV-count-matrix",
+        "loom"
+      ],
+      "native_method_requirements": [
+        "spage"
+      ],
+      "source_specific_decisions": [
+        "Hold each target gene out of alignment and fitting; calculate correlations over matched spatial units."
+      ],
+      "proposed_artifact_requirements": [
+        "Shared-feature map, mixture weights, reconstruction, uncertainty, held-out predictions and validation metrics"
+      ],
+      "deterministic_verifier_design": [
+        "Check simplex/identity constraints and native fits; validate predictions against masked observed features; separate fit residuals from external biological accuracy."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-multi-section-spatial-domains",
+      "scientific_question": "Which tissue domains recur across observed sections under the specified graph representation and clustering rules?",
+      "target_ids": [
+        "graphst"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "graphst",
+          "source_task_record_sha256": "9d7575ef324ccc4c84f80bb725f0199b4e329ba229dd04460573ba783ac12163",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "graphst",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "spatial-expression"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "validate section and spot identities",
+        "fit graph representations across sections",
+        "cluster spatial domains",
+        "assess tissue correspondence"
+      ],
+      "observed_input_requirements": [
+        "Observed spatial coordinates, counts, image/segmentation metadata and multiple sections or samples where comparisons require replication."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "native_method_requirements": [
+        "graphst"
+      ],
+      "source_specific_decisions": [
+        "Account for domain-label permutations; tissue continuity and section boundaries constrain valid results."
+      ],
+      "proposed_artifact_requirements": [
+        "Coordinate transforms, segmentation/QC masks, H5AD, region/cell expression tables, neighborhood edges and null distributions"
+      ],
+      "deterministic_verifier_design": [
+        "Check physical units, section boundaries, segmentation-to-cell joins, geometric distances and full null-model outputs; compare images through underlying numerical artifacts."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-joint-spatial-expression-imputation",
+      "scientific_question": "How well does a joint sequencing/spatial model reconstruct held-out observed spatial expression?",
+      "target_ids": [
+        "gimvi",
+        "gimvi--data2"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "gimvi",
+          "source_task_record_sha256": "2c7810873f2681caa91d261148a7bad3369f25d33b1a121f0bd403d87e8156e6",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "gimvi",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        },
+        {
+          "task_id": "gimvi--data2",
+          "source_task_record_sha256": "90232090569ce71e056b8620c5e06f09593aea53011ed9205a226738c007486f",
+          "source_metadata_sha256": "b13de7501f18bb05671997609fec82671dbedef462d8562a9e7daa0114cbe078",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "gimvi",
+          "source_prompt_variants": [
+            "basic"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "spatial-reference-transfer"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "match genes across sequencing and spatial assays",
+        "withhold target genes",
+        "fit a joint latent model",
+        "reconstruct held-out spatial expression"
+      ],
+      "observed_input_requirements": [
+        "Independent observed scRNA reference and spatial measurements with gene panel overlap and measured validation labels or held-out features."
+      ],
+      "required_formats": [
+        "AnnData",
+        "CSV-expression-matrices"
+      ],
+      "native_method_requirements": [
+        "gimvi"
+      ],
+      "source_specific_decisions": [
+        "An embedding alone does not verify gene imputation; retain explicit withheld-gene scores and spatial identities."
+      ],
+      "proposed_artifact_requirements": [
+        "Shared-feature map, mixture weights, reconstruction, uncertainty, held-out predictions and validation metrics"
+      ],
+      "deterministic_verifier_design": [
+        "Check simplex/identity constraints and native fits; validate predictions against masked observed features; separate fit residuals from external biological accuracy."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-spatial-expression-denoising",
+      "scientific_question": "Which observed expression patterns remain after spatial denoising, and how do held-out reconstruction and tissue boundaries change?",
+      "target_ids": [
+        "sedr"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "sedr",
+          "source_task_record_sha256": "a6ae4b53eb4a1528b4854c1342a25205f1ef173b8e7c466b711f2f8b29da3127",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "sedr",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "spatial-expression"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "QC spatial counts",
+        "build spatial neighborhoods",
+        "fit denoising model",
+        "assess observed-gene reconstruction and tissue structure"
+      ],
+      "observed_input_requirements": [
+        "Observed spatial coordinates, counts, image/segmentation metadata and multiple sections or samples where comparisons require replication."
+      ],
+      "required_formats": [
+        "Visium"
+      ],
+      "native_method_requirements": [
+        "sedr"
+      ],
+      "source_specific_decisions": [
+        "Increased correlation among selected markers is not independent accuracy evidence; use held-out measured observations."
+      ],
+      "proposed_artifact_requirements": [
+        "Coordinate transforms, segmentation/QC masks, H5AD, region/cell expression tables, neighborhood edges and null distributions"
+      ],
+      "deterministic_verifier_design": [
+        "Check physical units, section boundaries, segmentation-to-cell joins, geometric distances and full null-model outputs; compare images through underlying numerical artifacts."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-histology-informed-spatial-domains",
+      "scientific_question": "Which spatial domains are supported jointly by observed expression, registered histology and a frozen tissue graph?",
+      "target_ids": [
+        "spagcn"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "spagcn",
+          "source_task_record_sha256": "9be46dc105c65203a3dd23fe1fb55be3736feacc75aeea381eb159f76bd2d00d",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "spagcn",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "biological-imaging"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "align expression, array coordinates and image pixels",
+        "construct a weighted tissue graph",
+        "infer domains",
+        "test spatially variable genes"
+      ],
+      "observed_input_requirements": [
+        "Observed microscopy/histology images with pixel size, section/subject identifiers and measured annotations; temporal images for dynamics."
+      ],
+      "required_formats": [
+        "H5AD",
+        "TIFF"
+      ],
+      "native_method_requirements": [
+        "spagcn"
+      ],
+      "source_specific_decisions": [
+        "Do not interchange array and pixel coordinates; check domains and gene-level results independently of rendered figures."
+      ],
+      "proposed_artifact_requirements": [
+        "Image/annotation manifest, masks, object tables, calibration/scale checks, replicate summaries and held-out predictions"
+      ],
+      "deterministic_verifier_design": [
+        "Mask/object overlap and geometric invariants against observed annotations; independent sample-level statistics; exact plots are secondary to validated numerical artifacts."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-microenvironment-conditioned-communication",
+      "scientific_question": "Which expression-supported interactions remain after restricting observed sender/receiver cells to comparable microenvironments?",
+      "target_ids": [
+        "cellphonedb"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "cellphonedb",
+          "source_task_record_sha256": "4cf3489673a9d76e26601e9aa3e09ff21feb34a9cb167f7ce4aae778cdbc38ea",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "cellphonedb",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "cell-communication"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "join barcodes and cell labels",
+        "load frozen interaction priors",
+        "restrict permitted microenvironments",
+        "test group-level interactions",
+        "export deconvolved results"
+      ],
+      "observed_input_requirements": [
+        "Replicated sender/receiver expression with tissue/condition labels, frozen ligand-receptor evidence and spatial measurements if proximity is claimed."
+      ],
+      "required_formats": [
+        "H5AD",
+        "TSV",
+        "interaction-database"
+      ],
+      "native_method_requirements": [
+        "cellphonedb"
+      ],
+      "source_specific_decisions": [
+        "Distinguish expression-supported interaction hypotheses from observed signaling; pin database and permutation rules."
+      ],
+      "proposed_artifact_requirements": [
+        "Eligible ligand/receptor expression, sender-receiver scores, sample-level contrasts, permutation/null results, spatial proximity evidence"
+      ],
+      "deterministic_verifier_design": [
+        "Independently recompute eligibility, complex-subunit rules, joins, null statistics and multiplicity; distinguish association from demonstrated signaling."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-correlation-based-gene-selection",
+      "scientific_question": "Which correlation-selected genes retain observed biological grouping after normalization and identifier checks?",
+      "target_ids": [
+        "deeptree"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "deeptree",
+          "source_task_record_sha256": "f5e74da13fcd5609660e51ef6c739dce95a3010d0930d7c617537f61b299785d",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "deeptree",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "gene-program-factorization"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "retain original gene identifiers",
+        "QC and normalize",
+        "estimate gene structure",
+        "select informative genes",
+        "evaluate downstream grouping"
+      ],
+      "observed_input_requirements": [
+        "Observed expression or multiomic matrices with biological sample identities, condition labels and frozen annotations."
+      ],
+      "required_formats": [
+        "10x-Matrix-Market"
+      ],
+      "native_method_requirements": [
+        "deeptree"
+      ],
+      "source_specific_decisions": [
+        "Preserve feature identity and selection scores; correlated technical variation is not automatically biological signal."
+      ],
+      "proposed_artifact_requirements": [
+        "Feature eligibility, loadings/modules, complete per-feature scores, sample-level validation, gene-set memberships and null statistics"
+      ],
+      "deterministic_verifier_design": [
+        "Independent feature score, correlation and enrichment arithmetic plus native model references; test subspaces and reconstructed data rather than arbitrary factor labels."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-single-cell-coexpression-modules",
+      "scientific_question": "Which observed gene-association modules recur across cells and biological samples under a declared graph partition?",
+      "target_ids": [
+        "scdemon"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "scdemon",
+          "source_task_record_sha256": "74728d084b037f37e6a8a82ef7f2edee3906880d9d7e7404bbe353e42a422d03",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "scdemon",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-qc-embedding"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "normalize observed counts",
+        "construct gene association graph",
+        "partition gene modules",
+        "score modules across cells"
+      ],
+      "observed_input_requirements": [
+        "Observed count matrix with feature identities, mitochondrial annotation, sample/batch labels and QC metadata; native H5AD/Matrix Market inputs."
+      ],
+      "required_formats": [
+        "AnnData"
+      ],
+      "native_method_requirements": [
+        "scdemon"
+      ],
+      "source_specific_decisions": [
+        "Declare graph threshold and module equivalence; inspect library-size confounding and preserve cell/gene identities."
+      ],
+      "proposed_artifact_requirements": [
+        "H5AD layers, cell/feature inclusion tables, normalization factors, PCA loadings, neighbor graph, cluster and QC tables"
+      ],
+      "deterministic_verifier_design": [
+        "Check counts and sparse shapes, sample joins and exclusion arithmetic; verify subspaces/graphs up to appropriate symmetries, not exact UMAP coordinates; use observed labels only where supported."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-count-model-differential-expression",
+      "scientific_question": "Which replicated expression effects persist under count filtering, negative-binomial contrasts and explicit effect shrinkage?",
+      "target_ids": [
+        "deseq2"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "deseq2",
+          "source_task_record_sha256": "2f90d7d658d3bdb0cb448a8849c3330c5d0b3cb2f3545322c53607d6028b3ce2",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "deseq2",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "rna-seq-contrast-enrichment"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "join counts to sample metadata",
+        "filter low-count genes",
+        "fit negative-binomial contrasts",
+        "perform Wald tests and fold-change shrinkage"
+      ],
+      "observed_input_requirements": [
+        "Observed counts, sample metadata and frozen annotation; biological replication for each requested contrast, with donor/block identifiers only when documented."
+      ],
+      "required_formats": [
+        "count-matrix",
+        "metadata-table"
+      ],
+      "native_method_requirements": [
+        "PyDESeq2"
+      ],
+      "source_specific_decisions": [
+        "Source uses PyDESeq2 synthetic examples and requests the count matrix as output; use independent real data and require full fitted statistics instead."
+      ],
+      "proposed_artifact_requirements": [
+        "Sample QC, filtered counts, design and contrast matrices, complete effect/uncertainty tables, all tested pathways, set membership and sensitivity comparisons"
+      ],
+      "deterministic_verifier_design": [
+        "Execute the pinned PyDESeq2 workflow required by this source; independently verify sample/design/contrast identities and multiplicity, and compare full count-model outputs within frozen numerical tolerances. R DESeq2 is an additional cross-check, not a replacement native method."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-spatial-contamination-correction",
+      "scientific_question": "Which spatial expression contrasts change after observed contamination and reference-transfer evidence are modeled?",
+      "target_ids": [
+        "resolvi"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "resolvi",
+          "source_task_record_sha256": "d91ee552004abb0cbbdd21b6e60838115a71a8f81997e65b77cdf00adda2eab4",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "resolvi",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "spatial-expression"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "partition reference and query tissue",
+        "fit unsupervised and label-informed models",
+        "transfer annotations",
+        "estimate corrected counts and contrasts"
+      ],
+      "observed_input_requirements": [
+        "Observed spatial coordinates, counts, image/segmentation metadata and multiple sections or samples where comparisons require replication."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "native_method_requirements": [
+        "resolvi"
+      ],
+      "source_specific_decisions": [
+        "Corrected counts and spatial assignment uncertainty need verification; predicted labels alone do not validate decontamination."
+      ],
+      "proposed_artifact_requirements": [
+        "Coordinate transforms, segmentation/QC masks, H5AD, region/cell expression tables, neighborhood edges and null distributions"
+      ],
+      "deterministic_verifier_design": [
+        "Check physical units, section boundaries, segmentation-to-cell joins, geometric distances and full null-model outputs; compare images through underlying numerical artifacts."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-atlas-constrained-spatial-reconstruction",
+      "scientific_question": "Which cell-position reconstructions are supported by observed expression and an independently measured spatial atlas?",
+      "target_ids": [
+        "novosparc"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "novosparc",
+          "source_task_record_sha256": "2bf12628ad7f40472633503293b845eb2371839e43c90eb000e7a6ff824516f2",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "novosparc",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "spatial-reference-transfer"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "align expression with an independent spatial atlas",
+        "choose gene representation",
+        "construct a target geometry",
+        "fit cell-to-position transport"
+      ],
+      "observed_input_requirements": [
+        "Independent observed scRNA reference and spatial measurements with gene panel overlap and measured validation labels or held-out features."
+      ],
+      "required_formats": [
+        "TSV-expression",
+        "TSV-coordinates"
+      ],
+      "native_method_requirements": [
+        "novosparc"
+      ],
+      "source_specific_decisions": [
+        "Spatial reconstruction is underdetermined; verify transport constraints and held-out spatial markers."
+      ],
+      "proposed_artifact_requirements": [
+        "Shared-feature map, mixture weights, reconstruction, uncertainty, held-out predictions and validation metrics"
+      ],
+      "deterministic_verifier_design": [
+        "Check simplex/identity constraints and native fits; validate predictions against masked observed features; separate fit residuals from external biological accuracy."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-ligand-receptor-network-inference",
+      "scientific_question": "Which sender-receiver pathways remain supported by observed expression under a frozen interaction prior?",
+      "target_ids": [
+        "cellchat",
+        "cellchat--data2"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "cellchat",
+          "source_task_record_sha256": "fe7dbc475df344ecd22e5b50994301149e1370bc527efde5f69dac5a3c08a056",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "cellchat",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        },
+        {
+          "task_id": "cellchat--data2",
+          "source_task_record_sha256": "4ff81b04a980bf1979351bdeb999033ae8bd7681bbb4287d7ab802aeeb9d7e6f",
+          "source_metadata_sha256": "b13de7501f18bb05671997609fec82671dbedef462d8562a9e7daa0114cbe078",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "cellchat",
+          "source_prompt_variants": [
+            "basic"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "cell-communication"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "join expression and cell groups",
+        "restrict signaling genes to a frozen prior",
+        "infer group-level interactions",
+        "aggregate pathway networks"
+      ],
+      "observed_input_requirements": [
+        "Replicated sender/receiver expression with tissue/condition labels, frozen ligand-receptor evidence and spatial measurements if proximity is claimed."
+      ],
+      "required_formats": [
+        "RData",
+        "JSON-spatial-scale-factors"
+      ],
+      "native_method_requirements": [
+        "cellchat"
+      ],
+      "source_specific_decisions": [
+        "Group size, expression eligibility and species-specific priors affect the network; inferred edges are hypotheses."
+      ],
+      "proposed_artifact_requirements": [
+        "Eligible ligand/receptor expression, sender-receiver scores, sample-level contrasts, permutation/null results, spatial proximity evidence"
+      ],
+      "deterministic_verifier_design": [
+        "Independently recompute eligibility, complex-subunit rules, joins, null statistics and multiplicity; distinguish association from demonstrated signaling."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-rna-protein-cell-characterization",
+      "scientific_question": "Which cell identities are supported jointly by observed RNA and antibody measurements after assay-specific normalization?",
+      "target_ids": [
+        "seurat-1"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "seurat-1",
+          "source_task_record_sha256": "84aa59b7305f68eb8a5a8c55debc41fc4774898e49fd340960bc95016e313010",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "seurat-1",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-annotation"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "join RNA and antibody counts by cell",
+        "normalize assays separately",
+        "cluster transcriptomes",
+        "identify protein markers per population"
+      ],
+      "observed_input_requirements": [
+        "Independent observed single-cell data plus frozen marker/reference evidence and hierarchical labels; distinguish measured labels from inferred identities."
+      ],
+      "required_formats": [
+        "CSV-gzip-RNA",
+        "CSV-gzip-ADT"
+      ],
+      "native_method_requirements": [
+        "seurat"
+      ],
+      "source_specific_decisions": [
+        "Preserve feature modalities and antibody background; a visualization is not a numerical endpoint."
+      ],
+      "proposed_artifact_requirements": [
+        "Marker statistics, cell-by-label scores, hierarchy-consistent annotations, abstentions, detection denominators, cross-study confusion tables"
+      ],
+      "deterministic_verifier_design": [
+        "Independent marker/count calculations; deterministic classifier or prespecified score contract; evaluate label agreement where external labels exist, and grade evidence consistency elsewhere."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-reference-to-spatial-label-transfer",
+      "scientific_question": "Which transferred spatial cell labels retain independent marker and condition support after reference integration?",
+      "target_ids": [
+        "seurat-2"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "seurat-2",
+          "source_task_record_sha256": "d06e8b5ff6c49c70032f2401f53025b779841c15a395c9afebea2071a9682b65",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "seurat-2",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "spatial-reference-transfer"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "prepare spatial and reference objects",
+        "compare unintegrated populations",
+        "transfer or integrate reference information",
+        "assess conserved markers and condition contrasts"
+      ],
+      "observed_input_requirements": [
+        "Independent observed scRNA reference and spatial measurements with gene panel overlap and measured validation labels or held-out features."
+      ],
+      "required_formats": [
+        "Seurat-RDS",
+        "Slide-seq"
+      ],
+      "native_method_requirements": [
+        "seurat"
+      ],
+      "source_specific_decisions": [
+        "Spatial spots and reference cells are different sampling units; preserve transfer uncertainty and biological replication."
+      ],
+      "proposed_artifact_requirements": [
+        "Shared-feature map, mixture weights, reconstruction, uncertainty, held-out predictions and validation metrics"
+      ],
+      "deterministic_verifier_design": [
+        "Check simplex/identity constraints and native fits; validate predictions against masked observed features; separate fit residuals from external biological accuracy."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-count-variance-stabilization",
+      "scientific_question": "How does native count variance stabilization change depth dependence and biological representation in observed cells?",
+      "target_ids": [
+        "sctransform",
+        "sctransform--data2"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "sctransform",
+          "source_task_record_sha256": "e4a794582cdce86dae67c6523ec10b0deec42493114ee0db7d976f4e2713c344",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "sctransform",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        },
+        {
+          "task_id": "sctransform--data2",
+          "source_task_record_sha256": "113a456aa7e016487019ea0e9857058b4e50b0eecbfd2fca125d321db6c38c75",
+          "source_metadata_sha256": "b13de7501f18bb05671997609fec82671dbedef462d8562a9e7daa0114cbe078",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "sctransform",
+          "source_prompt_variants": [
+            "basic"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "rna-seq-contrast-enrichment"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "retain UMI counts and technical covariates",
+        "fit regularized count models",
+        "obtain residuals",
+        "select features and representations"
+      ],
+      "observed_input_requirements": [
+        "Observed counts, sample metadata and frozen annotation; biological replication for each requested contrast, with donor/block identifiers only when documented."
+      ],
+      "required_formats": [
+        "10x-Matrix-Market"
+      ],
+      "native_method_requirements": [
+        "sctransform"
+      ],
+      "source_specific_decisions": [
+        "Residual normalization and UMAP are distinct endpoints; check gene/cell indexing and mean-variance behavior.",
+        "This additional dataset case requests the normalized residual matrix; the main case requests dimensionality reduction. Preserve that endpoint difference."
+      ],
+      "proposed_artifact_requirements": [
+        "Sample QC, filtered counts, design and contrast matrices, complete effect/uncertainty tables, all tested pathways, set membership and sensitivity comparisons"
+      ],
+      "deterministic_verifier_design": [
+        "Native DESeq2/edgeR reference plus independent contrast, multiplicity and set checks; retain every gene and pathway, including undefined estimates; test interaction directly."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-distribution-aware-gene-selection",
+      "scientific_question": "Which genes show nonuniform expression across an observed embedding after explicit null and discovery-rate checks?",
+      "target_ids": [
+        "singlecellhaystack"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "singlecellhaystack",
+          "source_task_record_sha256": "b8464f4090c12cfd1062012241a8009a0fc45648e8f871e3256040dfea6989c7",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "singlecellhaystack",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "gene-program-factorization"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "prepare expression and low-dimensional coordinates",
+        "test nonuniform expression distributions",
+        "control false discovery",
+        "cluster gene patterns"
+      ],
+      "observed_input_requirements": [
+        "Observed expression or multiomic matrices with biological sample identities, condition labels and frozen annotations."
+      ],
+      "required_formats": [
+        "RData"
+      ],
+      "native_method_requirements": [
+        "singlecellhaystack"
+      ],
+      "source_specific_decisions": [
+        "Declare coordinate construction and gene universe; high dispersion alone is not the spatial-distribution test."
+      ],
+      "proposed_artifact_requirements": [
+        "Feature eligibility, loadings/modules, complete per-feature scores, sample-level validation, gene-set memberships and null statistics"
+      ],
+      "deterministic_verifier_design": [
+        "Independent feature score, correlation and enrichment arithmetic plus native model references; test subspaces and reconstructed data rather than arbitrary factor labels."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-projective-factor-gene-selection",
+      "scientific_question": "Which informative genes remain after nonnegative factorization and removal of depth-associated factors?",
+      "target_ids": [
+        "scpnmf"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "scpnmf",
+          "source_task_record_sha256": "e83b4144d319aec674c9798dc79c654a654a20f5a87b38c067d4a887d403e9a5",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "scpnmf",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "gene-program-factorization"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "prepare expression counts",
+        "fit nonnegative projective factors",
+        "remove depth-associated factors",
+        "select informative gene loadings"
+      ],
+      "observed_input_requirements": [
+        "Observed expression or multiomic matrices with biological sample identities, condition labels and frozen annotations."
+      ],
+      "required_formats": [
+        "R-SingleCellExperiment"
+      ],
+      "native_method_requirements": [
+        "scpnmf"
+      ],
+      "source_specific_decisions": [
+        "Use stable factor equivalence and preserve gene IDs; factor rotations/order cannot be graded as exact array identities."
+      ],
+      "proposed_artifact_requirements": [
+        "Feature eligibility, loadings/modules, complete per-feature scores, sample-level validation, gene-set memberships and null statistics"
+      ],
+      "deterministic_verifier_design": [
+        "Independent feature score, correlation and enrichment arithmetic plus native model references; test subspaces and reconstructed data rather than arbitrary factor labels."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-deviance-based-feature-selection",
+      "scientific_question": "Which observed genes lead multinomial-deviance rankings, and how do count-aware components differ from transformed-count PCA?",
+      "target_ids": [
+        "scry"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "scry",
+          "source_task_record_sha256": "99e8e333f2b6d60b8e91a60bbb643256af9b6d3511bd72f24935f528689539ea",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "scry",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-qc-embedding"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "retain observed counts",
+        "compute multinomial deviance",
+        "rank features",
+        "fit count-aware components or null residuals"
+      ],
+      "observed_input_requirements": [
+        "Observed count matrix with feature identities, mitochondrial annotation, sample/batch labels and QC metadata; native H5AD/Matrix Market inputs."
+      ],
+      "required_formats": [
+        "R-SingleCellExperiment"
+      ],
+      "native_method_requirements": [
+        "scry"
+      ],
+      "source_specific_decisions": [
+        "Declare likelihood and library-size offsets; do not substitute transformed variance for count deviance."
+      ],
+      "proposed_artifact_requirements": [
+        "H5AD layers, cell/feature inclusion tables, normalization factors, PCA loadings, neighbor graph, cluster and QC tables"
+      ],
+      "deterministic_verifier_design": [
+        "Check counts and sparse shapes, sample joins and exclusion arithmetic; verify subspaces/graphs up to appropriate symmetries, not exact UMAP coordinates; use observed labels only where supported."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-trajectory-associated-gene-selection",
+      "scientific_question": "Which genes vary along an observed-data trajectory under a prespecified representation and association model?",
+      "target_ids": [
+        "scorpius"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "scorpius",
+          "source_task_record_sha256": "2f63480db14b90ffdc3bf1b0351a8b635b76b5b665051618c3cad1d5422e5bb6",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "scorpius",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-trajectory"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "use the provided processed layer",
+        "infer a low-dimensional trajectory",
+        "rank trajectory-associated genes",
+        "export selected features"
+      ],
+      "observed_input_requirements": [
+        "Observed developmental or perturbation time course with biological replication; spliced/unspliced counts or lineage evidence only for endpoints requiring them."
+      ],
+      "required_formats": [
+        "R-expression-object"
+      ],
+      "native_method_requirements": [
+        "scorpius"
+      ],
+      "source_specific_decisions": [
+        "Avoid reprocessing an already transformed layer; account for trajectory reversal and cell identity."
+      ],
+      "proposed_artifact_requirements": [
+        "State graph, root evidence, pseudotime/fate matrices, full gene/regulon tests, biological-validation tables"
+      ],
+      "deterministic_verifier_design": [
+        "Verify graph/ordering invariants and native outputs with seeded tolerances; independently check associations with held-out observed time/lineage evidence; do not grade causality from expression."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "portfolio-liu-single-cell-ligand-to-target-prioritization",
+      "scientific_question": "Which ligand hypotheses explain independently observed receiver-cell responses under a frozen ligand-target prior and expressed-gene background?",
+      "target_ids": [
+        "nichenet"
+      ],
+      "source_endpoint_evidence": [
+        {
+          "task_id": "nichenet",
+          "source_task_record_sha256": "f225f3d745ea9e6876f7cac7860beed4c8dfc4439e4508881c70fc6b3b65b602",
+          "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+          "source_suggested_tools": [],
+          "shared_workflow_group": "nichenet",
+          "source_prompt_variants": [
+            "basic",
+            "intermediate",
+            "advanced"
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "ligand-structure-affinity"
+      ],
+      "source_inspection_tiers": [
+        "task-description-reviewed"
+      ],
+      "required_endpoint_stages": [
+        "define sender and receiver populations",
+        "derive condition-associated receiver genes",
+        "freeze expressed-gene background",
+        "score ligand activity",
+        "link ligand, receptor and target evidence"
+      ],
+      "observed_input_requirements": [
+        "Observed PDB/mmCIF structures with biological assembly, ligand identity, alternate locations, protonation assumptions and measured affinity where available."
+      ],
+      "required_formats": [
+        "Seurat-RDS",
+        "network-RDS"
+      ],
+      "native_method_requirements": [
+        "nichenet"
+      ],
+      "source_specific_decisions": [
+        "Preserve receiver-specific gene universe and contrast identity; prior-supported ligand activity does not prove signaling causality."
+      ],
+      "proposed_artifact_requirements": [
+        "Native structures, ligand/residue mapping, atom/contact tables, descriptor/ranking outputs and assay comparison"
+      ],
+      "deterministic_verifier_design": [
+        "Independent coordinate/contact calculations and native structural parsing; distinguish a docking score from measured affinity; deterministic invariants for equivalent atom ordering."
+      ],
+      "status": "question-proposal-input-and-contract-decisions-pending",
+      "validated_new_mappings": 0
+    }
+  ],
+  "excluded": []
+}

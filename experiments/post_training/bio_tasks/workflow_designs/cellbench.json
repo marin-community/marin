@@ -1,0 +1,1070 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-09-24T15:12:07.448098+00:00",
+  "scope": "Benchmark-wide question planning only; no implementation, source biological fixture reuse, or validated coverage added.",
+  "source": {
+    "benchmark": "CellBench",
+    "inventory_path": "benchmark_tasks/cellbench.json",
+    "inventory_sha256": "3269a79bf813494be6679a5c45ca16b21d798f2cca7d1536b7dd5a6421f21536",
+    "source_revision": "5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b"
+  },
+  "defaults": {
+    "data": "Independent observed biological inputs with pinned rights, provenance and transformations. A corpus train split can contain a task-internal held-out evaluation; task-internal labels remain private.",
+    "acceptance": "Freeze complete output schemas, identity and eligibility rules, numerical or metric criteria and independent checks before solver evaluation. No LLM judge.",
+    "reference": "Native package scripts read the supplied observations; a passing reference proves feasibility, not that every model must produce identical predictions.",
+    "runtime": "Bound a scientifically meaningful question for a measured <=30-minute solve. Publish any preprocessing/start-boundary adaptation and do not claim stages that the task does not execute.",
+    "status": "Context-inspired adaptation planning only; source planning-quality objective remains unsupported."
+  },
+  "questions": [
+    {
+      "proposed_id": "cellbench-adaptation-tumor-state-characterization",
+      "scientific_question": "Which malignant and nonmalignant expression states remain reproducible across observed tumors after donor-aware QC and composition checks?",
+      "target_ids": [
+        "0",
+        "28",
+        "31",
+        "32",
+        "38"
+      ],
+      "source_contexts": [
+        {
+          "task_id": "0",
+          "source_task_record_sha256": "27e32a52748758c4886b2a41fae4cb941d1b075024082a7ac93c1b96e448761a",
+          "setting": "oral-tumor-cellular-heterogeneity",
+          "decisions": [
+            "Keep anatomical site and co-occurring fibrosis distinct from inferred cell states."
+          ]
+        },
+        {
+          "task_id": "28",
+          "source_task_record_sha256": "ecc09973717ff74b99ffb6577dbe09c3680864de791591bf1e7ca7c1818e6426",
+          "setting": "cervical-tumor-cell-heterogeneity",
+          "decisions": [
+            "Cell-state associations alone do not establish clinical prognostic value or therapeutic efficacy."
+          ]
+        },
+        {
+          "task_id": "31",
+          "source_task_record_sha256": "05dbf59c37ec955fe6fd29190b42ce099e16b66a7186976891c7327655417b39",
+          "setting": "lung-adenocarcinoma-cell-context",
+          "decisions": [
+            "Separate malignant-cell variation from microenvironment composition and donor-level clinical associations."
+          ]
+        },
+        {
+          "task_id": "32",
+          "source_task_record_sha256": "c946ee4ae5f28f4d71448344cd0cdad064cad90771b991be3850f139631444f0",
+          "setting": "nasopharyngeal-tumor-cell-context",
+          "decisions": [
+            "Preserve sample identity and distinguish cell-state expression from bulk composition effects."
+          ]
+        },
+        {
+          "task_id": "38",
+          "source_task_record_sha256": "9a43f63d3448f2989248363bf93c2c98d2496a373f1ac18dc2f95f9a3fc8dca0",
+          "setting": "lung-squamous-tumor-cell-context",
+          "decisions": [
+            "Keep tumor stage and clinical sampling distinct from inferred cell interactions."
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-annotation"
+      ],
+      "inspection_tier": "public-research-context-reviewed-expected-analysis-lists-excluded",
+      "relationship": "context-inspired-executed-analysis-not-equivalent-to-source-planning-objective",
+      "observed_input_requirements": [
+        "Independently observed single-cell or single-nucleus counts in H5AD or MTX with feature annotation, cell/sample/donor IDs, recorded context and sufficient biological replication for the proposed estimand.",
+        "Use only modalities actually observed; preserve paired sites, longitudinal identities, ortholog mappings and measured time where the question requires them."
+      ],
+      "proposed_artifact_requirements": [
+        "Typed analysis contract: measured variables, biological unit, estimand, comparison, eligibility, covariance design and declared limits.",
+        "Complete sample/cell eligibility, sample-level effect or prediction tables, feature universe and frozen numerical evidence supporting each claim."
+      ],
+      "deterministic_verifier_design": [
+        "Check input schema, rank/estimability of the design, all biological IDs and complete output artifacts against a private native oracle.",
+        "Check every quantitative claim against its artifact; fixed contract constraints grade execution and explicit assumptions, not whether a free-form analysis idea is scientifically the best possible proposal."
+      ],
+      "coverage_limit": "Do not promote these 50 source planning cases to fully covered solely because an executed adaptation passes. Faithful acceptance of arbitrary analysis proposals without an LLM judge remains unresolved.",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "cellbench-adaptation-condition-specific-cell-responses",
+      "scientific_question": "Which cell-type-specific host or tissue responses associate with the observed condition after donor and sampling-context adjustment?",
+      "target_ids": [
+        "1",
+        "12",
+        "25",
+        "27",
+        "39",
+        "48"
+      ],
+      "source_contexts": [
+        {
+          "task_id": "1",
+          "source_task_record_sha256": "8aa01bcd4643e557b7078d059c69e7e665b1e0e820a2a056c2836867af9874ea",
+          "setting": "placental-host-cell-responses",
+          "decisions": [
+            "Preserve gestational age, donor and placental cell lineage; restrict adaptation to analysis of measured host-cell responses."
+          ]
+        },
+        {
+          "task_id": "12",
+          "source_task_record_sha256": "c5c22e5363e2523967de065f69f30cf7837a837c28cbedad253473772d03e363",
+          "setting": "myocarditis-tissue-conditions",
+          "decisions": [
+            "Distinguish observed inflammatory etiologies and clinical covariates without inferring causality from cell expression."
+          ]
+        },
+        {
+          "task_id": "25",
+          "source_task_record_sha256": "3b4b5455bffe00ff83dce03207ae153cabc8c194fc13fa7483fce33259f03258",
+          "setting": "covid19-lung-cell-pathology",
+          "decisions": [
+            "Separate measured host-cell pathology from clinical severity, treatment and sampling effects."
+          ]
+        },
+        {
+          "task_id": "27",
+          "source_task_record_sha256": "68d6a61e7c7e5208dad9a0124be471fe01373b98c69a2cd7f300262a9f9cc0d4",
+          "setting": "plant-cell-defense-transcriptomics",
+          "decisions": [
+            "Limit adaptation to observed plant host-defense expression; preserve tissue, time and biological replication."
+          ]
+        },
+        {
+          "task_id": "39",
+          "source_task_record_sha256": "f4ab4aba26d67df3da0904bd14351e698c4fbe5e740d959a431d4bcc6e09fda7",
+          "setting": "psoriasis-ex-vivo-immune-cell-states",
+          "decisions": [
+            "Ex-vivo cell emigration can alter sampled composition and expression; retain culture and donor context."
+          ]
+        },
+        {
+          "task_id": "48",
+          "source_task_record_sha256": "fc79937feea6aaf45318a02dede668c3ba5d94664f3c74c0c7ff83649f7fe194",
+          "setting": "acute-kidney-injury-subtypes",
+          "decisions": [
+            "Distinguish injury subtype and clinical covariates from cell-intrinsic responses."
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-pseudobulk"
+      ],
+      "inspection_tier": "public-research-context-reviewed-expected-analysis-lists-excluded",
+      "relationship": "context-inspired-executed-analysis-not-equivalent-to-source-planning-objective",
+      "observed_input_requirements": [
+        "Independently observed single-cell or single-nucleus counts in H5AD or MTX with feature annotation, cell/sample/donor IDs, recorded context and sufficient biological replication for the proposed estimand.",
+        "Use only modalities actually observed; preserve paired sites, longitudinal identities, ortholog mappings and measured time where the question requires them."
+      ],
+      "proposed_artifact_requirements": [
+        "Typed analysis contract: measured variables, biological unit, estimand, comparison, eligibility, covariance design and declared limits.",
+        "Complete sample/cell eligibility, sample-level effect or prediction tables, feature universe and frozen numerical evidence supporting each claim."
+      ],
+      "deterministic_verifier_design": [
+        "Check input schema, rank/estimability of the design, all biological IDs and complete output artifacts against a private native oracle.",
+        "Check every quantitative claim against its artifact; fixed contract constraints grade execution and explicit assumptions, not whether a free-form analysis idea is scientifically the best possible proposal."
+      ],
+      "coverage_limit": "Do not promote these 50 source planning cases to fully covered solely because an executed adaptation passes. Faithful acceptance of arbitrary analysis proposals without an LLM judge remains unresolved.",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "cellbench-adaptation-developmental-cell-state-comparison",
+      "scientific_question": "Which observed cell states and programs differ across recorded developmental stages after biological-sample and batch checks?",
+      "target_ids": [
+        "2",
+        "10",
+        "29",
+        "37"
+      ],
+      "source_contexts": [
+        {
+          "task_id": "2",
+          "source_task_record_sha256": "c9bf736e2f048647a017ef55e6ec4f9772a2c2f2e6f04e47de1bc237d40b0127",
+          "setting": "human-fetal-kidney-development",
+          "decisions": [
+            "Separate human observations from mouse-derived developmental assumptions."
+          ]
+        },
+        {
+          "task_id": "10",
+          "source_task_record_sha256": "5a86391ff5bfe5d86da46ae688788d60dcb46d9b4052eda03dc250177755a20c",
+          "setting": "neonatal-lung-cell-maturation",
+          "decisions": [
+            "Establish the observed developmental range before inferring maturation or ordering states."
+          ]
+        },
+        {
+          "task_id": "29",
+          "source_task_record_sha256": "c51dd72773f7678ff55ea0718270bb699a00db297c4bafb1eb1d82c39320436f",
+          "setting": "developing-mouse-cortical-cell-atlas",
+          "decisions": [
+            "Align sampled developmental stages and distinguish inferred ordering from longitudinal measurement."
+          ]
+        },
+        {
+          "task_id": "37",
+          "source_task_record_sha256": "43ccb4799b2957d56b9491751e2cf23bae4b56898e57e1686948c30f1fbb7b23",
+          "setting": "fetal-skin-immune-development",
+          "decisions": [
+            "Retain gestational age and rare-cell sampling limits before trajectory or program analysis."
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-trajectory"
+      ],
+      "inspection_tier": "public-research-context-reviewed-expected-analysis-lists-excluded",
+      "relationship": "context-inspired-executed-analysis-not-equivalent-to-source-planning-objective",
+      "observed_input_requirements": [
+        "Independently observed single-cell or single-nucleus counts in H5AD or MTX with feature annotation, cell/sample/donor IDs, recorded context and sufficient biological replication for the proposed estimand.",
+        "Use only modalities actually observed; preserve paired sites, longitudinal identities, ortholog mappings and measured time where the question requires them."
+      ],
+      "proposed_artifact_requirements": [
+        "Typed analysis contract: measured variables, biological unit, estimand, comparison, eligibility, covariance design and declared limits.",
+        "Complete sample/cell eligibility, sample-level effect or prediction tables, feature universe and frozen numerical evidence supporting each claim."
+      ],
+      "deterministic_verifier_design": [
+        "Check input schema, rank/estimability of the design, all biological IDs and complete output artifacts against a private native oracle.",
+        "Check every quantitative claim against its artifact; fixed contract constraints grade execution and explicit assumptions, not whether a free-form analysis idea is scientifically the best possible proposal."
+      ],
+      "coverage_limit": "Do not promote these 50 source planning cases to fully covered solely because an executed adaptation passes. Faithful acceptance of arbitrary analysis proposals without an LLM judge remains unresolved.",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "cellbench-adaptation-longitudinal-immune-cell-comparison",
+      "scientific_question": "Which immune-cell abundance and expression changes associate with a recorded longitudinal outcome within repeatedly sampled patients?",
+      "target_ids": [
+        "3"
+      ],
+      "source_contexts": [
+        {
+          "task_id": "3",
+          "source_task_record_sha256": "da04008323c3ff07fc2ed6ec3973294b80b286217b108ccd57b064a89058a8f6",
+          "setting": "post-car-t-prolonged-cytopenia",
+          "decisions": [
+            "Align treatment timing and patient outcomes; post-treatment association does not establish a mechanism of cytopenia."
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-composition"
+      ],
+      "inspection_tier": "public-research-context-reviewed-expected-analysis-lists-excluded",
+      "relationship": "context-inspired-executed-analysis-not-equivalent-to-source-planning-objective",
+      "observed_input_requirements": [
+        "Independently observed single-cell or single-nucleus counts in H5AD or MTX with feature annotation, cell/sample/donor IDs, recorded context and sufficient biological replication for the proposed estimand.",
+        "Use only modalities actually observed; preserve paired sites, longitudinal identities, ortholog mappings and measured time where the question requires them."
+      ],
+      "proposed_artifact_requirements": [
+        "Typed analysis contract: measured variables, biological unit, estimand, comparison, eligibility, covariance design and declared limits.",
+        "Complete sample/cell eligibility, sample-level effect or prediction tables, feature universe and frozen numerical evidence supporting each claim."
+      ],
+      "deterministic_verifier_design": [
+        "Check input schema, rank/estimability of the design, all biological IDs and complete output artifacts against a private native oracle.",
+        "Check every quantitative claim against its artifact; fixed contract constraints grade execution and explicit assumptions, not whether a free-form analysis idea is scientifically the best possible proposal."
+      ],
+      "coverage_limit": "Do not promote these 50 source planning cases to fully covered solely because an executed adaptation passes. Faithful acceptance of arbitrary analysis proposals without an LLM judge remains unresolved.",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "cellbench-adaptation-paired-tissue-condition-comparison",
+      "scientific_question": "Which cell composition and within-cell-type effects differ between paired tissue conditions after retaining donor identity and anatomical context?",
+      "target_ids": [
+        "4",
+        "24",
+        "40",
+        "42",
+        "46"
+      ],
+      "source_contexts": [
+        {
+          "task_id": "4",
+          "source_task_record_sha256": "ebb673bbffaf06cce0ba2f84bb7245a1ef9aa3039a22e7daf0ebc81e0fb10340",
+          "setting": "crohn-disease-across-intestinal-sites",
+          "decisions": [
+            "Retain paired inflamed and non-inflamed sites, anatomical location and patient identity."
+          ]
+        },
+        {
+          "task_id": "24",
+          "source_task_record_sha256": "06e2d8aa369c28384a8b8a9e217cb9b1e48ab9b83ecb8dfaadc4bc532ecc3b3b",
+          "setting": "endometriosis-lesion-cell-heterogeneity",
+          "decisions": [
+            "Keep lesion class, anatomical site, menstrual context and donor identity explicit."
+          ]
+        },
+        {
+          "task_id": "40",
+          "source_task_record_sha256": "f475e75468bb1cd5b8bf6506c6d6c509d25dc54569d1690fa529504992bc5400",
+          "setting": "matched-head-neck-primary-and-metastatic-tumors",
+          "decisions": [
+            "Control paired patient identity and cellular composition before assigning metastatic expression effects."
+          ]
+        },
+        {
+          "task_id": "42",
+          "source_task_record_sha256": "8736d0a9b7f3d26c13045528ebfd79469b3e70fb82d9c1703a53c8f17c3e727f",
+          "setting": "small-cell-lung-cancer-primary-and-relapse",
+          "decisions": [
+            "Preserve patient pairing, relapse and treatment status; disease compartments may be unbalanced."
+          ]
+        },
+        {
+          "task_id": "46",
+          "source_task_record_sha256": "c589cd36289301fbc3183b9e61f46b185939729afa3d67ef9f95fb5fbb2f9f16",
+          "setting": "diabetic-foot-ulcer-healing-and-systemic-context",
+          "decisions": [
+            "Retain healing outcome, diabetes controls, matched tissue sites and patient identity."
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-pseudobulk"
+      ],
+      "inspection_tier": "public-research-context-reviewed-expected-analysis-lists-excluded",
+      "relationship": "context-inspired-executed-analysis-not-equivalent-to-source-planning-objective",
+      "observed_input_requirements": [
+        "Independently observed single-cell or single-nucleus counts in H5AD or MTX with feature annotation, cell/sample/donor IDs, recorded context and sufficient biological replication for the proposed estimand.",
+        "Use only modalities actually observed; preserve paired sites, longitudinal identities, ortholog mappings and measured time where the question requires them."
+      ],
+      "proposed_artifact_requirements": [
+        "Typed analysis contract: measured variables, biological unit, estimand, comparison, eligibility, covariance design and declared limits.",
+        "Complete sample/cell eligibility, sample-level effect or prediction tables, feature universe and frozen numerical evidence supporting each claim."
+      ],
+      "deterministic_verifier_design": [
+        "Check input schema, rank/estimability of the design, all biological IDs and complete output artifacts against a private native oracle.",
+        "Check every quantitative claim against its artifact; fixed contract constraints grade execution and explicit assumptions, not whether a free-form analysis idea is scientifically the best possible proposal."
+      ],
+      "coverage_limit": "Do not promote these 50 source planning cases to fully covered solely because an executed adaptation passes. Faithful acceptance of arbitrary analysis proposals without an LLM judge remains unresolved.",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "cellbench-adaptation-cross-tissue-cell-state-comparison",
+      "scientific_question": "Which cell-state differences replicate across independently observed tissues after donor and cell-composition adjustment?",
+      "target_ids": [
+        "5",
+        "19"
+      ],
+      "source_contexts": [
+        {
+          "task_id": "5",
+          "source_task_record_sha256": "24b868f5e072657aad21e73ed4729fac200c37e53d6fad552934ec983062ce97",
+          "setting": "healthy-tissue-t-cell-states",
+          "decisions": [
+            "Separate activation and residence signatures from tissue composition and donor effects."
+          ]
+        },
+        {
+          "task_id": "19",
+          "source_task_record_sha256": "d85d31a1ac4929ebf512681c4cea007f3e62535793f2c766fe566a22e1f69ac0",
+          "setting": "adult-intestinal-segment-atlas",
+          "decisions": [
+            "Retain ileum, colon and rectum identity and donor effects in segment comparisons."
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-annotation"
+      ],
+      "inspection_tier": "public-research-context-reviewed-expected-analysis-lists-excluded",
+      "relationship": "context-inspired-executed-analysis-not-equivalent-to-source-planning-objective",
+      "observed_input_requirements": [
+        "Independently observed single-cell or single-nucleus counts in H5AD or MTX with feature annotation, cell/sample/donor IDs, recorded context and sufficient biological replication for the proposed estimand.",
+        "Use only modalities actually observed; preserve paired sites, longitudinal identities, ortholog mappings and measured time where the question requires them."
+      ],
+      "proposed_artifact_requirements": [
+        "Typed analysis contract: measured variables, biological unit, estimand, comparison, eligibility, covariance design and declared limits.",
+        "Complete sample/cell eligibility, sample-level effect or prediction tables, feature universe and frozen numerical evidence supporting each claim."
+      ],
+      "deterministic_verifier_design": [
+        "Check input schema, rank/estimability of the design, all biological IDs and complete output artifacts against a private native oracle.",
+        "Check every quantitative claim against its artifact; fixed contract constraints grade execution and explicit assumptions, not whether a free-form analysis idea is scientifically the best possible proposal."
+      ],
+      "coverage_limit": "Do not promote these 50 source planning cases to fully covered solely because an executed adaptation passes. Faithful acceptance of arbitrary analysis proposals without an LLM judge remains unresolved.",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "cellbench-adaptation-disease-stage-cell-state-comparison",
+      "scientific_question": "Which cell-state associations differ across observed disease stages without interpreting cross-sectional ordering as measured progression?",
+      "target_ids": [
+        "6",
+        "30",
+        "36"
+      ],
+      "source_contexts": [
+        {
+          "task_id": "6",
+          "source_task_record_sha256": "85e24107ba3745c314a09aae3134ceb2d3de4aa78bce98b9d3c73c453c53826e",
+          "setting": "dental-pulp-inflammation-and-repair",
+          "decisions": [
+            "Preserve lesion stage and sampling context; rare immune populations require adequate observed support."
+          ]
+        },
+        {
+          "task_id": "30",
+          "source_task_record_sha256": "402b74f516108daf44d24d9213435df33e64c846f9a77dfc8a296383b1025eff",
+          "setting": "thyroid-cancer-cell-state-progression",
+          "decisions": [
+            "Cross-sectional tumor states do not prove transformation trajectories or cell ancestry."
+          ]
+        },
+        {
+          "task_id": "36",
+          "source_task_record_sha256": "04079205e8db081f363f607f86232c2a55f0dc8ed356df53524a8b5c6ad94f3c",
+          "setting": "pancreatic-precursor-to-cancer-cell-states",
+          "decisions": [
+            "Preserve histologic grade and donor sampling; inferred progression needs independent evidence."
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-annotation"
+      ],
+      "inspection_tier": "public-research-context-reviewed-expected-analysis-lists-excluded",
+      "relationship": "context-inspired-executed-analysis-not-equivalent-to-source-planning-objective",
+      "observed_input_requirements": [
+        "Independently observed single-cell or single-nucleus counts in H5AD or MTX with feature annotation, cell/sample/donor IDs, recorded context and sufficient biological replication for the proposed estimand.",
+        "Use only modalities actually observed; preserve paired sites, longitudinal identities, ortholog mappings and measured time where the question requires them."
+      ],
+      "proposed_artifact_requirements": [
+        "Typed analysis contract: measured variables, biological unit, estimand, comparison, eligibility, covariance design and declared limits.",
+        "Complete sample/cell eligibility, sample-level effect or prediction tables, feature universe and frozen numerical evidence supporting each claim."
+      ],
+      "deterministic_verifier_design": [
+        "Check input schema, rank/estimability of the design, all biological IDs and complete output artifacts against a private native oracle.",
+        "Check every quantitative claim against its artifact; fixed contract constraints grade execution and explicit assumptions, not whether a free-form analysis idea is scientifically the best possible proposal."
+      ],
+      "coverage_limit": "Do not promote these 50 source planning cases to fully covered solely because an executed adaptation passes. Faithful acceptance of arbitrary analysis proposals without an LLM judge remains unresolved.",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "cellbench-adaptation-cross-species-developmental-comparison",
+      "scientific_question": "Which developmental cell programs agree across observed species after matching orthologs, cell types and recorded developmental stages?",
+      "target_ids": [
+        "7"
+      ],
+      "source_contexts": [
+        {
+          "task_id": "7",
+          "source_task_record_sha256": "bd659f8f0db9cb35439b18eb7a02331d576d869ed3f71e1fc4eb048bb162b7b3",
+          "setting": "human-spinal-cord-development",
+          "decisions": [
+            "Align developmental stages and orthologs before interpreting human-specific cell programs."
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-trajectory"
+      ],
+      "inspection_tier": "public-research-context-reviewed-expected-analysis-lists-excluded",
+      "relationship": "context-inspired-executed-analysis-not-equivalent-to-source-planning-objective",
+      "observed_input_requirements": [
+        "Independently observed single-cell or single-nucleus counts in H5AD or MTX with feature annotation, cell/sample/donor IDs, recorded context and sufficient biological replication for the proposed estimand.",
+        "Use only modalities actually observed; preserve paired sites, longitudinal identities, ortholog mappings and measured time where the question requires them."
+      ],
+      "proposed_artifact_requirements": [
+        "Typed analysis contract: measured variables, biological unit, estimand, comparison, eligibility, covariance design and declared limits.",
+        "Complete sample/cell eligibility, sample-level effect or prediction tables, feature universe and frozen numerical evidence supporting each claim."
+      ],
+      "deterministic_verifier_design": [
+        "Check input schema, rank/estimability of the design, all biological IDs and complete output artifacts against a private native oracle.",
+        "Check every quantitative claim against its artifact; fixed contract constraints grade execution and explicit assumptions, not whether a free-form analysis idea is scientifically the best possible proposal."
+      ],
+      "coverage_limit": "Do not promote these 50 source planning cases to fully covered solely because an executed adaptation passes. Faithful acceptance of arbitrary analysis proposals without an LLM judge remains unresolved.",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "cellbench-adaptation-culture-condition-cell-state-comparison",
+      "scientific_question": "Which differentiation states differ between already observed culture conditions after biological-culture replication and QC checks?",
+      "target_ids": [
+        "8"
+      ],
+      "source_contexts": [
+        {
+          "task_id": "8",
+          "source_task_record_sha256": "6d7dee458062f4087dbda92d37654bd3206e2a84e5ae68091ddcd817e4ba3c4e",
+          "setting": "airway-organoid-culture-states",
+          "decisions": [
+            "Quantify measured cell differentiation without proposing experimental optimization; preserve biological culture replicates."
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-pseudobulk"
+      ],
+      "inspection_tier": "public-research-context-reviewed-expected-analysis-lists-excluded",
+      "relationship": "context-inspired-executed-analysis-not-equivalent-to-source-planning-objective",
+      "observed_input_requirements": [
+        "Independently observed single-cell or single-nucleus counts in H5AD or MTX with feature annotation, cell/sample/donor IDs, recorded context and sufficient biological replication for the proposed estimand.",
+        "Use only modalities actually observed; preserve paired sites, longitudinal identities, ortholog mappings and measured time where the question requires them."
+      ],
+      "proposed_artifact_requirements": [
+        "Typed analysis contract: measured variables, biological unit, estimand, comparison, eligibility, covariance design and declared limits.",
+        "Complete sample/cell eligibility, sample-level effect or prediction tables, feature universe and frozen numerical evidence supporting each claim."
+      ],
+      "deterministic_verifier_design": [
+        "Check input schema, rank/estimability of the design, all biological IDs and complete output artifacts against a private native oracle.",
+        "Check every quantitative claim against its artifact; fixed contract constraints grade execution and explicit assumptions, not whether a free-form analysis idea is scientifically the best possible proposal."
+      ],
+      "coverage_limit": "Do not promote these 50 source planning cases to fully covered solely because an executed adaptation passes. Faithful acceptance of arbitrary analysis proposals without an LLM judge remains unresolved.",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "cellbench-adaptation-immune-structural-cell-comparison",
+      "scientific_question": "Which immune and structural cell-state associations remain after compartment, donor and observed treatment reconciliation?",
+      "target_ids": [
+        "9"
+      ],
+      "source_contexts": [
+        {
+          "task_id": "9",
+          "source_task_record_sha256": "160bd5db5775d1379f3aaf97e51b915ac088a3688a1f9a4fd1cae4ff06ce60b8",
+          "setting": "cystic-fibrosis-lung-cell-context",
+          "decisions": [
+            "Separate compartment sampling, treatment exposure and donor effects from disease associations."
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-composition"
+      ],
+      "inspection_tier": "public-research-context-reviewed-expected-analysis-lists-excluded",
+      "relationship": "context-inspired-executed-analysis-not-equivalent-to-source-planning-objective",
+      "observed_input_requirements": [
+        "Independently observed single-cell or single-nucleus counts in H5AD or MTX with feature annotation, cell/sample/donor IDs, recorded context and sufficient biological replication for the proposed estimand.",
+        "Use only modalities actually observed; preserve paired sites, longitudinal identities, ortholog mappings and measured time where the question requires them."
+      ],
+      "proposed_artifact_requirements": [
+        "Typed analysis contract: measured variables, biological unit, estimand, comparison, eligibility, covariance design and declared limits.",
+        "Complete sample/cell eligibility, sample-level effect or prediction tables, feature universe and frozen numerical evidence supporting each claim."
+      ],
+      "deterministic_verifier_design": [
+        "Check input schema, rank/estimability of the design, all biological IDs and complete output artifacts against a private native oracle.",
+        "Check every quantitative claim against its artifact; fixed contract constraints grade execution and explicit assumptions, not whether a free-form analysis idea is scientifically the best possible proposal."
+      ],
+      "coverage_limit": "Do not promote these 50 source planning cases to fully covered solely because an executed adaptation passes. Faithful acceptance of arbitrary analysis proposals without an LLM judge remains unresolved.",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "cellbench-adaptation-age-by-tissue-cell-comparison",
+      "scientific_question": "Do observed age associations in cell composition and expression differ between tissues under a sample-level interaction model?",
+      "target_ids": [
+        "11"
+      ],
+      "source_contexts": [
+        {
+          "task_id": "11",
+          "source_task_record_sha256": "c171da40e202132460cee79505a8187f6a8c4215b359fbe696b9b37d952040e2",
+          "setting": "gamma-delta-t-cells-across-age-and-site",
+          "decisions": [
+            "Retain age, donor and tissue sampling structure; composition and functional state are different endpoints."
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-pseudobulk"
+      ],
+      "inspection_tier": "public-research-context-reviewed-expected-analysis-lists-excluded",
+      "relationship": "context-inspired-executed-analysis-not-equivalent-to-source-planning-objective",
+      "observed_input_requirements": [
+        "Independently observed single-cell or single-nucleus counts in H5AD or MTX with feature annotation, cell/sample/donor IDs, recorded context and sufficient biological replication for the proposed estimand.",
+        "Use only modalities actually observed; preserve paired sites, longitudinal identities, ortholog mappings and measured time where the question requires them."
+      ],
+      "proposed_artifact_requirements": [
+        "Typed analysis contract: measured variables, biological unit, estimand, comparison, eligibility, covariance design and declared limits.",
+        "Complete sample/cell eligibility, sample-level effect or prediction tables, feature universe and frozen numerical evidence supporting each claim."
+      ],
+      "deterministic_verifier_design": [
+        "Check input schema, rank/estimability of the design, all biological IDs and complete output artifacts against a private native oracle.",
+        "Check every quantitative claim against its artifact; fixed contract constraints grade execution and explicit assumptions, not whether a free-form analysis idea is scientifically the best possible proposal."
+      ],
+      "coverage_limit": "Do not promote these 50 source planning cases to fully covered solely because an executed adaptation passes. Faithful acceptance of arbitrary analysis proposals without an LLM judge remains unresolved.",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "cellbench-adaptation-cell-type-regulatory-context",
+      "scientific_question": "Which cell-type expression programs and annotated regulatory associations are supported by the available observed modalities and frozen evidence?",
+      "target_ids": [
+        "13",
+        "43"
+      ],
+      "source_contexts": [
+        {
+          "task_id": "13",
+          "source_task_record_sha256": "076422bc841a997b783075980265c73640f05297b7fcca0531d11805f436a0a9",
+          "setting": "retinal-cell-types-and-regulation",
+          "decisions": [
+            "The source planning prompt is restricted to single-cell RNA analyses; regulatory or epigenomic extensions require explicit measured inputs."
+          ]
+        },
+        {
+          "task_id": "43",
+          "source_task_record_sha256": "9c476968b37efe23efd36de6fde1d50c3192f1d4f084811e959bdb7470c6b94d",
+          "setting": "atherosclerotic-plaque-cell-context",
+          "decisions": [
+            "Assign disease-associated loci only with declared external evidence; expression association alone does not link a variant to a target gene."
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-annotation"
+      ],
+      "inspection_tier": "public-research-context-reviewed-expected-analysis-lists-excluded",
+      "relationship": "context-inspired-executed-analysis-not-equivalent-to-source-planning-objective",
+      "observed_input_requirements": [
+        "Independently observed single-cell or single-nucleus counts in H5AD or MTX with feature annotation, cell/sample/donor IDs, recorded context and sufficient biological replication for the proposed estimand.",
+        "Use only modalities actually observed; preserve paired sites, longitudinal identities, ortholog mappings and measured time where the question requires them."
+      ],
+      "proposed_artifact_requirements": [
+        "Typed analysis contract: measured variables, biological unit, estimand, comparison, eligibility, covariance design and declared limits.",
+        "Complete sample/cell eligibility, sample-level effect or prediction tables, feature universe and frozen numerical evidence supporting each claim."
+      ],
+      "deterministic_verifier_design": [
+        "Check input schema, rank/estimability of the design, all biological IDs and complete output artifacts against a private native oracle.",
+        "Check every quantitative claim against its artifact; fixed contract constraints grade execution and explicit assumptions, not whether a free-form analysis idea is scientifically the best possible proposal."
+      ],
+      "coverage_limit": "Do not promote these 50 source planning cases to fully covered solely because an executed adaptation passes. Faithful acceptance of arbitrary analysis proposals without an LLM judge remains unresolved.",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "cellbench-adaptation-cross-species-cell-type-comparison",
+      "scientific_question": "Which cell-type programs agree across species after explicit ortholog matching and biological-sample adjustment?",
+      "target_ids": [
+        "14",
+        "49"
+      ],
+      "source_contexts": [
+        {
+          "task_id": "14",
+          "source_task_record_sha256": "869c2a02a224085fb0aace7479aaf7d1351b6cd5bd7b7e1ef745eff515799029",
+          "setting": "primate-cortical-cell-atlas",
+          "decisions": [
+            "Match orthologs and homologous cell types before interpreting species-specific effects."
+          ]
+        },
+        {
+          "task_id": "49",
+          "source_task_record_sha256": "4f0553d678671844ca73b1dec8619cb01e07cc1303f4bc1d3623a052f19ff96b",
+          "setting": "cross-species-lung-tumor-myeloid-cells",
+          "decisions": [
+            "Match orthologs and myeloid populations while accounting for inter-patient and species sampling differences."
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-annotation"
+      ],
+      "inspection_tier": "public-research-context-reviewed-expected-analysis-lists-excluded",
+      "relationship": "context-inspired-executed-analysis-not-equivalent-to-source-planning-objective",
+      "observed_input_requirements": [
+        "Independently observed single-cell or single-nucleus counts in H5AD or MTX with feature annotation, cell/sample/donor IDs, recorded context and sufficient biological replication for the proposed estimand.",
+        "Use only modalities actually observed; preserve paired sites, longitudinal identities, ortholog mappings and measured time where the question requires them."
+      ],
+      "proposed_artifact_requirements": [
+        "Typed analysis contract: measured variables, biological unit, estimand, comparison, eligibility, covariance design and declared limits.",
+        "Complete sample/cell eligibility, sample-level effect or prediction tables, feature universe and frozen numerical evidence supporting each claim."
+      ],
+      "deterministic_verifier_design": [
+        "Check input schema, rank/estimability of the design, all biological IDs and complete output artifacts against a private native oracle.",
+        "Check every quantitative claim against its artifact; fixed contract constraints grade execution and explicit assumptions, not whether a free-form analysis idea is scientifically the best possible proposal."
+      ],
+      "coverage_limit": "Do not promote these 50 source planning cases to fully covered solely because an executed adaptation passes. Faithful acceptance of arbitrary analysis proposals without an LLM judge remains unresolved.",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "cellbench-adaptation-developmental-lineage-hypotheses",
+      "scientific_question": "Which proposed transcriptomic state orderings agree with recorded stage or independent lineage evidence, with unsupported fate claims reported explicitly?",
+      "target_ids": [
+        "15",
+        "33"
+      ],
+      "source_contexts": [
+        {
+          "task_id": "15",
+          "source_task_record_sha256": "6d4d4b157abb57b64abef923167a2d361a5ac4da1559c38eba573e6f16359d98",
+          "setting": "postnatal-thymic-progenitors",
+          "decisions": [
+            "Transcriptomic trajectories and marker expression do not demonstrate lineage fate."
+          ]
+        },
+        {
+          "task_id": "33",
+          "source_task_record_sha256": "fa4e4e6297509699226fea0f31fd7cac4e8119c491ffb39d2ecc4d33794dc419",
+          "setting": "human-gastrulation-cell-atlas",
+          "decisions": [
+            "A single embryo does not supply independent biological replication for population-level claims."
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-trajectory"
+      ],
+      "inspection_tier": "public-research-context-reviewed-expected-analysis-lists-excluded",
+      "relationship": "context-inspired-executed-analysis-not-equivalent-to-source-planning-objective",
+      "observed_input_requirements": [
+        "Independently observed single-cell or single-nucleus counts in H5AD or MTX with feature annotation, cell/sample/donor IDs, recorded context and sufficient biological replication for the proposed estimand.",
+        "Use only modalities actually observed; preserve paired sites, longitudinal identities, ortholog mappings and measured time where the question requires them."
+      ],
+      "proposed_artifact_requirements": [
+        "Typed analysis contract: measured variables, biological unit, estimand, comparison, eligibility, covariance design and declared limits.",
+        "Complete sample/cell eligibility, sample-level effect or prediction tables, feature universe and frozen numerical evidence supporting each claim."
+      ],
+      "deterministic_verifier_design": [
+        "Check input schema, rank/estimability of the design, all biological IDs and complete output artifacts against a private native oracle.",
+        "Check every quantitative claim against its artifact; fixed contract constraints grade execution and explicit assumptions, not whether a free-form analysis idea is scientifically the best possible proposal."
+      ],
+      "coverage_limit": "Do not promote these 50 source planning cases to fully covered solely because an executed adaptation passes. Faithful acceptance of arbitrary analysis proposals without an LLM judge remains unresolved.",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "cellbench-adaptation-donor-aware-disease-comparison",
+      "scientific_question": "Which within-cell-type disease associations remain under donor-level replication, measured covariates and explicit gene eligibility?",
+      "target_ids": [
+        "16",
+        "41",
+        "45",
+        "47"
+      ],
+      "source_contexts": [
+        {
+          "task_id": "16",
+          "source_task_record_sha256": "b1aa1b2db4f40e3aff27c313ec0cada0af784a9d42dd9941b25cd2b0c254a9e6",
+          "setting": "type-2-diabetes-islet-cell-programs",
+          "decisions": [
+            "Account for inter-donor heterogeneity and sampled cell counts before disease contrasts."
+          ]
+        },
+        {
+          "task_id": "41",
+          "source_task_record_sha256": "171cbc4d6c94ecf92ddf3f8326b57ce7a92bacd1bedc51ff9e82533088c6328b",
+          "setting": "alzheimers-prefrontal-nuclei-and-pathology",
+          "decisions": [
+            "Preserve sex balance, donor and neuropathology measurements; nuclei are not independent patients."
+          ]
+        },
+        {
+          "task_id": "45",
+          "source_task_record_sha256": "be4e85d6f98509ee76ac735932508bd64829c9d29b2a60d483611209ae763702",
+          "setting": "hypertrophic-cardiomyopathy-cardiomyocytes",
+          "decisions": [
+            "Surgical sampling and cardiomyocyte selection limit generalization to other cardiac compartments."
+          ]
+        },
+        {
+          "task_id": "47",
+          "source_task_record_sha256": "86d6cf68b6dbe2ec006fca975c50bfc85ff47f78651e68bf833fa216c9478645",
+          "setting": "parkinsons-midbrain-cell-heterogeneity",
+          "decisions": [
+            "The source explicitly names GSE157783; exclude that study lineage from training input selection."
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-pseudobulk"
+      ],
+      "inspection_tier": "public-research-context-reviewed-expected-analysis-lists-excluded",
+      "relationship": "context-inspired-executed-analysis-not-equivalent-to-source-planning-objective",
+      "observed_input_requirements": [
+        "Independently observed single-cell or single-nucleus counts in H5AD or MTX with feature annotation, cell/sample/donor IDs, recorded context and sufficient biological replication for the proposed estimand.",
+        "Use only modalities actually observed; preserve paired sites, longitudinal identities, ortholog mappings and measured time where the question requires them."
+      ],
+      "proposed_artifact_requirements": [
+        "Typed analysis contract: measured variables, biological unit, estimand, comparison, eligibility, covariance design and declared limits.",
+        "Complete sample/cell eligibility, sample-level effect or prediction tables, feature universe and frozen numerical evidence supporting each claim."
+      ],
+      "deterministic_verifier_design": [
+        "Check input schema, rank/estimability of the design, all biological IDs and complete output artifacts against a private native oracle.",
+        "Check every quantitative claim against its artifact; fixed contract constraints grade execution and explicit assumptions, not whether a free-form analysis idea is scientifically the best possible proposal."
+      ],
+      "coverage_limit": "Do not promote these 50 source planning cases to fully covered solely because an executed adaptation passes. Faithful acceptance of arbitrary analysis proposals without an LLM judge remains unresolved.",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "cellbench-adaptation-age-associated-cell-state-comparison",
+      "scientific_question": "Which cell-state associations with observed age remain after donor, tissue exposure and cohort-selection checks?",
+      "target_ids": [
+        "17",
+        "44"
+      ],
+      "source_contexts": [
+        {
+          "task_id": "17",
+          "source_task_record_sha256": "e891a706d1c30b63e2ac9b7e1e830117f467723771c11c900f1a363dc39d252b",
+          "setting": "intrinsic-skin-aging-fibroblasts",
+          "decisions": [
+            "Keep sun exposure separate from chronological age and retain donor-level replication."
+          ]
+        },
+        {
+          "task_id": "44",
+          "source_task_record_sha256": "b6ea8077048b0c1a5a4567d43e0d90f8ea8c595e3ae130f5684fb04f7c7fd51e",
+          "setting": "supercentenarian-immune-cell-states",
+          "decisions": [
+            "Separate exceptional-age cohort selection from longitudinal aging and preserve donor replication."
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-pseudobulk"
+      ],
+      "inspection_tier": "public-research-context-reviewed-expected-analysis-lists-excluded",
+      "relationship": "context-inspired-executed-analysis-not-equivalent-to-source-planning-objective",
+      "observed_input_requirements": [
+        "Independently observed single-cell or single-nucleus counts in H5AD or MTX with feature annotation, cell/sample/donor IDs, recorded context and sufficient biological replication for the proposed estimand.",
+        "Use only modalities actually observed; preserve paired sites, longitudinal identities, ortholog mappings and measured time where the question requires them."
+      ],
+      "proposed_artifact_requirements": [
+        "Typed analysis contract: measured variables, biological unit, estimand, comparison, eligibility, covariance design and declared limits.",
+        "Complete sample/cell eligibility, sample-level effect or prediction tables, feature universe and frozen numerical evidence supporting each claim."
+      ],
+      "deterministic_verifier_design": [
+        "Check input schema, rank/estimability of the design, all biological IDs and complete output artifacts against a private native oracle.",
+        "Check every quantitative claim against its artifact; fixed contract constraints grade execution and explicit assumptions, not whether a free-form analysis idea is scientifically the best possible proposal."
+      ],
+      "coverage_limit": "Do not promote these 50 source planning cases to fully covered solely because an executed adaptation passes. Faithful acceptance of arbitrary analysis proposals without an LLM judge remains unresolved.",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "cellbench-adaptation-injury-time-cell-state-comparison",
+      "scientific_question": "Which measured cell-state responses differ with recorded time after injury under the actual sample-pairing design?",
+      "target_ids": [
+        "18"
+      ],
+      "source_contexts": [
+        {
+          "task_id": "18",
+          "source_task_record_sha256": "f1d8e676e5a9d7d0610752974e0024514c9f08d50a4e30344f26074eaf6ffee4",
+          "setting": "acute-tendon-injury-cell-states",
+          "decisions": [
+            "Preserve time after injury and cell compartment; a cross-sectional sample does not establish repair dynamics."
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-pseudobulk"
+      ],
+      "inspection_tier": "public-research-context-reviewed-expected-analysis-lists-excluded",
+      "relationship": "context-inspired-executed-analysis-not-equivalent-to-source-planning-objective",
+      "observed_input_requirements": [
+        "Independently observed single-cell or single-nucleus counts in H5AD or MTX with feature annotation, cell/sample/donor IDs, recorded context and sufficient biological replication for the proposed estimand.",
+        "Use only modalities actually observed; preserve paired sites, longitudinal identities, ortholog mappings and measured time where the question requires them."
+      ],
+      "proposed_artifact_requirements": [
+        "Typed analysis contract: measured variables, biological unit, estimand, comparison, eligibility, covariance design and declared limits.",
+        "Complete sample/cell eligibility, sample-level effect or prediction tables, feature universe and frozen numerical evidence supporting each claim."
+      ],
+      "deterministic_verifier_design": [
+        "Check input schema, rank/estimability of the design, all biological IDs and complete output artifacts against a private native oracle.",
+        "Check every quantitative claim against its artifact; fixed contract constraints grade execution and explicit assumptions, not whether a free-form analysis idea is scientifically the best possible proposal."
+      ],
+      "coverage_limit": "Do not promote these 50 source planning cases to fully covered solely because an executed adaptation passes. Faithful acceptance of arbitrary analysis proposals without an LLM judge remains unresolved.",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "cellbench-adaptation-age-by-disease-cell-comparison",
+      "scientific_question": "Does the observed disease-associated cell response differ by age under a design that separates age, assay and disease effects?",
+      "target_ids": [
+        "20",
+        "23"
+      ],
+      "source_contexts": [
+        {
+          "task_id": "20",
+          "source_task_record_sha256": "b32fc421bee132ee191d15a38cf9ef30b70d5e005b541ce799078a0debf3dff0",
+          "setting": "healthy-and-failing-heart-with-age",
+          "decisions": [
+            "Account for single-cell versus single-nucleus sampling and clinical covariates."
+          ]
+        },
+        {
+          "task_id": "23",
+          "source_task_record_sha256": "daa1a711e100426b2995b43c2fd52efe9b3b01fe80126b6ab2a24590e888188c",
+          "setting": "pancreatic-endocrine-development-and-diabetes",
+          "decisions": [
+            "Age and diabetes group differences require a design that supports disentangling them."
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-pseudobulk"
+      ],
+      "inspection_tier": "public-research-context-reviewed-expected-analysis-lists-excluded",
+      "relationship": "context-inspired-executed-analysis-not-equivalent-to-source-planning-objective",
+      "observed_input_requirements": [
+        "Independently observed single-cell or single-nucleus counts in H5AD or MTX with feature annotation, cell/sample/donor IDs, recorded context and sufficient biological replication for the proposed estimand.",
+        "Use only modalities actually observed; preserve paired sites, longitudinal identities, ortholog mappings and measured time where the question requires them."
+      ],
+      "proposed_artifact_requirements": [
+        "Typed analysis contract: measured variables, biological unit, estimand, comparison, eligibility, covariance design and declared limits.",
+        "Complete sample/cell eligibility, sample-level effect or prediction tables, feature universe and frozen numerical evidence supporting each claim."
+      ],
+      "deterministic_verifier_design": [
+        "Check input schema, rank/estimability of the design, all biological IDs and complete output artifacts against a private native oracle.",
+        "Check every quantitative claim against its artifact; fixed contract constraints grade execution and explicit assumptions, not whether a free-form analysis idea is scientifically the best possible proposal."
+      ],
+      "coverage_limit": "Do not promote these 50 source planning cases to fully covered solely because an executed adaptation passes. Faithful acceptance of arbitrary analysis proposals without an LLM judge remains unresolved.",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "cellbench-adaptation-cross-species-tissue-cell-comparison",
+      "scientific_question": "Which observed tissue-associated cell programs replicate across species after ortholog, assay and donor reconciliation?",
+      "target_ids": [
+        "21"
+      ],
+      "source_contexts": [
+        {
+          "task_id": "21",
+          "source_task_record_sha256": "28014af5f50c53cd96fc015986cdc5f5af8eb155a5479698ed1319a00c0c6441",
+          "setting": "tissue-regulatory-t-cell-adaptation",
+          "decisions": [
+            "Separate tissue adaptation from species and assay effects; do not treat inferred trajectories as direct migration."
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-annotation"
+      ],
+      "inspection_tier": "public-research-context-reviewed-expected-analysis-lists-excluded",
+      "relationship": "context-inspired-executed-analysis-not-equivalent-to-source-planning-objective",
+      "observed_input_requirements": [
+        "Independently observed single-cell or single-nucleus counts in H5AD or MTX with feature annotation, cell/sample/donor IDs, recorded context and sufficient biological replication for the proposed estimand.",
+        "Use only modalities actually observed; preserve paired sites, longitudinal identities, ortholog mappings and measured time where the question requires them."
+      ],
+      "proposed_artifact_requirements": [
+        "Typed analysis contract: measured variables, biological unit, estimand, comparison, eligibility, covariance design and declared limits.",
+        "Complete sample/cell eligibility, sample-level effect or prediction tables, feature universe and frozen numerical evidence supporting each claim."
+      ],
+      "deterministic_verifier_design": [
+        "Check input schema, rank/estimability of the design, all biological IDs and complete output artifacts against a private native oracle.",
+        "Check every quantitative claim against its artifact; fixed contract constraints grade execution and explicit assumptions, not whether a free-form analysis idea is scientifically the best possible proposal."
+      ],
+      "coverage_limit": "Do not promote these 50 source planning cases to fully covered solely because an executed adaptation passes. Faithful acceptance of arbitrary analysis proposals without an LLM judge remains unresolved.",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "cellbench-adaptation-injury-associated-cell-state-comparison",
+      "scientific_question": "Which observed cell programs associate with injury without treating activation markers as direct evidence of regenerative fate?",
+      "target_ids": [
+        "22"
+      ],
+      "source_contexts": [
+        {
+          "task_id": "22",
+          "source_task_record_sha256": "a40f236258080badfeb3e3877eb088ba5ad66711b6f9954acf48e5ee4f9854ce",
+          "setting": "adult-neural-stem-cell-injury-response",
+          "decisions": [
+            "Distinguish observed activation programs from prior lineage commitment or regenerative capacity."
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-pseudobulk"
+      ],
+      "inspection_tier": "public-research-context-reviewed-expected-analysis-lists-excluded",
+      "relationship": "context-inspired-executed-analysis-not-equivalent-to-source-planning-objective",
+      "observed_input_requirements": [
+        "Independently observed single-cell or single-nucleus counts in H5AD or MTX with feature annotation, cell/sample/donor IDs, recorded context and sufficient biological replication for the proposed estimand.",
+        "Use only modalities actually observed; preserve paired sites, longitudinal identities, ortholog mappings and measured time where the question requires them."
+      ],
+      "proposed_artifact_requirements": [
+        "Typed analysis contract: measured variables, biological unit, estimand, comparison, eligibility, covariance design and declared limits.",
+        "Complete sample/cell eligibility, sample-level effect or prediction tables, feature universe and frozen numerical evidence supporting each claim."
+      ],
+      "deterministic_verifier_design": [
+        "Check input schema, rank/estimability of the design, all biological IDs and complete output artifacts against a private native oracle.",
+        "Check every quantitative claim against its artifact; fixed contract constraints grade execution and explicit assumptions, not whether a free-form analysis idea is scientifically the best possible proposal."
+      ],
+      "coverage_limit": "Do not promote these 50 source planning cases to fully covered solely because an executed adaptation passes. Faithful acceptance of arbitrary analysis proposals without an LLM judge remains unresolved.",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "cellbench-adaptation-tissue-compartment-cell-characterization",
+      "scientific_question": "Which cell populations and within-cell-type programs differ across measured anatomical compartments after sample-level QC?",
+      "target_ids": [
+        "26",
+        "35"
+      ],
+      "source_contexts": [
+        {
+          "task_id": "26",
+          "source_task_record_sha256": "91a88149fec7efe09916c1a2e96ddd9ded920112d68e28f602762db445ea3e67",
+          "setting": "retinal-pigment-epithelium-and-choroid",
+          "decisions": [
+            "Retain the anatomical compartments and distinguish mixture composition from cell-intrinsic expression."
+          ]
+        },
+        {
+          "task_id": "35",
+          "source_task_record_sha256": "9079c82419b46a44797e56159532c251273e07205f19f4be7323c83e95ce97f1",
+          "setting": "ovarian-cancer-metastatic-omentum",
+          "decisions": [
+            "Retain metastatic site and donor identity; immune-cell abundance alone does not establish function."
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-composition"
+      ],
+      "inspection_tier": "public-research-context-reviewed-expected-analysis-lists-excluded",
+      "relationship": "context-inspired-executed-analysis-not-equivalent-to-source-planning-objective",
+      "observed_input_requirements": [
+        "Independently observed single-cell or single-nucleus counts in H5AD or MTX with feature annotation, cell/sample/donor IDs, recorded context and sufficient biological replication for the proposed estimand.",
+        "Use only modalities actually observed; preserve paired sites, longitudinal identities, ortholog mappings and measured time where the question requires them."
+      ],
+      "proposed_artifact_requirements": [
+        "Typed analysis contract: measured variables, biological unit, estimand, comparison, eligibility, covariance design and declared limits.",
+        "Complete sample/cell eligibility, sample-level effect or prediction tables, feature universe and frozen numerical evidence supporting each claim."
+      ],
+      "deterministic_verifier_design": [
+        "Check input schema, rank/estimability of the design, all biological IDs and complete output artifacts against a private native oracle.",
+        "Check every quantitative claim against its artifact; fixed contract constraints grade execution and explicit assumptions, not whether a free-form analysis idea is scientifically the best possible proposal."
+      ],
+      "coverage_limit": "Do not promote these 50 source planning cases to fully covered solely because an executed adaptation passes. Faithful acceptance of arbitrary analysis proposals without an LLM judge remains unresolved.",
+      "validated_new_mappings": 0
+    },
+    {
+      "proposed_id": "cellbench-adaptation-cell-type-feature-characterization",
+      "scientific_question": "Which observed coding and noncoding feature programs distinguish cell types under explicit annotation and detection-rate rules?",
+      "target_ids": [
+        "34"
+      ],
+      "source_contexts": [
+        {
+          "task_id": "34",
+          "source_task_record_sha256": "068918464888929a3d8f5a710c5a37bbe178c1f0941e6ca27df09a16758f38c0",
+          "setting": "human-blood-lineages-and-lncrna",
+          "decisions": [
+            "Retain feature annotation versions and sparse detection of noncoding transcripts."
+          ]
+        }
+      ],
+      "matching_workstreams": [
+        "single-cell-annotation"
+      ],
+      "inspection_tier": "public-research-context-reviewed-expected-analysis-lists-excluded",
+      "relationship": "context-inspired-executed-analysis-not-equivalent-to-source-planning-objective",
+      "observed_input_requirements": [
+        "Independently observed single-cell or single-nucleus counts in H5AD or MTX with feature annotation, cell/sample/donor IDs, recorded context and sufficient biological replication for the proposed estimand.",
+        "Use only modalities actually observed; preserve paired sites, longitudinal identities, ortholog mappings and measured time where the question requires them."
+      ],
+      "proposed_artifact_requirements": [
+        "Typed analysis contract: measured variables, biological unit, estimand, comparison, eligibility, covariance design and declared limits.",
+        "Complete sample/cell eligibility, sample-level effect or prediction tables, feature universe and frozen numerical evidence supporting each claim."
+      ],
+      "deterministic_verifier_design": [
+        "Check input schema, rank/estimability of the design, all biological IDs and complete output artifacts against a private native oracle.",
+        "Check every quantitative claim against its artifact; fixed contract constraints grade execution and explicit assumptions, not whether a free-form analysis idea is scientifically the best possible proposal."
+      ],
+      "coverage_limit": "Do not promote these 50 source planning cases to fully covered solely because an executed adaptation passes. Faithful acceptance of arbitrary analysis proposals without an LLM judge remains unresolved.",
+      "validated_new_mappings": 0
+    }
+  ],
+  "counts": {
+    "records": 50,
+    "context_inspired_question_cards": 22,
+    "source_equivalent_deterministic_contracts": 0,
+    "validated_new_mappings": 0
+  }
+}

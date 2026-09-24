@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T14:38:49.733432+00:00",
+  "updated_at": "2026-09-24T15:22:12.546163+00:00",
   "basis_revision": "c3a42fa5cf",
   "scope": "Provisional ID agentic benchmarks only. This queue selects new authoring work; it does not change benchmark coverage states.",
   "selection_policy": {
@@ -23,7 +23,7 @@
     "scope_limit": "Ranks compare the currently assessed candidate set, not all possible workflows in all releases. Source-review backlog entries remain explicit and can change the ranking."
   },
   "selected_candidate": null,
-  "selection_reason": "User requested benchmark-wide question planning before further individual implementation. Keep the eight assessed candidate target sets as conditional planning evidence, but select no task until the full portfolio and cross-benchmark endpoint mappings are reviewed.",
+  "selection_reason": "Question portfolio now accounts for all 2,881 inventoried records. Review its conditional consolidations, source inspection limits and input/acceptance contracts before selecting implementation work. The eight earlier assessed gains remain conditional and are not a global ranking.",
   "candidates": [
     {
       "id": "multi-locus-phylogenomic-signal",
@@ -1226,23 +1226,30 @@
     },
     "next_actions": [
       {
-        "id": "task-interface-repair",
-        "work": "Validate the updated login-shell native-tool PATH in a fresh Harbor terminal. Public summary shape and failure artifact reporting have focused local regression coverage; preserve original solver results."
+        "id": "portfolio-consolidation-review",
+        "work": "Review the complete question portfolio and its 30 conditional combinations; preserve standalone methods, estimands and observation types where one study cannot support every endpoint."
       },
       {
-        "id": "portfolio-endpoint-review",
-        "work": "Turn proposed workstream questions into exact endpoint assignments. Preserve study/assay differences and known aliases; freeze independent observed inputs before estimating completed-task gain."
+        "id": "source-and-acceptance-contracts",
+        "work": "For prioritized question groups, specify independent observed input accessions and study structure, exact formats and artifacts, required native methods and deterministic acceptance before implementation assignment. Unsupported free-form objectives and inaccessible sources remain explicit."
       }
     ]
   },
   "portfolio_plan": "workflow_plan.json",
   "authoring_phase": "question-portfolio-planning",
   "portfolio_review_progress": {
-    "detailed_question_sources": 18,
-    "detailed_question_assignments": 848,
-    "new_inventory_based_question_cards": 160,
-    "new_source_releases": 15,
-    "source_file": "workflow_designs/additional_benchmarks.json",
-    "limit": "Includes question-stem and inventory-stage planning; does not imply full source-prompt review, completed contracts, independent task count or executable coverage."
+    "source_releases": 30,
+    "inventory_records": 2881,
+    "question_cards": 662,
+    "proposed_task_groups": 605,
+    "conditional_consolidations": 30,
+    "non_alias_records_linked_to_questions": 2480,
+    "known_cross_release_alias_records": 50,
+    "identity_only_records_with_gap_dispositions": 350,
+    "excluded_records": 1,
+    "validated_new_mappings": 0,
+    "portfolio_file": "workflow_portfolio.json",
+    "portfolio_sha256": "300766ccfb81d06234e292e575fc8359744a5f4424944814c91ee9be6eda3097",
+    "limit": "The portfolio now accounts for every inventoried record, but inspection depth varies. Conditional task consolidation and source-specific input/acceptance contracts remain unresolved. No implemented task count or validated coverage increased."
   }
 }
