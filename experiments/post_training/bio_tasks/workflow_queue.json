@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T13:20:44.508860+00:00",
+  "updated_at": "2026-09-24T14:04:24.136958+00:00",
   "basis_revision": "cda940f675d7d81252cabd76d6b11dfd6696c15e",
   "scope": "Provisional ID agentic benchmarks only. This queue selects new authoring work; it does not change benchmark coverage states.",
   "selection_policy": {
@@ -23,7 +23,7 @@
     "scope_limit": "Ranks compare the currently assessed candidate set, not all possible workflows in all releases. Source-review backlog entries remain explicit and can change the ranking."
   },
   "selected_candidate": null,
-  "selection_reason": "The full provisional plan and two completed solver diagnostics are available. Interface changes have local regression coverage; fresh Harbor terminal validation remains. Review task-specific endpoint assignments and independent inputs across the portfolio before selecting the next recipe.",
+  "selection_reason": "Question-level endpoint designs now cover the review scope of all 355 BixBench, CompBioBench and BiomniBench-DA records. These are proposals with unresolved inputs and method contracts; no new executable coverage. The approved model-free Harbor interface check passed all three expected cases, including login-terminal PATH. Select the next recipe after independent-input feasibility and cross-benchmark design overlap are assessed.",
   "candidates": [
     {
       "id": "multi-locus-phylogenomic-signal",
@@ -1102,9 +1102,9 @@
   ],
   "inventory_file_sha256": {
     "benchmark_tasks/bioagent.json": "2915e369b49c11ee83d90c4aa7521d6155230751d7a2205b3b36a114466cdc8d",
-    "benchmark_tasks/bixbench.json": "95b687d8f3cb30c0aa126a0136624551974f0151779fff6d57a9fa60d4b13795",
+    "benchmark_tasks/bixbench.json": "aea7bce180d74615adc38f06c593dc6461b9f94696078ffd14c98f050385ae0e",
     "benchmark_tasks/bixbench-verified-50.json": "2521fbbc67d7fa8e57e3c3f20820d71c92c0cb2477a4f541bb8a465cd473682f",
-    "benchmark_tasks/compbiobench.json": "7b5888c59de481791e8988907dcf6b840d531563c1aa5f78b8bdc53758a745b4",
+    "benchmark_tasks/compbiobench.json": "dc5651f1afa08ab5274026792b610e49e3aa74427dab2b1a217290275524874f",
     "benchmark_tasks/scienceagentbench.json": "6f85405ff563ada594d6ea9744d4f71c0497f77bcdb197e99e3dd5843e7ac12a",
     "benchmark_tasks/scbench.json": "b379b4d840d43afd612f6bd260e2b9312dc2658d8bf61d790b52e02b81b5a76d"
   },

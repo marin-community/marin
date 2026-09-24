@@ -30,6 +30,14 @@ The [BiomniBench-DA endpoint designs](../workflow_designs/biomnibench-da.json) r
 all 50 question IDs into 45 proposed tasks, with output artifacts, numerical decisions,
 negative controls and unresolved independent-data requirements. Their IDs are linked
 from each inventory record's `endpoint_review`; they add no validated coverage.
+The [BixBench endpoint designs](../workflow_designs/bixbench.json) assign all 205
+question IDs to 27 prospective workflows and retain scientific adaptation limits,
+including ambiguous denominators, invalid count transformations and unsupported
+equivalence claims in source formulations.
+The [CompBioBench endpoint designs](../workflow_designs/compbiobench.json) assign
+100 question IDs to 84 proposals, explicitly separating observed-data adaptations,
+simulated source formulations and subjective or software-only endpoints. Metadata
+JSON and source TSV hashes are different artifacts and are labeled separately.
 
 Enumeration, prompt inspection and executable coverage are separate claims.
 An ID obtained from a registry can remain uninspected; a reviewed shared protocol

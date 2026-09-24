@@ -1,0 +1,2799 @@
+{
+  "schema_version": 1,
+  "basis_revision": "9de9a3b812",
+  "scope": "Question-only endpoint designs for independent observed-data workflow adaptations; no benchmark answers, fixtures or exact-answer reproduction. Nearby broad question IDs are navigation, not equivalence claims.",
+  "source": {
+    "revision": "f8cc3bdcc6357c88b8c3648306522b9c422dc95a",
+    "url": "https://huggingface.co/datasets/futurehouse/BixBench/blob/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/BixBench.jsonl",
+    "question_metadata_sha256": "6d2d1ca1f642ee64a7f4cca07bc0e097674c884352a19fb085b0f72d5a9710f6",
+    "fields_read": [
+      "question_id",
+      "short_id",
+      "question",
+      "paper",
+      "categories"
+    ],
+    "answers_or_fixtures_read": false
+  },
+  "counts": {
+    "question_ids": 205,
+    "source_groups": 54,
+    "proposed_designs": 27,
+    "validated_coverage_added": 0
+  },
+  "design_principles": [
+    "One coherent observed-data task per recipe by default. These refine the 147 broad questions; do not add design counts across planning levels.",
+    "Pin each independent study accession, release, license, checksum, native file formats, biological dimensions and every subset transformation. Source paper/accession identifiers listed here are exclusions, not proposed training sources.",
+    "Freeze complete schemas, numerical tolerances, package versions and offline annotation snapshots before implementation. Proposed artifact columns are not complete validated schemas.",
+    "Run the actual package reference plus independent input/artifact invariants. Negative controls corrupt outputs against fixed observations; no assumption that random labels must change significance.",
+    "Question inspection cannot recover omitted source methods. Ambiguous or scientifically invalid source formulations remain explicit gaps; a corrected authored task is a method adaptation, not exact endpoint equivalence.",
+    "All designs still need independent input selection, native oracle/verifier runs, incorrect-output checks and measured offline runtime at most 30 minutes. No release readiness or coverage forecast is implied."
+  ],
+  "method_references": [
+    {
+      "url": "https://bioconductor.org/packages/release/bioc/vignettes/DESeq2/inst/doc/DESeq2.html",
+      "reviewed": "2026-09-24",
+      "use": "Unnormalized counts or valid quantified-count import; full-rank model and shrinkage/contrast semantics."
+    },
+    {
+      "url": "https://www.statsmodels.org/stable/generated/statsmodels.stats.weightstats.ttost_ind.html",
+      "reviewed": "2026-09-24",
+      "use": "Equivalence requires bounds and an equivalence test; nonsignificant difference is not an equivalence result."
+    },
+    {
+      "url": "https://jlsteenwyk.com/PhyKIT/usage/index.html",
+      "reviewed": "2026-09-24",
+      "use": "Native metric entry points; pinned implementation details still require per-metric reconciliation."
+    }
+  ],
+  "endpoint_assignments": [
+    {
+      "task_id": "bix-1-q1",
+      "source_group": "bix-1",
+      "question_sha256": "dc49b18260599c65bf828c8a28b3c90cba458d3586f599f76b0879120c38f82f",
+      "proposed_design_id": "bix-design-case-control-go",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-1-q2",
+      "source_group": "bix-1",
+      "question_sha256": "8c08e45f02e6a9cc50f831e12b32afddce9402f9f66677e2f0cc371eba696f47",
+      "proposed_design_id": "bix-design-case-control-go",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-10-q1",
+      "source_group": "bix-10",
+      "question_sha256": "2c1a75f58ef867de32d81a0e85e50b727f503f58a33bd1ba7018cae560d1158b",
+      "proposed_design_id": "bix-design-ordinal-clinical-risk",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-10-q2",
+      "source_group": "bix-10",
+      "question_sha256": "fd12e13865fae719c7bd6a4dccb2aaec7b715ea43d0432de6af4b78cb118050d",
+      "proposed_design_id": "bix-design-ordinal-clinical-risk",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-10-q3",
+      "source_group": "bix-10",
+      "question_sha256": "649fa8f8ff4df7aa310057f5475e2f9d791a4c80f56761f88081c7a6b83a4453",
+      "proposed_design_id": "bix-design-ordinal-clinical-risk",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-10-q4",
+      "source_group": "bix-10",
+      "question_sha256": "d9fcec504326217127e07d7fcf0375d9a1f85163e3b5a186409516199e3f4c28",
+      "proposed_design_id": "bix-design-ordinal-clinical-risk",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-10-q5",
+      "source_group": "bix-10",
+      "question_sha256": "c7cdea0f326e772cbf3f64261cbe5bccb57f3cd0394ffd05aef1dd21e2cf0e38",
+      "proposed_design_id": "bix-design-ordinal-clinical-risk",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-10-q6",
+      "source_group": "bix-10",
+      "question_sha256": "cda1a690ad8f8129c620df774c198772737214dbe89635fb2d76f8792fb534d7",
+      "proposed_design_id": "bix-design-ordinal-clinical-risk",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-10-q7",
+      "source_group": "bix-10",
+      "question_sha256": "f8559b58b5379efc5bb75f3735c88e52cbd8a15266439f45e996086d0f745389",
+      "proposed_design_id": "bix-design-ordinal-clinical-risk",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-11-q1",
+      "source_group": "bix-11",
+      "question_sha256": "8635690ede17bf47aa993f3db087fdd2484682b1657394543677ae6a4b14389d",
+      "proposed_design_id": "bix-design-ortholog-tree-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-11-q2",
+      "source_group": "bix-11",
+      "question_sha256": "a27bb10febe8a1e0d206ecee482bf61f8c3b7757ebbc1db0878a59aeae847f62",
+      "proposed_design_id": "bix-design-ortholog-tree-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-11-q3",
+      "source_group": "bix-11",
+      "question_sha256": "cb17e2b2e8421328a2b3364e3e4eb3cef9a1e3ba63baecb020d42417395ab7fb",
+      "proposed_design_id": "bix-design-ortholog-tree-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-11-q4",
+      "source_group": "bix-11",
+      "question_sha256": "daf6a423fc0b94bc01b4c5f9bf25ce0cf34f45d68bbb9b45512198fe5a56c95e",
+      "proposed_design_id": "bix-design-ortholog-tree-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-11-q5",
+      "source_group": "bix-11",
+      "question_sha256": "3d4eb8e3e01261eec09b3e1b606139d93cad124e50064d7fcdd7273dbcfff183",
+      "proposed_design_id": "bix-design-ortholog-tree-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-11-q6",
+      "source_group": "bix-11",
+      "question_sha256": "3fc2c84ecc89a426e00f52625eae31773124007a57360bf02ab140659986f321",
+      "proposed_design_id": "bix-design-ortholog-tree-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-12-q2",
+      "source_group": "bix-12",
+      "question_sha256": "085e3f73ddd484f748df5c59fa5c61ffa2e228f7893b1846397406701bfb1612",
+      "proposed_design_id": "bix-design-alignment-signal-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-12-q3",
+      "source_group": "bix-12",
+      "question_sha256": "b5c824be8d74cb2465070d059e0f0ca507d11233adb1be50c43f30fd651d4757",
+      "proposed_design_id": "bix-design-alignment-signal-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-12-q4",
+      "source_group": "bix-12",
+      "question_sha256": "9c63cfe85d3c0507d07ce63b23b0124180dc231d873137d6853dcbe312ce384b",
+      "proposed_design_id": "bix-design-alignment-signal-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-12-q5",
+      "source_group": "bix-12",
+      "question_sha256": "721d0bf417e7a57c8deb3f689d9e4ae97d9339690d7c4f1c7962022059ffd133",
+      "proposed_design_id": "bix-design-alignment-signal-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-12-q6",
+      "source_group": "bix-12",
+      "question_sha256": "55d18c0b3a7551ec2e47852f0ef59e8740ad23e4b03d2e981a1559127683fee9",
+      "proposed_design_id": "bix-design-alignment-signal-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-13-q1",
+      "source_group": "bix-13",
+      "question_sha256": "90dc672971971e506f900edb75987233aa67981432b5c93f7630f3471746dfee",
+      "proposed_design_id": "bix-design-factorial-microbial-rna",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-13-q2",
+      "source_group": "bix-13",
+      "question_sha256": "83763fc0b242d50ee3dd0af270f31bf4b51bc553f53571a2b8747d0370541d92",
+      "proposed_design_id": "bix-design-factorial-microbial-rna",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-13-q3",
+      "source_group": "bix-13",
+      "question_sha256": "ee6f57df211d10b1fa15d45a417ef0eaa78956c373e580c952ea6402549b024d",
+      "proposed_design_id": "bix-design-factorial-microbial-rna",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-13-q4",
+      "source_group": "bix-13",
+      "question_sha256": "ea8c8bd9e70ebb0c188e2d36920391bc8efe0418ecf3a98567ceea928f33cbca",
+      "proposed_design_id": "bix-design-factorial-microbial-rna",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-13-q5",
+      "source_group": "bix-13",
+      "question_sha256": "49670bed527d93d83c43b60ae1646b026cd90711da7dee69453c8ee13e521350",
+      "proposed_design_id": "bix-design-factorial-microbial-rna",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-14-q1",
+      "source_group": "bix-14",
+      "question_sha256": "2b5d059bce701cfc8d0dd98f6149c636ddd6785a9c8b893e67d4b6963e122918",
+      "proposed_design_id": "bix-design-clinical-exome-variant-audit",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-14-q2",
+      "source_group": "bix-14",
+      "question_sha256": "a59a0649312f62abc4840bd920304796eb8ae37d4dba3596021df453dc8dc5f2",
+      "proposed_design_id": "bix-design-clinical-exome-variant-audit",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-14-q3",
+      "source_group": "bix-14",
+      "question_sha256": "83fc5b95d92b8a70576cbe333027881cf28a9549cc38d8eff66c6da77fb3476d",
+      "proposed_design_id": "bix-design-clinical-exome-variant-audit",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-16-q1",
+      "source_group": "bix-16",
+      "question_sha256": "96172fa75a517be5982ae85a348c984d2f6c524a6411f55ea9260e68e47b5a6b",
+      "proposed_design_id": "bix-design-dependency-expression-association",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-16-q2",
+      "source_group": "bix-16",
+      "question_sha256": "6673a3e2798d45be2d19959d4c1d9579ab12ecfcd0431a66bb2dd4753ed60a3b",
+      "proposed_design_id": "bix-design-dependency-expression-association",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-16-q3",
+      "source_group": "bix-16",
+      "question_sha256": "2387b2b52bf15f41b0fd22f959ee67924d0a61a91ede3bb8d385864a8a39ca16",
+      "proposed_design_id": "bix-design-dependency-expression-association",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-16-q4",
+      "source_group": "bix-16",
+      "question_sha256": "41e8fc2121acfa5068af2a5f6cbe9d4970320d27b3134595070d3d2c4d350f8e",
+      "proposed_design_id": "bix-design-dependency-expression-association",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-17-q2",
+      "source_group": "bix-17",
+      "question_sha256": "476f359c946b088141523c758381625bffc8217b14ddac02984efde972527320",
+      "proposed_design_id": "bix-design-clinical-exome-variant-audit",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-18-q1",
+      "source_group": "bix-18",
+      "question_sha256": "619b0c8047389540594821429420bb5d5e9de62cdcf1a7ba0d84e25760a5ec5b",
+      "proposed_design_id": "bix-design-colony-morphology-contrasts",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-18-q2",
+      "source_group": "bix-18",
+      "question_sha256": "fc4ebd185d733ddacc7c3c5aeaf702d630f5a2af4a0e3c77199b4f387894a6af",
+      "proposed_design_id": "bix-design-colony-morphology-contrasts",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-18-q3",
+      "source_group": "bix-18",
+      "question_sha256": "5516c318cf254fc2b26034f58dae41427e2b66b3cc414a0726509e73087634c3",
+      "proposed_design_id": "bix-design-colony-morphology-contrasts",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-18-q4",
+      "source_group": "bix-18",
+      "question_sha256": "73fabe46154ca961444edef6028c28a3f889da2cb12fa347a1e9e33d43834f2e",
+      "proposed_design_id": "bix-design-colony-morphology-contrasts",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-18-q5",
+      "source_group": "bix-18",
+      "question_sha256": "c53a373685450101c6bfa9a7fab803d0d50531a69480863f10175e3d521fe1f4",
+      "proposed_design_id": "bix-design-colony-morphology-contrasts",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-19-q1",
+      "source_group": "bix-19",
+      "question_sha256": "b7ea0117d72c65dcf7239e3eb60ef73720ce63ac596dca12f1a538add78e2fc8",
+      "proposed_design_id": "bix-design-neuronal-count-effect-power",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-19-q2",
+      "source_group": "bix-19",
+      "question_sha256": "89b2c5acc915b7151cc7f07eba56af4e72f54bce6a536e885c4546de784399f2",
+      "proposed_design_id": "bix-design-neuronal-count-effect-power",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-19-q3",
+      "source_group": "bix-19",
+      "question_sha256": "dc46050816bb188e1b3fd13e4f0064d6948465c80acdd61b6ec5909066c77160",
+      "proposed_design_id": "bix-design-neuronal-count-effect-power",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-19-q4",
+      "source_group": "bix-19",
+      "question_sha256": "851a589c76141fa41ca9aa77d79c021cbf7af551ce4231ce111e0e092d160168",
+      "proposed_design_id": "bix-design-neuronal-count-effect-power",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-19-q5",
+      "source_group": "bix-19",
+      "question_sha256": "ae89c22fed7360099582a7ef1a9a790a0a306a1bffd70f113fb86cf04458401e",
+      "proposed_design_id": "bix-design-neuronal-count-effect-power",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-2-q1",
+      "source_group": "bix-2",
+      "question_sha256": "1ae429fe1c542dde400cd0a6caa645b58fa1b60816c64108cf2bd51857471f0d",
+      "proposed_design_id": "bix-design-clinical-exome-variant-audit",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-2-q2",
+      "source_group": "bix-2",
+      "question_sha256": "0d91fa4ebf3d3c8098a764cddaff298aeed5e8c97ea35fda920ed77fc5ae6177",
+      "proposed_design_id": "bix-design-clinical-exome-variant-audit",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-20-q1",
+      "source_group": "bix-20",
+      "question_sha256": "5916df9c5b1a726ddcc4a161cc72cb8ce00ca0121f7a6fe658da019c9ce155b0",
+      "proposed_design_id": "bix-design-clinical-exome-variant-audit",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-20-q2",
+      "source_group": "bix-20",
+      "question_sha256": "1635b0658b019a17c6438c0af3464771d1a576654f4987ef669532eea9ee1501",
+      "proposed_design_id": "bix-design-clinical-exome-variant-audit",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-20-q3",
+      "source_group": "bix-20",
+      "question_sha256": "c9ce02f59c8e95de8b4912732ff465ebf3f8959de302e16d61d81612f91b32cf",
+      "proposed_design_id": "bix-design-clinical-exome-variant-audit",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-20-q4",
+      "source_group": "bix-20",
+      "question_sha256": "6a6898f0f0a182c21e049a4d5dc7ecebf59c216e1b24069842a4592c526d77a8",
+      "proposed_design_id": "bix-design-clinical-exome-variant-audit",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-21-q2",
+      "source_group": "bix-21",
+      "question_sha256": "f4c2e700c95d94b3737f54ac9e8a7e993c142abe754c244869a72ff46d6c52dc",
+      "proposed_design_id": "bix-design-alignment-signal-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-22-q1",
+      "source_group": "bix-22",
+      "question_sha256": "d95b7f1d74b6b4aca3af321f5666cd6f91cc3155587df90902d9e4e5cb0e3ede",
+      "proposed_design_id": "bix-design-gene-length-expression",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-22-q2",
+      "source_group": "bix-22",
+      "question_sha256": "4120d01d4a20d956c1b724d117d9a316484a03f8b14a22da1fd8d08d9beb03e3",
+      "proposed_design_id": "bix-design-gene-length-expression",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-22-q3",
+      "source_group": "bix-22",
+      "question_sha256": "2786d61551eff66f908bf80750c18b92248837a7bdc0da7c96497de2a9ba9936",
+      "proposed_design_id": "bix-design-gene-length-expression",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-22-q4",
+      "source_group": "bix-22",
+      "question_sha256": "3ffd8d82127a82e2c50533d058195e981fc40a48c62ae248d29b7253ba641a97",
+      "proposed_design_id": "bix-design-gene-length-expression",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-22-q6",
+      "source_group": "bix-22",
+      "question_sha256": "9d76efbbcc8b54b3043b750937f057052f4c9f1557d9bb937ef63f5a2a3a6dfb",
+      "proposed_design_id": "bix-design-gene-length-expression",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-24-q1",
+      "source_group": "bix-24",
+      "question_sha256": "c32ba5c6056cb3b96f3452da3f0b64f6ee6258c18da6a6ee22cac6ed8d102bca",
+      "proposed_design_id": "bix-design-combination-rna-enrichment",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-24-q2",
+      "source_group": "bix-24",
+      "question_sha256": "10cb354b99b0f43ba02ffec58edba710158d0ca6f23b773c94c6f8c56dfb2f33",
+      "proposed_design_id": "bix-design-combination-rna-enrichment",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-24-q6",
+      "source_group": "bix-24",
+      "question_sha256": "0ee2e4f9612b06572476e39cf275d051a284c8e7237a1c0ef6054a5d5ae94842",
+      "proposed_design_id": "bix-design-combination-rna-enrichment",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-25-q1",
+      "source_group": "bix-25",
+      "question_sha256": "9f4f0c766aa374e9b86c12f9ca9b48f27adab81f4fe5dea13f5ad8c31e307217",
+      "proposed_design_id": "bix-design-alignment-signal-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-25-q4",
+      "source_group": "bix-25",
+      "question_sha256": "2d31e2e3c381bc7ddfa9b35f1e45f8a7e13a83f8f727260c360ba3f6eb7eaae0",
+      "proposed_design_id": "bix-design-alignment-signal-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-26-q3",
+      "source_group": "bix-26",
+      "question_sha256": "e51e8254441995fcd0a1d8f32351c030e6b16e447841cea298f33781d4147ea1",
+      "proposed_design_id": "bix-design-factorial-microbial-rna",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-26-q4",
+      "source_group": "bix-26",
+      "question_sha256": "5ef0e6812711b588617f0e237a87986b4da9312e67f7d2363b88d2e26f852b61",
+      "proposed_design_id": "bix-design-factorial-microbial-rna",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-26-q5",
+      "source_group": "bix-26",
+      "question_sha256": "dfad5db09604cdc2a0ed3c6269f9261f34819267b973f1240366521a531803c3",
+      "proposed_design_id": "bix-design-factorial-microbial-rna",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-27-q2",
+      "source_group": "bix-27",
+      "question_sha256": "0180cd7953b2554225ce97e4104429809506c091113130cd41e11d41f2f38b4d",
+      "proposed_design_id": "bix-design-consensus-expression-subtypes",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-27-q4",
+      "source_group": "bix-27",
+      "question_sha256": "93226e937e1e642641ab797c634a5885d51889dcd9f305b181de9edee56b911f",
+      "proposed_design_id": "bix-design-consensus-expression-subtypes",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-27-q5",
+      "source_group": "bix-27",
+      "question_sha256": "dd503f99717280fe67bb4e64ead20e6baef3e7fa92f9ac48cffc1113eddd47e9",
+      "proposed_design_id": "bix-design-consensus-expression-subtypes",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-28-q1",
+      "source_group": "bix-28",
+      "question_sha256": "37bd7cd68a3bc8d6cb6af334a46a52b4b18031347585bf55d315e4442705a672",
+      "proposed_design_id": "bix-design-ortholog-tree-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-28-q2",
+      "source_group": "bix-28",
+      "question_sha256": "0a3c7a86c3b510908caf1e4d836bc0a93bf4e1bab529d65c3daf7c4d371f5e21",
+      "proposed_design_id": "bix-design-ortholog-tree-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-28-q3",
+      "source_group": "bix-28",
+      "question_sha256": "3be0ad1ec03c039bfad94847a1c85f7e414bb0973739441ebc0da5f35fa6bb53",
+      "proposed_design_id": "bix-design-ortholog-tree-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-28-q4",
+      "source_group": "bix-28",
+      "question_sha256": "2dba5427ed3ce32a36f0fbcf233d9da5f4cfb2fa7240821d13f55a916ca582a0",
+      "proposed_design_id": "bix-design-ortholog-tree-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-28-q5",
+      "source_group": "bix-28",
+      "question_sha256": "cdc23f9e8177eaf6d092747ba33742882ce31c7152f53e33b8bc192f669904b3",
+      "proposed_design_id": "bix-design-ortholog-tree-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-28-q6",
+      "source_group": "bix-28",
+      "question_sha256": "7e9ec212e61105983f50cf1530b91d8201f4469b350c134dc64c55242334b85f",
+      "proposed_design_id": "bix-design-ortholog-tree-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-29-q1",
+      "source_group": "bix-29",
+      "question_sha256": "c3e5196b7b4685489d423f887e0cd3c08b21fa1bdedf68d40bdded9ba2b9352b",
+      "proposed_design_id": "bix-design-ordinal-clinical-risk",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-29-q2",
+      "source_group": "bix-29",
+      "question_sha256": "d2c1e9160354d3c3fc68a15d6cd31e29cebb2eac0f537cb8d267e06f12594f1a",
+      "proposed_design_id": "bix-design-ordinal-clinical-risk",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-29-q3",
+      "source_group": "bix-29",
+      "question_sha256": "6fc6ff04fa418eec0d6dc2b0017d159c3bd8c0493715061f953be444b0ac60d2",
+      "proposed_design_id": "bix-design-ordinal-clinical-risk",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-29-q4",
+      "source_group": "bix-29",
+      "question_sha256": "baff7fd7d5c2651563d57a3949ef1fc1d2a5c189d5794afc21b9cb530ae7a845",
+      "proposed_design_id": "bix-design-ordinal-clinical-risk",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-3-q1",
+      "source_group": "bix-3",
+      "question_sha256": "73687ec913dfdf0141551e24e2d3ba5a62f89426828e0ad14a5a8304ff46e4bb",
+      "proposed_design_id": "bix-design-multi-tissue-response-rna",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-3-q2",
+      "source_group": "bix-3",
+      "question_sha256": "10d62679e38edd457fa2a6870acb457119b1a4d5820f23f9490c6850c9cc3723",
+      "proposed_design_id": "bix-design-multi-tissue-response-rna",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-3-q3",
+      "source_group": "bix-3",
+      "question_sha256": "1b08d2521ba2b36d11b7be131c50dd7c65eb2ef2047ab513507dce799e1b00bf",
+      "proposed_design_id": "bix-design-multi-tissue-response-rna",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-3-q4",
+      "source_group": "bix-3",
+      "question_sha256": "337132e45c91bce3c5a091d1631e1d3ac57670c559985b0cf7ddea13df5d6922",
+      "proposed_design_id": "bix-design-multi-tissue-response-rna",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-3-q5",
+      "source_group": "bix-3",
+      "question_sha256": "4c33997fef5c27e841c399c346c7fd2562c57f61d2fc1722c7a37ae5465293ef",
+      "proposed_design_id": "bix-design-multi-tissue-response-rna",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-30-q1",
+      "source_group": "bix-30",
+      "question_sha256": "d821d9cdbc1690eeef0324c2d35e5061c38b58b22bf0b671cc1fb740811609a0",
+      "proposed_design_id": "bix-design-mirna-multiplicity",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-30-q3",
+      "source_group": "bix-30",
+      "question_sha256": "c88e82a8baa3a4b78724c5776238ff33f19a705a12514fe9224b9c04e38faf95",
+      "proposed_design_id": "bix-design-mirna-multiplicity",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-30-q5",
+      "source_group": "bix-30",
+      "question_sha256": "d534c690aef861ac0c907d29284c23b262b83aca4b3a1d8ca855418b4a511a4e",
+      "proposed_design_id": "bix-design-mirna-multiplicity",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-30-q6",
+      "source_group": "bix-30",
+      "question_sha256": "d8bb185e11e075c8f0e38a5124d27970fb43826c195dada84f184d4e51063ea2",
+      "proposed_design_id": "bix-design-mirna-multiplicity",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-31-q1",
+      "source_group": "bix-31",
+      "question_sha256": "46af4abf36e5a7d795004affa7a37d9a3e683278ebfd7356dedd92c27388749a",
+      "proposed_design_id": "bix-design-sex-by-cell-expression",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-31-q2",
+      "source_group": "bix-31",
+      "question_sha256": "4ac2a028a99ceb4df35d34c328b3fb33fc170d0c29cbdb6a974266577a0924e7",
+      "proposed_design_id": "bix-design-sex-by-cell-expression",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-31-q3",
+      "source_group": "bix-31",
+      "question_sha256": "331dcd10bf4d2771b1c2f1db409efc87a558efce98694f83ef80dcf923f8f4ad",
+      "proposed_design_id": "bix-design-sex-by-cell-expression",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-31-q4",
+      "source_group": "bix-31",
+      "question_sha256": "5d142273459d1d383ce703f39219ffc562cb1d8862ae21880f6bfe22eac8ce31",
+      "proposed_design_id": "bix-design-sex-by-cell-expression",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-32-q2",
+      "source_group": "bix-32",
+      "question_sha256": "273953e7bc92dc0006b406e5d22ab95705b757184f806afbadaebd471ab1328a",
+      "proposed_design_id": "bix-design-factorial-microbial-rna",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-32-q3",
+      "source_group": "bix-32",
+      "question_sha256": "b8a7159d9fc52dd72d18d5b4be2b000e7452465b32535c91270af271a1dc4868",
+      "proposed_design_id": "bix-design-factorial-microbial-rna",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-32-q4",
+      "source_group": "bix-32",
+      "question_sha256": "5d428f60cacacf80510c766db4b9165fd4d46b4d186dbb612ad4612c5f88ebc6",
+      "proposed_design_id": "bix-design-factorial-microbial-rna",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-33-q1",
+      "source_group": "bix-33",
+      "question_sha256": "a558fc4929b910cfc7e30e7f2a07638b02c66dbc98dc1407cfa14507011b898b",
+      "proposed_design_id": "bix-design-donor-aware-celltype-treatment",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-33-q6",
+      "source_group": "bix-33",
+      "question_sha256": "a9243329f74494e9915363b72aec517930eaa4a7b045b2c32ab85c79b696bcd4",
+      "proposed_design_id": "bix-design-donor-aware-celltype-treatment",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-34-q1",
+      "source_group": "bix-34",
+      "question_sha256": "63485caffac29fdbe4b4d07af5d009c7fea52150a75c01ca5ed51f9c3a1fc1e0",
+      "proposed_design_id": "bix-design-ortholog-tree-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-34-q2",
+      "source_group": "bix-34",
+      "question_sha256": "ddb16c5feb7a007c384a9afd4c6f304c8ad1dc24c44285f723bcd2a2da2b5690",
+      "proposed_design_id": "bix-design-ortholog-tree-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-34-q3",
+      "source_group": "bix-34",
+      "question_sha256": "ea36260fef03c297be9e53a9fa1204fa8898e010300e6643f9444c79948c1848",
+      "proposed_design_id": "bix-design-ortholog-tree-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-34-q4",
+      "source_group": "bix-34",
+      "question_sha256": "1ecbb1292160d026599d2d3348505920e05dd49b10a2de9b04c80a533675baaf",
+      "proposed_design_id": "bix-design-ortholog-tree-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-34-q5",
+      "source_group": "bix-34",
+      "question_sha256": "1d030254eae14b7f694a6939a50bac8cc08106b5d1dbb8bb447efd7d79864bc3",
+      "proposed_design_id": "bix-design-ortholog-tree-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-34-q6",
+      "source_group": "bix-34",
+      "question_sha256": "392690d362bfae922995deaa2307361a3c17ff5b0c227e492b0c4ce3ac6d8225",
+      "proposed_design_id": "bix-design-ortholog-tree-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-35-q1",
+      "source_group": "bix-35",
+      "question_sha256": "48254ebcfa94f663e75554a2bf7448962ddbc910f7b508d5f7b750fb32672c60",
+      "proposed_design_id": "bix-design-ortholog-tree-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-35-q2",
+      "source_group": "bix-35",
+      "question_sha256": "e84f6f8bed540c111cd60416697ee0a4aa9b4d0a0d8f542b85610bf820dc3d4f",
+      "proposed_design_id": "bix-design-ortholog-tree-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-35-q3",
+      "source_group": "bix-35",
+      "question_sha256": "ffe1355a9360f30f99bab91a60adcf4e299a00d881602ccfb8ba53e5aa2bd717",
+      "proposed_design_id": "bix-design-ortholog-tree-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-35-q4",
+      "source_group": "bix-35",
+      "question_sha256": "12dedbcdd1c7702f1ea32a0c317547873207b46eb4912496d7a2f523ab614b12",
+      "proposed_design_id": "bix-design-ortholog-tree-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-36-q1",
+      "source_group": "bix-36",
+      "question_sha256": "0c1cd3dde553b29206509b1927975c4a2fa0ffbf4830bd68d7ad3ad8343a2350",
+      "proposed_design_id": "bix-design-immune-mirna-distributions",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-36-q3",
+      "source_group": "bix-36",
+      "question_sha256": "99c7ccbd5354a67c9cb341d26f00242d0170e5b7e31f6aa071d038861b6d077c",
+      "proposed_design_id": "bix-design-immune-mirna-distributions",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-36-q4",
+      "source_group": "bix-36",
+      "question_sha256": "fc3c28b249aa34849d89b86045f89be175569201490964b4dbce57a93d12c708",
+      "proposed_design_id": "bix-design-immune-mirna-distributions",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-36-q5",
+      "source_group": "bix-36",
+      "question_sha256": "13bbfeca352380635ad381493ab90f934df74cc55b23d500f4b7fdf4a60bbdeb",
+      "proposed_design_id": "bix-design-immune-mirna-distributions",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-37-q1",
+      "source_group": "bix-37",
+      "question_sha256": "bc88f1264d6174df1563bd648b823816b89d04bb388cc69ea31724788640f7fd",
+      "proposed_design_id": "bix-design-paired-protein-abundance",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-37-q2",
+      "source_group": "bix-37",
+      "question_sha256": "f3bd896bd57bec2df86ebe33c43b60dc6a9d240922351f371264c2c53b7c24c8",
+      "proposed_design_id": "bix-design-paired-protein-abundance",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-37-q3",
+      "source_group": "bix-37",
+      "question_sha256": "5677569a86aba010f722d7814984772ec3fa31aa2769db9fe4cfde315b52ff5e",
+      "proposed_design_id": "bix-design-paired-protein-abundance",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-37-q4",
+      "source_group": "bix-37",
+      "question_sha256": "1aba0c2693042713187e6d671c68ac8bfd3a3d0d299ea5b72907cc4c770e7959",
+      "proposed_design_id": "bix-design-paired-protein-abundance",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-38-q1",
+      "source_group": "bix-38",
+      "question_sha256": "ec990d710671599243484f14b24ea7058f29098a543ae97c1f98d1a9ff87f5e0",
+      "proposed_design_id": "bix-design-ortholog-tree-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-38-q2",
+      "source_group": "bix-38",
+      "question_sha256": "30a43c6c110cdad8126eb6f22eb57494c40e17a920e65a6f9724aa24b06f2188",
+      "proposed_design_id": "bix-design-ortholog-tree-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-38-q3",
+      "source_group": "bix-38",
+      "question_sha256": "5664f7cebec0d3aba058a80681f36e2cbe0a4034796e8741441eada2e094917a",
+      "proposed_design_id": "bix-design-ortholog-tree-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-38-q5",
+      "source_group": "bix-38",
+      "question_sha256": "5a58d669dbec5434f281109e64d94dc1d0e10474646f2040d4f59fe23d07734f",
+      "proposed_design_id": "bix-design-ortholog-tree-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-38-q6",
+      "source_group": "bix-38",
+      "question_sha256": "ead1298f7e91216c38ace2cfddc74602cdf969f8588057169f9d54ca17916687",
+      "proposed_design_id": "bix-design-ortholog-tree-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-39-q2",
+      "source_group": "bix-39",
+      "question_sha256": "eccbbd263b61e60dcf20174c0a39723107cace9cd8c612c7975da8c247a7bb59",
+      "proposed_design_id": "bix-design-clinical-exome-variant-audit",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-4-q1",
+      "source_group": "bix-4",
+      "question_sha256": "57f63b3871cf502769fa791c33f4800aec36f7e28326d86778721fa71708ab3d",
+      "proposed_design_id": "bix-design-ortholog-tree-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-4-q2",
+      "source_group": "bix-4",
+      "question_sha256": "424b51b762e57e20e8d95e2dd65995bb4d2f567db89daac2d78a031c96b75b53",
+      "proposed_design_id": "bix-design-ortholog-tree-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-4-q3",
+      "source_group": "bix-4",
+      "question_sha256": "b5f4c0816e7e01603a9b22f68471878e1cedbb637f9606a47d7d09b77cec9064",
+      "proposed_design_id": "bix-design-ortholog-tree-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-4-q4",
+      "source_group": "bix-4",
+      "question_sha256": "87b6153a03c141310afcc10d57cec8de143ee580ea5933d06104a058ccf2f606",
+      "proposed_design_id": "bix-design-ortholog-tree-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-4-q5",
+      "source_group": "bix-4",
+      "question_sha256": "07ca7017f503c28c48000e49b313044a87d5d680a9b960b5f2ae0fc0c702a9de",
+      "proposed_design_id": "bix-design-ortholog-tree-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-4-q6",
+      "source_group": "bix-4",
+      "question_sha256": "f5d1e1b8f4c688623bb9dc1ece8e993b5b47a323f831a424c0d891f7b274ce9e",
+      "proposed_design_id": "bix-design-ortholog-tree-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-4-q7",
+      "source_group": "bix-4",
+      "question_sha256": "d8f5aac062f2a3513f896985d5edebe123018953fc99c7205c72408223bf4331",
+      "proposed_design_id": "bix-design-ortholog-tree-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-41-q1",
+      "source_group": "bix-41",
+      "question_sha256": "399ab888507820e7d2fdaa50f70114f34e2a33c7e3189f734d4c09fa929ef134",
+      "proposed_design_id": "bix-design-colony-morphology-contrasts",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-41-q3",
+      "source_group": "bix-41",
+      "question_sha256": "5cdad230b954776af142685f4e2652d71d05b97ae9585bf0d35734ce24bb1f40",
+      "proposed_design_id": "bix-design-colony-morphology-contrasts",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-41-q4",
+      "source_group": "bix-41",
+      "question_sha256": "412cf99f237e12be914d6f706e836aa1cc5c2841d53737d4821aee670f0ad4c1",
+      "proposed_design_id": "bix-design-colony-morphology-contrasts",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-41-q5",
+      "source_group": "bix-41",
+      "question_sha256": "9360bb14a4cb50974e4a90149468c858a3029813ebedf543116bc6cbc1075308",
+      "proposed_design_id": "bix-design-colony-morphology-contrasts",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-42-q1",
+      "source_group": "bix-42",
+      "question_sha256": "d15c5341e2df3d0e6e452a6e1fba7c545436e3237ffa01f40f549e6f7594ab2c",
+      "proposed_design_id": "bix-design-multiomics-cohort-eligibility",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-42-q2",
+      "source_group": "bix-42",
+      "question_sha256": "56ee4f9fd3b1c9eea460f09b95dc7ef65d9082a2e27634fc94586c3477d8ea17",
+      "proposed_design_id": "bix-design-multiomics-cohort-eligibility",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-43-q1",
+      "source_group": "bix-43",
+      "question_sha256": "8f7f60b669d94bfd6f86ea094e0f94ba4a91d0b210390cc7ae9676ff539fda29",
+      "proposed_design_id": "bix-design-combination-rna-enrichment",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-43-q2",
+      "source_group": "bix-43",
+      "question_sha256": "0a7c4c5e860fb2fdb63a2601d58ea04f5bbed40f0a984e8b7899bc4006f199d6",
+      "proposed_design_id": "bix-design-combination-rna-enrichment",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-43-q3",
+      "source_group": "bix-43",
+      "question_sha256": "0a6df7a2e6de09bffbbc13b915da9c2695235efcf01d92fb19e15bc5132dca35",
+      "proposed_design_id": "bix-design-combination-rna-enrichment",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-43-q4",
+      "source_group": "bix-43",
+      "question_sha256": "9bd90f00c066c939615a2c824a105c9421916f91605c22084212ddae6baabda2",
+      "proposed_design_id": "bix-design-combination-rna-enrichment",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-43-q5",
+      "source_group": "bix-43",
+      "question_sha256": "d51c6ca5a5f280ed5edf004cd13a43811d0c6b55aeb837af63a41b623dc5726b",
+      "proposed_design_id": "bix-design-combination-rna-enrichment",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-45-q1",
+      "source_group": "bix-45",
+      "question_sha256": "1df8d6c0f542932f84cf83f458daea32ed0a31659802ab967550a3ccbe232397",
+      "proposed_design_id": "bix-design-alignment-signal-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-45-q2",
+      "source_group": "bix-45",
+      "question_sha256": "2c463d861f635f58582be0a631e8212f7dc30b90e8eb33591043c4efafdbc992",
+      "proposed_design_id": "bix-design-alignment-signal-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-45-q5",
+      "source_group": "bix-45",
+      "question_sha256": "6fedd7362e7838deb1482a871315d628c6046f867e07c0d1d6db6f11d7ded79a",
+      "proposed_design_id": "bix-design-alignment-signal-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-45-q6",
+      "source_group": "bix-45",
+      "question_sha256": "15427291d72ed0b346eca5ed964626e14cef686180dbc84193831864bc47af43",
+      "proposed_design_id": "bix-design-alignment-signal-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-46-q1",
+      "source_group": "bix-46",
+      "question_sha256": "7ad445079418c30b5f7ae4ae93332818cdc172c2856ebc83d3ff62af1bc5455a",
+      "proposed_design_id": "bix-design-factorial-microbial-rna",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-46-q4",
+      "source_group": "bix-46",
+      "question_sha256": "6ca10a7c484e10f9b16abe36e0d924118447b5b317ee2bf885efb455466905de",
+      "proposed_design_id": "bix-design-factorial-microbial-rna",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-47-q2",
+      "source_group": "bix-47",
+      "question_sha256": "087b60c436247ee4c26c13f8bd803ec1afc9a7483fa8979da52a7d5cb5f4011f",
+      "proposed_design_id": "bix-design-clinical-exome-variant-audit",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-47-q3",
+      "source_group": "bix-47",
+      "question_sha256": "2fc7fa331349bba70edbd5fda631f6e67ddcf6e6dfd5978212280191d182478c",
+      "proposed_design_id": "bix-design-clinical-exome-variant-audit",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-49-q1",
+      "source_group": "bix-49",
+      "question_sha256": "97ebf3049a5cda3d9123f02cadc03e7a27eb166e94049b1e2b552173961784ab",
+      "proposed_design_id": "bix-design-case-control-go",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-49-q2",
+      "source_group": "bix-49",
+      "question_sha256": "2b018ef66139e6e2bad807b039a10cd463be4d53717cb1c41feb09208e04900f",
+      "proposed_design_id": "bix-design-case-control-go",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-49-q3",
+      "source_group": "bix-49",
+      "question_sha256": "b7a01d67cb54cdca62c30a0f9aa37bb803c9dd5019dfbef80056d51089b623b1",
+      "proposed_design_id": "bix-design-case-control-go",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-49-q4",
+      "source_group": "bix-49",
+      "question_sha256": "c0611885b2926b5fe167f566d5b0bb5b5aacc79ba1af449d5042c52b2919ee80",
+      "proposed_design_id": "bix-design-case-control-go",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-49-q5",
+      "source_group": "bix-49",
+      "question_sha256": "9af0e2eded98daf4a87b8e3d900903a2a75aed3dfa8a83d97d5596482dfca9a6",
+      "proposed_design_id": "bix-design-case-control-go",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-5-q1",
+      "source_group": "bix-5",
+      "question_sha256": "2bf46de8ad2a4a236c5cafb38dc9f3d387dcafd5802cb996db071dab683032e8",
+      "proposed_design_id": "bix-design-case-control-go",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-5-q4",
+      "source_group": "bix-5",
+      "question_sha256": "3c71c34f973850bbae49d5abdba387e34a385eea883c8a75b276a3c4f970e22e",
+      "proposed_design_id": "bix-design-case-control-go",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-51-q1",
+      "source_group": "bix-51",
+      "question_sha256": "7c6446d5a74642cc964179efbeee8c57f6f48205c1200109c64e84c2c69a5d3d",
+      "proposed_design_id": "bix-design-binary-clinical-response",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-51-q2",
+      "source_group": "bix-51",
+      "question_sha256": "414c51bf9b9c3e6c3765222cc8f31bafc0118c2c1ac7ad85bfc45b2c0b176af2",
+      "proposed_design_id": "bix-design-binary-clinical-response",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-51-q3",
+      "source_group": "bix-51",
+      "question_sha256": "5e3e3ddc98eff831a958ef52696450a5156534246e9a279de9f4184150cc4227",
+      "proposed_design_id": "bix-design-binary-clinical-response",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-51-q4",
+      "source_group": "bix-51",
+      "question_sha256": "f6cb861c91e6feafb2a98fd6325d89961a2b7a7e4827b8af9c7ea7ffbc099d73",
+      "proposed_design_id": "bix-design-binary-clinical-response",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-51-q5",
+      "source_group": "bix-51",
+      "question_sha256": "c1554e3d7ac8f0680e41f989498cc2a03b88afb7c511f2ac799c48cb144e2a61",
+      "proposed_design_id": "bix-design-binary-clinical-response",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-51-q6",
+      "source_group": "bix-51",
+      "question_sha256": "adf6892b289329bb2d6e82f51f3e3a07d67df5ba59cb34f316949bb94ff03e3e",
+      "proposed_design_id": "bix-design-binary-clinical-response",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-51-q8",
+      "source_group": "bix-51",
+      "question_sha256": "c7bb46cc2e7abc72a546beb2d86a9d9ac291de498bd6c693cc2696f099beaf3a",
+      "proposed_design_id": "bix-design-binary-clinical-response",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-52-q1",
+      "source_group": "bix-52",
+      "question_sha256": "72603ec175182b45b2f219602071b3350c543b20857096810ce9f717cdb52875",
+      "proposed_design_id": "bix-design-methylation-genome-density",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-52-q2",
+      "source_group": "bix-52",
+      "question_sha256": "ac32c7f91421bdc592794dcf65058ff340c1740017222a699d9ac8966f671c71",
+      "proposed_design_id": "bix-design-methylation-genome-density",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-52-q3",
+      "source_group": "bix-52",
+      "question_sha256": "a63da6394d36f156710c4f285e3b5f63956afaf26e5a6c2f657c265795eeac15",
+      "proposed_design_id": "bix-design-methylation-genome-density",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-52-q5",
+      "source_group": "bix-52",
+      "question_sha256": "0fca351e9a38c591cb3056753223d2e13d4010169cd132c57f6f2e1ea8f7ae77",
+      "proposed_design_id": "bix-design-methylation-genome-density",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-52-q6",
+      "source_group": "bix-52",
+      "question_sha256": "a374fe13571c82e3f360ed04a6dc24f79f746bb573bb731d2f271cf27d4ab346",
+      "proposed_design_id": "bix-design-methylation-genome-density",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-52-q7",
+      "source_group": "bix-52",
+      "question_sha256": "9cd0c7040c6a74609cee8b76181f57dce72b8b279ee201006ff937c88c620ae6",
+      "proposed_design_id": "bix-design-methylation-genome-density",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-53-q2",
+      "source_group": "bix-53",
+      "question_sha256": "d646675d321001e0793d4416e5c24c3d04c38f5202af533bc9366b0d7d4f05cd",
+      "proposed_design_id": "bix-design-rna-replicate-sensitivity",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-53-q3",
+      "source_group": "bix-53",
+      "question_sha256": "8b2c260fc4c99d4446bb81c295188fd5d48bd308fe7ec8bbea51d7671f89881b",
+      "proposed_design_id": "bix-design-rna-replicate-sensitivity",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-53-q4",
+      "source_group": "bix-53",
+      "question_sha256": "2624d57acf97fc9a0aed51c41450336d78125de4fec6a9affb53686793f6ce93",
+      "proposed_design_id": "bix-design-rna-replicate-sensitivity",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-53-q5",
+      "source_group": "bix-53",
+      "question_sha256": "b6511359d1cccf7be33e51ac84ce8533d20989b777c5b79573c6ca781c795723",
+      "proposed_design_id": "bix-design-rna-replicate-sensitivity",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-53-q6",
+      "source_group": "bix-53",
+      "question_sha256": "bb1b246a0717579386c1184b05e1a6c01b452635f93156c8897e95b46a8f7c94",
+      "proposed_design_id": "bix-design-rna-replicate-sensitivity",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-54-q1",
+      "source_group": "bix-54",
+      "question_sha256": "44a12bec3f389a5c3f74b80a2498db121404eff513e28432b3e6f7ae4ebce023",
+      "proposed_design_id": "bix-design-colony-mixture-response",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-54-q2",
+      "source_group": "bix-54",
+      "question_sha256": "15443528a6606879adf1b124e0493923d220bb939a26d0ac61062ae2d6b36f35",
+      "proposed_design_id": "bix-design-colony-mixture-response",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-54-q3",
+      "source_group": "bix-54",
+      "question_sha256": "b411f1433d3ad24cbfbbfd96b57b5b83a9e7d35d2e40b0bc72d23d69feadd4f8",
+      "proposed_design_id": "bix-design-colony-mixture-response",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-54-q4",
+      "source_group": "bix-54",
+      "question_sha256": "0d3ea50bf78ef78744a313834f43dfd307af64b6ab6e4483da8d2d2a035fb56a",
+      "proposed_design_id": "bix-design-colony-mixture-response",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-54-q5",
+      "source_group": "bix-54",
+      "question_sha256": "1c06c573a479967b6b4416862d5ac6d2d4baf82a78e470f3ed0a202e7ae6e563",
+      "proposed_design_id": "bix-design-colony-mixture-response",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-54-q6",
+      "source_group": "bix-54",
+      "question_sha256": "d5ecfd05e02340ed7076dd3ee9f685c6b9c4f3e98ab596d5b591dc47166af463",
+      "proposed_design_id": "bix-design-colony-mixture-response",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-54-q7",
+      "source_group": "bix-54",
+      "question_sha256": "7564550e8ae83300ae0d91ca7023d01b593215fa08688e454b48473d780d0b7f",
+      "proposed_design_id": "bix-design-colony-mixture-response",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-55-q1",
+      "source_group": "bix-55",
+      "question_sha256": "8734df9eb29d17df07b3e7d736bdfb2e5d782eb323dd4d1088891733f112aa03",
+      "proposed_design_id": "bix-design-ortholog-discovery-qc",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-56-q1",
+      "source_group": "bix-56",
+      "question_sha256": "2c88515eeb2bd37134d92581bb22da1632fd6205f8958446f97c0eb1608a69f8",
+      "proposed_design_id": "bix-design-ortholog-discovery-qc",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-57-q1",
+      "source_group": "bix-57",
+      "question_sha256": "a6106eab2ecdd6380e2e7c9e8cf414d1b6f0dd68a4d3a0f1fec05fc762626368",
+      "proposed_design_id": "bix-design-ortholog-discovery-qc",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-58-q1",
+      "source_group": "bix-58",
+      "question_sha256": "01d159a153d9699fd658887fc4216497ed14bdcef43d9f4d18c57e06711d5670",
+      "proposed_design_id": "bix-design-ortholog-discovery-qc",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-6-q1",
+      "source_group": "bix-6",
+      "question_sha256": "57e40c5334397a948c7dc84c9ece9ae08ceba278bea72621fdc5f79fa0bf405a",
+      "proposed_design_id": "bix-design-replicated-crispr-enrichment",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-6-q3",
+      "source_group": "bix-6",
+      "question_sha256": "e2b8bece3c0d5af8852a835092b9c243e180080abddd702ccd399fcb2935b80a",
+      "proposed_design_id": "bix-design-replicated-crispr-enrichment",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-6-q4",
+      "source_group": "bix-6",
+      "question_sha256": "c8d42cf92fa5ea5109401f9e5c67ba3d43f13ef856a37a2aaadcca45cf70b07a",
+      "proposed_design_id": "bix-design-replicated-crispr-enrichment",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-6-q5",
+      "source_group": "bix-6",
+      "question_sha256": "13e067a638550045d3055775e84e866a793d53439e55b7f227f5161ba741de6b",
+      "proposed_design_id": "bix-design-replicated-crispr-enrichment",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-6-q6",
+      "source_group": "bix-6",
+      "question_sha256": "feacd9a42220603936f939baa921c4b0a494816bf4835e5120985b5064a6c40f",
+      "proposed_design_id": "bix-design-replicated-crispr-enrichment",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-6-q7",
+      "source_group": "bix-6",
+      "question_sha256": "d3e13df46e03f5841f56751aa86f4b886cd207139cbf2318805e88bd11ec9880",
+      "proposed_design_id": "bix-design-replicated-crispr-enrichment",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-60-q1",
+      "source_group": "bix-60",
+      "question_sha256": "4860214e0b48841d8bdc78a89530c40c6b4378992e2222d47a36518e0db70cd9",
+      "proposed_design_id": "bix-design-ortholog-tree-comparison",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-61-q1",
+      "source_group": "bix-61",
+      "question_sha256": "089aba415cd1cf6e09a13c6f70f3d92eb2ec4ac4da43d1f452bc19cdb0a09018",
+      "proposed_design_id": "bix-design-paired-bacterial-variant-workflow",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-61-q2",
+      "source_group": "bix-61",
+      "question_sha256": "7b55701fb9d957d8cce4f217eefb599629a20379c96a13747f784495b9826a43",
+      "proposed_design_id": "bix-design-paired-bacterial-variant-workflow",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-61-q3",
+      "source_group": "bix-61",
+      "question_sha256": "59bc4273c282b367c80eab1469f1e510e6cf6b4bc7bbcf4ddfec1772968b3534",
+      "proposed_design_id": "bix-design-paired-bacterial-variant-workflow",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-61-q4",
+      "source_group": "bix-61",
+      "question_sha256": "166698bc9e18aba3eaa73b4caa991c3e7cd4281f6f7a9eac03c686d8a7bab7c5",
+      "proposed_design_id": "bix-design-paired-bacterial-variant-workflow",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-61-q5",
+      "source_group": "bix-61",
+      "question_sha256": "95687365a900102efd02376e04fb1a7f73f8ede849af664abc00111f4d4ef533",
+      "proposed_design_id": "bix-design-paired-bacterial-variant-workflow",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-61-q6",
+      "source_group": "bix-61",
+      "question_sha256": "985fd0b1b9540c4aa254234d0e4fff700c58f325154032befbc96bc82e5abdfa",
+      "proposed_design_id": "bix-design-paired-bacterial-variant-workflow",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-7-q1",
+      "source_group": "bix-7",
+      "question_sha256": "6450af9e2c6a5eb9cddeb2148b14a31812dcd931811eb7cd595da39ae3e854e8",
+      "proposed_design_id": "bix-design-clinical-exome-variant-audit",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-7-q2",
+      "source_group": "bix-7",
+      "question_sha256": "76b745b1469f7e06513647cd01aa03212b23d26154cd800740178371c10a24cb",
+      "proposed_design_id": "bix-design-clinical-exome-variant-audit",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-7-q3",
+      "source_group": "bix-7",
+      "question_sha256": "5b97dff336752752ceadce68c526baa66836ac0bcbc093b79410b0dd365e34d4",
+      "proposed_design_id": "bix-design-clinical-exome-variant-audit",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-8-q1",
+      "source_group": "bix-8",
+      "question_sha256": "04bf5bb1b3702331cef20f127c8abe76af46c4f6bf8ac1309ce2c939dd2fabcf",
+      "proposed_design_id": "bix-design-m6a-expression-association",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-8-q2",
+      "source_group": "bix-8",
+      "question_sha256": "ba337629e8d2d1906086a9ca1fb8024cf72a267e2b56fc7fc3b191fc644f991a",
+      "proposed_design_id": "bix-design-m6a-expression-association",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-8-q3",
+      "source_group": "bix-8",
+      "question_sha256": "38cb10f20f1ea9f97c9ece06e201ff4a16d1065e727b8e4df292fcbe467720ed",
+      "proposed_design_id": "bix-design-m6a-expression-association",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-8-q5",
+      "source_group": "bix-8",
+      "question_sha256": "f50374c1c376bc7730c6bec155642490eb060e5a2980b60f018d0be1548c48e3",
+      "proposed_design_id": "bix-design-m6a-expression-association",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-8-q6",
+      "source_group": "bix-8",
+      "question_sha256": "ffb6b3ef22459c2e17c674fa10a280a765c8dda781c86fd278559f6987e6881f",
+      "proposed_design_id": "bix-design-m6a-expression-association",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-8-q7",
+      "source_group": "bix-8",
+      "question_sha256": "fbde61d90af8d6294209ecb3e2d3268954086fdc7774a9b4dc0fdea7744a8ba3",
+      "proposed_design_id": "bix-design-m6a-expression-association",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-9-q3",
+      "source_group": "bix-9",
+      "question_sha256": "4046380a92c598987d226dc69fc2417964b9056560a1d0fb754584a4f6b4100f",
+      "proposed_design_id": "bix-design-multi-tissue-response-rna",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-9-q4",
+      "source_group": "bix-9",
+      "question_sha256": "db8939f5aa04b8a7b4238db270db160c27cc03f39d1a6c591a4706ec53afe9cf",
+      "proposed_design_id": "bix-design-multi-tissue-response-rna",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    },
+    {
+      "task_id": "bix-9-q5",
+      "source_group": "bix-9",
+      "question_sha256": "3d12f9dff7913c34ae1d989a2e6dbf7e83a2c710779f0a0ff3c0f2b5763a6122",
+      "proposed_design_id": "bix-design-multi-tissue-response-rna",
+      "inspection_tier": "question-endpoint-reviewed",
+      "equivalence_status": "prospective-independent-data-workflow-adaptation-unvalidated"
+    }
+  ],
+  "designs": [
+    {
+      "proposed_id": "bix-design-case-control-go",
+      "target_ids": [
+        "bix-1-q1",
+        "bix-1-q2",
+        "bix-5-q1",
+        "bix-5-q4",
+        "bix-49-q1",
+        "bix-49-q2",
+        "bix-49-q3",
+        "bix-49-q4",
+        "bix-49-q5"
+      ],
+      "source_groups": [
+        "bix-1",
+        "bix-5",
+        "bix-49"
+      ],
+      "scientific_question_on_independent_observations": "Which disease-associated expression effects and GO processes persist after explicit count filtering, effect shrinkage and semantic term reduction?",
+      "matching_existing_workstream_ids": [
+        "rna-seq-contrast-enrichment"
+      ],
+      "nearby_broad_question_ids": [
+        "rna-seq-contrast-enrichment-01",
+        "rna-seq-contrast-enrichment-02",
+        "rna-seq-contrast-enrichment-03",
+        "rna-seq-contrast-enrichment-04"
+      ],
+      "input_design": "Independent replicated case/control raw RNA counts with documented covariates, GTF/GFF3 gene identifiers and pinned GO/gene annotations.",
+      "proposed_artifacts_and_key_columns": [
+        "samples.tsv: sample, condition, covariates, inclusion",
+        "results.tsv: gene, base_mean, raw_lfc, shrunken_lfc, p, q, testable",
+        "go.tsv: term, gene_universe, overlap, p, q, representative_term",
+        "members.tsv: term, gene, direction, eligibility"
+      ],
+      "method_and_decision_parameters_to_freeze": "Full-rank design, reference condition, apeglm coefficient, raw versus adjusted significance masks per endpoint, tested background versus all annotated genes, GO version, simplify semantic measure/cutoff/representative rule, ties and rounding.",
+      "deterministic_verifier_design_and_negative_controls": "Run native DESeq2/clusterProfiler oracle and independently check contrast direction, complete gene/term universes, memberships and multiplicity. Mutate a contrast sign, universe size or simplified representative and require failure.",
+      "unresolved_data_and_runtime_requirements": "Need independent raw counts and sufficiently replicated condition design; annotation snapshot must be license-compatible offline and complete enough for semantic reduction; runtime unmeasured.",
+      "endpoint_adaptation_limits": "The source mixes p and padj criteria and calls a term result a threshold. Keep each explicit mask distinct. Specific genes/terms may be absent or nonsignificant in independent observations; do not select data to force their published answer.",
+      "benchmark_study_exclusion_identifiers": [
+        "https://doi.org/10.1172/jci.insight.167744"
+      ],
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "bix-design-ordinal-clinical-risk",
+      "target_ids": [
+        "bix-10-q1",
+        "bix-10-q2",
+        "bix-10-q3",
+        "bix-10-q4",
+        "bix-10-q5",
+        "bix-10-q6",
+        "bix-10-q7",
+        "bix-29-q1",
+        "bix-29-q2",
+        "bix-29-q3",
+        "bix-29-q4"
+      ],
+      "source_groups": [
+        "bix-10",
+        "bix-29"
+      ],
+      "scientific_question_on_independent_observations": "How do treatment, exposure and baseline comorbidity relate to ordered disease severity, including prespecified interaction and subgroup estimates?",
+      "matching_existing_workstream_ids": [
+        "clinical-response-model"
+      ],
+      "nearby_broad_question_ids": [
+        "clinical-response-model-01",
+        "clinical-response-model-02",
+        "clinical-response-model-03"
+      ],
+      "input_design": "Independent participant-level observed ordered severity, treatment/exposure metadata and baseline comorbidity, including treatment design provenance.",
+      "proposed_artifacts_and_key_columns": [
+        "patients.tsv: id, severity, treatment, exposure, history, inclusion",
+        "models.tsv: model, term, coefficient, se, odds_ratio, p, threshold",
+        "contingencies.tsv: subgroup, treatment, severity, count",
+        "subgroup_tests.tsv: subgroup, statistic, df, p, assumptions",
+        "assumptions.tsv: model, diagnostic, statistic, p, criterion, status, fallback_used"
+      ],
+      "method_and_decision_parameters_to_freeze": "Ordered category levels, proportional-odds model convention, baseline categories, interaction centering, complete-case policy, all subgroup definitions, chi-square continuity correction and sparse-cell eligibility, adjusted multiplicity. Prespecify a proportional-odds diagnostic and threshold, along with an assumption-failed output or a declared partial-proportional/multinomial sensitivity model. A fallback changes the estimand and must not be reported as the original common odds ratio.",
+      "deterministic_verifier_design_and_negative_controls": "Native ordered-logit fit plus independent design, log-likelihood, exp(coefficient) and contingency arithmetic. Reject wrong severity ordering, a pooled subgroup or an odds reduction with reversed reference. Recompute the prespecified assumption check and reject a common-odds interpretation when the contract requires an assumption-failed status.",
+      "unresolved_data_and_runtime_requirements": "Need independent cohort with both outcome levels and enough observations in all covariate cells; complete or quasi-separation and unsupported proportional odds require explicit statuses.",
+      "endpoint_adaptation_limits": "An interaction-model main effect applies at reference/zero covariates; do not describe it as a universal treatment effect. Frozen subgroup comparisons describe association unless randomization supports a defined causal estimand.",
+      "benchmark_study_exclusion_identifiers": [
+        "https://zenodo.org/records/12737228"
+      ],
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "bix-design-ortholog-tree-comparison",
+      "target_ids": [
+        "bix-4-q1",
+        "bix-4-q2",
+        "bix-4-q3",
+        "bix-4-q4",
+        "bix-4-q5",
+        "bix-4-q6",
+        "bix-4-q7",
+        "bix-11-q1",
+        "bix-11-q2",
+        "bix-11-q3",
+        "bix-11-q4",
+        "bix-11-q5",
+        "bix-11-q6",
+        "bix-28-q1",
+        "bix-28-q2",
+        "bix-28-q3",
+        "bix-28-q4",
+        "bix-28-q5",
+        "bix-28-q6",
+        "bix-34-q1",
+        "bix-34-q2",
+        "bix-34-q3",
+        "bix-34-q4",
+        "bix-34-q5",
+        "bix-34-q6",
+        "bix-35-q1",
+        "bix-35-q2",
+        "bix-35-q3",
+        "bix-35-q4",
+        "bix-38-q1",
+        "bix-38-q2",
+        "bix-38-q3",
+        "bix-38-q5",
+        "bix-38-q6",
+        "bix-60-q1"
+      ],
+      "source_groups": [
+        "bix-4",
+        "bix-11",
+        "bix-28",
+        "bix-34",
+        "bix-35",
+        "bix-38",
+        "bix-60"
+      ],
+      "scientific_question_on_independent_observations": "How do evolutionary branch summaries vary across independent observed orthologs in two clades, and which summaries depend on rooting or tip anomalies?",
+      "matching_existing_workstream_ids": [
+        "ortholog-tree-signal"
+      ],
+      "nearby_broad_question_ids": [
+        "ortholog-tree-signal-01",
+        "ortholog-tree-signal-02",
+        "ortholog-tree-signal-03"
+      ],
+      "input_design": "Observed ortholog loci and provenance-linked Newick trees with taxon manifests, branch units and explicit rooting; retain one biological orthogroup per replicate.",
+      "proposed_artifacts_and_key_columns": [
+        "trees.tsv: locus, clade, rooted, n_tips, total_length, treeness, rate, dvmc",
+        "tips.tsv: locus, clade, tip, long_branch_score",
+        "distances.tsv: locus, clade, tip_a, tip_b, patristic_distance",
+        "comparisons.tsv: metric, group, n, median, mean, variance, quantile, u, p",
+        "paired.tsv: locus, metric, clade_a, clade_b, difference, ratio"
+      ],
+      "method_and_decision_parameters_to_freeze": "Pin native PhyKIT metric definitions/version, rooting/outgroup, internal/root branch conventions, zero-length rules, missing ortholog matching, sample versus population SD, Mann-Whitney sidedness/ties/exact/asymptotic method, paired versus unpaired summary, quantile interpolation.",
+      "deterministic_verifier_design_and_negative_controls": "Run native metrics and independently reconstruct branch sums, path distances and grouped summaries. Reject duplicate orthogroup replicates, a wrong root or a corrupted distance. Document native implementation discrepancies instead of silently substituting another formula.",
+      "unresolved_data_and_runtime_requirements": "Need enough independent original loci, not several transformations of seven loci; rooting and computational scale must be verified. Earlier 16 alignment/tree pairs represented only seven original orthogroups.",
+      "endpoint_adaptation_limits": "Source named-locus endpoints become explicitly named independent loci. DVMC SD must not be replaced with CV; long-branch-score behavior needs pinned-source reconciliation. Threshold fractions are descriptive and may legitimately be zero.",
+      "benchmark_study_exclusion_identifiers": [],
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "bix-design-alignment-signal-comparison",
+      "target_ids": [
+        "bix-12-q2",
+        "bix-12-q3",
+        "bix-12-q4",
+        "bix-12-q5",
+        "bix-12-q6",
+        "bix-21-q2",
+        "bix-25-q1",
+        "bix-25-q4",
+        "bix-45-q1",
+        "bix-45-q2",
+        "bix-45-q5",
+        "bix-45-q6"
+      ],
+      "source_groups": [
+        "bix-12",
+        "bix-21",
+        "bix-25",
+        "bix-45"
+      ],
+      "scientific_question_on_independent_observations": "How do informative sites, compositional variability and saturation relate to tree signal across independently observed loci and clades?",
+      "matching_existing_workstream_ids": [
+        "ortholog-tree-signal"
+      ],
+      "nearby_broad_question_ids": [
+        "ortholog-tree-signal-01",
+        "ortholog-tree-signal-02",
+        "ortholog-tree-signal-03"
+      ],
+      "input_design": "Matched aligned FASTA and Newick per observed orthogroup/clade, native gap/missing/ambiguity symbols and provenance-linked taxon sets.",
+      "proposed_artifacts_and_key_columns": [
+        "alignments.tsv: locus, clade, taxa, columns, gaps, informative_sites, informative_fraction, rcv, saturation",
+        "signal.tsv: locus, clade, treeness, rcv, ratio, eligible",
+        "comparisons.tsv: metric, group, n, median, quantile, u, p",
+        "pairs.tsv: locus, metric, clade_difference"
+      ],
+      "method_and_decision_parameters_to_freeze": "Residue alphabet, gaps/ambiguities and denominator definitions, PhyKIT saturation regression/RCV definitions, ratio zero denominator, locus pairing, Mann-Whitney settings and threshold inclusivity.",
+      "deterministic_verifier_design_and_negative_controls": "Native PhyKIT plus independent informative-site counts, residue frequencies, gap denominators and summaries. Reject a counted ambiguity, omitted low-signal locus or mismatched locus pair.",
+      "unresolved_data_and_runtime_requirements": "Need independent multi-locus aligned sequences with enough taxon diversity for meaningful saturation and both clades; thresholds must not dictate source selection.",
+      "endpoint_adaptation_limits": "Alignment and tree metrics form a connected analysis but cannot borrow a clade tree from an unrelated alignment. Exact source gene IDs are substituted openly.",
+      "benchmark_study_exclusion_identifiers": [],
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "bix-design-factorial-microbial-rna",
+      "target_ids": [
+        "bix-13-q1",
+        "bix-13-q2",
+        "bix-13-q3",
+        "bix-13-q4",
+        "bix-13-q5",
+        "bix-26-q3",
+        "bix-26-q4",
+        "bix-26-q5",
+        "bix-32-q2",
+        "bix-32-q3",
+        "bix-32-q4",
+        "bix-46-q1",
+        "bix-46-q4"
+      ],
+      "source_groups": [
+        "bix-13",
+        "bix-26",
+        "bix-32",
+        "bix-46"
+      ],
+      "scientific_question_on_independent_observations": "Which gene and pathway changes are shared by single and combined perturbations across observed growth environments?",
+      "matching_existing_workstream_ids": [
+        "rna-seq-contrast-enrichment"
+      ],
+      "nearby_broad_question_ids": [
+        "rna-seq-contrast-enrichment-01",
+        "rna-seq-contrast-enrichment-02",
+        "rna-seq-contrast-enrichment-03",
+        "rna-seq-contrast-enrichment-04"
+      ],
+      "input_design": "Independent replicated raw microbial counts for control, two single perturbations and their combination across at least two documented media, plus gene/KEGG annotations.",
+      "proposed_artifacts_and_key_columns": [
+        "samples.tsv: sample, replicate, perturbation, medium",
+        "model.tsv: sample, coefficient, design_value",
+        "genes.tsv: gene, contrast, raw_dispersion, fitted_dispersion, effect, p, q, call",
+        "sets.tsv: gene, contrast_membership, exclusive_call",
+        "pathways.tsv: contrast, direction, pathway, eligible, overlap, p, q",
+        "pathway_members.tsv: pathway, gene, contrast"
+      ],
+      "method_and_decision_parameters_to_freeze": "Full-rank replicate/perturbation/media design, interaction estimands, raw gene-wise dispersion versus shrunk estimate, each threshold mask, set union/intersection denominator, ORA directional semantics, fixed KEGG release and tested background.",
+      "deterministic_verifier_design_and_negative_controls": "Native DESeq2/reference enrichment plus independent contrast/set/ORA checks. Reject shrunk dispersions labeled raw, a mixed direction intersection or a pathway absent from the tested universe.",
+      "unresolved_data_and_runtime_requirements": "Finding an independent complete factorial observed experiment with biological replication is the gating requirement; separate tasks if one coherent fit exceeds30min.",
+      "endpoint_adaptation_limits": "Pathways do not themselves have a DESeq2 log fold change; interpret direction through separately defined up/down gene sets. Latest KEGG in the source becomes a declared immutable snapshot.",
+      "benchmark_study_exclusion_identifiers": [
+        "https://doi.org/10.17912/micropub.biology.001326"
+      ],
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "bix-design-clinical-exome-variant-audit",
+      "target_ids": [
+        "bix-2-q1",
+        "bix-2-q2",
+        "bix-7-q1",
+        "bix-7-q2",
+        "bix-7-q3",
+        "bix-14-q1",
+        "bix-14-q2",
+        "bix-14-q3",
+        "bix-17-q2",
+        "bix-20-q1",
+        "bix-20-q2",
+        "bix-20-q3",
+        "bix-20-q4",
+        "bix-39-q2",
+        "bix-47-q2",
+        "bix-47-q3"
+      ],
+      "source_groups": [
+        "bix-2",
+        "bix-7",
+        "bix-14",
+        "bix-17",
+        "bix-20",
+        "bix-39",
+        "bix-47"
+      ],
+      "scientific_question_on_independent_observations": "How do low-allele-fraction exonic variants and their annotation classes differ across observed patient groups after consistent sample and variant filtering?",
+      "matching_existing_workstream_ids": [
+        "variant-evidence"
+      ],
+      "nearby_broad_question_ids": [
+        "variant-evidence-01",
+        "variant-evidence-02",
+        "variant-evidence-03"
+      ],
+      "input_design": "Independent VCF/BCF calls with allele depths, sample metadata, GFF3/GTF reference annotations and a frozen clinical classification snapshot.",
+      "proposed_artifacts_and_key_columns": [
+        "samples.tsv: sample, patient, group, age, sex, eligible",
+        "variants.vcf: normalized allele-specific calls",
+        "events.tsv: sample, variant, gene, vaf, consequence, classification, qualifying",
+        "counts.tsv: sample, count, includes_zero",
+        "cohorts.tsv: group, consequence, numerator, denominator, median, iqr",
+        "comparisons.tsv: group, contrast, statistic, p, q"
+      ],
+      "method_and_decision_parameters_to_freeze": "Genome build, allele depth denominator, multiallelic splitting, transcript consequence precedence, gene set, strict versus inclusive VAF cutoffs, unique variant versus sample-variant count, zero-event samples, age/group ties and group comparison method.",
+      "deterministic_verifier_design_and_negative_controls": "Native normalization/consequence reference plus independent allele-depth, sample union, class denominator and quantile checks. Reject reference calls, double-counted alleles or dropped zero-variant samples.",
+      "unresolved_data_and_runtime_requirements": "Need independently licensed calls with observed depth and clinically interpretable metadata; sensitive or unavailable patient metadata cannot be invented.",
+      "endpoint_adaptation_limits": "VAF<0.3 is an operational source rule, not proof of somatic origin. Annotation benignity and CHIP membership are separate; disease-group labels from the benchmark are not copied to an unrelated cohort.",
+      "benchmark_study_exclusion_identifiers": [
+        "doi.org/10.3324/haematol.2024.285239",
+        "https://doi.org/10.1172/jci.insight.167744",
+        "https://doi.org/10.3324/haematol.2024.285239"
+      ],
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "bix-design-dependency-expression-association",
+      "target_ids": [
+        "bix-16-q1",
+        "bix-16-q2",
+        "bix-16-q3",
+        "bix-16-q4"
+      ],
+      "source_groups": [
+        "bix-16"
+      ],
+      "scientific_question_on_independent_observations": "Which gene expression levels correlate with measured cell-line dependency after identifier and assay eligibility checks?",
+      "matching_existing_workstream_ids": [
+        "target-evidence"
+      ],
+      "nearby_broad_question_ids": [
+        "target-evidence-01",
+        "target-evidence-02",
+        "target-evidence-03"
+      ],
+      "input_design": "Independent matched observed cell-line RNA abundance and CRISPR dependency scores, with lineage metadata and versioned gene crosswalk.",
+      "proposed_artifacts_and_key_columns": [
+        "matched.tsv: cell_line, gene, expression, dependency, eligible",
+        "associations.tsv: gene, n, rho, p, q, direction",
+        "distribution.tsv: scale, n, skewness, definition",
+        "summary.tsv: eligible_genes, strong_positive, significant, denominator"
+      ],
+      "method_and_decision_parameters_to_freeze": "log2(TPM+1) transform, complete-pair policy, minimum lines, Spearman tie handling, constant genes, tested-gene multiplicity universe and skewness estimator/interpretation cutoffs.",
+      "deterministic_verifier_design_and_negative_controls": "Independent joins/ranks/correlations and native statistics reference; reject mismatched cell-line IDs, wrong dependency score orientation or multiplicity over selected hits only.",
+      "unresolved_data_and_runtime_requirements": "Need release with compatible lines and independent study lineage; whole-matrix runtime/footprint must be bounded without selecting on correlation.",
+      "endpoint_adaptation_limits": "Correlated expression and dependency are associations, not causal essentiality proof. The source does not define qualitative skewness cutoffs.",
+      "benchmark_study_exclusion_identifiers": [],
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "bix-design-colony-morphology-contrasts",
+      "target_ids": [
+        "bix-18-q1",
+        "bix-18-q2",
+        "bix-18-q3",
+        "bix-18-q4",
+        "bix-18-q5",
+        "bix-41-q1",
+        "bix-41-q3",
+        "bix-41-q4",
+        "bix-41-q5"
+      ],
+      "source_groups": [
+        "bix-18",
+        "bix-41"
+      ],
+      "scientific_question_on_independent_observations": "How do observed single-strain and mixed-culture colony area and circularity differ from a declared reference?",
+      "matching_existing_workstream_ids": [
+        "dose-response"
+      ],
+      "nearby_broad_question_ids": [
+        "dose-response-01",
+        "dose-response-02",
+        "dose-response-03"
+      ],
+      "input_design": "Independent real colony images or documented measured morphometry with units, plate/batch, biological replicate and mixture identity.",
+      "proposed_artifacts_and_key_columns": [
+        "colonies.tsv: colony, plate, replicate, group, area, circularity, qc",
+        "summaries.tsv: group, n, mean_area, mean_circularity, sem",
+        "contrasts.tsv: endpoint, group, reference, effect, interval, dunnett_p",
+        "similarity.tsv: mixture, scaled_distance, rank"
+      ],
+      "method_and_decision_parameters_to_freeze": "Image segmentation if required, pixel-to-physical conversion, independent replicate unit, pooled variance or mixed/block design, Dunnett multiplicity, SEM denominator and bivariate similarity metric.",
+      "deterministic_verifier_design_and_negative_controls": "Native morphometry/statistics reference and independent moments/contrast checks; reject pixel areas labeled mm2, pseudoreplicated colonies or a wrong reference mean.",
+      "unresolved_data_and_runtime_requirements": "Need observed biological replicates and known imaging scale; if raw images are used, segmentation choices and runtime must be pinned.",
+      "endpoint_adaptation_limits": "Failure to reject Dunnett difference does not establish equivalence (bix-41-q1). Report non-rejection honestly; a true equivalence endpoint needs prespecified margins and a separate appropriate test, so exact formulation coverage stays unresolved.",
+      "benchmark_study_exclusion_identifiers": [
+        "https://doi.org/10.17912/micropub.biology.001326"
+      ],
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "bix-design-colony-mixture-response",
+      "target_ids": [
+        "bix-54-q1",
+        "bix-54-q2",
+        "bix-54-q3",
+        "bix-54-q4",
+        "bix-54-q5",
+        "bix-54-q6",
+        "bix-54-q7"
+      ],
+      "source_groups": [
+        "bix-54"
+      ],
+      "scientific_question_on_independent_observations": "Which mixture proportion maximizes the fitted observed colony response, and how uncertain is that estimate across prespecified curve models?",
+      "matching_existing_workstream_ids": [
+        "dose-response"
+      ],
+      "nearby_broad_question_ids": [
+        "dose-response-01",
+        "dose-response-02",
+        "dose-response-03"
+      ],
+      "input_design": "Independent mixture-series morphometry with measured fractions, replicate structure, area units and observed frequency range.",
+      "proposed_artifacts_and_key_columns": [
+        "observations.tsv: replicate, fraction, area, eligible",
+        "models.tsv: model, term, coefficient, se, r2, f, p, selection_score",
+        "predictions.tsv: model, fraction, mean, lower, upper",
+        "optima.tsv: model, fraction, area, lower, upper, boundary"
+      ],
+      "method_and_decision_parameters_to_freeze": "Natural spline df=4 knot/boundary rules, quadratic/cubic parametrization, model-selection rule, bounded continuous optimization versus fixed grid, mean CI versus prediction interval, uncertainty at selected optimum and replicate dependence.",
+      "deterministic_verifier_design_and_negative_controls": "Native curve fits plus independent design/prediction/residual checks and bounded extremum verification. Reject an out-of-range optimum, inverted mixture ratio or wrong unit conversion.",
+      "unresolved_data_and_runtime_requirements": "Need observed full-range mixture experiment with enough distinct fractions and replication; selected-optimum interval coverage requires a specified procedure.",
+      "endpoint_adaptation_limits": "Distinguish fraction of total from strain-to-strain ratio; df=4 spline p-value and best-model maximum are distinct endpoints.",
+      "benchmark_study_exclusion_identifiers": [
+        "https://doi.org/10.17912/micropub.biology.001326"
+      ],
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "bix-design-neuronal-count-effect-power",
+      "target_ids": [
+        "bix-19-q1",
+        "bix-19-q2",
+        "bix-19-q3",
+        "bix-19-q4",
+        "bix-19-q5"
+      ],
+      "source_groups": [
+        "bix-19"
+      ],
+      "scientific_question_on_independent_observations": "What effect size and interaction estimates follow from observed neuronal counts, and what nominal sample size follows from an explicitly assumed future design?",
+      "matching_existing_workstream_ids": [
+        "clinical-response-model"
+      ],
+      "nearby_broad_question_ids": [
+        "clinical-response-model-01",
+        "clinical-response-model-02",
+        "clinical-response-model-03"
+      ],
+      "input_design": "Independent measured neuronal counts with condition, hemisphere, sex and animal IDs, preserving within-animal pairing when documented.",
+      "proposed_artifacts_and_key_columns": [
+        "counts.tsv: animal, hemisphere, sex, condition, count",
+        "effects.tsv: contrast, mean_difference, pooled_sd, cohens_d",
+        "tests.tsv: group, shapiro_w, p; term, anova_f, df, p",
+        "power.tsv: design, effect_size, alpha, target_power, continuous_n, rounded_n"
+      ],
+      "method_and_decision_parameters_to_freeze": "Independent versus paired animals, pooled-SD definition, ANOVA sums of squares/interaction and repeated-measures handling, Shapiro missingness, two-sided noncentral-t power and upward rounding.",
+      "deterministic_verifier_design_and_negative_controls": "Native effect/test/power reference plus independent means/SD and achieved-power checks; reject paired rows treated as new independent animals or rounding down sample size.",
+      "unresolved_data_and_runtime_requirements": "Need suitable observed count study with documented hierarchy; two-sample prospective calculation must be labeled hypothetical if source observations are paired.",
+      "endpoint_adaptation_limits": "Post-hoc observed-effect power is a conditional design calculation, not evidence that the study was adequately powered; do not interpret a nonsignificant normality test as proof of normality.",
+      "benchmark_study_exclusion_identifiers": [
+        "https://zenodo.org/records/8036465, https://www.science.org/doi/10.1126/sciadv.adf4950"
+      ],
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "bix-design-gene-length-expression",
+      "target_ids": [
+        "bix-22-q1",
+        "bix-22-q2",
+        "bix-22-q3",
+        "bix-22-q4",
+        "bix-22-q6"
+      ],
+      "source_groups": [
+        "bix-22"
+      ],
+      "scientific_question_on_independent_observations": "How does measured expression relate to consistently defined gene length across sorted immune cell types?",
+      "matching_existing_workstream_ids": [
+        "rna-seq-contrast-enrichment"
+      ],
+      "nearby_broad_question_ids": [
+        "rna-seq-contrast-enrichment-01",
+        "rna-seq-contrast-enrichment-02",
+        "rna-seq-contrast-enrichment-03",
+        "rna-seq-contrast-enrichment-04"
+      ],
+      "input_design": "Independent sorted-cell RNA count/abundance data with biological replicates and matching GTF gene/exon annotations.",
+      "proposed_artifacts_and_key_columns": [
+        "genes.tsv: gene, biotype, length, length_definition",
+        "means.tsv: gene, cell_type, n_samples, mean_expression",
+        "correlations.tsv: cell_type, n_genes, pearson_r, p, eligibility",
+        "ranking.tsv: cell_type, abs_r, rank"
+      ],
+      "method_and_decision_parameters_to_freeze": "Gene span versus union-exonic/transcript length, expression scale, protein-coding universe, sample averaging versus pooling, zero/constant features, source q6 cell-type aggregation and correlation uncertainty unit.",
+      "deterministic_verifier_design_and_negative_controls": "Native annotation parsing plus independent interval-length/mean/Pearson checks; reject transcript length substituted for declared gene length or raw r sorted instead of abs(r).",
+      "unresolved_data_and_runtime_requirements": "Need independent observed sorted-cell data and matching release annotations; expression-length association depends strongly on normalization.",
+      "endpoint_adaptation_limits": "An across-gene association may reflect count/length normalization and does not alone establish biological regulation. Source pooled q6 needs a declared aggregation rule.",
+      "benchmark_study_exclusion_identifiers": [
+        "https://zenodo.org/records/10000430"
+      ],
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "bix-design-combination-rna-enrichment",
+      "target_ids": [
+        "bix-24-q1",
+        "bix-24-q2",
+        "bix-24-q6",
+        "bix-43-q1",
+        "bix-43-q2",
+        "bix-43-q3",
+        "bix-43-q4",
+        "bix-43-q5"
+      ],
+      "source_groups": [
+        "bix-24",
+        "bix-43"
+      ],
+      "scientific_question_on_independent_observations": "Which gene and pathway changes distinguish single and combination perturbations relative to a shared observed vehicle condition?",
+      "matching_existing_workstream_ids": [
+        "rna-seq-contrast-enrichment"
+      ],
+      "nearby_broad_question_ids": [
+        "rna-seq-contrast-enrichment-01",
+        "rna-seq-contrast-enrichment-02",
+        "rna-seq-contrast-enrichment-03",
+        "rna-seq-contrast-enrichment-04"
+      ],
+      "input_design": "Independent replicated raw RNA counts across vehicle, single treatment and combination, with fixed GO and Reactome gene-set snapshots.",
+      "proposed_artifacts_and_key_columns": [
+        "genes.tsv: contrast, gene, effect, base_mean, p, q, up, down",
+        "enrichment.tsv: contrast, direction, library, term, overlap, odds_ratio, p, q",
+        "members.tsv: contrast, term, gene, selected",
+        "summaries.tsv: contrast, term, numerator, denominator, rank"
+      ],
+      "method_and_decision_parameters_to_freeze": "Each source-specific raw/adjusted-p and fold-change mask, signed direction, ORA universe, GO/Reactome release, GSEApy odds-ratio definition and zero-cell correction, top-term tie rules and fraction denominator.",
+      "deterministic_verifier_design_and_negative_controls": "Native DESeq2/GSEApy reference plus independent set counts, hypergeometric/multiplicity and pathway rankings; reject selected-only universes, wrong denominator or reversed contrast.",
+      "unresolved_data_and_runtime_requirements": "Need independent observed complete perturbation panel and licensed offline annotation snapshots; combination-versus-vehicle alone does not identify synergy.",
+      "endpoint_adaptation_limits": "Source mechanistic prose becomes an evidence-linked declared pathway output; enrichment supports association. Named pathways may be absent and must not be forced to match.",
+      "benchmark_study_exclusion_identifiers": [
+        "https://zenodo.org/records/8353706, https://www.mdpi.com/1422-0067/24/19/14743"
+      ],
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "bix-design-consensus-expression-subtypes",
+      "target_ids": [
+        "bix-27-q2",
+        "bix-27-q4",
+        "bix-27-q5"
+      ],
+      "source_groups": [
+        "bix-27"
+      ],
+      "scientific_question_on_independent_observations": "Which expression-defined patient groups are stable under prespecified resampling and what independent pathway annotations characterize them?",
+      "matching_existing_workstream_ids": [
+        "gene-program-factorization"
+      ],
+      "nearby_broad_question_ids": [
+        "gene-program-factorization-01",
+        "gene-program-factorization-02",
+        "gene-program-factorization-03"
+      ],
+      "input_design": "Independent observed patient-by-gene expression with documented scale, no outcome-derived group labels and a pinned Reactome mapping.",
+      "proposed_artifacts_and_key_columns": [
+        "pca.tsv: component, variance, explained_fraction",
+        "resamples.tsv: iteration, sample, train_or_test, cluster, aligned_cluster, predicted_cluster",
+        "consensus.tsv: sample_a, sample_b, opportunities, agreements",
+        "membership.tsv: sample, group, stability",
+        "enrichment.tsv: group, term, genes, p, q"
+      ],
+      "method_and_decision_parameters_to_freeze": "log10(x+1) compatibility with input scale, PCA centering/scaling, three-cluster hierarchical distance/linkage, 50 resampling seeds, 70/30 split policy, logistic label prediction, label alignment, consistent-sample rule and cluster-specific-gene definition.",
+      "deterministic_verifier_design_and_negative_controls": "Native clustering/classifier/enrichment reference plus split disjointness, consensus denominators, variance and membership checks. Reject arbitrary label-number comparisons, test IDs in fit rows or a missing resample.",
+      "unresolved_data_and_runtime_requirements": "Need enough observed patients and independent biological groups; 50 fits plus enrichment must be measured under 30 minutes.",
+      "endpoint_adaptation_limits": "Source does not fully define bootstrap versus train/test sampling or consensus consistency. Freeze a scientifically coherent authored protocol before assigning workflow equivalence.",
+      "benchmark_study_exclusion_identifiers": [
+        "https://doi.org/10.5061/dryad.ttdz08kxq"
+      ],
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "bix-design-multi-tissue-response-rna",
+      "target_ids": [
+        "bix-3-q1",
+        "bix-3-q2",
+        "bix-3-q3",
+        "bix-3-q4",
+        "bix-3-q5",
+        "bix-9-q3",
+        "bix-9-q4",
+        "bix-9-q5"
+      ],
+      "source_groups": [
+        "bix-3",
+        "bix-9"
+      ],
+      "scientific_question_on_independent_observations": "Which observed tissue, time and response contrasts share expression changes after preserving subject structure and a valid count model?",
+      "matching_existing_workstream_ids": [
+        "rna-seq-contrast-enrichment"
+      ],
+      "nearby_broad_question_ids": [
+        "rna-seq-contrast-enrichment-01",
+        "rna-seq-contrast-enrichment-02",
+        "rna-seq-contrast-enrichment-03",
+        "rna-seq-contrast-enrichment-04"
+      ],
+      "input_design": "Independent replicated raw counts with subject, tissue, time and independently measured response metadata; multiple tissue samples per subject when available.",
+      "proposed_artifacts_and_key_columns": [
+        "samples.tsv: sample, subject, tissue, time, response, inclusion",
+        "design.tsv: sample, term, value",
+        "genes.tsv: gene, contrast, base_mean, effect, p, q",
+        "overlaps.tsv: gene, contrast_membership",
+        "proportions.tsv: contrast, eligible, de, fraction, wilson_lower, wilson_upper",
+        "tests.tsv: estimand, statistic, p, assumptions"
+      ],
+      "method_and_decision_parameters_to_freeze": "Raw counts or proper quantified-count import, paired versus unpaired design, each threshold mask, independent filtering and tested-gene denominator, Wilson definition, optional binomial null and gene-dependence limitation; define Category ANOVA response/replicate unit.",
+      "deterministic_verifier_design_and_negative_controls": "Native DESeq2 plus independent contrast/set/Wilson arithmetic; reject normalized abundances disguised as integer read counts, missing subject pairing or an incorrect overlap universe.",
+      "unresolved_data_and_runtime_requirements": "Need independent raw-count longitudinal/multi-tissue dataset with documented response and estimable model; source ANOVA and binomial endpoints need methodological clarification.",
+      "endpoint_adaptation_limits": "Source bix-3-q1 suggests scaling normalized values into pseudocounts: do not reproduce this. Counts are needed for the DESeq2 sampling model. Genes are dependent, so a binomial DE fraction test cannot by itself establish negligible biological effect.",
+      "benchmark_study_exclusion_identifiers": [
+        "https://zenodo.org/records/4287588"
+      ],
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "bix-design-mirna-multiplicity",
+      "target_ids": [
+        "bix-30-q1",
+        "bix-30-q3",
+        "bix-30-q5",
+        "bix-30-q6"
+      ],
+      "source_groups": [
+        "bix-30"
+      ],
+      "scientific_question_on_independent_observations": "How do prespecified multiple-testing procedures change observed miRNA differential-expression calls?",
+      "matching_existing_workstream_ids": [
+        "rna-seq-contrast-enrichment"
+      ],
+      "nearby_broad_question_ids": [
+        "rna-seq-contrast-enrichment-01",
+        "rna-seq-contrast-enrichment-02",
+        "rna-seq-contrast-enrichment-03",
+        "rna-seq-contrast-enrichment-04"
+      ],
+      "input_design": "Independent observed miRNA assay abundances with documented measurement scale, patient/control labels and biological replication.",
+      "proposed_artifacts_and_key_columns": [
+        "features.tsv: mirna, transformed_values, eligibility",
+        "tests.tsv: mirna, effect, t, df, p, bh, by, bonferroni",
+        "calls.tsv: mirna, raw_call, bh_call, by_call, bonferroni_call",
+        "summary.tsv: method, numerator, denominator, fraction, ratio"
+      ],
+      "method_and_decision_parameters_to_freeze": "log2 offset/zero policy, paired or independent t-test, equal-variance versus Welch, missingness, p<=0.05, complete tested universe, undefined ratio when zero discoveries.",
+      "deterministic_verifier_design_and_negative_controls": "Native t-tests/corrections and independent rank/multiplicity arithmetic; reject corrections over significant features only or wrong zero-denominator rendering.",
+      "unresolved_data_and_runtime_requirements": "Need independent biologically replicated miRNA measurements appropriate to log-scale testing.",
+      "endpoint_adaptation_limits": "The source repeats pre-correction endpoints; share one full test table and retain both target IDs without claiming two independent workflows.",
+      "benchmark_study_exclusion_identifiers": [
+        "10.1371/journal.pone.0150501"
+      ],
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "bix-design-sex-by-cell-expression",
+      "target_ids": [
+        "bix-31-q1",
+        "bix-31-q2",
+        "bix-31-q3",
+        "bix-31-q4"
+      ],
+      "source_groups": [
+        "bix-31"
+      ],
+      "scientific_question_on_independent_observations": "Which sex-associated expression effects differ across observed cell populations and gene biotypes under prespecified shrinkage and selection?",
+      "matching_existing_workstream_ids": [
+        "rna-seq-contrast-enrichment"
+      ],
+      "nearby_broad_question_ids": [
+        "rna-seq-contrast-enrichment-01",
+        "rna-seq-contrast-enrichment-02",
+        "rna-seq-contrast-enrichment-03",
+        "rna-seq-contrast-enrichment-04"
+      ],
+      "input_design": "Independent donor-replicated sorted-cell counts with sex metadata, cell identity and pinned gene-biotype annotations.",
+      "proposed_artifacts_and_key_columns": [
+        "samples.tsv: donor, cell_type, sex, inclusion",
+        "effects.tsv: gene, cell_type, biotype, raw_effect, shrunk_effect, base_mean, p, q",
+        "sets.tsv: gene, selected_rule, eligible",
+        "comparisons.tsv: biotype_or_cell_group, n, mean_effect, t, df, p"
+      ],
+      "method_and_decision_parameters_to_freeze": "Estimate sex effects between independent donors within each cell type, with documented batch/covariates and at least biological replication per sex. For joint cell-type analysis use a justified donor random effect or an explicitly estimable sex-by-cell-type interaction; do not include donor fixed intercepts alongside a time-invariant sex main effect. Freeze shrinkage type/coefficient, separate p and padj masks, absolute-effect cutoffs, CD4/CD8 grouping, Welch/equal-variance choices and gene-dependence interpretation.",
+      "deterministic_verifier_design_and_negative_controls": "Native count/shrinkage reference plus gene-biotype join, selection and descriptive Welch arithmetic; reject raw effects mislabeled shrunken or wrong biotype universe. Verify design rank and the estimability of each requested contrast; reject a sex main effect absorbed by donor fixed effects.",
+      "unresolved_data_and_runtime_requirements": "Need independent observed donors in each sex/cell-type group and known batch structure; gene-level post-selection comparisons do not provide independent biological replication.",
+      "endpoint_adaptation_limits": "Source across-gene t-tests are descriptive method adaptations with selection/dependence caveats; specific source genes become declared independent-study targets.",
+      "benchmark_study_exclusion_identifiers": [
+        "https://zenodo.org/records/10000430"
+      ],
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "bix-design-donor-aware-celltype-treatment",
+      "target_ids": [
+        "bix-33-q1",
+        "bix-33-q6"
+      ],
+      "source_groups": [
+        "bix-33"
+      ],
+      "scientific_question_on_independent_observations": "Which cell populations show the broadest donor-replicated treatment expression response, including prespecified genes?",
+      "matching_existing_workstream_ids": [
+        "single-cell-pseudobulk"
+      ],
+      "nearby_broad_question_ids": [
+        "single-cell-pseudobulk-01",
+        "single-cell-pseudobulk-02",
+        "single-cell-pseudobulk-03"
+      ],
+      "input_design": "Independent observed H5AD or MTX counts with donor, cell type, treatment and time metadata.",
+      "proposed_artifacts_and_key_columns": [
+        "cells.tsv: cell, donor, type, qc",
+        "pseudobulk.tsv: donor, type, gene, count",
+        "results.tsv: type, gene, effect, p, q, testable",
+        "summary.tsv: type, eligible_genes, significant_genes, target_gene_status"
+      ],
+      "method_and_decision_parameters_to_freeze": "Minimum cells/donors, paired treatment design, count filter, gene universe per type, BH within versus across types, target-gene absence and tie handling.",
+      "deterministic_verifier_design_and_negative_controls": "Native pseudobulk DE reference and independent aggregation/denominators; reject cell-level pseudoreplication or interpreting absent genes as nonsignificant measured genes.",
+      "unresolved_data_and_runtime_requirements": "Need independent observed treatment/control donors with adequate counts per cell type; one treated individual cannot support donor-level treatment inference.",
+      "endpoint_adaptation_limits": "Broad source question leaves cell-level testing unspecified; scientifically valid donor-level adaptation must state its method and mapping limit.",
+      "benchmark_study_exclusion_identifiers": [
+        "https://doi.org/10.5281/zenodo.13935259"
+      ],
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "bix-design-immune-mirna-distributions",
+      "target_ids": [
+        "bix-36-q1",
+        "bix-36-q3",
+        "bix-36-q4",
+        "bix-36-q5"
+      ],
+      "source_groups": [
+        "bix-36"
+      ],
+      "scientific_question_on_independent_observations": "How do observed miRNA profiles and their fold-change distributions differ across sorted immune cell populations?",
+      "matching_existing_workstream_ids": [
+        "rna-seq-contrast-enrichment"
+      ],
+      "nearby_broad_question_ids": [
+        "rna-seq-contrast-enrichment-01",
+        "rna-seq-contrast-enrichment-02",
+        "rna-seq-contrast-enrichment-03",
+        "rna-seq-contrast-enrichment-04"
+      ],
+      "input_design": "Independent donor-linked miRNA abundance by sorted cell type and assay metadata; exclude pooled PBMC according to a frozen rule.",
+      "proposed_artifacts_and_key_columns": [
+        "measurements.tsv: donor, cell_type, mirna, abundance",
+        "contrasts.tsv: mirna, cell_type_a, cell_type_b, log2fc",
+        "tests.tsv: endpoint, factor, statistic, df, p",
+        "distribution.tsv: contrast, n, median, skewness, classification"
+      ],
+      "method_and_decision_parameters_to_freeze": "Scale/offset, replicate aggregation, donor blocking, per-feature versus pooled ANOVA estimand, fold-change denominator, skewness threshold and repeated-feature dependence.",
+      "deterministic_verifier_design_and_negative_controls": "Native specified model plus independent paired contrasts, medians and moment calculations; reject PBMC inclusion or a pooled cell mean substituted for donor measurements.",
+      "unresolved_data_and_runtime_requirements": "Need independent sorted-cell miRNA observations; source global ANOVA unit is ambiguous and must be authored before implementation.",
+      "endpoint_adaptation_limits": "Qualitative distribution shape requires a numeric definition; gene/miRNA rows do not substitute for independent donors.",
+      "benchmark_study_exclusion_identifiers": [
+        "https://zenodo.org/records/10000430"
+      ],
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "bix-design-paired-protein-abundance",
+      "target_ids": [
+        "bix-37-q1",
+        "bix-37-q2",
+        "bix-37-q3",
+        "bix-37-q4"
+      ],
+      "source_groups": [
+        "bix-37"
+      ],
+      "scientific_question_on_independent_observations": "What tumor-associated abundance effect is supported for prespecified proteins under a complete observed proteomics comparison?",
+      "matching_existing_workstream_ids": [
+        "proteomics-metabolomics"
+      ],
+      "nearby_broad_question_ids": [
+        "proteomics-metabolomics-01",
+        "proteomics-metabolomics-02",
+        "proteomics-metabolomics-03"
+      ],
+      "input_design": "Independent observed tumor/normal proteomics with patient pairing, protein IDs, assay scale and missingness metadata.",
+      "proposed_artifacts_and_key_columns": [
+        "samples.tsv: sample, patient, condition, qc",
+        "proteins.tsv: protein, baseline, effect, log2fc, se, p, q, measured",
+        "normalization.tsv: sample, factor, method"
+      ],
+      "method_and_decision_parameters_to_freeze": "Raw/log assay scale, normalization, peptide-to-protein aggregation if present, pairing, missingness/imputation, native differential model, multiplicity and significant-figure rounding.",
+      "deterministic_verifier_design_and_negative_controls": "Native proteomics model and independent baseline/fold/log arithmetic; reject ratio-of-means versus mean-of-ratios substitution and adjusted p from a one-protein universe.",
+      "unresolved_data_and_runtime_requirements": "Need independent measured paired or explicitly unpaired proteomics and a valid missingness protocol; full tested-protein output required.",
+      "endpoint_adaptation_limits": "Named ENO1 endpoint can be retained only if independently measured; otherwise an explicitly different target is a workflow adaptation.",
+      "benchmark_study_exclusion_identifiers": [
+        "10.17632/dj4sb8h3c3.1"
+      ],
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "bix-design-multiomics-cohort-eligibility",
+      "target_ids": [
+        "bix-42-q1",
+        "bix-42-q2"
+      ],
+      "source_groups": [
+        "bix-42"
+      ],
+      "scientific_question_on_independent_observations": "Which independently observed patients support joint survival, expression and methylation analysis after assay and identity checks?",
+      "matching_existing_workstream_ids": [
+        "methylation-expression"
+      ],
+      "nearby_broad_question_ids": [
+        "methylation-expression-01",
+        "methylation-expression-02",
+        "methylation-expression-03"
+      ],
+      "input_design": "Independent observed methylation matrix, RNA abundance/counts and clinical vital-status metadata with explicit sample-to-patient mappings.",
+      "proposed_artifacts_and_key_columns": [
+        "crosswalk.tsv: patient, assay_sample, assay, aliquot, eligibility",
+        "patients.tsv: patient, vital_status_present, rna_present, methylation_present, complete",
+        "rna_distribution.tsv: scale, n, skewness, classification"
+      ],
+      "method_and_decision_parameters_to_freeze": "Assay presence versus per-feature missingness, duplicate aliquots, one sample per patient, nonmissing vital status, raw/log scale and skewness estimator/thresholds.",
+      "deterministic_verifier_design_and_negative_controls": "Independent joins and moment reference; reject a complete-case count based on sample IDs that do not identify the same patients or missing assay encoded zero.",
+      "unresolved_data_and_runtime_requirements": "Need independently accessible multi-assay clinical data and permitted metadata; no survival fit is implied by this eligibility task.",
+      "endpoint_adaptation_limits": "Source only asks eligibility and expression distribution; do not claim a complete methylation-survival workflow from this task.",
+      "benchmark_study_exclusion_identifiers": [
+        "https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0305268"
+      ],
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "bix-design-binary-clinical-response",
+      "target_ids": [
+        "bix-51-q1",
+        "bix-51-q2",
+        "bix-51-q3",
+        "bix-51-q4",
+        "bix-51-q5",
+        "bix-51-q6",
+        "bix-51-q8"
+      ],
+      "source_groups": [
+        "bix-51"
+      ],
+      "scientific_question_on_independent_observations": "How do age and body size associate with an observed binary treatment-response category under separate and combined logistic models?",
+      "matching_existing_workstream_ids": [
+        "clinical-response-model"
+      ],
+      "nearby_broad_question_ids": [
+        "clinical-response-model-01",
+        "clinical-response-model-02",
+        "clinical-response-model-03"
+      ],
+      "input_design": "Independent observed patient-level response, age, BMI and documented sex/gender variable, with treatment and eligibility provenance.",
+      "proposed_artifacts_and_key_columns": [
+        "patients.tsv: id, response, age, bmi, category, inclusion",
+        "models.tsv: model, term, beta, se, p, log_likelihood, aic, converged",
+        "predictions.tsv: model, age, other_covariates, probability"
+      ],
+      "method_and_decision_parameters_to_freeze": "Exact response event definition, observed sex versus gender label, complete-case rows shared or model-specific, MLE convergence/separation, predictor reference values, Wald versus likelihood-ratio p-values and AIC parameter count.",
+      "deterministic_verifier_design_and_negative_controls": "Native logistic fits and independent design/log-likelihood/sigmoid/AIC arithmetic; reject reversed event labels, an incorrect coefficient or a prediction outside the declared covariate specification.",
+      "unresolved_data_and_runtime_requirements": "Need independent cohort with sufficient response events and overlap at queried age; undefined separated fits need deterministic status.",
+      "endpoint_adaptation_limits": "Source alternates partial response and remission; resolve the event definition before mapping. Cross-sectional associations do not establish treatment efficacy.",
+      "benchmark_study_exclusion_identifiers": [],
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "bix-design-methylation-genome-density",
+      "target_ids": [
+        "bix-52-q1",
+        "bix-52-q2",
+        "bix-52-q3",
+        "bix-52-q5",
+        "bix-52-q6",
+        "bix-52-q7"
+      ],
+      "source_groups": [
+        "bix-52"
+      ],
+      "scientific_question_on_independent_observations": "How do observed extreme age-associated methylation sites distribute across chromosomes after unique-site and callable-space accounting?",
+      "matching_existing_workstream_ids": [
+        "methylation-expression"
+      ],
+      "nearby_broad_question_ids": [
+        "methylation-expression-01",
+        "methylation-expression-02",
+        "methylation-expression-03"
+      ],
+      "input_design": "Independent observed methylation BED/cytosine reports with coverage, age-association output or raw age-linked samples, and reference chromosome sizes/callable intervals.",
+      "proposed_artifacts_and_key_columns": [
+        "sites.bed: chrom, start, end, site_id",
+        "site_status.tsv: site, sample, methylated, total, fraction, age_associated, extreme",
+        "chromosomes.tsv: chrom, callable_bp, reference_bp, unique_sites, density",
+        "tests.tsv: model, expected_basis, chi2, df, p",
+        "summary.tsv: species, filtered_sites, density_estimator"
+      ],
+      "method_and_decision_parameters_to_freeze": "Coordinate system, methylation fraction versus percentage, coverage filter, strict 0.1/0.9 thresholds, across-sample union, age-association eligibility, chromosome exclusions, mean chromosome density versus genome-weighted density, length/callable expected counts.",
+      "deterministic_verifier_design_and_negative_controls": "Native interval operations plus independent unique-site counts, densities and chi-square arithmetic; reject double-counted sites, percentage/fraction confusion or equal-count null labeled uniform per-base distribution.",
+      "unresolved_data_and_runtime_requirements": "Need independent age-linked methylation observations and matched genome build/callability; two species optional only if both cohorts are valid.",
+      "endpoint_adaptation_limits": "Source uniform-genome wording is ambiguous between equal chromosome counts and equal density; freeze the null. Age-related labels require actual age evidence, not invented annotation.",
+      "benchmark_study_exclusion_identifiers": [
+        "https://doi.org/10.5061/dryad.wm37pvmw8"
+      ],
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "bix-design-rna-replicate-sensitivity",
+      "target_ids": [
+        "bix-53-q2",
+        "bix-53-q3",
+        "bix-53-q4",
+        "bix-53-q5",
+        "bix-53-q6"
+      ],
+      "source_groups": [
+        "bix-53"
+      ],
+      "scientific_question_on_independent_observations": "Which perturbation gene/pathway conclusions change under a prespecified replicate-quality sensitivity analysis?",
+      "matching_existing_workstream_ids": [
+        "rna-seq-contrast-enrichment"
+      ],
+      "nearby_broad_question_ids": [
+        "rna-seq-contrast-enrichment-01",
+        "rna-seq-contrast-enrichment-02",
+        "rna-seq-contrast-enrichment-03",
+        "rna-seq-contrast-enrichment-04"
+      ],
+      "input_design": "Independent replicated observed perturbation/control raw counts with documented QC/batch variables and fixed mouse or species-matched pathway annotations.",
+      "proposed_artifacts_and_key_columns": [
+        "samples.tsv: sample, condition, qc_reason, primary_inclusion, sensitivity_inclusion",
+        "genes.tsv: analysis, gene, effect, shrunk_effect, base_mean, p, q",
+        "pathways.tsv: analysis, library, term, overlap, p, q, rank",
+        "sensitivity.tsv: endpoint, primary_value, sensitivity_value, direction"
+      ],
+      "method_and_decision_parameters_to_freeze": "QC exclusion declared before differential results, exact model/shrinkage, raw versus adjusted p masks, contrast direction, annotation versions, top 20 tie rules and case-insensitive keyword definition.",
+      "deterministic_verifier_design_and_negative_controls": "Native fits/enrichment with independent inclusion, top-list and fraction checks; reject exclusion chosen from effect significance, wrong number of tested pathways or reversal of reported sensitivity direction. Only recorded inclusion rules are verifiable.",
+      "unresolved_data_and_runtime_requirements": "Need independent study with documented QC issue and enough remaining biological replicates; arbitrary dropping of replicate 3 is not a realistic QC policy.",
+      "endpoint_adaptation_limits": "Source fixed exclusion is adapted to evidence-backed QC. Keep planned sensitivity distinct from choosing the analysis yielding more discoveries.",
+      "benchmark_study_exclusion_identifiers": [
+        "https://zenodo.org/records/14063261, https://www.jbc.org/article/S0021-9258(24)02587-0/fulltext"
+      ],
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "bix-design-ortholog-discovery-qc",
+      "target_ids": [
+        "bix-55-q1",
+        "bix-56-q1",
+        "bix-57-q1",
+        "bix-58-q1"
+      ],
+      "source_groups": [
+        "bix-55",
+        "bix-56",
+        "bix-57",
+        "bix-58"
+      ],
+      "scientific_question_on_independent_observations": "Which observed single-copy orthologs remain across proteomes, and how much alignment material survives an explicit alignment/trimming workflow?",
+      "matching_existing_workstream_ids": [
+        "ortholog-tree-signal"
+      ],
+      "nearby_broad_question_ids": [
+        "ortholog-tree-signal-01",
+        "ortholog-tree-signal-02",
+        "ortholog-tree-signal-03"
+      ],
+      "input_design": "Four independent observed proteome FASTA releases with species manifests and a pinned BUSCO lineage; retain original sequence identifiers.",
+      "proposed_artifacts_and_key_columns": [
+        "busco.tsv: species, orthogroup, status, sequence_id",
+        "shared.tsv: orthogroup, species, sequence_id, amino_acids",
+        "alignments/: orthogroup aligned FASTA",
+        "trimmed/: orthogroup trimmed FASTA",
+        "qc.tsv: orthogroup, pre_columns, post_columns, removed_fraction, gaps, aligned_positions"
+      ],
+      "method_and_decision_parameters_to_freeze": "BUSCO mode/lineage/version, complete-single-copy policy across all species, isoform duplication, MAFFT --auto version/thread settings, ClipKIT mode, total gap fraction weighting and reduction ties.",
+      "deterministic_verifier_design_and_negative_controls": "Run actual BUSCO/MAFFT/ClipKIT and independently count membership, residues, positions and retained columns; reject duplicated BUSCO matches or average-of-percentages substituted for global fraction.",
+      "unresolved_data_and_runtime_requirements": "Complete proteome BUSCO may exceed 30 minutes; measure it. Precomputed discovery outputs would cover downstream accounting only and cannot claim native discovery coverage for that task.",
+      "endpoint_adaptation_limits": "Source species/data unknown from questions alone; orthology and input-size suitability remain open. Do not duplicate tiny proteomes to simulate coverage.",
+      "benchmark_study_exclusion_identifiers": [],
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "bix-design-replicated-crispr-enrichment",
+      "target_ids": [
+        "bix-6-q1",
+        "bix-6-q3",
+        "bix-6-q4",
+        "bix-6-q5",
+        "bix-6-q6",
+        "bix-6-q7"
+      ],
+      "source_groups": [
+        "bix-6"
+      ],
+      "scientific_question_on_independent_observations": "Which pathway responses persist across independently observed perturbation-screen rounds and biological replicates?",
+      "matching_existing_workstream_ids": [
+        "crispr-screen-pathway"
+      ],
+      "nearby_broad_question_ids": [
+        "crispr-screen-pathway-01",
+        "crispr-screen-pathway-02"
+      ],
+      "input_design": "Independent observed guide counts for control and repeated screen conditions, replicate/sample metadata and frozen guide-to-gene/pathway mapping.",
+      "proposed_artifacts_and_key_columns": [
+        "guides.tsv: guide, gene, sample, count, qc",
+        "genes.tsv: condition, replicate, gene, mageck_score, p, q",
+        "replicate_pairs.tsv: condition, pair, n_genes, spearman_r",
+        "pathways.tsv: condition, replicate, term, overlap, p, q",
+        "persistence.tsv: term, eligible_rounds, significant_rounds"
+      ],
+      "method_and_decision_parameters_to_freeze": "MAGeCK normalization and control selection, selection direction, gene-hit rule, replicate-level versus aggregated tests, pathway universe and immune relevance definition, complete tested-gene correlations and across-round multiplicity.",
+      "deterministic_verifier_design_and_negative_controls": "Native MAGeCK/enrichment oracle plus independent rank correlations, intersections and denominators; reject selected-hits-only correlations or a missing nonsignificant round.",
+      "unresolved_data_and_runtime_requirements": "Need independent observed repeated screens with adequate guides, counts and replicated rounds; package runtime to be measured.",
+      "endpoint_adaptation_limits": "Minimum p across replicates is a selection statistic, not automatically calibrated evidence. Retain all replicate tests and label that source summary explicitly; freeze multiplicity for authored conclusions.",
+      "benchmark_study_exclusion_identifiers": [
+        "https://www.nature.com/articles/s41467-022-29205-8#Abs1"
+      ],
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "bix-design-paired-bacterial-variant-workflow",
+      "target_ids": [
+        "bix-61-q1",
+        "bix-61-q2",
+        "bix-61-q3",
+        "bix-61-q4",
+        "bix-61-q5",
+        "bix-61-q6"
+      ],
+      "source_groups": [
+        "bix-61"
+      ],
+      "scientific_question_on_independent_observations": "How do read-backed mutation spectra differ between two independently observed bacterial isolates under a common calling and callable-space protocol?",
+      "matching_existing_workstream_ids": [
+        "bacterial-read-variant"
+      ],
+      "nearby_broad_question_ids": [
+        "bacterial-read-variant-01",
+        "bacterial-read-variant-02",
+        "bacterial-read-variant-03"
+      ],
+      "input_design": "Observed paired FASTQ for two isolates, matching reference FASTA/GFF3, sample manifest and frozen adapter FASTA, all independent of SRR35233585 and its comparison study.",
+      "proposed_artifacts_and_key_columns": [
+        "read_qc.tsv: sample, input_pairs, surviving_pairs, singletons, dropped_pairs, dropped_reads",
+        "alignments.bam: reads, read_groups, indexed",
+        "depth.tsv: sample, reference, eligible_bases, depth_sum, mean_depth",
+        "variants.vcf: sample, normalized calls, filters",
+        "spectra.tsv: sample, snvs, insertions, deletions, transitions, transversions, ratio",
+        "comparison.tsv: metric, sample_a, sample_b, callable_adjusted_difference"
+      ],
+      "method_and_decision_parameters_to_freeze": "Trimmomatic parameters and pair/read counting, BWA-MEM reference/readgroups, duplicate/secondary/mapQ policy, samtools depth include-zero denominator, bacterial ploidy in GATK, call filters, normalized SNV/indel classification and Ts/Tv zero handling.",
+      "deterministic_verifier_design_and_negative_controls": "Actual read QC/alignment/calling oracle plus independent FASTQ counts, reference-depth arithmetic, allele normalization and mutation classes; reject diploid bacterial genotypes if haploid specified, missing zero-depth bases or multibase variants counted as SNVs.",
+      "unresolved_data_and_runtime_requirements": "Need independent observed isolate pair with manageable read depth and licensed reference; GATK environment and complete run under 30 minutes remain unverified.",
+      "endpoint_adaptation_limits": "True SNP means retained calls under this contract unless independent truth exists. Static mutation counts do not establish mutation accumulation rate, mechanism or resistance causality; final comparison is a structured evidence-bound output.",
+      "benchmark_study_exclusion_identifiers": [],
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "bix-design-m6a-expression-association",
+      "target_ids": [
+        "bix-8-q1",
+        "bix-8-q2",
+        "bix-8-q3",
+        "bix-8-q5",
+        "bix-8-q6",
+        "bix-8-q7"
+      ],
+      "source_groups": [
+        "bix-8"
+      ],
+      "scientific_question_on_independent_observations": "How do independently observed RNA modification changes co-occur with expression changes after assay-specific normalization and gene mapping?",
+      "matching_existing_workstream_ids": [
+        "methylation-expression"
+      ],
+      "nearby_broad_question_ids": [
+        "methylation-expression-01",
+        "methylation-expression-02",
+        "methylation-expression-03"
+      ],
+      "input_design": "Independent observed MeRIP/input and RNA expression count evidence with condition, biological replicates, peak-to-gene annotations and frozen result thresholds.",
+      "proposed_artifacts_and_key_columns": [
+        "assays.tsv: sample, condition, assay, replicate, normalization",
+        "modification.tsv: gene, effect, p, q, class, eligible",
+        "expression.tsv: gene, effect, p, q, class, eligible",
+        "contingency.tsv: modification_class, expression_class, count",
+        "summary.tsv: eligible_genes, hyper_up, hyper_total, hypo_total, chi2, df, p"
+      ],
+      "method_and_decision_parameters_to_freeze": "MeRIP enrichment relative to input, peak aggregation and multimapping, gene universe across assays, hyper/hypo and up/down thresholds, treatment of unchanged/unmeasured genes, chi-square correction and sparse cells.",
+      "deterministic_verifier_design_and_negative_controls": "Native assay references plus independent gene joins, full contingency, marginal denominators and ratio arithmetic; reject RNA abundance substituted for modification effect or unmapped features counted as unchanged.",
+      "unresolved_data_and_runtime_requirements": "Need independently observed paired modification/input and expression assays; otherwise source-derived effect tables cover joint analysis only, not upstream differential modification.",
+      "endpoint_adaptation_limits": "m6A is RNA modification and must not be treated as genomic CpG methylation. Association between assay classes does not establish regulation.",
+      "benchmark_study_exclusion_identifiers": [
+        "10.17632/dj4sb8h3c3.1"
+      ],
+      "status": "proposed-design-only-no-coverage-credit"
+    }
+  ]
+}

@@ -253,7 +253,13 @@
       "runtime_seconds": null,
       "workflow_family": "identifier-resolution",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "559244e863d402937579d9a4fa3de2a1405cf06972b7ab400216a567fa6db7bc",
+        "proposed_design_id": "compbio-design-identifier-joins",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "bam-infer-read-length-q1",
@@ -285,7 +291,13 @@
       "runtime_seconds": null,
       "workflow_family": "alignment-inspection",
       "original_internet_required": false,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "620e39a4c540ba6c9b6b1be9dab65a8b156a5992079f32248bb35f3044a61fd9",
+        "proposed_design_id": "compbio-design-bam-read-structure",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "differential-composition-q1",
@@ -320,7 +332,13 @@
       "runtime_seconds": null,
       "workflow_family": "cell-composition",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "b2e643fdf4fa7d3a7f545545330f58555332dee45c4b1ed56776146f7cbdc9fd",
+        "proposed_design_id": "compbio-design-retina-composition",
+        "source_question_type": "contrived_or_underspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "genomic-state-q1",
@@ -353,7 +371,13 @@
       "runtime_seconds": null,
       "workflow_family": "regulatory-annotation",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "eda245ee6dc92bbfd3f4ceb36bfbcd99e00fbf3b6df9ab3f18f8ff1b6f4077ab",
+        "proposed_design_id": "compbio-design-regulatory-state",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "cryptic-exon-q1",
@@ -390,7 +414,13 @@
       "runtime_seconds": null,
       "workflow_family": "transcript-structure-discovery",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "06bf6b5aed77bb8b66725dc475c111d224195ff313b2747ec55e79f117ed2245",
+        "proposed_design_id": "compbio-design-cryptic-exon",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "read-paper-download-file-parse-q1",
@@ -423,7 +453,13 @@
       "runtime_seconds": null,
       "workflow_family": "study-artifact-discovery",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "25be28ae9497a370dbbb6cd2171af52b7fb9fe4348dbdd1d51ad04b6f2a7b713",
+        "proposed_design_id": "compbio-design-study-peak-evidence",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "huggingface-entropy-q1",
@@ -461,7 +497,13 @@
       "runtime_seconds": null,
       "workflow_family": "sequence-model-uncertainty",
       "original_internet_required": true,
-      "original_gpu_preferred": true
+      "original_gpu_preferred": true,
+      "endpoint_review": {
+        "question_sha256": "42bf9830088ae299a5666ebd334665344d34f3325b9c5395adb28b184f2274bc",
+        "proposed_design_id": "compbio-design-masked-sequence-uncertainty",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "ml-model-track-overlap-q1",
@@ -496,7 +538,13 @@
       "runtime_seconds": null,
       "workflow_family": "resource-provenance-join",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "844d339981a629f3b9cff1a71e9883a5d414429c11792aeb75569db228278a39",
+        "proposed_design_id": "compbio-design-model-track-provenance",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "compute-gc-content-interval-q1",
@@ -530,7 +578,13 @@
       "runtime_seconds": null,
       "workflow_family": "strand-aware-reference-query",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "5731b50be20f8c4565348a736318714196b43276b70c106cf9e720058c2671c8",
+        "proposed_design_id": "compbio-design-reference-interval-audit",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "reverse-search-gwas-q1",
@@ -565,7 +619,13 @@
       "runtime_seconds": null,
       "workflow_family": "data-source-identification",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "b468a5edee405d8f0cd128cd032f1455665c67c05286136b72aa126e9d6b15ad",
+        "proposed_design_id": "compbio-design-study-provenance-gwas",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "pathogenic-variant-lookup-q1",
@@ -599,7 +659,13 @@
       "runtime_seconds": null,
       "workflow_family": "variant-evidence-integration",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "c7c72f017641f9cd4fc3236ab11cf4f09536756f207d8e2d24931f7329ae3ae1",
+        "proposed_design_id": "compbio-design-variant-score-evidence",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "identify-donor-q1",
@@ -634,7 +700,13 @@
       "runtime_seconds": null,
       "workflow_family": "genotype-demultiplexing",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "fb83de12bcc0bc4e1b16f53face1073bb73bedbd0e576f75049b578ea922003d",
+        "proposed_design_id": "compbio-design-single-donor-demux",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "contaminated-rna-q3",
@@ -669,7 +741,13 @@
       "runtime_seconds": null,
       "workflow_family": "read-taxonomy",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "5e6cf897203ff654dbdfa17c7928ace87e3b45e58bd3cd0ae8afb49b3b27da3d",
+        "proposed_design_id": "compbio-design-read-contaminant-taxonomy",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "hic-differential-loop-q1",
@@ -705,7 +783,13 @@
       "runtime_seconds": null,
       "workflow_family": "differential-chromatin-contact",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "81bf86b42f2714a41af98953db76029854a3dc20038102a54054be8f71718b18",
+        "proposed_design_id": "compbio-design-microc-loop",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "encode-atac-pipeline-q1",
@@ -742,7 +826,13 @@
       "runtime_seconds": null,
       "workflow_family": "atac-pipeline",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "8da06d62f0e6579d81af63269c4473537738d58612db0de7a2672f89dcbe00fd",
+        "proposed_design_id": "compbio-design-atac-encode-qc",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "pooled-infer-donors-q1",
@@ -776,7 +866,13 @@
       "runtime_seconds": null,
       "workflow_family": "genotype-demultiplexing",
       "original_internet_required": false,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "62c9465dfdc600441d65dadf9144454114e8b1b01d3657393c1a9f8008438667",
+        "proposed_design_id": "compbio-design-pooled-donor-count",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "overexpress-tf-q1",
@@ -810,7 +906,13 @@
       "runtime_seconds": null,
       "workflow_family": "motif-enrichment",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "6692246f661d2e049c3e420f4ea62ef921580b87f39ed8deb908b1df41fcdc76",
+        "proposed_design_id": "compbio-design-atac-tf-perturbation",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "conservation-lookup-q1",
@@ -844,7 +946,13 @@
       "runtime_seconds": null,
       "workflow_family": "ortholog-sequence-comparison",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "343eeb2c31c05e48c4113802a79fb82920268a5c82b66b7b740fb829613d739f",
+        "proposed_design_id": "compbio-design-ortholog-cdna-distance",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "splice-pred-q1",
@@ -882,7 +990,13 @@
       "runtime_seconds": null,
       "workflow_family": "splice-model-inference",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "cd1fcb78730dc7c0ba6503d11ae8b225965bd3663ce0274441e81df85ccf105e",
+        "proposed_design_id": "compbio-design-splice-site-prediction",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "borzoi-rnaseq-q1",
@@ -921,7 +1035,13 @@
       "runtime_seconds": null,
       "workflow_family": "genomic-track-prediction",
       "original_internet_required": true,
-      "original_gpu_preferred": true
+      "original_gpu_preferred": true,
+      "endpoint_review": {
+        "question_sha256": "d27734968e25a3e5933042519f216392643c0ee385b515448878e01c947ba8f5",
+        "proposed_design_id": "compbio-design-sequence-track-prediction",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "calculate-average-gene-expression-q1",
@@ -953,7 +1073,13 @@
       "runtime_seconds": null,
       "workflow_family": "annotated-expression-query",
       "original_internet_required": false,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "17a4b4f11076c66a45ec8e11e7c19c376dd4bc28395ea6d25aa374a3e0ba6364",
+        "proposed_design_id": "compbio-design-sc-expression-audit",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "covid-patient-q1",
@@ -988,7 +1114,13 @@
       "runtime_seconds": null,
       "workflow_family": "biological-state-identification",
       "original_internet_required": false,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "03b6b1ecdd3e721d0a6490fe8036f4617477b5a7656b88f74647ed5997f7cbf9",
+        "proposed_design_id": "compbio-design-clinical-state-classification",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "saluki-setup-optimize-q1",
@@ -1027,7 +1159,13 @@
       "runtime_seconds": null,
       "workflow_family": "sequence-model-optimization",
       "original_internet_required": true,
-      "original_gpu_preferred": true
+      "original_gpu_preferred": true,
+      "endpoint_review": {
+        "question_sha256": "cc217d1be6c451f0bb2be65a60d3a1e06e39657a1120f1c1d8c0df9647fee6a1",
+        "proposed_design_id": "compbio-design-bounded-utr-sequence-optimization",
+        "source_question_type": "provided_sequence_optimization",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "identify-related-q1",
@@ -1062,7 +1200,13 @@
       "runtime_seconds": null,
       "workflow_family": "population-genetics",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "1a760e9bdd41d8a595d1f3e58182f2d35ca29db7596b968ce71873fb772b4332",
+        "proposed_design_id": "compbio-design-relatedness-genotypes",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "ep-interactions-q1",
@@ -1095,7 +1239,13 @@
       "runtime_seconds": null,
       "workflow_family": "regulatory-evidence-integration",
       "original_internet_required": false,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "ca241b91c11642b9eae263d2304574db529835b52ed21862769e5262cd1d7cf7",
+        "proposed_design_id": "compbio-design-regulatory-contact-perturbation",
+        "source_question_type": "contrived_or_underspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "sample-swap-rna-q1",
@@ -1130,7 +1280,13 @@
       "runtime_seconds": null,
       "workflow_family": "biological-label-reconciliation",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "3226d9dfb0d434c36dca686eac824f06a54f878eaf3d775a8817c30e871e44c0",
+        "proposed_design_id": "compbio-design-rna-label-audit",
+        "source_question_type": "contrived_or_underspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "gene-fusion-q2",
@@ -1167,7 +1323,13 @@
       "runtime_seconds": null,
       "workflow_family": "transcript-structure-discovery",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "e23f81de4cc1b96efe9ab4afb0751e29dc092693829a43478acb03fbae1cf9ee",
+        "proposed_design_id": "compbio-design-observed-fusion-discovery",
+        "source_question_type": "explicitly_simulated",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "retina-score-snps-q1",
@@ -1207,7 +1369,13 @@
       "runtime_seconds": null,
       "workflow_family": "variant-model-evaluation",
       "original_internet_required": true,
-      "original_gpu_preferred": true
+      "original_gpu_preferred": true,
+      "endpoint_review": {
+        "question_sha256": "269e8d0507fcb47a88ae1de6b511c1b0f2fda91bd815a421dc4f9b8042ce3be1",
+        "proposed_design_id": "compbio-design-variant-score-evaluation",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "atac-tn5-shift-q1",
@@ -1241,7 +1409,13 @@
       "runtime_seconds": null,
       "workflow_family": "fragment-shift-inference",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "01ec1b39ec13a8c05fc519cd985e6b90d7ed5a54e017a3f27cd73536872be9a9",
+        "proposed_design_id": "compbio-design-atac-cutsite-shift",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "finding-geo-q1",
@@ -1277,7 +1451,13 @@
       "runtime_seconds": null,
       "workflow_family": "data-source-identification",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "7abdf4d25d01b282996405b1a693383f8c78fc8359552d3597e30a6f4516d324",
+        "proposed_design_id": "compbio-design-source-discovery-expression",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "deg-simple-q1",
@@ -1323,7 +1503,13 @@
       "runtime_seconds": null,
       "workflow_family": "read-to-expression-contrast",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "1bdcd53a270af9bf78c46f10356b63b349d207f0cc589ee8b261b51ef7ac0517",
+        "proposed_design_id": "compbio-design-replicated-gene-expression",
+        "source_question_type": "contrived_or_underspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "bigwig-density-q1",
@@ -1356,7 +1542,13 @@
       "runtime_seconds": null,
       "workflow_family": "genomic-signal-query",
       "original_internet_required": false,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "8a2aef09f980194742c372be32b5eea6d3f0802e7cdf08d67f225da68444c958",
+        "proposed_design_id": "compbio-design-signal-window-ranking",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "gtf-5-utr-median-len-q1",
@@ -1390,7 +1582,13 @@
       "runtime_seconds": null,
       "workflow_family": "transcript-annotation-query",
       "original_internet_required": false,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "3a3d44c045df5d2b12d879d52260e9fff701283b8054a607426be64c2892c2ed",
+        "proposed_design_id": "compbio-design-transcript-region-lengths",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "contaminated-rna-q2",
@@ -1425,7 +1623,13 @@
       "runtime_seconds": null,
       "workflow_family": "read-taxonomy",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "5935f2813ccf896573704fb521bd6af98b397d175112c3d305f3555b050abe35",
+        "proposed_design_id": "compbio-design-read-contaminant-taxonomy",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "sample-swap-rna-q2",
@@ -1460,7 +1664,13 @@
       "runtime_seconds": null,
       "workflow_family": "biological-label-reconciliation",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "0f1df16ac095edeca844608e7e07c27890330bb44ce07bdbb00d1c5342f82288",
+        "proposed_design_id": "compbio-design-rna-label-audit",
+        "source_question_type": "contrived_or_underspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "multiome-match-atac-rna-q1",
@@ -1495,7 +1705,13 @@
       "runtime_seconds": null,
       "workflow_family": "cross-modality-matching",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "92ecd93fdb11a6e389521cc65984f6529675381e7ad7549f080ff08292a7ca10",
+        "proposed_design_id": "compbio-design-multiome-population-matching",
+        "source_question_type": "contrived_or_underspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "spatial-sim-q2",
@@ -1534,7 +1750,13 @@
       "runtime_seconds": null,
       "workflow_family": "spatial-deconvolution",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "da4aa73a870da8ce922c9f327438589c0cefff529ab530f6bd35d5f11a556fa5",
+        "proposed_design_id": "compbio-design-spatial-cell-deconvolution",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "reverse-encode-q1",
@@ -1569,7 +1791,13 @@
       "runtime_seconds": null,
       "workflow_family": "data-source-identification",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "79365bcd3c4dc4339c2c7fed809113e3ff86b42428b42f06fa5ab20966b67c0d",
+        "proposed_design_id": "compbio-design-track-source-fingerprint",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "compute-hvg-jaccard-q1",
@@ -1601,7 +1829,13 @@
       "runtime_seconds": null,
       "workflow_family": "variable-gene-comparison",
       "original_internet_required": false,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "e2ab4fe17291aea55a2da1167620528d95c0bb4b9b492b1bbd2bc905efd430aa",
+        "proposed_design_id": "compbio-design-hvg-jaccard",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "deleterious-mutation-q1",
@@ -1641,7 +1875,13 @@
       "runtime_seconds": null,
       "workflow_family": "read-to-functional-variant",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "ceb02712ba0159787dae32eaca13395f2d1aee5b921dc82c767e3dd7eadd41c2",
+        "proposed_design_id": "compbio-design-high-confidence-nonsense",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "genome-assembly-contiguity-q1",
@@ -1679,7 +1919,13 @@
       "runtime_seconds": 4.663212667001062,
       "workflow_family": "assembly-contiguity",
       "original_internet_required": false,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "88f27c007b1c6545cdd8bc8e5b5d527c89c08650d070a4930a3372b71b60a62c",
+        "proposed_design_id": "compbio-design-observed-assembly-contiguity",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "1000G-retrieve-genotype-q1",
@@ -1714,7 +1960,13 @@
       "runtime_seconds": null,
       "workflow_family": "population-genotype-query",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "6532589548f75cc2e264c5f06fcbefe9d3174312919b83cc6c813b020e34fe50",
+        "proposed_design_id": "compbio-design-public-genotype-site",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "annotate-variant-regulatory-overlap-q1",
@@ -1747,7 +1999,13 @@
       "runtime_seconds": null,
       "workflow_family": "genomic-interval-composition",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "834355ada6875814a2d04c6098dba08f627548788aab0875bc825fd501fd3e70",
+        "proposed_design_id": "compbio-design-consensus-regulatory-annotation",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "extract-rna-secondary-structure-q1",
@@ -1780,7 +2038,13 @@
       "runtime_seconds": null,
       "workflow_family": "rna-folding",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "0d544cfce15a756e1af39a4cb96650197cf060b3b69c3a8c71f7ffcdb230c43a",
+        "proposed_design_id": "compbio-design-rna-minimum-free-energy",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "protein-shape-q1",
@@ -1822,7 +2086,13 @@
       "runtime_seconds": null,
       "workflow_family": "structure-projection",
       "original_internet_required": false,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "b0f6dd2056309f2f70317dad51f8b5a48fc6d2db7d9e3d2f5661c80c2043a48f",
+        "proposed_design_id": "compbio-design-subjective-protein-shape",
+        "source_question_type": "nonadaptable_subjective_exact_endpoint",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "deg-simple-q2",
@@ -1865,7 +2135,13 @@
       "runtime_seconds": null,
       "workflow_family": "read-to-expression-contrast",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "7556b71c2f8210a869c20a4c373ca112c50e31344f5a1e2692365697ce778f79",
+        "proposed_design_id": "compbio-design-isoform-expression",
+        "source_question_type": "contrived_or_underspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "match-genotypes-q1",
@@ -1900,7 +2176,13 @@
       "runtime_seconds": null,
       "workflow_family": "genotype-metadata-matching",
       "original_internet_required": false,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "b0f97badc9e0a11cae5f3bb77542486d76fe6f60ae76c3e6b01a7e91ac5b17fd",
+        "proposed_design_id": "compbio-design-metadata-genotype-join",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "spatial-sim-q1",
@@ -1939,7 +2221,13 @@
       "runtime_seconds": null,
       "workflow_family": "spatial-deconvolution",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "c5b7f054a3bcf987f15e06cbd4e2c149ce4bce46e547c45a9d546e0bd80bf145",
+        "proposed_design_id": "compbio-design-spatial-cell-deconvolution",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "compute-nonoverlapping-exonic-length-q1",
@@ -1974,7 +2262,13 @@
       "runtime_seconds": null,
       "workflow_family": "transcript-annotation-query",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "dfa40160d80cfda6585a15738daaf0adc0b619e2921eb4184b354c10f57ead9a",
+        "proposed_design_id": "compbio-design-exon-union-length",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "atac-doublet-q1",
@@ -2008,7 +2302,13 @@
       "runtime_seconds": null,
       "workflow_family": "single-cell-doublet-detection",
       "original_internet_required": false,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "a9df6514f752a6f1f61ed6aff3a3e3d4b73d896d18e8d9e95e2f268ecdb4e93b",
+        "proposed_design_id": "compbio-design-singlecell-doublet",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "enriched-motif-identification-q1",
@@ -2042,7 +2342,13 @@
       "runtime_seconds": null,
       "workflow_family": "motif-enrichment",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "8b7489ad8a43189cac04f351a21f7e257ade3dfb97a169365bead4da8d42eb9c",
+        "proposed_design_id": "compbio-design-motif-background",
+        "source_question_type": "contrived_or_underspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "find-deletion-q1",
@@ -2079,7 +2385,13 @@
       "runtime_seconds": null,
       "workflow_family": "copy-number-discovery",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "694446ca8e77e9df7512726370a6c99356e8572fe526f75a6e71bf51a2ce72d8",
+        "proposed_design_id": "compbio-design-copy-number-from-reads",
+        "source_question_type": "explicitly_simulated",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "three-way-barnyard-q1",
@@ -2114,7 +2426,13 @@
       "runtime_seconds": null,
       "workflow_family": "multispecies-single-cell",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "856d6b98ef1cf0b24d2776851dadc3c87d27673251b91f161be4d9239620c775",
+        "proposed_design_id": "compbio-design-physical-barnyard-mixture",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "subtype-inflammation-q1",
@@ -2148,7 +2466,13 @@
       "runtime_seconds": null,
       "workflow_family": "single-cell-state-annotation",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "30aad5c366bdecf6614818932162b64eb61cd484c97486083ddb8081430179fe",
+        "proposed_design_id": "compbio-design-retina-state-testing",
+        "source_question_type": "contrived_or_underspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "read-proportions-q1",
@@ -2181,7 +2505,13 @@
       "runtime_seconds": null,
       "workflow_family": "read-origin-abundance",
       "original_internet_required": false,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "69ebf30bca6c75a801e866f6c2c87c80c4cd02c617b4567f78caf55f3cf0b3f5",
+        "proposed_design_id": "compbio-design-read-origin-mixture",
+        "source_question_type": "explicitly_simulated",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "sample-swap-atac-q2",
@@ -2216,7 +2546,13 @@
       "runtime_seconds": null,
       "workflow_family": "biological-label-reconciliation",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "e2b3daa8ee9a722e45776086060b543a71c1b8e167104b29378cfbab411cdc38",
+        "proposed_design_id": "compbio-design-atac-label-audit",
+        "source_question_type": "contrived_or_underspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "exogenous-mix-reads-q1",
@@ -2250,7 +2586,13 @@
       "runtime_seconds": null,
       "workflow_family": "mixture-identifiability",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "ebd49006699cfe720b3caf0b51eb78bcd385eff5715704952c0d200ddf356a53",
+        "proposed_design_id": "compbio-design-exogenous-read-mixture",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "perturb-seq-align-q1",
@@ -2286,7 +2628,13 @@
       "runtime_seconds": null,
       "workflow_family": "perturbation-signature-analysis",
       "original_internet_required": false,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "746b309805bde955fe7f2cef5ced890e78bd6fb0c026bd079f8b072b4ab141ce",
+        "proposed_design_id": "compbio-design-perturbation-guide-identity",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "gwas-ancestry-q1",
@@ -2323,7 +2671,13 @@
       "runtime_seconds": null,
       "workflow_family": "population-genetics",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "64b2044452fd0bdde02fc3d7ded8f661e9888e93c51b3574406e6c0fb158ce3f",
+        "proposed_design_id": "compbio-design-ancestry-gwas-provenance",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "gene-info-grab-q1",
@@ -2357,7 +2711,13 @@
       "runtime_seconds": null,
       "workflow_family": "transcript-annotation-query",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "d024a685e88fe92bf49d7a8f048a2c9f023f57bffd7593847ee822a7ef5b682a",
+        "proposed_design_id": "compbio-design-mouse-gene-annotation",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "genome-coords-q1",
@@ -2391,7 +2751,13 @@
       "runtime_seconds": null,
       "workflow_family": "longitudinal-contact-association",
       "original_internet_required": false,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "34ec1e8e56b80edeccbb47c21e6143b49a14483ead0d726b386a0810e03fde61",
+        "proposed_design_id": "compbio-design-measured-contact-timecourse",
+        "source_question_type": "contrived_or_underspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "mystery-peak-set-q1",
@@ -2427,7 +2793,13 @@
       "runtime_seconds": null,
       "workflow_family": "chromatin-assay-identification",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "432c8357071f52d634229f978cda54cfab82af46041baa46493275925f52aede",
+        "proposed_design_id": "compbio-design-reference-peak-depletion",
+        "source_question_type": "contrived_or_underspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "phase-chain-q1",
@@ -2463,7 +2835,13 @@
       "runtime_seconds": null,
       "workflow_family": "read-backed-phasing",
       "original_internet_required": false,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "2759ae2e7345827e2c19244e36371dd9fc5761c808d9022a2db680344453df50",
+        "proposed_design_id": "compbio-design-read-backed-phasing",
+        "source_question_type": "explicitly_simulated",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "enformer-basic-q1",
@@ -2499,7 +2877,13 @@
       "runtime_seconds": null,
       "workflow_family": "model-architecture-inspection",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "41111cc4a11ed07a53cddfaf36481041533338a3010ed5af27536a46c523e92a",
+        "proposed_design_id": "compbio-design-model-parameter-count",
+        "source_question_type": "software_only_endpoint",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "bedtools-ops-q1",
@@ -2532,7 +2916,13 @@
       "runtime_seconds": null,
       "workflow_family": "genomic-interval-composition",
       "original_internet_required": false,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "da2c4a64333a2165c563dd9d2992dbbd171bde3534c5518fb248a0f7747f048a",
+        "proposed_design_id": "compbio-design-peak-summit-blacklist",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "orf-annot-q1",
@@ -2566,7 +2956,13 @@
       "runtime_seconds": null,
       "workflow_family": "coding-region-inference",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "6bf94cd70db1cb6b92ba6100fbb1051fadcd40de5646e6a3555f077f1f535b52",
+        "proposed_design_id": "compbio-design-orf-cds-audit",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "reverse-search-gwas-q2",
@@ -2601,7 +2997,13 @@
       "runtime_seconds": null,
       "workflow_family": "data-source-identification",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "cbd5e00abed5dbd64bd1992d74468839055f847585895e527553cd3835fe6dce",
+        "proposed_design_id": "compbio-design-study-provenance-gwas",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "disease-samples-q1",
@@ -2636,7 +3038,13 @@
       "runtime_seconds": null,
       "workflow_family": "biological-state-identification",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "984016479eca7ebd5c91be6729965c04ab8bb26537930fdaecab1e87a96e6e0d",
+        "proposed_design_id": "compbio-design-clinical-state-classification",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "contaminated-rna-q1",
@@ -2671,7 +3079,13 @@
       "runtime_seconds": null,
       "workflow_family": "read-taxonomy",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "8a590cf0f5ab611461e59945250246bff784284c6738fa3cf369534361d8306b",
+        "proposed_design_id": "compbio-design-read-contaminant-taxonomy",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "variant-coordinate-lookup-q1",
@@ -2703,7 +3117,13 @@
       "runtime_seconds": null,
       "workflow_family": "identifier-resolution",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "217c8eceb171bfa56c00bfd19e142fdde137c14b5bd35fc9dcb7c676f90135d0",
+        "proposed_design_id": "compbio-design-variant-coordinate-crosswalk",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "histone-chip-q1",
@@ -2738,7 +3158,13 @@
       "runtime_seconds": null,
       "workflow_family": "chromatin-assay-identification",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "e532c45240029f3a4e46a462259ec6a578b2c01e9c104b8306ba095c1af3370c",
+        "proposed_design_id": "compbio-design-histone-mark-identification",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "cell-proportions-q1",
@@ -2773,7 +3199,13 @@
       "runtime_seconds": null,
       "workflow_family": "cell-composition",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "c7e5642af2890f0af2690ba4e0cdda8eac5c3819fadebb40ff6be46e2826daaa",
+        "proposed_design_id": "compbio-design-co-culture-proportions",
+        "source_question_type": "contrived_or_underspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "three-way-barnyard-q2",
@@ -2809,7 +3241,13 @@
       "runtime_seconds": null,
       "workflow_family": "multispecies-single-cell",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "0c28b74dedb174e1b48d12907490d3fbce8cbb32d366ff9ed62e2e6df15c81f4",
+        "proposed_design_id": "compbio-design-physical-barnyard-mixture",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "chip-pioneer-q1",
@@ -2844,7 +3282,13 @@
       "runtime_seconds": null,
       "workflow_family": "chromatin-perturbation-comparison",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "151c7cf983140f10ed8f1accfb23cae7729f39fa437cd495532d5f79a50abd21",
+        "proposed_design_id": "compbio-design-chip-pioneer-evidence",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "deleterious-mutation-q2",
@@ -2883,7 +3327,13 @@
       "runtime_seconds": null,
       "workflow_family": "read-to-functional-variant",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "ef6708169195630f2bf21554efe53e3578bec2595cf0b3a921c8ac4482221f76",
+        "proposed_design_id": "compbio-design-mosaic-nonsense",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "bam-ops-q1",
@@ -2914,7 +3364,13 @@
       "runtime_seconds": null,
       "workflow_family": "alignment-inspection",
       "original_internet_required": false,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "478704728826d55216c14053bdf7fba242d201ce73bb90d95f0e4dd5473953ac",
+        "proposed_design_id": "compbio-design-bam-read-structure",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "perturb-seq-effect-q1",
@@ -2950,7 +3406,13 @@
       "runtime_seconds": null,
       "workflow_family": "perturbation-signature-analysis",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "04c4d7e15c7ecad45553dc242c19e7c03c1657cd701366c3b554bcae072d91bd",
+        "proposed_design_id": "compbio-design-immune-pathway-screen-audit",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "exogenous-mix-reads-q2",
@@ -2984,7 +3446,13 @@
       "runtime_seconds": null,
       "workflow_family": "mixture-identifiability",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "4ad27e0f78e51320c51fb014a25708932ed2c5e727a03a020d917d379ba2f8af",
+        "proposed_design_id": "compbio-design-exogenous-read-mixture",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "align-one-sequence-to-reference-q1",
@@ -3015,7 +3483,13 @@
       "runtime_seconds": null,
       "workflow_family": "sequence-localization",
       "original_internet_required": false,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "d89e62c68c6ca885cc608e5ba21988752a4ca48047c47dc4c75be5fb5d86deb2",
+        "proposed_design_id": "compbio-design-reference-interval-localization",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "promoter-sequence-retrieval-q1",
@@ -3049,7 +3523,13 @@
       "runtime_seconds": null,
       "workflow_family": "strand-aware-reference-query",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "2aed685ae0f0f246d8fb4f74d21f05c2d04252c695c43c59b3da3f909292619a",
+        "proposed_design_id": "compbio-design-zebrafish-promoter-sequence",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "bedtools-chromhmm-q1",
@@ -3081,7 +3561,13 @@
       "runtime_seconds": null,
       "workflow_family": "genomic-interval-composition",
       "original_internet_required": false,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "bf4fb14d17058dcb2c958186ed64a940f01b0b5f6769c48c67fd0d10864714fc",
+        "proposed_design_id": "compbio-design-chromhmm-base-overlap",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "lung-cancer-sc-q1",
@@ -3116,7 +3602,13 @@
       "runtime_seconds": null,
       "workflow_family": "single-cell-state-annotation",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "6c80df9a619bbe23f2c07929257f02c508a9e9f0b54c1b84b2d6c441526146fd",
+        "proposed_design_id": "compbio-design-lung-cell-composition",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "tissue-fibroblast-q1",
@@ -3150,7 +3642,13 @@
       "runtime_seconds": null,
       "workflow_family": "single-cell-state-annotation",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "e2d20dbf1838313966c1fe137f89b7c80fd705910be014c7ece8252dd3a4adf7",
+        "proposed_design_id": "compbio-design-fibroblast-tissue-label",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "characterize-response-q1",
@@ -3185,7 +3683,13 @@
       "runtime_seconds": null,
       "workflow_family": "biological-state-identification",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "dbefe3ae08ade8d3ed862b7d3cc70ebed3acbd31537e65e4be076a6336d1a9d0",
+        "proposed_design_id": "compbio-design-response-signature-label",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "geo-lookup-read-matrix-market-q1",
@@ -3220,7 +3724,13 @@
       "runtime_seconds": null,
       "workflow_family": "public-sparse-count-query",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "6894d2283813aa51d52087647b113d62e3db9c17e42169c599db667ce2b30b2b",
+        "proposed_design_id": "compbio-design-public-count-extraction",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "annotate-variant-gene-impact-q1",
@@ -3253,7 +3763,13 @@
       "runtime_seconds": null,
       "workflow_family": "variant-consequence-annotation",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "8c5cbd09fb3886c04c8a6f38e21f2ee0a1ff7bded73dc16e426badd53bd832d1",
+        "proposed_design_id": "compbio-design-clinical-variant-consequence",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "vcf-infer-build-q1",
@@ -3288,7 +3804,13 @@
       "runtime_seconds": null,
       "workflow_family": "reference-build-inference",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "8aca84c4d19975a7f636f05a5481af4c46dbdda3599813a1b0ea9ac07f47146d",
+        "proposed_design_id": "compbio-design-variant-build-inference",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "gene-pair-ordering-fraction-q1",
@@ -3320,7 +3842,13 @@
       "runtime_seconds": null,
       "workflow_family": "annotated-expression-query",
       "original_internet_required": false,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "d9b93aaf2bfd52f08729002bd5b9f6588b2bf584e1b93e3af907b522356fdc40",
+        "proposed_design_id": "compbio-design-sc-expression-audit",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "1000G-retrieve-genotype-q2",
@@ -3356,7 +3884,13 @@
       "runtime_seconds": null,
       "workflow_family": "population-genotype-query",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "c02b0bc83fda9a6eb6f61c3ddb8d278a2190532706f50aa754715bf3894a9508",
+        "proposed_design_id": "compbio-design-public-genotype-panel",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "odd-one-out-q1",
@@ -3390,7 +3924,13 @@
       "runtime_seconds": null,
       "workflow_family": "chromatin-assay-identification",
       "original_internet_required": false,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "169ef6c8ee0b3d9f2a33d7a760fa1f8a53f7e5a8f68ed418242ad5b4dd6432ac",
+        "proposed_design_id": "compbio-design-assay-outlier-identification",
+        "source_question_type": "contrived_or_underspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "gene-expression-query-q1",
@@ -3423,7 +3963,13 @@
       "runtime_seconds": null,
       "workflow_family": "tissue-expression-query",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "18fa712647799dac8c1e1af3a91463e0627b90293a00d19af7d1ecbb1609cfec",
+        "proposed_design_id": "compbio-design-expressed-gene-query",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "afgr-1000g-intersect-atac-q1",
@@ -3458,7 +4004,13 @@
       "runtime_seconds": null,
       "workflow_family": "resource-provenance-join",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "bdf391ffcdbddd09676c8e803b3f132ec6db871a2aeaffa3214966f345a606aa",
+        "proposed_design_id": "compbio-design-regulatory-accession-crosswalk",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "borzoi-basic-q1",
@@ -3494,7 +4046,13 @@
       "runtime_seconds": null,
       "workflow_family": "model-architecture-inspection",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "1d4ea1b1aa7b9d1867594d714f110e7b698cbb464838a98d0107be25fc5447ad",
+        "proposed_design_id": "compbio-design-model-parameter-count",
+        "source_question_type": "software_only_endpoint",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "annotate-variant-gene-impact-q2",
@@ -3527,7 +4085,13 @@
       "runtime_seconds": null,
       "workflow_family": "variant-consequence-annotation",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "f91d88e6128d59357813631da876a4d9d6fa39178799175a41dd9b84aa4e6343",
+        "proposed_design_id": "compbio-design-clinical-variant-consequence",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "gene-fusion-q1",
@@ -3564,7 +4128,13 @@
       "runtime_seconds": null,
       "workflow_family": "transcript-structure-discovery",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "2c6a4fe57b1c1cb1bc2d6bea3f813426842ff822491de7e1efbb7938ccb278cb",
+        "proposed_design_id": "compbio-design-observed-fusion-discovery",
+        "source_question_type": "explicitly_simulated",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "compute-gccontent-promoter-q1",
@@ -3598,7 +4168,13 @@
       "runtime_seconds": null,
       "workflow_family": "strand-aware-reference-query",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "5261dc3bd625c27cc462e522e4c04c914d045983c6998453e785a2bd80581c71",
+        "proposed_design_id": "compbio-design-reference-interval-audit",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "vcf-infer-ancestry-q1",
@@ -3633,7 +4209,13 @@
       "runtime_seconds": null,
       "workflow_family": "population-genetics",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "8d43c309789a51e001a428f8f149f3acd5916b9eb08813cd94eba8057dcabfef",
+        "proposed_design_id": "compbio-design-population-ancestry-vcf",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "find-amplification-q1",
@@ -3670,7 +4252,13 @@
       "runtime_seconds": null,
       "workflow_family": "copy-number-discovery",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "bc975f3b774db8f89dbf635ff0390a89e01357ba43beb680b35f50e47b0ecd23",
+        "proposed_design_id": "compbio-design-copy-number-from-reads",
+        "source_question_type": "explicitly_simulated",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "sample-swap-atac-q1",
@@ -3705,7 +4293,13 @@
       "runtime_seconds": null,
       "workflow_family": "biological-label-reconciliation",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "6fa099d508d1f8d95da9e1611f61b2e727500fe601c081d5000ff0319f8798a9",
+        "proposed_design_id": "compbio-design-atac-label-audit",
+        "source_question_type": "contrived_or_underspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     },
     {
       "task_id": "variant-status-q1",
@@ -3741,7 +4335,26 @@
       "runtime_seconds": null,
       "workflow_family": "read-backed-genotype",
       "original_internet_required": true,
-      "original_gpu_preferred": false
+      "original_gpu_preferred": false,
+      "endpoint_review": {
+        "question_sha256": "ff34c799a9c5c9999f2cf91d1222ea88309f6c97674c1a0efecd4d2a955a3415",
+        "proposed_design_id": "compbio-design-readbacked-variant-status",
+        "source_question_type": "observed_or_unspecified",
+        "inspection_tier": "question-endpoint-reviewed"
+      }
     }
-  ]
+  ],
+  "question_review": {
+    "reviewed_question_count": 100,
+    "metadata_json_sha256": "39cf7ddf561861f9de4d9a3f757dc68eefdefd20fe62828c6eefcfa102d0f264",
+    "question_tsv_sha256": "ac8a5dcf813e9e89556701648140a84b2757fe449e35650168de54baed75ce1c",
+    "source_revision": "86ee0a22e036fef2a98f382f8fd528d5d390dde3",
+    "detailed_designs_file": "workflow_designs/compbiobench.json",
+    "proposed_design_count": 84,
+    "explicitly_simulated_questions": 6,
+    "non_equivalent_subjective_or_software_only_questions": 3,
+    "answers_or_fixtures_read": false,
+    "validated_coverage_added": 0,
+    "limit": "Question-only endpoint proposals. Independent observations, scientific endpoint equivalence, complete schemas and native execution remain unresolved."
+  }
 }

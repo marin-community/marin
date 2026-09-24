@@ -18,7 +18,7 @@
       "distribution": "ID",
       "tasks_file": "benchmark_tasks/bixbench.json",
       "source_inventory_name": "BixBench v1.5, Harbor CLI",
-      "task_inventory_status": "assessed",
+      "task_inventory_status": "205-question-endpoints-reviewed; 27 prospective workflow designs; source-method ambiguities and independent data remain unresolved",
       "public_inventory_count": 205
     },
     "CompBioBench": {
@@ -30,7 +30,7 @@
       "distribution": "ID",
       "tasks_file": "benchmark_tasks/compbiobench.json",
       "source_inventory_name": "CompBioBench",
-      "task_inventory_status": "assessed",
+      "task_inventory_status": "100-question-endpoints-reviewed; 84 prospective designs; six explicit simulated and three subjective/software-only source questions require adaptation review",
       "public_inventory_count": 100
     },
     "BiomniBench-DA": {

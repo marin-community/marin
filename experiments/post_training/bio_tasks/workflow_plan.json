@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T13:47:13.443966+00:00",
+  "updated_at": "2026-09-24T14:04:24.136958+00:00",
   "basis_revision": "952929c306",
   "scope": "Agentic provisional-ID benchmarks only; preserve all existing OOD exclusions. Plan the broad task set before further recipe implementation.",
   "authoring_unit": "One coherent observed-data task per recipe by default. Proposed questions are separate task designs, not repeated instances. They may be split or merged after endpoint and runtime checks.",
@@ -9,7 +9,7 @@
   "source_inventory_files": [
     {
       "path": "experiments/post_training/bio_tasks/benchmark_coverage.json",
-      "sha256": "3a3e23b642352ec76d91fbf7be9a4788eff67b6b88c7c535110a92baf0e527b0"
+      "sha256": "c19fa85b0db4211607380b0933023e85272560c6a7454a72b28a9007286fa2a9"
     },
     {
       "path": "experiments/post_training/bio_tasks/benchmark_sources.json",
@@ -19,11 +19,14 @@
   "question_inspection_evidence": {
     "BixBench": {
       "task_count": 205,
-      "question_only_metadata_sha256": "6d2d1ca1f642ee64a7f4cca07bc0e097674c884352a19fb085b0f72d5a9710f6"
+      "question_only_metadata_sha256": "6d2d1ca1f642ee64a7f4cca07bc0e097674c884352a19fb085b0f72d5a9710f6",
+      "detailed_designs_file": "workflow_designs/bixbench.json"
     },
     "CompBioBench": {
       "task_count": 100,
-      "question_only_metadata_sha256": "ac8a5dcf813e9e89556701648140a84b2757fe449e35650168de54baed75ce1c"
+      "question_only_metadata_sha256": "39cf7ddf561861f9de4d9a3f757dc68eefdefd20fe62828c6eefcfa102d0f264",
+      "detailed_designs_file": "workflow_designs/compbiobench.json",
+      "question_only_tsv_sha256": "ac8a5dcf813e9e89556701648140a84b2757fe449e35650168de54baed75ce1c"
     },
     "BiomniBench-DA": {
       "task_count": 50,
@@ -4979,7 +4982,7 @@
         "bacterial-read-variant"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -4996,7 +4999,7 @@
         "rna-seq-contrast-enrichment"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -5011,7 +5014,7 @@
         "single-cell-pseudobulk"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -5030,7 +5033,7 @@
         "methylation-expression"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -5050,7 +5053,7 @@
         "clinical-response-model"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -5067,7 +5070,7 @@
         "clinical-response-model"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -5083,7 +5086,7 @@
         "clinical-response-model"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -5112,7 +5115,7 @@
         "clinical-variant-cohort"
       ],
       "routing_basis": "explicit-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -5129,7 +5132,7 @@
         "dose-response"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -5149,7 +5152,7 @@
         "dose-response"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -5167,7 +5170,7 @@
         "biological-imaging"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -5185,7 +5188,7 @@
         "clinical-response-model"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -5204,7 +5207,7 @@
         "crispr-screen-pathway"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -5220,7 +5223,7 @@
         "rna-seq-contrast-enrichment"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -5236,7 +5239,7 @@
         "gene-program-factorization"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -5253,7 +5256,7 @@
         "target-evidence"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -5271,7 +5274,7 @@
         "biological-imaging"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -5289,7 +5292,7 @@
         "rna-seq-contrast-enrichment"
       ],
       "routing_basis": "explicit-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -5304,7 +5307,7 @@
         "clinical-response-model"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -5323,7 +5326,7 @@
         "methylation-expression"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -5340,7 +5343,7 @@
         "small-rna-sequence-structure"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -5357,7 +5360,7 @@
         "small-rna-sequence-structure"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -5375,7 +5378,7 @@
         "rna-seq-contrast-enrichment"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -5394,7 +5397,7 @@
         "rna-seq-contrast-enrichment"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -5408,7 +5411,7 @@
         "ortholog-tree-signal"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -5422,7 +5425,7 @@
         "ortholog-tree-signal"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -5436,7 +5439,7 @@
         "ortholog-tree-signal"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -5450,7 +5453,7 @@
         "ortholog-tree-signal"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -5467,7 +5470,7 @@
         "proteomics-metabolomics"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -5484,7 +5487,7 @@
         "ortholog-tree-signal"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -5503,7 +5506,7 @@
         "ortholog-tree-signal"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -5521,7 +5524,7 @@
         "ortholog-tree-signal"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -5540,7 +5543,7 @@
         "ortholog-tree-signal"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -5557,7 +5560,7 @@
         "ortholog-tree-signal"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -5577,7 +5580,7 @@
         "ortholog-tree-signal"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -5591,7 +5594,7 @@
         "ortholog-tree-signal"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -5609,7 +5612,7 @@
         "ortholog-tree-signal"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -5631,7 +5634,7 @@
         "ortholog-tree-signal"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -5649,7 +5652,7 @@
         "rna-seq-contrast-enrichment"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -5667,7 +5670,7 @@
         "rna-seq-contrast-enrichment"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -5682,7 +5685,7 @@
         "rna-seq-contrast-enrichment"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -5699,7 +5702,7 @@
         "rna-seq-contrast-enrichment"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -5716,7 +5719,7 @@
         "clinical-response-model"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -5737,7 +5740,7 @@
         "rna-seq-contrast-enrichment"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -6782,7 +6785,7 @@
         "bacterial-read-variant"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -6797,7 +6800,7 @@
         "database-identity-evidence"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -6811,7 +6814,7 @@
         "assembly-qc"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -6825,7 +6828,7 @@
         "chromatin-regulatory"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -6842,7 +6845,7 @@
         "data-statistics-visualization"
       ],
       "routing_basis": "explicit-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -6858,7 +6861,7 @@
         "single-cell-annotation"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -6873,7 +6876,7 @@
         "single-cell-composition"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -6889,7 +6892,7 @@
         "differential-binding"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -6903,7 +6906,7 @@
         "differential-binding"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -6917,7 +6920,7 @@
         "transcript-reference-audit"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -6932,7 +6935,7 @@
         "variant-evidence"
       ],
       "routing_basis": "explicit-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -6946,7 +6949,7 @@
         "single-cell-integration"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -6963,7 +6966,7 @@
         "database-identity-evidence"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -6977,7 +6980,7 @@
         "chromatin-contact"
       ],
       "routing_basis": "explicit-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -6991,7 +6994,7 @@
         "data-statistics-visualization"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7007,7 +7010,7 @@
         "genomic-interval-operations"
       ],
       "routing_basis": "explicit-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7021,7 +7024,7 @@
         "differential-binding"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7035,7 +7038,7 @@
         "protein-sequence-model-evaluation"
       ],
       "routing_basis": "explicit-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7050,7 +7053,7 @@
         "single-cell-qc-embedding"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7064,7 +7067,7 @@
         "population-genetics"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7079,7 +7082,7 @@
         "database-identity-evidence"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7093,7 +7096,7 @@
         "differential-binding"
       ],
       "routing_basis": "explicit-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7108,7 +7111,7 @@
         "data-statistics-visualization"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7123,7 +7126,7 @@
         "data-statistics-visualization"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7138,7 +7141,7 @@
         "chromatin-regulatory"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7153,7 +7156,7 @@
         "single-cell-qc-embedding"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7167,7 +7170,7 @@
         "ortholog-tree-signal"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7182,7 +7185,7 @@
         "single-cell-pseudobulk"
       ],
       "routing_basis": "explicit-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7198,7 +7201,7 @@
         "population-genetics"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7213,7 +7216,7 @@
         "population-genetics"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7227,7 +7230,7 @@
         "database-identity-evidence"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7241,7 +7244,7 @@
         "bacterial-read-variant"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7255,7 +7258,7 @@
         "bacterial-read-variant"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7269,7 +7272,7 @@
         "metagenomic-community"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7285,7 +7288,7 @@
         "metagenomic-community"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7300,7 +7303,7 @@
         "rna-seq-contrast-enrichment"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7315,7 +7318,7 @@
         "bacterial-read-variant"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7329,7 +7332,7 @@
         "transcript-reference-audit"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7343,7 +7346,7 @@
         "chromatin-regulatory"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7357,7 +7360,7 @@
         "single-cell-integration"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7372,7 +7375,7 @@
         "database-identity-evidence"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7386,7 +7389,7 @@
         "small-rna-sequence-structure"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7400,7 +7403,7 @@
         "sequence-construct"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7414,7 +7417,7 @@
         "protein-sequence-model-evaluation"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7428,7 +7431,7 @@
         "protein-sequence-model-evaluation"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7442,7 +7445,7 @@
         "single-cell-qc-embedding"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7458,7 +7461,7 @@
         "single-cell-annotation"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7474,7 +7477,7 @@
         "spatial-reference-transfer"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7488,7 +7491,7 @@
         "transcript-reference-audit"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7504,7 +7507,7 @@
         "transcript-reference-audit"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7518,7 +7521,7 @@
         "ligand-structure-affinity"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7532,7 +7535,7 @@
         "evidence-meta-analysis"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7546,7 +7549,7 @@
         "database-identity-evidence"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7562,7 +7565,7 @@
         "transcript-reference-audit"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7578,7 +7581,7 @@
         "transcript-reference-audit"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7592,7 +7595,7 @@
         "single-cell-qc-embedding"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7607,7 +7610,7 @@
         "variant-evidence"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7621,7 +7624,7 @@
         "variant-evidence"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -7635,7 +7638,7 @@
         "variant-evidence"
       ],
       "routing_basis": "previously-assessed-candidate-membership",
-      "inspection_tier": "question-only-inspected"
+      "inspection_tier": "question-endpoint-reviewed"
     },
     {
       "planning_disposition": "candidate-design-provisional",
@@ -12612,9 +12615,9 @@
     },
     "BixBench": {
       "source_inventory_path": "experiments/post_training/bio_tasks/benchmark_tasks/bixbench.json",
-      "source_inventory_sha256": "95b687d8f3cb30c0aa126a0136624551974f0151779fff6d57a9fa60d4b13795",
+      "source_inventory_sha256": "aea7bce180d74615adc38f06c593dc6461b9f94696078ffd14c98f050385ae0e",
       "source_revision": "f8cc3bdcc6357c88b8c3648306522b9c422dc95a",
-      "task_inventory_status": "assessed",
+      "task_inventory_status": "205-question-endpoints-reviewed; 27 prospective workflow designs; source-method ambiguities and independent data remain unresolved",
       "record_count": 205,
       "unique_count_after_known_bix_aliases": 205,
       "provisional_design_record_count": 205,
@@ -12624,7 +12627,7 @@
         "candidate-design-provisional": 205
       },
       "reconciled_inspection_tier_counts": {
-        "question-only-inspected": 205
+        "question-endpoint-reviewed": 205
       },
       "initial_group_referenced_record_count": 144,
       "new_expansion_card_record_count": 61
@@ -12671,9 +12674,9 @@
     },
     "CompBioBench": {
       "source_inventory_path": "experiments/post_training/bio_tasks/benchmark_tasks/compbiobench.json",
-      "source_inventory_sha256": "7b5888c59de481791e8988907dcf6b840d531563c1aa5f78b8bdc53758a745b4",
+      "source_inventory_sha256": "dc5651f1afa08ab5274026792b610e49e3aa74427dab2b1a217290275524874f",
       "source_revision": "86ee0a22e036fef2a98f382f8fd528d5d390dde3",
-      "task_inventory_status": "assessed",
+      "task_inventory_status": "100-question-endpoints-reviewed; 84 prospective designs; six explicit simulated and three subjective/software-only source questions require adaptation review",
       "record_count": 100,
       "unique_count_after_known_bix_aliases": 100,
       "provisional_design_record_count": 100,
@@ -12683,7 +12686,7 @@
         "candidate-design-provisional": 100
       },
       "reconciled_inspection_tier_counts": {
-        "question-only-inspected": 100
+        "question-endpoint-reviewed": 100
       },
       "initial_group_referenced_record_count": 38,
       "new_expansion_card_record_count": 62
@@ -13136,6 +13139,22 @@
       "reviewed_question_ids": 50,
       "proposed_designs": 45,
       "relationship_to_workstream_questions": "Endpoint refinements; do not add to the 147 broad questions or count as validated mappings."
+    },
+    {
+      "path": "workflow_designs/bixbench.json",
+      "sha256": "1c1f6d202d81e21930ee267359a60b051b618e88a285e0678154c15404530543",
+      "benchmark_id": "BixBench",
+      "reviewed_question_ids": 205,
+      "proposed_designs": 27,
+      "relationship_to_workstream_questions": "Endpoint refinements; do not add to the 147 broad questions or count as validated mappings."
+    },
+    {
+      "path": "workflow_designs/compbiobench.json",
+      "sha256": "933a69a17a5c4b17582c35a81bbb4a285fa07f1d1286973eeba32629d7ecfbf5",
+      "benchmark_id": "CompBioBench",
+      "reviewed_question_ids": 100,
+      "proposed_designs": 84,
+      "relationship_to_workstream_questions": "Endpoint refinements including non-equivalent supporting components; do not add to the 147 broad questions or count as validated mappings."
     }
   ]
 }

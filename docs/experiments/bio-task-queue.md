@@ -40,6 +40,31 @@ controls specify incorrect submitted artifacts; random label permutations are no
 assumed to change significance. Independent input selection, complete schemas and
 native reference execution remain required before authoring is considered ready.
 
+The [BixBench endpoint designs](../../experiments/post_training/bio_tasks/workflow_designs/bixbench.json)
+assign all 205 questions to 27 proposed workflows. Full gene, pathway, variant and
+patient tables support related endpoints within one observed study. Distinct assays
+and model families remain separate. Scientific departures are explicit: normalized
+abundances are not converted into artificial read counts, a nonsignificant difference
+does not establish equivalence, and static variant counts do not establish mutation
+accumulation rates. Such corrected adaptations need endpoint review before any
+coverage credit. The designs retain source-study exclusions and question hashes.
+
+The [CompBioBench endpoint designs](../../experiments/post_training/bio_tasks/workflow_designs/compbiobench.json)
+assign all 100 questions to 84 proposals, including supporting components for two
+software-only endpoints and a subjective shape question. Six explicitly simulated
+source questions need independently observed alternatives. Spatial tasks include
+both deconvolution and neighborhood analysis; alignment tasks distinguish reads
+from templates, and sequence checks include orientation as well as GC content.
+Public transcript-model optimization starts from observed sequences and labels
+its designed variants separately. Runtime, model weights and method equivalence
+remain unresolved. Its JSON and TSV metadata hashes are recorded separately.
+
+These three reviews assign 355 question endpoints. Their 156 detailed proposals
+refine or split the 147 broad questions and overlap across benchmarks; they are
+neither an independent task count nor a coverage forecast. Cross-benchmark merging
+requires matching estimands, usable independent inputs and complete output contracts.
+Other releases retain their recorded inspection limits in the full plan.
+
 ## Solver diagnostics
 
 [Inspect both GLM-5.3 traces](https://codex-main.exe.xyz:8757/solver-checks/20260924/index.html).
@@ -67,14 +92,15 @@ cost even for a malformed summary; existing file bounds and the 60-second verifi
 limit (300 seconds for matrix tasks) still apply. Infrastructure failures remain
 unscored. Original attempts and grades are unchanged.
 
-Native environment contexts now export `/opt/bio/bin` from `/etc/profile.d/bio.sh`
-as well as Docker `ENV`. The pinned Harbor terminal starts `bash --login`; a
-fresh container/terminal check of this change is still required before release.
-Two model-free follow-up workers failed in the validation launcher before any
-sandbox was created (missing local module, then unsupported custom-agent constructor).
-Their archives and failure records are retained in the diagnostics report. A corrected
-check is prepared; a further launch awaits approval under the Iris repeated-failure
-rule. These failures add no task grades and do not change the two GLM results.
+Native environment contexts export `/opt/bio/bin` from `/etc/profile.d/bio.sh`
+as well as Docker `ENV`. The corrected model-free Harbor check passed all three
+expected cases on the reserved TRC CPU in 3m06s: the native oracle earns reward 1;
+a split summary earns 0 while all seven artifacts pass; a split summary with a
+corrupted contrast earns 0 and flags exactly `contrast_weights.tsv`. Each fresh
+Terminus-2 login terminal resolves `/opt/bio/bin/Rscript` and runs R 4.5.3.
+All task sandboxes were deleted. The diagnostics report pins the successful archive
+and retains both earlier launcher failures before sandbox creation. No model calls
+were made and the original GLM grades remain unchanged.
 
 ## Proposed scientific workstreams
 
