@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T19:23:20.489090+00:00",
+  "updated_at": "2026-09-24T19:31:00.353549+00:00",
   "basis_revision": "952929c306",
   "scope": "Agentic provisional-ID benchmarks only; preserve all existing OOD exclusions. Plan the broad task set before further recipe implementation.",
   "authoring_unit": "One coherent observed-data task per recipe by default. Proposed questions are separate task designs, not repeated instances. They may be split or merged after endpoint and runtime checks.",
@@ -13457,7 +13457,7 @@
     },
     {
       "path": "workflow_designs/bioxarena.json",
-      "sha256": "0a4638ae34063d8c3b9ce1551e5c63998deac370da12dff01472f14b2f40fbb7",
+      "sha256": "a3b9b85b3b8eda673c5bca621568504fbcf38fe156ad368b084011664b02508f",
       "benchmark_id": "BioXArena",
       "inventory_records_assigned": 76,
       "proposed_question_cards": 76,
@@ -13516,7 +13516,7 @@
   "authoring_phase": "question-portfolio-planning",
   "portfolio_index": {
     "path": "workflow_portfolio.json",
-    "sha256": "74a5aec815ef2b345d67ea14d0819ef0ae74f918611415e6a9a522a1cfd75b22",
+    "sha256": "8e0b0b354d5259e99d4317420a43f8cee272cf344fa1f3aa18c923179a515b25",
     "counts": {
       "source_releases": 32,
       "inventory_records": 5133,

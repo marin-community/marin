@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T19:23:20.489090+00:00",
+  "updated_at": "2026-09-24T19:31:00.353549+00:00",
   "scope": "Full question-proposal portfolio for the 32 currently inventoried provisional-ID agentic releases. This planning index resolves every question card and records conditional consolidation; it creates no training task or validated coverage. Nine source leads without inventories remain outside the enumerated denominator.",
   "counts": {
     "source_releases": 32,
@@ -75,7 +75,7 @@
     },
     {
       "path": "workflow_designs/bioxarena.json",
-      "sha256": "0a4638ae34063d8c3b9ce1551e5c63998deac370da12dff01472f14b2f40fbb7"
+      "sha256": "a3b9b85b3b8eda673c5bca621568504fbcf38fe156ad368b084011664b02508f"
     },
     {
       "path": "workflow_designs/cellbench.json",
@@ -8895,7 +8895,7 @@
     },
     {
       "proposed_task_id": "biox-design-perturbation-dynamics-cancer-drug-sensitivity",
-      "scientific_question": "Do molecular and baseline cell-state features predict measured drug sensitivity across held-out compounds and cell lines?",
+      "scientific_question": "How well can a held-out cell-line drug response be ranked under explicitly declared available assay measurements?",
       "question_card_ids": [
         "biox-design-perturbation-dynamics-cancer-drug-sensitivity"
       ],
@@ -8910,7 +8910,7 @@
     },
     {
       "proposed_task_id": "biox-design-perturbation-dynamics-drug-transcriptional-response",
-      "scientific_question": "Which observed drug-induced expression responses can be predicted after dose, time and cell-context reconciliation?",
+      "scientific_question": "How well can responses to independently withheld compounds be predicted across observed doses and cell lines?",
       "question_card_ids": [
         "biox-design-perturbation-dynamics-drug-transcriptional-response"
       ],
@@ -8925,7 +8925,7 @@
     },
     {
       "proposed_task_id": "biox-design-perturbation-dynamics-eccite-multimodal-perturbation",
-      "scientific_question": "How well do jointly measured RNA and protein perturbation responses generalize to held-out biological contexts under modality-specific normalization?",
+      "scientific_question": "How well do permitted cell features predict observed RNA and ADT response targets within explicitly defined perturbation groups?",
       "question_card_ids": [
         "biox-design-perturbation-dynamics-eccite-multimodal-perturbation"
       ],
@@ -8940,7 +8940,7 @@
     },
     {
       "proposed_task_id": "biox-design-perturbation-dynamics-gene-regulatory-network-inference",
-      "scientific_question": "Which regulator-target edges inferred from observed perturbation data agree with independently held-out experimental evidence?",
+      "scientific_question": "How well do observed expression-derived edge scores recover a declared assay-specific regulatory reference?",
       "question_card_ids": [
         "biox-design-perturbation-dynamics-gene-regulatory-network-inference"
       ],
@@ -8955,7 +8955,7 @@
     },
     {
       "proposed_task_id": "biox-design-perturbation-dynamics-multi-timepoint-perturbation",
-      "scientific_question": "Can observed perturbation trajectories predict held-out timepoints without using future observations during fitting?",
+      "scientific_question": "How well can measured drug-response profiles be predicted at declared times while holding biological trajectories together?",
       "question_card_ids": [
         "biox-design-perturbation-dynamics-multi-timepoint-perturbation"
       ],
@@ -8970,7 +8970,7 @@
     },
     {
       "proposed_task_id": "biox-design-perturbation-dynamics-rna-velocity-cell-transition",
-      "scientific_question": "Which cell-transition predictions agree with measured temporal or lineage evidence after spliced and unspliced count reconciliation?",
+      "scientific_question": "How well can observed unspliced RNA counts be predicted from spliced counts under a declared cell-group evaluation?",
       "question_card_ids": [
         "biox-design-perturbation-dynamics-rna-velocity-cell-transition"
       ],
@@ -8985,7 +8985,7 @@
     },
     {
       "proposed_task_id": "biox-design-perturbation-dynamics-spear-atac-perturbation",
-      "scientific_question": "Can measured accessibility responses be predicted across held-out perturbations after reference, peak and depth reconciliation?",
+      "scientific_question": "How well do permitted perturbation features predict observed changes in a declared gene-activity feature panel?",
       "question_card_ids": [
         "biox-design-perturbation-dynamics-spear-atac-perturbation"
       ],
@@ -9120,7 +9120,7 @@
     },
     {
       "proposed_task_id": "biox-design-sequence-gene-tissue-expression",
-      "scientific_question": "How well do genomic sequence features predict measured tissue expression across held-out loci with consistent assembly and expression units?",
+      "scientific_question": "How accurately do promoter and transcript sequences predict observed tissue expression for held-out genes?",
       "question_card_ids": [
         "biox-design-sequence-gene-tissue-expression"
       ],
@@ -9135,7 +9135,7 @@
     },
     {
       "proposed_task_id": "biox-design-sequence-isoform-expression",
-      "scientific_question": "Can observed sequence and annotation features rank measured isoform expression across held-out genes and tissues?",
+      "scientific_question": "How well do observed transcript and protein sequences predict tissue-specific isoform expression across held-out genomic groups?",
       "question_card_ids": [
         "biox-design-sequence-isoform-expression"
       ],
@@ -9150,7 +9150,7 @@
     },
     {
       "proposed_task_id": "biox-design-sequence-multi-tf-binding",
-      "scientific_question": "Which observed transcription-factor binding labels generalize to held-out loci without homologous or overlapping-window leakage?",
+      "scientific_question": "How well do sequence and cellular context predict assay-specific TF peak overlap in held-out genomic regions?",
       "question_card_ids": [
         "biox-design-sequence-multi-tf-binding"
       ],
@@ -9165,7 +9165,7 @@
     },
     {
       "proposed_task_id": "biox-design-sequence-protein-protein-interaction",
-      "scientific_question": "Can sequence-derived features predict independently observed protein interactions under a protein-family-held-out evaluation?",
+      "scientific_question": "How well do protein sequences predict assay-supported binary interaction labels under explicit pair and protein grouping?",
       "question_card_ids": [
         "biox-design-sequence-protein-protein-interaction"
       ],
@@ -9180,7 +9180,7 @@
     },
     {
       "proposed_task_id": "biox-design-sequence-regulatory-element-detection",
-      "scientific_question": "How well do sequence features distinguish observed regulatory-element classes across held-out genomic regions?",
+      "scientific_question": "How accurately do sequence and genomic context recover declared reference cCRE categories in independent regions?",
       "question_card_ids": [
         "biox-design-sequence-regulatory-element-detection"
       ],
@@ -9195,7 +9195,7 @@
     },
     {
       "proposed_task_id": "biox-design-sequence-remote-homology-detection",
-      "scientific_question": "Can sequence-derived similarity rank independently observed structural relationships across held-out protein families?",
+      "scientific_question": "How well do protein-domain sequences predict a defined structural-similarity score on independent domain pairs?",
       "question_card_ids": [
         "biox-design-sequence-remote-homology-detection"
       ],
@@ -9210,7 +9210,7 @@
     },
     {
       "proposed_task_id": "biox-design-sequence-rna-protein-binding-affinity",
-      "scientific_question": "How well do RNA sequence features rank measured protein-binding affinities across held-out sequence families and assays?",
+      "scientific_question": "How well do RNA and protein sequences predict observed RBNS enrichment under a fixed assay concentration?",
       "question_card_ids": [
         "biox-design-sequence-rna-protein-binding-affinity"
       ],
@@ -9225,7 +9225,7 @@
     },
     {
       "proposed_task_id": "biox-design-sequence-rna-protein-binding-signal",
-      "scientific_question": "Can sequence features rank measured RNA-protein binding signals across held-out loci under a fixed assay and normalization?",
+      "scientific_question": "How well do RNA sequence and assay context predict strand-specific eCLIP signal in independent genomic windows?",
       "question_card_ids": [
         "biox-design-sequence-rna-protein-binding-signal"
       ],
@@ -9240,7 +9240,7 @@
     },
     {
       "proposed_task_id": "biox-design-sequence-rna-reactivity-imputation",
-      "scientific_question": "Which missing RNA reactivity measurements can be predicted from sequence and observed context on held-out molecules?",
+      "scientific_question": "How well can withheld measured RNA probing values be reconstructed from sequence and the remaining observed positions?",
       "question_card_ids": [
         "biox-design-sequence-rna-reactivity-imputation"
       ],
@@ -9255,7 +9255,7 @@
     },
     {
       "proposed_task_id": "biox-design-sequence-variant-effect-pathogenicity",
-      "scientific_question": "Can observed reference-consistent variant features recover curated effect classes across held-out genes without circular annotation leakage?",
+      "scientific_question": "How well can explicit variant alleles and sequence context recover versioned reference classification labels in independent records?",
       "question_card_ids": [
         "biox-design-sequence-variant-effect-pathogenicity"
       ],
@@ -10075,7 +10075,7 @@
     },
     {
       "proposed_task_id": "biox-design-perturbation-dynamics-crispr-perturbation-prediction",
-      "scientific_question": "Can a bounded model predict measured gene-expression responses to held-out benign perturbations across biological replicates?",
+      "scientific_question": "How well do gene identities predict observed transcriptional responses to held-out single and combined genetic activation perturbations?",
       "question_card_ids": [
         "biox-design-perturbation-dynamics-crispr-perturbation-prediction"
       ],
@@ -10825,6 +10825,15 @@
       "official_description_comparisons_passed": 16,
       "official_single_cell_scorer_hashes_reverified": 10,
       "finding": "Keep candidate-local matching, closed-set labeling, modality-specific layers and target provenance explicit. Defer source-style synthetic dropout from real-data authoring. Mirror prompt parity remains unverified for these ten records.",
+      "validated_new_mappings": 0
+    },
+    {
+      "source": "BioXArena sequence and perturbation",
+      "design_file": "workflow_designs/bioxarena.json",
+      "mirror_descriptions_reviewed": 18,
+      "csv_header_lines_reviewed": 40,
+      "official_scorer_hashes_reverified": 18,
+      "finding": "Separate CRISPRa from knockout, unspliced counts from velocity, gene activity from peaks and enrichment from affinity. Preserve actual correlation axes, measured-mask targets and allele-specific identity; source input and label provenance gaps remain explicit.",
       "validated_new_mappings": 0
     }
   ]

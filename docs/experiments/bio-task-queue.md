@@ -251,7 +251,7 @@ The expanded portfolio also includes the following source-specific plans:
 | [DrugDiscoveryBench](../../experiments/post_training/bio_tasks/workflow_designs/drugdiscoverybench.json) | 82 | 27 | Public-preview endpoint-stage review; independent evidence and inputs needed |
 | [Liu single-cell](../../experiments/post_training/bio_tasks/workflow_designs/liu-single-cell.json) | 63 | 49 | Native method requirements and shared prompt variants retained |
 | [Bio-Task Bench](../../experiments/post_training/bio_tasks/workflow_designs/bio-task-bench.json) | 34 | 10 | Related component outputs grouped into connected analyses |
-| [BioXArena](../../experiments/post_training/bio_tasks/workflow_designs/bioxarena.json) | 76 | 76 | All scorers, 16 official chemical/network descriptions and 10 provisional mirror single-cell descriptions inspected; 50 prompts remain uninspected |
+| [BioXArena](../../experiments/post_training/bio_tasks/workflow_designs/bioxarena.json) | 76 | 76 | All scorers, 16 official descriptions and 28 provisional mirror descriptions inspected; 32 prompts remain uninspected |
 | [CellBench](../../experiments/post_training/bio_tasks/workflow_designs/cellbench.json) | 50 | 22 | Context-inspired executable adaptations; original open-ended planning quality is not covered |
 | [SciGym](../../experiments/post_training/bio_tasks/workflow_designs/scigym.json) | 350 | 3 | All supplied input structures audited; shared observed-dynamics adaptations, zero biological endpoint assignments |
 | [BixBench-Verified-50](../../experiments/post_training/bio_tasks/workflow_designs/bixbench-verified-50.json) | 50 | 0 new | Known aliases; 17 revised question texts retain separate protocol review |
@@ -283,6 +283,18 @@ as training-only. Neither finding establishes leakage without inspecting the val
 The denoising description specifies simulated dropout; that construction is deferred
 from real-data authoring. It needs no LLM judge, but a measured-target alternative
 has not been selected. These reviews add no validated mappings.
+
+Eighteen sequence and perturbation designs also have provisional mirror-description
+reviews, with primary scorer hashes verified. The contracts separate unspliced-count
+prediction from velocity inference, gene-score prediction from peak accessibility,
+RBNS enrichment from affinity, and structural-similarity regression from homology
+classification. Genetic activation and knockout remain distinct interventions.
+Chunked perturbation scores need an explicit gene map; column-wise correlation over
+stacked chunks is not a per-gene metric. RNA-reactivity imputation can withhold
+genuinely measured values, but its evaluation mask must exclude visible inputs and
+cannot shrink when a solver returns NaNs. Variant reasoning requires explicit REF/ALT
+alleles, absent from the inspected source CSV headers. Independent input selection,
+target provenance and official-description parity remain unresolved.
 
 BioKGBench's 225 instruction identities now route to six contracts: protein names
 (55), entry presence (45), protein-pair evidence (94), cellular localization (11),
