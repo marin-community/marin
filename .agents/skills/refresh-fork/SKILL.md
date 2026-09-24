@@ -168,7 +168,8 @@ regenerate `lib/marin/src/marin/external_dependencies.py`; confirm only the
 intended pins change.
 The stable `main` remains at the old tip until an admin hard-swaps it after reviewing
 the draft PR. Because `main-next` and the eventual `main` are the same commit,
-the pin set here needs no change after that promotion.
+descriptor pins need no change after promotion. Release and isolated-project pins
+need the follow-up described below.
 
 - `pin = descriptor:<path>#<section>` (`vllm`, `tpu-inference`): for a rebased
   fork, push `main-next` and record its tip and selected base. For `fork_main`,
