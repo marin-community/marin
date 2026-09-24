@@ -25,6 +25,7 @@ from haliax import Axis
 from jax.sharding import AxisType, Mesh
 from jax.sharding import PartitionSpec as P
 from levanter.grug.attention import AttentionMask
+from levanter.grug.sharding import _GRUG_MESH_AXIS_NAMES
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 
 import experiments.grug.moe.model as gm
@@ -109,8 +110,8 @@ def _capture_snowball(model: SnowballLMHeadModel, tokens: jax.Array) -> list[np.
 def mesh():
     return Mesh(
         np.asarray(jax.devices()[:1]).reshape((1,) * 5),
-        ("replica_dcn", "data", "context", "expert", "model"),
-        axis_types=(AxisType.Explicit,) * 5,
+        _GRUG_MESH_AXIS_NAMES,
+        axis_types=(AxisType.Explicit,) * len(_GRUG_MESH_AXIS_NAMES),
     )
 
 
