@@ -221,7 +221,6 @@ def _run_variant(name, kernel, args, chunk_size, peak, mode, precision=None):
     )
     RESULTS.append(line)
     print(line, flush=True)
-    jax.clear_caches()
     return med, tflops, mfu
 
 
@@ -242,18 +241,18 @@ def main():
     dv = int(os.environ.get("KDA_DV", "128"))
     lengths = [int(x) for x in os.environ.get("KDA_LENS", "8192").split(",")]
 
+    full = os.environ.get("KDA_FULL") == "1"
     for length in lengths:
         args = _make_inputs(b, h, length, dk, dv)
         for mode in ("fwd", "fwd_bwd"):
-            # Essential comparison first (so a later OOM still leaves it captured):
-            # current default vs true-fp32 vs bf16 intra-chunk, all at C=64.
+            # bf16 first so it is captured even if a later variant OOMs.
+            _try("bf16-mm", _chunk_kda_matmul_dtype, args, 64, _H100_BF16_PEAK, mode)
             _try("fp32,default", chunk_kda, args, 64, _H100_FP32_PEAK, mode)
             _try("fp32,highest", chunk_kda, args, 64, _H100_FP32_PEAK, mode, precision="highest")
-            _try("bf16-mm", _chunk_kda_matmul_dtype, args, 64, _H100_BF16_PEAK, mode)
-            # Chunk-size sweep for both precisions.
-            for c in (32, 128, 256):
-                _try("fp32,default", chunk_kda, args, c, _H100_FP32_PEAK, mode)
-                _try("bf16-mm", _chunk_kda_matmul_dtype, args, c, _H100_BF16_PEAK, mode)
+            if full:
+                for c in (32, 128, 256):
+                    _try("fp32,default", chunk_kda, args, c, _H100_FP32_PEAK, mode)
+                    _try("bf16-mm", _chunk_kda_matmul_dtype, args, c, _H100_BF16_PEAK, mode)
 
     marker = "###KDA_RESULTS###"
     print("\n" + marker, flush=True)
