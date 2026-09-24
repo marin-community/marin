@@ -80,23 +80,34 @@ recorded as a baseline failure and left for its own fix.
 
 ## The vLLM GPU release pipeline
 
-The GPU pin resolves to a prebuilt wheel. The current `marin-community/vllm`
-pipeline builds an immutable CUDA 13.2 x86_64 wheel for H100, validates the
-exact wheel bytes on real GPUs, and publishes a GitHub release carrying
-`marin-vllm-gpu-manifest.json`. The GPU overlay lives on the fork's `main`, which
-the candidate build triggers on.
+The stable GPU pin resolves to a prebuilt wheel. For a refresh, the candidate
+workflow builds immutable x86_64 and aarch64 wheels from the exact `main-next`
+tip. The release workflow runs from trusted `main` as the qualification harness
+and validates those staged wheels on H100 and GB200. Running the harness from
+`main` does not change the `main-next` code inside the wheels.
 
-A refresh dispatches those workflows against the staged `main-next` branch, waits
-for the promoted release, downloads the manifest, and re-pins with:
+Before source promotion, download the staged candidate manifest, temporarily
+pin its x86_64 wheel in Marin, and run the declared Snowball parity end-to-end:
+
+```sh
+uv run config/update-external.py --stage-gpu-candidate marin-vllm-gpu-manifest.json
+uv run pytest tests/cluster/vllm/test_snowball_backend_parity.py \
+  -m cluster -o addopts= --import-mode=importlib -vv -s
+```
+
+The fork qualification and Marin end-to-end must both pass. After an admin
+promotes that exact `main-next` source to `main`, publish the final release from
+the same wheel bytes, download its manifest, and replace the temporary pin with:
 
 ```sh
 uv run config/update-external.py --promote-gpu-release marin-vllm-gpu-manifest.json
 ```
 
-That command writes `gpu.toml` (release tag, source commit, version, torch
-backend, and each arch's wheel URL and SHA-256) and regenerates the pins. Do not
-hand-edit `gpu.toml`; the helper re-encodes the wheel URLs the way the pin
-loader validates.
+Both manifest commands write `gpu.toml` (tag, source commit, version, Torch
+backend, and each architecture's wheel URL and SHA-256) and regenerate the
+pins. Do not hand-edit `gpu.toml`; the helper encodes the wheel URLs as the pin
+loader expects. The refresh-fork vLLM guide contains the exact workflow
+dispatch commands.
 
 ## Promotion
 
