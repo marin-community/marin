@@ -319,7 +319,10 @@ class WandbSource:
         it. That makes it the run's active execution time across every attempt, and
         unlike a `telemetry_v1` scan it does not stop where segment eviction does.
         Wall time runs from the run's creation to its last heartbeat, thus the
-        remainder is downtime and the ratio is the share of the run that ran.
+        remainder is time with no live process and the ratio is the share of the run
+        that had one. A live process that makes no progress -- a hung collective, or
+        steps redone after a rollback -- still counts as active; progress efficiency
+        is the measure that sees it.
 
         Progress efficiency is `tokens_since_start / (reference_tps * wall)`: the
         fraction of an ideal run that held its steady token rate from creation with no
