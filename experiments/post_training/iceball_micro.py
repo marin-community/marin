@@ -15,14 +15,9 @@ Print or run the complete graph from the same entry point::
 
 Programmatic callers use :func:`build_workflow` and select any stage handle.
 
-Run the same graph in Iris from a CPU coordinator::
-
-    uv run iris --cluster=cw-us-east-08a job run --no-wait \
-      -e DAYTONA_API_KEY "$DAYTONA_API_KEY" \
-      -- python -m experiments.post_training.iceball_micro --version 2026.08.02 --run
-
-The submitter resolves ``DAYTONA_API_KEY`` before launch because coordinator pods do not
-receive cloud credentials. Iris redacts the value from the recorded submission command.
+When the selected stage includes RL, ``--run`` validates the complete graph and submits a CPU
+coordinator to Iris. Earlier stages can be planned from this entry point but do not define an RL
+submission route. Set ``DAYTONA_API_KEY`` on the submit host when the selected stages include Harbor.
 """
 
 from __future__ import annotations
@@ -48,17 +43,16 @@ from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep
 from marin.execution.remote import remote
-from marin.experiment.cli import build_options
 from marin.experiment.data import tokenized
 from marin.experiment.namespacing import user_owned_name
 from marin.experiment.train import train_lm
 from marin.processing.tokenize.tokenize import TokenizedCache
+from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import (
-    SKYRL_POLICY_LOCATION,
+    IRIS_HUB_CLUSTER_CONFIG,
     ArtifactDataSource,
     ArtifactHfModel,
     IrisSkyRLExecution,
-    SkyRLEvaluationModel,
     SkyRLModel,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
@@ -73,6 +67,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr.writers import write_parquet_file
 
 from experiments.evaluation.pipeline import EvaluationResult, eval_step
+from experiments.post_training.skyrl_evaluation import SKYRL_POLICY_LOCATION, resolve_skyrl_model
 from experiments.sft.launcher import DatasetSpec, LevanterCheckpointModel, SFTSpec, resources_from_accelerator, sft_step
 
 logger = logging.getLogger(__name__)
@@ -133,6 +128,9 @@ ICEBALL_RL_ROLE_PLAN = SkyRLRolePlan(
     policy_num_gpus_per_node=ICEBALL_TRAIN_GPUS,
     num_inference_engines=ICEBALL_TRAIN_GPUS,
     inference_engine_tensor_parallel_size=1,
+    inference_engine_pipeline_parallel_size=1,
+    inference_engine_data_parallel_size=1,
+    inference_engine_expert_parallel_size=1,
     train_batch_size=16,
     policy_mini_batch_size=16,
     micro_train_batch_size_per_gpu=1,
@@ -170,17 +168,15 @@ trainer:
   epochs: 1
   max_steps: 8
   update_epochs_per_batch: 1
-  train_batch_size: {ICEBALL_RL_ROLE_PLAN.train_batch_size}
-  policy_mini_batch_size: {ICEBALL_RL_ROLE_PLAN.policy_mini_batch_size}
   eval_batch_size: 16
   micro_forward_batch_size_per_gpu: 2
-  micro_train_batch_size_per_gpu: {ICEBALL_RL_ROLE_PLAN.micro_train_batch_size_per_gpu}
   eval_before_train: false
   eval_interval: -1
   ckpt_interval: 2
   resume_mode: latest
   logger: console
   project_name: {ICEBALL_WANDB_PROJECT}
+  hf_hub_repo_id: null
   policy:
     optimizer_config:
       lr: 2.0e-6
@@ -188,18 +184,12 @@ trainer:
     fsdp_config:
       cpu_offload: false
       reshard_after_forward: true
-  placement:
-    colocate_all: {str(ICEBALL_RL_ROLE_PLAN.colocate_all).lower()}
-
 generator:
   backend: vllm
   model_dtype: bfloat16
   vllm_attention_backend: FLASH_ATTN
-  inference_engine_tensor_parallel_size: {ICEBALL_RL_ROLE_PLAN.inference_engine_tensor_parallel_size}
-  num_inference_engines: {ICEBALL_RL_ROLE_PLAN.num_inference_engines}
-  n_samples_per_prompt: {ICEBALL_RL_ROLE_PLAN.n_samples_per_prompt}
   gpu_memory_utilization: 0.70
-  enforce_eager: true
+  enforce_eager: false
   run_engines_locally: true
   weight_sync_backend: nccl
   async_engine: true
@@ -430,8 +420,6 @@ def build_workflow(*, version: str | None = None) -> IceballMicroWorkflow:
             name=rl_name,
             version=version or resolve_version(rl_base_name, None),
             config_yaml=ICEBALL_RL_CONFIG,
-            # Evaluation consumes the regional export; disable the launcher's default Hub publication.
-            overrides=("++trainer.hf_hub_repo_id=null",),
             runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.FSDP),
             model=ArtifactHfModel(
                 step=sft,
@@ -457,34 +445,37 @@ def build_workflow(*, version: str | None = None) -> IceballMicroWorkflow:
             disk="4TB",
             priority="interactive",
             max_retries=3,
+            target_cluster=ICEBALL_CLUSTER,
+            parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
+            coordinator_timeout_hours=24,
             wandb_entity="marin-community",
         ),
     )
 
     evaluation_name = f"evals/{ICEBALL_MODEL_NAME}/{ICEBALL_EVALS}"
-    evaluation = eval_step(
-        SkyRLEvaluationModel(
-            step=rl,
-            model=ModelConfig(
-                name=ICEBALL_MODEL_NAME,
-                location=SKYRL_POLICY_LOCATION,
-                tokenizer=QWEN_TOKENIZER,
-                apply_chat_template=True,
-                resource_hint=ResourceHint(gpu={ICEBALL_GPU_VARIANT: 1}),
-                serve=ServeConfig(
-                    tensor_parallel_size=1,
-                    # Fit the unchanged five-shot prompts beyond the short training context.
-                    auto_overrides=False,
-                    max_model_len=ICEBALL_EVAL_CONTEXT_LENGTH,
-                    hf_overrides=json.dumps({"max_position_embeddings": ICEBALL_EVAL_CONTEXT_LENGTH}),
-                    max_num_seqs=32,
-                    vllm_extra_args=("--enforce-eager",),
-                ),
-                generation=GenerationConfig(max_gen_toks=256),
-            ),
+    evaluation_version = version or resolve_version(evaluation_name, None)
+    evaluation_model = ModelConfig(
+        name=ICEBALL_MODEL_NAME,
+        location=SKYRL_POLICY_LOCATION,
+        tokenizer=QWEN_TOKENIZER,
+        apply_chat_template=True,
+        resource_hint=ResourceHint(gpu={ICEBALL_GPU_VARIANT: 1}),
+        serve=ServeConfig(
+            tensor_parallel_size=1,
+            # Fit the unchanged five-shot prompts beyond the short training context.
+            auto_overrides=False,
+            max_model_len=ICEBALL_EVAL_CONTEXT_LENGTH,
+            hf_overrides=json.dumps({"max_position_embeddings": ICEBALL_EVAL_CONTEXT_LENGTH}),
+            max_num_seqs=32,
         ),
+        generation=GenerationConfig(max_gen_toks=256),
+    )
+    evaluation = eval_step(
+        evaluation_model,
         ICEBALL_EVALS,
-        version=version or resolve_version(evaluation_name, None),
+        version=evaluation_version,
+        deps=(rl,),
+        resolve_model=lambda ctx: resolve_skyrl_model(ctx, rl, evaluation_model),
         accelerator=ICEBALL_EVAL_ACCELERATOR,
         submission_cluster=ICEBALL_CLUSTER,
         federated_cluster=ICEBALL_CLUSTER,
@@ -507,7 +498,7 @@ def build_workflow(*, version: str | None = None) -> IceballMicroWorkflow:
     show_default=True,
     help="Terminal workflow stage to plan or run; its dependencies are included automatically.",
 )
-@build_options
+@rl_build_options
 def main(stage: str) -> ArtifactStep:
     workflow = build_workflow()
     stages: dict[str, ArtifactStep] = {stage_name: getattr(workflow, stage_name) for stage_name in ICEBALL_STAGES}

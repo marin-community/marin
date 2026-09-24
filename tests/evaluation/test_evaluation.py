@@ -14,7 +14,8 @@ from types import SimpleNamespace
 import click
 import pytest
 from click.testing import CliRunner
-from finestore.eval import EvaluationStore
+from finestore.eval import ARCHIVE_ROLLOUTS_TABLE, EvalSample, EvaluationStore, Grading, SampleKind
+from finestore.reader import ReadView
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.rpc import job_pb2
 from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyRunConfig
@@ -51,8 +52,15 @@ from marin.evaluation.runner import (
 )
 from marin.evaluation.serving_config import inference_config_for_model
 from marin.external_dependencies import EVALCHEMY
+from marin.inference.config import (
+    EffectiveServing,
+    ResolvedModelLocator,
+    SpeculativeMethod,
+    SpeculativeServingConfig,
+)
 from marin.inference.iris import RemoteInferenceSession
 from marin.inference.types import OpenAIEndpoint, RunningModel
+from prometheus_client.parser import text_string_to_metric_families
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.evaluation.cli import cli, resolve_model_config
@@ -67,6 +75,10 @@ from experiments.evaluation.launch import (
     build_evaluation_batch,
 )
 from experiments.evaluation.models import models
+from experiments.evaluation.pipeline import (
+    EvalStepConfig,
+    run_eval_pipeline_step,
+)
 
 # Stand-in agent limits the fake driver reports back. They match neither Harbor's defaults nor any
 # model in these tests, so an assertion on them can only be satisfied by the preflight result.
@@ -283,6 +295,7 @@ def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp
     records = tmp_path / "records"
     endpoint = "https://iris.example/proxy/t/token/inference/v1"
     session = _remote_session(endpoint)
+    session = replace(session, effective_serving=EffectiveServing(2, 1, 1, 1, 4096))
     batch = EvaluationBatch(
         group_id="group",
         user="tester",
@@ -319,6 +332,11 @@ def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp
     assert failed.log_tails == {"eval": ("failure detail",)}
     assert succeeded.status is RunStatus.SUCCEEDED
     assert succeeded.metrics == {"task": {"accuracy": 0.75}}
+    assert succeeded.serving is not None
+    assert succeeded.serving.effective
+    assert succeeded.serving.tensor_parallel_size == 2
+    assert succeeded.serving.max_model_len == 4096
+    assert failed.serving == succeeded.serving
     assert succeeded.provenance.eval_runtime == "test-runtime"
     assert succeeded.model.config is not None
     assert succeeded.model.config.model_dump(mode="json") == json.loads(json.dumps(asdict(batch.model)))
@@ -328,6 +346,142 @@ def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp
         ("run-success", "succeeded"),
     ]
     assert all(row.storage_format == "finestore" for row in catalog_rows)
+
+
+def test_evaluate_batch_persists_run_scoped_speculative_metrics(tmp_path, monkeypatch):
+    def scrape(prompt: int, generated: int, drafts: int, draft_tokens: int, accepted: int):
+        return tuple(
+            text_string_to_metric_families(
+                f"""
+# TYPE vllm:prompt_tokens_total counter
+vllm:prompt_tokens_total {prompt}
+# TYPE vllm:generation_tokens_total counter
+vllm:generation_tokens_total {generated}
+# TYPE vllm:spec_decode_num_drafts_total counter
+vllm:spec_decode_num_drafts_total {drafts}
+# TYPE vllm:spec_decode_num_draft_tokens_total counter
+vllm:spec_decode_num_draft_tokens_total {draft_tokens}
+# TYPE vllm:spec_decode_num_accepted_tokens_total counter
+vllm:spec_decode_num_accepted_tokens_total {accepted}
+"""
+            )
+        )
+
+    scrapes = [scrape(10, 20, 3, 9, 4), scrape(30, 120, 13, 39, 19)]
+    monkeypatch.setattr(
+        "marin.evaluation.inference_metrics.PrometheusScraper.scrape",
+        lambda _self: scrapes.pop(0),
+    )
+    clock = iter((10.0, 12.0))
+    monkeypatch.setattr("marin.evaluation.inference_metrics.time.monotonic", lambda: next(clock))
+    monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _row: None)
+    speculative = SpeculativeServingConfig(
+        method=SpeculativeMethod.EAGLE3,
+        model=ResolvedModelLocator(uri="s3://models/draft", identity="draft@2026.09.23:abc123"),
+        num_speculative_tokens=3,
+    )
+    batch = EvaluationBatch(
+        group_id="group",
+        user="tester",
+        version="v1",
+        description=None,
+        records_prefix=str(tmp_path / "records"),
+        model=ModelConfig(
+            name="model",
+            location="s3://models/target",
+            identity="target@2026.09.23:def456",
+            tokenizer="org/tokenizer",
+            tokenizer_revision="tokenizer-revision",
+            resource_hint=ResourceHint(gpu={"H100": 1}),
+            serve=ServeConfig(speculative=speculative),
+        ),
+        accelerator=AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=1),
+        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
+        capability_origin="https://iris.example",
+        api_model="model",
+        evaluations=(_evaluation(tmp_path, "measured", _successful_evaluation),),
+        provenance=LaunchProvenance(git_sha="abc", launch_host="host"),
+        submission_cluster="marin",
+    )
+    session = replace(_remote_session(), metrics_url="https://inference.example/metrics")
+
+    evaluate_batch(batch, session, orchestrator_job_id="/orchestrator", env_vars={})
+
+    record = read_record(str(tmp_path / "records" / "run-measured" / "record.json"))
+    assert record.model.config is not None
+    assert record.model.config.identity == "target@2026.09.23:def456"
+    assert record.inference_metrics is not None
+    assert record.inference_metrics.prompt_tokens == 20
+    assert record.inference_metrics.generation_tokens == 100
+    assert record.inference_metrics.wall_time_seconds == 2.0
+    assert record.inference_metrics.generation_tokens_per_second == 50.0
+    assert record.inference_metrics.speculative_decoding is not None
+    assert record.inference_metrics.speculative_decoding.model_dump() == {
+        "drafts": 10,
+        "draft_tokens": 30,
+        "accepted_tokens": 15,
+        "mean_acceptance_length": 2.5,
+        "draft_acceptance_rate": 0.5,
+    }
+    assert record.model.config.serve.speculative is not None
+    assert record.model.config.serve.speculative.model.identity == "draft@2026.09.23:abc123"
+
+
+def test_speculative_pipeline_launch_selects_gpu(tmp_path, monkeypatch):
+    model = ModelConfig(
+        name="target",
+        location="s3://models/target",
+        tokenizer="org/tokenizer",
+        resource_hint=ResourceHint(hbm_gb=40),
+    )
+    speculative = SpeculativeServingConfig(
+        method=SpeculativeMethod.EAGLE3,
+        model=ResolvedModelLocator(uri="s3://models/draft", identity="draft@2026.09.23:abc123"),
+        num_speculative_tokens=3,
+    )
+    control_config = EvalStepConfig(
+        model=model,
+        evals="gsm8k-smoke",
+        limit=1,
+        artifact_path=str(tmp_path / "control"),
+        accelerator=None,
+        submission_cluster="marin",
+        federated_cluster=None,
+        version="2026.09.23",
+    )
+    drafted_config = replace(
+        control_config,
+        model=replace(model, serve=replace(model.serve, speculative=speculative)),
+        version="2026.09.23.1",
+    )
+
+    submitted_batches: list[EvaluationBatch] = []
+
+    def launch(batch: EvaluationBatch, _client: object):
+        submitted_batches.append(batch)
+        return SimpleNamespace(
+            group_id=batch.group_id,
+            records_prefix=batch.records_prefix,
+            evaluations=tuple(SimpleNamespace(run_id=evaluation.identity.run_id) for evaluation in batch.evaluations),
+            job=SimpleNamespace(wait=lambda *, timeout: None),
+        )
+
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    monkeypatch.setattr("experiments.evaluation.pipeline.launch_group", launch)
+    monkeypatch.setattr(
+        "experiments.evaluation.pipeline.iris_ctx",
+        lambda: SimpleNamespace(client=object()),
+    )
+    monkeypatch.setattr(
+        "experiments.evaluation.pipeline.read_record",
+        lambda path: SimpleNamespace(results_path=f"{path.removesuffix('/record.json')}/results"),
+    )
+
+    run_eval_pipeline_step(control_config)
+    run_eval_pipeline_step(drafted_config)
+
+    assert submitted_batches[0].accelerator.platform is Platform.TPU
+    assert submitted_batches[1].accelerator.platform is Platform.GPU
 
 
 def test_evalchemy_executor_classifies_missing_native_archive(tmp_path, monkeypatch):
@@ -431,6 +585,57 @@ def test_evalchemy_executor_excludes_infrastructure_failures(tmp_path, monkeypat
             errors={EVALCHEMY_INFRASTRUCTURE_ERROR: 1},
         ),
     }
+
+
+def test_evalchemy_executor_rebuilds_native_prompts_before_normalizing_rollouts(tmp_path, monkeypatch):
+    output_dir = f"file://{tmp_path / 'native-prompt'}"
+    prompt = json.dumps([{"role": "user", "content": "Question: 2+2?"}])
+    raw = _lm_eval_generation(0, "exact_match", 1.0, "4")
+    raw["arguments"] = [[[prompt], {"temperature": 1.0}]]
+    _write_evalchemy_output(
+        output_dir,
+        "gsm8k_5shot",
+        {"gsm8k": {"exact_match,none": 1.0}},
+        {"gsm8k": [raw]},
+    )
+    with EvaluationStore.open(output_dir, writer_id="evalchemy-without-prompt") as store:
+        store.add_sample(
+            EvalSample(
+                task="gsm8k_5shot",
+                doc_id="0",
+                kind=SampleKind.GENERATION,
+                output="4",
+                grading=Grading(
+                    method="lm-eval:exact_match",
+                    metric="exact_match",
+                    filter="none",
+                    score=1.0,
+                    passed=True,
+                ),
+                metrics={"exact_match": 1.0},
+                correct=True,
+            )
+        )
+        store.seal()
+    monkeypatch.setattr(
+        "marin.evaluation.evalchemy.runner._run_evalchemy_child",
+        lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
+    )
+    executor = EvalchemyExecutor(
+        EvalchemyRunConfig(
+            name="gsm8k",
+            tasks=(EvalTaskConfig(name="gsm8k", num_fewshot=5, generation=True),),
+            apply_chat_template=True,
+        )
+    )
+
+    executor(_remote_session(), output_dir, {})
+
+    rows = list(ReadView(output_dir).iter_rows(ARCHIVE_ROLLOUTS_TABLE))
+    assert [(row["participant_type"], row["content"]) for row in rows] == [
+        ("user", "Question: 2+2?"),
+        ("assistant", "4"),
+    ]
 
 
 def test_submit_evaluation_batch_resolves_declared_secrets_outside_the_pickled_batch(tmp_path, monkeypatch):
@@ -638,7 +843,10 @@ def test_build_evaluation_batch_routes_declared_verifier_host_secrets(monkeypatc
             "env:DAYTONA_API_KEY",
             "gcp-secret://projects/hai-gcp-models/secrets/DAYTONA_EVAL_API_KEY/versions/latest",
         ),
-        "TOGETHER_API_KEY": ("env:TOGETHER_API_KEY",),
+        "TOGETHER_API_KEY": (
+            "env:TOGETHER_API_KEY",
+            "gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest",
+        ),
     }
     assert batch.evaluations[0].secret_env_keys == ("DAYTONA_API_KEY", "TOGETHER_API_KEY")
 
@@ -672,6 +880,43 @@ def test_build_evaluation_batch_records_evalchemy_benchmark_extras(monkeypatch):
     )
 
     assert batch.evaluations[0].identity.eval_runtime == EVALCHEMY.requirement((*EVALCHEMY_REQUIRED_EXTRAS, "math500"))
+
+
+def test_build_evaluation_batch_routes_and_records_financebench_judge(monkeypatch):
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    definition = EvalchemyDefinition(
+        name="financebench",
+        config_path=Path("experiments/evaluation/configs/evalchemy/financebench.yaml"),
+    )
+    spec = LaunchSpec(
+        model=models()["qwen3-8b"],
+        evals=(),
+        evalchemy_definitions=(definition,),
+        harbor_definitions=(),
+        platform=Platform.TPU,
+        accelerator=None,
+        limit=1,
+        records_prefix="memory://records",
+        submission_cluster="marin",
+        federated_cluster=None,
+        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
+    )
+
+    batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
+
+    evaluation = batch.evaluations[0]
+    assert batch.secret_env == {
+        "JUDGE_API_KEY": (
+            "env:TOGETHER_API_KEY",
+            "gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest",
+        )
+    }
+    assert evaluation.secret_env_keys == ("JUDGE_API_KEY",)
+    assert evaluation.identity.eval_ref.evalchemy.judge.model_dump() == {
+        "base_url": "https://api.together.xyz/v1",
+        "model": "openai/gpt-oss-120b",
+    }
+    assert "TOGETHER_API_KEY" not in evaluation.identity.eval_ref.model_dump_json()
 
 
 def test_file_evalchemy_chat_template_overrides_model_default(monkeypatch):
@@ -773,6 +1018,7 @@ def test_registry_family_travels_into_the_record_the_launcher_writes(monkeypatch
         (128, 8192, 128, 1),
         (8192, 2048, 2048, 0),
         (None, 8192, 8192, 0),
+        (None, None, None, 0),
     ],
 )
 def test_evalchemy_generation_budget_preserves_benchmark_protocol(
@@ -895,7 +1141,6 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
         ],
         "evalchemy": {
             "apply_chat_template": True,
-            "max_gen_toks": 2048,
             "max_eval_instances": 2,
             "num_concurrent": 16,
             "batch_size": "1",

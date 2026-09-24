@@ -99,6 +99,13 @@ class WellKnownAttribute(StrEnum):
     GPU_COUNT = "gpu-count"
 
 
+AVAILABILITY_PREFIX = "availability:"
+
+
+def availability_key(variant: str) -> str:
+    return f"{AVAILABILITY_PREFIX}{variant.strip().lower()}"
+
+
 AUTO_DEVICE_VARIANT = "auto"
 """Device-variant sentinel meaning "unspecified — let the platform pick a variant".
 

@@ -7,8 +7,7 @@ The launcher trains the 67B-A2B Snowball policy with MarinSkyRL's fully asynchro
 curriculum-RL pool, policy and evaluation. It writes every setting it decides into the rendered
 config, including values that MarinSkyRL's base config or the curriculum template already hold.
 Presets bundle the loop settings, and ``--set`` changes one key; a run's address carries a hash of
-its ``--set`` changes. Hydra applies overrides after the config, so the launcher drops each
-inherited override whose key it writes.
+its ``--set`` changes.
 
 Plan or run::
 
@@ -37,14 +36,14 @@ import yaml
 from marin.execution.build_context import resolve_version
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import ArtifactStep
-from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_owned_name
+from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import (
     _STRATEGY_FOR_PROFILE,
+    IRIS_HUB_CLUSTER_CONFIG,
     ArtifactDataSource,
     ArtifactHfModel,
     IrisSkyRLExecution,
-    SkyRLEvaluationModel,
     SkyRLModel,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
@@ -58,7 +57,7 @@ from rigging.provenance import username_segment
 
 from experiments.evaluation.pipeline import EvaluationResult, eval_step
 from experiments.post_training.curriculum_rl.launch import (
-    BASE_OVERRIDES,
+    ARMS,
     GPU_VARIANT,
     GPUS_PER_NODE,
     MODEL_ARTIFACT_NAME,
@@ -77,6 +76,7 @@ from experiments.post_training.curriculum_rl.pool import (
     VALIDATION_FILENAME,
     pool_step,
 )
+from experiments.post_training.skyrl_evaluation import resolve_skyrl_model
 
 EXPERIMENT_NAME = "async-rl"
 WANDB_PROJECT = f"marin-{EXPERIMENT_NAME}"
@@ -133,10 +133,6 @@ class TrainingRecipe:
     max_grad_norm: float
     # Megatron parallelism for the policy and the reference model.
     megatron: MegatronGeometry
-    # Data and expert parallelism of the one vLLM engine, which spans one node. The role plan
-    # MarinSkyRL receives carries neither, so these reach the run through the rendered config.
-    engine_data_parallel_size: int
-    engine_expert_parallel_size: int
     # Host memory per training task. Megatron checkpoint staging needs 1800GB; the policy spec's
     # 512GB is sized for an FSDP load.
     host_memory: str
@@ -160,6 +156,9 @@ SNOWBALL_RECIPE = TrainingRecipe(
         policy_num_gpus_per_node=GPUS_PER_NODE,
         num_inference_engines=1,
         inference_engine_tensor_parallel_size=1,
+        inference_engine_pipeline_parallel_size=1,
+        inference_engine_data_parallel_size=GPUS_PER_NODE,
+        inference_engine_expert_parallel_size=GPUS_PER_NODE,
         train_batch_size=PROMPTS_PER_UPDATE,
         policy_mini_batch_size=PROMPTS_PER_UPDATE,
         # One sequence per GPU per micro-step: 32 micro-steps over 16 data-parallel ranks.
@@ -176,8 +175,6 @@ SNOWBALL_RECIPE = TrainingRecipe(
         expert_model_parallel_size=8,
         expert_tensor_parallel_size=1,
     ),
-    engine_data_parallel_size=GPUS_PER_NODE,
-    engine_expert_parallel_size=GPUS_PER_NODE,
     host_memory="1800GB",
     # The Triton MoE kernels; the fused defaults do not cover this expert layout.
     engine_init_kwargs=MappingProxyType({"moe_backend": "triton"}),
@@ -284,8 +281,7 @@ def parse_setting(text: str) -> Setting:
     return Setting(key.lstrip("+"), yaml.safe_load(value), key.startswith("+"))
 
 
-# Keys MarinSkyRL's launcher writes from the topology and the run request as ++ overrides after the
-# config, so a --set on them would be silently discarded; they change through the recipe only.
+# Keys the typed role plan owns. They change through the recipe only.
 TOPOLOGY_OWNED_SETTINGS = frozenset(
     {
         "trainer.placement.colocate_all",
@@ -297,20 +293,15 @@ TOPOLOGY_OWNED_SETTINGS = frozenset(
         "generator.run_engines_locally",
         "generator.num_inference_engines",
         "generator.inference_engine_tensor_parallel_size",
+        "generator.inference_engine_pipeline_parallel_size",
+        "generator.inference_engine_data_parallel_size",
+        "generator.inference_engine_expert_parallel_size",
         "trainer.train_batch_size",
         "trainer.policy_mini_batch_size",
         "trainer.micro_train_batch_size_per_gpu",
         "generator.n_samples_per_prompt",
         "trainer.resume_mode",
         "trainer.max_ckpts_to_keep",
-    }
-)
-# The engine geometry the recipe owns. The launcher writes it into the config and drops any
-# inherited override on it, so it changes with the recipe beside the role plan it must agree with.
-RECIPE_OWNED_SETTINGS = frozenset(
-    {
-        "generator.inference_engine_data_parallel_size",
-        "generator.inference_engine_expert_parallel_size",
     }
 )
 # Keys MarinSkyRL derives from context_budget and rejects as direct YAML.
@@ -334,8 +325,6 @@ def apply_setting(config: dict, setting: Setting) -> None:
         raise click.BadParameter("this launcher is the fully asynchronous loop; entrypoint cannot change")
     if key in TOPOLOGY_OWNED_SETTINGS:
         raise click.BadParameter(f"{key!r} is written from the topology after the config; change the recipe instead")
-    if key in RECIPE_OWNED_SETTINGS:
-        raise click.BadParameter(f"{key!r} is the engine geometry the recipe decides; change SNOWBALL_RECIPE instead")
     if key in DERIVED_CONTEXT_SETTINGS:
         raise click.BadParameter(f"MarinSkyRL derives {key!r} from context_budget; set context_budget instead")
     if key in EVAL_DERIVED_SETTINGS:
@@ -387,7 +376,7 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
     plan = recipe.role_plan
     # The curriculum template supplies the data and environment sections; every other section is
     # written below in full.
-    config = yaml.safe_load(rl_config_yaml(CURRICULUM_TEMPLATE))
+    config = yaml.safe_load(rl_config_yaml(CURRICULUM_TEMPLATE, ARMS["naive"], SNOWBALL_POLICY))
     config["entrypoint"] = "fully_async"
     # The one public context declaration; MarinSkyRL derives the prompt, generation and engine
     # lengths from it.
@@ -502,9 +491,9 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
         "batched": False,
         "num_inference_engines": plan.num_inference_engines,
         "inference_engine_tensor_parallel_size": plan.inference_engine_tensor_parallel_size,
-        "inference_engine_pipeline_parallel_size": 1,
-        "inference_engine_data_parallel_size": recipe.engine_data_parallel_size,
-        "inference_engine_expert_parallel_size": recipe.engine_expert_parallel_size,
+        "inference_engine_pipeline_parallel_size": plan.inference_engine_pipeline_parallel_size,
+        "inference_engine_data_parallel_size": plan.inference_engine_data_parallel_size,
+        "inference_engine_expert_parallel_size": plan.inference_engine_expert_parallel_size,
         "n_samples_per_prompt": plan.n_samples_per_prompt,
         # Fraction of each engine GPU vLLM may occupy, weights and KV cache together; the rest
         # leaves room for the NCCL weight-sync buffers.
@@ -545,28 +534,6 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
     return config
 
 
-def config_keys(node: dict, prefix: str = "") -> set[str]:
-    """Every dotted key the rendered config sets, sections included."""
-    keys: set[str] = set()
-    for key, value in node.items():
-        keys.add(f"{prefix}{key}")
-        if isinstance(value, dict):
-            keys |= config_keys(value, f"{prefix}{key}.")
-    return keys
-
-
-def request_overrides(policy: PolicySpec, config: dict) -> tuple[str, ...]:
-    """Return inherited Hydra overrides for keys absent from the rendered config."""
-    # MarinSkyRL applies overrides after the config, so a kept collision would replace the
-    # rendered value.
-    written = config_keys(config)
-    return tuple(
-        override
-        for override in (*BASE_OVERRIDES, *policy.overrides)
-        if override.lstrip("+").partition("=")[0] not in written
-    )
-
-
 @dataclass(frozen=True)
 class AsyncRun:
     rl: ArtifactStep[SkyRLModel]
@@ -604,9 +571,7 @@ def build_run(policy: PolicySpec, preset: AsyncPreset, version: str | None, sett
                 role_plan=recipe.role_plan,
             ),
             retention=RETENTION,
-            # The request's seed is what MarinSkyRL writes over the config, so it follows a --set.
             seed=config["trainer"]["seed"],
-            overrides=request_overrides(policy, config),
         ),
         IrisSkyRLExecution(
             cluster=policy.cluster,
@@ -617,6 +582,9 @@ def build_run(policy: PolicySpec, preset: AsyncPreset, version: str | None, sett
             priority="interactive",
             # One automatic retry, then fail; a healthy run resumes from its latest checkpoint on resubmission.
             max_retries=1,
+            target_cluster=policy.cluster,
+            parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
+            coordinator_timeout_hours=72,
             # The W&B key decides the entity; a hard-coded one fails at runtime for a key that
             # cannot write there.
             wandb_entity=None,
@@ -633,10 +601,14 @@ def build_run(policy: PolicySpec, preset: AsyncPreset, version: str | None, sett
     # The eval artifact is keyed on the model name; the owner keeps two users at one version apart.
     evaluation_model_name = f"{username_segment()}-{EXPERIMENT_NAME}-{policy.label}-{preset.label}{suffix}"
     evaluation_base_name = f"evals/{evaluation_model_name}/{preset.evals}"
+    evaluation_version = version or resolve_version(evaluation_base_name, None)
+    evaluation_model = evaluation_model_config(policy, served, evaluation_model_name)
     evaluation = eval_step(
-        SkyRLEvaluationModel(step=rl, model=evaluation_model_config(policy, served, evaluation_model_name)),
+        evaluation_model,
         preset.evals,
-        version=version or resolve_version(evaluation_base_name, None),
+        version=evaluation_version,
+        deps=(rl,),
+        resolve_model=lambda ctx: resolve_skyrl_model(ctx, rl, evaluation_model),
         accelerator=f"{GPU_VARIANT}x{policy.serve_gpus}",
         submission_cluster=policy.cluster,
         federated_cluster=policy.cluster,
@@ -660,7 +632,7 @@ def build_run(policy: PolicySpec, preset: AsyncPreset, version: str | None, sett
     show_default=True,
     help="Terminal stage; evaluation includes the RL run automatically.",
 )
-@build_options
+@rl_build_options
 def main(preset: str, settings: tuple[str, ...], stage: str) -> dict[str, ArtifactStep]:
     run = build_run(SNOWBALL_POLICY, PRESETS[preset], version=None, settings=settings)
     return {f"{SNOWBALL_POLICY.label}-{preset}": getattr(run, stage)}

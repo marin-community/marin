@@ -1,0 +1,5691 @@
+{
+  "uid": "marin-async-rl",
+  "title": "RL Post-training (async)",
+  "description": "Concurrent rollout and Megatron training diagnostics. Select one run and job, then the execution processes to inspect. Missing telemetry is unknown, not zero.",
+  "tags": [
+    "marin",
+    "rl",
+    "async"
+  ],
+  "timezone": "utc",
+  "editable": false,
+  "schemaVersion": 39,
+  "refresh": "5m",
+  "time": {
+    "from": "now-3h",
+    "to": "now"
+  },
+  "links": [
+    {
+      "title": "Home",
+      "url": "/d/marin-home",
+      "type": "link",
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "asDropdown": false
+    },
+    {
+      "linkRef": "rl_post_training"
+    },
+    {
+      "title": "Jobs",
+      "url": "/d/marin-jobs",
+      "type": "link",
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "asDropdown": false
+    },
+    {
+      "title": "Inference",
+      "url": "/d/marin-inference",
+      "type": "link",
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "asDropdown": false
+    },
+    {
+      "title": "Fleet accelerators",
+      "url": "/d/marin-accel",
+      "type": "link",
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "asDropdown": false
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "cluster",
+        "label": "Cluster",
+        "type": "custom",
+        "query": "cw-rno2a,cw-us-east-02a,cw-us-east-08a,marin,marin-dev",
+        "multi": true,
+        "includeAll": true,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": []
+      },
+      {
+        "name": "run",
+        "label": "Run",
+        "type": "query",
+        "datasource": {
+          "type": "yesoreyeram-infinity-datasource",
+          "uid": "finelog-marin"
+        },
+        "multi": false,
+        "includeAll": false,
+        "refresh": 2,
+        "sort": 0,
+        "current": {},
+        "options": [],
+        "query": {
+          "queryType": "infinity",
+          "refId": "variable-run",
+          "infinityQuery": {
+            "refId": "A",
+            "type": "json",
+            "source": "url",
+            "format": "table",
+            "parser": "backend",
+            "url": "/query",
+            "url_options": {
+              "method": "GET",
+              "params": [
+                {
+                  "key": "sql",
+                  "value": "SELECT run_id AS value FROM (SELECT * FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND name IN ('lifecycle','policy_step','rollout_call') AND json_get(resource_attributes_json,'training_loop')='async') GROUP BY run_id HAVING run_id IS NOT NULL ORDER BY MAX(timestamp_ms) DESC"
+                },
+                {
+                  "key": "from",
+                  "value": "${__from}"
+                },
+                {
+                  "key": "to",
+                  "value": "${__to}"
+                }
+              ]
+            },
+            "columns": [
+              {
+                "selector": "value",
+                "text": "value",
+                "type": "string"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "job",
+        "label": "Job / attempt",
+        "type": "query",
+        "datasource": {
+          "type": "yesoreyeram-infinity-datasource",
+          "uid": "finelog-marin"
+        },
+        "multi": false,
+        "includeAll": false,
+        "refresh": 2,
+        "sort": 0,
+        "current": {},
+        "options": [],
+        "query": {
+          "queryType": "infinity",
+          "refId": "variable-job",
+          "infinityQuery": {
+            "refId": "A",
+            "type": "json",
+            "source": "url",
+            "format": "table",
+            "parser": "backend",
+            "url": "/query",
+            "url_options": {
+              "method": "GET",
+              "params": [
+                {
+                  "key": "sql",
+                  "value": "SELECT job_id AS value FROM (SELECT * FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND run_id IN (${run:sqlstring})) GROUP BY job_id HAVING job_id IS NOT NULL ORDER BY MAX(timestamp_ms) DESC"
+                },
+                {
+                  "key": "from",
+                  "value": "${__from}"
+                },
+                {
+                  "key": "to",
+                  "value": "${__to}"
+                }
+              ]
+            },
+            "columns": [
+              {
+                "selector": "value",
+                "text": "value",
+                "type": "string"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "execution",
+        "label": "Execution processes",
+        "type": "query",
+        "datasource": {
+          "type": "yesoreyeram-infinity-datasource",
+          "uid": "finelog-marin"
+        },
+        "multi": true,
+        "includeAll": true,
+        "refresh": 2,
+        "sort": 0,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [],
+        "query": {
+          "queryType": "infinity",
+          "refId": "variable-execution",
+          "infinityQuery": {
+            "refId": "A",
+            "type": "json",
+            "source": "url",
+            "format": "table",
+            "parser": "backend",
+            "url": "/query",
+            "url_options": {
+              "method": "GET",
+              "params": [
+                {
+                  "key": "sql",
+                  "value": "SELECT execution_uid AS value FROM (SELECT * FROM \"telemetry_v1.marinskyrl\" WHERE service = 'marinskyrl' AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND run_id IN (${run:sqlstring}) AND job_id IN (${job:sqlstring})) GROUP BY execution_uid HAVING execution_uid IS NOT NULL ORDER BY MAX(timestamp_ms) DESC"
+                },
+                {
+                  "key": "from",
+                  "value": "${__from}"
+                },
+                {
+                  "key": "to",
+                  "value": "${__to}"
+                }
+              ]
+            },
+            "columns": [
+              {
+                "selector": "value",
+                "text": "value",
+                "type": "string"
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Progress and telemetry coverage",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Optimizer and synced policy steps",
+      "description": "Per-bucket maximum of policy_step (the trainer's current optimizer step) and the model version carried on weight_sync_completed, one series per execution. policy_step is set on every step; weight_sync_completed fires after each weight sync to the vLLM engines. The weight-sync series needs trainer.training_metrics; policy_step is always on.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 1,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "policy_step"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Response tokens generated and trained on / s",
+      "description": "Per-second rate of work_completed token counts for generated_token, consumed_response_token and consumed_loss_token, summed per bucket. Generation workers record generated tokens when a group finishes; the trainer records consumed tokens after each optimizer step. The generated-token series is always on; the two consumed-token series need trainer.training_metrics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 1,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "tps",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "token_rates"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 4,
+      "type": "table",
+      "title": "Process lifecycle",
+      "description": "Latest lifecycle or terminal event per process: its status, exit reason and last-record time. Every trainer, generation-worker and controller process emits lifecycle on start and terminal on exit. Always on when telemetry is configured; a completed process does not by itself mean training succeeded.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 1,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No matching records in this window."
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "lifecycle"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "execution_uid",
+              "text": "execution_uid",
+              "type": "string"
+            },
+            {
+              "selector": "role",
+              "text": "role",
+              "type": "string"
+            },
+            {
+              "selector": "process",
+              "text": "process",
+              "type": "string"
+            },
+            {
+              "selector": "event",
+              "text": "event",
+              "type": "string"
+            },
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "string"
+            },
+            {
+              "selector": "reason",
+              "text": "reason",
+              "type": "string"
+            },
+            {
+              "selector": "last_record_ms",
+              "text": "last_record_ms",
+              "type": "timestamp_epoch"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "row",
+      "title": "Trainer waits and generation-worker backpressure",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "x": 0,
+        "y": 9,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Driver step, preparation and policy walls",
+      "description": "Mean phase_duration_seconds for the driver's step, wait_for_generation_buffer, run_training, fwd_logprobs_values_reward and train_critic_and_policy phases, per bucket. Each is a Timer span the trainer publishes after every step. Always on when telemetry is configured; step, run_training and train_critic_and_policy are nested, so never add them.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 10,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "driver_walls"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Generation worker await duration",
+      "description": "Mean and max rollout_wait_seconds by wait name (prompt, slot, enqueue, model_client_await, env_await), the mean normalized by rollout_waits. Generation workers record these inside TrajectoryRunner.run(), including the wait on AsyncStalenessManager.acquire_submission_slot(). Empty without trainer.async_spans.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 10,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "worker_waits"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Completed buffer depth and capacity",
+      "description": "Latest rollout_queue_depth and rollout_capacity gauges per bucket: the GenerationOutputGroupBuffer's occupancy against trainer.fully_async.max_buffered_groups. The trainer updates both whenever a group enters or leaves the buffer. Always on when telemetry is configured; sampled zeros can miss short occupancy bursts.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 10,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "buffer"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 9,
+      "type": "row",
+      "title": "Freshness and rollout latency",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "x": 0,
+        "y": 18,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Buffer dwell of trained groups",
+      "description": "p50/p95/max of rollout_buffer_dwell_seconds for groups with disposition=consumed: time from group completion to trainer admission. Recorded when a consumed group leaves the GenerationOutputGroupBuffer. Empty without trainer.async_spans.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 19,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "buffer_dwell"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Policy staleness at training",
+      "description": "p50/p95/max of rollout_staleness_steps: how many optimizer steps behind the model was when each admitted group was consumed. The trainer records one observation per group against max_staleness_steps. Always on when telemetry is configured; rejected groups are excluded.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 19,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "policy_staleness"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Successful rollout-call latency",
+      "description": "p50/p95/max of phase_duration_seconds for phase=rollout_call: the wall time of one successful TrajectoryRunner.run() call. Recorded by observe_rollout_call around each generation-worker rollout. Empty without trainer.async_spans.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 19,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "rollout_latency"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 13,
+      "type": "row",
+      "title": "Synchronization and accounting",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "x": 0,
+        "y": 27,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Weight sync and policy offload walls",
+      "description": "Mean phase_duration_seconds for sync_weights, init_weight_sync_state, offload_policy_model_to_cpu and update_ref_with_policy, split by outcome and execution. sync_weights times broadcast_to_inference_engines; the rest time the one-time sync-state setup and the optimizer offload around it. Always on when telemetry is configured; these are elapsed waits and do not measure GPU kernel time.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 28,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "sync_walls"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "Driver event-loop lag",
+      "description": "Max event_loop_lag_seconds per bucket: how late the driver's asyncio loop ran past its scheduled tick. Sampled once a second by monitor_event_loop_lag on the trainer's event loop. Empty without trainer.async_spans.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 28,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "event_loop_lag"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "Signed timing residuals",
+      "description": "Min signed phase_duration_seconds for rollout_call_residual and ppo_train_residual, by rank and execution: wall time inside a span not attributed to any named child phase. Negative values expose overlapping child accounting and are not clamped. Empty without trainer.async_spans (rollout residual) or trainer.policy_train_spans (Megatron residual).",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 28,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "residuals"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 17,
+      "type": "row",
+      "title": "Concurrent work and terminal group dispositions",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "x": 0,
+        "y": 36,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 18,
+      "type": "table",
+      "title": "Rollouts completing during policy training",
+      "description": "Successful rollout_call events whose finish falls inside an async_phase_window phase=training interval, grouped by optimizer step. Both are driver-recorded with explicit start/finish timestamps and joined on overlap. Empty without trainer.async_spans.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 37,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No matching records in this window."
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "training_overlap"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "execution_uid",
+              "text": "execution_uid",
+              "type": "string"
+            },
+            {
+              "selector": "step",
+              "text": "step",
+              "type": "number"
+            },
+            {
+              "selector": "coverage",
+              "text": "coverage",
+              "type": "string"
+            },
+            {
+              "selector": "completed_calls",
+              "text": "completed_calls",
+              "type": "number"
+            },
+            {
+              "selector": "returned_tokens",
+              "text": "returned_tokens",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 19,
+      "type": "timeseries",
+      "title": "Group dispositions / bucket",
+      "description": "Per-bucket sum of rollout_groups: the count of groups reaching each terminal disposition (consumed, rejected, stale_enqueue, shutdown-pending). Recorded once per group when record_group_disposition closes it out. Empty without trainer.async_spans.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 37,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "group_dispositions"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Tokens by group disposition / bucket",
+      "description": "Per-bucket sum of rollout_group_tokens: response tokens attached to each terminal group disposition. Recorded alongside rollout_groups by record_group_disposition. Empty without trainer.async_spans.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 37,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "group_tokens"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 21,
+      "type": "row",
+      "title": "Reward, evaluation and optimizer health",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "x": 0,
+        "y": 45,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "Training reward and informative groups",
+      "description": "training_metric_value for reward/avg_raw_reward, reward/avg_pass_at_4 and reward/informative_group_fraction, one point per optimizer step. Logged by the trainer from the reward-shaping and group-admission pass over each mini-batch. Empty without trainer.training_metrics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 46,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "reward"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 23,
+      "type": "timeseries",
+      "title": "Evaluation scores",
+      "description": "training_metric_value for every eval/% metric: held-out scores mirrored from the evaluation tracker. Written only at evaluation steps, one point per metric and execution. Empty without trainer.training_metrics; a blank between evaluation steps means no evaluation ran.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 46,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "evaluation"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 40,
+      "type": "timeseries",
+      "title": "Length stops and coverage in trained groups",
+      "description": "training_metric_value for consumed/length_stop_fraction and consumed/stop_reason_coverage: the share of admitted response sequences that hit a length stop, gated on full stop-reason coverage. Logged by the trainer after the policy update consumes the batch. Empty without trainer.training_metrics; the fraction is null wherever coverage is incomplete.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 46,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "length_stops"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 24,
+      "type": "timeseries",
+      "title": "Optimizer diagnostics",
+      "description": "training_metric_value for policy/policy_entropy, policy/raw_grad_norm, policy/policy_kl, policy/final_loss and policy/policy_loss, one point per optimizer step. Logged by the policy worker after each optimizer_step call. Empty without trainer.training_metrics; these are different quantities and are not additive.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 46,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "optimizer"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 25,
+      "type": "row",
+      "title": "Worker detail and telemetry health",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "x": 0,
+        "y": 54,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "id": 26,
+      "type": "timeseries",
+      "title": "Megatron policy wall by rank",
+      "description": "phase_duration_seconds for phase=ppo_train, one point per rank and outcome: the Megatron policy worker's wall time for one optimizer update. Recorded by LearnerMemory around PolicyWorkerBase.ppo_train. Empty without trainer.policy_train_spans.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 55,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "megatron_policy_wall"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 27,
+      "type": "table",
+      "title": "Megatron phase detail",
+      "description": "phase_duration_seconds for every Megatron-backend phase, by step, rank, phase and outcome, newest steps first. Recorded by LearnerMemory inside PolicyWorkerBase.ppo_train. Empty without trainer.policy_train_spans.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 55,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No matching records in this window."
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "megatron_phases"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "execution_uid",
+              "text": "execution_uid",
+              "type": "string"
+            },
+            {
+              "selector": "step",
+              "text": "step",
+              "type": "number"
+            },
+            {
+              "selector": "rank",
+              "text": "rank",
+              "type": "string"
+            },
+            {
+              "selector": "phase",
+              "text": "phase",
+              "type": "string"
+            },
+            {
+              "selector": "outcome",
+              "text": "outcome",
+              "type": "string"
+            },
+            {
+              "selector": "seconds",
+              "text": "seconds",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 28,
+      "type": "table",
+      "title": "Exporter and nonfinite observations",
+      "description": "Per process: summed training_nonfinite_values, and the max cumulative telemetry_lost_records / telemetry_rejected_records exporter gauges. The nonfinite counter comes from record_training_metrics; the exporter gauges are native to the telemetry pipeline. The nonfinite series needs trainer.training_metrics; the exporter gauges are always on.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 55,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No matching records in this window."
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "exporter"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "execution_uid",
+              "text": "execution_uid",
+              "type": "string"
+            },
+            {
+              "selector": "process",
+              "text": "process",
+              "type": "string"
+            },
+            {
+              "selector": "name",
+              "text": "name",
+              "type": "string"
+            },
+            {
+              "selector": "observed_value",
+              "text": "observed_value",
+              "type": "number"
+            },
+            {
+              "selector": "last_record_ms",
+              "text": "last_record_ms",
+              "type": "timestamp_epoch"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 29,
+      "type": "row",
+      "title": "Trainer vs vLLM logprobs",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 63,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 30,
+      "type": "timeseries",
+      "title": "Pre-update model log-ratio drift",
+      "description": "training_metric_value for policy/mismatch/pooled/log_ratio_*: the trainer's pre-update logprob minus vLLM's recorded logprob, over finite loss tokens. Computed by mismatch_ratio_metrics in fwd_logprobs_values_reward, before the optimizer step consumes the batch. Empty without trainer.training_metrics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 64,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "drift"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 31,
+      "type": "timeseries",
+      "title": "Pre-update PPO-window pressure",
+      "description": "training_metric_value for policy/mismatch/pooled/lower_clip_pressure and upper_clip_pressure: the fraction of finite loss tokens outside the configured PPO ratio bounds. Computed by mismatch_ratio_metrics alongside the log-ratio drift metrics. Empty without trainer.training_metrics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 64,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "clip_pressure"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 32,
+      "type": "timeseries",
+      "title": "Drift coverage and token-weight concentration",
+      "description": "training_metric_value for policy/mismatch/pooled/finite_fraction, missing_behavior and ess_fraction: coverage and importance-weight concentration of the trainer/vLLM mismatch. Computed by mismatch_ratio_metrics from the same batch as the drift panels. Empty without trainer.training_metrics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 64,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "drift_coverage"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 44,
+      "type": "timeseries",
+      "title": "Mean squared model log-ratio",
+      "description": "training_metric_value for policy/mismatch/pooled/log_ratio_mean_squared: the mean squared trainer-minus-vLLM logprob difference over finite loss tokens. Computed by mismatch_ratio_metrics before the optimizer update. Empty without trainer.training_metrics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 64,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "log_ratio_squared"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 46,
+      "type": "timeseries",
+      "title": "TIS correction skips",
+      "description": "training_metric_value for tis/batch_skipped_no_logprobs and tis/skipped_fraction: whether a batch's TIS correction fell back to the standard policy loss because rollout_logprobs were missing. Logged by the trainer when trainer.algorithm.use_tis is on. Empty without trainer.training_metrics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 72,
+        "w": 24,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "tis_skips"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 33,
+      "type": "row",
+      "title": "Useful work and role balance",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 80,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 34,
+      "type": "timeseries",
+      "title": "Core and cycle duration",
+      "description": "training_metric_value for async/performance/core_seconds, cycle_seconds and outside_core_seconds: the fully-async step's core wall and the surrounding cycle, including checkpoint/eval callbacks. Computed by async_step_metrics after each optimizer step. Empty without trainer.training_metrics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 81,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "core_cycle"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 35,
+      "type": "timeseries",
+      "title": "Loss tokens trained per second",
+      "description": "training_metric_value for async/performance/consumed_loss_tokens_per_core_second and per_cycle_second: useful loss tokens divided by core or cycle wall. Computed by async_step_metrics alongside the core/cycle durations. Empty without trainer.training_metrics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 81,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "loss_token_rates"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 36,
+      "type": "timeseries",
+      "title": "Core wall fractions",
+      "description": "training_metric_value for async/performance/buffer_wait_fraction, training_fraction and weight_sync_fraction: the driver's core wall split across waiting for a full admitted batch, run_training and sync_weights. Computed by async_step_metrics from the same step timings as Core and cycle duration. Empty without trainer.training_metrics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 81,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "core_fractions"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 37,
+      "type": "row",
+      "title": "Configured resources and normalization",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 89,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 38,
+      "type": "timeseries",
+      "title": "Useful tokens per configured role GPU-second",
+      "description": "training_metric_value for async/performance/loss_tokens_per_configured_policy_gpu_second and response_tokens_per_configured_inference_gpu_second. Computed by async_step_metrics from consumed work divided by the configured policy and inference GPU counts; it does not measure vLLM engine utilization. Empty without trainer.training_metrics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 90,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "role_gpu_tokens"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 39,
+      "type": "timeseries",
+      "title": "Configured role GPU counts",
+      "description": "training_metric_value for async/performance/configured_policy_gpus and configured_inference_gpus: policy nodes x GPUs/node, and inference engines x TP x PP x DP. Computed by async_step_metrics from trainer.placement and the generator config. Empty without trainer.training_metrics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 90,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "role_gpus"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 41,
+      "type": "table",
+      "title": "Learner memory by phase",
+      "description": "cuda_memory_observation for the policy worker: peak/reserved/allocated bytes and free device memory, by rank, GPU and phase. Recorded by LearnerMemory around each policy phase. Empty without trainer.policy_train_spans.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 99,
+        "w": 12,
+        "h": 9
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No matching observations"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "learner_memory"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "execution",
+              "text": "execution",
+              "type": "string"
+            },
+            {
+              "selector": "host",
+              "text": "host",
+              "type": "string"
+            },
+            {
+              "selector": "rank",
+              "text": "rank",
+              "type": "string"
+            },
+            {
+              "selector": "gpu",
+              "text": "gpu",
+              "type": "string"
+            },
+            {
+              "selector": "phase",
+              "text": "phase",
+              "type": "string"
+            },
+            {
+              "selector": "observations",
+              "text": "observations",
+              "type": "number"
+            },
+            {
+              "selector": "peak_allocated_gib",
+              "text": "peak_allocated_gib",
+              "type": "number"
+            },
+            {
+              "selector": "peak_reserved_gib",
+              "text": "peak_reserved_gib",
+              "type": "number"
+            },
+            {
+              "selector": "sampled_allocated_gib",
+              "text": "sampled_allocated_gib",
+              "type": "number"
+            },
+            {
+              "selector": "sampled_free_gib",
+              "text": "sampled_free_gib",
+              "type": "number"
+            },
+            {
+              "selector": "device_total_gib",
+              "text": "device_total_gib",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 42,
+      "type": "table",
+      "title": "Inference sampled throughput by learner phase",
+      "description": "vLLM generation_tokens_total / prompt_tokens_total counter deltas, rated per covered second and joined to async_phase_window driver phases. The vLLM engines export the counters independently; the trainer emits the phase windows to join against. Empty without trainer.async_spans.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 99,
+        "w": 12,
+        "h": 9
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No matching observations"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "inference_service"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "execution",
+              "text": "execution",
+              "type": "string"
+            },
+            {
+              "selector": "collector",
+              "text": "collector",
+              "type": "string"
+            },
+            {
+              "selector": "phase",
+              "text": "phase",
+              "type": "string"
+            },
+            {
+              "selector": "engine",
+              "text": "engine",
+              "type": "string"
+            },
+            {
+              "selector": "model",
+              "text": "model",
+              "type": "string"
+            },
+            {
+              "selector": "counter",
+              "text": "counter",
+              "type": "string"
+            },
+            {
+              "selector": "tokens_per_sampled_second",
+              "text": "tokens_per_sampled_second",
+              "type": "number"
+            },
+            {
+              "selector": "coverage_fraction",
+              "text": "coverage_fraction",
+              "type": "number"
+            },
+            {
+              "selector": "intervals",
+              "text": "intervals",
+              "type": "number"
+            },
+            {
+              "selector": "phase_seconds",
+              "text": "phase_seconds",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 43,
+      "type": "timeseries",
+      "title": "Cumulative core GPU-hours in selected window",
+      "description": "Running sum of async/performance/core_seconds times configured policy+inference GPUs, divided by 3600, accumulated over complete rows in the window. Computed by async_step_metrics per optimizer step, cumulative within each execution. Empty without trainer.training_metrics; excludes startup, eval, checkpoint and export time.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 90,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "core_gpu_hours"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "description": "Per-execution rollups of training_metric_value for optimizer batches whose async/staleness_min equals async/staleness_max: response length, token-weighted mean squared log-ratio, minimum ESS fraction and mean raw reward, one row per staleness value. Built from the same per-step metrics as the drift panels, restricted to uniform-staleness batches. Empty without trainer.training_metrics.",
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "No matching diagnostics.",
+          "unit": "none"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Token-weighted MSLR"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 6
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Minimum batch ESS fraction"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 6
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 18,
+        "x": 0,
+        "y": 108
+      },
+      "id": 47,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        },
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "columns": [
+            {
+              "selector": "status",
+              "text": "Coverage status",
+              "type": "string"
+            },
+            {
+              "selector": "execution",
+              "text": "Execution",
+              "type": "string"
+            },
+            {
+              "selector": "staleness",
+              "text": "Exact group age",
+              "type": "number"
+            },
+            {
+              "selector": "updates",
+              "text": "Updates",
+              "type": "number"
+            },
+            {
+              "selector": "mean_response_tokens",
+              "text": "Response tokens / sequence",
+              "type": "number"
+            },
+            {
+              "selector": "token_weighted_mslr",
+              "text": "Token-weighted MSLR",
+              "type": "number"
+            },
+            {
+              "selector": "minimum_ess_fraction",
+              "text": "Minimum batch ESS fraction",
+              "type": "number"
+            },
+            {
+              "selector": "mean_update_raw_reward",
+              "text": "Mean update raw reward",
+              "type": "number"
+            }
+          ],
+          "format": "table",
+          "parser": "backend",
+          "refId": "A",
+          "source": "url",
+          "type": "json",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "uniform_staleness"
+              }
+            ]
+          }
+        }
+      ],
+      "title": "Uniform-staleness batch diagnostics",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "description": "Fraction of consumed loss tokens (async/performance/consumed_loss_tokens) that fall in a batch eligible for the uniform-staleness table above. Computed from the same training_metric_value rows, over the selected runs, jobs, executions and window. Empty without trainer.training_metrics; null means no tokens were observed.",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 1,
+          "max": 1,
+          "min": 0,
+          "noValue": "No valid token denominator",
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 6,
+        "x": 18,
+        "y": 108
+      },
+      "id": 48,
+      "options": {
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/uniform_staleness_token_fraction/",
+          "values": false
+        },
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "columns": [
+            {
+              "selector": "uniform_staleness_token_fraction",
+              "text": "uniform_staleness_token_fraction",
+              "type": "number"
+            },
+            {
+              "selector": "observed_loss_tokens",
+              "text": "observed_loss_tokens",
+              "type": "number"
+            },
+            {
+              "selector": "represented_loss_tokens",
+              "text": "represented_loss_tokens",
+              "type": "number"
+            },
+            {
+              "selector": "mixed_staleness_loss_tokens",
+              "text": "mixed_staleness_loss_tokens",
+              "type": "number"
+            },
+            {
+              "selector": "uniform_updates",
+              "text": "uniform_updates",
+              "type": "number"
+            },
+            {
+              "selector": "excluded_updates",
+              "text": "excluded_updates",
+              "type": "number"
+            }
+          ],
+          "format": "table",
+          "parser": "backend",
+          "refId": "A",
+          "source": "url",
+          "type": "json",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "uniform_staleness_coverage"
+              }
+            ]
+          }
+        }
+      ],
+      "title": "Uniform-staleness diagnostic token coverage",
+      "type": "stat"
+    },
+    {
+      "id": 49,
+      "type": "timeseries",
+      "title": "Evaluation response length and stop coverage",
+      "description": "training_metric_value for eval/%/response_tokens_mean, response_tokens_max, length_stop_fraction, completed_stop_fraction and stop_reason_coverage. Logged by the trainer at each evaluation step from the finalized trajectories' stop reasons. Empty without trainer.training_metrics; fractions are blank wherever stop-reason coverage is incomplete.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 118,
+        "w": 12,
+        "h": 9
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No supplemental evaluation observations",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*(fraction|coverage).*"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "min",
+                "value": 0
+              },
+              {
+                "id": "max",
+                "value": 1
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "Fraction"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "evaluation_lengths"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 50,
+      "type": "timeseries",
+      "title": "Evaluation score contributions by stop class",
+      "description": "training_metric_value for eval/%/avg_score, length_stop_score_contribution and completed_stop_score_contribution. Logged alongside the response-length panel at each evaluation step. Empty without trainer.training_metrics; the two contributions need not sum to avg_score.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 118,
+        "w": 12,
+        "h": 9
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No supplemental evaluation observations",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "evaluation_contributions"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 51,
+      "type": "timeseries",
+      "title": "Staleness of trained groups: groups per step",
+      "description": "Count of rollout_staleness_steps observations per optimizer step, split by staleness value: how many admitted groups landed at each staleness. The trainer records one observation per group in record_rollout_staleness. Always on when telemetry is configured; rejected groups are excluded.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 128,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 0,
+            "fillOpacity": 70,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "staleness_groups"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 52,
+      "type": "timeseries",
+      "title": "Staleness of trained groups: tokens per step",
+      "description": "Sum of response_tokens on consumed_staleness events per optimizer step, split by staleness value. The trainer emits one event per consumed group, carrying its admitted staleness and token count. Empty without trainer.training_metrics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 128,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 0,
+            "fillOpacity": 70,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "staleness_tokens"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 53,
+      "type": "state-timeline",
+      "title": "Weight-sync stages",
+      "description": "async_phase_window intervals for phase=training and weight_sync, plus a 1 ms marker at each weight_sync_completed event, per execution. The trainer opens and closes the phase windows around each step and the loop's weight sync. Empty without trainer.async_spans for the intervals, or trainer.training_metrics for the completion marks.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 128,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 0,
+            "fillOpacity": 70
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "training": {
+                  "text": "training",
+                  "color": "#5794F2",
+                  "index": 0
+                },
+                "weight sync": {
+                  "text": "weight sync",
+                  "color": "#B877D9",
+                  "index": 1
+                },
+                "weights synced": {
+                  "text": "weights synced",
+                  "color": "#FADE2A",
+                  "index": 2
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "mergeValues": false,
+        "showValue": "auto",
+        "rowHeight": 0.9,
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "weight_sync_stages"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "start",
+              "text": "start",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "finish",
+              "text": "finish",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "execution",
+              "text": "execution",
+              "type": "string"
+            },
+            {
+              "selector": "state",
+              "text": "state",
+              "type": "string"
+            }
+          ]
+        }
+      ],
+      "interval": "1m",
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "indexByName": {
+              "start": 0,
+              "finish": 1,
+              "execution": 2,
+              "state": 3
+            }
+          }
+        },
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "execution"
+            ],
+            "keepFields": false
+          }
+        }
+      ]
+    },
+    {
+      "id": 54,
+      "type": "timeseries",
+      "title": "Trainer/vLLM logprob mismatch ρ (staleness 0)",
+      "description": "training_metric_value for policy/mismatch/staleness0/*: log-ratio mean/p99/p999, the fraction outside [0.5x, 2x], ESS fraction, KL and chi-squared, for staleness-zero loss tokens only. Computed by mismatch_ratio_metrics, isolating tokens with no policy drift since generation. Empty without trainer.training_metrics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 128,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "mismatch_staleness0"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 55,
+      "type": "timeseries",
+      "title": "Trainer/vLLM logprob mismatch by staleness bucket",
+      "description": "training_metric_value for policy/mismatch/staleness{0,1,2,3,4-7,8+}/log_ratio_abs_mean: mean absolute trainer/vLLM log-ratio by the group's staleness at consumption. Computed by mismatch_ratio_metrics from the same batch as the staleness-0 panel. Empty without trainer.training_metrics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 136,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "mismatch_by_staleness"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 56,
+      "type": "timeseries",
+      "title": "Trainer logprob drift within the update",
+      "description": "training_metric_value for policy/log_ratio_*: the trainer's ratio against its own logprobs recomputed at consumption, pooled over the update's microbatches. Computed by LogRatioMonitor in the policy worker's training step, independent of the rollout-time mismatch panels. Empty without trainer.training_metrics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 136,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "learner_drift"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 57,
+      "type": "timeseries",
+      "title": "Position dependence of |log ρ|",
+      "description": "training_metric_value for policy/mismatch/pooled/pos_* and policy/log_ratio_pos_*: mean absolute log-ratio by response position (first/last 256 tokens, middle) for the rollout-mismatch and within-update-drift families. Computed by mismatch_ratio_metrics and LogRatioMonitor using trainer.algorithm.ratio_diagnostics.position_window. Empty without trainer.training_metrics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 136,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "position_dependence"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 58,
+      "type": "timeseries",
+      "title": "Gradient direction persistence",
+      "description": "training_metric_value for policy/grad_cosine, grad_cosine_min/max and grad_norm_reduced/raw_grad_norm: cosine similarity between successive gradients and their norms. Logged by the policy worker after each optimizer step. Empty without trainer.training_metrics; the cosine series also need trainer.algorithm.grad_cosine.enabled.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 136,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*grad_norm.*"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "Gradient norm"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "gradient_direction"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 59,
+      "type": "timeseries",
+      "title": "Correction activity",
+      "description": "training_metric_value for policy/offpolicy_mask/*, policy/m2_mask/*, policy/ppo_clip_ratio and policy/tis/imp_ratio_capped_fraction: token-masking and clipping activity from the off-policy, M2 and TIS corrections. Logged by the policy worker after each optimizer step. Empty without trainer.training_metrics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 144,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No matching records in this window.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "timeseries",
+          "parser": "backend",
+          "url": "/v1/async-rl/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "run",
+                "value": "${run}"
+              },
+              {
+                "key": "job",
+                "value": "${job}"
+              },
+              {
+                "key": "executions",
+                "value": "${execution:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "view",
+                "value": "corrections"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "series",
+              "text": "series",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m"
+    }
+  ],
+  "version": 2
+}

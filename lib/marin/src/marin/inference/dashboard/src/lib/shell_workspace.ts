@@ -7,7 +7,7 @@ export const BASH_TOOL_DEFINITION: ToolDefinition = {
   function: {
     name: BASH_TOOL_NAME,
     description:
-      'Run a Bash command in the persistent workspace rooted at /work. Use it to inspect and edit files, run programs and tests, and inspect Git state. The workspace has no network access.',
+      'Run a Bash command in the persistent workspace rooted at /work. Use it to inspect and edit files, run programs and tests, inspect imported Git history, and manage changes with local branches, commits, merges, stashes, and rebases. The workspace has no network access, so Git clone, fetch, pull, and push are unavailable.',
     parameters: {
       type: 'object',
       properties: {

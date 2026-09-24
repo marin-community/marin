@@ -22,12 +22,14 @@ from marin.datakit.download.nemotron_terminal import nemotron_terminal_chat_norm
 from marin.datakit.download.nemotron_v2 import nemotron_sft_chat_normalize_steps
 from marin.datakit.download.numinamath_tir import numinamath_tir_chat_normalize_steps
 from marin.datakit.download.numinamath_v1_5 import numinamath_v1_5_chat_normalize_steps
+from marin.datakit.download.open_swe_traces import OPEN_SWE_TRACES_PARTITIONS, open_swe_traces_chat_normalize_steps
 from marin.datakit.download.openthoughts4_code import openthoughts4_code_chat_normalize_steps
 from marin.datakit.download.penfever_rollouts import penfever_rollouts_chat_normalize_steps
 from marin.datakit.download.superior_reasoning import superior_reasoning_chat_normalize_steps
 from marin.datakit.download.swe_rebench_openhands import swe_rebench_openhands_chat_normalize_steps
 from marin.datakit.download.swe_zero_12m import swe_zero_12m_chat_normalize_steps
 from marin.datakit.download.synthetic1 import synthetic1_chat_normalize_steps
+from marin.datakit.download.synthetic_misconceptions import synthetic_misconceptions_chat_normalize_steps
 from marin.datakit.normalize import normalize_step
 from marin.datakit.sources import all_sources
 from marin.execution.step_spec import StepSpec
@@ -175,6 +177,7 @@ def all_sft_sources() -> dict[str, DatakitChatSource]:
         ("swe-rebench-openhands", swe_rebench_openhands_chat_normalize_steps),
         ("swe-zero-12m", swe_zero_12m_chat_normalize_steps),
         ("synthetic-1", synthetic1_chat_normalize_steps),
+        ("synthetic-misconceptions-conversations", synthetic_misconceptions_chat_normalize_steps),
     ]
     rows.extend(
         (name, lambda source_name=name: penfever_steps()[source_name])
@@ -186,6 +189,10 @@ def all_sft_sources() -> dict[str, DatakitChatSource]:
         for name in all_sources()
         if name.startswith("nemotron_sft/")
     )
+    rows.extend(
+        (name, lambda source_name=name: open_swe_traces_chat_normalize_steps(source_name))
+        for name in OPEN_SWE_TRACES_PARTITIONS
+    )
 
     v3_chains = nemotron_v3_steps()
     if set(v3_chains) != set(NEMOTRON_SFT_V3_TOKEN_COUNTS_B):
@@ -194,12 +201,14 @@ def all_sft_sources() -> dict[str, DatakitChatSource]:
 
     token_counts = {name: source.rough_token_count_b for name, source in all_sources().items()}
     token_counts.update(NEMOTRON_SFT_V3_TOKEN_COUNTS_B)
+    token_counts.update({name: size for name, (_, size) in OPEN_SWE_TRACES_PARTITIONS.items()})
     # This chat-only source has 3,341,347,579 completion tokens in its pinned
     # manifest. The rough weight excludes repeated prompts.
     token_counts["openthoughts4-code-glm-5.2-n4"] = 3.341347579
     # Initial sharding estimates; token-store preparation measures the actual mixture sizes.
     token_counts["agenttrove-glm53-compactions"] = 0.25
     token_counts["wildchat-glm53-format-completions"] = 0.01
+    token_counts["synthetic-misconceptions-conversations"] = 0.002
     return {
         name: DatakitChatSource(
             name=name,

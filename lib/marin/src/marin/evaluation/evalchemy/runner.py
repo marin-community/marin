@@ -17,7 +17,7 @@ from iris.client.client import Job, JobFailedError, iris_ctx
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 
 from marin.evaluation.evalchemy.client import CONFIG_ENV_KEY
-from marin.evaluation.evalchemy.config import RESERVED_ENDPOINT_MODEL_ARGS
+from marin.evaluation.evalchemy.config import RESERVED_ENDPOINT_MODEL_ARGS, EvalchemyJudgeConfig
 from marin.evaluation.evalchemy.result import FineStoreEvalchemyResult
 from marin.evaluation.evalchemy.runtime import (
     EVALCHEMY_EXTRA_PACKAGES,
@@ -25,7 +25,7 @@ from marin.evaluation.evalchemy.runtime import (
     EVALCHEMY_REQUIREMENT,
 )
 from marin.evaluation.evaluation_config import EvalTaskConfig, eval_task_directory
-from marin.evaluation.lm_eval_samples import summarize_native_eval_samples
+from marin.evaluation.lm_eval_samples import rebuild_lm_eval_samples, summarize_native_eval_samples
 from marin.evaluation.metric_selection import declared_metric
 from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, EvalTaskRef, RunStatus, TaskCoverage
 from marin.evaluation.rollouts import normalize_rollouts
@@ -36,7 +36,6 @@ from marin.inference.types import RunningModel
 logger = logging.getLogger(__name__)
 
 DEFAULT_NUM_CONCURRENT = 16
-DEFAULT_MAX_GEN_TOKS = 2048
 LOG_TAIL_LINES = 100
 _EVAL_CLIENT_SCRIPT = "lib/marin/src/marin/evaluation/evalchemy/client.py"
 _EVAL_JOB_ROLE = "eval"
@@ -101,7 +100,9 @@ class EvalchemyRunConfig:
     name: str
     tasks: tuple[EvalTaskConfig, ...]
     apply_chat_template: bool = False
-    max_gen_toks: int = DEFAULT_MAX_GEN_TOKS
+    # None passes no generation cap to Evalchemy, which then sizes each benchmark's responses from the
+    # served context window minus its stored longest prompt (evalchemy#132).
+    max_gen_toks: int | None = None
     max_eval_instances: int | None = None
     num_concurrent: int = DEFAULT_NUM_CONCURRENT
     batch_size: str | None = None
@@ -109,6 +110,7 @@ class EvalchemyRunConfig:
     extra_gen_kwargs: dict[str, str] = field(default_factory=dict)
     extra_model_args: dict[str, str | int | float | bool] = field(default_factory=dict)
     max_length: int | None = None
+    judge: EvalchemyJudgeConfig | None = None
     runtime: EvalchemyRuntimeConfig = field(default_factory=EvalchemyRuntimeConfig)
 
 
@@ -222,6 +224,17 @@ def _run_evalchemy_child(
     output_dir: str,
     env_vars: Mapping[str, str],
 ) -> str:
+    judge_env: dict[str, str] = {}
+    if config.judge is not None:
+        try:
+            judge_api_key = env_vars["JUDGE_API_KEY"]
+        except KeyError as exc:
+            raise ValueError("FinanceBench judge configuration requires JUDGE_API_KEY") from exc
+        judge_env = {
+            "JUDGE_API_KEY": judge_api_key,
+            "JUDGE_BASE_URL": config.judge.base_url,
+            "JUDGE_MODEL": config.judge.model,
+        }
     client = iris_ctx().client
     child_id = uuid.uuid4().hex[:8]
     uvx_command = shlex.join(_evalchemy_client_command(config.runtime))
@@ -241,6 +254,7 @@ def _run_evalchemy_child(
                 HF_ALLOW_CODE_EVAL="1",
                 OPENAI_API_KEY="local-endpoint",
                 TQDM_MININTERVAL="30",
+                **judge_env,
                 **{CONFIG_ENV_KEY: _run_config_json(model, config, output_dir)},
             )
         ),
@@ -279,9 +293,18 @@ def run_evalchemy(
         raise ValueError(f"Evalchemy output_dir {output_dir!r} is not an object-store path")
     eval_job = _run_evalchemy_child(model, config, output_dir, env_vars)
     try:
-        normalize_rollouts(output_dir, writer_id=f"marin-evalchemy-rollouts-{uuid.uuid4().hex}")
         result = FineStoreEvalchemyResult(path=output_dir)
         result.task_metrics()
+        summary = summarize_native_eval_samples(
+            output_dir,
+            tasks=config.tasks,
+        )
+        rebuild_lm_eval_samples(
+            output_dir,
+            tasks=summary.tasks,
+            writer_id=f"marin-evalchemy-samples-{uuid.uuid4().hex}",
+        )
+        normalize_rollouts(output_dir, writer_id=f"marin-evalchemy-rollouts-{uuid.uuid4().hex}")
         summary = summarize_native_eval_samples(
             output_dir,
             tasks=config.tasks,

@@ -1,9 +1,10 @@
 # Marina
 
-One Cloud Run service that hosts Marin's small internal web apps. Checked-in
-apps live under `apps/`; dynamic applets are uploaded with `marina publish` and
-stored in Postgres. Both use the same IAP login, database, app directory, and
-browser test harness.
+Marina hosts Marin's small web apps. Checked-in apps live under `apps/`;
+dynamic applets are uploaded with `marina publish` and stored in Postgres.
+Checked-in apps and private applets use the same IAP login, database, app
+directory, and browser test harness. An isolated public service exposes only
+applets that their publishers explicitly mark public.
 
 ## Layout
 
@@ -208,6 +209,14 @@ for applet pages on Marina's main host redirect there. The applet host returns
 a comma-separated set of user IDs allowed to update, roll back, or archive any
 applet; otherwise only the recorded owner may do so.
 
+`MARINA_APPLET_HOSTS` assigns named hosts to applet UUIDs, for example
+`zephyr.marina.oa.dev=6c2b0dc9-9a31-4777-82d4-e759c0292aa3`. Each host serves
+only its assigned applet behind the same authentication. Its root redirects
+to `/v/<current>/` on that host; assets, queries, and Python APIs remain pinned
+to that revision. Existing URLs on `MARINA_APPLET_ORIGIN` remain valid.
+Declare the host in the deployment's `APPLET_HOSTS` map to provision its DNS
+record and Cloud Run domain mapping.
+
 ## Deploying
 
 ```bash
@@ -355,15 +364,44 @@ On the first publish the server generates the stable UUID and records the IAP
 identity's `user_id` as owner. `MARINA_APPLET_OPERATORS` is a comma-separated
 list of those exact user IDs (normally email addresses in production).
 
-The command prints the immutable revision URL under
+The command prints the immutable revision URL. Private applets use
 `https://applets.marina.oa.dev/a/<uuid>/v/<revision>/`. A successful publish
-runs the migration and then atomically changes the stable current URL,
-`https://applets.marina.oa.dev/a/<uuid>/`, to that revision. To update the same
-applet, pass both the UUID and the current revision:
+runs the migration and then atomically changes the stable current URL to that
+revision. To update the same applet, pass both the UUID and the current
+revision:
 
 ```bash
 uv run marina publish my-applet --update <uuid> --base-version 1
 ```
+
+Applets are private by default. Set the mode on the first publish or an update:
+
+```bash
+uv run marina publish my-applet --mode public
+uv run marina publish my-applet --update <uuid> --base-version 1 --mode public
+```
+
+An update without `--mode` preserves the current mode. Change only the access
+mode without publishing another revision:
+
+```bash
+uv run marina applets mode <uuid> public
+uv run marina applets mode <uuid> private
+```
+
+Public applets use `https://public.applets.marina.oa.dev/a/<uuid>/`. The public
+service accepts GET and HEAD requests for frontend files and applet backend
+routes. It returns 404 for private applets, SQL `query` requests, non-read HTTP
+methods, and Marina control routes.
+
+Public mode provides no access control. Treat the UUID and every revision URL
+as public, and publish only data that may be disclosed to the unrestricted
+internet. Use public mode only for trusted applet publishers and trusted applet
+code. It is not a sandbox for external or untrusted authors. A Python GET
+handler still runs as a trusted Marina plugin with the applet database role and
+the service's credentials; the handler must be side-effect-free and must return
+only intended public data. Marina restricts the HTTP methods but cannot prove
+that a GET handler is read-only.
 
 `--dry-run` validates and lists only the package that would be sent. Its report
 lists `backend_import` under `not_checked` for a Python applet. Use the separate

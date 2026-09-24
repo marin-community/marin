@@ -291,13 +291,17 @@
           "source": "url",
           "format": "table",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/jobs/overview",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "SELECT COUNT(*) AS value FROM \"iris.provisioning\" WHERE outcome IN ('stockout', 'error') AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND ts >= {{from}} AND ts < {{to}}"
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "jobs",
+                "value": "${job:csv}"
               },
               {
                 "key": "from",
@@ -306,6 +310,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "provisioning_failures"
               }
             ]
           },
@@ -372,13 +384,17 @@
           "source": "url",
           "format": "table",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/jobs/overview",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "SELECT SUM(count) AS value FROM \"iris.task_event\" WHERE type = 'Warning' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND ts >= {{from}} AND ts < {{to}}"
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "jobs",
+                "value": "${job:csv}"
               },
               {
                 "key": "from",
@@ -387,6 +403,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "warning_count"
               }
             ]
           },
@@ -516,13 +540,17 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/jobs/overview",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "WITH per_cluster AS ( SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, COALESCE(NULLIF(\"cluster\", ''), 'marin') AS cl, MAX(pending) AS pending, MAX(assigned) AS assigned, MAX(building) AS building, MAX(running) AS running FROM \"iris.task_state\" WHERE root_job_id = '' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2) SELECT t, SUM(pending) AS pending, SUM(assigned) AS assigned, SUM(building) AS building, SUM(running) AS running FROM per_cluster GROUP BY 1 ORDER BY 1"
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "jobs",
+                "value": "${job:csv}"
               },
               {
                 "key": "from",
@@ -531,6 +559,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "fleet_state"
               }
             ]
           },
@@ -701,13 +737,17 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/jobs/overview",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, COALESCE(NULLIF(\"cluster\", ''), 'marin') AS series, MAX(GREATEST(oldest_pending_age_ms, oldest_building_age_ms)) AS value FROM \"iris.task_state\" WHERE root_job_id = '' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1"
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "jobs",
+                "value": "${job:csv}"
               },
               {
                 "key": "from",
@@ -716,6 +756,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "oldest_waiting"
               }
             ]
           },
@@ -865,13 +913,17 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/jobs/overview",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, outcome AS series, COUNT(*) AS value FROM \"iris.provisioning\" WHERE COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1"
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "jobs",
+                "value": "${job:csv}"
               },
               {
                 "key": "from",
@@ -880,6 +932,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "provisioning_outcomes"
               }
             ]
           },
@@ -954,13 +1014,17 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/jobs/overview",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, CASE WHEN accelerator_variant = '' THEN resource_type ELSE accelerator_variant END AS series, AVG(provision_latency_ms) AS value FROM \"iris.provisioning\" WHERE outcome = 'ready' AND provision_latency_ms > 0 AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1"
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "jobs",
+                "value": "${job:csv}"
               },
               {
                 "key": "from",
@@ -969,6 +1033,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "provisioning_latency"
               }
             ]
           },
@@ -1040,13 +1112,17 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/jobs/overview",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, root_job_id AS series, MAX(pending + assigned + building) AS value FROM \"iris.task_state\" WHERE root_job_id IN (${job:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND ts >= {{from}} AND ts < {{to}} GROUP BY 1, 2 ORDER BY 1"
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "jobs",
+                "value": "${job:csv}"
               },
               {
                 "key": "from",
@@ -1055,6 +1131,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "waiting_jobs"
               }
             ]
           },
@@ -1196,13 +1280,17 @@
           "source": "url",
           "format": "table",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/jobs/overview",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "WITH recent AS ( SELECT COALESCE(NULLIF(\"cluster\", ''), 'marin') AS cluster, root_job_id, pending, assigned, building, running, oldest_pending_age_ms, oldest_building_age_ms, ROW_NUMBER() OVER (PARTITION BY \"cluster\", root_job_id ORDER BY ts DESC) AS rn FROM \"iris.task_state\" WHERE root_job_id IN (${job:sqlstring}) AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND ts >= {{from}} AND ts < {{to}}) SELECT \"cluster\", root_job_id AS job, pending, assigned, building, running, oldest_pending_age_ms, oldest_building_age_ms FROM recent WHERE rn = 1 ORDER BY GREATEST(oldest_building_age_ms, oldest_pending_age_ms) DESC"
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "jobs",
+                "value": "${job:csv}"
               },
               {
                 "key": "from",
@@ -1211,6 +1299,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "active_jobs"
               }
             ]
           },
@@ -1295,13 +1391,17 @@
           "source": "url",
           "format": "table",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/jobs/overview",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "SELECT ts, COALESCE(NULLIF(\"cluster\", ''), 'marin') AS cluster, task_id, attempt_id, reason, source, message, count FROM \"iris.task_event\" WHERE type = 'Warning' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND ts >= {{from}} AND ts < {{to}} ORDER BY ts DESC LIMIT 200"
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "jobs",
+                "value": "${job:csv}"
               },
               {
                 "key": "from",
@@ -1310,6 +1410,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "recent_warnings"
               }
             ]
           },
@@ -1551,13 +1659,17 @@
               "source": "url",
               "format": "timeseries",
               "parser": "backend",
-              "url": "/query",
+              "url": "/v1/jobs/overview",
               "url_options": {
                 "method": "GET",
                 "params": [
                   {
-                    "key": "sql",
-                    "value": "WITH top AS ( SELECT task_id FROM \"iris.task\" WHERE ts >= {{from}} AND ts < {{to}} GROUP BY task_id ORDER BY AVG(memory_mb) DESC LIMIT 20) SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, task_id AS series, AVG(memory_mb) AS value FROM \"iris.task\" WHERE ts >= {{from}} AND ts < {{to}} AND task_id IN (SELECT task_id FROM top) GROUP BY 1, 2 ORDER BY 1"
+                    "key": "clusters",
+                    "value": "${cluster:csv}"
+                  },
+                  {
+                    "key": "jobs",
+                    "value": "${job:csv}"
                   },
                   {
                     "key": "from",
@@ -1566,6 +1678,14 @@
                   {
                     "key": "to",
                     "value": "${__to}"
+                  },
+                  {
+                    "key": "bucket_ms",
+                    "value": "${__interval_ms}"
+                  },
+                  {
+                    "key": "view",
+                    "value": "task_memory"
                   }
                 ]
               },
@@ -1637,13 +1757,17 @@
               "source": "url",
               "format": "timeseries",
               "parser": "backend",
-              "url": "/query",
+              "url": "/v1/jobs/overview",
               "url_options": {
                 "method": "GET",
                 "params": [
                   {
-                    "key": "sql",
-                    "value": "WITH top AS ( SELECT task_id FROM \"iris.task\" WHERE ts >= {{from}} AND ts < {{to}} GROUP BY task_id ORDER BY AVG(cpu_millicores) DESC LIMIT 20) SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, task_id AS series, AVG(cpu_millicores) AS value FROM \"iris.task\" WHERE ts >= {{from}} AND ts < {{to}} AND task_id IN (SELECT task_id FROM top) GROUP BY 1, 2 ORDER BY 1"
+                    "key": "clusters",
+                    "value": "${cluster:csv}"
+                  },
+                  {
+                    "key": "jobs",
+                    "value": "${job:csv}"
                   },
                   {
                     "key": "from",
@@ -1652,6 +1776,14 @@
                   {
                     "key": "to",
                     "value": "${__to}"
+                  },
+                  {
+                    "key": "bucket_ms",
+                    "value": "${__interval_ms}"
+                  },
+                  {
+                    "key": "view",
+                    "value": "task_cpu"
                   }
                 ]
               },
@@ -1723,13 +1855,17 @@
               "source": "url",
               "format": "timeseries",
               "parser": "backend",
-              "url": "/query",
+              "url": "/v1/jobs/overview",
               "url_options": {
                 "method": "GET",
                 "params": [
                   {
-                    "key": "sql",
-                    "value": "WITH top AS ( SELECT worker_id FROM \"iris.worker\" WHERE ts >= {{from}} AND ts < {{to}} GROUP BY worker_id ORDER BY AVG(cpu_pct) DESC LIMIT 20) SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, worker_id AS series, AVG(cpu_pct) AS value FROM \"iris.worker\" WHERE ts >= {{from}} AND ts < {{to}} AND worker_id IN (SELECT worker_id FROM top) GROUP BY 1, 2 ORDER BY 1"
+                    "key": "clusters",
+                    "value": "${cluster:csv}"
+                  },
+                  {
+                    "key": "jobs",
+                    "value": "${job:csv}"
                   },
                   {
                     "key": "from",
@@ -1738,6 +1874,14 @@
                   {
                     "key": "to",
                     "value": "${__to}"
+                  },
+                  {
+                    "key": "bucket_ms",
+                    "value": "${__interval_ms}"
+                  },
+                  {
+                    "key": "view",
+                    "value": "worker_cpu"
                   }
                 ]
               },
@@ -1809,13 +1953,17 @@
               "source": "url",
               "format": "timeseries",
               "parser": "backend",
-              "url": "/query",
+              "url": "/v1/jobs/overview",
               "url_options": {
                 "method": "GET",
                 "params": [
                   {
-                    "key": "sql",
-                    "value": "WITH top AS ( SELECT worker_id FROM \"iris.worker\" WHERE ts >= {{from}} AND ts < {{to}} GROUP BY worker_id ORDER BY AVG(mem_bytes) DESC LIMIT 20) SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', ts) AS t, worker_id AS series, AVG(mem_bytes) AS value FROM \"iris.worker\" WHERE ts >= {{from}} AND ts < {{to}} AND worker_id IN (SELECT worker_id FROM top) GROUP BY 1, 2 ORDER BY 1"
+                    "key": "clusters",
+                    "value": "${cluster:csv}"
+                  },
+                  {
+                    "key": "jobs",
+                    "value": "${job:csv}"
                   },
                   {
                     "key": "from",
@@ -1824,6 +1972,14 @@
                   {
                     "key": "to",
                     "value": "${__to}"
+                  },
+                  {
+                    "key": "bucket_ms",
+                    "value": "${__interval_ms}"
+                  },
+                  {
+                    "key": "view",
+                    "value": "worker_memory"
                   }
                 ]
               },

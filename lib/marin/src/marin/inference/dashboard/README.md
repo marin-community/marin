@@ -40,6 +40,53 @@ system and user messages, unparsed assistant `content` and reasoning fields,
 structured tool calls, tool results, and errors. The OpenAI-compatible response
 does not include numeric token IDs, so the dashboard cannot display those.
 
+Enable **vLLM debug** beside Raw chat to record request stats on each assistant
+reply. Open **Request stats** below a reply to see server-reported time to first
+token (TTFT), queue time, generation time, mean inter-token latency (the average
+gap between generated tokens), output tokens per second, and prompt/output token
+counts. The checkbox is off by default. It works with streaming and buffered
+chat responses. The dashboard requests usage at the end of a streaming chat
+response only while the checkbox is enabled. Stats are saved with the browser's
+conversation history but are excluded from Raw chat and shared-chat links.
+
+Start the serving process with `--vllm-arg=--enable-per-request-metrics` to
+receive timings. The foldout explains when the server does not return them; token
+counts still appear when the response includes usage. A single-token response
+can have no mean inter-token latency.
+
+## Rendered output and shared chats
+
+Assistant messages render Markdown. Unfenced HTML and XML from the model are
+displayed as literal text instead of DOM elements. The Markdown parser places a
+raw markup region in a code block when it classifies the region as a block;
+tags embedded in prose remain inline. This preserves custom tags such as
+`<ticket_analysis>` and prevents model output from adding active HTML to the
+dashboard.
+
+Choose **Share chat** to store a snapshot in the dashboard process and copy a
+link whose URL fragment contains its 16-character ID. The link length does not
+grow with the transcript. The snapshot includes the title, model name, user and
+assistant message text, and assistant errors. It excludes reasoning, tool calls,
+tool results, the system prompt, custom template instructions, Python tool
+source, shell workspace, and unparsed raw protocol fields. The share operation
+does not redact excluded data that was copied into included message text or an
+error.
+
+The UTF-8 JSON request body for each snapshot is limited to 512 KiB. An
+oversized snapshot is rejected, and the share button reports **Copy failed**.
+The dashboard process retains the newest 128 snapshots in memory. A snapshot is
+unavailable after it is evicted or the serving process restarts. Opening a valid
+link fetches the snapshot from the same dashboard process, saves it in that
+browser's conversation history, and removes the ID fragment from the address
+bar. A missing or invalid ID opens an empty chat and displays an import error.
+
+The snapshot ID is not a credential. Retrieval requires the dashboard URL that
+contains the Iris capability token. That token authorizes the routes for one
+`marin-serve iris` serving endpoint, including inference, tool, and shared-chat
+requests. The command that mints the URL prints its expiration time. Share chat
+links only with trusted users. The share operation grants the same access as the
+current dashboard URL; it does not narrow or revoke that access.
+
 ## Custom Python tools
 
 Open **Python tools** above the Chat composer to define functions for the active
@@ -86,9 +133,19 @@ and source is limited to 64 KiB. ShellSim implements a source-compatible subset
 of Python rather than full CPython, so unsupported modules and language features
 fail the tool call.
 
-One model response counts as one round, including a response with multiple
-calls. The UI executes calls from the eighth round, stops before another model
-request, and displays a limit error.
+Within one user turn, each model response that contains one or more calls counts
+as one tool round. **Max tool rounds** in **More settings** controls the number
+of rounds in that turn. The default value, `0`, allows unlimited rounds. For a
+positive value, the UI executes calls from the final allowed round, stops before
+another model request, and displays a limit error.
+
+The UI also stops before executing the third identical tool call in a row. A
+call is identical when its function name and arguments match; object key order
+does not affect the comparison. Multiple calls in one response are checked in
+execution order. A call with another function name or different arguments
+resets the repetition count. The count resets at the start of each user turn.
+Calls that return tool errors still count because the UI records the call before
+execution.
 
 ## ShellSim agent workspaces
 
@@ -101,31 +158,40 @@ shell calls and results are rendered just like custom Python tools. The three
 agent cards on an empty chat demonstrate repairing code, investigating a log,
 and updating a configuration.
 
-ShellSim starts in `/work` with the initial files committed as a fresh Git
-baseline. The browser stores each executed command with the conversation. For
-the next call, the service reconstructs the filesystem and replays those
-commands before executing the new command, which preserves file edits and Git
-state without keeping a host process or directory alive. Editing the initial
-files or choosing **Reset commands** clears that replay history.
+For manually entered files, ShellSim starts in `/work` with a fresh Git baseline
+commit. Cloned workspaces recreate the imported commits described below. The
+browser stores each executed command with the conversation. For the next call,
+the service reconstructs the filesystem and replays those commands before
+executing the new command, which preserves file edits and Git state without
+keeping a host process or directory alive. Editing the initial
+files JSON in the dashboard clears imported Git history and command replay
+history. Choosing **Reset commands** clears only command replay history. The
+simulated Git supports local agent workflows including status, diffs, branches,
+commits, tags, merges, stashes, cherry-picks, rebases, blame, and reflog.
+Networked Git commands are unavailable inside the workspace.
 
 To start from an existing project, enter a public GitHub repository URL and
-choose **Load public repo**. The dashboard service downloads the default
-branch's archive outside ShellSim, extracts bounded UTF-8 regular files, and
-passes only that file map into the simulation. It does not forward credentials,
-clone remote Git history, load submodules, or support private repositories.
-ShellSim itself has no real network access, and `git clone` is unavailable; the
-simulated repository receives a new baseline commit after import.
+choose **Clone public repo**. That explicit action performs one shallow,
+networked clone on the dashboard server. The service translates up to 32 recent
+first-parent commits into bounded ShellSim-native commits, then deletes the
+temporary clone. The model can use local commands such as `git log`, `git show`,
+`git diff`, and `git blame` against the imported text history without another
+network request. Merge topology, tags, binary and oversized file changes, and
+older commits are not imported. The service does not forward credentials, load
+submodules, retain a remote or `.git` directory, or support private
+repositories.
 
 Workspace inputs are limited to 500 files, 256 KiB per file, and 4 MiB total.
-Repository downloads are limited to 4 MiB compressed and 10,000 archive
-entries. Binary files and common generated directories such as `node_modules`,
-`.venv`, `target`, and `__pycache__` are skipped. A conversation may replay at
-most 32 commands totaling 128 KiB; each command is limited to 16 KiB. Each
-simulation is limited to 50 million CPU ticks, 64 MiB of memory, 16 MiB of disk,
-and 2 MiB of output, with the same 10-second outer worker timeout used for
-custom Python tools.
+Repository clones are limited to 64 MiB and 30 seconds. Imported history is
+limited to 32 commits and approximately 4 MiB of text changes; older commits
+are dropped first when necessary. Binary files and common generated directories
+such as `node_modules`, `.venv`, `target`, and `__pycache__` are skipped. A
+conversation may replay at most 32 commands totaling 128 KiB; each command is
+limited to 16 KiB. Each simulation is limited to 50 million CPU ticks, 64 MiB
+of memory, 16 MiB of disk, and 2 MiB of output, with the same 10-second outer
+worker timeout used for custom Python tools.
 
 After the endpoint becomes ready, `marin-serve iris` prints a capability URL.
 Possession of that URL authorizes inference and simulated Python tool calls.
-It also authorizes ShellSim commands and bounded public GitHub downloads. Share
+It also authorizes ShellSim commands and bounded public GitHub clones. Share
 the URL only with trusted users and treat it as a credential.

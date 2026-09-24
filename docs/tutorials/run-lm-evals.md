@@ -312,11 +312,12 @@ paths.
 selection in a lazy artifact. Save the pipeline as `eval_pipeline.py`:
 
 ```python
+from experiments.evaluation.models import models
 from experiments.evaluation.pipeline import eval_step
 from marin.execution.step_runner import StepRunner
 
 step = eval_step(
-    "qwen3-1.7b",
+    models()["qwen3-1.7b"],
     "smoke",
     version="2026.07.27",
     limit=32,
