@@ -30,7 +30,8 @@ from levanter.utils.jax_utils import barrier_sync_named, multihost_allgather_syn
 from experiments.grug.moe_hero_ep.hero_recipe import HERO_MODEL_CONFIG
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, QbEstimator
 from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
-from experiments.grug.moe_hero_ep.pipeline import (
+from experiments.grug.moe_hero_ep.train import _compute_flops
+from experiments.grug.moe_hero_pipeline.pipeline import (
     BATCH_AXES,
     TRAIN_LOSS_KEY,
     AutomaticPipelineSchedule,
@@ -44,7 +45,6 @@ from experiments.grug.moe_hero_ep.pipeline import (
     prepare_automatic_mpmd_step,
     restore_pipeline_state,
 )
-from experiments.grug.moe_hero_ep.train import _compute_flops
 
 _MULTIHOST_TIMEOUT = 600
 

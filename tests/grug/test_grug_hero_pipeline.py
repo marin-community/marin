@@ -14,7 +14,7 @@ from levanter.data.text.examples import GrugLmExample
 from levanter.grug.attention import AttentionMask
 
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, QbEstimator, Transformer
-from experiments.grug.moe_hero_ep.pipeline import _copy_array_to_host, split_transformer
+from experiments.grug.moe_hero_pipeline.pipeline import _copy_array_to_host, split_transformer
 
 
 def _tiny_hero(qb_estimator: QbEstimator) -> tuple[Mesh, Transformer]:
