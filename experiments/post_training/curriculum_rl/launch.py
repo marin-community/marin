@@ -56,7 +56,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import username_segment
 
 from experiments.evaluation.models import SNOWBALL_SFT_EXPORT_URI, SNOWBALL_VLLM_ARGS
-from experiments.evaluation.pipeline import EvaluationResult, eval_step
+from experiments.evaluation.pipeline import EvaluationResult
 from experiments.post_training.curriculum_rl.pool import (
     MAX_PROMPT_TOKENS,
     QWEN3_MODEL,
@@ -65,7 +65,7 @@ from experiments.post_training.curriculum_rl.pool import (
     VALIDATION_FILENAME,
     pool_step,
 )
-from experiments.post_training.skyrl_evaluation import SKYRL_POLICY_LOCATION, resolve_skyrl_model
+from experiments.post_training.skyrl_evaluation import SKYRL_POLICY_LOCATION, skyrl_eval_step
 
 logger = logging.getLogger(__name__)
 
@@ -625,8 +625,8 @@ class CurriculumArm:
     evaluation: ArtifactStep[EvaluationResult]
 
 
-def _evaluation_serving(policy: PolicySpec, preset: ScalePreset, name: str) -> ModelConfig:
-    """Serving profile for the trained policy checkpoint, from the policy's
+def evaluation_model_config(policy: PolicySpec, preset: ScalePreset, name: str) -> ModelConfig:
+    """Model configuration for the trained policy checkpoint, from the policy's
     ``serve_*`` fields and the preset's context window."""
     return ModelConfig(
         name=name,
@@ -708,13 +708,12 @@ def build_arm(
     evaluation_model_name = f"{username_segment()}-{EXPERIMENT_NAME}-{policy_prefix}{spec.name}{suffix}"
     evaluation_base_name = f"evals/{evaluation_model_name}/{preset.evals}"
     evaluation_version = version or resolve_version(evaluation_base_name, None)
-    evaluation_model = _evaluation_serving(policy, preset, evaluation_model_name)
-    evaluation = eval_step(
+    evaluation_model = evaluation_model_config(policy, preset, evaluation_model_name)
+    evaluation = skyrl_eval_step(
+        rl,
         evaluation_model,
         preset.evals,
         version=evaluation_version,
-        deps=(rl,),
-        resolve_model=lambda ctx: resolve_skyrl_model(ctx, rl, evaluation_model),
         accelerator=f"{GPU_VARIANT}x{policy.serve_gpus}",
         submission_cluster=policy.cluster,
         federated_cluster=policy.cluster,
