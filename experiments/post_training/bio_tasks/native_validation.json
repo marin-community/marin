@@ -1152,7 +1152,87 @@
           }
         }
       ],
-      "decision": "Pin HASWELL in the R image and validate it on Harbor; retain all probability tolerances unchanged. Autodetected CPU kernels can change fitted statistics beyond the declared tolerance."
+      "decision": "Pin HASWELL in the R image and validate it on Harbor; retain all probability tolerances unchanged. Autodetected CPU kernels can change fitted statistics beyond the declared tolerance.",
+      "resolved_by_job": "/exedev/bio-harbor-rnaseq-haswell-20260924-032150"
+    }
+  ],
+  "corpus_builds": [
+    {
+      "job_id": "/exedev/bio-full-corpus-haswell-20260924-033635",
+      "source_revision": "e2f0ad4d9e07230cf7c9e0f87e13bf29eca57643",
+      "scope": "Canonical authoring-corpus build, including correctness controls. All executable oracles, row permutations and negative controls passed. This is not a training release.",
+      "archive": {
+        "uri": "gs://marin-us-central2/tmp/ttl=7d/iris/task-outputs/exedev/bio-full-corpus-haswell-20260924-033635/0/190a2a86031e84e4/outputs.tar.zst",
+        "size_bytes": 25525828,
+        "sha256": "2efd7fd7ccff614c44e9a94df4883d6f299c2ee689726a41a6b70676b10f300d",
+        "ttl_days": 7
+      },
+      "result": {
+        "status": "passed",
+        "source_revision": "e2f0ad4d9e07230cf7c9e0f87e13bf29eca57643",
+        "model_calls": 0,
+        "task_count": 139,
+        "data_origins": {
+          "simulated": 115,
+          "real": 24
+        },
+        "manifest_sha256": "f78b7fc1ca0f013dd44fcf7a8056600dd5a4c3629bfabfd86010f96c9cf7cd4e",
+        "finished_at": "2026-09-24T03:39:05.508584+00:00"
+      },
+      "build_execution": {
+        "argv": [
+          "/app/bio-full-corpus-keblh7bz/python/bin/python",
+          "-m",
+          "experiments.post_training.bio_tasks.build",
+          "--output",
+          "/iris/outputs/corpus",
+          "--tool-ref",
+          "e2f0ad4d9e07230cf7c9e0f87e13bf29eca57643",
+          "--base-image",
+          "python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c",
+          "--seed",
+          "20260923",
+          "--instances-per-recipe",
+          "1"
+        ],
+        "exit_code": 0,
+        "seconds": 96.35249642800773,
+        "peak_child_rss_kib": 1201580
+      },
+      "blas_profile": {
+        "requested_core": "HASWELL",
+        "core": "Haswell",
+        "configuration": "OpenBLAS 0.3.34 DYNAMIC_ARCH NO_AFFINITY Haswell MAX_THREADS=128",
+        "cpu_model": "AMD EPYC 7B12"
+      },
+      "benchmark_distribution_counts": {
+        "ID": 765,
+        "OOD": 90
+      },
+      "benchmark_coverage_counts": {
+        "component-only": 23,
+        "unmapped": 742,
+        "restricted/excluded": 90
+      },
+      "instances_per_recipe": 1,
+      "controller_placement": {
+        "job_id": "/exedev/bio-full-corpus-haswell-20260924-033635",
+        "state": "succeeded",
+        "worker_id": "marin-tpu-v4-reserved-256-us-central2-b-20260922-2317-8259d330-worker-28",
+        "execution_cluster_id": "local",
+        "backend_id": "default",
+        "checked_at": "2026-09-24T03:48:53.611138+00:00",
+        "worker_metadata": [
+          {
+            "worker_id": "marin-tpu-v4-reserved-256-us-central2-b-20260922-2317-8259d330-worker-28",
+            "scale_group": "tpu_v4-reserved_256-us-central2-b",
+            "backend_id": "default",
+            "tpu_name": "t1v-n-9a98788d",
+            "gce_zone": "",
+            "gce_instance_name": "t1v-n-9a98788d-w-28"
+          }
+        ]
+      }
     }
   ]
 }
