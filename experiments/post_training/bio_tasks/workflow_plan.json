@@ -2,9 +2,9 @@
   "schema_version": 1,
   "updated_at": "2026-09-24T22:26:00.604392+00:00",
   "basis_revision": "952929c306",
-  "scope": "Agentic provisional-ID benchmarks only; preserve all existing OOD exclusions. The broad question portfolio is complete with explicit limits. Prepare selected input and acceptance contracts before further recipe implementation.",
-  "authoring_unit": "One coherent observed-data task per recipe by default. Proposed questions are separate task designs, not repeated instances. They may be split or merged after endpoint and runtime checks.",
-  "coverage_goal": "Aim to cover most missing distinct ID task workflows. Keep the full inventoried denominator, known protocol aliases, per-benchmark progress and every unresolved or excluded endpoint visible. Plan membership is not a coverage forecast; exact endpoint assignments and independent inputs still require review.",
+  "scope": "Provisional-ID agentic benchmarks supply competency provenance; preserve every OOD exclusion. Generation is paused for taxonomy and public communication review.",
+  "authoring_unit": "A coherent, verifiable Harbor task with one primary competency. Reuse a recipe only for meaningful independent observed inputs or scientific decisions; no fixed instance quota.",
+  "coverage_goal": "Uniform hierarchical competency coverage; see competencies.json. Preserve source endpoints, aliases and context adaptations as derivation evidence rather than the primary objective.",
   "count_policy": "Only the 50 explicitly related BixBench-Verified-50 records are collapsed for unique counts. Other shared-task, insight, study, protocol and source-ID fields remain as relation evidence, not inferred equivalence. No disposition or group label is coverage credit.",
   "source_inventory_files": [
     {
@@ -13521,10 +13521,10 @@
       "shared_external_question_cards": 7
     }
   ],
-  "authoring_phase": "task-contract-preparation",
+  "authoring_phase": "paused-for-competency-review",
   "portfolio_index": {
     "path": "workflow_portfolio.json",
-    "sha256": "19484e52b0a09106a8b2b4d0b1c36ad4c37c032775b80351517b0500d738d241",
+    "sha256": "0030248f79654334ab68af13191731d9fbd1bad54ddd6d93e3834f41b03f4a41",
     "counts": {
       "source_releases": 32,
       "inventory_records": 5133,
@@ -13539,5 +13539,6 @@
       "system_records_with_endpoint_gap_dispositions": 350
     },
     "status": "question-portfolio-complete-with-explicit-limits; selected-task-contracts-pending"
-  }
+  },
+  "competency_taxonomy": "competencies.json"
 }

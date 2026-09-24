@@ -10,20 +10,20 @@ All authored tasks run through **Harbor**, using terminal-based solving, private
 executable oracles and deterministic artifact verifiers. Notebook-based benchmarks
 inform scientific endpoints; their notebook execution protocol is outside scope.
 
-Prioritize complete tasks and connected workflows from eligible ID benchmarks.
-Choose new recipes from the missing stages and scientific decisions recorded in
-the [task inventories](../../experiments/post_training/bio_tasks/benchmark_tasks/README.md).
-Repository and format coverage support those workflows; they are secondary to
-benchmark-task coverage. Continue tracking actual execution of all 50 repositories.
-The issue's opening ledger records real-data task candidates, fully validated and
-partial ID mappings, and repositories with passing native execution evidence.
-The [authoring queue](bio-task-queue.md) ranks assessed candidates by the additional
-distinct missing ID tasks their connected workflow could complete. Recompute the
-remaining targets after each result; related protocol variants add no rank credit.
-The [full design plan](../../experiments/post_training/bio_tasks/workflow_plan.json)
-contains 147 proposed questions across 52 scientific workstreams and keeps all
-inventoried ID endpoints and unresolved source gaps visible. Proposed assignments
-add no validated coverage.
+Primary coverage is now **competency coverage**, organized by scientific area,
+family and assessable outcome. The [public explorer](https://htmlpreview.github.io/?https://github.com/marin-community/marin/blob/codex/bio-task-generators/docs/experiments/bio-task-coverage.html)
+and [versioned taxonomy](../../experiments/post_training/bio_tasks/competencies.json)
+define the draft and separate planned, candidate and validated evidence.
+Benchmarks supply derivation sources rather than generation quotas. Repository and
+format inventories remain supporting axes. The [authoring queue](bio-task-queue.md)
+preserves prior endpoint research; its historical benchmark gains no longer rank
+new work. Generation is paused while the hierarchy is reviewed.
+
+The existing [workstream plan](../../experiments/post_training/bio_tasks/workflow_plan.json)
+contains 147 proposed questions across 52 workstreams. Exact benchmark task IDs,
+source inspection limits and context adaptations remain useful provenance.
+Previously validated benchmark mappings do not automatically become competency
+coverage; each bounded outcome needs a reviewed task/verifier assignment.
 
 The implementation has **145 recipes across 13 domains**, with one task per
 recipe by default and one train split. The [implemented recipe matrix](bio-task-recipes.md)

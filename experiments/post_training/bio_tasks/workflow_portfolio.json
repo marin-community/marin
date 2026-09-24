@@ -10600,7 +10600,7 @@
       "predicted_validated_gain": null
     }
   ],
-  "ordering_policy": "The first review pass balances exact endpoint contracts, cross-benchmark reuse and scientific feasibility. This is not a measured gain ranking. Recompute the implementation queue only after independent input and acceptance contracts are fixed. Prefer largest conservative gain in missing distinct endpoints among feasible candidates; break ties by benchmark breadth, connected workflow realism and implementation cost. Never use registry-row counts as a shortcut for gain.",
+  "ordering_policy": "Historical source-question review order only. Generation is paused for competency taxonomy review. On resumption, recursively balance scientific areas, families and competencies using one primary competency per accepted task. Source endpoint counts are provenance, not allocation weights.",
   "planning_completion_checklist": [
     "Every inventoried source record has an exact question, known-alias, exclusion or explicit unavailable-endpoint disposition.",
     "Every question appears exactly once in the portfolio; all proposed merges preserve every member endpoint by reference.",

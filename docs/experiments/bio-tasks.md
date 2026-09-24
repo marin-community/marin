@@ -1,4 +1,4 @@
-# Synthetic biology task generation
+# Biology Harbor task generation
 
 The generators in `experiments/post_training/bio_tasks/` implement 145
 recipes from [the biology data program](https://github.com/marin-community/marin/issues/9257).
@@ -10,11 +10,63 @@ the original 2026-07-28 downloads/stars/citations. The maintained
 [task catalog](bio-task-catalog.md) contains all source assessments, skills, and
 format coverage, with the original adoption inventory preserved as a separate file.
 
-Complete eligible-ID benchmark workflows take priority over repository coverage.
-Use the versioned task inventories to select missing stages and scientific decisions;
-track packages and formats as supporting coverage. The issue's opening ledger
-separates real-data task candidates, validated and partial ID mappings, and native
-repository checks.
+The project produces reusable **Harbor tasks**, including instructions, real inputs,
+pinned environments, private executable oracles and deterministic verifiers.
+Model training, teacher traces, model choice and inference settings are outside
+its scope. Sandbox CPU, memory, storage, timeout and network requirements are part
+of the task contract; see [the shared contract](https://github.com/marin-community/marin/issues/9122).
+
+## Competency coverage and public explorer
+
+[Open the public explorer](https://htmlpreview.github.io/?https://github.com/marin-community/marin/blob/codex/bio-task-generators/docs/experiments/bio-task-coverage.html)
+to inspect the draft hierarchy, generation policy, source benchmarks, format profiles,
+repository metadata and five frozen public task examples. The self-contained
+[HTML](bio-task-coverage.html) needs no login or local server.
+
+The versioned [taxonomy](../../experiments/post_training/bio_tasks/competencies.json)
+uses **scientific area → family → competency**, with reusable operations and
+independent resolution, spatiality, process and integration facets. The explorer
+uses nested circles, with equal-sized leaves and filters across branches. Its tree
+is a primary navigation/allocation view; biological topics can overlap. Its curriculum field uses the existing task-curriculum schema.
+The revised draft has 11 areas, 26 families and 54 competencies. It separates
+genetics from genomics and phylogenetics from ecological analysis. Single-cell,
+spatial, gene regulation, evolution and multiomics are cross-cutting facets. Generic
+data preparation has no separate biology quota. Definitions draw on 51 scientific
+workstreams plus three recipe-derived abilities; the remaining workstream supplies
+cross-cutting data-handling research. The taxonomy records EDAM, NHGRI and Gene
+Ontology references and the remaining categorization questions.
+Definitions and primary candidate assignments remain provisional. None has yet
+received validated competency credit under this new review policy.
+
+A competency describes an assessable scientific outcome. Benchmarks provide
+provenance and question patterns; benchmark size does not weight generation.
+Choose the least-served feasible area, then family, then competency. Each task has
+one primary competency for allocation. Secondary competency and operation tags do
+not increase allocation credit. Keep blocked leaves and reasons visible. Report
+leaf breadth, distinct validated task counts and independent biological lineages
+separately; a task witnessing one outcome does not establish mastery of a field.
+
+Scaling can reuse a recipe with distinct real studies, designs or scientific
+questions. Reject duplicate and cosmetic variants; no fixed instance count or
+dataset-size ceiling applies. The current builder defaults to one example per
+recipe and does not yet automate balanced generation or source acquisition.
+Generation is paused while this taxonomy and communication layer are reviewed.
+
+Rebuild the explorer from versioned metadata without generating or solving tasks:
+
+```bash
+uv run python -m experiments.post_training.bio_tasks.coverage_site
+uv run python -m experiments.post_training.bio_tasks.coverage_site --check
+```
+
+The builder validates the reused curriculum schema and frozen instruction hashes.
+`public_examples.json` contains only public instructions, input previews, resource
+metadata and source identities from existing packaged tasks. To refresh an example,
+export those fields from its reviewed Harbor bundle, retain the bundle revision
+and instruction/task-metadata hashes, and omit private answers and traces. The HTML
+records input-file hashes so a rebuild can detect stale presentation data.
+
+## Existing authoring inventory
 
 The [implemented recipe list](bio-task-recipes.md) records every operation, skill,
 format profile, and repository mapping. The 145 recipes span 13 domains:
@@ -80,8 +132,8 @@ and end-to-end workflow validation remain pending. See the
 for the distinction and the requirements for realistic inputs and artifact outputs.
 Select tasks for realistic biological inputs, scientific decisions and connected
 analysis stages. Record actual input scale and measured runtime; no difficulty
-labels or quotas apply. Evaluation uses the independent benchmarks in the program
-issue. No development or test split is generated.
+labels or quotas apply. No development or test split is generated. Benchmark ID/OOD policy controls
+authoring provenance; downstream evaluation remains outside this project.
 
 Native formats now include GFF3 and GTF, BED12 and bedGraph, SAM and VCF,
 Matrix Market/10x, Newick and NEXUS charsets, PDB and mmCIF, SBML, MGF,

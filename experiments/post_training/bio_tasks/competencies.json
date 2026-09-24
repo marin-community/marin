@@ -1,0 +1,3232 @@
+{
+  "status": "draft-for-review",
+  "operations": [
+    "quality-control",
+    "reference-and-format-semantics",
+    "replicate-aware-inference",
+    "prediction-and-validation",
+    "integration-and-provenance",
+    "alignment-and-search",
+    "graphs-and-spatial-analysis"
+  ],
+  "mapping_policy": "One primary competency per task for allocation. Related components and secondary tags do not establish validated competency coverage.",
+  "candidate_recipe_prefixes": {
+    "real-rnaseq-": "bio.rna-seq-contrast-enrichment",
+    "real-genome-": "bio.sequence-construct",
+    "real-fastq-": "bio.read-quality"
+  },
+  "candidate_recipe_overrides": {
+    "real-singlecell-read-qc": "bio.single-cell-qc-embedding",
+    "real-clinical-kaplan-meier": "bio.clinical-survival",
+    "real-clinical-adjusted-cox": "bio.clinical-survival",
+    "real-clinical-paired-visits": "bio.clinical-safety-evidence",
+    "real-genome-overlap": "bio.genomic-interval-operations",
+    "real-genome-promoters": "bio.genomic-interval-operations",
+    "real-protein-alignment": "bio.protein-function",
+    "real-cox1-tree-comparison": "bio.ortholog-tree-signal",
+    "real-mmcif-chain-geometry": "bio.structure-geometry",
+    "real-mmcif-contact-degree": "bio.structure-geometry",
+    "real-proteome-domain-search": "bio.protein-function",
+    "real-proteome-clustering": "bio.protein-function",
+    "real-phix-assembly": "bio.assembly-qc"
+  },
+  "validated_assignments": [],
+  "release_ready_assignments": [],
+  "policy": {
+    "primary_unit": "competency",
+    "allocation": "Recursively select the least-served feasible area, then family, then competency; break ties by explicit stable order. Count distinct validated tasks with one primary competency. Record reservations separately and blocked leaves visibly. Benchmark counts never weight allocation.",
+    "scaling": "Vary independent real biological inputs, study designs and scientific decisions under a versioned recipe and verifier. Reject duplicate or cosmetically relabeled instances. No fixed instance count or dataset-size ceiling.",
+    "coverage": "A validated task witnesses a bounded competency outcome; it does not establish mastery of its whole scientific area. Track leaf breadth, distinct task counts and biological lineages separately.",
+    "promotion": "Record exact task/environment/verifier hashes, passing Harbor oracle, empty and scientifically wrong output failures, scientific scope review and provenance/rights review before validated competency credit. Release readiness additionally requires the complete release contract.",
+    "pause": "Generation paused while the taxonomy and public communication are refined.",
+    "hierarchy": "The hierarchy is a primary navigation/allocation view of overlapping science. Competency IDs are independent of parents. Genetics and genomics are distinct question families with permitted secondary links; single-cell and spatial are independent facets. Gene regulation and evolution cross areas."
+  },
+  "references": [
+    "https://github.com/marin-community/marin/pull/9232",
+    "https://github.com/marin-community/marin/issues/9122",
+    "https://storage.googleapis.com/marin-public/benjaminfeuer/tasktrove-competency-coverage/2026.09.03/index.html"
+  ],
+  "curriculum": {
+    "version": "2026.09.24-draft2",
+    "subject_id": "biology",
+    "subject_name": "Computational biology",
+    "sections": [
+      {
+        "id": "bio.genomics",
+        "parent_id": null,
+        "name": "Genomics",
+        "kind": "group",
+        "scope": "Genomics assessment tasks.",
+        "includes": [
+          "Genomics scientific questions."
+        ],
+        "excludes": [
+          "Direct task assignments; assign tasks to competency leaves."
+        ]
+      },
+      {
+        "id": "bio.genomics.reference",
+        "parent_id": "bio.genomics",
+        "name": "References and annotation",
+        "kind": "group",
+        "scope": "References and annotation competencies.",
+        "includes": [
+          "References and annotation scientific questions."
+        ],
+        "excludes": [
+          "Direct task assignments; assign tasks to competency leaves."
+        ]
+      },
+      {
+        "id": "bio.transcript-reference-audit",
+        "parent_id": "bio.genomics.reference",
+        "name": "Reconstruct and audit transcript sequences against matched reference and annotation releases",
+        "kind": "capability",
+        "outcome": "Reconstruct and audit transcript sequences against matched reference and annotation releases.",
+        "includes": [
+          "Native GFF/GTF/BED, extracted FASTA, transcript/exon/CDS tables, coordinate audit, junction evidence"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.sequence-construct",
+        "parent_id": "bio.genomics.reference",
+        "name": "Reconcile annotated sequences, reading frames and construct products with native coordinate semantics",
+        "kind": "capability",
+        "outcome": "Reconcile annotated sequences, reading frames and construct products with native coordinate semantics.",
+        "includes": [
+          "FASTA/GenBank records, feature/coordinate tables, translated sequences, amplicon or digest maps and sequence-consistency audit"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.genomic-interval-operations",
+        "parent_id": "bio.genomics.reference",
+        "name": "Reconcile genomic intervals and annotations across coordinate conventions and reference builds",
+        "kind": "capability",
+        "outcome": "Reconcile genomic intervals and annotations across coordinate conventions and reference builds.",
+        "includes": [
+          "Canonical BED, conversion audit, overlap pairs, merged intervals, per-class covered bases and denominators"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.genomics.reads",
+        "parent_id": "bio.genomics",
+        "name": "Reads and assembly",
+        "kind": "group",
+        "scope": "Reads and assembly competencies.",
+        "includes": [
+          "Reads and assembly scientific questions."
+        ],
+        "excludes": [
+          "Direct task assignments; assign tasks to competency leaves."
+        ]
+      },
+      {
+        "id": "bio.read-quality",
+        "parent_id": "bio.genomics.reads",
+        "name": "Assess and transform observed sequencing reads while preserving pairing and quality semantics",
+        "kind": "capability",
+        "outcome": "Assess and transform observed sequencing reads while preserving pairing and quality semantics.",
+        "includes": [
+          "Assess and transform observed sequencing reads while preserving pairing and quality semantics."
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.assembly-qc",
+        "parent_id": "bio.genomics.reads",
+        "name": "Assemble observed reads and assess contiguity, reference agreement and read support",
+        "kind": "capability",
+        "outcome": "Assemble observed reads and assess contiguity, reference agreement and read support.",
+        "includes": [
+          "FASTA, FASTQ QC, contig metrics, alignments, coverage, taxonomic evidence and repeat/read support"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.bacterial-read-variant",
+        "parent_id": "bio.genomics.reads",
+        "name": "Produce read-supported microbial variants through QC, alignment, calling and annotation",
+        "kind": "capability",
+        "outcome": "Produce read-supported microbial variants through QC, alignment, calling and annotation.",
+        "includes": [
+          "FASTQ QC, BAM/BAI, VCF/TBI, reference/annotation manifest, per-call evidence, consequence table"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.genomics.variation",
+        "parent_id": "bio.genomics",
+        "name": "Variant and repertoire characterization",
+        "kind": "group",
+        "scope": "Variant and repertoire characterization competencies.",
+        "includes": [
+          "Variant and repertoire characterization scientific questions."
+        ],
+        "excludes": [
+          "Direct task assignments; assign tasks to competency leaves."
+        ]
+      },
+      {
+        "id": "bio.variant-evidence",
+        "parent_id": "bio.genomics.variation",
+        "name": "Normalize and annotate observed variants with reference-consistent consequences and evidence",
+        "kind": "capability",
+        "outcome": "Normalize and annotate observed variants with reference-consistent consequences and evidence.",
+        "includes": [
+          "Normalized VCF, consequence transcript table, evidence rows with accession/date, exclusion rationale and sequence products where appropriate"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.repeat-genotyping",
+        "parent_id": "bio.genomics.variation",
+        "name": "Infer repeat alleles from spanning reads with locus and motif reconciliation",
+        "kind": "capability",
+        "outcome": "Infer repeat alleles from spanning reads with locus and motif reconciliation.",
+        "includes": [
+          "Per-read repeat spans and motifs, alignment evidence, allele assignments, uncertainty and interpretation provenance"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.immune-repertoire",
+        "parent_id": "bio.genomics.variation",
+        "name": "Characterize immune clonotypes and repertoire changes with chain and sample-aware QC",
+        "kind": "capability",
+        "outcome": "Characterize immune clonotypes and repertoire changes with chain and sample-aware QC.",
+        "includes": [
+          "AIRR tables, chain eligibility, clonotype membership, per-sample abundance/diversity and transcriptome joins"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.genetics",
+        "parent_id": null,
+        "name": "Genetics",
+        "kind": "group",
+        "scope": "Genetics assessment tasks.",
+        "includes": [
+          "Genetics scientific questions."
+        ],
+        "excludes": [
+          "Direct task assignments; assign tasks to competency leaves."
+        ]
+      },
+      {
+        "id": "bio.genetics.population",
+        "parent_id": "bio.genetics",
+        "name": "Population and trait genetics",
+        "kind": "group",
+        "scope": "Population and trait genetics competencies.",
+        "includes": [
+          "Population and trait genetics scientific questions."
+        ],
+        "excludes": [
+          "Direct task assignments; assign tasks to competency leaves."
+        ]
+      },
+      {
+        "id": "bio.population-genetics",
+        "parent_id": "bio.genetics.population",
+        "name": "Infer population structure or inheritance from quality-controlled observed genotypes",
+        "kind": "capability",
+        "outcome": "Infer population structure or inheritance from quality-controlled observed genotypes.",
+        "includes": [
+          "VCF/BCF/TBI, genotype/sample eligibility, allele counts, PCA/frequency statistics, haplotypes and pedigree checks"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.clinical-variant-cohort",
+        "parent_id": "bio.genetics.population",
+        "name": "Compare cohort variant burden with genotype QC and prespecified covariate adjustment",
+        "kind": "capability",
+        "outcome": "Compare cohort variant burden with genotype QC and prespecified covariate adjustment.",
+        "includes": [
+          "QC exclusions, normalized variant annotations, carrier/burden matrices, model designs, complete effect and uncertainty tables"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.genetics.inheritance",
+        "parent_id": "bio.genetics",
+        "name": "Clonal inheritance",
+        "kind": "group",
+        "scope": "Clonal inheritance competencies.",
+        "includes": [
+          "Clonal inheritance scientific questions."
+        ],
+        "excludes": [
+          "Direct task assignments; assign tasks to competency leaves."
+        ]
+      },
+      {
+        "id": "bio.cell-lineage-barcodes",
+        "parent_id": "bio.genetics.inheritance",
+        "name": "Infer clonal identities from observed barcodes while accounting for errors and dropout",
+        "kind": "capability",
+        "outcome": "Infer clonal identities from observed barcodes while accounting for errors and dropout.",
+        "includes": [
+          "Read/barcode/genotype eligibility, cell-clone membership, lineage graph with uncertainty, sample-aware expression joins and complete comparisons"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.transcriptomics",
+        "parent_id": null,
+        "name": "Transcriptomics and RNA biology",
+        "kind": "group",
+        "scope": "Transcriptomics and RNA biology assessment tasks.",
+        "includes": [
+          "Transcriptomics and RNA biology scientific questions."
+        ],
+        "excludes": [
+          "Direct task assignments; assign tasks to competency leaves."
+        ]
+      },
+      {
+        "id": "bio.transcriptomics.contrasts",
+        "parent_id": "bio.transcriptomics",
+        "name": "Replicated expression",
+        "kind": "group",
+        "scope": "Replicated expression competencies.",
+        "includes": [
+          "Replicated expression scientific questions."
+        ],
+        "excludes": [
+          "Direct task assignments; assign tasks to competency leaves."
+        ]
+      },
+      {
+        "id": "bio.rna-seq-contrast-enrichment",
+        "parent_id": "bio.transcriptomics.contrasts",
+        "name": "Estimate replicated expression contrasts and their pathway enrichment with a valid design and tested universe",
+        "kind": "capability",
+        "outcome": "Estimate replicated expression contrasts and their pathway enrichment with a valid design and tested universe.",
+        "includes": [
+          "Sample QC, filtered counts, design and contrast matrices, complete effect/uncertainty tables, all tested pathways, set membership and sensitivity comparisons"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.single-cell-pseudobulk",
+        "parent_id": "bio.transcriptomics.contrasts",
+        "name": "Aggregate observed cells and test cell-type expression effects at the biological replicate level",
+        "kind": "capability",
+        "outcome": "Aggregate observed cells and test cell-type expression effects at the biological replicate level.",
+        "includes": [
+          "Sample-by-cell-type count matrices, donor inclusion, designs, complete gene effects, enrichment universe and pathway outputs"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.transcriptomics.states",
+        "parent_id": "bio.transcriptomics",
+        "name": "Expression and cell states",
+        "kind": "group",
+        "scope": "Expression and cell states competencies.",
+        "includes": [
+          "Expression and cell states scientific questions."
+        ],
+        "excludes": [
+          "Direct task assignments; assign tasks to competency leaves."
+        ]
+      },
+      {
+        "id": "bio.single-cell-qc-embedding",
+        "parent_id": "bio.transcriptomics.states",
+        "name": "Filter and represent observed single-cell counts while diagnosing depth and sample confounding",
+        "kind": "capability",
+        "outcome": "Filter and represent observed single-cell counts while diagnosing depth and sample confounding.",
+        "includes": [
+          "H5AD layers, cell/feature inclusion tables, normalization factors, PCA loadings, neighbor graph, cluster and QC tables"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.single-cell-annotation",
+        "parent_id": "bio.transcriptomics.states",
+        "name": "Assign cell identities using declared marker or reference evidence and explicit uncertainty",
+        "kind": "capability",
+        "outcome": "Assign cell identities using declared marker or reference evidence and explicit uncertainty.",
+        "includes": [
+          "Marker statistics, cell-by-label scores, hierarchy-consistent annotations, abstentions, detection denominators, cross-study confusion tables"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.single-cell-composition",
+        "parent_id": "bio.transcriptomics.states",
+        "name": "Estimate population abundance changes with biological replication and valid denominators",
+        "kind": "capability",
+        "outcome": "Estimate population abundance changes with biological replication and valid denominators.",
+        "includes": [
+          "Cell/sample joins, donor-by-population counts and fractions, eligibility decisions, model matrix, contrasts and uncertainty"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.single-cell-trajectory",
+        "parent_id": "bio.transcriptomics.states",
+        "name": "Infer state trajectories and test their consistency with observed temporal or lineage evidence",
+        "kind": "capability",
+        "outcome": "Infer state trajectories and test their consistency with observed temporal or lineage evidence.",
+        "includes": [
+          "State graph, root evidence, pseudotime/fate matrices, full gene/regulon tests, biological-validation tables"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.gene-program-factorization",
+        "parent_id": "bio.transcriptomics.states",
+        "name": "Identify stable expression programs or feature networks and assess confounding",
+        "kind": "capability",
+        "outcome": "Identify stable expression programs or feature networks and assess confounding.",
+        "includes": [
+          "Feature eligibility, loadings/modules, complete per-feature scores, sample-level validation, gene-set memberships and null statistics"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.transcriptomics.rna",
+        "parent_id": "bio.transcriptomics",
+        "name": "RNA processing",
+        "kind": "group",
+        "scope": "RNA processing competencies.",
+        "includes": [
+          "RNA processing scientific questions."
+        ],
+        "excludes": [
+          "Direct task assignments; assign tasks to competency leaves."
+        ]
+      },
+      {
+        "id": "bio.repeat-expression-splicing",
+        "parent_id": "bio.transcriptomics.rna",
+        "name": "Quantify repeat expression or splicing with explicit multimapping and replicate rules",
+        "kind": "capability",
+        "outcome": "Quantify repeat expression or splicing with explicit multimapping and replicate rules.",
+        "includes": [
+          "Read eligibility and multimapping audit, repeat counts, design/contrast matrices, full differential tables, intron-usage tables and transcript support"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.small-rna-sequence-structure",
+        "parent_id": "bio.transcriptomics.rna",
+        "name": "Analyze observed small-RNA sequence, structure or target relationships with matched identities",
+        "kind": "capability",
+        "outcome": "Analyze observed small-RNA sequence, structure or target relationships with matched identities.",
+        "includes": [
+          "FASTA/GTF joins, processed sequence and structure files, complete expression/target results, predicted-versus-observed measurements"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.transcriptomics.spatial",
+        "parent_id": "bio.transcriptomics",
+        "name": "Spatial expression analysis",
+        "kind": "group",
+        "scope": "Spatial expression analysis competencies.",
+        "includes": [
+          "Spatial expression analysis scientific questions."
+        ],
+        "excludes": [
+          "Direct task assignments; assign tasks to competency leaves."
+        ]
+      },
+      {
+        "id": "bio.spatial-expression",
+        "parent_id": "bio.transcriptomics.spatial",
+        "name": "Measure spatial expression patterns with valid coordinates, compartments and sample-aware comparisons",
+        "kind": "capability",
+        "outcome": "Measure spatial expression patterns with valid coordinates, compartments and sample-aware comparisons.",
+        "includes": [
+          "Coordinate transforms, segmentation/QC masks, H5AD, region/cell expression tables, neighborhood edges and null distributions"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.spatial-reference-transfer",
+        "parent_id": "bio.transcriptomics.spatial",
+        "name": "Transfer reference information to spatial measurements while accounting for panel overlap and mixtures",
+        "kind": "capability",
+        "outcome": "Transfer reference information to spatial measurements while accounting for panel overlap and mixtures.",
+        "includes": [
+          "Shared-feature map, mixture weights, reconstruction, uncertainty, held-out predictions and validation metrics"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.epigenomics",
+        "parent_id": null,
+        "name": "Chromatin and epigenomics",
+        "kind": "group",
+        "scope": "Chromatin and epigenomics assessment tasks.",
+        "includes": [
+          "Chromatin and epigenomics scientific questions."
+        ],
+        "excludes": [
+          "Direct task assignments; assign tasks to competency leaves."
+        ]
+      },
+      {
+        "id": "bio.epigenomics.chromatin",
+        "parent_id": "bio.epigenomics",
+        "name": "Chromatin measurements",
+        "kind": "group",
+        "scope": "Chromatin measurements competencies.",
+        "includes": [
+          "Chromatin measurements scientific questions."
+        ],
+        "excludes": [
+          "Direct task assignments; assign tasks to competency leaves."
+        ]
+      },
+      {
+        "id": "bio.chromatin-regulatory",
+        "parent_id": "bio.epigenomics.chromatin",
+        "name": "Compare accessible regions and regulatory motifs after sample-aware peak and background checks",
+        "kind": "capability",
+        "outcome": "Compare accessible regions and regulatory motifs after sample-aware peak and background checks.",
+        "includes": [
+          "BAM/fragment QC, BED peaks, count matrices, motif matches/backgrounds, gene links and sample-level effects"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.methylation-expression",
+        "parent_id": "bio.epigenomics.chromatin",
+        "name": "Estimate methylation differences and expression associations while accounting for coverage",
+        "kind": "capability",
+        "outcome": "Estimate methylation differences and expression associations while accounting for coverage.",
+        "includes": [
+          "Coverage/QC tables, locus and region effects, probe/assembly mapping, matched expression joins and full association tests"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.differential-binding",
+        "parent_id": "bio.epigenomics.chromatin",
+        "name": "Estimate replicated binding differences with valid controls, peaks and multiplicity correction",
+        "kind": "capability",
+        "outcome": "Estimate replicated binding differences with valid controls, peaks and multiplicity correction.",
+        "includes": [
+          "Signal/control QC, native BED/bigWig or contact matrices, region counts, full differential results and gene context"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.epigenomics.contacts",
+        "parent_id": "bio.epigenomics",
+        "name": "Genome organization",
+        "kind": "group",
+        "scope": "Genome organization competencies.",
+        "includes": [
+          "Genome organization scientific questions."
+        ],
+        "excludes": [
+          "Direct task assignments; assign tasks to competency leaves."
+        ]
+      },
+      {
+        "id": "bio.chromatin-contact",
+        "parent_id": "bio.epigenomics.contacts",
+        "name": "Estimate differential chromatin contacts after balancing, distance and replicate checks",
+        "kind": "capability",
+        "outcome": "Estimate differential chromatin contacts after balancing, distance and replicate checks.",
+        "includes": [
+          "Bin masks, balanced contact matrices, normalization factors, complete loop/contact tests and annotation links"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.phylogenetics",
+        "parent_id": null,
+        "name": "Phylogenetics",
+        "kind": "group",
+        "scope": "Phylogenetics assessment tasks.",
+        "includes": [
+          "Phylogenetics scientific questions."
+        ],
+        "excludes": [
+          "Direct task assignments; assign tasks to competency leaves."
+        ]
+      },
+      {
+        "id": "bio.phylogenetics.trees",
+        "parent_id": "bio.phylogenetics",
+        "name": "Tree inference and comparison",
+        "kind": "group",
+        "scope": "Tree inference and comparison competencies.",
+        "includes": [
+          "Tree inference and comparison scientific questions."
+        ],
+        "excludes": [
+          "Direct task assignments; assign tasks to competency leaves."
+        ]
+      },
+      {
+        "id": "bio.ortholog-tree-signal",
+        "parent_id": "bio.phylogenetics.trees",
+        "name": "Compare evolutionary signal across observed loci with alignment, tree and taxon QC",
+        "kind": "capability",
+        "outcome": "Compare evolutionary signal across observed loci with alignment, tree and taxon QC.",
+        "includes": [
+          "Aligned FASTA, rooted Newick where required, taxon/locus exclusions, pairwise and tip distances, per-locus metrics, paired clade comparisons"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.ecology",
+        "parent_id": null,
+        "name": "Community and ecological analysis",
+        "kind": "group",
+        "scope": "Community and ecological analysis assessment tasks.",
+        "includes": [
+          "Community and ecological analysis scientific questions."
+        ],
+        "excludes": [
+          "Direct task assignments; assign tasks to competency leaves."
+        ]
+      },
+      {
+        "id": "bio.ecology.communities",
+        "parent_id": "bio.ecology",
+        "name": "Community profiles",
+        "kind": "group",
+        "scope": "Community profiles competencies.",
+        "includes": [
+          "Community profiles scientific questions."
+        ],
+        "excludes": [
+          "Direct task assignments; assign tasks to competency leaves."
+        ]
+      },
+      {
+        "id": "bio.metagenomic-community",
+        "parent_id": "bio.ecology.communities",
+        "name": "Estimate microbial taxonomic and functional profiles with contamination and ambiguity checks",
+        "kind": "capability",
+        "outcome": "Estimate microbial taxonomic and functional profiles with contamination and ambiguity checks.",
+        "includes": [
+          "Read/contig QC, reference/database manifest, native classifier outputs, abundance and uncertainty tables, full sample-level comparisons"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.ecology.associations",
+        "parent_id": "bio.ecology",
+        "name": "Ecological associations",
+        "kind": "group",
+        "scope": "Ecological associations competencies.",
+        "includes": [
+          "Ecological associations scientific questions."
+        ],
+        "excludes": [
+          "Direct task assignments; assign tasks to competency leaves."
+        ]
+      },
+      {
+        "id": "bio.ecological-regression",
+        "parent_id": "bio.ecology.associations",
+        "name": "Estimate ecological trait associations while accounting for dependence and sampling effort",
+        "kind": "capability",
+        "outcome": "Estimate ecological trait associations while accounting for dependence and sampling effort.",
+        "includes": [
+          "Taxon/site/time joins, sampling eligibility, model matrices, coefficients, spatial/phylogenetic diagnostics and predictions"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.proteins",
+        "parent_id": null,
+        "name": "Proteins and structural biology",
+        "kind": "group",
+        "scope": "Proteins and structural biology assessment tasks.",
+        "includes": [
+          "Proteins and structural biology scientific questions."
+        ],
+        "excludes": [
+          "Direct task assignments; assign tasks to competency leaves."
+        ]
+      },
+      {
+        "id": "bio.proteins.sequence",
+        "parent_id": "bio.proteins",
+        "name": "Protein sequence and function",
+        "kind": "group",
+        "scope": "Protein sequence and function competencies.",
+        "includes": [
+          "Protein sequence and function scientific questions."
+        ],
+        "excludes": [
+          "Direct task assignments; assign tasks to competency leaves."
+        ]
+      },
+      {
+        "id": "bio.protein-function",
+        "parent_id": "bio.proteins.sequence",
+        "name": "Align or group observed proteins and annotate sequence-supported domains with bounded function claims",
+        "kind": "capability",
+        "outcome": "Align or group observed proteins and annotate sequence-supported domains with bounded function claims.",
+        "includes": [
+          "Align or group observed proteins and annotate sequence-supported domains with bounded function claims."
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.protein-sequence-model-evaluation",
+        "parent_id": "bio.proteins.sequence",
+        "name": "Evaluate protein sequence predictions against measured effects using leakage-safe comparisons",
+        "kind": "capability",
+        "outcome": "Evaluate protein sequence predictions against measured effects using leakage-safe comparisons.",
+        "includes": [
+          "Variant/reference alignments, assay/construct mapping, split membership, predictor outputs, full held-out predictions and metrics"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.proteins.structure",
+        "parent_id": "bio.proteins",
+        "name": "Molecular structure",
+        "kind": "group",
+        "scope": "Molecular structure competencies.",
+        "includes": [
+          "Molecular structure scientific questions."
+        ],
+        "excludes": [
+          "Direct task assignments; assign tasks to competency leaves."
+        ]
+      },
+      {
+        "id": "bio.structure-geometry",
+        "parent_id": "bio.proteins.structure",
+        "name": "Measure experimental molecular geometry while respecting chains, units and alternate conformations",
+        "kind": "capability",
+        "outcome": "Measure experimental molecular geometry while respecting chains, units and alternate conformations.",
+        "includes": [
+          "Measure experimental molecular geometry while respecting chains, units and alternate conformations."
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.ligand-structure-affinity",
+        "parent_id": "bio.proteins.structure",
+        "name": "Evaluate ligand contacts and binding claims using experimentally grounded structures and assays",
+        "kind": "capability",
+        "outcome": "Evaluate ligand contacts and binding claims using experimentally grounded structures and assays.",
+        "includes": [
+          "Native structures, ligand/residue mapping, atom/contact tables, descriptor/ranking outputs and assay comparison"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.pharmacology",
+        "parent_id": null,
+        "name": "Chemical biology and pharmacology",
+        "kind": "group",
+        "scope": "Chemical biology and pharmacology assessment tasks.",
+        "includes": [
+          "Chemical biology and pharmacology scientific questions."
+        ],
+        "excludes": [
+          "Direct task assignments; assign tasks to competency leaves."
+        ]
+      },
+      {
+        "id": "bio.pharmacology.molecules",
+        "parent_id": "bio.pharmacology",
+        "name": "Molecules and assays",
+        "kind": "group",
+        "scope": "Molecules and assays competencies.",
+        "includes": [
+          "Molecules and assays scientific questions."
+        ],
+        "excludes": [
+          "Direct task assignments; assign tasks to competency leaves."
+        ]
+      },
+      {
+        "id": "bio.molecular-property",
+        "parent_id": "bio.pharmacology.molecules",
+        "name": "Predict observed molecular properties with leakage-safe molecular splits and calibrated metrics",
+        "kind": "capability",
+        "outcome": "Predict observed molecular properties with leakage-safe molecular splits and calibrated metrics.",
+        "includes": [
+          "SDF/SMILES normalization, assay/replicate table, descriptors, split membership, held-out predictions and full metrics"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.dose-response",
+        "parent_id": "bio.pharmacology.molecules",
+        "name": "Estimate observed dose-response effects with control normalization and fit diagnostics",
+        "kind": "capability",
+        "outcome": "Estimate observed dose-response effects with control normalization and fit diagnostics.",
+        "includes": [
+          "Plate/sample maps, raw and normalized responses, control diagnostics, fitted curves/uncertainty and complete hit decisions"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.chemical-diagram-transcription",
+        "parent_id": "bio.pharmacology.molecules",
+        "name": "Recover normalized molecular graphs from observed chemical diagrams",
+        "kind": "capability",
+        "outcome": "Recover normalized molecular graphs from observed chemical diagrams.",
+        "includes": [
+          "Per-image molecular graphs, canonical representations, stereochemical annotations and explicit failed/ambiguous cases"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.pharmacology.targets",
+        "parent_id": "bio.pharmacology",
+        "name": "Perturbations and targets",
+        "kind": "group",
+        "scope": "Perturbations and targets competencies.",
+        "includes": [
+          "Perturbations and targets scientific questions."
+        ],
+        "excludes": [
+          "Direct task assignments; assign tasks to competency leaves."
+        ]
+      },
+      {
+        "id": "bio.crispr-screen-pathway",
+        "parent_id": "bio.pharmacology.targets",
+        "name": "Identify gene and pathway effects from replicated guide counts with control calibration",
+        "kind": "capability",
+        "outcome": "Identify gene and pathway effects from replicated guide counts with control calibration.",
+        "includes": [
+          "Guide eligibility and counts, normalization, guide and gene effects, control diagnostics, complete pathway results"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.target-evidence",
+        "parent_id": "bio.pharmacology.targets",
+        "name": "Prioritize targets using direction-aware, provenance-linked biological evidence",
+        "kind": "capability",
+        "outcome": "Prioritize targets using direction-aware, provenance-linked biological evidence.",
+        "includes": [
+          "Identifier/release map, source evidence rows, direction/effect tables, confounder checks, ranked candidates and uncertainty flags"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.systems",
+        "parent_id": null,
+        "name": "Systems biology",
+        "kind": "group",
+        "scope": "Systems biology assessment tasks.",
+        "includes": [
+          "Systems biology scientific questions."
+        ],
+        "excludes": [
+          "Direct task assignments; assign tasks to competency leaves."
+        ]
+      },
+      {
+        "id": "bio.systems.networks",
+        "parent_id": "bio.systems",
+        "name": "Networks and communication",
+        "kind": "group",
+        "scope": "Networks and communication competencies.",
+        "includes": [
+          "Networks and communication scientific questions."
+        ],
+        "excludes": [
+          "Direct task assignments; assign tasks to competency leaves."
+        ]
+      },
+      {
+        "id": "bio.network-model-evidence",
+        "parent_id": "bio.systems.networks",
+        "name": "Analyze biological network paths or modules against measured edge evidence and explicit nulls",
+        "kind": "capability",
+        "outcome": "Analyze biological network paths or modules against measured edge evidence and explicit nulls.",
+        "includes": [
+          "Typed graph, source evidence per edge, complete module/path outputs, perturbation predictions and measured comparisons"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.cell-communication",
+        "parent_id": "bio.systems.networks",
+        "name": "Quantify expression-supported cell interaction associations with appropriate null comparisons",
+        "kind": "capability",
+        "outcome": "Quantify expression-supported cell interaction associations with appropriate null comparisons.",
+        "includes": [
+          "Eligible ligand/receptor expression, sender-receiver scores, sample-level contrasts, permutation/null results, spatial proximity evidence"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.systems.integration",
+        "parent_id": "bio.systems",
+        "name": "Multiomic and evidence integration",
+        "kind": "group",
+        "scope": "Multiomic and evidence integration competencies.",
+        "includes": [
+          "Multiomic and evidence integration scientific questions."
+        ],
+        "excludes": [
+          "Direct task assignments; assign tasks to competency leaves."
+        ]
+      },
+      {
+        "id": "bio.proteomics-metabolomics",
+        "parent_id": "bio.systems.integration",
+        "name": "Compare measured protein or metabolite abundance with valid normalization and missingness handling",
+        "kind": "capability",
+        "outcome": "Compare measured protein or metabolite abundance with valid normalization and missingness handling.",
+        "includes": [
+          "Feature/sample joins, normalized measurements, missingness masks, complete effects, pathways and matched associations"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.single-cell-integration",
+        "parent_id": "bio.systems.integration",
+        "name": "Integrate batches or modalities while checking preservation of measured biological variation",
+        "kind": "capability",
+        "outcome": "Integrate batches or modalities while checking preservation of measured biological variation.",
+        "includes": [
+          "Cell/sample/feature matches, split membership, latent coordinates/loadings, complete held-out reconstructions and batch/biology diagnostics"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.database-identity-evidence",
+        "parent_id": "bio.systems.integration",
+        "name": "Reconcile biological database entities and claims against frozen, versioned evidence",
+        "kind": "capability",
+        "outcome": "Reconcile biological database entities and claims against frozen, versioned evidence.",
+        "includes": [
+          "Identity map, provenance manifest, directed edge/evidence tables, contradictions, structured answer and supporting accession/span references"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.systems.models",
+        "parent_id": "bio.systems",
+        "name": "Dynamical models",
+        "kind": "group",
+        "scope": "Dynamical models competencies.",
+        "includes": [
+          "Dynamical models scientific questions."
+        ],
+        "excludes": [
+          "Direct task assignments; assign tasks to competency leaves."
+        ]
+      },
+      {
+        "id": "bio.observed-dynamics",
+        "parent_id": "bio.systems.models",
+        "name": "Fit mechanistic biological models and assess predictions against held-out observed trajectories",
+        "kind": "capability",
+        "outcome": "Fit mechanistic biological models and assess predictions against held-out observed trajectories.",
+        "includes": [
+          "Observation/condition table, SBML or explicit equations, fitted parameters, held-out trajectories, residuals and identifiability profiles"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.clinical",
+        "parent_id": null,
+        "name": "Clinical and population biomedicine",
+        "kind": "group",
+        "scope": "Clinical and population biomedicine assessment tasks.",
+        "includes": [
+          "Clinical and population biomedicine scientific questions."
+        ],
+        "excludes": [
+          "Direct task assignments; assign tasks to competency leaves."
+        ]
+      },
+      {
+        "id": "bio.clinical.cohorts",
+        "parent_id": "bio.clinical",
+        "name": "Cohort inference",
+        "kind": "group",
+        "scope": "Cohort inference competencies.",
+        "includes": [
+          "Cohort inference scientific questions."
+        ],
+        "excludes": [
+          "Direct task assignments; assign tasks to competency leaves."
+        ]
+      },
+      {
+        "id": "bio.clinical-response-model",
+        "parent_id": "bio.clinical.cohorts",
+        "name": "Estimate adjusted cohort associations or leakage-safe response predictions with uncertainty",
+        "kind": "capability",
+        "outcome": "Estimate adjusted cohort associations or leakage-safe response predictions with uncertainty.",
+        "includes": [
+          "Cohort inclusion flow, subject-level model matrix, complete coefficient/uncertainty tables, held-out predictions, calibration and subgroup diagnostics"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.clinical-survival",
+        "parent_id": "bio.clinical.cohorts",
+        "name": "Estimate survival associations with explicit censoring, eligibility and model diagnostics",
+        "kind": "capability",
+        "outcome": "Estimate survival associations with explicit censoring, eligibility and model diagnostics.",
+        "includes": [
+          "Eligibility/censoring table, survival curves with risk sets, model matrix, coefficients, diagnostics and predictions"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.clinical.measurements",
+        "parent_id": "bio.clinical",
+        "name": "Longitudinal and multimodal measurements",
+        "kind": "group",
+        "scope": "Longitudinal and multimodal measurements competencies.",
+        "includes": [
+          "Longitudinal and multimodal measurements scientific questions."
+        ],
+        "excludes": [
+          "Direct task assignments; assign tasks to competency leaves."
+        ]
+      },
+      {
+        "id": "bio.clinical-safety-evidence",
+        "parent_id": "bio.clinical.measurements",
+        "name": "Compare exposure or biomarker measurements with valid timing, units and missingness treatment",
+        "kind": "capability",
+        "outcome": "Compare exposure or biomarker measurements with valid timing, units and missingness treatment.",
+        "includes": [
+          "Study/assay compatibility matrix, unit/time/compartment joins, censored estimates, complete exclusions and bounded quantitative comparisons"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.physiological-timeseries",
+        "parent_id": "bio.clinical.measurements",
+        "name": "Extract physiological events or condition effects after signal QC and subject-aware aggregation",
+        "kind": "capability",
+        "outcome": "Extract physiological events or condition effects after signal QC and subject-aware aggregation.",
+        "includes": [
+          "Signal/event alignment, QC masks, filtered signals or sufficient bounded features, group splits, predictions and full metrics"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.multimodal-clinical-discovery",
+        "parent_id": "bio.clinical.measurements",
+        "name": "Estimate cross-modal associations after matching subjects, measurements and timepoints",
+        "kind": "capability",
+        "outcome": "Estimate cross-modal associations after matching subjects, measurements and timepoints.",
+        "includes": [
+          "Patient/sample/time joins, modality QC, latent/subtype membership, complete held-out predictions, covariate and missingness sensitivity"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.clinical.synthesis",
+        "parent_id": "bio.clinical",
+        "name": "Evidence synthesis",
+        "kind": "group",
+        "scope": "Evidence synthesis competencies.",
+        "includes": [
+          "Evidence synthesis scientific questions."
+        ],
+        "excludes": [
+          "Direct task assignments; assign tasks to competency leaves."
+        ]
+      },
+      {
+        "id": "bio.evidence-meta-analysis",
+        "parent_id": "bio.clinical.synthesis",
+        "name": "Synthesize quantitative biological findings with study selection, unit and duplicate-cohort checks",
+        "kind": "capability",
+        "outcome": "Synthesize quantitative biological findings with study selection, unit and duplicate-cohort checks.",
+        "includes": [
+          "Source-linked extraction table, eligibility and cohort-overlap records, effect/variance derivations, pooled and sensitivity estimates"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.imaging",
+        "parent_id": null,
+        "name": "Biological imaging and biophysics",
+        "kind": "group",
+        "scope": "Biological imaging and biophysics assessment tasks.",
+        "includes": [
+          "Biological imaging and biophysics scientific questions."
+        ],
+        "excludes": [
+          "Direct task assignments; assign tasks to competency leaves."
+        ]
+      },
+      {
+        "id": "bio.imaging.images",
+        "parent_id": "bio.imaging",
+        "name": "Image measurements",
+        "kind": "group",
+        "scope": "Image measurements competencies.",
+        "includes": [
+          "Image measurements scientific questions."
+        ],
+        "excludes": [
+          "Direct task assignments; assign tasks to competency leaves."
+        ]
+      },
+      {
+        "id": "bio.biological-imaging",
+        "parent_id": "bio.imaging.images",
+        "name": "Segment and quantify observed biological images with scale and object-level validation",
+        "kind": "capability",
+        "outcome": "Segment and quantify observed biological images with scale and object-level validation.",
+        "includes": [
+          "Image/annotation manifest, masks, object tables, calibration/scale checks, replicate summaries and held-out predictions"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.inverse-biological-imaging",
+        "parent_id": "bio.imaging.images",
+        "name": "Reconstruct biological images under an explicit acquisition model and numerical validation",
+        "kind": "capability",
+        "outcome": "Reconstruct biological images under an explicit acquisition model and numerical validation.",
+        "includes": [
+          "Geometry and units, reconstructed arrays, convergence traces, forward-projection residuals and quality metrics"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      },
+      {
+        "id": "bio.imaging.transport",
+        "parent_id": "bio.imaging",
+        "name": "Physical models",
+        "kind": "group",
+        "scope": "Physical models competencies.",
+        "includes": [
+          "Physical models scientific questions."
+        ],
+        "excludes": [
+          "Direct task assignments; assign tasks to competency leaves."
+        ]
+      },
+      {
+        "id": "bio.optical-fluence",
+        "parent_id": "bio.imaging.transport",
+        "name": "Evaluate tissue light transport under declared physical parameters and measured boundary conditions",
+        "kind": "capability",
+        "outcome": "Evaluate tissue light transport under declared physical parameters and measured boundary conditions.",
+        "includes": [
+          "Input units and geometry, modeled fluence arrays, measurement residuals, dose contrasts and sensitivity tables"
+        ],
+        "excludes": [
+          "Unscored narrative judgments; clinical recommendations; claims beyond the stated observations."
+        ],
+        "prerequisites": [],
+        "sampling_facets": [
+          {
+            "id": "variation-1",
+            "description": "independent biological study"
+          },
+          {
+            "id": "variation-2",
+            "description": "organism or cohort"
+          },
+          {
+            "id": "variation-3",
+            "description": "assay and input scale"
+          },
+          {
+            "id": "variation-4",
+            "description": "scientific contrast or decision"
+          }
+        ],
+        "sample_tasks": []
+      }
+    ]
+  },
+  "competency_evidence": {
+    "bio.transcript-reference-audit": {
+      "workstream_ids": [
+        "transcript-reference-audit"
+      ],
+      "definition_status": "draft",
+      "operations": [
+        "reference-and-format-semantics"
+      ],
+      "question_examples": [
+        "Which transcript sequences and promoter intervals are consistent with strand, exon phase and reference release?",
+        "Which assembled transcripts have read-supported novel splice junctions?",
+        "Which cross-reference or gene-model discrepancies explain a failed coordinate query?"
+      ],
+      "facets": []
+    },
+    "bio.sequence-construct": {
+      "workstream_ids": [
+        "sequence-construct"
+      ],
+      "definition_status": "draft",
+      "operations": [
+        "reference-and-format-semantics"
+      ],
+      "question_examples": [
+        "Which annotated sequence, ORF and translated products agree with strand and frame conventions?",
+        "Are published primer, amplicon and restriction-fragment records internally consistent?",
+        "Which differences between declared and observed construct sequences explain failed accounting?"
+      ],
+      "facets": []
+    },
+    "bio.genomic-interval-operations": {
+      "workstream_ids": [
+        "genomic-interval-operations"
+      ],
+      "definition_status": "draft",
+      "operations": [
+        "reference-and-format-semantics"
+      ],
+      "question_examples": [
+        "Which regulatory annotations overlap the observed variants when intervals and genome builds are reconciled?",
+        "How much of each annotation class is covered after interval union and explicit denominator selection?",
+        "Which strand-aware intersections and complements change after declared boundary and missing-contig handling?"
+      ],
+      "facets": []
+    },
+    "bio.read-quality": {
+      "workstream_ids": [],
+      "definition_status": "draft",
+      "operations": [
+        "quality-control"
+      ],
+      "question_examples": [],
+      "facets": []
+    },
+    "bio.assembly-qc": {
+      "workstream_ids": [
+        "assembly-qc"
+      ],
+      "definition_status": "draft",
+      "operations": [
+        "quality-control"
+      ],
+      "question_examples": [
+        "How do assembly contiguity, reference agreement and read support differ?",
+        "Which observed metagenomic contigs support the reported taxonomic abundance?",
+        "Which long-read repeats or indels have sufficient read-level evidence?"
+      ],
+      "facets": []
+    },
+    "bio.bacterial-read-variant": {
+      "workstream_ids": [
+        "bacterial-read-variant"
+      ],
+      "definition_status": "draft",
+      "operations": [
+        "quality-control",
+        "alignment-and-search"
+      ],
+      "question_examples": [
+        "Which variants remain after a complete read-QC, alignment, calling and annotation workflow?",
+        "How do read-level eligibility and strand/depth filters change the retained calls?",
+        "Which coding consequences are supported by phased reads rather than independent site annotations?"
+      ],
+      "facets": []
+    },
+    "bio.variant-evidence": {
+      "workstream_ids": [
+        "variant-evidence"
+      ],
+      "definition_status": "draft",
+      "operations": [
+        "reference-and-format-semantics"
+      ],
+      "question_examples": [
+        "Which coding or splice consequences follow from reference-consistent variant normalization?",
+        "Which candidate variants remain after inheritance, frequency and evidence filtering?",
+        "How do somatic calls, expression and phase change peptide-candidate accounting?"
+      ],
+      "facets": []
+    },
+    "bio.repeat-genotyping": {
+      "workstream_ids": [
+        "repeat-genotyping"
+      ],
+      "definition_status": "draft",
+      "operations": [
+        "reference-and-format-semantics"
+      ],
+      "question_examples": [
+        "Which repeat alleles are supported by spanning reads after locus and motif reconciliation?",
+        "How do interruption patterns and read eligibility affect uncertainty in the inferred repeat lengths?",
+        "Which conclusions are supported by the read evidence and frozen repeat-specific interpretation rules?"
+      ],
+      "facets": []
+    },
+    "bio.immune-repertoire": {
+      "workstream_ids": [
+        "immune-repertoire"
+      ],
+      "definition_status": "draft",
+      "operations": [],
+      "question_examples": [
+        "Which clonotypes and chain-quality differences remain after sample-aware repertoire QC?",
+        "Are expanded/shared clonotypes associated with observed transcriptional states across donors?"
+      ],
+      "facets": []
+    },
+    "bio.population-genetics": {
+      "workstream_ids": [
+        "population-genetics"
+      ],
+      "definition_status": "draft",
+      "operations": [],
+      "question_examples": [
+        "Which population-frequency and differentiation results survive genotype QC?",
+        "Do structure/outlier and equilibrium findings persist under declared sample eligibility?",
+        "Which read-backed or pedigree-based haplotypes support the proposed inheritance pattern?"
+      ],
+      "facets": [
+        "evolution"
+      ]
+    },
+    "bio.clinical-variant-cohort": {
+      "workstream_ids": [
+        "clinical-variant-cohort"
+      ],
+      "definition_status": "draft",
+      "operations": [],
+      "question_examples": [
+        "Which cohort differences remain after variant/sample QC and declared covariate adjustment?",
+        "How do gene-burden findings change with the prespecified qualifying-variant mask?",
+        "Which variant classifications and cohort summaries are sensitive to reference and annotation versions?"
+      ],
+      "facets": []
+    },
+    "bio.cell-lineage-barcodes": {
+      "workstream_ids": [
+        "cell-lineage-barcodes"
+      ],
+      "definition_status": "draft",
+      "operations": [],
+      "question_examples": [
+        "Which clonal identities remain after read, barcode and allelic-dropout checks?",
+        "Which measured lineage relationships are supported by the observed genotype or barcode evidence?",
+        "Do clone-associated expression programs persist across biological samples?"
+      ],
+      "facets": [
+        "single-cell"
+      ]
+    },
+    "bio.rna-seq-contrast-enrichment": {
+      "workstream_ids": [
+        "rna-seq-contrast-enrichment"
+      ],
+      "definition_status": "draft",
+      "operations": [
+        "replicate-aware-inference"
+      ],
+      "question_examples": [
+        "Does the condition effect differ between populations under an interaction model?",
+        "How do single and combined perturbations change directional pathway overlap across environments?",
+        "Which conclusions survive declared filtering, shrinkage and enrichment-universe choices?",
+        "Do repeated-subject and sex-stratified analyses support the same expression claims?"
+      ],
+      "facets": []
+    },
+    "bio.single-cell-pseudobulk": {
+      "workstream_ids": [
+        "single-cell-pseudobulk"
+      ],
+      "definition_status": "draft",
+      "operations": [
+        "replicate-aware-inference"
+      ],
+      "question_examples": [
+        "Which within-cell-type expression effects survive donor-aware pseudobulk testing?",
+        "Do cell-type-specific responses differ under an interaction contrast?",
+        "How do targeted-panel and whole-transcriptome analyses change the tested gene universe?"
+      ],
+      "facets": [
+        "single-cell"
+      ]
+    },
+    "bio.single-cell-qc-embedding": {
+      "workstream_ids": [
+        "single-cell-qc-embedding"
+      ],
+      "definition_status": "draft",
+      "operations": [
+        "quality-control"
+      ],
+      "question_examples": [
+        "Which cells and genes remain after explicit QC, and how does normalization affect the representation?",
+        "Are variable-feature and neighborhood results driven by depth or sample confounding?",
+        "Which doublet or demultiplexing calls agree with independent experimental evidence?"
+      ],
+      "facets": [
+        "single-cell"
+      ]
+    },
+    "bio.single-cell-annotation": {
+      "workstream_ids": [
+        "single-cell-annotation"
+      ],
+      "definition_status": "draft",
+      "operations": [
+        "prediction-and-validation"
+      ],
+      "question_examples": [
+        "Which cell identities are supported by marker and reference evidence, including ambiguous cells?",
+        "Which expression programs distinguish related states after detection-rate and composition checks?",
+        "Does reference transfer preserve known labels across an independently held-out study?"
+      ],
+      "facets": [
+        "single-cell"
+      ]
+    },
+    "bio.single-cell-composition": {
+      "workstream_ids": [
+        "single-cell-composition"
+      ],
+      "definition_status": "draft",
+      "operations": [
+        "replicate-aware-inference"
+      ],
+      "question_examples": [
+        "Does a cell population change in abundance across conditions at the donor level?",
+        "Does a genotype-by-treatment interaction change population composition?",
+        "Are baseline cell fractions associated with a later patient outcome?"
+      ],
+      "facets": [
+        "single-cell"
+      ]
+    },
+    "bio.single-cell-trajectory": {
+      "workstream_ids": [
+        "single-cell-trajectory"
+      ],
+      "definition_status": "draft",
+      "operations": [
+        "graphs-and-spatial-analysis"
+      ],
+      "question_examples": [
+        "Which state ordering is consistent with measured time and branch-specific gene programs?",
+        "Do velocity-based fate estimates agree with observed lineage or timepoint evidence?",
+        "Which regulon associations remain after a declared reference-network and null-model analysis?"
+      ],
+      "facets": [
+        "single-cell",
+        "gene-regulation"
+      ]
+    },
+    "bio.gene-program-factorization": {
+      "workstream_ids": [
+        "gene-program-factorization"
+      ],
+      "definition_status": "draft",
+      "operations": [
+        "graphs-and-spatial-analysis"
+      ],
+      "question_examples": [
+        "Which selected features remain stable after depth, distribution and neighborhood checks?",
+        "Which gene programs replicate across biological samples and modalities?",
+        "Are coexpression modules and enrichment claims consistent with the declared null and universe?"
+      ],
+      "facets": [
+        "gene-regulation"
+      ]
+    },
+    "bio.repeat-expression-splicing": {
+      "workstream_ids": [
+        "repeat-expression-splicing"
+      ],
+      "definition_status": "draft",
+      "operations": [],
+      "question_examples": [
+        "Which repeat families change expression under explicit multimapping and replication rules?",
+        "Which condition-dependent intron-usage changes have independent long-read transcript support?",
+        "How do repeat-associated transcript conclusions change after consistent isoform and genomic-coordinate reconciliation?"
+      ],
+      "facets": [
+        "gene-regulation"
+      ]
+    },
+    "bio.small-rna-sequence-structure": {
+      "workstream_ids": [
+        "small-rna-sequence-structure"
+      ],
+      "definition_status": "draft",
+      "operations": [],
+      "question_examples": [
+        "Which small-RNA and target-expression changes agree after identifier and condition matching?",
+        "Which transcript folding or splice predictions agree with the specified native computation?",
+        "How well do structure predictions reproduce independent observed structural measurements?"
+      ],
+      "facets": [
+        "gene-regulation"
+      ]
+    },
+    "bio.spatial-expression": {
+      "workstream_ids": [
+        "spatial-expression"
+      ],
+      "definition_status": "draft",
+      "operations": [
+        "graphs-and-spatial-analysis"
+      ],
+      "question_examples": [
+        "Which anatomical regions show reproducible spatial expression gradients?",
+        "Which cell neighborhoods are enriched after section-aware spatial randomization?",
+        "How do segmentation and contamination choices change cell-level localization claims?"
+      ],
+      "facets": [
+        "spatial"
+      ]
+    },
+    "bio.spatial-reference-transfer": {
+      "workstream_ids": [
+        "spatial-reference-transfer"
+      ],
+      "definition_status": "draft",
+      "operations": [
+        "prediction-and-validation"
+      ],
+      "question_examples": [
+        "Can a single-cell reference explain spatial mixture proportions without confusing missing genes with zero expression?",
+        "How well does cross-platform gene imputation predict held-out observed features?"
+      ],
+      "facets": [
+        "single-cell",
+        "spatial"
+      ]
+    },
+    "bio.chromatin-regulatory": {
+      "workstream_ids": [
+        "chromatin-regulatory"
+      ],
+      "definition_status": "draft",
+      "operations": [],
+      "question_examples": [
+        "Which accessible regions and motifs change after sample-aware QC and peak calling?",
+        "Are peak-to-gene associations supported by paired accessibility and expression?",
+        "Does a topic/latent representation retain condition signal while controlling depth?"
+      ],
+      "facets": [
+        "gene-regulation"
+      ]
+    },
+    "bio.methylation-expression": {
+      "workstream_ids": [
+        "methylation-expression"
+      ],
+      "definition_status": "draft",
+      "operations": [],
+      "question_examples": [
+        "Which methylation differences remain after coverage and sample-level checks?",
+        "Which promoter methylation-expression associations survive assembly and covariate checks?",
+        "How consistent are array and sequencing measurements on the same measured loci?"
+      ],
+      "facets": [
+        "gene-regulation",
+        "multiomics"
+      ]
+    },
+    "bio.differential-binding": {
+      "workstream_ids": [
+        "differential-binding"
+      ],
+      "definition_status": "draft",
+      "operations": [
+        "replicate-aware-inference"
+      ],
+      "question_examples": [
+        "Which binding differences survive control-aware peak calling and replicated testing?",
+        "Are apparent promoter contacts supported after distance and assay-specific normalization?"
+      ],
+      "facets": [
+        "gene-regulation"
+      ]
+    },
+    "bio.chromatin-contact": {
+      "workstream_ids": [
+        "chromatin-contact"
+      ],
+      "definition_status": "draft",
+      "operations": [
+        "graphs-and-spatial-analysis"
+      ],
+      "question_examples": [
+        "Which contact changes survive balancing, distance adjustment and replicate-aware testing?",
+        "Which reported loops remain supported after predefined bin filtering and resolution sensitivity checks?",
+        "How does gene/regulatory annotation change the interpretation of the supported contact differences?"
+      ],
+      "facets": [
+        "gene-regulation"
+      ]
+    },
+    "bio.ortholog-tree-signal": {
+      "workstream_ids": [
+        "ortholog-tree-signal"
+      ],
+      "definition_status": "draft",
+      "operations": [
+        "alignment-and-search"
+      ],
+      "question_examples": [
+        "Which observed loci change evolutionary signal between clades after alignment QC?",
+        "Which loci retain stable signal after a declared trimming and tree-inference workflow?",
+        "How do per-tip branch anomalies affect gene-level rankings under the pinned metric definitions?"
+      ],
+      "facets": [
+        "evolution"
+      ]
+    },
+    "bio.metagenomic-community": {
+      "workstream_ids": [
+        "metagenomic-community"
+      ],
+      "definition_status": "draft",
+      "operations": [],
+      "question_examples": [
+        "Which taxonomic and functional profiles remain after contamination and ambiguity checks?",
+        "Do ecological associations persist after compositional and sample-level analysis?",
+        "How do assembly-based and read-based results differ on the same observed samples?"
+      ],
+      "facets": []
+    },
+    "bio.ecological-regression": {
+      "workstream_ids": [
+        "ecological-regression"
+      ],
+      "definition_status": "draft",
+      "operations": [],
+      "question_examples": [
+        "Which trait associations survive phylogenetic, spatial and sampling-effort adjustment?",
+        "Do introduction-pathway and residence-time effects persist under prespecified temporal and spatial models?"
+      ],
+      "facets": [
+        "spatial",
+        "evolution"
+      ]
+    },
+    "bio.protein-function": {
+      "workstream_ids": [],
+      "definition_status": "draft",
+      "operations": [
+        "alignment-and-search"
+      ],
+      "question_examples": [],
+      "facets": []
+    },
+    "bio.protein-sequence-model-evaluation": {
+      "workstream_ids": [
+        "protein-sequence-model-evaluation"
+      ],
+      "definition_status": "draft",
+      "operations": [
+        "prediction-and-validation"
+      ],
+      "question_examples": [
+        "Do sequence-model scores predict measured substitution effects beyond a baseline?",
+        "How do indel and domain-shift cases change held-out performance and calibration?",
+        "Do structural context and uncertainty identify unreliable predictions?",
+        "Do genomic sequence predictions match measured tracks on held-out loci under the correct assembly and units?"
+      ],
+      "facets": []
+    },
+    "bio.structure-geometry": {
+      "workstream_ids": [],
+      "definition_status": "draft",
+      "operations": [
+        "reference-and-format-semantics"
+      ],
+      "question_examples": [],
+      "facets": []
+    },
+    "bio.ligand-structure-affinity": {
+      "workstream_ids": [
+        "ligand-structure-affinity"
+      ],
+      "definition_status": "draft",
+      "operations": [],
+      "question_examples": [
+        "Which ligand identity and contact claims survive assembly and alternate-location checks?",
+        "How do charge state and residue-contact geometry affect a declared ranking?",
+        "Does a structure-derived ranking agree with independent measured affinity?"
+      ],
+      "facets": []
+    },
+    "bio.molecular-property": {
+      "workstream_ids": [
+        "molecular-property"
+      ],
+      "definition_status": "draft",
+      "operations": [
+        "prediction-and-validation"
+      ],
+      "question_examples": [
+        "Which descriptor model predicts a measured assay without scaffold or duplicate leakage?",
+        "Do potency/toxicity conclusions change after censoring, units and assay-context checks?",
+        "How do chemical-neighborhood and feature-selection choices change calibration and uncertainty?"
+      ],
+      "facets": []
+    },
+    "bio.dose-response": {
+      "workstream_ids": [
+        "dose-response"
+      ],
+      "definition_status": "draft",
+      "operations": [],
+      "question_examples": [
+        "Which dose-response effects remain after control normalization and fit diagnostics?",
+        "Do combination effects differ from the prespecified additivity model?",
+        "Which apparent hits disappear after plate-position, morphology or assay-interference checks?"
+      ],
+      "facets": []
+    },
+    "bio.chemical-diagram-transcription": {
+      "workstream_ids": [
+        "chemical-diagram-transcription"
+      ],
+      "definition_status": "draft",
+      "operations": [],
+      "question_examples": [
+        "Which molecular graphs can be recovered from observed structure diagrams after atom/bond normalization?",
+        "How do stereochemistry, charge and disconnected-component conventions affect the reconstructed structures?"
+      ],
+      "facets": []
+    },
+    "bio.crispr-screen-pathway": {
+      "workstream_ids": [
+        "crispr-screen-pathway"
+      ],
+      "definition_status": "draft",
+      "operations": [
+        "replicate-aware-inference"
+      ],
+      "question_examples": [
+        "Which gene-level hits remain after guide QC and control calibration?",
+        "Are pathway effects consistent across individual guides, replicates and declared conditions?"
+      ],
+      "facets": [
+        "gene-regulation"
+      ]
+    },
+    "bio.target-evidence": {
+      "workstream_ids": [
+        "target-evidence"
+      ],
+      "definition_status": "draft",
+      "operations": [
+        "integration-and-provenance"
+      ],
+      "question_examples": [
+        "Which targets remain supported after direction-aware cross-source evidence joins?",
+        "Which perturbation or dependency associations survive expression and cell-line confounding?",
+        "Which compounds have compatible measured target-engagement evidence?"
+      ],
+      "facets": []
+    },
+    "bio.network-model-evidence": {
+      "workstream_ids": [
+        "network-model-evidence"
+      ],
+      "definition_status": "draft",
+      "operations": [
+        "graphs-and-spatial-analysis"
+      ],
+      "question_examples": [
+        "Which network paths and modules are supported by the measured edge evidence?",
+        "Do model-predicted perturbation directions agree with independent measured effects?",
+        "Which apparent target mechanisms vanish after direction and context reconciliation?"
+      ],
+      "facets": [
+        "gene-regulation"
+      ]
+    },
+    "bio.cell-communication": {
+      "workstream_ids": [
+        "cell-communication"
+      ],
+      "definition_status": "draft",
+      "operations": [
+        "graphs-and-spatial-analysis"
+      ],
+      "question_examples": [
+        "Which ligand-receptor associations change between conditions after expression and replicate checks?",
+        "Which spatially localized interactions remain after compartment-matched null comparisons?"
+      ],
+      "facets": [
+        "single-cell",
+        "spatial"
+      ]
+    },
+    "bio.proteomics-metabolomics": {
+      "workstream_ids": [
+        "proteomics-metabolomics"
+      ],
+      "definition_status": "draft",
+      "operations": [
+        "replicate-aware-inference"
+      ],
+      "question_examples": [
+        "Which paired protein-abundance changes remain after normalization and missingness checks?",
+        "Which metabolite effects persist across longitudinal or matched-sample analysis?",
+        "Which cross-omics associations are supported after identifier, timing and covariate checks?"
+      ],
+      "facets": [
+        "multiomics"
+      ]
+    },
+    "bio.single-cell-integration": {
+      "workstream_ids": [
+        "single-cell-integration"
+      ],
+      "definition_status": "draft",
+      "operations": [
+        "integration-and-provenance"
+      ],
+      "question_examples": [
+        "Does batch correction preserve measured biological condition differences?",
+        "Can partially paired RNA/protein or RNA/ATAC data recover held-out measured features?",
+        "How does reference label transfer behave on genuinely new biological samples?"
+      ],
+      "facets": [
+        "single-cell",
+        "multiomics"
+      ]
+    },
+    "bio.database-identity-evidence": {
+      "workstream_ids": [
+        "database-identity-evidence"
+      ],
+      "definition_status": "draft",
+      "operations": [
+        "integration-and-provenance"
+      ],
+      "question_examples": [
+        "Which accession and annotation discrepancies are explained by version or species differences?",
+        "Which directed graph claims are supported, contradicted or unresolved by the frozen evidence?",
+        "Can a database/literature answer be traced to complete structured evidence rows?"
+      ],
+      "facets": []
+    },
+    "bio.observed-dynamics": {
+      "workstream_ids": [
+        "observed-dynamics"
+      ],
+      "definition_status": "draft",
+      "operations": [
+        "prediction-and-validation"
+      ],
+      "question_examples": [
+        "Which mechanistic model predicts held-out observed trajectories?",
+        "Which additional measured intervention best distinguishes two candidate mechanisms?",
+        "Which parameters remain identifiable under the actual sampling design?"
+      ],
+      "facets": []
+    },
+    "bio.clinical-response-model": {
+      "workstream_ids": [
+        "clinical-response-model"
+      ],
+      "definition_status": "draft",
+      "operations": [
+        "replicate-aware-inference"
+      ],
+      "question_examples": [
+        "Which baseline covariates associate with a binary response after prespecified adjustment?",
+        "How do ordinal outcomes and effect modification alter the association?",
+        "Does a patient-level prediction model retain calibration under a leakage-safe evaluation?"
+      ],
+      "facets": []
+    },
+    "bio.clinical-survival": {
+      "workstream_ids": [
+        "clinical-survival"
+      ],
+      "definition_status": "draft",
+      "operations": [
+        "replicate-aware-inference"
+      ],
+      "question_examples": [
+        "Do survival contrasts persist after censoring, baseline eligibility and proportional-hazards checks?",
+        "Does a multi-modal prognostic model improve held-out patient-level prediction?"
+      ],
+      "facets": []
+    },
+    "bio.clinical-safety-evidence": {
+      "workstream_ids": [
+        "clinical-safety-evidence"
+      ],
+      "definition_status": "draft",
+      "operations": [],
+      "question_examples": [
+        "Which exposure and biomarker comparisons remain valid after timing, compartment and missingness checks?",
+        "Which cross-study safety claims are unsupported by incompatible assays or denominators?"
+      ],
+      "facets": []
+    },
+    "bio.physiological-timeseries": {
+      "workstream_ids": [
+        "physiological-timeseries"
+      ],
+      "definition_status": "draft",
+      "operations": [],
+      "question_examples": [
+        "Which event or condition effects survive signal QC and subject-aware aggregation?",
+        "Can a bounded signal model generalize to held-out subjects?",
+        "How do filtering and window selection change calibrated predictions?"
+      ],
+      "facets": []
+    },
+    "bio.multimodal-clinical-discovery": {
+      "workstream_ids": [
+        "multimodal-clinical-discovery"
+      ],
+      "definition_status": "draft",
+      "operations": [
+        "integration-and-provenance"
+      ],
+      "question_examples": [
+        "Which cross-modal associations persist after patient and timepoint matching?",
+        "Does a proposed subtype replicate in held-out patients and measured outcomes?",
+        "How does missing-modality handling change the clinical association or prediction?"
+      ],
+      "facets": [
+        "multiomics"
+      ]
+    },
+    "bio.evidence-meta-analysis": {
+      "workstream_ids": [
+        "evidence-meta-analysis"
+      ],
+      "definition_status": "draft",
+      "operations": [
+        "integration-and-provenance"
+      ],
+      "question_examples": [
+        "Which quantitative findings remain after study selection, unit conversion and duplicate-cohort checks?",
+        "How do longitudinal or exercise-associated effects combine under a prespecified meta-analysis?",
+        "Which discrepancies between registration and reported measurements affect the estimand?"
+      ],
+      "facets": []
+    },
+    "bio.biological-imaging": {
+      "workstream_ids": [
+        "biological-imaging"
+      ],
+      "definition_status": "draft",
+      "operations": [
+        "quality-control"
+      ],
+      "question_examples": [
+        "Which cell or colony measurements remain after segmentation and scale QC?",
+        "Do morphology or neuronal measurements differ at the biological-replicate level?",
+        "Does an image classifier generalize across held-out subjects or experiments?"
+      ],
+      "facets": []
+    },
+    "bio.inverse-biological-imaging": {
+      "workstream_ids": [
+        "inverse-biological-imaging"
+      ],
+      "definition_status": "draft",
+      "operations": [
+        "prediction-and-validation"
+      ],
+      "question_examples": [
+        "How do declared reconstruction methods recover the observed biological volume under the same acquisition model?",
+        "Which reconstruction conclusions persist across regularization and held-out measurement residual checks?"
+      ],
+      "facets": []
+    },
+    "bio.optical-fluence": {
+      "workstream_ids": [
+        "optical-fluence"
+      ],
+      "definition_status": "draft",
+      "operations": [],
+      "question_examples": [
+        "How does predicted fluence vary across measured tissue conditions under the declared transport model?",
+        "Which inferred dose differences persist after measurement uncertainty and geometry sensitivity checks?"
+      ],
+      "facets": []
+    }
+  },
+  "cross_cutting_workstreams": [
+    {
+      "id": "data-statistics-visualization",
+      "role": "Generic joining, denominator accounting and numerical visualization apply across scientific areas; retain the source research without assigning a standalone biology quota."
+    }
+  ],
+  "facets": {
+    "resolution": [
+      {
+        "id": "single-cell",
+        "name": "Single-cell",
+        "description": "Measurements or inference resolved at individual cells; independent of molecular modality."
+      }
+    ],
+    "spatiality": [
+      {
+        "id": "spatial",
+        "name": "Spatial",
+        "description": "Measured spatial coordinates or spatially resolved observations; can coexist with single-cell resolution."
+      }
+    ],
+    "process": [
+      {
+        "id": "gene-regulation",
+        "name": "Gene regulation",
+        "description": "Regulation of gene products across chromatin, transcription, RNA processing and protein production."
+      },
+      {
+        "id": "evolution",
+        "name": "Evolution",
+        "description": "Evolutionary relationships, variation or processes; not restricted to one scientific area."
+      }
+    ],
+    "integration": [
+      {
+        "id": "multiomics",
+        "name": "Multiomics",
+        "description": "Joint analysis of distinct molecular measurement layers."
+      }
+    ]
+  },
+  "facet_policy": "Facets annotate the scope of a competency definition. They are not evidence that every candidate recipe exercises each facet. Resolution, spatiality, biological process and integration are independent; multiple facets may apply together. Assays, organisms, tools and formats remain separate metadata.",
+  "classification_references": [
+    {
+      "name": "EDAM users guide",
+      "url": "https://edamontologydocs.readthedocs.io/en/latest/users_guide.html",
+      "use": "Separate scientific topics, operations, data and formats; use specific terms without assuming nonoverlapping topics."
+    },
+    {
+      "name": "EDAM editors guide",
+      "url": "https://edamontologydocs.readthedocs.io/en/latest/editors_guide.html",
+      "use": "EDAM permits overlapping topics and multiple relationships; the displayed tree is our allocation projection, not an imported ontology."
+    },
+    {
+      "name": "NHGRI Genetics",
+      "url": "https://www.genome.gov/genetics-glossary/Genetics",
+      "use": "Inheritance, genetic variation and interactions with environment."
+    },
+    {
+      "name": "NHGRI Genomics",
+      "url": "https://www.genome.gov/genetics-glossary/genomics",
+      "use": "Genome-wide DNA, genes and functional elements."
+    },
+    {
+      "name": "GO:0010468 regulation of gene expression",
+      "url": "https://amigo.geneontology.org/amigo/term/GO:0010468",
+      "use": "Gene regulation includes chromatin, transcriptional, post-transcriptional and protein-maturation processes."
+    }
+  ],
+  "topic_references": {
+    "bio.genomics": {
+      "edam_id": "topic_0622",
+      "relationship": "related scientific topic; task boundary is curated"
+    },
+    "bio.genetics": {
+      "edam_id": "topic_3053",
+      "relationship": "related scientific topic; overlaps genomics"
+    },
+    "bio.transcriptomics": {
+      "edam_id": "topic_3308",
+      "relationship": "related scientific topic"
+    },
+    "bio.epigenomics": {
+      "edam_id": "topic_3173",
+      "relationship": "narrower than our chromatin-and-epigenomics scope"
+    },
+    "bio.phylogenetics": {
+      "edam_id": "topic_0084",
+      "relationship": "EDAM label Phylogeny"
+    },
+    "bio.ecology": {
+      "edam_id": "topic_0610",
+      "relationship": "broader than our currently scoped community/ecological analysis"
+    }
+  },
+  "classification_review": {
+    "status": "provisional; not published",
+    "decision": "Split genetics/genomics; separate phylogenetics and ecological analysis; distribute single-cell/spatial outcomes by their scientific question and retain independent facets. Gene regulation spans branches. Generic data manipulation remains cross-cutting.",
+    "remaining_boundaries": [
+      "Cell composition and trajectories are provisionally under transcriptomics because current source designs infer them from expression; future other-modality tasks may need a broader cell-state competency or secondary links.",
+      "Protein abundance and metabolomics remain a compound draft outcome; splitting and independent domain coverage still need review.",
+      "Community ecology and phylogenetics branches are thin; current leaf count reflects inspected task designs rather than completeness of these fields.",
+      "Primary homes do not preclude secondary scientific-topic links; task-specific assignments still require review."
+    ]
+  }
+}

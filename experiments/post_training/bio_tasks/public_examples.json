@@ -1,0 +1,268 @@
+{
+  "scope": "Public instruction and bounded input previews from existing generated Harbor tasks. No private answers, solver traces or benchmark fixtures. These are frozen examples, not a new corpus build.",
+  "examples": [
+    {
+      "recipe": "real-genome-cds-extraction",
+      "task_id": "real-genome-cds-extraction-v1-20260923-00000",
+      "instruction": "Analyze the unchanged NC_001422.1 genome and deposited coding annotations in /app/inputs. Read operation parameters and genome topology from query.json. GFF3 coordinates are 1-based inclusive; repeated CDS IDs are parts of one coding sequence. The part=i/n attribute specifies biological 5'-to-3' concatenation order, including origin-crossing or overlapping parts. Orient each part by its strand before concatenating; do not discard phase bases from later parts. All supplied CDSs are complete and reproduce deposited proteins. Report each complete coding sequence and its length, keyed by the CDS ID.\n\nWrite /app/answer.json as a JSON array of records, with one record per requested id.\nEach record must contain a string id and exactly the fields below. Record order is irrelevant.\nDo not duplicate or omit IDs. Extra IDs/fields, booleans as numbers, and nonfinite numbers fail.\n- sequence: text (DNA); complete oriented CDS including stop codon.\n- length: integer (bases); CDS length.\nNumeric tolerance is abs(actual - reference) <= atol + rtol * abs(reference).\n",
+      "instruction_sha256": "c9427670c56054ba7b352fe2a8f93dd0a31c34bb59e0369b6792cb543f9d895c",
+      "task_metadata_sha256": "5d3bf82a2f894ad20b177085415ed54443c52f148b5f4d8b7701bb7ed4d5300a",
+      "environment": {
+        "allow_internet": false,
+        "cpus": 1,
+        "memory_mb": 1024,
+        "storage_mb": 8192
+      },
+      "verifier": {
+        "timeout_sec": 60,
+        "environment_mode": "separate",
+        "environment": {
+          "allow_internet": false,
+          "cpus": 1,
+          "memory_mb": 1024
+        }
+      },
+      "source_ids": [
+        "RefSeq:NC_001422.1"
+      ],
+      "derivation": "Full reference genome unchanged; complete CDS coordinates converted from deposited GenBank to GFF3. Biopython 1.86 extraction/translation checked against deposited proteins; all retained parts and exclusions are recorded in the source preparation. Instance query selects the declared operation and window size.",
+      "workflow_scope": "component",
+      "inputs": [
+        {
+          "name": "annotations.gff3",
+          "bytes": 1135,
+          "preview": "##gff-version 3\n##sequence-region NC_001422.1 1 5386\nNC_001422.1\tRefSeq\tCDS\t3981\t5386\t.\t+\t0\tID=NP_040703.1;part=1/2;transl_table=11\nNC_001422.1\tRefSeq\tCDS\t1\t136\t.\t+\t1\tID=NP_040703.1;part=2/2;transl_table=11\nNC_001422.1\tRefSeq\tCDS\t4497\t5386\t.\t+\t0\tID=NP_040704.1;part=1/2;transl_table=11\nNC_001422.1\tRefSeq\tCDS\t1\t136\t.\t+\t1\tID=NP_040704.1;part=2/2;transl_table=11\nNC_001422.1\tRefSeq\tCDS\t5075\t5386\t.\t+\t0\tID=NP_040705.1;part=1/2;transl_table=11\nNC_001422.1\tRefSeq\tCDS\t1\t51\t.\t+\t0\tID=NP_040705.1;part=2/2;transl_table=11\nNC_001422.1\tRefSeq\tCDS\t51\t221\t.\t+\t0\tID=NP_040706.1;part=1/1;transl_table=11\nNC_001422.1\tRefSeq\tCDS\t133\t393\t.\t+\t0\tID=NP_040707.1;part=1/1;transl_table=11\nNC_001422.1\tRefSeq\tCDS\t390\t848\t.\t+\t0\tID=NP_040708.1;part=1/1;transl_table=11\nNC_001422.1\tRefSeq\tCDS\t568\t843\t.\t+\t0\tID=NP_040709.1;part=1/1;transl_table=11\nNC_001422.1\tRefSeq\tCDS\t848\t964\t.\t+\t0\tID=NP_040710.1;part=1/1;transl_table=11\nNC_001422.1\tRefSeq\tCDS\t1001\t2284\t.\t+\t0\tID=NP_040711.1;part=1/1;transl_table=11\nNC_001422.1\tRefSeq\tCDS\t2395\t2922\t.\t+\t0\tID=NP_040712.1;part=1/1;transl_table=11\nNC_001422.1\tRefSeq\tCDS\t2931\t3917\t.\t+\t0\tID=NP_040713.1;part=1/1;transl_table=11\n"
+        },
+        {
+          "name": "genome.fa",
+          "bytes": 5476,
+          "preview": ">NC_001422.1\nGAGTTTTATCGCTTCCATGACGCAGAAGTTAACACTTTCGGATATTTCTGATGAGTCGAAAAATTATCTT\nGATAAAGCAGGAATTACTACTGCTTGTTTACGAATTAAATCGAAGTGGACTGCTGGCGGAAAATGAGAAA\nATTCGACCTATCCTTGCGCAGCTCGAGAAGCTCTTACTTTGCGACCTTTCGCCATCAACTAACGATTCTG\nTCAAAAACTGACGCGTTGGATGAGGAGAAGTGGCTTAATATGCTTGGCACGTTCGTCAAGGACTGGTTTA\nGATATGAGTCACATTTTGTTCATGGTAGAGATTCTCTTGTTGACATTTTAAAAGAGCGTGGATTACTATC\nTGAGTCCGATGCTGTTCAACCACTAATAGGTAAGAAATCATGAGTCAAGTTACTGAACAATCCGTACGTT\nTCCAGACCGCTTTGGCCTCTATTAAGCTCATTCAGGCTTCTGCCGTTTTGGATTTAACCGAAGATGATTT\nCGATTTTCTGACGAGTAACAAAGTTTGGATTGCTACTGACCGCTCTCGTGCTCGTCGCTGCGTTGAGGCT\nTGCGTTTATGGTACGCTGGACTTTGTGGGATACCCTCGCTTTCCTGCTCCTGTTGAGTTTATTGCTGCCG\nTCATTGCTTATTATGTTCATCCCGTCAACATTCAAACGGCCTGTCTCATCATGGAAGGCGCTGAATTTAC\nGGAAAACATTATTAATGGCGTCGAGCGTCCGGTTAAAGCCGCTGAATTGTTCGCGTTTACCTTGCGTGTA\nCGCGCAGGAAACACTGACGTTCTTACTGACGCAGAAGAAAACGTGCGTCAAAAATTACGTGCGGAAGGAG\nTGATGTAATGTCTAAAGGTAAAAAACGTTCTGGCGCTCGCCCTGGTCGTCCGCAGCCGTTGCGAGGTACT\nAAAGGCAAGCGTAAAGGCGCTCGTCTTTGGTATGTAGGTGGTCAACAATTTTAATTGCAGGGGCTTCGGC\nCCCTTACTTGAGGATAAATTATGTCTAATATTCAAACTGGCGCCGAGCGTATGCCGCATGACCTTTCCCA\nTCTTGGCTTCCTTGCTGGTCAGATTGGTCGTCTTATTACCATTTCAACTACTCCGGTTATCGCTGGCGAC\nTCCTTCGAGATGGACGCCGTTGGCGCTCTCCGTCTTTCTCCATTGCGTCGT"
+        },
+        {
+          "name": "query.json",
+          "bytes": 68,
+          "preview": "{\"operation\": \"real-genome-cds-extraction\", \"topology\": \"circular\"}\n"
+        }
+      ],
+      "artifacts": [
+        "/app/answer.json"
+      ],
+      "source_snapshot_revision": "5c5b253bde5eeec495fb6d61e63b85249572c6b2"
+    },
+    {
+      "recipe": "real-rnaseq-go-enrichment",
+      "task_id": "real-rnaseq-go-enrichment-v1-20260923-00000",
+      "instruction": "Analyze the observed GSE60450 mouse mammary-gland RNA-seq experiment. Join samples.tsv to counts.tsv by sample ID. The matrix has 27,179 Entrez genes and twelve libraries; Length is an annotation column. Select query.json's cell population and retain its six libraries, two biological replicates at each of virgin, 18.5 days pregnant and 2 days lactating. Preserve the counts. Filter genes to total count >=10 across all six selected libraries. Fit DESeq2 1.50.2 design ~stage with stage levels virgin, '18.5 dP', '2 dL', ratio size factors, parametric dispersion, Wald tests, betaPrior=FALSE and no count replacement. Keep all three stages in the fit; extract treatment relative to baseline from query.json. Disable Cook's filtering and independent filtering; use BH adjustment over all retained genes, with no effect shrinkage. Write sample_qc.tsv for every selected library and de_results.tsv for every retained gene, including missing test results. QC totals/detected genes use the full unfiltered matrix; size factors use the filtered model. Probability fields are -log10(max(p,1e-300)), preserving NA. Use the specified inclusive FDR and absolute log2-effect cutoffs to identify up/downregulated genes. All inputs are in /app/inputs. Continue the fitted contrast into GO biological-process over-representation analysis using the frozen propagated memberships in go_membership.tsv; go_terms.tsv gives term names. The universe is finite-tested genes with any supplied BP annotation. Select the significant direction in query.json and intersect it with that universe. Restrict each term to the universe; test every term with 10..500 universe genes, including zero-overlap terms. Use the upper-tail hypergeometric probability P(X>=observed overlap), then BH across all eligible terms. Write enrichment.tsv for every tested term. Return the report_terms smallest raw probabilities, breaking ties lexicographically by GO ID, with the GO ID as id. Interpret this as association in a selected gene set, without claiming pathway activation or a causal effect. \n\nWrite /app/answer.json as a JSON array of records, with one record per requested id.\nEach record must contain a string id and exactly the fields below. Record order is irrelevant.\nDo not duplicate or omit IDs. Extra IDs/fields, booleans as numbers, and nonfinite numbers fail.\n- overlap: integer (genes); selected genes in this term.\n- term_size: integer (genes); term genes in declared universe.\n- selected_genes: integer (genes); selected DE genes in declared universe.\n- background_genes: integer (genes); finite tested genes with BP annotation.\n- neg_log10_p: number (log probability); upper-tail hypergeometric probability as capped -log10; absolute tolerance 1e-05, relative tolerance 1e-06.\n- neg_log10_padj: number (log probability); BH probability across all eligible terms as capped -log10; absolute tolerance 1e-05, relative tolerance 1e-06.\nNumeric tolerance is abs(actual - reference) <= atol + rtol * abs(reference).\nAlso write /app/sample_qc.tsv as UTF-8 TSV, with an id column and exactly these columns: library_counts, detected_genes, size_factor. Row and column order are irrelevant; duplicate, missing and extra IDs fail. Use NA for specified missing values. Fields must occupy one line. Every row is verified; a correct JSON summary alone does not pass.\n- sample_qc.tsv.library_counts: integer (counts); all observed counts before gene filtering; absolute tolerance 0.0, relative tolerance 0.0.\n- sample_qc.tsv.detected_genes: integer (genes); positive-count genes before filtering; absolute tolerance 0.0, relative tolerance 0.0.\n- sample_qc.tsv.size_factor: number (factor); DESeq2 ratio size factor on the filtered model matrix; absolute tolerance 1e-05, relative tolerance 1e-06.\nAlso write /app/de_results.tsv as UTF-8 TSV, with an id column and exactly these columns: base_mean, log2_fold_change, standard_error, wald_statistic, neg_log10_p, neg_log10_padj. Row and column order are irrelevant; duplicate, missing and extra IDs fail. Use NA for specified missing values. Fields must occupy one line. Every row is verified; a correct JSON summary alone does not pass.\n- de_results.tsv.base_mean: number (counts); mean of normalized counts in all six modeled samples; absolute tolerance 1e-05, relative tolerance 1e-06.\n- de_results.tsv.log2_fold_change: number (log2); unshrunk treatment relative to baseline effect; absolute tolerance 1e-05, relative tolerance 1e-06.\n- de_results.tsv.standard_error: number (log2); unshrunk effect standard error; absolute tolerance 1e-05, relative tolerance 1e-06.\n- de_results.tsv.wald_statistic: number (statistic); Wald coefficient divided by standard error; absolute tolerance 1e-05, relative tolerance 1e-06.\n- de_results.tsv.neg_log10_p: number (log probability); negative log10 raw probability, capped at 300; absolute tolerance 1e-05, relative tolerance 1e-06.\n- de_results.tsv.neg_log10_padj: number (log probability); negative log10 BH probability, capped at 300; absolute tolerance 1e-05, relative tolerance 1e-06.\nAlso write /app/enrichment.tsv as UTF-8 TSV, with an id column and exactly these columns: overlap, term_size, selected_genes, background_genes, neg_log10_p, neg_log10_padj. Row and column order are irrelevant; duplicate, missing and extra IDs fail. Use NA for specified missing values. Fields must occupy one line. Every row is verified; a correct JSON summary alone does not pass.\n- enrichment.tsv.overlap: integer (genes); selected genes in this term; absolute tolerance 0.0, relative tolerance 0.0.\n- enrichment.tsv.term_size: integer (genes); term genes in declared universe; absolute tolerance 0.0, relative tolerance 0.0.\n- enrichment.tsv.selected_genes: integer (genes); selected DE genes in declared universe; absolute tolerance 0.0, relative tolerance 0.0.\n- enrichment.tsv.background_genes: integer (genes); finite tested genes with BP annotation; absolute tolerance 0.0, relative tolerance 0.0.\n- enrichment.tsv.neg_log10_p: number (log probability); upper-tail hypergeometric probability as capped -log10; absolute tolerance 1e-05, relative tolerance 1e-06.\n- enrichment.tsv.neg_log10_padj: number (log probability); BH probability across all eligible terms as capped -log10; absolute tolerance 1e-05, relative tolerance 1e-06.\n",
+      "instruction_sha256": "51618b5380632f6ba8da4f5bffe9b1697b4b170c506eed500f85374e8333db5f",
+      "task_metadata_sha256": "3bab5734ef61b2a4b06f0ae4cea81895cfd130a1205c75dd10e7fe4b2720f844",
+      "environment": {
+        "allow_internet": false,
+        "cpus": 1,
+        "memory_mb": 4096,
+        "storage_mb": 8192
+      },
+      "verifier": {
+        "timeout_sec": 60,
+        "environment_mode": "separate",
+        "environment": {
+          "allow_internet": false,
+          "cpus": 1,
+          "memory_mb": 1024
+        }
+      },
+      "source_ids": [
+        "GSE60450",
+        "GO:mouse-3.22.0"
+      ],
+      "derivation": "Unchanged deposited counts; biological population and contrast selected explicitly. Frozen GO membership where supplied. Private fit references use the DESeq wrapper; the input-reading oracle executes the estimation stages with the same pinned statistical engine.",
+      "workflow_scope": "connected",
+      "inputs": [
+        {
+          "name": "counts.tsv",
+          "bytes": 1340161,
+          "preview": "EntrezGeneID\tLength\tMCL1-DG_BC2CTUACXX_ACTTGA_L002_R1\tMCL1-DH_BC2CTUACXX_CAGATC_L002_R1\tMCL1-DI_BC2CTUACXX_ACAGTG_L002_R1\tMCL1-DJ_BC2CTUACXX_CGATGT_L002_R1\tMCL1-DK_BC2CTUACXX_TTAGGC_L002_R1\tMCL1-DL_BC2CTUACXX_ATCACG_L002_R1\tMCL1-LA_BC2CTUACXX_GATCAG_L001_R1\tMCL1-LB_BC2CTUACXX_TGACCA_L001_R1\tMCL1-LC_BC2CTUACXX_GCCAAT_L001_R1\tMCL1-LD_BC2CTUACXX_GGCTAC_L001_R1\tMCL1-LE_BC2CTUACXX_TAGCTT_L001_R1\tMCL1-LF_BC2CTUACXX_CTTGTA_L001_R1\n497097\t3634\t438\t300\t65\t237\t354\t287\t0\t0\t0\t0\t0\t0\n100503874\t3259\t1\t0\t1\t1\t0\t4\t0\t0\t0\t0\t0\t0\n100038431\t1634\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\n19888\t9747\t1\t1\t0\t0\t0\t0\t10\t3\t10\t2\t0\t0\n20671\t3130\t106\t182\t82\t105\t43\t82\t16\t25\t18\t8\t3\t10\n27395\t4203\t309\t234\t337\t300\t290\t270\t560\t464\t489\t328\t307\t342\n18777\t2433\t652\t515\t948\t935\t928\t791\t826\t862\t668\t646\t544\t581\n100503730\t799\t0\t1\t0\t0\t0\t0\t0\t1\t2\t0\t2\t2\n21399\t2847\t1604\t1495\t1721\t1317\t1159\t1066\t1334\t1258\t1068\t926\t508\t500\n58175\t2241\t4\t2\t14\t4\t2\t2\t170\t165\t138\t60\t27\t15\n108664\t1976\t769\t752\t1062\t987\t995\t903\t1381\t1430\t1762\t1570\t1330\t1296\n18387\t4707\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\n226304\t3692\t2\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\n12421\t7046\t1494\t1412\t1157\t967\t1603\t1577\t1262\t1336\t1288\t1278\t717\t622\n620393\t858\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\n240690\t6161\t0\t0\t0\t1\t0\t0\t0\t0\t1\t0\t0\t0\n319263\t5232\t1344"
+        },
+        {
+          "name": "go_membership.tsv",
+          "bytes": 27119057,
+          "preview": "gene\tterm\tontology\n104884\tGO:0000012\tBP\n11545\tGO:0000012\tBP\n14211\tGO:0000012\tBP\n21958\tGO:0000012\tBP\n22064\tGO:0000012\tBP\n22594\tGO:0000012\tBP\n234258\tGO:0000012\tBP\n319583\tGO:0000012\tBP\n319955\tGO:0000012\tBP\n54402\tGO:0000012\tBP\n66408\tGO:0000012\tBP\n70099\tGO:0000012\tBP\n71991\tGO:0000012\tBP\n72103\tGO:0000012\tBP\n93759\tGO:0000012\tBP\n20537\tGO:0000017\tBP\n246787\tGO:0000017\tBP\n100561\tGO:0000018\tBP\n100683\tGO:0000018\tBP\n102871\tGO:0000018\tBP\n103537\tGO:0000018\tBP\n104271\tGO:0000018\tBP\n107823\tGO:0000018\tBP\n107970\tGO:0000018\tBP\n11350\tGO:0000018\tBP\n11461\tGO:0000018\tBP\n11545\tGO:0000018\tBP\n117599\tGO:0000018\tBP\n11920\tGO:0000018\tBP\n12053\tGO:0000018\tBP\n12144\tGO:0000018\tBP\n12261\tGO:0000018\tBP\n12487\tGO:0000018\tBP\n12649\tGO:0000018\tBP\n12914\tGO:0000018\tBP\n12995\tGO:0000018\tBP\n13831\tGO:0000018\tBP\n13871\tGO:0000018\tBP\n13990\tGO:0000018\tBP\n14581\tGO:0000018\tBP\n14957\tGO:0000018\tBP\n14958\tGO:0000018\tBP\n15193\tGO:0000018\tBP\n15270\tGO:0000018\tBP\n15469\tGO:0000018\tBP\n15978\tGO:0000018\tBP\n16183\tGO:0000018\tBP\n16189\tGO:0000018\tBP\n16882\tGO:0000018\tBP\n170472\tGO:0000018\tBP\n171506\tGO:0000018\tBP\n17350\tGO:0000018\tBP\n17685\tGO:0000018\tBP\n17686\tGO:0000018\tBP\n17688\tGO:0000018\tBP\n18817\tGO:0000018\tBP\n18861\tGO:0000018\tBP\n191578\tGO:0000018\tBP\n19264"
+        },
+        {
+          "name": "go_terms.tsv",
+          "bytes": 1203142,
+          "preview": "GOID\tTERM\tONTOLOGY\nGO:0000009\talpha-1,6-mannosyltransferase activity\tMF\nGO:0000012\tsingle strand break repair\tBP\nGO:0000014\tsingle-stranded DNA endodeoxyribonuclease activity\tMF\nGO:0000015\tphosphopyruvate hydratase complex\tCC\nGO:0000016\tlactase activity\tMF\nGO:0000017\talpha-glucoside transport\tBP\nGO:0000018\tregulation of DNA recombination\tBP\nGO:0000019\tregulation of mitotic recombination\tBP\nGO:0000022\tmitotic spindle elongation\tBP\nGO:0000023\tmaltose metabolic process\tBP\nGO:0000025\tmaltose catabolic process\tBP\nGO:0000026\talpha-1,2-mannosyltransferase activity\tMF\nGO:0000027\tribosomal large subunit assembly\tBP\nGO:0000028\tribosomal small subunit assembly\tBP\nGO:0000030\tmannosyltransferase activity\tMF\nGO:0000033\talpha-1,3-mannosyltransferase activity\tMF\nGO:0000035\tacyl binding\tMF\nGO:0000036\tacyl carrier activity\tMF\nGO:0000038\tvery long-chain fatty acid metabolic process\tBP\nGO:0000041\ttransition metal ion transport\tBP\nGO:0000045\tautophagosome assembly\tBP\nGO:0000048\tpeptidyltransferase activity\tMF\nGO:0000049\ttRNA binding\tMF\nGO:0000050\turea cycle\tBP\nGO:0000052\tcitrulline metabolic process\tBP\nGO:0000053\targininosuccinate metabolic process\tBP\nGO:0000054\tribosomal subunit export from nucleus\tBP"
+        },
+        {
+          "name": "query.json",
+          "bytes": 193,
+          "preview": "{\"analysis\": \"real-rnaseq-go-enrichment\", \"population\": \"basal\", \"baseline\": \"virgin\", \"treatment\": \"2 dL\", \"maximum_fdr\": 0.05, \"minimum_effect\": 1.0, \"direction\": \"down\", \"report_terms\": 10}\n"
+        },
+        {
+          "name": "samples.tsv",
+          "bytes": 772,
+          "preview": "sample\taccession\tpopulation\tstage\treplicate\nMCL1-LD_BC2CTUACXX_GGCTAC_L001_R1\tGSM1480294\tluminal\t18.5 dP\t2\nMCL1-DI_BC2CTUACXX_ACAGTG_L002_R1\tGSM1480299\tbasal\t18.5 dP\t1\nMCL1-LB_BC2CTUACXX_TGACCA_L001_R1\tGSM1480292\tluminal\tvirgin\t2\nMCL1-LC_BC2CTUACXX_GCCAAT_L001_R1\tGSM1480293\tluminal\t18.5 dP\t1\nMCL1-DH_BC2CTUACXX_CAGATC_L002_R1\tGSM1480298\tbasal\tvirgin\t2\nMCL1-LF_BC2CTUACXX_CTTGTA_L001_R1\tGSM1480296\tluminal\t2 dL\t2\nMCL1-DJ_BC2CTUACXX_CGATGT_L002_R1\tGSM1480300\tbasal\t18.5 dP\t2\nMCL1-LE_BC2CTUACXX_TAGCTT_L001_R1\tGSM1480295\tluminal\t2 dL\t1\nMCL1-DL_BC2CTUACXX_ATCACG_L002_R1\tGSM1480302\tbasal\t2 dL\t2\nMCL1-DG_BC2CTUACXX_ACTTGA_L002_R1\tGSM1480297\tbasal\tvirgin\t1\nMCL1-LA_BC2CTUACXX_GATCAG_L001_R1\tGSM1480291\tluminal\tvirgin\t1\nMCL1-DK_BC2CTUACXX_TTAGGC_L002_R1\tGSM1480301\tbasal\t2 dL\t1\n"
+        }
+      ],
+      "artifacts": [
+        "/app/answer.json",
+        "/app/sample_qc.tsv",
+        "/app/de_results.tsv",
+        "/app/enrichment.tsv"
+      ],
+      "source_snapshot_revision": "5c5b253bde5eeec495fb6d61e63b85249572c6b2"
+    },
+    {
+      "recipe": "real-singlecell-read-qc",
+      "task_id": "real-singlecell-read-qc-v1-20260923-00000",
+      "instruction": "Prepare an auditable filtered count matrix for the observed mouse hematopoietic stem/progenitor Smart-seq2 study GSE81682. All inputs are in /app/inputs. matrix.mtx.gz is a gzip-compressed Matrix Market coordinate integer general matrix with features as rows and cells as columns. features.tsv and cells.tsv list those identities in matrix order. Counts are aligned reads. Use feature_type to distinguish endogenous genes from ERCC spike-ins; the __ columns in cell metadata are HTSeq alignment summaries and are excluded from gene counts. Apply the explicit analysis policy in query.json to every supplied cell: require endogenous read counts >= minimum_endogenous_counts, detected endogenous genes >= minimum_detected_endogenous, and ERCC/all-count fraction <= ercc_fraction_numerator / ercc_fraction_denominator. All counts means endogenous plus ERCC counts. Detected means a strictly positive count. Compute QC on the original matrix before gene filtering. An empty cell has a null ERCC fraction and fails the positive count requirements. Write cell_qc.tsv for every original cell, preserving its GEO accession and broad sorting gate, with the stated metrics, keep indicator and output matrix_column. Excluded cells have matrix_column=0; retained cells receive contiguous 1-based indices in original order. After cell selection, count retained cells and read counts for every original feature. Retain endogenous genes observed in at least minimum_retained_cells_per_gene retained cells, and exclude ERCC rows from the final matrix. Write feature_qc.tsv for all original features, including ERCC, with feature_type, retained_cell_count, retained_read_count, keep and matrix_row. Excluded features have matrix_row=0; retained features receive contiguous 1-based indices in original order. Export filtered_counts.mtx.gz with all retained integer counts, features as rows and cells as columns, and report the study totals in answer.json. Use these descriptive QC criteria as specified; they are not the original authors' final cell selection or universal biological cutoffs. Broad sorting gates do not supply donor identities or fine cell annotations. Do not infer mitochondrial, donor or cell-type labels.\n\nWrite /app/answer.json as a JSON array of records, with one record per requested id.\nEach record must contain a string id and exactly the fields below. Record order is irrelevant.\nDo not duplicate or omit IDs. Extra IDs/fields, booleans as numbers, and nonfinite numbers fail.\n- input_cells: integer (cells); number of supplied cell columns.\n- retained_cells: integer (cells); cells passing all stated filters.\n- input_features: integer (features); supplied endogenous and ERCC rows.\n- retained_features: integer (genes); endogenous genes passing the post-cell-QC filter.\n- output_nonzeros: integer (entries); positive counts in the exported matrix.\n- output_read_counts: integer (read counts); sum of exported integer counts.\nNumeric tolerance is abs(actual - reference) <= atol + rtol * abs(reference).\nAlso write /app/cell_qc.tsv as UTF-8 TSV, with an id column and exactly these columns: geo_accession, sorting_gate, all_counts, ercc_counts, endogenous_counts, detected_endogenous, keep, matrix_column, ercc_fraction. Row and column order are irrelevant; duplicate, missing and extra IDs fail. Use NA for specified missing values. Fields must occupy one line. Every row is verified; a correct JSON summary alone does not pass.\n- cell_qc.tsv.geo_accession: text (accession); source GEO sample; absolute tolerance 0.0, relative tolerance 0.0.\n- cell_qc.tsv.sorting_gate: text (label); supplied broad sorting gate; absolute tolerance 0.0, relative tolerance 0.0.\n- cell_qc.tsv.all_counts: integer (read counts); endogenous plus ERCC counts before filtering; absolute tolerance 0.0, relative tolerance 0.0.\n- cell_qc.tsv.ercc_counts: integer (read counts); ERCC counts before filtering; absolute tolerance 0.0, relative tolerance 0.0.\n- cell_qc.tsv.endogenous_counts: integer (read counts); endogenous counts before filtering; absolute tolerance 0.0, relative tolerance 0.0.\n- cell_qc.tsv.detected_endogenous: integer (genes); endogenous genes with positive counts before filtering; absolute tolerance 0.0, relative tolerance 0.0.\n- cell_qc.tsv.keep: integer (indicator); one if all cell criteria pass, zero otherwise; absolute tolerance 0.0, relative tolerance 0.0.\n- cell_qc.tsv.matrix_column: integer (1-based index); output column in original cell order, or zero if excluded; absolute tolerance 0.0, relative tolerance 0.0.\n- cell_qc.tsv.ercc_fraction: number (fraction); ERCC divided by all counts, null for an empty cell; absolute tolerance 1e-12, relative tolerance 1e-09.\nAlso write /app/feature_qc.tsv as UTF-8 TSV, with an id column and exactly these columns: feature_type, retained_cell_count, retained_read_count, keep, matrix_row. Row and column order are irrelevant; duplicate, missing and extra IDs fail. Use NA for specified missing values. Fields must occupy one line. Every row is verified; a correct JSON summary alone does not pass.\n- feature_qc.tsv.feature_type: text (label); endogenous or ERCC; absolute tolerance 0.0, relative tolerance 0.0.\n- feature_qc.tsv.retained_cell_count: integer (cells); QC-passing cells with a positive count for this feature; absolute tolerance 0.0, relative tolerance 0.0.\n- feature_qc.tsv.retained_read_count: integer (read counts); sum of this feature across QC-passing cells; absolute tolerance 0.0, relative tolerance 0.0.\n- feature_qc.tsv.keep: integer (indicator); one if endogenous and present in enough retained cells; absolute tolerance 0.0, relative tolerance 0.0.\n- feature_qc.tsv.matrix_row: integer (1-based index); output row in original feature order, or zero if excluded; absolute tolerance 0.0, relative tolerance 0.0.\nAlso write /app/filtered_counts.mtx.gz as MatrixMarket coordinate integer general, with 40312 rows, 1422 columns and 17332418 positive entries. Use one 1-based coordinate per nonzero count, with no duplicate coordinates or explicit zeros. Every count and coordinate is checked; entry order, whitespace and comments are ignored. Use gzip compression for a .gz filename. Integer counts must be below 2^63. The file must be at most 134217728 bytes, at most 536870912 decoded bytes, and at most 65536 bytes per line. A correct JSON summary alone does not pass.\n",
+      "instruction_sha256": "d4cf4d75652c53b1126aab3f59a487c5e45d7dabf90844225928ababd19b1d6f",
+      "task_metadata_sha256": "b02c050d09aa634366d533415c4e309a1c9b1e1813c0fec983d86cd7ff0cc348",
+      "environment": {
+        "allow_internet": false,
+        "cpus": 1,
+        "memory_mb": 4096,
+        "storage_mb": 8192
+      },
+      "verifier": {
+        "timeout_sec": 300,
+        "environment_mode": "separate",
+        "environment": {
+          "allow_internet": false,
+          "cpus": 1,
+          "memory_mb": 1024
+        }
+      },
+      "source_ids": [
+        "GSE81682"
+      ],
+      "derivation": "All 1,920 original cells, 46,078 endogenous features and 92 ERCC rows; unchanged counts, original identities and ordering. Scanpy reference and independent streaming oracle agree on all cell/feature tables and 17,332,418 filtered matrix entries.",
+      "workflow_scope": "connected",
+      "inputs": [
+        {
+          "name": "cells.tsv",
+          "bytes": 97831,
+          "preview": "id\tgeo_accession\tsorting_gate\t__no_feature\t__ambiguous\t__too_low_aQual\t__not_aligned\t__alignment_not_unique\nHSPC_007\tGSM2166427\tHSPC\t194829\t5022\t0\t5820455\t0\nHSPC_013\tGSM2166433\tHSPC\t110530\t15271\t0\t1562724\t0\nHSPC_019\tGSM2166439\tHSPC\t86825\t2708\t0\t1407254\t0\nHSPC_025\tGSM2166445\tHSPC\t212206\t107278\t0\t1810368\t0\nHSPC_031\tGSM2166451\tHSPC\t690411\t227480\t0\t6097116\t0\nHSPC_037\tGSM2166457\tHSPC\t242472\t126874\t0\t2267894\t0\nLT-HSC_001\tGSM2167273\tLT-HSC\t88984\t38690\t0\t1019658\t0\nHSPC_001\tGSM2166421\tHSPC\t766298\t460445\t0\t5568688\t0\nHSPC_008\tGSM2166428\tHSPC\t219500\t97666\t0\t2325621\t0\nHSPC_014\tGSM2166434\tHSPC\t147728\t60004\t0\t1519534\t0\nHSPC_020\tGSM2166440\tHSPC\t177524\t102027\t0\t1882795\t0\nHSPC_026\tGSM2166446\tHSPC\t278149\t121200\t0\t1328278\t0\nHSPC_032\tGSM2166452\tHSPC\t54189\t2368\t0\t1232967\t0\nHSPC_038\tGSM2166458\tHSPC\t310220\t98111\t0\t2529466\t0\nLT-HSC_002\tGSM2167274\tLT-HSC\t199475\t96851\t0\t1688765\t0\nHSPC_002\tGSM2166422\tHSPC\t109731\t37725\t0\t1515674\t0\nHSPC_009\tGSM2166429\tHSPC\t216721\t65913\t0\t2160392\t0\nHSPC_015\tGSM2166435\tHSPC\t159168\t30898\t0\t1999089\t0\nHSPC_021\tGSM2166441\tHSPC\t147473\t69770\t0\t1614072\t0\nHSPC_027\tGSM2166447\tHSPC\t386979\t244332\t0\t2689111\t0\nHSPC_033\tGSM2166453\tHSPC\t287827\t141145\t0\t2571597\t0\nHSPC_039\tGSM2166459\tHSPC\t164583\t"
+        },
+        {
+          "name": "features.tsv",
+          "bytes": 1383828,
+          "preview": "id\tfeature_type\nENSMUSG00000000001\tendogenous\nENSMUSG00000000003\tendogenous\nENSMUSG00000000028\tendogenous\nENSMUSG00000000031\tendogenous\nENSMUSG00000000037\tendogenous\nENSMUSG00000000049\tendogenous\nENSMUSG00000000056\tendogenous\nENSMUSG00000000058\tendogenous\nENSMUSG00000000078\tendogenous\nENSMUSG00000000085\tendogenous\nENSMUSG00000000088\tendogenous\nENSMUSG00000000093\tendogenous\nENSMUSG00000000094\tendogenous\nENSMUSG00000000103\tendogenous\nENSMUSG00000000120\tendogenous\nENSMUSG00000000125\tendogenous\nENSMUSG00000000126\tendogenous\nENSMUSG00000000127\tendogenous\nENSMUSG00000000131\tendogenous\nENSMUSG00000000134\tendogenous\nENSMUSG00000000142\tendogenous\nENSMUSG00000000148\tendogenous\nENSMUSG00000000149\tendogenous\nENSMUSG00000000154\tendogenous\nENSMUSG00000000157\tendogenous\nENSMUSG00000000159\tendogenous\nENSMUSG00000000167\tendogenous\nENSMUSG00000000168\tendogenous\nENSMUSG00000000171\tendogenous\nENSMUSG00000000182\tendogenous\nENSMUSG00000000183\tendogenous\nENSMUSG00000000184\tendogenous\nENSMUSG00000000194\tendogenous\nENSMUSG00000000197\tendogenous\nENSMUSG00000000202\tendogenous\nENSMUSG00000000204\tendogenous\nENSMUSG00000000214\tendogenous\nENSMUSG00000000215\tendogenous\nENSMUSG00000000216\tendogenous\nENSMUSG0000000"
+        },
+        {
+          "name": "matrix.mtx.gz",
+          "bytes": 76277182,
+          "preview": "%%MatrixMarket matrix coordinate integer general\n% GSE81682 original counts; features by cells; HTSeq metrics stored separately\n46170 1920 22590142\n1 2 7\n1 3 1\n1 4 185\n1 5 2\n1 6 2\n1 7 136\n1 8 232\n1 9 354\n1 10 181\n1 11 318\n1 12 4\n1 13 1\n1 14 2\n1 15 5\n1 17 3\n1 18 261\n1 20 410\n1 21 5\n1 22 2\n1 23 163\n1 24 478\n1 25 3\n1 26 776\n1 27 614\n1 28 1383\n1 29 89\n1 30 482\n1 31 41\n1 32 6\n1 33 266\n1 34 488\n1 35 589\n1 36 2\n1 37 35\n1 38 288\n1 39 4\n1 40 2\n1 41 3\n1 42 1\n1 43 189\n1 44 637\n1 45 4\n1 46 311\n1 47 668\n1 48 2\n1 49 239\n1 50 568\n1 51 234\n1 52 95\n1 53 2\n1 54 4\n1 55 271\n1 56 22\n1 57 22\n1 58 97\n1 59 69\n1 60 6\n1 61 282\n1 62 332\n1 63 3\n1 64 446\n1 65 4\n1 66 944\n1 67 90\n1 68 70\n1 69 59\n1 70 1661\n1 71 807\n1 72 114\n1 73 75\n1 74 427\n1 75 47\n1 76 512\n1 77 3\n1 78 835\n1 79 69\n1 80 5\n1 81 360\n1 82 30\n1 83 1056\n1 84 138\n1 85 1283\n1 86 9\n1 87 5\n1 88 1\n1 89 183\n1 90 364\n1 91 560\n1 92 158\n1 93 5\n1 94 220\n1 95 97\n1 96 1211\n1 97 283\n1 98 1\n1 99 108\n1 100 10\n1 101 185\n1 102 306\n1 103 408\n1 104 6\n1 105 5\n1 106 391\n1 107 37\n1 108 96\n1 109 126\n1 110 346\n1 111 227\n1 112 42\n1 113 2\n1 114 137\n1 115 183\n1 116 2\n1 117 340\n1 118 10\n1 119 28\n1 120 487\n1 121 42\n1 122 3\n1 123 5\n1 124 928\n1 125 452\n1 126 10\n1 127 135\n1 128 654\n1"
+        },
+        {
+          "name": "query.json",
+          "bytes": 187,
+          "preview": "{\n  \"minimum_endogenous_counts\": 100000,\n  \"minimum_detected_endogenous\": 2000,\n  \"ercc_fraction_numerator\": 1,\n  \"ercc_fraction_denominator\": 5,\n  \"minimum_retained_cells_per_gene\": 3\n}\n"
+        }
+      ],
+      "artifacts": [
+        "/app/answer.json",
+        "/app/cell_qc.tsv",
+        "/app/feature_qc.tsv",
+        "/app/filtered_counts.mtx.gz"
+      ],
+      "source_snapshot_revision": "5c5b253bde5eeec495fb6d61e63b85249572c6b2"
+    },
+    {
+      "recipe": "real-mmcif-chain-geometry",
+      "task_id": "real-mmcif-chain-geometry-v1-20260923-00000",
+      "instruction": "Analyze the unchanged experimental structure 1CRN in /app/inputs/structure.cif. Use only model 1, ATOM records, and protein alpha carbons (auth_atom_id CA). Identify residues by auth_asym_id, auth_seq_id, and pdbx_PDB_ins_code; '.' and '?' mean no insertion code. For alternate conformers, retain highest occupancy; ties use lexicographically smallest label_alt_id with '.' or '?' treated as empty. Coordinates and distances are in angstroms. For each author chain, report its CA centroid, unweighted radius of gyration about that centroid, and residue count.\n\nWrite /app/answer.json as a JSON array of records, with one record per requested id.\nEach record must contain a string id and exactly the fields below. Record order is irrelevant.\nDo not duplicate or omit IDs. Extra IDs/fields, booleans as numbers, and nonfinite numbers fail.\n- x: number (angstrom); CA centroid x coordinate; absolute tolerance 1e-07, relative tolerance 1e-09.\n- y: number (angstrom); CA centroid y coordinate; absolute tolerance 1e-07, relative tolerance 1e-09.\n- z: number (angstrom); CA centroid z coordinate; absolute tolerance 1e-07, relative tolerance 1e-09.\n- radius: number (angstrom); unweighted CA radius of gyration; absolute tolerance 1e-07, relative tolerance 1e-09.\n- n_residues: integer (residues); selected alpha carbons.\nNumeric tolerance is abs(actual - reference) <= atol + rtol * abs(reference).\n",
+      "instruction_sha256": "0ba481f1406d66fd5f75916a5e5e606110a238420226fe57b779ed8051785ff9",
+      "task_metadata_sha256": "8db5ebbeb9bc1ad84d76ac3849025ac615bb34bcc01f2311a1c068e48acbe2a6",
+      "environment": {
+        "allow_internet": false,
+        "cpus": 1,
+        "memory_mb": 1024,
+        "storage_mb": 8192
+      },
+      "verifier": {
+        "timeout_sec": 60,
+        "environment_mode": "separate",
+        "environment": {
+          "allow_internet": false,
+          "cpus": 1,
+          "memory_mb": 1024
+        }
+      },
+      "source_ids": [
+        "PDB:1CRN"
+      ],
+      "derivation": "Full deposited mmCIF supplied unchanged. References use the independently parsed paired PDB representation; model, atom and conformer selection is explicit.",
+      "workflow_scope": "component",
+      "inputs": [
+        {
+          "name": "structure.cif",
+          "bytes": 69506,
+          "preview": "data_1CRN\n# \n_entry.id   1CRN \n# \n_audit_conform.dict_name       mmcif_pdbx.dic \n_audit_conform.dict_version    5.397 \n_audit_conform.dict_location   http://mmcif.pdb.org/dictionaries/ascii/mmcif_pdbx.dic \n# \nloop_\n_database_2.database_id \n_database_2.database_code \n_database_2.pdbx_database_accession \n_database_2.pdbx_DOI \nPDB   1CRN         pdb_00001crn 10.2210/pdb1crn/pdb \nWWPDB D_1000172485 ?            ?                   \n# \nloop_\n_pdbx_audit_revision_history.ordinal \n_pdbx_audit_revision_history.data_content_type \n_pdbx_audit_revision_history.major_revision \n_pdbx_audit_revision_history.minor_revision \n_pdbx_audit_revision_history.revision_date \n1 'Structure model' 1 0 1981-07-28 \n2 'Structure model' 1 1 2008-03-24 \n3 'Structure model' 1 2 2011-07-13 \n4 'Structure model' 1 3 2012-07-11 \n5 'Structure model' 1 4 2017-11-29 \n6 'Structure model' 1 5 2024-10-30 \n# \n_pdbx_audit_revision_details.ordinal             1 \n_pdbx_audit_revision_details.revision_ordinal    1 \n_pdbx_audit_revision_details.data_content_type   'Structure model' \n_pdbx_audit_revision_details.provider            repository \n_pdbx_audit_revision_details.type                'Initial release' \n_pdbx_audit_revisio"
+        }
+      ],
+      "artifacts": [
+        "/app/answer.json"
+      ],
+      "source_snapshot_revision": "5c5b253bde5eeec495fb6d61e63b85249572c6b2"
+    },
+    {
+      "recipe": "real-phix-assembly",
+      "task_id": "real-phix-assembly-v1-20260923-00000",
+      "instruction": "Assemble the supplied observed PhiX paired reads and assess contiguity and agreement with the deposited reference genome. Inputs are in /app/inputs. The FASTQs are systematically spaced records across the full ENA ERR266411 run, with original sequences, qualities and matching mate identifiers. This technical subset is not biological replication. First report complete per-mate read and quality counts in read_qc.tsv, with ids R1 and R2. Use all input reads unchanged. Run the installed SPAdes with --isolate --only-assembler, the k-mer lengths in query.json, one thread and a 4 GB memory limit. Retain every native contig and its identifier in contigs.fa; use contigs.fasta rather than scaffolds. Align these contigs to reference.fa with minimap2 -x asm5 --secondary=no --eqx -c --cs=long -t 1. Include every reported alignment, including split alignments, in alignments.tsv. Use id=contig:strand:query_start:query_end:reference_start:reference_end. Coordinates are zero-based and half-open; query coordinates refer to the original forward contig. Write contig_metrics.tsv keyed by native contig ID and reference_coverage.tsv keyed by reference_id:zero_based_position for every reference position, including zeros. Count contig depth only where a query base is paired to a reference base (= or X); insertions and deletions do not contribute. Within each contig, count aligned query positions once when alignments overlap. Sum matches and errors over alignments without that deduplication. Write answer.json for id=assembly with complete input, assembly and reference accounting. For N50/L50 and NG50/LG50, sort all contig lengths descending and include the first contig reaching at least half the relevant length; do not filter short contigs. NG50/LG50 use the reference length and are null if the threshold is never reached. The reference is circular, but this task measures the native linear contigs and alignments without circularization or reference-guided correction. Contig-alignment breadth describes reference agreement; it is not read depth or a guarantee of assembly correctness.\n\nWrite /app/answer.json as a JSON array of records, with one record per requested id.\nEach record must contain a string id and exactly the fields below. Record order is irrelevant.\nDo not duplicate or omit IDs. Extra IDs/fields, booleans as numbers, and nonfinite numbers fail.\n- read_pairs: integer (pairs); all observed input read pairs.\n- input_bases: integer (bases); sum of both mates' sequence lengths.\n- contigs: integer (contigs); all native contigs, including unaligned contigs.\n- assembled_bases: integer (bases); sum of complete contig lengths.\n- reference_length: integer (bases); complete supplied reference length.\n- n50: integer (bases); contig length crossing half the assembled length.\n- l50: integer (contigs); number of descending-length contigs needed to cross half the assembled length.\n- ng50: integer (bases); contig length crossing half the reference length; null if never reached; use null when specified.\n- lg50: integer (contigs); number needed to cross half the reference length; null if never reached; use null when specified.\n- aligned_contigs: integer (contigs); contigs with at least one reported reference alignment.\n- reference_covered_bases: integer (bases); reference positions paired to at least one query base.\n- reference_uncovered_bases: integer (bases); reference positions with zero aligned contig depth.\n- multiply_covered_reference_bases: integer (bases); reference positions paired to at least two query bases.\n- aligned_query_bases: integer (bases); union of matched or substituted query positions within each contig.\n- matches: integer (aligned bases); sum of exact matches over all reported alignments.\n- substitutions: integer (aligned bases); sum of nucleotide substitutions over all reported alignments.\n- inserted_bases: integer (bases); query insertions over all reported alignments.\n- deleted_bases: integer (bases); reference deletions over all reported alignments.\nNumeric tolerance is abs(actual - reference) <= atol + rtol * abs(reference).\nAlso write /app/contigs.fa as unaligned FASTA, at most 1048576 bytes. Every requested first-token ID and its complete sequence must occur exactly once. Record order, letter case, line wrapping, blank lines and header comments are ignored. Do not add gaps or change residues. Every sequence is verified; a correct JSON summary alone does not pass.\nAlso write /app/read_qc.tsv as UTF-8 TSV, with an id column and exactly these columns: reads, bases, q20_bases, q30_bases, n_bases. Row and column order are irrelevant; duplicate, missing and extra IDs fail. Use NA for specified missing values. Fields must occupy one line. Every row is verified; a correct JSON summary alone does not pass.\n- read_qc.tsv.reads: integer (reads); records for this mate; absolute tolerance 0.0, relative tolerance 0.0.\n- read_qc.tsv.bases: integer (bases); complete input bases; absolute tolerance 0.0, relative tolerance 0.0.\n- read_qc.tsv.q20_bases: integer (bases); Phred+33 quality at least 20; absolute tolerance 0.0, relative tolerance 0.0.\n- read_qc.tsv.q30_bases: integer (bases); Phred+33 quality at least 30; absolute tolerance 0.0, relative tolerance 0.0.\n- read_qc.tsv.n_bases: integer (bases); N residues in input reads; absolute tolerance 0.0, relative tolerance 0.0.\nAlso write /app/contig_metrics.tsv as UTF-8 TSV, with an id column and exactly these columns: length, gc_bases, ambiguous_bases, alignments, aligned_query_bases. Row and column order are irrelevant; duplicate, missing and extra IDs fail. Use NA for specified missing values. Fields must occupy one line. Every row is verified; a correct JSON summary alone does not pass.\n- contig_metrics.tsv.length: integer (bases); complete native contig length; absolute tolerance 0.0, relative tolerance 0.0.\n- contig_metrics.tsv.gc_bases: integer (bases); G and C residues; absolute tolerance 0.0, relative tolerance 0.0.\n- contig_metrics.tsv.ambiguous_bases: integer (bases); residues other than A, C, G or T; absolute tolerance 0.0, relative tolerance 0.0.\n- contig_metrics.tsv.alignments: integer (alignments); all reported alignments of this contig; absolute tolerance 0.0, relative tolerance 0.0.\n- contig_metrics.tsv.aligned_query_bases: integer (bases); union of matched or substituted original query positions; absolute tolerance 0.0, relative tolerance 0.0.\nAlso write /app/alignments.tsv as UTF-8 TSV, with an id column and exactly these columns: query_start, query_end, reference_start, reference_end, mapping_quality, alignment_columns, matches, substitutions, inserted_bases, deleted_bases, contig, reference, strand, cigar. Row and column order are irrelevant; duplicate, missing and extra IDs fail. Use NA for specified missing values. Fields must occupy one line. Every row is verified; a correct JSON summary alone does not pass.\n- alignments.tsv.query_start: integer (0-based coordinate); inclusive query start on the original contig; absolute tolerance 0.0, relative tolerance 0.0.\n- alignments.tsv.query_end: integer (0-based coordinate); exclusive query end on the original contig; absolute tolerance 0.0, relative tolerance 0.0.\n- alignments.tsv.reference_start: integer (0-based coordinate); inclusive reference start; absolute tolerance 0.0, relative tolerance 0.0.\n- alignments.tsv.reference_end: integer (0-based coordinate); exclusive reference end; absolute tolerance 0.0, relative tolerance 0.0.\n- alignments.tsv.mapping_quality: integer (MAPQ); native PAF mapping quality; absolute tolerance 0.0, relative tolerance 0.0.\n- alignments.tsv.alignment_columns: integer (columns); matches, substitutions, inserted bases and deleted bases; absolute tolerance 0.0, relative tolerance 0.0.\n- alignments.tsv.matches: integer (aligned bases); sum of exact matches over all reported alignments; absolute tolerance 0.0, relative tolerance 0.0.\n- alignments.tsv.substitutions: integer (aligned bases); sum of nucleotide substitutions over all reported alignments; absolute tolerance 0.0, relative tolerance 0.0.\n- alignments.tsv.inserted_bases: integer (bases); query insertions over all reported alignments; absolute tolerance 0.0, relative tolerance 0.0.\n- alignments.tsv.deleted_bases: integer (bases); reference deletions over all reported alignments; absolute tolerance 0.0, relative tolerance 0.0.\n- alignments.tsv.contig: text (FASTA identifier); native contig identifier; absolute tolerance 0.0, relative tolerance 0.0.\n- alignments.tsv.reference: text (FASTA identifier); supplied reference identifier; absolute tolerance 0.0, relative tolerance 0.0.\n- alignments.tsv.strand: text (+ or -); query alignment orientation; absolute tolerance 0.0, relative tolerance 0.0.\n- alignments.tsv.cigar: text (extended CIGAR); complete native =, X, I and D operations; absolute tolerance 0.0, relative tolerance 0.0.\nAlso write /app/reference_coverage.tsv as UTF-8 TSV, with an id column and exactly these columns: contig_depth. Row and column order are irrelevant; duplicate, missing and extra IDs fail. Use NA for specified missing values. Fields must occupy one line. Every row is verified; a correct JSON summary alone does not pass.\n- reference_coverage.tsv.contig_depth: integer (aligned bases); number of query bases paired to this position; absolute tolerance 0.0, relative tolerance 0.0.\n",
+      "instruction_sha256": "3c23e1125c3c0418e166512de17530429fbf49834209be4ce24dd213fa76307c",
+      "task_metadata_sha256": "91b8078c33ca98fa6ca4d7b897b84839dd6e6eccd75d269926bd0a7a6c520e49",
+      "environment": {
+        "allow_internet": false,
+        "cpus": 1,
+        "memory_mb": 4096,
+        "storage_mb": 8192
+      },
+      "verifier": {
+        "timeout_sec": 60,
+        "environment_mode": "separate",
+        "environment": {
+          "allow_internet": false,
+          "cpus": 1,
+          "memory_mb": 1024
+        }
+      },
+      "source_ids": [
+        "ENA:ERR266411",
+        "RefSeq:NC_001422.1"
+      ],
+      "derivation": "12,000 observed read pairs systematically spaced across the checksum-verified run; native assembly and alignment.",
+      "workflow_scope": "connected",
+      "inputs": [
+        {
+          "name": "query.json",
+          "bytes": 44,
+          "preview": "{\n  \"kmers\": [\n    21,\n    33,\n    55\n  ]\n}\n"
+        },
+        {
+          "name": "reads_R1.fastq",
+          "bytes": 3088099,
+          "preview": "@ERR266411.1 HS18_09233:8:1307:10911:3848#168/1\nTAAACAAGCAGTAGTAATTCCTGCTTTATCAAGATAATTTTTCGACTCATCAGAAATATCCGAAAGTGTTAACTTCTGCGTCATGGAAGCGATAAAACTC\n+\nB@DFEFFFGEGGGHEHGHGHGGGGHIFGFIFHICFGHGHGJGHFGHGIHEHGGHJGFEFHGHEGGHHGHIFGFGDIFGGFGGGFHGGGHGGGAGIFGGCG\n@ERR266411.61 HS18_09233:8:2211:4719:19422#168/1\nCTGTGACGACAAATCTGCTCAAATTTATGCGCGCTTCGATAAAAATGATTGGCGTATCCAACCTGCAGAGTTTTATCGCTTCCATGACGCAGAAGTTAAC\n+\n?@DCCDFFBGGGBFFFDHGCGGGGFIGGEEEHIHFDHGEFHGGHGHGDGFCDGHHGGGFGEFHDGHCG5G>FFFCBBGGFFHGGFGGFF@EGAFCF;CG@\n@ERR266411.121 HS18_09233:8:1105:13870:40024#168/1\nGTCCACTTCGATTTAATTCGTAAACAAGCAGTAGTAATTCCTGCTTTATCAAGATAATTTTTCGACTCATCAGAAATATCCGAAAGTGTTAACTTCTGCG\n+\nB@DFEHFFGHGGGFFHGHGIGGHGFIGGFHEHHHFGHFHGG6EFGHGFGFHGGHJGGHFHIHHHIHGGHFFKFGJJFIGIJGGGJGGFJIGGGFIFGKGD\n@ERR266411.182 HS18_09233:8:1212:16638:95968#168/1\nCGACAAATCTGCTCAAATTTATGCGCGCTTCGATAAAAATGATTGGCGTATCCAACCTGCAGAGTTTTATCGCTTCCATGACGCAGAAGTTAACACTTTC\n+\n@@DCEDFEGBDGBGGHAHGCGEFEDCDGHEEHG:HGHFG;@DCHGHGFHEHDGGGEH9FFFE<D7DGGGG;>GD>EIIG5CDE4FG3F43DH>DGFCGED\n@ERR266411.242 HS18_09233:8:1204:12057:59801#168/1\nAGTTACTGTAGCCGACGTTTTGGCGGCGCAACCTGTGACGACAAATCTGCTCAAATTTATGCGCGCTTCGATAAAAATGATTGGCGTATCCAACCTGCAG\n+\nB@@CCEFEBIGGBDEHE<GAG@GEFI9GEFG"
+        },
+        {
+          "name": "reads_R2.fastq",
+          "bytes": 3088099,
+          "preview": "@ERR266411.1 HS18_09233:8:1307:10911:3848#168/2\nGTTACTGTAGCCGACGTTTTGGCGGCGCAACCTGTGACGACAAATCTGCTCAAATTTATGCGCGCTTCGATAAAAATGATTGGCGTATCCAACCTGCAGA\n+\n9BEDEFFEFGGGGFHGF9GGBGFGHADFEIIHFHBFEFHEFIFFGGGGFHFBGHHHHGDFIFHEGHGFEF5HHFHHDHHDG5GHHECFHFHGHEHHFBE1\n@ERR266411.61 HS18_09233:8:2211:4719:19422#168/2\nTTTAATTCGTAAACAAGCAGTAGTAATTCCTGCTTTATCAAGATAATTTTTCGACTCATCAGAAATATCCGAAAGTGTTAACTTCTGCGTCATGGAAGCG\n+\n9BEDEFFEFDFEGCHEEEHEEGFGHEHGBIIHGHFEDFDHHFJFGGEGGEFFGFHGGGHGIFGFGBFFFHFDHFH5CDDEFGEHGEEEFFGFEEHHFBB>\n@ERR266411.121 HS18_09233:8:1105:13870:40024#168/2\nTTACTGTAGCCGACGTTTTGGCGGCGCAACCTGTGACGACAAATCTGCTCAAATTTATGCGCGCTTCGATAAAAATGATTGGCGTATCCAACCTGCAGAG\n+\n9BBDEFFEFGFHGHHGHFGEGGGGJIHFJIIEFHGDEGAEHGFFIGGGFHDFGFGHFIDFEFFFFGFHGHIHFFHHHHHHEIGFHFHEHFGFEHBHFHDH\n@ERR266411.182 HS18_09233:8:1212:16638:95968#168/2\nCAGCAGTCCACTTCGATTTAATTCGTAAACAAGCAGTAGTAATTCCTGCTTTATCAAGATAATTTTTCGACTCATCAGAAATATCCGAAAGTGTTAACTT\n+\n9BBCECFEFGGGFGH@GGGFGGFGFDHGGIFHFEGFEFJHHDEFEGGGDHFFFGEGG@GFEFHFGGEFEHIDFFAHHDCHGIEHHHGHDFFEE=FHF?BF\n@ERR266411.242 HS18_09233:8:1204:12057:59801#168/2\nTCCGCCAGCAGTCCACTTCGATTTAATTCGTAAACAAGCAGTAGTAATTCCTGCTTTATCAAGATAATTTTTCGACTCATCAGAAATATCCGAAAGTGTT\n+\n9BCDEDDEFGGGGHEEGIGEEGFGFDHFBIE"
+        },
+        {
+          "name": "reference.fa",
+          "bytes": 5476,
+          "preview": ">NC_001422.1\nGAGTTTTATCGCTTCCATGACGCAGAAGTTAACACTTTCGGATATTTCTGATGAGTCGAAAAATTATCTT\nGATAAAGCAGGAATTACTACTGCTTGTTTACGAATTAAATCGAAGTGGACTGCTGGCGGAAAATGAGAAA\nATTCGACCTATCCTTGCGCAGCTCGAGAAGCTCTTACTTTGCGACCTTTCGCCATCAACTAACGATTCTG\nTCAAAAACTGACGCGTTGGATGAGGAGAAGTGGCTTAATATGCTTGGCACGTTCGTCAAGGACTGGTTTA\nGATATGAGTCACATTTTGTTCATGGTAGAGATTCTCTTGTTGACATTTTAAAAGAGCGTGGATTACTATC\nTGAGTCCGATGCTGTTCAACCACTAATAGGTAAGAAATCATGAGTCAAGTTACTGAACAATCCGTACGTT\nTCCAGACCGCTTTGGCCTCTATTAAGCTCATTCAGGCTTCTGCCGTTTTGGATTTAACCGAAGATGATTT\nCGATTTTCTGACGAGTAACAAAGTTTGGATTGCTACTGACCGCTCTCGTGCTCGTCGCTGCGTTGAGGCT\nTGCGTTTATGGTACGCTGGACTTTGTGGGATACCCTCGCTTTCCTGCTCCTGTTGAGTTTATTGCTGCCG\nTCATTGCTTATTATGTTCATCCCGTCAACATTCAAACGGCCTGTCTCATCATGGAAGGCGCTGAATTTAC\nGGAAAACATTATTAATGGCGTCGAGCGTCCGGTTAAAGCCGCTGAATTGTTCGCGTTTACCTTGCGTGTA\nCGCGCAGGAAACACTGACGTTCTTACTGACGCAGAAGAAAACGTGCGTCAAAAATTACGTGCGGAAGGAG\nTGATGTAATGTCTAAAGGTAAAAAACGTTCTGGCGCTCGCCCTGGTCGTCCGCAGCCGTTGCGAGGTACT\nAAAGGCAAGCGTAAAGGCGCTCGTCTTTGGTATGTAGGTGGTCAACAATTTTAATTGCAGGGGCTTCGGC\nCCCTTACTTGAGGATAAATTATGTCTAATATTCAAACTGGCGCCGAGCGTATGCCGCATGACCTTTCCCA\nTCTTGGCTTCCTTGCTGGTCAGATTGGTCGTCTTATTACCATTTCAACTACTCCGGTTATCGCTGGCGAC\nTCCTTCGAGATGGACGCCGTTGGCGCTCTCCGTCTTTCTCCATTGCGTCGT"
+        }
+      ],
+      "artifacts": [
+        "/app/answer.json",
+        "/app/contigs.fa",
+        "/app/read_qc.tsv",
+        "/app/contig_metrics.tsv",
+        "/app/alignments.tsv",
+        "/app/reference_coverage.tsv"
+      ],
+      "source_snapshot_revision": "e2f95ea89d128e351eea6ae1b030548fd4ea989b"
+    }
+  ]
+}

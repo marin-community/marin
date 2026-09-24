@@ -1,4 +1,13 @@
-# Biology workflow authoring queue
+# Biology competency authoring queue
+
+**Generation is paused for organization and taxonomy review.** The
+[competency taxonomy](../../experiments/post_training/bio_tasks/competencies.json)
+and [public explorer](https://htmlpreview.github.io/?https://github.com/marin-community/marin/blob/codex/bio-task-generators/docs/experiments/bio-task-coverage.html)
+now define the primary planning unit. Select underrepresented scientific areas,
+then families and competencies within them. One primary competency per accepted
+task determines allocation; benchmark record counts do not. This file retains
+source research and existing validation evidence, not a live implementation order.
+Model training and trace generation are outside the task-generation scope.
 
 The [question portfolio](../../experiments/post_training/bio_tasks/workflow_portfolio.json)
 accounts for all **5,133 inventoried task, protocol or dataset-definition records
@@ -37,30 +46,23 @@ the source task IDs. A changed species, tissue or disease label alone is not a g
 missing operations, invalid assumptions or unverified outputs remain gaps. This
 measures workflow coverage and does not claim reproduction of benchmark answers.
 
-**Current phase: prepare selected task contracts.** The broad question portfolio
+**Current phase: review the competency hierarchy and public communication.** The broad question portfolio
 and consolidation pass are complete with explicit source and endpoint gaps. All
 5,133 inventoried records have one primary disposition, and all 702 cards have a
 scientific question, input requirements, proposed outputs and a verification
 approach. These checks establish a planning baseline, not executable acceptance.
 The portfolio's `planning_readiness` audit records the evidence and its limits.
 
-The next preparation target is count-contrast enrichment, using the verified
-observed-count candidate while preserving the conditional group's species, tissue
-and reference-release limits. The ortholog input candidate is deferred: Dryad's
-documented archive-download link returns 401, leaving exact mirror-member
-redistribution unresolved. Its native checks remain recorded. No implementation
-packet or worker is assigned.
-Freeze the selected inputs, methods, artifacts and deterministic acceptance before
-implementation. If a candidate cannot satisfy those requirements, record the gap
-and advance to another feasible candidate without weakening its endpoints.
+Count-contrast enrichment was the preparation target before this pause; its
+existing evidence remains below. The ortholog input candidate remains deferred
+because the documented archive-download link returns 401. Neither candidate is
+currently assigned. Resume selection through the competency hierarchy after review,
+then freeze inputs, methods, artifacts and executable acceptance before implementation.
 
-When authoring resumes, choose the next coherent task by its expected gain in currently missing, distinct
-ID benchmark tasks. Recompute after each completed or rejected candidate.
-Repository coverage is secondary. The
-[machine-readable queue](../../experiments/post_training/bio_tasks/workflow_queue.json)
-retains assessed target IDs, conditional gains and overlap; the
-[coverage inventories](../../experiments/post_training/bio_tasks/benchmark_tasks/README.md)
-remain authoritative for validated mappings.
+The [machine-readable queue](../../experiments/post_training/bio_tasks/workflow_queue.json)
+retains source endpoint links and prior conditional gains as provenance. Those gains
+are not the selection objective. The [benchmark inventories](../../experiments/post_training/bio_tasks/benchmark_tasks/README.md)
+retain their historical mapping states without automatically awarding competency credit.
 
 The plan groups 561 benchmark/family combinations for review. Fifty known
 BixBench-Verified aliases reduce the record count to 5,083, or 5,082 after the one
@@ -140,10 +142,20 @@ genes with the background to preserve the intended hypergeometric draw count. It
 native BH family contains query-associated terms passing size filters; report
 zero-overlap terms separately. The GO.db 3.22.0 graph reconciles all 15,164 terms
 in the existing mouse membership asset, with no missing terms or label mismatches.
-GOSemSim 2.36.0 uses its own bundled relation table for Wang similarity, so this
-GO.db audit does not establish native semantic-graph equivalence. The bundled table
-is hash-pinned but still needs inspection. The full genome-wide gene universe,
-combined native environment and source-specific annotation releases remain open.
+The full pinned annotation export now contains 25,730 genes and 1,400,728 BP
+memberships. GOSemSim 2.36.0 uses a different bundled graph from GO.db; its literal
+relation labels give all observed BP edges weight 0.7. Independent reconstruction
+matches all 3,811 native contribution vectors and ancestor counts, 608 sampled
+pair scores and the completed 181-term native reduction. The larger full package
+call timed out; the equivalent calculation retains 798 of 3,786 terms in 23.25
+seconds. Preserve that implementation distinction and the recorded rounding rules.
+
+Two fresh GSEApy runs over 16,659 ranked genes and 4,720 eligible sets matched every
+statistic, leading-edge list and selected top term exactly. Independent enrichment
+walks also matched; permutation-null arithmetic was not reimplemented. Each run
+finished its analysis and checks in about 6.5 minutes. Complete count-fit diagnostics,
+the separate basal analysis and end-to-end Harbor validation remain pending.
+The shared acceptance contract records hashes, versions and scoped checks.
 
 The connected ortholog proposal specifies all 47 source endpoints individually:
 within-locus tip/pair summaries, across-locus reductions, ordered rank tests,
@@ -519,7 +531,7 @@ raw reads remain uninspected. No source gained training clearance.
 | [GSE252331](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE252331) | Alternative RNA/ADT prediction and clinical-state comparisons | Reconcile the deposited subset with the study description; myeloid enrichment complicates cell-abundance interpretation. |
 | [GSE271413](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE271413) | Receptor QC, sequence annotation and developmental-state analysis | Verify donor/visit identities and sequence availability. It does not establish cancer exhaustion or sorting-gate endpoints. |
 | [Fang 3D MERFISH](https://datadryad.org/dataset/doi:10.5061/dryad.w0vt4b922) | Native three-dimensional neighborhoods and within-volume expression analysis | Targeted panels and limited biological replication; separate regions cannot be treated as interchangeable animal replicates. |
-| Existing GSE60450 counts | Developmental count contrasts, enrichment and native PyDESeq2 | Verified 27,179 genes and twelve sample identities. Two libraries per population/stage; no documented failed replicate for a QC-exclusion task. Enrichment inputs and new native methods remain unresolved. |
+| Existing GSE60450 counts | Developmental count contrasts, enrichment and native PyDESeq2 | Verified 27,179 genes and twelve sample identities. Native count, enrichment and semantic-component checks pass; complete population-specific references and Harbor validation remain pending. No documented failed replicate supports a QC-exclusion task. |
 | Existing matched ortholog alignments/trees | Per-locus evolutionary signal | Mirror/deposit identity and full endpoint validation remain; precomputed loci do not exercise ortholog discovery. |
 | [MANE 1.4 reference annotation](https://ftp.ncbi.nlm.nih.gov/refseq/MANE/MANE_human/release_1.4/) | Transcript-region reconstruction, reference identifier joins and candidate promoter/ORF queries | GTF and summary identities reconcile; genomic/transcript FASTA remains absent. Selected transcripts cannot supply an all-isoform exon union. This is shared curated reference infrastructure, not independent assay data. |
 
@@ -555,57 +567,29 @@ exact manifest requirements, rights gaps and the biological limitations above.
 GSE60450's vendored count bytes match the [licensed public deposit](https://zenodo.org/records/4249555).
 Both provider sample sheets agree with GEO metadata after an explicit filename-prefix
 conversion. The source plan proposes a luminal developmental contrast using all six
-luminal libraries; 16,659 genes pass the declared population count filter. Disease
-context and single-cell processing remain outside this input's scope.
+luminal libraries; 16,659 genes pass the declared population count filter. Its
+developmental workflows can cover explicitly adapted disease-analysis methods;
+these inputs cannot establish disease findings or single-cell processing.
 
-The count/enrichment and PyDESeq2 questions now have input and acceptance contracts.
-Existing DESeq2 references do not validate shrinkage, GSEA or semantic reduction.
-The available GO memberships lack ontology edges, and no KEGG snapshot is supplied.
-The predicted/reference gene-set endpoint needs separate inputs. This review adds
-no validated benchmark coverage and rejects this source for replicate-QC exclusion.
+The count/enrichment and PyDESeq2 questions have input and acceptance contracts.
+New native checks cover shrinkage, full GO annotations, semantic contributions and
+repeatable GSEA; they do not establish PyDESeq2 or Harbor validation. Compatible
+KEGG inputs and the predicted/reference gene-set inputs remain unresolved.
+Screening declared source metadata in all 32 ID inventories and all 244 PromptBio
+definitions found no GSE60450 identifiers, but generic unnamed inputs still have
+uncertain lineage. These checks add no validated benchmark coverage.
 
-Planning priority considers exact endpoint detail, cross-benchmark reuse and
-feasibility. Predicted validated gains remain unset. When those contracts are fixed,
-rank feasible candidates by conservative gains in missing distinct endpoints,
-then benchmark breadth and implementation cost. Keep source aliases, repeated assay
-configurations and unreviewed individual cases out of automatic coverage claims.
+Planning now balances the competency hierarchy among feasible candidates.
+Benchmark aliases and assay variants remain provenance, not independent allocation
+credit. Runtime feasibility and source readiness break ties within underrepresented
+branches; blocked competencies remain visible.
 
-## Solver diagnostics
+## Historical solver diagnostics
 
-[Inspect both GLM-5.3 traces](https://codex-main.exe.xyz:8757/solver-checks/20260924/index.html).
-The [versioned report](../../experiments/post_training/bio_tasks/solver_diagnostics.json)
-retains original grades, artifact comparisons, task hashes and a checksum-pinned
-GCS archive. There was one attempt per unchanged task, high reasoning, 65,536 input
-tokens, 32,768 output tokens per ordinary request and a 30-minute agent limit.
-All 22 recorded inference requests used high reasoning and the output cap.
-
-| Existing task | Agent time | Original reward | Trace and artifact finding |
-|---|---:|---:|---|
-| Observed PhiX read assembly | 2m32s | 1 | Runs SPAdes and minimap2; all summary fields, FASTA and TSV artifacts pass |
-| Replicated RNA population interaction | 5m18s | 0 | Runs the specified DESeq2 interaction model; six correct values appear in six summary objects instead of one. All seven TSVs match in a separate read-only comparison |
-
-The RNA comparison does not change its original grade. Both traces show intended
-scientific tool use within the budget; two selected attempts cannot establish
-benchmark accuracy, general solvability or training benefit. The server did not
-expose its maximum context length or weight revision, and the rendered chat
-template was not inspected. No LLM judge or bulk teacher collection was used.
-
-The generator now shows a value-free record example and makes the RNA task's single
-`comparison` record explicit. Verification reports artifact checks even when the
-summary fails, preserving reward zero. This incurs the usual artifact read/sort
-cost even for a malformed summary; existing file bounds and the 60-second verifier
-limit (300 seconds for matrix tasks) still apply. Infrastructure failures remain
-unscored. Original attempts and grades are unchanged.
-
-Native environment contexts export `/opt/bio/bin` from `/etc/profile.d/bio.sh`
-as well as Docker `ENV`. The corrected model-free Harbor check passed all three
-expected cases on the reserved TRC CPU in 3m06s: the native oracle earns reward 1;
-a split summary earns 0 while all seven artifacts pass; a split summary with a
-corrupted contrast earns 0 and flags exactly `contrast_weights.tsv`. Each fresh
-Terminus-2 login terminal resolves `/opt/bio/bin/Rscript` and runs R 4.5.3.
-All task sandboxes were deleted. The diagnostics report pins the successful archive
-and retains both earlier launcher failures before sandbox creation. No model calls
-were made and the original GLM grades remain unchanged.
+The [archived diagnostic record](https://github.com/marin-community/marin/blob/ea66e88c73/experiments/post_training/bio_tasks/solver_diagnostics.json)
+preserves the earlier two-task experiment. Model configuration and trace collection
+are outside this task-generation queue. Harbor oracle and verifier checks remain
+part of task validation.
 
 ## Proposed scientific workstreams
 
