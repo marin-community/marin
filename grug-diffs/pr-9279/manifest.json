@@ -1,0 +1,22 @@
+{
+  "added_variants": [
+    "moe_hero_pipeline"
+  ],
+  "base_sha": "d5079306fc75ab4f39979c348f8fe8eaf41cc7e7",
+  "head_sha": "b0e28bd2ec80e01eb89eac9cb5b512df4f106697",
+  "report_count": 1,
+  "reports": [
+    {
+      "closest_variant": "base",
+      "distance_score": 2423,
+      "report_relpath": "moe_hero_pipeline/index.html",
+      "status_counts": {
+        "added": 3,
+        "changed": 0,
+        "removed": 3,
+        "unchanged": 1
+      },
+      "variant": "moe_hero_pipeline"
+    }
+  ]
+}
