@@ -3653,6 +3653,12 @@
           }
         ],
         "source_findings": "Prerank._load_ranking only re-sorts when ascending is not None. Duplicate IDs are otherwise renamed and infinities filled; reject them before the call. Explicit method=permutation selects prerank_rs rather than the new multilevel path. Native execution still pending."
+      },
+      "gosemsim_rounding": {
+        "archive_sha256": "73c383b98b5fa14c2b3031f18ffc73d8654cbdbf1f518c2882654a97d4bbbf68",
+        "member": "GOSemSim/R/mgoSim.R",
+        "member_sha256": "b8bb4c6331f2e5b417a2257d1f3ec72fa4782a73a52429a26789fe8db90486c2",
+        "finding": "mgoSim returns round(res,digits=3), including combine=NULL, before clusterProfiler simplify applies its strict threshold."
       }
     },
     "input_scope": {
@@ -3706,7 +3712,7 @@
       "native_hypothesis_family": "DOSE constructs candidate terms from the supplied annotation-mapped query genes, then intersects their memberships with the effective universe and filters by minGSSize/maxGSSize before BH adjustment. Under the explicit pre-intersection rule every native tested term has nonzero overlap. Export those exact tested IDs and all eligible zero-overlap terms separately; do not include appended zero-overlap rows in native BH correction.",
       "qvalue_policy": "Set seed 42 immediately before each ORA call because DOSE invokes qvalue with pi0.method=bootstrap. Export its result/status separately; deterministic acceptance and term selection use native BH p.adjust, not Storey qvalue. Preserve the raw result slot and record qvalue failures as returned NA; do not silently change the native hypothesis family.",
       "semantic_graph": "Use the checksum-pinned GOSemSim 2.36.0 bundled gotbl.rda for Wang similarity and the separately pinned GO.db 3.22.0 ancestors for clusterProfiler tie-breaking. Inspect the bundled relation table and eligible-term representation before freezing acceptance. Do not overwrite the native table with the audited GO.db export or claim the two graphs agree without comparison.",
-      "semantic_native_conventions": "The inspected Wang source assigns weights 0.8 to is_a, 0.6 to part_of and 0.7 to other relationships. For BP it sets the universal all root contribution to zero. Its traversal retains the first duplicate ancestor entry rather than explicitly maximizing over path contributions. Preserve native table/traversal order and record this behavior; an independently implemented textbook maximum-path score is not automatically the same oracle. Use a fresh R process per task so global semantic caches cannot mix graph versions.",
+      "semantic_native_conventions": "The inspected Wang source assigns weights 0.8 to is_a, 0.6 to part_of and 0.7 to other relationships. For BP it sets the universal all root contribution to zero. Its traversal retains the first duplicate ancestor entry rather than explicitly maximizing over path contributions. Preserve native table/traversal order and record this behavior; an independently implemented textbook maximum-path score is not automatically the same oracle. Use a fresh R process per task so global semantic caches cannot mix graph versions. GOSemSim mgoSim rounds the similarity matrix to three decimals before clusterProfiler applies the strict >0.7 comparison; reproduce that rounding boundary.",
       "semantic_data": "For Wang, construct godata(annoDb=the pinned mouse OrgDb, keytype=ENTREZID, ont=BP, computeIC=FALSE, processTCSS=FALSE). Information content is not used by the inspected Wang path. This avoids an unnecessary IC fit without changing the intended native similarity method."
     },
     "kegg": {
@@ -3721,7 +3727,7 @@
     },
     "gsea": {
       "native_candidate": "GSEApy 1.3.0 prerank; independently acquired GO BP GMT compatible with rank identifiers. Do not substitute ORA or a different named library without an adaptation record.",
-      "ranking": "Every count-eligible, mapped gene with a finite unshrunken signed Wald statistic. One stable ID per gene; descending statistic with lexicographic stable-ID tie break recorded before native ranking. No significant-gene prefilter. Preserve source IDs through symbol mappings and resolve duplicates before ranking. Pass ascending=None to preserve the predeclared order and assert that the native ranking IDs and values match it. Reject duplicate IDs and nonfinite statistics before the call so GSEApy does not rename genes or fill infinities.",
+      "ranking": "Every count-eligible gene with a finite unshrunken signed Wald statistic and a unique stable Entrez identifier. Keep genes without GO membership in the ranked universe; lack of annotation does not remove a measured gene from the enrichment walk. Order by descending statistic then lexicographic stable-ID tie break. No significance prefilter or symbol-row multiplication. Pass ascending=None and assert native ranking IDs/values match; reject duplicate IDs/nonfinite statistics before the call.",
       "parameters": {
         "min_size": 15,
         "max_size": 500,
@@ -3876,6 +3882,23 @@
       "selection_timing": "Named GO terms come from the source questions and were resolved in the pinned annotation table. Grik5 is the declared mouse-symbol candidate for the GRIK5 lookup; require an unambiguous native identifier mapping before authoring. Do not select a replacement using observed significance.",
       "separate_population_endpoint": "For bix-5-q4, adapt source fibroblast population selection to the independently observed basal population. A separate basal fit and enrichment result are required; the current luminal preparation provides no credit for this endpoint.",
       "validated_new_mappings": 0
+    },
+    "gsea_native_preparation": {
+      "status": "Prepared only; native execution and Harbor validation pending.",
+      "script": "sources/prepare_gsea.py",
+      "script_sha256": "d67e6df94dc917a9a939c892a36d0bb62098384d3c80fcc945271ed778c5b6a9",
+      "requirements": "sources/gseapy-preparation.requirements.txt",
+      "requirements_sha256": "3a242b01f4dbfd46bd28430b8cc943d475fa6dd0d95570b81cf73df0f797c33e",
+      "environment": "Python 3.12 Linux x86_64; 19 exact package versions with artifact hashes; binary wheels only. Prepared lock has not yet been installed remotely.",
+      "input": "Checksum-verified native count statistics and full observed-species BP membership from the count/enrichment preparation. All finite eligible Wald statistics enter ranking, including genes outside eligible gene sets.",
+      "checks": "Require complete set universe, preserved native rank order, exact hit/membership identities, independently calculated weighted ES and leading-edge genes; check native permutation probabilities and FDR bounds. Retain every set with its eligibility status.",
+      "limits": "Independent ES/leading-edge checks do not recompute the null distribution, NES, permutation p or FDR. Native and Harbor validation remain required; no coverage promoted.",
+      "wrapper_source": {
+        "archive_sha256": "bc5daa80376751c42c0beb5cfbb42131ad2de3c9426f97a415df37d713ceaae3",
+        "member": "gseapy-1.3.0/gseapy/__init__.py",
+        "member_sha256": "81b470c47057c9303b1c7f3a299532fbd8f6179cda278ba85c29f91d69d65075",
+        "finding": "prerank forwards the explicit method=permutation argument to Prerank; species is explicitly mouse and gene sets are supplied locally."
+      }
     }
   }
 }

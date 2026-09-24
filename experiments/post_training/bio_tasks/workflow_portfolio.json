@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T21:12:25.117992+00:00",
+  "updated_at": "2026-09-24T21:23:44.676797+00:00",
   "scope": "Full question-proposal portfolio for the 32 currently inventoried provisional-ID agentic releases. This planning index resolves every question card and records conditional consolidation; it creates no training task or validated coverage. Nine source leads without inventories remain outside the enumerated denominator.",
   "counts": {
     "source_releases": 32,
@@ -31,7 +31,7 @@
     },
     {
       "path": "workflow_designs/bixbench.json",
-      "sha256": "b312c9cc7a685e5b5f63047a9fa60ed22152211110d09e4b8cd3be41bfac0c39"
+      "sha256": "3460db4c5eea42d5486b760e1a08efcea9becd23e2444b0e5a999152af6fa5cb"
     },
     {
       "path": "workflow_designs/compbiobench.json",
