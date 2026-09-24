@@ -29,7 +29,190 @@
           "content_bytes": 24894,
           "vendored_bytes": 2631,
           "transformation": "Content unchanged; gzip level 9, mtime 0."
+        },
+        "gse60450-basal-1-2-results.tsv.gz": {
+          "role": "private-reference",
+          "content_sha256": "a15b0a0ee0f2c1062752b080e0d06519527fd07c29cdcad48b2e28624012cb6b",
+          "vendored_sha256": "78b30b6f27a63f1e2d34c0f80b6247498ab8371d0468d67b9d5e16963258e142",
+          "content_bytes": 1988419,
+          "vendored_bytes": 950682,
+          "transformation": "Unchanged output from pinned prepare_deseq.R on observed GSE60450 counts.",
+          "preparation_output_sha256": "a15b0a0ee0f2c1062752b080e0d06519527fd07c29cdcad48b2e28624012cb6b"
+        },
+        "gse60450-basal-1-3-results.tsv.gz": {
+          "role": "private-reference",
+          "content_sha256": "adfe9f743d3a20b5481a17dc0c173700ac7df9906cf9c4645cc0bece79479449",
+          "vendored_sha256": "e525298b5d0f0c0b4fbaae8a7bd817fcdc6ca66ed73b91ca3f39069cfbba9f0b",
+          "content_bytes": 1997149,
+          "vendored_bytes": 958736,
+          "transformation": "Unchanged output from pinned prepare_deseq.R on observed GSE60450 counts.",
+          "preparation_output_sha256": "adfe9f743d3a20b5481a17dc0c173700ac7df9906cf9c4645cc0bece79479449"
+        },
+        "gse60450-basal-2-1-results.tsv.gz": {
+          "role": "private-reference",
+          "content_sha256": "168e40c9af2267db6b23b06fba7d4f7c1877c6576b7a72cb4fb9a6b811b59823",
+          "vendored_sha256": "50a2937acf23df4f735424f3812ba55bfbd213a69d44cf40686e132a4e3784cb",
+          "content_bytes": 1987831,
+          "vendored_bytes": 950593,
+          "transformation": "Unchanged output from pinned prepare_deseq.R on observed GSE60450 counts.",
+          "preparation_output_sha256": "168e40c9af2267db6b23b06fba7d4f7c1877c6576b7a72cb4fb9a6b811b59823"
+        },
+        "gse60450-basal-2-3-results.tsv.gz": {
+          "role": "private-reference",
+          "content_sha256": "9fe73061bd180f4a3bc874767642407232da3d4e26b331c38f2cc34558229ec8",
+          "vendored_sha256": "109b2e30c4269d0301e1ea39d50dcfd8c642bd25e56589e3358ef2e805563cc2",
+          "content_bytes": 1988327,
+          "vendored_bytes": 951038,
+          "transformation": "Unchanged output from pinned prepare_deseq.R on observed GSE60450 counts.",
+          "preparation_output_sha256": "9fe73061bd180f4a3bc874767642407232da3d4e26b331c38f2cc34558229ec8"
+        },
+        "gse60450-basal-3-1-results.tsv.gz": {
+          "role": "private-reference",
+          "content_sha256": "3ff5116fda620c7d311f21ce3068454e25d9da0a290e88c65af0a437a9c15927",
+          "vendored_sha256": "3d35867dd7892558cac3ea8a69faaa08670f7fcac3995f81e01ac4dc8511f564",
+          "content_bytes": 1996501,
+          "vendored_bytes": 958443,
+          "transformation": "Unchanged output from pinned prepare_deseq.R on observed GSE60450 counts.",
+          "preparation_output_sha256": "3ff5116fda620c7d311f21ce3068454e25d9da0a290e88c65af0a437a9c15927"
+        },
+        "gse60450-basal-3-2-results.tsv.gz": {
+          "role": "private-reference",
+          "content_sha256": "4b97d932f9862de040d690fc02e8d762c7f97572e24df25a51f09afc852cb162",
+          "vendored_sha256": "a0f0dd7fafe69663bef096475683d9681c1ba6303e71576b5820c217e51932fe",
+          "content_bytes": 1988723,
+          "vendored_bytes": 951300,
+          "transformation": "Unchanged output from pinned prepare_deseq.R on observed GSE60450 counts.",
+          "preparation_output_sha256": "4b97d932f9862de040d690fc02e8d762c7f97572e24df25a51f09afc852cb162"
+        },
+        "gse60450-basal-dispersions.tsv.gz": {
+          "role": "private-reference",
+          "content_sha256": "8ba2571b49a604cb06d7237a5f9d44440e6b9605b047e8cbda7d2a2447926a49",
+          "vendored_sha256": "31722bb84365248e8c163998cdf6e77f4a74cd8b86c30c6db2639151e2679eeb",
+          "content_bytes": 1004670,
+          "vendored_bytes": 441703,
+          "transformation": "Unchanged output from pinned prepare_deseq.R on observed GSE60450 counts.",
+          "preparation_output_sha256": "8ba2571b49a604cb06d7237a5f9d44440e6b9605b047e8cbda7d2a2447926a49"
+        },
+        "gse60450-basal-size-factors.tsv.gz": {
+          "role": "private-reference",
+          "content_sha256": "be550e7ebe65bd16d4090b3e3bb7a9ba037367684cccebe876f0437fdfd0f15a",
+          "vendored_sha256": "f70e8a7df43a957472a78b22a59d6be939e7529921745c4c6f44998cc3b7edb8",
+          "content_bytes": 327,
+          "vendored_bytes": 189,
+          "transformation": "Unchanged output from pinned prepare_deseq.R on observed GSE60450 counts.",
+          "preparation_output_sha256": "be550e7ebe65bd16d4090b3e3bb7a9ba037367684cccebe876f0437fdfd0f15a"
+        },
+        "gse60450-luminal-1-2-results.tsv.gz": {
+          "role": "private-reference",
+          "content_sha256": "45f4d7c18abdc5e4a7d2c6c202405f071dc7719980d961230a797a881a8a1a4f",
+          "vendored_sha256": "f2f967f68a41b1ba6b65790f2e7cb61164c5fda10ef3a7d0565ec56e9803e377",
+          "content_bytes": 1915502,
+          "vendored_bytes": 920676,
+          "transformation": "Unchanged output from pinned prepare_deseq.R on observed GSE60450 counts.",
+          "preparation_output_sha256": "45f4d7c18abdc5e4a7d2c6c202405f071dc7719980d961230a797a881a8a1a4f"
+        },
+        "gse60450-luminal-1-3-results.tsv.gz": {
+          "role": "private-reference",
+          "content_sha256": "345a462cab4f0e9a1b2f3621a039ef8e1b9b087a521c9b820ab84af2b5c27157",
+          "vendored_sha256": "af366721352c9d055ad0f2442a6993b67c866b4e9a2913205cae56bd497dfe56",
+          "content_bytes": 1925347,
+          "vendored_bytes": 928564,
+          "transformation": "Unchanged output from pinned prepare_deseq.R on observed GSE60450 counts.",
+          "preparation_output_sha256": "345a462cab4f0e9a1b2f3621a039ef8e1b9b087a521c9b820ab84af2b5c27157"
+        },
+        "gse60450-luminal-2-1-results.tsv.gz": {
+          "role": "private-reference",
+          "content_sha256": "4d41f97e905feb0e74b929646dc6840e8746fddd8e09980e06240e62b44036b6",
+          "vendored_sha256": "bb68a6c1eb2927d43b6bc35ba4d537edc904e47b2f3f5a97fbb2916343093eff",
+          "content_bytes": 1915380,
+          "vendored_bytes": 920904,
+          "transformation": "Unchanged output from pinned prepare_deseq.R on observed GSE60450 counts.",
+          "preparation_output_sha256": "4d41f97e905feb0e74b929646dc6840e8746fddd8e09980e06240e62b44036b6"
+        },
+        "gse60450-luminal-2-3-results.tsv.gz": {
+          "role": "private-reference",
+          "content_sha256": "cbc73a83bd05511c55479d1042d0baf6f315765e45cbd9e7633e6443459075fc",
+          "vendored_sha256": "abe96ff9ef0c84afdaee8863ecb2215e31df9bf384b527794065463ce8d994cb",
+          "content_bytes": 1912987,
+          "vendored_bytes": 920238,
+          "transformation": "Unchanged output from pinned prepare_deseq.R on observed GSE60450 counts.",
+          "preparation_output_sha256": "cbc73a83bd05511c55479d1042d0baf6f315765e45cbd9e7633e6443459075fc"
+        },
+        "gse60450-luminal-3-1-results.tsv.gz": {
+          "role": "private-reference",
+          "content_sha256": "8d6388f8a36361ee6d5cd4de9fce8a7ca096586d0d31f43aff71212b6b5bae95",
+          "vendored_sha256": "423732e87c8ea2e546ca1ab5c3cca61830a15b03e6a84ef307abe85022ccb2f7",
+          "content_bytes": 1923071,
+          "vendored_bytes": 927656,
+          "transformation": "Unchanged output from pinned prepare_deseq.R on observed GSE60450 counts.",
+          "preparation_output_sha256": "8d6388f8a36361ee6d5cd4de9fce8a7ca096586d0d31f43aff71212b6b5bae95"
+        },
+        "gse60450-luminal-3-2-results.tsv.gz": {
+          "role": "private-reference",
+          "content_sha256": "90db0e02920623a096cd109512321bed3a91257e657d41d963197f17663a7e6a",
+          "vendored_sha256": "86d2ad9554d6dbe745700c23aadd70bdfa4d36fc37d421039c2c684f8fc3c577",
+          "content_bytes": 1913879,
+          "vendored_bytes": 920490,
+          "transformation": "Unchanged output from pinned prepare_deseq.R on observed GSE60450 counts.",
+          "preparation_output_sha256": "90db0e02920623a096cd109512321bed3a91257e657d41d963197f17663a7e6a"
+        },
+        "gse60450-luminal-dispersions.tsv.gz": {
+          "role": "private-reference",
+          "content_sha256": "2e1afcc2c477f74542861c7b418c579fb0ed4ae9989b327ba29aca468b8cb0ee",
+          "vendored_sha256": "a5c9ddba2c14127ef9291adf0180c13177ec2f1205b3e88d694871b3fd00ab0e",
+          "content_bytes": 947049,
+          "vendored_bytes": 415910,
+          "transformation": "Unchanged output from pinned prepare_deseq.R on observed GSE60450 counts.",
+          "preparation_output_sha256": "2e1afcc2c477f74542861c7b418c579fb0ed4ae9989b327ba29aca468b8cb0ee"
+        },
+        "gse60450-luminal-size-factors.tsv.gz": {
+          "role": "private-reference",
+          "content_sha256": "ca00297478985bd589a77e200666a57b77b1cb06a7a23a092ddba550ec555488",
+          "vendored_sha256": "a671dd9f072f04d4a87dc6a056a6cc24d4c241343f8dbf1ea871020d4bca9b3f",
+          "content_bytes": 327,
+          "vendored_bytes": 188,
+          "transformation": "Unchanged output from pinned prepare_deseq.R on observed GSE60450 counts.",
+          "preparation_output_sha256": "ca00297478985bd589a77e200666a57b77b1cb06a7a23a092ddba550ec555488"
+        },
+        "gse60450-reference-metadata.json.gz": {
+          "role": "private-reference",
+          "content_sha256": "0bec706bba5f355b128fcca48b3b14d95a6eb77617a63b1899dac67c9c2c2950",
+          "vendored_sha256": "d1ebe6c645115eb3d5b050230339b1d616bac0591dc016963b8bcde0aff92ed5",
+          "content_bytes": 8189,
+          "vendored_bytes": 1032,
+          "transformation": "Unchanged output from pinned prepare_deseq.R on observed GSE60450 counts.",
+          "preparation_output_sha256": "0bec706bba5f355b128fcca48b3b14d95a6eb77617a63b1899dac67c9c2c2950"
+        },
+        "gse60450-session-info.txt.gz": {
+          "role": "private-reference",
+          "content_sha256": "d2094955ae75799189721f6805be3773b0d86e5fff733a7fe950ed33fe2cf8ff",
+          "vendored_sha256": "5a9d02c7af685bb57fd7195649097cd838a6463c5f34dea62be74a0488eaecd8",
+          "content_bytes": 2090,
+          "vendored_bytes": 1073,
+          "transformation": "Unchanged output from pinned prepare_deseq.R on observed GSE60450 counts.",
+          "preparation_output_sha256": "d2094955ae75799189721f6805be3773b0d86e5fff733a7fe950ed33fe2cf8ff"
         }
+      },
+      "reference_preparation": {
+        "source_revision": "da6c8f64372e91b18fe87c8f613bc1cf0be37700",
+        "preparation_script": "sources/prepare_deseq.R",
+        "preparation_script_sha256": "696c88370829e9b7895669ad8f8a20d1d54ba3743000e799a0dc134f14b66e8b",
+        "job_id": "/exedev/bio-rnaseq-references-20260924-012120",
+        "output_archive_sha256": "91de592a9f07a2ee28ca9ae73974ab04fee3ff89c4f399e08d170e384947319f",
+        "packages": {
+          "R": "4.5.3",
+          "DESeq2": "1.50.2",
+          "org.Mm.eg.db": "3.22.0",
+          "GO.db": "3.22.0",
+          "jsonlite": "2.0.0"
+        },
+        "annotation_database_sha256": {
+          "lib/R/library/org.Mm.eg.db/extdata/org.Mm.eg.sqlite": "663501f1f2de03c1b2d4e30ad407607b65ec299242c9e0f4b3bced7e35c5b424",
+          "lib/R/library/GO.db/extdata/GO.sqlite": "ccdb10199a59103c051dabe04f4f89445be1fb804d7b8889eed4f75b0a9b787b"
+        },
+        "prepared_at": "2026-09-24T01:24:30.202687+00:00",
+        "vendoring_script": "sources/vendor_deseq.py",
+        "oracle_independence": "Preparation uses the DESeq wrapper; the oracle independently executes explicit estimation stages with the same statistical engine. Enrichment references use SciPy; the R oracle uses phyper and p.adjust."
       }
     },
     "PDB:1UBQ": {
@@ -448,6 +631,57 @@
             "numpy": "2.5.3",
             "pandas": "3.0.6"
           }
+        }
+      }
+    },
+    "GO:mouse-3.22.0": {
+      "landing_page": "https://bioconductor.org/packages/3.22/data/annotation/html/org.Mm.eg.db.html",
+      "lineage": "shared-reference:org.Mm.eg.db-3.22.0:GO.db-3.22.0",
+      "license": "Artistic-2.0",
+      "license_source": "https://bioconductor.org/packages/3.22/data/annotation/html/org.Mm.eg.db.html",
+      "citation": "Bioconductor org.Mm.eg.db 3.22.0 and GO.db 3.22.0; exact database hashes in reference_preparation.",
+      "retrieved_at": "2026-09-24",
+      "data_origin": "real",
+      "benchmark_screening": "Shared reference annotation; biological sample lineage remains GSE60450. Full benchmark artifact-lineage exclusion is pending.",
+      "reference_preparation": {
+        "source_revision": "da6c8f64372e91b18fe87c8f613bc1cf0be37700",
+        "preparation_script": "sources/prepare_deseq.R",
+        "preparation_script_sha256": "696c88370829e9b7895669ad8f8a20d1d54ba3743000e799a0dc134f14b66e8b",
+        "job_id": "/exedev/bio-rnaseq-references-20260924-012120",
+        "output_archive_sha256": "91de592a9f07a2ee28ca9ae73974ab04fee3ff89c4f399e08d170e384947319f",
+        "packages": {
+          "R": "4.5.3",
+          "DESeq2": "1.50.2",
+          "org.Mm.eg.db": "3.22.0",
+          "GO.db": "3.22.0",
+          "jsonlite": "2.0.0"
+        },
+        "annotation_database_sha256": {
+          "lib/R/library/org.Mm.eg.db/extdata/org.Mm.eg.sqlite": "663501f1f2de03c1b2d4e30ad407607b65ec299242c9e0f4b3bced7e35c5b424",
+          "lib/R/library/GO.db/extdata/GO.sqlite": "ccdb10199a59103c051dabe04f4f89445be1fb804d7b8889eed4f75b0a9b787b"
+        },
+        "prepared_at": "2026-09-24T01:24:30.202687+00:00",
+        "vendoring_script": "sources/vendor_deseq.py",
+        "oracle_independence": "Preparation uses the DESeq wrapper; the oracle independently executes explicit estimation stages with the same statistical engine. Enrichment references use SciPy; the R oracle uses phyper and p.adjust."
+      },
+      "assets": {
+        "go-terms-3.22.0.tsv.gz": {
+          "role": "public-annotation",
+          "content_sha256": "fcd6ca21a01d15f594118065edda30a6a11654efc76b49f21f2ca28c8784ce12",
+          "vendored_sha256": "df5b839e524a1352b41828103f3cf474ab79f5f22baedd21aa6f190e127b606e",
+          "content_bytes": 1203142,
+          "vendored_bytes": 225905,
+          "transformation": "Unchanged output from pinned prepare_deseq.R on observed GSE60450 counts.",
+          "preparation_output_sha256": "fcd6ca21a01d15f594118065edda30a6a11654efc76b49f21f2ca28c8784ce12"
+        },
+        "mouse-go-bp-3.22.0.tsv.gz": {
+          "role": "public-annotation",
+          "content_sha256": "c20e1ef4a729a734bab07f61f806aa2330d2de0a6261c0dba7ada9d555764748",
+          "vendored_sha256": "b232bcb236eb7218b04be966a4efe4feae264f89ccfaafe53e91f701a9fb3eea",
+          "content_bytes": 27119057,
+          "vendored_bytes": 4134054,
+          "transformation": "GOALL propagated membership for observed GSE60450 Entrez IDs; unique gene/term/ontology triples, biological process only, with evidence codes collapsed.",
+          "preparation_output_sha256": "363ea9990efec566c2622314bdd43b55ad01efe2f9719a921c2bc884139ea0ef"
         }
       }
     }

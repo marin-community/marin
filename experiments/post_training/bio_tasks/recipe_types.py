@@ -18,6 +18,11 @@ class DataOrigin(StrEnum):
     MODIFIED_REAL = "modified-real"
 
 
+class WorkflowScope(StrEnum):
+    COMPONENT = "component"
+    CONNECTED = "connected"
+
+
 @dataclass(frozen=True)
 class Instance:
     instruction: str
@@ -27,6 +32,7 @@ class Instance:
     data_origin: DataOrigin = DataOrigin.SIMULATED
     source_ids: tuple[str, ...] = ()
     derivation: str = "Synthetic correctness fixture."
+    workflow_scope: WorkflowScope = WorkflowScope.COMPONENT
 
 
 @dataclass(frozen=True)
@@ -39,6 +45,7 @@ class Recipe:
     generate: Callable[[int], Instance]
     domain: str = ""
     repositories: tuple[str, ...] = ()
+    oracle_timeout: int = 30
 
 
 def csv_text(rows: list[dict]) -> str:

@@ -84,6 +84,33 @@ the format distinctions instead of converting every annotation to CSV.
 
 ## Build and inspect
 
+Connected DESeq2 differential-expression and GO-enrichment candidates are defined in
+`generators/real_rnaseq.py`. Their private fits use unchanged GSE60450 observations;
+the public annotation snapshot preserves propagated biological-process membership
+from org.Mm.eg.db and GO.db 3.22.0. They remain outside the default corpus while
+native-oracle and container validation are pending. No benchmark inputs or model
+calls were used to prepare these references.
+
+`sources/prepare_deseq.R` prepares all contrasts, fitted size factors and frozen
+annotations on a CPU worker with R 4.5.3 and DESeq2 1.50.2. After verifying the
+worker's output manifest, `sources/vendor_deseq.py` preserves the private reference
+files and selects the public BP annotation snapshot. `data_sources.json` records
+content hashes, package versions and annotation database hashes. The oracle
+executes DESeq2's estimation stages from task inputs; it shares the statistical
+engine with the preparation reference. The enrichment cross-check uses independent
+SciPy and R probability implementations.
+
+On a CPU host with the pinned R environment on `PATH`:
+
+```bash
+python -m experiments.post_training.bio_tasks.sources.validate_rnaseq \
+  --output <new-output> --lock <resolved-packages.json> \
+  --source-revision <commit> --seed 20260923 --instances 3
+```
+
+It checks complete QC, fitted-gene and enrichment tables as well as summaries and
+negative controls. R validation requires remote compute on the shared authoring VM.
+
 From the repository root:
 
 ```bash

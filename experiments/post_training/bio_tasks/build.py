@@ -87,7 +87,8 @@ def oracle_archive() -> bytes:
     files.update(
         {
             prefix + path.relative_to(SOURCE_DIR).as_posix(): path.read_bytes()
-            for path in (SOURCE_DIR / "solvers").rglob("*.py")
+            for path in (SOURCE_DIR / "solvers").rglob("*")
+            if path.suffix in {".py", ".R"}
         }
     )
     buffer = io.BytesIO()
@@ -136,7 +137,7 @@ def validate_instance(
             check=True,
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=recipe.oracle_timeout,
         )
         solved = json.loads(answer.read_text())
         reference = root / "reference.json"
@@ -180,6 +181,17 @@ def validate_instance(
             artifact_checks[f"missing_table_row:{name}"] = grade_files(reference, answer).reward
             artifact.write_bytes(original + lines[-1])
             artifact_checks[f"duplicate_table_row:{name}"] = grade_files(reference, answer).reward
+            fields = lines[1].decode().rstrip("\r\n").split("\t")
+            header = lines[0].decode().rstrip("\r\n").split("\t")
+            for column_name, column in instance.contract.tables[name].columns.items():
+                index = header.index(column_name)
+                if column.kind not in {"integer", "number"} or fields[index] in {"NA", "null", ""}:
+                    continue
+                value = int(fields[index]) if column.kind == "integer" else float(fields[index])
+                fields[index] = str(value + max(1, abs(value)))
+                artifact.write_bytes(lines[0] + ("\t".join(fields) + "\n").encode() + b"".join(lines[2:]))
+                artifact_checks[f"changed_table_value:{name}"] = grade_files(reference, answer).reward
+                break
             artifact.write_bytes(original)
         if any(value != 0 for value in artifact_checks.values()):
             raise ValueError(f"{recipe.id}: invalid native artifact passed: {artifact_checks}")
@@ -279,7 +291,7 @@ def instance_provenance(instance: Instance) -> dict:
         "biological_lineages": [source_catalog()[source]["lineage"] for source in instance.source_ids],
         "derivation": instance.derivation,
         "scale_profile": "small-fixture" if instance.data_origin == DataOrigin.SIMULATED else "observed-study",
-        "workflow_scope": "component",
+        "workflow_scope": instance.workflow_scope.value,
         "training_ready": False,
     }
 
@@ -560,7 +572,8 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
         "split_policy": "single train split; evaluation benchmarks remain separate",
         "source_hashes": {
             path.relative_to(SOURCE_DIR).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
-            for path in sorted(SOURCE_DIR.rglob("*.py"))
+            for path in sorted(SOURCE_DIR.rglob("*"))
+            if path.suffix in {".py", ".R"}
         },
         "source_inventory_sha256": hashlib.sha256(inventory).hexdigest(),
         "repository_coverage_sha256": hashlib.sha256(coverage_bytes).hexdigest(),
