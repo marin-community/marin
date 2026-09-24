@@ -403,6 +403,53 @@
           "transformation": "Sequences unchanged. Selected accession/version/taxonomy/name metadata; added BLOSUM62 and independent optimal pairwise scores. gzip mtime 0."
         }
       }
+    },
+    "survival:PBC": {
+      "landing_page": "https://github.com/therneau/survival/tree/ed1a6b249fa714ccb9169faea63ddafd1addb774",
+      "lineage": "Mayo-PBC-1974-1984",
+      "revision": "ed1a6b249fa714ccb9169faea63ddafd1addb774",
+      "license": "LGPL-2.0-or-later",
+      "license_source": "https://github.com/therneau/survival/blob/ed1a6b249fa714ccb9169faea63ddafd1addb774/DESCRIPTION",
+      "citation": "Therneau and Grambsch (2000), Modeling Survival Data, ISBN 0-387-98784-3; Murtaugh et al. (1994), Hepatology 20:126-134.",
+      "retrieved_at": "2026-09-24",
+      "data_origin": "real",
+      "benchmark_screening": "No matching study identifiers in inspected permitted ID metadata; full artifact-lineage screening pending. BioMysteryBench held out as OOD and not used for authoring.",
+      "limitations": "pbcseq contains corrected baseline values and extended follow-up; do not interchange its baselines with pbc. Missing visits/measurements may be informative. Observational associations do not establish treatment benefit.",
+      "assets": {
+        "pbc-pbc.tsv.gz": {
+          "url": "https://raw.githubusercontent.com/therneau/survival/ed1a6b249fa714ccb9169faea63ddafd1addb774/data/pbc.rda",
+          "download_sha256": "86ed4d908bccc801a01053b4e619a23e92d1b1bf8000a8429c7ced7632de44e2",
+          "content_sha256": "6e9e683bfdc05e0b7d0978d3199c7e4c811a100ff805405f6ccca13033046a6c",
+          "vendored_sha256": "a89ea253723e54ad89be2c7458bba2db3d0784f0682c8672f2266cb837657728",
+          "content_bytes": 45674,
+          "vendored_bytes": 13157,
+          "transformation": "R dataframe converted to TSV; column values and row order preserved, missing values empty."
+        },
+        "pbc-pbcseq.tsv.gz": {
+          "url": "https://raw.githubusercontent.com/therneau/survival/ed1a6b249fa714ccb9169faea63ddafd1addb774/data/pbc.rda",
+          "download_sha256": "86ed4d908bccc801a01053b4e619a23e92d1b1bf8000a8429c7ced7632de44e2",
+          "content_sha256": "bf1ed54c51821b5ce51e5fe8accb2319e952df77e44ddc20b04add70557dc9e9",
+          "vendored_sha256": "2f72efb43c9f615e1fee2fd0f59bcd514390728559a5f5c4ff1da42c1a7e2eeb",
+          "content_bytes": 213158,
+          "vendored_bytes": 42721,
+          "transformation": "R dataframe converted to TSV; column values and row order preserved, missing values empty."
+        },
+        "pbc-cox-reference.json.gz": {
+          "url": "https://raw.githubusercontent.com/therneau/survival/ed1a6b249fa714ccb9169faea63ddafd1addb774/data/pbc.rda",
+          "download_sha256": "86ed4d908bccc801a01053b4e619a23e92d1b1bf8000a8429c7ced7632de44e2",
+          "content_sha256": "4c447c0fce6a776840cf210933e666a407d35bc3c2551304df2d2b5cc3b4968c",
+          "vendored_sha256": "87ddb13cf21c45e5aed4b6645e7fb0195a69e6d2eaf303fa58ce6d7ee54be1e5",
+          "content_bytes": 4462,
+          "vendored_bytes": 1432,
+          "transformation": "statsmodels PHReg, Breslow ties, composite death/transplant endpoint, age in decades, male indicator",
+          "preparation_versions": {
+            "statsmodels": "0.14.6",
+            "pyreadr": "0.5.6",
+            "numpy": "2.5.3",
+            "pandas": "3.0.6"
+          }
+        }
+      }
     }
   }
 }

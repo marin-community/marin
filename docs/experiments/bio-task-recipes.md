@@ -158,6 +158,9 @@ correctness controls. See [provenance and limitations](bio-task-catalog.md#id-wo
 
 | Recipe | Difficulty | Supplied formats | Skills | Repository operations |
 |---|---|---|---|---|
+| `real-clinical-kaplan-meier` | medium | clinical TSV, survival TSV | patient joins, randomized cohort, censoring, tied events | Additional domain coverage |
+| `real-clinical-adjusted-cox` | medium | clinical TSV, survival TSV | complete cases, Cox regression, Breslow ties, adjusted uncertainty | Additional domain coverage |
+| `real-clinical-paired-visits` | medium | clinical TSV, longitudinal TSV | patient joins, nearest visits, missingness, paired changes | Additional domain coverage |
 | `enrichment-universe` | medium | gmt, gene-lists | background-universe, hypergeometric-tail, multiple-testing | Additional domain coverage |
 | `design-estimability` | medium | csv-header | model-rank, confounding, valid-stopping | DESeq2 |
 | `paired-treatment-effect` | medium | csv-header | paired-design, technical-replicates, missing-visits | limma |

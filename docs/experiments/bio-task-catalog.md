@@ -6,7 +6,7 @@ program decisions, collection policy, and results; this file holds the detailed
 coverage and source evidence. [Generator documentation](bio-tasks.md) lists the
 implemented recipes and how to inspect their examples.
 
-The implementation has **134 recipes across 13 domains**, with three instances per
+The implementation has **137 recipes across 13 domains**, with three instances per
 recipe and one train split. The [implemented recipe matrix](bio-task-recipes.md)
 records the supplied formats, skills, and source-repository mappings. Sections below
 also retain candidate capabilities beyond the current implementation. Source inspection
@@ -195,7 +195,7 @@ supplies imaging operations. Distinguish measuring supplied masks from segmentin
 
 ## ID workflow coverage and input realism
 
-The 134 recipes include nineteen using real observations and 115 simulated component
+The 137 recipes include twenty-two using real observations and 115 simulated component
 controls. They do **not** establish coverage of complete ID benchmark workflows. Repository count, format count, and successful
 package checks measure different things from workflow coverage. The following
 assessment uses public benchmark descriptions and the program's prior source
@@ -203,13 +203,13 @@ inspection; it is a qualitative gap analysis, not a benchmark coverage score.
 
 The [task-level registry](../../experiments/post_training/bio_tasks/benchmark_coverage.json)
 retains 365 provisional ID identifiers at pinned dataset revisions: 205 BixBench,
-100 CompBioBench, 50 BiomniBench-DA and 10 BioAgent. Eighteen have manually assessed
-component mappings and 347 are unmapped. The 90 BioMysteryBench identifiers are
+100 CompBioBench, 50 BiomniBench-DA and 10 BioAgent. Twenty-three have manually assessed
+component mappings and 342 are unmapped. The 90 BioMysteryBench identifiers are
 tracked separately as OOD; their task formulations remain excluded from training authoring. None is marked workflow-validated.
 The inspection browser binds mappings to generated examples and their local reference
 results. These timings are solver-check runtimes, not teacher latency measurements.
 
-Nineteen recipes supply unchanged biological observations or declared observed subsets:
+Twenty-two recipes supply unchanged biological observations or declared observed subsets:
 
 - **GSE60450:** 27,179 genes and 12 libraries from mouse mammary basal/luminal cells,
   with two biological replicates per population and stage. Tasks cover library QC,
@@ -238,6 +238,14 @@ Nineteen recipes supply unchanged biological observations or declared observed s
   Biopython pairwise scores bound the objective; a separate center-star solution
   checks feasibility. Different qualifying alignments pass. This does not establish
   orthology or a species phylogeny. UniProt data are [CC-BY-4.0](https://www.uniprot.org/help/license).
+
+- **Mayo PBC study:** 418 baseline records and 1,945 follow-up observations. Three
+  recipes cover randomized-cohort selection, composite-endpoint Kaplan-Meier
+  estimation, adjusted Cox regression, and complete-pair visit comparisons. Cox
+  references use Statsmodels and an independent standard-library solver. The
+  longitudinal source contains corrected values and extended follow-up; its
+  baselines are kept separate from the original baseline table. Missingness may
+  be informative. Native R execution and scientific review remain pending.
 
 [Source provenance](../../experiments/post_training/bio_tasks/data_sources.json)
 records retrieval URLs, checksums, licenses and unchanged-content recompression.

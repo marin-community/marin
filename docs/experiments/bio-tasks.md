@@ -1,6 +1,6 @@
 # Synthetic biology task generation
 
-The generators in `experiments/post_training/bio_tasks/` implement 134
+The generators in `experiments/post_training/bio_tasks/` implement 137
 recipes from [the biology data program](https://github.com/marin-community/marin/issues/9257).
 They combine independently sourced real observations with synthetic correctness controls, establish references,
 execute separate input-reading oracle solutions, and package tasks for Harbor.
@@ -11,7 +11,7 @@ the original 2026-07-28 downloads/stars/citations. The maintained
 format coverage, with the original adoption inventory preserved as a separate file.
 
 The [implemented recipe list](bio-task-recipes.md) records every operation, skill,
-format profile, and repository mapping. The 134 recipes span 13 domains:
+format profile, and repository mapping. The 137 recipes span 13 domains:
 
 | Domain | Recipes |
 |---|---:|
@@ -23,14 +23,14 @@ format profile, and repository mapping. The 134 recipes span 13 domains:
 | phylogeny | 11 |
 | assembly and ecology | 8 |
 | imaging and spatial | 7 |
-| statistics | 8 |
+| statistics | 11 |
 | structures and proteomics | 9 |
 | networks | 6 |
 | assays and metabolomics | 7 |
 | workflow and identifiers | 2 |
 
-Use three instances with distinct inputs and reference targets per recipe: 402 train tasks at this checkpoint.
-There are 57 real-data examples and 345 simulated controls. The manifest marks
+Use three instances with distinct inputs and reference targets per recipe: 411 train tasks at this checkpoint.
+There are 66 real-data examples and 345 simulated controls. The manifest marks
 `corpus_stage=authoring-candidates-and-controls` and `training_ready=false`.
 The final training release targets real biological data for every task. Synthetic
 controls stay outside that release and remain available for verifier development.
@@ -39,7 +39,8 @@ inputs, plus checks of alternative valid outputs and plausible scientific errors
 Real examples use the unchanged 27,179-gene, 12-sample GSE60450 count matrix and
 experimental structures 1UBQ, 1CRN and 4HHB, complete annotated phage genomes
 NC_001422.1/NC_001416.1/NC_001604.1, 6,000 observed paired reads from ERR266411,
-and complete curated UniProt globin proteins.
+complete curated UniProt globin proteins, and the published Mayo PBC baseline
+and longitudinal clinical tables.
 The read source retains varying per-base qualities in three disjoint 2,000-pair
 blocks; these are technical subsets, not biological replicates. Source files are vendored with hashes,
 licenses and transformations in `data_sources.json`. Full benchmark lineage screening

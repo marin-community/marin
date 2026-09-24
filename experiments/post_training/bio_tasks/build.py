@@ -245,6 +245,8 @@ def task_files(recipe: Recipe, instance: Instance, task: Identity, base_image: s
         '"pydantic==2.12.5" "tomlkit==0.13.3" '
         f'"tasktrove-verify @ git+https://github.com/marin-community/marin@{tool_ref}'
         '#subdirectory=lib/tasktrove-verify"\n'
+        "COPY test.sh contract.py reference.json /tests/\n"
+        "RUN chmod 755 /tests/test.sh\n"
         "WORKDIR /app\n"
     )
     files = {

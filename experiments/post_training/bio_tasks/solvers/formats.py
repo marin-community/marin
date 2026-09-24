@@ -17,9 +17,9 @@ CODONS = dict(
 )
 
 
-def table(path: Path) -> list[dict[str, str]]:
+def table(path: Path, delimiter: str = ",") -> list[dict[str, str]]:
     with path.open() as handle:
-        return list(csv.DictReader(handle))
+        return list(csv.DictReader(handle, delimiter=delimiter))
 
 
 def fasta(path: Path) -> dict[str, str]:

@@ -3922,15 +3922,30 @@
         "API/Web Fetching"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "resolve identifier namespaces",
+        "select genome/transcript release",
+        "join cross-references",
+        "normalize requested coordinates or stable IDs"
+      ],
+      "remaining_gaps": [
+        "Freeze identifier mappings and version policies; do not infer coordinates from names or mix assemblies.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "annotation cross-references",
+        "assembly metadata"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "identifier-resolution",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -3941,15 +3956,29 @@
         "Bioinformatics Tools"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "read native BAM",
+        "interpret flags and CIGAR",
+        "filter eligible alignments",
+        "aggregate read structure or counts"
+      ],
+      "remaining_gaps": [
+        "Provide authentic alignments and an explicit primary/supplementary/duplicate policy; SAM toy summaries do not establish native BAM coverage.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract."
+      ],
+      "required_formats": [
+        "BAM",
+        "BAI"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "alignment-inspection",
+      "original_internet_required": false,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -3960,15 +3989,32 @@
         "Reasoning"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "read sparse counts",
+        "QC cells",
+        "normalize expression",
+        "cluster and annotate populations",
+        "calculate sample-level proportions"
+      ],
+      "remaining_gaps": [
+        "Use real heterogeneous cell populations and frozen annotation evidence; preserve sample denominators and QC exclusions.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "Matrix Market",
+        "gene identifiers",
+        "cell metadata"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "cell-composition",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -3979,15 +4025,30 @@
         "Reasoning"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "resolve assembly and region",
+        "load tissue-specific chromatin annotation",
+        "intersect coordinates",
+        "compare evidence across tissues"
+      ],
+      "remaining_gaps": [
+        "Freeze tissue and state vocabularies and retain uncertain overlaps; coordinate lookup alone does not establish tissue function.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "BED",
+        "chromatin-state annotations"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "regulatory-annotation",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -3999,15 +4060,33 @@
         "Bioinformatics Tools"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "QC reads",
+        "splice-aware alignment",
+        "collect novel junction or chimeric evidence",
+        "resolve exon/transcript orientation",
+        "report supported structure"
+      ],
+      "remaining_gaps": [
+        "Run actual splice/chimera inference on real RNA reads; supplied junction lists omit the discovery stage.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "FASTQ",
+        "FASTA",
+        "GTF",
+        "BAM"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "transcript-structure-discovery",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4017,15 +4096,31 @@
         "API/Web Fetching"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "inspect study methods and data links",
+        "resolve supplemental artifacts",
+        "parse labels",
+        "derive requested quantitative result"
+      ],
+      "remaining_gaps": [
+        "Use an independent study with a frozen supplement inventory; answer-bearing benchmark papers are not training seeds.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "PDF",
+        "study supplements",
+        "analysis tables"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "study-artifact-discovery",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4039,15 +4134,32 @@
         "Tooling"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "retrieve reference interval",
+        "pin model and tokenizer",
+        "apply single-position masks",
+        "compute predictive entropy",
+        "find qualifying sequence runs"
+      ],
+      "remaining_gaps": [
+        "Run the frozen model on real independent sequence and preserve masking/strand policy; a supplied score vector is only a component.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "FASTA",
+        "model weights",
+        "prediction arrays"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "sequence-model-uncertainty",
+      "original_internet_required": true,
+      "original_gpu_preferred": true
     },
     {
       "benchmark": "CompBioBench",
@@ -4059,15 +4171,31 @@
         "Data Wrangling"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "retrieve versioned assay/sample manifests",
+        "normalize provenance identifiers",
+        "intersect eligible records",
+        "deduplicate and serialize results"
+      ],
+      "remaining_gaps": [
+        "Use actual accession relationships and declared file versions; names or tissue labels do not prove shared provenance.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "resource manifests",
+        "sample accessions",
+        "checksums"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "resource-provenance-join",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4078,15 +4206,31 @@
         "Coding"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "resolve assembly/transcript and strand",
+        "derive interval",
+        "extract oriented reference sequence",
+        "calculate requested sequence metrics"
+      ],
+      "remaining_gaps": [
+        "Pin reference and annotation together; validate inclusive/half-open endpoints and upstream/downstream conventions.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "FASTA",
+        "FAI",
+        "GTF or GFF3"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "strand-aware-reference-query",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4098,15 +4242,31 @@
         "Data Wrangling"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "inspect unknown file features",
+        "retrieve candidate public metadata",
+        "normalize feature coordinates/identifiers",
+        "compare quantitative fingerprints",
+        "identify supported source"
+      ],
+      "remaining_gaps": [
+        "Original tasks involve source discovery; offline analogues require an independent frozen candidate catalog and do not test live discovery.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "GWAS TSV or H5AD or genomic count table",
+        "source catalogs"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "data-source-identification",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4116,15 +4276,32 @@
         "API/Web Fetching"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "resolve transcript and coding interval",
+        "retrieve curated disease variants",
+        "map amino-acid changes",
+        "join pathogenicity predictions",
+        "rank eligible alleles"
+      ],
+      "remaining_gaps": [
+        "Freeze all annotation snapshots and handle transcript/allele ambiguity; predicted pathogenicity is not a clinical diagnosis.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "VCF or variant table",
+        "GTF",
+        "protein consequence scores"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "variant-evidence-integration",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4136,15 +4313,31 @@
         "Bioinformatics Tools"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "align or inspect reads",
+        "collect allele evidence",
+        "join reference genotypes",
+        "infer donor assignments or mixture size",
+        "assess ambiguity"
+      ],
+      "remaining_gaps": [
+        "Use authentic read evidence and multiple donors; preserve barcode and genotype likelihood uncertainty.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "FASTQ or barcode-tagged BAM",
+        "reference VCF"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "genotype-demultiplexing",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4155,15 +4348,32 @@
         "Reasoning"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "QC reads",
+        "screen host and alternative references",
+        "classify ambiguous hits",
+        "aggregate taxonomic evidence",
+        "report supported contamination"
+      ],
+      "remaining_gaps": [
+        "Use real mixed observations and frozen reference coverage; do not equate every unaligned read with contamination.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "FASTQ",
+        "reference FASTA",
+        "taxonomy database"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "read-taxonomy",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4175,15 +4385,32 @@
         "Data Wrangling"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "resolve comparable contact maps",
+        "balance and normalize",
+        "subset genomic region",
+        "compare contact enrichment",
+        "locate differential loop"
+      ],
+      "remaining_gaps": [
+        "Preserve bin resolution, normalization and replicate evidence; synthetic distance tables omit contact-map inference.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "cooler or contact matrix",
+        "genomic bins",
+        "sample metadata"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "differential-chromatin-contact",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4194,15 +4421,34 @@
         "Data Wrangling"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "QC paired reads",
+        "align and filter fragments",
+        "call peaks",
+        "assess replicate reproducibility",
+        "extract pipeline QC result"
+      ],
+      "remaining_gaps": [
+        "Execute a pinned pipeline and dependencies on real reads; supplied peak/QC tables are insufficient.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "FASTQ",
+        "FASTA",
+        "BAM",
+        "BED/narrowPeak",
+        "pipeline JSON"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "atac-pipeline",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4214,15 +4460,30 @@
         "Reasoning"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "align or inspect reads",
+        "collect allele evidence",
+        "join reference genotypes",
+        "infer donor assignments or mixture size",
+        "assess ambiguity"
+      ],
+      "remaining_gaps": [
+        "Use authentic read evidence and multiple donors; preserve barcode and genotype likelihood uncertainty.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract."
+      ],
+      "required_formats": [
+        "FASTQ or barcode-tagged BAM",
+        "reference VCF"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "genotype-demultiplexing",
+      "original_internet_required": false,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4233,15 +4494,31 @@
         "Reasoning"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "define comparable sequence/region universe",
+        "retrieve motif models",
+        "scan sequences",
+        "control sequence background",
+        "compare motif support"
+      ],
+      "remaining_gaps": [
+        "Use actual motif probability matrices and an explicit background; exact string matching cannot replace motif enrichment.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "FASTA or BED",
+        "motif database"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "motif-enrichment",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4252,15 +4529,31 @@
         "Bioinformatics Tools"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "resolve transcript and ortholog mapping",
+        "extract homologous transcript segments",
+        "orient sequences",
+        "compute edit distances"
+      ],
+      "remaining_gaps": [
+        "Retain independently supported orthology and transcript policy; globin paralog alignment is not this workflow.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "FASTA",
+        "transcript annotation",
+        "orthology table"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "ortholog-sequence-comparison",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4274,15 +4567,32 @@
         "Tooling"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "extract oriented reference region",
+        "run pinned checkpoint ensemble",
+        "threshold donor/acceptor scores",
+        "pair sites in transcript order",
+        "reconstruct exons"
+      ],
+      "remaining_gaps": [
+        "Run the actual model ensemble and preserve boundary assumptions; supplied predicted sites only cover reconstruction.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "FASTA",
+        "model checkpoints",
+        "site predictions"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "splice-model-inference",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4296,15 +4606,33 @@
         "Tooling"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "extract model window",
+        "run pinned sequence model",
+        "select assay/strand track",
+        "invert output transforms",
+        "aggregate requested region"
+      ],
+      "remaining_gaps": [
+        "Check model bin coordinates and inverse transforms; supplied predictions omit inference.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "FASTA",
+        "model weights",
+        "track metadata",
+        "prediction tensor"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "genomic-track-prediction",
+      "original_internet_required": true,
+      "original_gpu_preferred": true
     },
     {
       "benchmark": "CompBioBench",
@@ -4315,15 +4643,29 @@
         "Data Wrangling"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "read native AnnData",
+        "resolve raw/layer semantics",
+        "filter cells by annotations and QC",
+        "select exact genes",
+        "aggregate expression comparisons"
+      ],
+      "remaining_gaps": [
+        "Use independently sourced observed cells with preserved layers and annotations; CSV summaries do not establish H5AD handling.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "annotated-expression-query",
+      "original_internet_required": false,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4335,15 +4677,31 @@
         "Data Wrangling"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "QC and normalize expression",
+        "identify relevant population/signature",
+        "compare independent reference states",
+        "aggregate evidence",
+        "assign supported state"
+      ],
+      "remaining_gaps": [
+        "Require independent biological labels and calibrated ambiguity; handpicked marker examples cannot validate investigative identification.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract."
+      ],
+      "required_formats": [
+        "expression matrix",
+        "gene signatures",
+        "reference annotations"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "biological-state-identification",
+      "original_internet_required": false,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4358,15 +4716,32 @@
         "Tooling"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "configure pinned RNA model",
+        "identify mutable region",
+        "enumerate substitutions",
+        "score checkpoint ensemble",
+        "select iterative improvements"
+      ],
+      "remaining_gaps": [
+        "Preserve real starting sequence and declare designed variants as modified-real; deterministic optimization still needs actual model execution.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "RNA FASTA",
+        "model weights",
+        "candidate score table"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "sequence-model-optimization",
+      "original_internet_required": true,
+      "original_gpu_preferred": true
     },
     {
       "benchmark": "CompBioBench",
@@ -4378,15 +4753,31 @@
         "Data Wrangling"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "QC alleles and sample genotypes",
+        "harmonize population reference",
+        "prune or account for LD",
+        "estimate relatedness or ancestry",
+        "assess assignment uncertainty"
+      ],
+      "remaining_gaps": [
+        "Use real population data and matching allele/build definitions; identity counts do not establish ancestry or kinship.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "PLINK or VCF or GWAS summary",
+        "population reference"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "population-genetics",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4398,15 +4789,29 @@
         "Data Wrangling"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "join candidate regulatory pairs",
+        "normalize contact and perturbation evidence",
+        "compare concordance",
+        "identify unsupported regulatory claims"
+      ],
+      "remaining_gaps": [
+        "Preserve intervention controls and uncertainty; spatial proximity alone does not establish regulation.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract."
+      ],
+      "required_formats": [
+        "chromatin-contact table",
+        "CRISPR expression effects"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "regulatory-evidence-integration",
+      "original_internet_required": false,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4418,15 +4823,31 @@
         "Data Wrangling"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "normalize sample profiles",
+        "join reference markers or regulatory annotations",
+        "compare expected biological signatures",
+        "test assignment consistency",
+        "report supported swaps"
+      ],
+      "remaining_gaps": [
+        "Use authentic distinct tissues and recorded identity perturbations; simple identifier joins do not establish biological swap detection.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "pseudobulk expression or accessibility matrix",
+        "reference markers"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "biological-label-reconciliation",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4438,15 +4859,33 @@
         "Bioinformatics Tools"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "QC reads",
+        "splice-aware alignment",
+        "collect novel junction or chimeric evidence",
+        "resolve exon/transcript orientation",
+        "report supported structure"
+      ],
+      "remaining_gaps": [
+        "Run actual splice/chimera inference on real RNA reads; supplied junction lists omit the discovery stage.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "FASTQ",
+        "FASTA",
+        "GTF",
+        "BAM"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "transcript-structure-discovery",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4461,15 +4900,33 @@
         "Data Wrangling"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "harmonize SNP coordinates/alleles",
+        "run cell-type model ensemble",
+        "derive allele effect scores",
+        "join labels",
+        "compute precision-recall metric"
+      ],
+      "remaining_gaps": [
+        "Use independent observed variant labels and fixed folds; precomputed scores cover only the metric stage.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "variant TSV",
+        "FASTA",
+        "model checkpoints",
+        "observed labels"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "variant-model-evaluation",
+      "original_internet_required": true,
+      "original_gpu_preferred": true
     },
     {
       "benchmark": "CompBioBench",
@@ -4480,15 +4937,31 @@
         "Reasoning"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "inspect fragment endpoints",
+        "retrieve reference/motif context",
+        "evaluate candidate strand offsets",
+        "compare alignment evidence",
+        "select supported shift"
+      ],
+      "remaining_gaps": [
+        "Keep recorded coordinate perturbations separate from real observations and test offset identifiability.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "fragment BED",
+        "FASTA"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "fragment-shift-inference",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4501,15 +4974,31 @@
         "Data Wrangling"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "inspect unknown file features",
+        "retrieve candidate public metadata",
+        "normalize feature coordinates/identifiers",
+        "compare quantitative fingerprints",
+        "identify supported source"
+      ],
+      "remaining_gaps": [
+        "Original tasks involve source discovery; offline analogues require an independent frozen candidate catalog and do not test live discovery.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "GWAS TSV or H5AD or genomic count table",
+        "source catalogs"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "data-source-identification",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4519,26 +5008,31 @@
         "Bioinformatics Tools"
       ],
       "status": "component-only",
-      "assessment": "Manual workflow decomposition; shared operations only. No reproduction of benchmark inputs or expected outputs.",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [
         "fastq-quality-trimming",
         "real-rnaseq-size-factors",
         "real-rnaseq-normalized-contrast"
       ],
       "required_stages": [
-        "read QC",
-        "alignment or quantification",
-        "gene counting",
-        "differential expression"
+        "QC reads",
+        "align or pseudoalign",
+        "quantify genes or isoforms",
+        "normalize libraries",
+        "compare expression"
       ],
       "remaining_gaps": [
         "Real FASTQ-to-counts workflow",
-        "Replicate-aware statistical test and gene ranking"
+        "Replicate-aware statistical test and gene ranking",
+        "Run quantification on independent observed libraries; two unreplicated samples support descriptive contrasts, not replicated significance.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
       ],
       "required_formats": [
         "FASTQ",
-        "FASTA/GTF",
-        "count matrix"
+        "transcriptome FASTA",
+        "GTF",
+        "quantification files"
       ],
       "required_tools": [
         "aligner/quantifier",
@@ -4548,7 +5042,10 @@
         "GSE60450"
       ],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "read-to-expression-contrast",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4559,15 +5056,30 @@
         "Data Wrangling"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "read native bigWig",
+        "construct eligible genomic bins",
+        "integrate signal",
+        "rank bins",
+        "report coordinates"
+      ],
+      "remaining_gaps": [
+        "Use a real signal track and exact uncovered/terminal-bin policy; bedGraph controls do not establish binary bigWig handling.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract."
+      ],
+      "required_formats": [
+        "bigWig",
+        "chromosome sizes"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "genomic-signal-query",
+      "original_internet_required": false,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4578,15 +5090,31 @@
         "Data Wrangling"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "select annotation release and eligible transcripts",
+        "join gene/transcript/exon features",
+        "apply strand and stop-codon conventions",
+        "merge intervals or compare neighbors",
+        "aggregate requested features"
+      ],
+      "remaining_gaps": [
+        "Use real eukaryotic transcripts with alternative isoforms; phage CDS coordinates omit introns and UTRs.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract."
+      ],
+      "required_formats": [
+        "GTF or GFF3",
+        "FASTA",
+        "gene cross-references"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "transcript-annotation-query",
+      "original_internet_required": false,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4597,15 +5125,32 @@
         "Reasoning"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "QC reads",
+        "screen host and alternative references",
+        "classify ambiguous hits",
+        "aggregate taxonomic evidence",
+        "report supported contamination"
+      ],
+      "remaining_gaps": [
+        "Use real mixed observations and frozen reference coverage; do not equate every unaligned read with contamination.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "FASTQ",
+        "reference FASTA",
+        "taxonomy database"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "read-taxonomy",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4617,15 +5162,31 @@
         "Data Wrangling"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "normalize sample profiles",
+        "join reference markers or regulatory annotations",
+        "compare expected biological signatures",
+        "test assignment consistency",
+        "report supported swaps"
+      ],
+      "remaining_gaps": [
+        "Use authentic distinct tissues and recorded identity perturbations; simple identifier joins do not establish biological swap detection.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "pseudobulk expression or accessibility matrix",
+        "reference markers"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "biological-label-reconciliation",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4636,15 +5197,32 @@
         "Reasoning"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "resolve shared populations and genome",
+        "map accessible regions to genes",
+        "normalize modalities",
+        "compare profiles",
+        "solve population assignment"
+      ],
+      "remaining_gaps": [
+        "Use independent measured modalities and retain mapping ambiguity; identical synthetic signatures bypass cross-modality reasoning.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "RNA expression matrix",
+        "ATAC bin matrix",
+        "gene annotation"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "cross-modality-matching",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4657,15 +5235,34 @@
         "Data Wrangling"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "QC reference single cells and spatial counts",
+        "harmonize genes",
+        "infer spot composition",
+        "join tissue coordinates/images",
+        "evaluate spatial neighborhood enrichment"
+      ],
+      "remaining_gaps": [
+        "Use real spatial observations and independent cell references; pixel or coordinate arithmetic alone does not establish deconvolution.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "Matrix Market",
+        "single-cell counts",
+        "spot coordinates",
+        "PNG",
+        "scale factors"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "spatial-deconvolution",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4677,15 +5274,31 @@
         "Coding"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "inspect unknown file features",
+        "retrieve candidate public metadata",
+        "normalize feature coordinates/identifiers",
+        "compare quantitative fingerprints",
+        "identify supported source"
+      ],
+      "remaining_gaps": [
+        "Original tasks involve source discovery; offline analogues require an independent frozen candidate catalog and do not test live discovery.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "GWAS TSV or H5AD or genomic count table",
+        "source catalogs"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "data-source-identification",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4696,15 +5309,29 @@
         "Data Wrangling"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "read native AnnData layers",
+        "harmonize gene universe",
+        "apply pinned HVG method",
+        "interpret selection flags",
+        "compute set overlap"
+      ],
+      "remaining_gaps": [
+        "Preserve normalization/layer semantics and the exact gene universe; supplied variable-gene lists omit inference.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "variable-gene-comparison",
+      "original_internet_required": false,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4716,15 +5343,36 @@
         "Data Wrangling"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "QC and align reads",
+        "call germline or mosaic variants",
+        "assess allele support",
+        "annotate transcript consequence",
+        "join constraint evidence",
+        "prioritize candidates"
+      ],
+      "remaining_gaps": [
+        "Run actual variant discovery and consequence annotation; separate mosaic allele fraction from homozygous calls.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "FASTQ",
+        "BAM",
+        "VCF",
+        "FASTA",
+        "GTF",
+        "gene constraint"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "read-to-functional-variant",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4734,15 +5382,28 @@
         "Coding"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "read full assembly",
+        "define eligible sequence records",
+        "derive lengths",
+        "compute length-weighted N50"
+      ],
+      "remaining_gaps": [
+        "Use authentic assembly contigs and specify gaps/record eligibility; a supplied length ledger only covers arithmetic.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract."
+      ],
+      "required_formats": [
+        "FASTA"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "assembly-contiguity",
+      "original_internet_required": false,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4753,15 +5414,32 @@
         "Data Wrangling"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "resolve sample/reference release",
+        "select genomic loci and eligible alleles",
+        "intersect regulatory regions where requested",
+        "normalize phased/missing genotypes",
+        "serialize stable sample order"
+      ],
+      "remaining_gaps": [
+        "Use real genotypes and allele-specific joins; scalar genotype counts omit sample ordering and multiallelic handling.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "indexed VCF",
+        "BED/narrowPeak",
+        "variant catalog"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "population-genotype-query",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4771,15 +5449,31 @@
         "API/Web Fetching"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "resolve coordinate conventions",
+        "construct eligible intervals",
+        "union or intersect regions",
+        "apply exclusions and annotation classes",
+        "aggregate covered bases"
+      ],
+      "remaining_gaps": [
+        "Use deposited peak/annotation sets; preserve summit, overlap-union and denominator semantics through the complete composition.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "BED/narrowPeak",
+        "blacklist or chromatin-state BED"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "genomic-interval-composition",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4789,15 +5483,31 @@
         "API/Web Fetching"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "retrieve authentic RNA sequence",
+        "pin thermodynamic model",
+        "compute minimum-free-energy structure",
+        "verify pairing and energy",
+        "serialize dot-bracket output"
+      ],
+      "remaining_gaps": [
+        "Run the actual folding package and allow energy-equivalent structures; a supplied structure string omits folding.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "RNA FASTA",
+        "thermodynamic parameter files"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "rna-folding",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4808,22 +5518,25 @@
         "Visual Reasoning"
       ],
       "status": "component-only",
-      "assessment": "Manual workflow decomposition; shared operations only. No reproduction of benchmark inputs or expected outputs.",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [
         "real-mmcif-chain-geometry",
         "real-mmcif-contact-degree"
       ],
       "required_stages": [
-        "structure parsing",
-        "coordinate projection",
-        "shape interpretation"
+        "read protein coordinates",
+        "select structural entities",
+        "evaluate spatial projections",
+        "compare projected shape with candidate targets"
       ],
       "remaining_gaps": [
         "No projection search or shape classification task yet",
-        "PDB input path remains a synthetic component; real examples supply mmCIF"
+        "PDB input path remains a synthetic component; real examples supply mmCIF",
+        "The original visual analogy lacks a fixed deterministic acceptance contract; geometry summaries cover components only.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract."
       ],
       "required_formats": [
-        "PDB"
+        "PDB or mmCIF"
       ],
       "required_tools": [
         "structure parsing/visualization"
@@ -4834,7 +5547,10 @@
         "PDB:4HHB"
       ],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "structure-projection",
+      "original_internet_required": false,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4846,30 +5562,39 @@
         "Bioinformatics Tools"
       ],
       "status": "component-only",
-      "assessment": "Manual workflow decomposition; shared operations only. No reproduction of benchmark inputs or expected outputs.",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [
         "splice-psi"
       ],
       "required_stages": [
-        "read QC",
-        "transcript quantification",
-        "isoform comparison"
+        "QC reads",
+        "align or pseudoalign",
+        "quantify genes or isoforms",
+        "normalize libraries",
+        "compare expression"
       ],
       "remaining_gaps": [
         "Real transcriptome and sequencing reads",
-        "Isoform abundance uncertainty and comparison"
+        "Isoform abundance uncertainty and comparison",
+        "Run quantification on independent observed libraries; two unreplicated samples support descriptive contrasts, not replicated significance.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
       ],
       "required_formats": [
         "FASTQ",
-        "FASTA/GTF",
-        "transcript abundance"
+        "transcriptome FASTA",
+        "GTF",
+        "quantification files"
       ],
       "required_tools": [
         "transcript quantifier"
       ],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "read-to-expression-contrast",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4881,15 +5606,31 @@
         "Data Wrangling"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "read PLINK genotypes",
+        "QC and harmonize loci",
+        "derive genotype-supported traits/relationships",
+        "compare metadata",
+        "solve sample assignment"
+      ],
+      "remaining_gaps": [
+        "Preserve uncertainty and real trait evidence; metadata row permutation alone is not the inference task.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract."
+      ],
+      "required_formats": [
+        "PLINK BED/BIM/FAM",
+        "sample metadata",
+        "reference genotypes"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "genotype-metadata-matching",
+      "original_internet_required": false,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4902,15 +5643,34 @@
         "Data Wrangling"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "QC reference single cells and spatial counts",
+        "harmonize genes",
+        "infer spot composition",
+        "join tissue coordinates/images",
+        "evaluate spatial neighborhood enrichment"
+      ],
+      "remaining_gaps": [
+        "Use real spatial observations and independent cell references; pixel or coordinate arithmetic alone does not establish deconvolution.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "Matrix Market",
+        "single-cell counts",
+        "spot coordinates",
+        "PNG",
+        "scale factors"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "spatial-deconvolution",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4921,15 +5681,32 @@
         "Coding"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "select annotation release and eligible transcripts",
+        "join gene/transcript/exon features",
+        "apply strand and stop-codon conventions",
+        "merge intervals or compare neighbors",
+        "aggregate requested features"
+      ],
+      "remaining_gaps": [
+        "Use real eukaryotic transcripts with alternative isoforms; phage CDS coordinates omit introns and UTRs.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "GTF or GFF3",
+        "FASTA",
+        "gene cross-references"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "transcript-annotation-query",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4940,15 +5717,31 @@
         "Bioinformatics Tools"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "read fragment/barcode data",
+        "construct accessibility matrix",
+        "normalize and embed",
+        "score putative doublets",
+        "validate calls"
+      ],
+      "remaining_gaps": [
+        "Use a declared doublet model with independent evidence; high library depth alone is not sufficient.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract."
+      ],
+      "required_formats": [
+        "fragment BED",
+        "cell barcodes",
+        "peak regions"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "single-cell-doublet-detection",
+      "original_internet_required": false,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4959,15 +5752,31 @@
         "Reasoning"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "define comparable sequence/region universe",
+        "retrieve motif models",
+        "scan sequences",
+        "control sequence background",
+        "compare motif support"
+      ],
+      "remaining_gaps": [
+        "Use actual motif probability matrices and an explicit background; exact string matching cannot replace motif enrichment.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "FASTA or BED",
+        "motif database"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "motif-enrichment",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4979,15 +5788,33 @@
         "Coding"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "align reads",
+        "estimate coverage",
+        "correct depth/mappability",
+        "segment copy-number changes",
+        "estimate coordinates and relative dosage"
+      ],
+      "remaining_gaps": [
+        "Use observed copy-number variation and preserve background regions; fabricated coverage plateaus do not establish read-to-call analysis.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "FASTQ",
+        "BAM",
+        "FASTA",
+        "coverage tracks"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "copy-number-discovery",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -4998,15 +5825,32 @@
         "Coding"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "parse cell barcodes and UMIs",
+        "align cDNA against species references",
+        "assign cells with ambiguity handling",
+        "infer tissue labels where required",
+        "aggregate proportions"
+      ],
+      "remaining_gaps": [
+        "Use authentic mixed-species observations; retain barcode-level denominators and avoid counting reads as cells.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "paired FASTQ",
+        "multispecies FASTA/GTF",
+        "cell annotations"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "multispecies-single-cell",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5017,15 +5861,31 @@
         "Reasoning"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "read sparse or native single-cell object",
+        "QC and normalize",
+        "annotate cell identity/state",
+        "join sample context",
+        "compare cell-type expression or composition"
+      ],
+      "remaining_gaps": [
+        "Use real heterogeneous populations and independent annotations; clustering labels alone do not establish biological cell states.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "Matrix Market or H5AD or RDS",
+        "cell/sample metadata"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "single-cell-state-annotation",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5037,15 +5897,29 @@
         "Coding"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "align error-containing reads",
+        "resolve multi-mapping policy",
+        "count reference origins",
+        "normalize by read denominator"
+      ],
+      "remaining_gaps": [
+        "Use observed reads from multiple references; this component is distinct from cell-level or organism-level abundance.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract."
+      ],
+      "required_formats": [
+        "FASTQ",
+        "FASTA"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "read-origin-abundance",
+      "original_internet_required": false,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5057,15 +5931,31 @@
         "Data Wrangling"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "normalize sample profiles",
+        "join reference markers or regulatory annotations",
+        "compare expected biological signatures",
+        "test assignment consistency",
+        "report supported swaps"
+      ],
+      "remaining_gaps": [
+        "Use authentic distinct tissues and recorded identity perturbations; simple identifier joins do not establish biological swap detection.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "pseudobulk expression or accessibility matrix",
+        "reference markers"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "biological-label-reconciliation",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5076,15 +5966,31 @@
         "Reasoning"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "compare endpoint read signatures",
+        "identify discriminative sequence features",
+        "fit mixture fraction",
+        "assess identifiability",
+        "report supported estimate or ambiguity"
+      ],
+      "remaining_gaps": [
+        "Retain real sequence differences and endpoint uncertainty; force no numerical answer when the mixture is unidentifiable.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "FASTQ",
+        "reference endpoint libraries"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "mixture-identifiability",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5096,15 +6002,32 @@
         "Data Wrangling"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "join guide assignments to cells",
+        "QC and normalize",
+        "aggregate perturbation effects",
+        "compare gene/pathway signatures",
+        "match or prioritize perturbations"
+      ],
+      "remaining_gaps": [
+        "Use real guide efficacy and biological replication; account for cell-state differences and multiple guides per target.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract."
+      ],
+      "required_formats": [
+        "H5AD or Matrix Market",
+        "guide calls",
+        "guide reference",
+        "gene sets"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "perturbation-signature-analysis",
+      "original_internet_required": false,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5118,15 +6041,31 @@
         "Data Wrangling"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "QC alleles and sample genotypes",
+        "harmonize population reference",
+        "prune or account for LD",
+        "estimate relatedness or ancestry",
+        "assess assignment uncertainty"
+      ],
+      "remaining_gaps": [
+        "Use real population data and matching allele/build definitions; identity counts do not establish ancestry or kinship.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "PLINK or VCF or GWAS summary",
+        "population reference"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "population-genetics",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5136,15 +6075,32 @@
         "API/Web Fetching"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "select annotation release and eligible transcripts",
+        "join gene/transcript/exon features",
+        "apply strand and stop-codon conventions",
+        "merge intervals or compare neighbors",
+        "aggregate requested features"
+      ],
+      "remaining_gaps": [
+        "Use real eukaryotic transcripts with alternative isoforms; phage CDS coordinates omit introns and UTRs.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "GTF or GFF3",
+        "FASTA",
+        "gene cross-references"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "transcript-annotation-query",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5156,15 +6112,30 @@
         "Data Wrangling"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "compute spatial distances",
+        "define contact events",
+        "align within-cell temporal observations",
+        "estimate association or lag structure",
+        "bound causal interpretation"
+      ],
+      "remaining_gaps": [
+        "Preserve repeated-cell/time dependence; association or lag order alone does not establish causal direction.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract."
+      ],
+      "required_formats": [
+        "single-cell coordinate time series",
+        "transcription labels"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "longitudinal-contact-association",
+      "original_internet_required": false,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5176,15 +6147,32 @@
         "Coding"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "QC fragment or peak sets",
+        "derive genomic enrichment patterns",
+        "compare public assay references",
+        "rank candidate assay or state",
+        "assess ambiguity"
+      ],
+      "remaining_gaps": [
+        "Use real genomic signal and matched background; task-specific filenames must not reveal identity.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "BED/tagAlign",
+        "control tracks",
+        "reference epigenomic annotations"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "chromatin-assay-identification",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5196,15 +6184,32 @@
         "Reasoning"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "align reads",
+        "discover eligible variants",
+        "collect read-pair allele links",
+        "construct phase blocks",
+        "serialize supported haplotypes"
+      ],
+      "remaining_gaps": [
+        "Use observed heterozygous loci with connected support; independent site genotypes do not establish phase.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract."
+      ],
+      "required_formats": [
+        "paired FASTQ",
+        "BAM",
+        "VCF",
+        "FASTA"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "read-backed-phasing",
+      "original_internet_required": false,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5218,15 +6223,30 @@
         "ML Frameworks"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "retrieve pinned model implementation/configuration",
+        "instantiate architecture",
+        "identify trainable parameters and heads",
+        "count unique tensors"
+      ],
+      "remaining_gaps": [
+        "These are model-inspection skills rather than biological-data analyses; they do not increase real-observation workflow coverage.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "model source/configuration",
+        "parameter metadata"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "model-architecture-inspection",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5237,15 +6257,30 @@
         "Data Wrangling"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "resolve coordinate conventions",
+        "construct eligible intervals",
+        "union or intersect regions",
+        "apply exclusions and annotation classes",
+        "aggregate covered bases"
+      ],
+      "remaining_gaps": [
+        "Use deposited peak/annotation sets; preserve summit, overlap-union and denominator semantics through the complete composition.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract."
+      ],
+      "required_formats": [
+        "BED/narrowPeak",
+        "blacklist or chromatin-state BED"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "genomic-interval-composition",
+      "original_internet_required": false,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5257,15 +6292,30 @@
         "Coding"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "read authentic transcript",
+        "evaluate candidate reading frames",
+        "resolve main coding region with annotation/evidence",
+        "translate and report coordinates"
+      ],
+      "remaining_gaps": [
+        "Specify how the main CDS is established when multiple ORFs exist; longest-ORF selection alone is not general annotation.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "transcript FASTA",
+        "coding annotation or homology evidence"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "coding-region-inference",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5277,15 +6327,31 @@
         "Data Wrangling"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "inspect unknown file features",
+        "retrieve candidate public metadata",
+        "normalize feature coordinates/identifiers",
+        "compare quantitative fingerprints",
+        "identify supported source"
+      ],
+      "remaining_gaps": [
+        "Original tasks involve source discovery; offline analogues require an independent frozen candidate catalog and do not test live discovery.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "GWAS TSV or H5AD or genomic count table",
+        "source catalogs"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "data-source-identification",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5296,15 +6362,32 @@
         "Coding"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "QC and normalize expression",
+        "identify relevant population/signature",
+        "compare independent reference states",
+        "aggregate evidence",
+        "assign supported state"
+      ],
+      "remaining_gaps": [
+        "Require independent biological labels and calibrated ambiguity; handpicked marker examples cannot validate investigative identification.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "expression matrix",
+        "gene signatures",
+        "reference annotations"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "biological-state-identification",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5315,15 +6398,32 @@
         "Reasoning"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "QC reads",
+        "screen host and alternative references",
+        "classify ambiguous hits",
+        "aggregate taxonomic evidence",
+        "report supported contamination"
+      ],
+      "remaining_gaps": [
+        "Use real mixed observations and frozen reference coverage; do not equate every unaligned read with contamination.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "FASTQ",
+        "reference FASTA",
+        "taxonomy database"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "read-taxonomy",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5333,15 +6433,30 @@
         "API/Web Fetching"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "resolve identifier namespaces",
+        "select genome/transcript release",
+        "join cross-references",
+        "normalize requested coordinates or stable IDs"
+      ],
+      "remaining_gaps": [
+        "Freeze identifier mappings and version policies; do not infer coordinates from names or mix assemblies.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "annotation cross-references",
+        "assembly metadata"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "identifier-resolution",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5352,15 +6467,32 @@
         "Bioinformatics Tools"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "QC fragment or peak sets",
+        "derive genomic enrichment patterns",
+        "compare public assay references",
+        "rank candidate assay or state",
+        "assess ambiguity"
+      ],
+      "remaining_gaps": [
+        "Use real genomic signal and matched background; task-specific filenames must not reveal identity.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "BED/tagAlign",
+        "control tracks",
+        "reference epigenomic annotations"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "chromatin-assay-identification",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5371,15 +6503,32 @@
         "Bioinformatics Tools"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "read sparse counts",
+        "QC cells",
+        "normalize expression",
+        "cluster and annotate populations",
+        "calculate sample-level proportions"
+      ],
+      "remaining_gaps": [
+        "Use real heterogeneous cell populations and frozen annotation evidence; preserve sample denominators and QC exclusions.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "Matrix Market",
+        "gene identifiers",
+        "cell metadata"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "cell-composition",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5391,15 +6540,32 @@
         "Reasoning"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "parse cell barcodes and UMIs",
+        "align cDNA against species references",
+        "assign cells with ambiguity handling",
+        "infer tissue labels where required",
+        "aggregate proportions"
+      ],
+      "remaining_gaps": [
+        "Use authentic mixed-species observations; retain barcode-level denominators and avoid counting reads as cells.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "paired FASTQ",
+        "multispecies FASTA/GTF",
+        "cell annotations"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "multispecies-single-cell",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5411,15 +6577,31 @@
         "Bioinformatics Tools"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "QC and normalize ChIP/control fragments",
+        "retrieve baseline accessibility",
+        "identify binding in initially inaccessible regions",
+        "compare factors"
+      ],
+      "remaining_gaps": [
+        "Use matched baseline/control data and replication; binding in inaccessible regions alone requires a stated operational definition of pioneering.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "BED fragments",
+        "control libraries",
+        "DNase track"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "chromatin-perturbation-comparison",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5430,15 +6612,36 @@
         "Data Wrangling"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "QC and align reads",
+        "call germline or mosaic variants",
+        "assess allele support",
+        "annotate transcript consequence",
+        "join constraint evidence",
+        "prioritize candidates"
+      ],
+      "remaining_gaps": [
+        "Run actual variant discovery and consequence annotation; separate mosaic allele fraction from homozygous calls.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "FASTQ",
+        "BAM",
+        "VCF",
+        "FASTA",
+        "GTF",
+        "gene constraint"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "read-to-functional-variant",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5448,15 +6651,29 @@
         "Bioinformatics Tools"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "read native BAM",
+        "interpret flags and CIGAR",
+        "filter eligible alignments",
+        "aggregate read structure or counts"
+      ],
+      "remaining_gaps": [
+        "Provide authentic alignments and an explicit primary/supplementary/duplicate policy; SAM toy summaries do not establish native BAM coverage.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract."
+      ],
+      "required_formats": [
+        "BAM",
+        "BAI"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "alignment-inspection",
+      "original_internet_required": false,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5467,15 +6684,33 @@
         "Reasoning"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "join guide assignments to cells",
+        "QC and normalize",
+        "aggregate perturbation effects",
+        "compare gene/pathway signatures",
+        "match or prioritize perturbations"
+      ],
+      "remaining_gaps": [
+        "Use real guide efficacy and biological replication; account for cell-state differences and multiple guides per target.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "H5AD or Matrix Market",
+        "guide calls",
+        "guide reference",
+        "gene sets"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "perturbation-signature-analysis",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5486,15 +6721,31 @@
         "Reasoning"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "compare endpoint read signatures",
+        "identify discriminative sequence features",
+        "fit mixture fraction",
+        "assess identifiability",
+        "report supported estimate or ambiguity"
+      ],
+      "remaining_gaps": [
+        "Retain real sequence differences and endpoint uncertainty; force no numerical answer when the mixture is unidentifiable.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "FASTQ",
+        "reference endpoint libraries"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "mixture-identifiability",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5504,15 +6755,29 @@
         "Bioinformatics Tools"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "index deposited reference",
+        "search query and reverse complement",
+        "evaluate exact/multiple matches",
+        "report coordinates"
+      ],
+      "remaining_gaps": [
+        "Use real reference sequence and explicit uniqueness/strand policy; preserve all candidate matches when ambiguity exists.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract."
+      ],
+      "required_formats": [
+        "FASTA",
+        "FAI"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "sequence-localization",
+      "original_internet_required": false,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5523,15 +6788,31 @@
         "Coding"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "resolve assembly/transcript and strand",
+        "derive interval",
+        "extract oriented reference sequence",
+        "calculate requested sequence metrics"
+      ],
+      "remaining_gaps": [
+        "Pin reference and annotation together; validate inclusive/half-open endpoints and upstream/downstream conventions.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "FASTA",
+        "FAI",
+        "GTF or GFF3"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "strand-aware-reference-query",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5541,15 +6822,30 @@
         "Bioinformatics Tools"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "resolve coordinate conventions",
+        "construct eligible intervals",
+        "union or intersect regions",
+        "apply exclusions and annotation classes",
+        "aggregate covered bases"
+      ],
+      "remaining_gaps": [
+        "Use deposited peak/annotation sets; preserve summit, overlap-union and denominator semantics through the complete composition.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract."
+      ],
+      "required_formats": [
+        "BED/narrowPeak",
+        "blacklist or chromatin-state BED"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "genomic-interval-composition",
+      "original_internet_required": false,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5561,15 +6857,31 @@
         "Data Wrangling"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "read sparse or native single-cell object",
+        "QC and normalize",
+        "annotate cell identity/state",
+        "join sample context",
+        "compare cell-type expression or composition"
+      ],
+      "remaining_gaps": [
+        "Use real heterogeneous populations and independent annotations; clustering labels alone do not establish biological cell states.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "Matrix Market or H5AD or RDS",
+        "cell/sample metadata"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "single-cell-state-annotation",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5580,15 +6892,31 @@
         "Coding"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "read sparse or native single-cell object",
+        "QC and normalize",
+        "annotate cell identity/state",
+        "join sample context",
+        "compare cell-type expression or composition"
+      ],
+      "remaining_gaps": [
+        "Use real heterogeneous populations and independent annotations; clustering labels alone do not establish biological cell states.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "Matrix Market or H5AD or RDS",
+        "cell/sample metadata"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "single-cell-state-annotation",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5599,15 +6927,32 @@
         "Reasoning"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "QC and normalize expression",
+        "identify relevant population/signature",
+        "compare independent reference states",
+        "aggregate evidence",
+        "assign supported state"
+      ],
+      "remaining_gaps": [
+        "Require independent biological labels and calibrated ambiguity; handpicked marker examples cannot validate investigative identification.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "expression matrix",
+        "gene signatures",
+        "reference annotations"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "biological-state-identification",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5618,15 +6963,32 @@
         "Data Wrangling"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "resolve study supplement",
+        "decompress sparse matrix and feature/barcode tables",
+        "join exact identifiers",
+        "read sparse count"
+      ],
+      "remaining_gaps": [
+        "An offline snapshot tests format/query stages but not live study retrieval; preserve implicit zeros and feature identity.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "Matrix Market",
+        "feature TSV",
+        "barcode TSV",
+        "source manifest"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "public-sparse-count-query",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5636,15 +6998,31 @@
         "API/Web Fetching"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "normalize HGVS/variant identifiers",
+        "resolve reference/transcript",
+        "retrieve or compute consequence evidence",
+        "report frozen annotation"
+      ],
+      "remaining_gaps": [
+        "Separate curated clinical significance from computational consequence; pin transcript/database releases and retain ambiguity.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "VCF or HGVS",
+        "FASTA/GTF",
+        "ClinVar or consequence database"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "variant-consequence-annotation",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5656,15 +7034,31 @@
         "Bioinformatics Tools"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "parse variants",
+        "compare REF alleles across candidate assemblies",
+        "handle ambiguous sites",
+        "aggregate consistency evidence",
+        "select supported build"
+      ],
+      "remaining_gaps": [
+        "Use real sites discriminating candidate references; filenames and headers must not disclose the answer.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "VCF",
+        "candidate reference FASTAs"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "reference-build-inference",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5675,15 +7069,29 @@
         "Data Wrangling"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "read native AnnData",
+        "resolve raw/layer semantics",
+        "filter cells by annotations and QC",
+        "select exact genes",
+        "aggregate expression comparisons"
+      ],
+      "remaining_gaps": [
+        "Use independently sourced observed cells with preserved layers and annotations; CSV summaries do not establish H5AD handling.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "annotated-expression-query",
+      "original_internet_required": false,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5695,15 +7103,32 @@
         "Data Wrangling"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "resolve sample/reference release",
+        "select genomic loci and eligible alleles",
+        "intersect regulatory regions where requested",
+        "normalize phased/missing genotypes",
+        "serialize stable sample order"
+      ],
+      "remaining_gaps": [
+        "Use real genotypes and allele-specific joins; scalar genotype counts omit sample ordering and multiallelic handling.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "indexed VCF",
+        "BED/narrowPeak",
+        "variant catalog"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "population-genotype-query",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5714,15 +7139,31 @@
         "Coding"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "QC fragment or peak sets",
+        "derive genomic enrichment patterns",
+        "compare public assay references",
+        "rank candidate assay or state",
+        "assess ambiguity"
+      ],
+      "remaining_gaps": [
+        "Use real genomic signal and matched background; task-specific filenames must not reveal identity.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract."
+      ],
+      "required_formats": [
+        "BED/tagAlign",
+        "control tracks",
+        "reference epigenomic annotations"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "chromatin-assay-identification",
+      "original_internet_required": false,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5733,15 +7174,30 @@
         "Data Wrangling"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "resolve study release and tissue labels",
+        "join gene identifiers",
+        "select eligible samples",
+        "aggregate expression in declared units"
+      ],
+      "remaining_gaps": [
+        "Use full real tissue cohorts and explicit gene-version/normalization policy; tiny fabricated expression tables are insufficient.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "expression matrix",
+        "sample tissue metadata"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "tissue-expression-query",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5753,15 +7209,31 @@
         "Bioinformatics Tools"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "retrieve versioned assay/sample manifests",
+        "normalize provenance identifiers",
+        "intersect eligible records",
+        "deduplicate and serialize results"
+      ],
+      "remaining_gaps": [
+        "Use actual accession relationships and declared file versions; names or tissue labels do not prove shared provenance.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "resource manifests",
+        "sample accessions",
+        "checksums"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "resource-provenance-join",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5775,15 +7247,30 @@
         "ML Frameworks"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "retrieve pinned model implementation/configuration",
+        "instantiate architecture",
+        "identify trainable parameters and heads",
+        "count unique tensors"
+      ],
+      "remaining_gaps": [
+        "These are model-inspection skills rather than biological-data analyses; they do not increase real-observation workflow coverage.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "model source/configuration",
+        "parameter metadata"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "model-architecture-inspection",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5793,15 +7280,31 @@
         "API/Web Fetching"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "normalize HGVS/variant identifiers",
+        "resolve reference/transcript",
+        "retrieve or compute consequence evidence",
+        "report frozen annotation"
+      ],
+      "remaining_gaps": [
+        "Separate curated clinical significance from computational consequence; pin transcript/database releases and retain ambiguity.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "VCF or HGVS",
+        "FASTA/GTF",
+        "ClinVar or consequence database"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "variant-consequence-annotation",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5813,15 +7316,33 @@
         "Coding"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "QC reads",
+        "splice-aware alignment",
+        "collect novel junction or chimeric evidence",
+        "resolve exon/transcript orientation",
+        "report supported structure"
+      ],
+      "remaining_gaps": [
+        "Run actual splice/chimera inference on real RNA reads; supplied junction lists omit the discovery stage.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "FASTQ",
+        "FASTA",
+        "GTF",
+        "BAM"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "transcript-structure-discovery",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5832,15 +7353,31 @@
         "Coding"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "resolve assembly/transcript and strand",
+        "derive interval",
+        "extract oriented reference sequence",
+        "calculate requested sequence metrics"
+      ],
+      "remaining_gaps": [
+        "Pin reference and annotation together; validate inclusive/half-open endpoints and upstream/downstream conventions.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "FASTA",
+        "FAI",
+        "GTF or GFF3"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "strand-aware-reference-query",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5852,15 +7389,31 @@
         "Bioinformatics Tools"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "QC alleles and sample genotypes",
+        "harmonize population reference",
+        "prune or account for LD",
+        "estimate relatedness or ancestry",
+        "assess assignment uncertainty"
+      ],
+      "remaining_gaps": [
+        "Use real population data and matching allele/build definitions; identity counts do not establish ancestry or kinship.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "PLINK or VCF or GWAS summary",
+        "population reference"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "population-genetics",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5872,15 +7425,33 @@
         "Coding"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "align reads",
+        "estimate coverage",
+        "correct depth/mappability",
+        "segment copy-number changes",
+        "estimate coordinates and relative dosage"
+      ],
+      "remaining_gaps": [
+        "Use observed copy-number variation and preserve background regions; fabricated coverage plateaus do not establish read-to-call analysis.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "FASTQ",
+        "BAM",
+        "FASTA",
+        "coverage tracks"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "copy-number-discovery",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5892,15 +7463,31 @@
         "Data Wrangling"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "normalize sample profiles",
+        "join reference markers or regulatory annotations",
+        "compare expected biological signatures",
+        "test assignment consistency",
+        "report supported swaps"
+      ],
+      "remaining_gaps": [
+        "Use authentic distinct tissues and recorded identity perturbations; simple identifier joins do not establish biological swap detection.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "pseudobulk expression or accessibility matrix",
+        "reference markers"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "biological-label-reconciliation",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "CompBioBench",
@@ -5912,15 +7499,32 @@
         "API/Web Fetching"
       ],
       "status": "unmapped",
-      "assessment": "metadata inventoried; workflow mapping pending",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
-      "required_stages": [],
-      "remaining_gaps": [],
-      "required_formats": [],
+      "required_stages": [
+        "read native alignments",
+        "replay CIGAR at locus",
+        "filter base/read quality",
+        "count allele evidence",
+        "infer supported genotype"
+      ],
+      "remaining_gaps": [
+        "Use real allele evidence with uncertainty and chromosome context; a supplied allele-count table omits read interpretation.",
+        "Validate the connected workflow on independent real biological inputs with a deterministic acceptance contract.",
+        "Frozen offline inputs cover analysis stages only; live acquisition requires separate validation."
+      ],
+      "required_formats": [
+        "BAM",
+        "BAI",
+        "FASTA"
+      ],
       "required_tools": [],
       "independent_data_sources": [],
       "validation_evidence": [],
-      "runtime_seconds": null
+      "runtime_seconds": null,
+      "workflow_family": "read-backed-genotype",
+      "original_internet_required": true,
+      "original_gpu_preferred": false
     },
     {
       "benchmark": "BiomniBench-DA",
@@ -6114,9 +7718,11 @@
         "oncology",
         "survival-analysis"
       ],
-      "status": "unmapped",
+      "status": "component-only",
       "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
-      "recipes": [],
+      "recipes": [
+        "real-clinical-adjusted-cox"
+      ],
       "required_stages": [
         "join patients and microbial features",
         "encode time and censoring",
@@ -6125,17 +7731,25 @@
       ],
       "remaining_gaps": [
         "Specify censoring, time units and compositional preprocessing; fit survival models with diagnostics.",
-        "Validate the connected workflow and native output artifacts on independent real biological data."
+        "Validate the connected workflow and native output artifacts on independent real biological data.",
+        "The PBC cohort checks general clinical-analysis stages; benchmark-specific immune/protein/microbial measurements and the complete dependent workflow are not covered."
       ],
       "required_formats": [
         "microbial abundance",
         "survival table"
       ],
       "required_tools": [],
-      "independent_data_sources": [],
+      "independent_data_sources": [
+        "survival:PBC"
+      ],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "survival-association"
+      "workflow_family": "survival-association",
+      "mapped_stages": [
+        "complete-case cohort selection",
+        "Cox partial-likelihood fitting",
+        "hazard-ratio and Wald uncertainty reporting"
+      ]
     },
     {
       "benchmark": "BiomniBench-DA",
@@ -6144,9 +7758,11 @@
         "metabolic",
         "differential-expression"
       ],
-      "status": "unmapped",
+      "status": "component-only",
       "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
-      "recipes": [],
+      "recipes": [
+        "real-clinical-paired-visits"
+      ],
       "required_stages": [
         "match baseline and follow-up",
         "proteomic QC",
@@ -6156,17 +7772,24 @@
       ],
       "remaining_gaps": [
         "Preserve patient pairing and separate within-regimen change from the between-regimen interaction.",
-        "Validate the connected workflow and native output artifacts on independent real biological data."
+        "Validate the connected workflow and native output artifacts on independent real biological data.",
+        "The PBC cohort checks general clinical-analysis stages; benchmark-specific immune/protein/microbial measurements and the complete dependent workflow are not covered."
       ],
       "required_formats": [
         "protein abundance",
         "patient treatment/timepoint metadata"
       ],
       "required_tools": [],
-      "independent_data_sources": [],
+      "independent_data_sources": [
+        "survival:PBC"
+      ],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "longitudinal-proteomics"
+      "workflow_family": "longitudinal-proteomics",
+      "mapped_stages": [
+        "subject-level visit matching",
+        "complete-pair measurement changes"
+      ]
     },
     {
       "benchmark": "BiomniBench-DA",
@@ -6175,9 +7798,11 @@
         "metabolic",
         "association-testing"
       ],
-      "status": "unmapped",
+      "status": "component-only",
       "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
-      "recipes": [],
+      "recipes": [
+        "real-clinical-paired-visits"
+      ],
       "required_stages": [
         "pair baseline and follow-up",
         "compute subject-level changes",
@@ -6186,17 +7811,24 @@
       ],
       "remaining_gaps": [
         "Avoid correlating unmatched samples or treating repeated visits as independent subjects.",
-        "Validate the connected workflow and native output artifacts on independent real biological data."
+        "Validate the connected workflow and native output artifacts on independent real biological data.",
+        "The PBC cohort checks general clinical-analysis stages; benchmark-specific immune/protein/microbial measurements and the complete dependent workflow are not covered."
       ],
       "required_formats": [
         "protein abundance",
         "paired body measurements"
       ],
       "required_tools": [],
-      "independent_data_sources": [],
+      "independent_data_sources": [
+        "survival:PBC"
+      ],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "clinical-association"
+      "workflow_family": "clinical-association",
+      "mapped_stages": [
+        "subject-level visit matching",
+        "complete-pair measurement changes"
+      ]
     },
     {
       "benchmark": "BiomniBench-DA",
@@ -7158,9 +8790,11 @@
         "oncology",
         "survival-analysis"
       ],
-      "status": "unmapped",
+      "status": "component-only",
       "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
-      "recipes": [],
+      "recipes": [
+        "real-clinical-kaplan-meier"
+      ],
       "required_stages": [
         "join pathological response and cell scores",
         "restrict eligible cohort",
@@ -7170,7 +8804,8 @@
       ],
       "remaining_gaps": [
         "Specify cutoff and eligible denominator before outcome analysis; avoid choosing thresholds to maximize significance.",
-        "Validate the connected workflow and native output artifacts on independent real biological data."
+        "Validate the connected workflow and native output artifacts on independent real biological data.",
+        "The PBC cohort checks general clinical-analysis stages; benchmark-specific immune/protein/microbial measurements and the complete dependent workflow are not covered."
       ],
       "required_formats": [
         "patient response",
@@ -7178,10 +8813,16 @@
         "survival table"
       ],
       "required_tools": [],
-      "independent_data_sources": [],
+      "independent_data_sources": [
+        "survival:PBC"
+      ],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "survival-stratification"
+      "workflow_family": "survival-stratification",
+      "mapped_stages": [
+        "eligible patient denominator",
+        "censoring-aware survival estimation"
+      ]
     },
     {
       "benchmark": "BiomniBench-DA",
@@ -7443,9 +9084,12 @@
         "oncology",
         "survival-analysis"
       ],
-      "status": "unmapped",
+      "status": "component-only",
       "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
-      "recipes": [],
+      "recipes": [
+        "real-clinical-kaplan-meier",
+        "real-clinical-adjusted-cox"
+      ],
       "required_stages": [
         "select treatment and baseline cohort",
         "compute patient cell frequencies",
@@ -7455,7 +9099,8 @@
       ],
       "remaining_gaps": [
         "Do not classify censored patients as one-year survivors without follow-up; avoid cutoff selection on outcomes.",
-        "Validate the connected workflow and native output artifacts on independent real biological data."
+        "Validate the connected workflow and native output artifacts on independent real biological data.",
+        "The PBC cohort checks general clinical-analysis stages; benchmark-specific immune/protein/microbial measurements and the complete dependent workflow are not covered."
       ],
       "required_formats": [
         "cell frequencies",
@@ -7463,10 +9108,16 @@
         "survival table"
       ],
       "required_tools": [],
-      "independent_data_sources": [],
+      "independent_data_sources": [
+        "survival:PBC"
+      ],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "survival-association"
+      "workflow_family": "survival-association",
+      "mapped_stages": [
+        "censoring-aware survival estimation",
+        "adjusted Cox model fitting"
+      ]
     },
     {
       "benchmark": "BiomniBench-DA",

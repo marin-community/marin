@@ -19,6 +19,7 @@ from experiments.post_training.bio_tasks.solvers.networks import SOLVERS as NETW
 from experiments.post_training.bio_tasks.solvers.phylogeny import SOLVERS as PHYLOGENY_SOLVERS
 from experiments.post_training.bio_tasks.solvers.protein_alignment import OUTPUT_SOLVERS as ALIGNMENT_OUTPUT_SOLVERS
 from experiments.post_training.bio_tasks.solvers.reads import SOLVERS as READ_SOLVERS
+from experiments.post_training.bio_tasks.solvers.real_clinical import SOLVERS as REAL_CLINICAL_SOLVERS
 from experiments.post_training.bio_tasks.solvers.real_expression import SOLVERS as REAL_EXPRESSION_SOLVERS
 from experiments.post_training.bio_tasks.solvers.real_genomes import SOLVERS as REAL_GENOMES_SOLVERS
 from experiments.post_training.bio_tasks.solvers.real_reads import OUTPUT_SOLVERS as READ_OUTPUT_SOLVERS
@@ -274,6 +275,7 @@ def solve_images(inputs: Path) -> list[dict]:
 
 
 SOLVERS = {
+    **REAL_CLINICAL_SOLVERS,
     **REAL_EXPRESSION_SOLVERS,
     **REAL_GENOMES_SOLVERS,
     **REAL_STRUCTURE_SOLVERS,
