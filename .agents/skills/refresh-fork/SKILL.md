@@ -162,9 +162,10 @@ blocker issue.
 
 ## Pin at the staged tip
 
-Point Marin at `main-next` so the e2e runs against the replayed code, then run
-`uv run config/update-external.py` to regenerate
-`lib/marin/src/marin/external_dependencies.py`; confirm only the intended pins change.
+Point Marin at the exact `main-next` SHA or candidate wheel so the e2e runs
+against the replayed code, then run `uv run config/update-external.py` to
+regenerate `lib/marin/src/marin/external_dependencies.py`; confirm only the
+intended pins change.
 The stable `main` remains at the old tip until an admin hard-swaps it after reviewing
 the draft PR. Because `main-next` and the eventual `main` are the same commit,
 the pin set here needs no change after that promotion.
@@ -174,10 +175,10 @@ the pin set here needs no change after that promotion.
   record the exact existing main-line source and its upstream base without
   creating or promoting another branch. The section-by-section mechanics are
   in `docs/vllm.md`.
-- `pin = release:<path>` (`vllm-gpu`): the pin is a prebuilt wheel, so the refresh builds
-  and promotes one through the fork's own release pipeline, then re-pins from the promoted
-  manifest. The candidate/promote/re-pin commands and the CUDA/torch ABI-boundary caveat
-  are in `docs/vllm.md`.
+- `pin = release:<path>` (`vllm-gpu`): the pin is a prebuilt wheel. Publish an
+  immutable staged candidate, temporarily pin it in Marin for the e2e, then
+  promote the source and re-pin from the final release manifest. The exact
+  commands and the CUDA/torch ABI-boundary caveat are in `docs/vllm.md`.
 - `pin = isolated_project` (`evalchemy`, `harbor`, `MarinSkyRL`): the uv source follows
   the fork's `main`, so `main` is the stable branch. Stage the rebase on `main-next`,
   review it from a compare link (`upstream_base..main-next`) on the Marin PR, and point
