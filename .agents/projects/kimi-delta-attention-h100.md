@@ -25,14 +25,23 @@ All math was fp32. Shapes benchmarked: B=4, H=8, L=8192, d_k=d_v=128, C=64.
 FLOPs from an analytic GEMM model — **`cost_analysis` undercounts `lax.scan`
 bodies** (returned 12G for C=64 vs ~137G analytic), so it is not used for MFU.
 
-| variant (L=8192, C=64) | fwd ms | fwd tok/s | fwd+bwd ms | fwd+bwd tok/s |
-|---|---|---|---|---|
-| fp32, true fp32 (`precision=highest`) | 7.80 | 33.6M | 23.79 | 11.0M |
-| fp32, default (**TF32**) | 5.98 | 43.8M | 19.74 | 13.3M |
-| **bf16 intra-chunk GEMMs (fp32 state)** | **5.56** | **47.2M** | **17.49** | **15.0M** |
+Shipped kernel (L=8192, B=4, H=8, d=128), the two viable chunk sizes:
 
-Chunk-size sweep (fwd, fp32-default, B=8 earlier run): C=32 → 11.4ms, **C=64 →
-9.87ms (best)**, C=128 → 11.5ms. C=64 is the H100 sweet spot.
+| config | fwd ms | fwd tok/s | fwd+bwd ms | fwd+bwd tok/s |
+|---|---|---|---|---|
+| fp32 (TF32), C=64 (old baseline) | 5.95 | 44.1M | 19.79 | 13.3M |
+| fp32 true (`precision=highest`), C=64 | 7.75 | 33.8M | 23.80 | 11.0M |
+| bf16, C=64 | 5.52 | 47.5M | 17.46 | 15.0M |
+| fp32 (TF32), C=128 | 6.32 | 41.5M | 19.61 | 13.4M |
+| **bf16, C=128 (new default)** | **4.89** | **53.6M** | **14.72** | **17.8M** |
+
+Two independent levers stack:
+- **bf16 intra-chunk GEMMs** alone (at C=64): +7.8% fwd, +13.3% fwd+bwd.
+- **bf16 shifts the optimal chunk 64→128** (larger intra-chunk GEMMs are cheap on
+  tensor cores, and C=128 halves the sequential scan steps to L/128=64). In fp32
+  C=64 was best; in bf16 C=128 wins.
+- **Combined (bf16 + C=128) vs the old fp32/C=64 baseline: +21.6% fwd, +34.3%
+  fwd+bwd** tokens/s. bf16-C=128 accuracy vs the recurrence is ~5.8e-3, same as C=64.
 
 ## Bottleneck (the headline)
 
@@ -50,18 +59,22 @@ observations pin it down:
 
 ## Change landed
 
-`chunk_kda(..., matmul_dtype=jnp.bfloat16)` (new default): the **intra-chunk**
-GEMMs (delta-correction `A`, its Neumann inverse, `U`/`k_cumdecay`, and the
-intra-chunk attention) run in bf16 on tensor cores; the **cross-chunk fp32 state
-recurrence and all decay/cumsum math stay fp32** (stability). Result: **+7.6% fwd,
-+12.9% fwd+bwd** tokens/s, at ~0.5% max relative error vs the fp32 recurrence.
-This is a real but modest win — consistent with the kernel being memory/latency
-bound, where bf16 mainly cuts operand traffic rather than compute time.
+Two defaults changed in `chunk_kda`:
+
+- `matmul_dtype=jnp.bfloat16`: the **intra-chunk** GEMMs (delta-correction `A`, its
+  Neumann inverse, `U`/`k_cumdecay`, and the intra-chunk attention) run in bf16 on
+  tensor cores; the **cross-chunk fp32 state recurrence and all decay/cumsum math
+  stay fp32** (stability). Pass `matmul_dtype=jnp.float32` for the exact-fp32 oracle.
+- `chunk_size=128` (was 64): the H100 optimum under bf16. C=64 remains a
+  lower-memory fallback (the reverse pass saves ~2x less C×C state), so the model's
+  `kda_chunk_size` can drop it back for very long context if memory-bound.
+
+Combined win over the old fp32/C=64 kernel: **+21.6% fwd, +34.3% fwd+bwd** tokens/s.
 
 Correctness: `test_kda.py` — exact-fp32 parity pinned via `matmul_dtype=float32`
 (rtol 1e-4 vs `recurrent_kda`; scalar-limit exactly matches levanter's
-HF-validated `recurrent_gated_delta_rule`); new bf16 test at rtol 2e-2; gradients
-and strong-decay finiteness on the bf16 default. 13 tests pass.
+HF-validated `recurrent_gated_delta_rule`); bf16 tests at rtol 2e-2 for C=32/64/128;
+gradients and strong-decay finiteness on the bf16 default. 14 tests pass.
 
 ## Remaining bottleneck & next steps (highest leverage first)
 

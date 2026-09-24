@@ -184,7 +184,7 @@ def chunk_kda(
     g: Float[Array, "... L Dk"],
     beta: Float[Array, "... L"],
     *,
-    chunk_size: int = 64,
+    chunk_size: int = 128,
     initial_state: jax.Array | None = None,
     use_qk_l2norm: bool = True,
     matmul_dtype: jnp.dtype | None = jnp.bfloat16,
@@ -195,8 +195,11 @@ def chunk_kda(
     and carries a single recurrent state ``S`` across chunks -- the matmul-bound form
     that keeps the layer efficient. See module docstring for the equations.
 
-    Args mirror :func:`recurrent_kda`. ``chunk_size`` is the intra-chunk length C
-    (64 is the H100 sweet spot). ``matmul_dtype`` selects the dtype of the
+    Args mirror :func:`recurrent_kda`. ``chunk_size`` is the intra-chunk length C.
+    With the default bf16 GEMMs, C=128 is the H100 sweet spot (fewer sequential
+    scan steps, and the larger intra-chunk GEMMs are cheap on tensor cores); C=64
+    is a lower-memory fallback (the reverse pass saves ~2x less CxC state). In fp32
+    the optimum is C=64. ``matmul_dtype`` selects the dtype of the
     *intra-chunk* GEMM operands (delta-correction matrix, its Neumann inverse, the
     pseudo-value/decayed-key products, and the intra-chunk attention); the fp32 cross-
     chunk state recurrence and all decay/cumsum math are always fp32. ``bfloat16``
