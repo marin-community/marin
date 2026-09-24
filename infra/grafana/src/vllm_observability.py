@@ -118,6 +118,7 @@ _HEALTH_METRIC_NAMES = (
 )
 _METRIC_NAMES = (*_SERVING_METRIC_NAMES, *_HEALTH_METRIC_NAMES)
 _HISTOGRAM_BOUND_ORDER_SQL = "CASE WHEN upper_bound IN ('+Inf', 'Inf') THEN 1e308 ELSE CAST(upper_bound AS DOUBLE) END"
+_PUBLICATION_ID_JSON_FIELD_RE = r'"histogram_publication_id":"(?:\\.|[^"\\])*"'
 _SUMMARY_METRIC_NAMES = (
     *_TOKEN_COUNTERS,
     *_PREEMPTION_COUNTERS,
@@ -161,6 +162,13 @@ def _vllm_samples_query(
            'histogram_bounds', json_get(body_json, 'explicit_bounds'),
            'producer_epoch', json_get(body_json, 'producer_epoch'),
            'source_sequence', CAST(json_get(body_json, 'sequence') AS BIGINT)"""
+    # Finelog serializes attributes as compact, sorted JSON and supports regexp_replace,
+    # but not json_merge_patch. Handle a publication token in either key position.
+    leading_token = sql_string(r"^\{" + _PUBLICATION_ID_JSON_FIELD_RE + ",")
+    other_token = sql_string("," + _PUBLICATION_ID_JSON_FIELD_RE)
+    attributes_without_token = (
+        f"regexp_replace(regexp_replace(attributes_json, {leading_token}, '{{'), {other_token}, '')"
+    )
     return f"""
 WITH base AS (
     SELECT COALESCE(NULLIF(cluster, ''), 'local') AS origin_cluster,
@@ -184,7 +192,7 @@ WITH base AS (
 ), normalized AS (
     SELECT origin_cluster, service, name, kind, value, body_json, resource_attributes_json,
            CASE WHEN json_get(attributes_json, 'histogram_publication_id') IS NOT NULL
-                THEN regexp_replace(attributes_json, ',"histogram_publication_id":"[^"]+"', '')
+                THEN {attributes_without_token}
                 ELSE attributes_json END AS attributes_json,
            json_get(attributes_json, 'histogram_publication_id') AS publication_id,
            timestamp_ms, seq

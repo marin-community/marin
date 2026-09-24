@@ -170,7 +170,7 @@ def test_histogram_snapshot_publisher_preserves_exact_bins_and_raw_observations(
         explicit_bounds=(0.01, 0.1),
         bucket_counts=(first_bin, 2, 3),
         count=first_bin + 5,
-        total=42.5,
+        sum=42.5,
         unit="s",
         attributes={"engine": "engine-a", "engine_index": "0"},
         timestamp_ms=1_700_000_000_000,
@@ -213,7 +213,7 @@ def test_invalid_histogram_family_does_not_poison_valid_family(monkeypatch: pyte
         explicit_bounds=(0.1,),
         bucket_counts=(2, 1),
         count=3,
-        total=0.2,
+        sum=0.2,
         unit="s",
         attributes={"engine": "engine-a"},
         timestamp_ms=1_700_000_000_000,
@@ -227,6 +227,33 @@ def test_invalid_histogram_family_does_not_poison_valid_family(monkeypatch: pyte
     assert result.telemetry_lost_records == 1
     assert telemetry.runtime_status().lost_records == 1
     assert transport.wait_for(1)[0]["body"]["count"] == 3
+
+
+def test_histogram_snapshot_publisher_accepts_generic_point_without_publication_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = _transport(monkeypatch)
+    result = metrics.HistogramSnapshotPublisher(max_records=1).publish(
+        (
+            metrics.HistogramSnapshot(
+                name="request_duration_seconds",
+                explicit_bounds=(0.1,),
+                bucket_counts=(2, 1),
+                count=3,
+                sum=0.2,
+                unit="s",
+                attributes={},
+                timestamp_ms=1_700_000_000_000,
+            ),
+        )
+    )
+
+    assert result.enqueued_records == 1
+    body = transport.wait_for(1)[0]["body"]
+    assert body["count"] == 3
+    assert body["bucket_counts"] == [2, 1]
+    assert "producer_epoch" not in body
+    assert "sequence" not in body
 
 
 def test_processor_failure_does_not_hide_successful_scrape(monkeypatch: pytest.MonkeyPatch) -> None:

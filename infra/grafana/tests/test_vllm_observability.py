@@ -90,16 +90,27 @@ def _vllm_projection_database():
 
 @pytest.mark.parametrize("format_name", ["scalar", "structured", "mixed", "dual", "dual_missing"])
 @pytest.mark.parametrize(
-    ("family", "metric"),
-    [("time_to_first_token_seconds", "ttft"), ("inter_token_latency_seconds", "inter_token_latency")],
+    ("family", "metric", "section", "scale"),
+    [
+        ("time_to_first_token_seconds", "ttft", "latency", 1.0),
+        ("inter_token_latency_seconds", "inter_token_latency", "latency", 1.0),
+        ("request_time_per_output_token_seconds", "tpot", "latency", 0.1),
+        ("request_generation_tokens", "output_tokens", "workload", 100.0),
+    ],
 )
-def test_vllm_histogram_dashboard_format_parity(format_name: str, family: str, metric: str) -> None:
+def test_vllm_histogram_dashboard_format_parity(
+    format_name: str, family: str, metric: str, section: str, scale: float
+) -> None:
     database = _vllm_projection_database()
 
     def canonical(attributes: dict[str, str]) -> str:
+        if format_name.startswith("dual") and "histogram_publication_id" in attributes:
+            publication_id = attributes["histogram_publication_id"]
+            remaining = {key: attributes[key] for key in sorted(attributes) if key != "histogram_publication_id"}
+            return json.dumps({"histogram_publication_id": publication_id, **remaining}, separators=(",", ":"))
         return json.dumps(attributes, sort_keys=True, separators=(",", ":"))
 
-    bounds = (0.1, 1.0)
+    bounds = (0.1 * scale, 1.0 * scale)
     snapshots = (
         (0, 0, (0, 0, 0), 0.0),
         (15_000, 1, (1, 2, 0), 0.3),
@@ -142,7 +153,7 @@ def test_vllm_histogram_dashboard_format_parity(format_name: str, family: str, m
             rows.extend(
                 (
                     (f"{family}_count", "gauge", float(count), None, canonical(labels), timestamp),
-                    (f"{family}_sum", "gauge", total, None, canonical(labels), timestamp),
+                    (f"{family}_sum", "gauge", total * scale, None, canonical(labels), timestamp),
                 )
             )
         if structured:
@@ -152,7 +163,7 @@ def test_vllm_histogram_dashboard_format_parity(format_name: str, family: str, m
                 "explicit_bounds": list(bounds),
                 "bucket_counts": list(bins),
                 "count": count,
-                "sum": total,
+                "sum": total * scale,
                 "producer_epoch": "engine-a",
                 "sequence": sequence,
             }
@@ -170,12 +181,17 @@ def test_vllm_histogram_dashboard_format_parity(format_name: str, family: str, m
     statistics = {
         row["stat"]: (row["value"], row["samples"])
         for row in result
-        if row["section"] == "latency" and row["metric"] == metric and row["t"] is None
+        if row["section"] == section and row["metric"] == metric and row["t"] is None
     }
-    assert statistics["mean"] == pytest.approx((0.16, 5))
-    assert statistics["p50"] == (1.0, 5)
-    assert statistics["p90"] == (1.0, 5)
-    assert statistics["p99"] == (1.0, 5)
+    assert statistics["mean"] == pytest.approx((0.16 * scale, 5))
+    assert statistics["p50"] == pytest.approx((1.0 * scale, 5))
+    assert statistics["p90"] == pytest.approx((1.0 * scale, 5))
+    assert statistics["p99"] == pytest.approx((1.0 * scale, 5))
+    if metric == "output_tokens":
+        distribution = {row["series"]: row["value"] for row in result if row["section"] == "output_length_distribution"}
+        assert distribution == {str(bounds[0]): 2, str(bounds[1]): 3, "+Inf": 0}
+    if metric not in ("ttft", "inter_token_latency"):
+        return
     summary_series = database.execute(vllm_run_summary_samples_query(overview)).fetch_arrow_table()
     summary = vllm_run_summary_table(overview, summary_series, nullcontext(), max_rows=1_000).to_pylist()
     if metric == "ttft":
@@ -184,10 +200,103 @@ def test_vllm_histogram_dashboard_format_parity(format_name: str, family: str, m
         assert [(row["value"], row["samples"]) for row in summary if row["metric"] == "ttft_observations"] == [
             (5, expected_samples)
         ]
-    else:
+    elif metric == "inter_token_latency":
         assert [(row["value"], row["samples"]) for row in summary if row["metric"] == "inter_token_latency"] == [
             (pytest.approx(0.16), 5)
         ]
+
+
+def test_vllm_target_histograms_weight_producers_without_dual_or_reset_counts() -> None:
+    database = _vllm_projection_database()
+    rows = []
+    base_attributes = {
+        "metric_source": "vllm",
+        "source_kind": "histogram",
+        "source_temporality": "cumulative_snapshot",
+    }
+    engine_a = {**base_attributes, "engine": "engine-a", "engine_index": "0"}
+    engine_b = {**base_attributes, "engine": "engine-b", "engine_index": "1"}
+
+    def labels(attributes):
+        # Finelog serializes BTreeMap attributes as compact, sorted JSON.
+        return json.dumps(attributes, sort_keys=True, separators=(",", ":"))
+
+    def scalar_rows(family, bounds, attributes, timestamp, count, total, cumulative_buckets, *, publication_id=None):
+        attributes = dict(attributes)
+        if publication_id is not None:
+            attributes["histogram_publication_id"] = publication_id
+        for bound, cumulative in zip((*bounds, "+Inf"), cumulative_buckets, strict=True):
+            rows.append(
+                (
+                    f"{family}_bucket",
+                    "gauge",
+                    float(cumulative),
+                    None,
+                    labels({**attributes, "le": str(bound)}),
+                    timestamp,
+                )
+            )
+        rows.extend(
+            (
+                (f"{family}_count", "gauge", float(count), None, labels(attributes), timestamp),
+                (f"{family}_sum", "gauge", total, None, labels(attributes), timestamp),
+            )
+        )
+
+    for family, bounds, small_total, big_total in (
+        ("request_generation_tokens", (10.0, 100.0), 20.0, 800.0),
+        ("request_time_per_output_token_seconds", (0.02, 0.1), 0.04, 0.8),
+    ):
+        for timestamp, count, total in ((0, 0, 0.0), (15_000, 2, small_total), (30_000, 1, small_total / 2)):
+            sequence = timestamp // 15_000
+            body = {
+                "encoding": "explicit_bucket_v1",
+                "aggregation_temporality": "cumulative",
+                "explicit_bounds": bounds,
+                "bucket_counts": (count, 0, 0),
+                "count": count,
+                "sum": total,
+                "producer_epoch": "engine-a",
+                "sequence": sequence,
+            }
+            rows.append((family, "histogram", None, json.dumps(body), labels(engine_a), timestamp))
+            if timestamp < 30_000:
+                scalar_rows(
+                    family,
+                    bounds,
+                    engine_a,
+                    timestamp,
+                    count,
+                    total,
+                    (count, count, count),
+                    publication_id=f"engine-a:{sequence}",
+                )
+        for timestamp, count, total in ((0, 0, 0.0), (15_000, 8, big_total), (30_000, 10, big_total * 1.25)):
+            scalar_rows(family, bounds, engine_b, timestamp, count, total, (0, count, count))
+
+    database.executemany(
+        """INSERT INTO "telemetry_v1.marinskyrl"
+           (cluster, service, job_id, name, kind, value, body_json,
+            resource_attributes_json, attributes_json, timestamp_ms, seq)
+           VALUES ('cw-a', 'marinskyrl', '/train', ?, ?, ?, ?, '{}', ?, ?, ?)""",
+        [(*row, seq) for seq, row in enumerate(rows)],
+    )
+    overview = vllm_overview_query(VllmIdentityField.JOB_ID, "/train", 0, 45_000, 15_000)
+    series = database.execute(overview.samples_sql).fetch_arrow_table()
+    result = vllm_overview_table(overview, series, nullcontext(), max_rows=10_000).to_pylist()
+    means = {
+        row["metric"]: (row["value"], row["samples"])
+        for row in result
+        if row["stat"] == "mean" and row["metric"] in ("output_tokens", "tpot")
+    }
+    assert means == {"output_tokens": pytest.approx((85.0, 12)), "tpot": pytest.approx((1.04 / 12, 12))}
+    assert [
+        (row["value"], row["samples"])
+        for row in result
+        if row["metric"] == "tpot" and row["stat"] == "mean_over_time" and row["t"] == 30_000
+    ] == [pytest.approx((0.1, 2))]
+    distribution = {row["series"]: row["value"] for row in result if row["section"] == "output_length_distribution"}
+    assert distribution == {"10.0": 2, "100.0": 10, "+Inf": 0}
 
 
 @pytest.mark.parametrize("conflicting", [False, True])
