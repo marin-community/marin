@@ -64,7 +64,7 @@ class DraftSftPlan:
     config_yaml: str
 
 
-def sft_draft(
+def draft_sft_plan(
     target_model: StoragePath,
     initial_draft: StoragePath,
     initial_draft_identity: str,

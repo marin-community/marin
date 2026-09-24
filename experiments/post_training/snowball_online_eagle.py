@@ -22,7 +22,7 @@ from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.cli import rl_build_options
-from marin.rl.drafting_sft import MegatronDraftPolicy, OnlineEagleTraining, sft_draft
+from marin.rl.drafting_sft import MegatronDraftPolicy, OnlineEagleTraining, draft_sft_plan
 from marin.rl.skyrl import (
     IRIS_HUB_CLUSTER_CONFIG,
     ArtifactDataSource,
@@ -60,7 +60,7 @@ GPU_VARIANT = "H100"
 GPUS_PER_NODE = 8
 SEED = 17
 
-DRAFT_SFT_PLAN = sft_draft(
+DRAFT_SFT_PLAN = draft_sft_plan(
     target_model=TARGET_MODEL_URI,
     initial_draft=INITIAL_DRAFT_URI,
     initial_draft_identity=INITIAL_DRAFT_REVISION,
