@@ -20,8 +20,8 @@ The default preset runs on 40 GPUs: 128 prompts per update with four answers eac
 workers, a buffer of 32 finished groups, staleness 4, and an 8192-token request window with a
 4096-token response cap. To grow the batch, add prompts; more answers per prompt changes the group
 each advantage is computed over. The loop settings, telemetry gates and ``marin_tokenizer`` chat
-template need a MarinSkyRL revision that supports them. An older revision rejects the keys when
-Hydra parses the config, before the job takes a GPU.
+template need a MarinSkyRL revision that supports them. An older revision rejects the loop and
+telemetry keys when the launch config is composed, before the job takes a GPU.
 """
 
 from __future__ import annotations
@@ -85,8 +85,8 @@ WANDB_PROJECT = f"marin-{EXPERIMENT_NAME}"
 PROMPTS_PER_UPDATE = 128
 # Answers sampled per prompt, so one update trains on 512 sequences.
 ANSWERS_PER_PROMPT = 4
-# Engines cancel requests still generating when new weights arrive, and the client resubmits each
-# prompt with the tokens it already generated.
+# Engines abort requests still generating at each weight sync; the client retries each one,
+# re-rendering its partial answer through the chat template, so it continues under the new weights.
 PAUSE_MODE = "abort"
 # Keep two resumable checkpoints in the temporary bucket, which deletes objects after 14 days. The
 # terminal export does not expire.
@@ -124,7 +124,7 @@ class TrainingRecipe:
     profile: SkyRLRuntimeProfile
     # Nodes the job holds: the policy nodes plus one per engine.
     num_nodes: int
-    # Placement and batch shape; MarinSkyRL writes these over the config from the topology.
+    # Placement and batch shape; Marin writes these into the SkyRL config from the role plan.
     role_plan: SkyRLRolePlan
     # AdamW learning rate; MarinSkyRL's Snowball Megatron configs use 1e-6.
     learning_rate: float
@@ -213,14 +213,11 @@ class AsyncPreset:
     evals: str
     # Drop the engines' KV cache at the pause so nothing computed by the old weights is reused.
     clear_kv_cache_on_weight_sync: bool = True
-    # Count a group's staleness from the policy version that sampled its first token. When off,
-    # staleness counts from the trainer's step at submission.
+    # Count a group's staleness from the oldest policy version that sampled it, plus one. When off,
+    # the step is captured when the first model call returns, which under-counts staleness.
     first_token_admission: bool = True
     # Export the telemetry the async RL dashboard reads.
     telemetry: bool = True
-    # Record exact quantiles of the log-ratio; no dashboard panel reads them and they gather up to
-    # 4M values per rank.
-    exact_ratio_quantiles: bool = False
     # Track the cosine between successive gradients; costs one fp32 gradient copy per rank and one
     # all-reduce per update.
     grad_cosine: bool = False
@@ -284,7 +281,7 @@ def parse_setting(text: str) -> Setting:
 
 # Keys that cannot change through --set because typed run inputs own them.
 ROLE_PLAN_SETTINGS = frozenset(_role_plan_config_values(SNOWBALL_RECIPE.role_plan))
-RETENTION_SETTINGS = frozenset({"trainer.resume_mode", "trainer.max_ckpts_to_keep"})
+RETENTION_SETTINGS = frozenset({"trainer.max_ckpts_to_keep"})
 # Keys MarinSkyRL derives from context_budget and rejects as direct YAML.
 DERIVED_CONTEXT_SETTINGS = frozenset(
     {
@@ -293,6 +290,8 @@ DERIVED_CONTEXT_SETTINGS = frozenset(
         "generator.max_turns",
         "generator.sampling_params.max_generate_length",
         "generator.engine_init_kwargs.max_model_len",
+        "generator.trajectory_reward_shaping.overlong.l_max",
+        "generator.trajectory_reward_shaping.overlong.l_cache",
     }
 )
 # Keys this launcher derives from the rendered trainer.eval_interval and trainer.max_steps.
@@ -304,8 +303,14 @@ def apply_setting(config: dict, setting: Setting) -> None:
     key, value, allows_new_key = setting
     if key == "entrypoint":
         raise click.BadParameter("this launcher is the fully asynchronous loop; entrypoint cannot change")
+    if key == "trainer.placement.colocate_policy_ref":
+        raise click.BadParameter("SkyRL artifact runs always place the reference model with the policy")
     if key in ROLE_PLAN_SETTINGS:
         raise click.BadParameter(f"{key!r} is fixed by the role plan; change SNOWBALL_RECIPE instead")
+    if key == "trainer.resume_mode":
+        raise click.BadParameter("the launcher keeps trainer.resume_mode at latest so a retried run resumes")
+    if key.startswith("data."):
+        raise click.BadParameter(f"{key!r} is overwritten from the run's pool inputs; change the pool instead")
     if key == "generator.run_engines_locally":
         raise click.BadParameter("SkyRL artifact runs always use local engines")
     if key in RETENTION_SETTINGS:
@@ -347,7 +352,9 @@ def check_loop_shape(config: dict) -> None:
     # At staleness 0 nothing stale is ever admitted, so the allowance bounds no queue.
     if staleness == 0:
         return
-    in_flight = workers + loop["max_buffered_groups"]
+    # A null buffer holds one finished group per generation worker.
+    buffered = loop["max_buffered_groups"]
+    in_flight = workers + (workers if buffered is None else buffered)
     if in_flight / prompts >= staleness:
         raise click.BadParameter(
             f"{in_flight} groups in flight or buffered exceed {staleness} updates of {prompts}, "
@@ -395,7 +402,7 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
         # Validation prompts scored per in-run evaluation.
         "eval_batch_size": 256,
         "eval_interval": preset.eval_interval,
-        # No periodic HF export; the terminal export the launcher performs after training stays.
+        # No periodic HF export; the terminal export MarinSkyRL runs after training stays.
         "hf_save_interval": -1,
         "resume_mode": "latest",
         "max_ckpts_to_keep": RETENTION.resume_checkpoint_count,
@@ -410,7 +417,6 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
         "policy_train_spans": preset.telemetry,
         # Per-request generation spans; no async dashboard panel reads them.
         "generate_spans": False,
-        "optimizer_state_metrics": preset.telemetry,
         "algorithm": {
             # Group-relative advantages over each prompt's answers.
             "advantage_estimator": "grpo",
@@ -425,7 +431,7 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
             # Symmetric PPO clip.
             "eps_clip_low": 0.2,
             "eps_clip_high": 0.2,
-            "ratio_diagnostics": {"pooled": preset.telemetry, "exact_quantiles": preset.exact_ratio_quantiles},
+            "ratio_diagnostics": {"pooled": preset.telemetry},
             "grad_cosine": {"enabled": preset.grad_cosine},
         },
         "policy": {
@@ -467,7 +473,8 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
         # Weights reach the engine over NCCL from the policy ranks at each sync.
         "weight_sync_backend": "nccl",
         # Each expert matrix goes from a Megatron rank that holds it straight to the vLLM workers that
-        # serve it; the recipe meets its requirements (TP=1, ETP=1, one local engine with EP=DP=8).
+        # serve it; the recipe meets its requirements (TP=1, ETP=1, local vLLM engines at TP=1 with
+        # EP=DP=8, and the Triton MoE backend).
         "weight_sync_transport": "expert_block",
         "expert_block_sync": {"timeout_seconds": 600, "verify": False},
         # The asynchronous engine API, which the abort pause and the HTTP route need.
@@ -487,7 +494,7 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
         "max_num_seqs": 1024,
         # Tokens one engine scheduling step may prefill or decode.
         "max_num_batched_tokens": 8192,
-        # Reuse prefilled prefixes across an answer's resubmissions after an abort.
+        # Share each prompt's prefill across its four answers; the cache is cleared at each pause.
         "enable_prefix_caching": True,
         # Split long prefills across scheduling steps so decodes keep flowing.
         "enable_chunked_prefill": True,
