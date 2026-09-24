@@ -843,6 +843,8 @@ def _add_lm_eval_rows(
     samples = []
     for raw in rows:
         normalized = samples_from_lm_eval(task, raw, primary_metric_name)
+        sample_repeat = raw.get("sample_repeat")
+        trial_id = "" if sample_repeat is None else str(sample_repeat)
         variants = raw.get("filter_variants")
         filters = (
             [variant.get("filter") for variant in variants]
@@ -850,7 +852,11 @@ def _add_lm_eval_rows(
             else [raw.get("filter")]
         )
         for sample, extraction_filter in zip(normalized, filters, strict=True):
-            store.add_sample(sample, extraction_filter=extraction_filter if isinstance(extraction_filter, str) else None)
+            store.add_sample(
+                sample,
+                trial_id=trial_id,
+                extraction_filter=extraction_filter if isinstance(extraction_filter, str) else None,
+            )
         samples.extend(normalized)
     return samples
 
