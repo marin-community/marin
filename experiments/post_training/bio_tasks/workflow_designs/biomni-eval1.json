@@ -32,7 +32,7 @@
     {
       "path": "benchmark_tasks/labbench-literature-database.json",
       "benchmark": "LAB-Bench tool-enabled literature/database",
-      "sha256": "6261cb16ada51076ca465ad2adb30991428f647569322e7bb7cd9abb0e6bee70",
+      "sha256": "a0337954ec6e645c4b24d9c21603ac01a9b790032979041e062636e8c5f40372",
       "records": 520,
       "selection": "source_configuration == DbQA; remaining 281 records use a separate design file"
     }

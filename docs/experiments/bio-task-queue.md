@@ -222,7 +222,7 @@ The expanded portfolio also includes the following source-specific plans:
 | [SciGym](../../experiments/post_training/bio_tasks/workflow_designs/scigym.json) | 350 | 3 | All supplied input structures audited; shared observed-dynamics adaptations, zero biological endpoint assignments |
 | [BixBench-Verified-50](../../experiments/post_training/bio_tasks/workflow_designs/bixbench-verified-50.json) | 50 | 0 new | Known aliases; 17 revised question texts retain separate protocol review |
 | [ScholarQA-Bio](../../experiments/post_training/bio_tasks/workflow_designs/scholarqabench-bio.json) | 1,451 | 0 | All public question identities/hashes; individual scientific endpoints and deterministic adaptations unreviewed |
-| [LAB-Bench literature/database](../../experiments/post_training/bio_tasks/workflow_designs/labbench-literature-database.json) | 801 | 16 + 7 shared | 520 database schemas reuse existing cards; 58 supplementary targets and 24 gaps; 199 literature endpoints and source evidence remain open |
+| [LAB-Bench literature/database](../../experiments/post_training/bio_tasks/workflow_designs/labbench-literature-database.json) | 801 | 16 + 7 shared | 520 database schemas reuse existing cards; 58 supplementary targets; all 199 literature stems reviewed across 14 patterns, with source evidence and acceptance unresolved |
 
 [ScholarQA-Bio's public file](../../experiments/post_training/bio_tasks/benchmark_tasks/scholarqabench-bio.json)
 contains 1,451 distinct question IDs. Its source protocol produces long-form literature
@@ -254,7 +254,21 @@ variant queries and forty each for promoters, predicted interactions, cytobands,
 targets and disease-resource differences. Clinical queries request 61 benign and 99
 pathogenic recorded classifications; eighty provide a reference protein and eighty
 depend on full-sequence choices. No source choices or database records were inspected.
-The 199 literature endpoints and 24 supplementary context gaps remain unassigned.
+All 199 literature question stems now have per-ID scientific-pattern reviews.
+The largest groups concern molecular-feature contrasts (34), entity/marker/localization
+evidence (28), interaction/mutational evidence (24), phenotype comparisons (21),
+assay responses (20) and reported quantities (20). The remaining groups cover sequence,
+structure, connectivity, enrichment, method provenance, model comparisons and open
+scientific claims. These are review categories, not task counts or equivalence claims.
+
+The literature review specifies independent input requirements, complete outputs,
+incorrect-output checks and related existing question cards for each pattern. It
+prioritizes measured contrasts, assay analysis, study accounting and structure
+comparison for further input planning. Nine mechanistic/general claims and two open
+literature-existence questions lack a complete deterministic acceptance contract;
+bounded retrieval cannot establish global absence. Every literature endpoint remains
+unassigned until its evidence supports a faithful adaptation. The 24 supplementary
+context gaps also remain.
 Independent input packages and complete acceptance contracts remain open; source
 supplements, ideal answers, distractors and key passages were not read. No validated
 coverage is added.

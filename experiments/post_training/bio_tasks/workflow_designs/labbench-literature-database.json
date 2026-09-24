@@ -1,17 +1,17 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T17:26:31.651957+00:00",
-  "scope": "Harbor planning for public literature/database LAB-Bench questions. SuppQA question stems and citation metadata reviewed; provisional observed-study audit designs preserve extraction/recomputation boundaries. Database schemas route 520 records to seven existing cards in biomni-eval1.json; individual candidate sets and source evidence remain open.",
+  "updated_at": "2026-09-24T17:50:12.615871+00:00",
+  "scope": "Harbor planning for scoped public LAB-Bench questions. All 199 LitQA2 stems have scientific-pattern and evidence-boundary reviews; complete endpoint equivalence remains unresolved. SuppQA has 58 provisional targets and 24 gaps. DbQA routes 520 records to seven existing cards; candidates and source evidence remain uninspected.",
   "source": {
     "inventory_path": "benchmark_tasks/labbench-literature-database.json",
-    "inventory_sha256": "6261cb16ada51076ca465ad2adb30991428f647569322e7bb7cd9abb0e6bee70"
+    "inventory_sha256": "a0337954ec6e645c4b24d9c21603ac01a9b790032979041e062636e8c5f40372"
   },
   "counts": {
     "inventory_records": 801,
     "individual_endpoint_reviews": 0,
     "question_cards": 16,
     "validated_new_mappings": 0,
-    "individual_question_stems_reviewed": 82,
+    "individual_question_stems_reviewed": 281,
     "records_linked_to_questions": 578,
     "records_with_gap_dispositions": 223,
     "shared_external_question_cards": 7,
@@ -1877,998 +1877,1396 @@
   "record_dispositions": [
     {
       "task_id": "LitQA2:e3b5a4af-41d9-48db-becf-29a08d0ad28e",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "assay-ranking-and-response",
+      "source_task_record_sha256": "ce60ac3d0018ef3d935727536bcb2c011445fb0044743e59f3663789bfe3e437"
     },
     {
       "task_id": "LitQA2:76184ccf-4bf0-469e-a442-11d04b4ff8b0",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "contact-and-connectivity-comparison",
+      "source_task_record_sha256": "bc24c121cdb48b789e26db8ea39a61e15fb93663ef7ebbc2d3f443b2d17567e4"
     },
     {
       "task_id": "LitQA2:39129e1c-096f-4414-bf4f-37fadbbe364c",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "reported-quantity-and-denominator",
+      "source_task_record_sha256": "daeecbf642b37bd61b9a0d3225cf44e8eeef9c66b41463817b5e240838364e49"
     },
     {
       "task_id": "LitQA2:27234279-f50c-4cfc-86e2-af68364a8f94",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "sequence-and-genome-accounting",
+      "source_task_record_sha256": "8ae6ead6815689e344192933c9d6be30c3b68b427f00019efcbfa4f18f95968f"
     },
     {
       "task_id": "LitQA2:517e7cf8-c5d2-4391-9e2a-235b79d93050",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "reported-quantity-and-denominator",
+      "source_task_record_sha256": "b3167108497d88a5bdeb5f197279f3287161d124dc07a6cb51099810741e7b82"
     },
     {
       "task_id": "LitQA2:cb710074-73a8-4407-b0c7-7dc868f1bc76",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "reported-quantity-and-denominator",
+      "source_task_record_sha256": "ac17203c81b3a78dbd0743c3090776ac54ec6659e75eef259cbefd8d34275c8e"
     },
     {
       "task_id": "LitQA2:2c05315d-6898-4667-b454-d99b7381bedb",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "mechanistic-or-general-claim",
+      "source_task_record_sha256": "000f2a2bdcbca8e0cf3cf323b70884e9ee025b39011e3da3792235cc678205fd"
     },
     {
       "task_id": "LitQA2:5c4c602c-9624-4eae-ac44-efe4c0dd10e6",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "structure-and-interface-measurement",
+      "source_task_record_sha256": "1ef2d6f77f3fa1dfd46735cc6d0a6c7a498d71d8b23a43a7ecb37c66e55c0234"
     },
     {
       "task_id": "LitQA2:c9bdb9b5-28c1-44da-93b6-b1fc9d8bf369",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "contact-and-connectivity-comparison",
+      "source_task_record_sha256": "e54965cf6ea10d0dd5468880dc4c5d356c5314399adbf9ea38e66207813d1514"
     },
     {
       "task_id": "LitQA2:e6b0f9e5-e976-47dc-b839-0b2fca967e9e",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "functional-enrichment",
+      "source_task_record_sha256": "d1f6343cea349203cad81d831d73e88064b2922889333197c12831a2a3e84eb1"
     },
     {
       "task_id": "LitQA2:247eeb85-a552-4b87-b83e-327538fcb8a9",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "reported-quantity-and-denominator",
+      "source_task_record_sha256": "cf932631caecce1e50f90e3c1d934e0995a70cd1d4b074b32c54214c8fd632c5"
     },
     {
       "task_id": "LitQA2:39c985ce-70e8-48e4-bd76-744cd07cb56a",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "molecular-feature-contrast",
+      "source_task_record_sha256": "935f8c702392821d931670e581d40a37199e800d3bf9edd98066fea4c1272f6e"
     },
     {
       "task_id": "LitQA2:a214f5f8-0de8-43cf-82e0-7930003e4a0c",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "assay-ranking-and-response",
+      "source_task_record_sha256": "56201b87af9d3cb31a59e7b38bcefd91e2cf587cd53175e3e36ca5c9f525cf75"
     },
     {
       "task_id": "LitQA2:a43e5166-d0e8-48f8-a113-648acac7ed59",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "contact-and-connectivity-comparison",
+      "source_task_record_sha256": "66c430c7dd505c1d61945f9b74b9d3db6cf628372028a288c92503e2b2c777ce"
     },
     {
       "task_id": "LitQA2:dd29920d-cb70-440f-961c-3e1103776c4f",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "reported-quantity-and-denominator",
+      "source_task_record_sha256": "55a3a01ec1216565a0b10ccfa8b0bb45b43e5bbd0247c8038c66c3551b4a64de"
     },
     {
       "task_id": "LitQA2:7d805bb8-4c7c-431f-b068-acf5e5459985",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "assay-ranking-and-response",
+      "source_task_record_sha256": "0f0db66fae391ea3bb5913b2e5391fb25e5405730e45a43944a52f75f5b461b0"
     },
     {
       "task_id": "LitQA2:8d7fa642-ee46-4a13-8ea9-61cc2d4f4ddd",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "interaction-and-mutational-evidence",
+      "source_task_record_sha256": "351a0d2134328f8501be15fc6f940487a7465b8d3dd0b1c3ea7a04c0e82a4a11"
     },
     {
       "task_id": "LitQA2:487539f9-2f17-4009-aa4a-c41322445f11",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "interaction-and-mutational-evidence",
+      "source_task_record_sha256": "d025c1d16b0d58934b81eaacd7f7910c4b783380e1b99c82a35db4e6f7ab0af2"
     },
     {
       "task_id": "LitQA2:5049c648-b1bb-4624-8824-9d93dfb04e51",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "perturbation-and-phenotype-comparison",
+      "source_task_record_sha256": "9b6b8fc76d303302a6bd3208deb170689e2d28dba348ecca86a7c9d0549893c8"
     },
     {
       "task_id": "LitQA2:a18883e9-218a-4719-8d2c-cf94d740de1a",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "perturbation-and-phenotype-comparison",
+      "source_task_record_sha256": "47ce6bc09cea50e8d579ee33d59026a0a8579d812b7d91313a0031a836deadda"
     },
     {
       "task_id": "LitQA2:d7833c0f-2a16-40d2-b6a0-6764aa3003a6",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "perturbation-and-phenotype-comparison",
+      "source_task_record_sha256": "d2b59d288db6875a751310847d30c6cd3ba1fa2bd98577cf01205ca4ce904fb1"
     },
     {
       "task_id": "LitQA2:1ccdc348-50e1-4941-9151-5e50411a2b41",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "molecular-feature-contrast",
+      "source_task_record_sha256": "c5966045d06c30440a9e76e3bd4203560cbf1ee70ed844f13f04734870ae0c6e"
     },
     {
       "task_id": "LitQA2:1e5f5199-84f4-4133-ab87-2372fa6ca722",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "interaction-and-mutational-evidence",
+      "source_task_record_sha256": "5b8c1f5eb0d868cf0ce6fd40bb7185799b24b007824155566da2bb5085cdb137"
     },
     {
       "task_id": "LitQA2:d2860d38-dfb9-4b80-905f-812c32573915",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "entity-marker-and-localization-evidence",
+      "source_task_record_sha256": "de761f7eb82460f780ee93aac7275d237846dfc0f57681ee94e7469b745c4345"
     },
     {
       "task_id": "LitQA2:77a41274-cd9c-48bc-a347-e0746907840d",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "perturbation-and-phenotype-comparison",
+      "source_task_record_sha256": "43346b277beff1bba27417b38c0bd1b47c11078155756d26424fc51688f73223"
     },
     {
       "task_id": "LitQA2:5a2128ad-3127-4595-b810-db128d1a2335",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "structure-and-interface-measurement",
+      "source_task_record_sha256": "3717dd036445f222cbe4054a0f9042fa962b57f1aac58e8b12d4f6d96e036caa"
     },
     {
       "task_id": "LitQA2:d65103ae-c881-4116-a0a7-1b233eb6275a",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "mechanistic-or-general-claim",
+      "source_task_record_sha256": "fa37acfc8f1265a436edae4ed0f16a04cd7575fbd22fb246723caaa7ca23360e"
     },
     {
       "task_id": "LitQA2:ab5eb050-d134-4445-9307-6faa08be7474",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "structure-and-interface-measurement",
+      "source_task_record_sha256": "dcb4bd9321feb5c98b13f40b5486a438d1e2cdd3d63829de3c0acb0726be6356"
     },
     {
       "task_id": "LitQA2:82de3e92-abe2-46ac-ad17-23417b9c4da7",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "interaction-and-mutational-evidence",
+      "source_task_record_sha256": "b25df0bc4436f48e4d14640e38ca345ffd23d927e819bf5b649bd7fa79b185eb"
     },
     {
       "task_id": "LitQA2:7cf0fcde-fea8-420c-8531-2f2fe9e38980",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "open-literature-existence",
+      "source_task_record_sha256": "a993a9cf0940c1a74bfa4e7f4f51886ddfe2219fee0fbc3aaaaa6b6812a74480"
     },
     {
       "task_id": "LitQA2:da5b2a8f-ba08-4692-851f-2e0bf142a02f",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "open-literature-existence",
+      "source_task_record_sha256": "025442752394daf861ec3e1bd235af310dcc3b50f20f92993db5c4805088d8c3"
     },
     {
       "task_id": "LitQA2:e2fb56b7-08cd-4dc0-bc63-b45931a74fc9",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "contact-and-connectivity-comparison",
+      "source_task_record_sha256": "4c771f37ebf7463755c38cd4dc370644ea3b15e9c51483050ffac85f78b65e25"
     },
     {
       "task_id": "LitQA2:eda34fde-798e-43a1-a9d3-a804d3d8ee4e",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "perturbation-and-phenotype-comparison",
+      "source_task_record_sha256": "410e50658e34e845451a30fdebb518827bcd4146b013f1b6cec4c419f62ed16e"
     },
     {
       "task_id": "LitQA2:0eede7a8-fe1f-42d3-a2c6-478083648644",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "interaction-and-mutational-evidence",
+      "source_task_record_sha256": "ddcfde9b43e245e8a5b1d75b7649480247f821f881c2f6f3bbdeed64cb621c2f"
     },
     {
       "task_id": "LitQA2:d1307e50-3c03-4c76-81ee-2decb5de5f14",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "molecular-feature-contrast",
+      "source_task_record_sha256": "f49506b03cead0f2e78839c005ef818d2e60fa0e58d224c16a4c66c32915dc87"
     },
     {
       "task_id": "LitQA2:10cece36-a507-4a93-9600-13f3e0e677f8",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "molecular-feature-contrast",
+      "source_task_record_sha256": "a4c14cb317c6674b28f93398a8c406cf61e682cafb1d34a01df4624208645fee"
     },
     {
       "task_id": "LitQA2:f5a84803-3917-43eb-801b-8dc0c5400da1",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "assay-ranking-and-response",
+      "source_task_record_sha256": "4ce25e65acf3db53247ddd948af3603d964192006d995065b6b257147a74b405"
     },
     {
       "task_id": "LitQA2:c47dd378-dde3-4a45-9184-6abfa6163717",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "molecular-feature-contrast",
+      "source_task_record_sha256": "f4cec9344019c5a5da3fb9d4ebad8058ba8e7e3d10115ba26ab1e0ae0c57863a"
     },
     {
       "task_id": "LitQA2:0bac8974-554c-439a-a9a2-22fa509c8d5d",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "mechanistic-or-general-claim",
+      "source_task_record_sha256": "f68e8bfca07bdc5645820b855ef55c4a24229b8a952a1e27dfb3e0a8f81b9b31"
     },
     {
       "task_id": "LitQA2:aaa85379-1e4b-4642-9ec4-e1a6d6c29c3b",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "reported-quantity-and-denominator",
+      "source_task_record_sha256": "11fca7d2c7f815d414e01cc27bd8bfdc14875e1a8c36597454ff75472912470b"
     },
     {
       "task_id": "LitQA2:aa1835b2-2b1c-4986-b7af-e174da0124b0",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "reported-quantity-and-denominator",
+      "source_task_record_sha256": "4de3c8b5e41ff7259dda172e423e61adbd06e1c43e05e30c134d719bcfb73162"
     },
     {
       "task_id": "LitQA2:5a9c6697-a65c-49c0-9e02-38b2a276fde7",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "reported-quantity-and-denominator",
+      "source_task_record_sha256": "7e77303440079742668483d89d217f96fd1476b188ad239c9b6ee3674f95ca0c"
     },
     {
       "task_id": "LitQA2:37a4d007-793e-4a89-922a-c1b05f4f82c1",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "sequence-and-genome-accounting",
+      "source_task_record_sha256": "bdb4c2c4487aa2f072a1f8cd338738fcce3af20298b3d5a4a8736d28208a1f20"
     },
     {
       "task_id": "LitQA2:c9baf8e0-c4c7-4ba3-b5c4-18e9af8b2df1",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "structure-and-interface-measurement",
+      "source_task_record_sha256": "d31ea00069dc9e83a83c5fe43057cac09ecabc013433cceb11768131bbbf5db3"
     },
     {
       "task_id": "LitQA2:d0f69626-66ee-4807-937d-c3a024441812",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "molecular-feature-contrast",
+      "source_task_record_sha256": "86e3e3076ac58a233dff10fbbc0269d3959f2d8044f2de0622235ffc57aa7652"
     },
     {
       "task_id": "LitQA2:462a9f38-7cbe-4e12-a6e2-b1d7028c3a8b",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "sequence-and-genome-accounting",
+      "source_task_record_sha256": "b166f0a2d86cf16a7fabf393f7ca54fddf043f97d3b6fb8554e6ed827b41b64b"
     },
     {
       "task_id": "LitQA2:86f111e5-402b-4ef5-b101-8be1bf5be7c6",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "molecular-feature-contrast",
+      "source_task_record_sha256": "c932d68f20a7c3bb0f5dddb62f19c3e45dd5c2a4031b6009d2e58a80504fe863"
     },
     {
       "task_id": "LitQA2:cbe93a43-09cd-4cb4-9edd-f22fe8c28415",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "molecular-feature-contrast",
+      "source_task_record_sha256": "afba5833ece33dc36cd03148f70dbfc73859f4b2521ae88d76ff379ebfc12156"
     },
     {
       "task_id": "LitQA2:7a88e6f7-fb8e-4a24-b08d-9b7a6edafe57",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "sequence-and-genome-accounting",
+      "source_task_record_sha256": "a1e69eba0cba7811a8ba4957623c5f8019f9e70ae57df104c1a3dbc3dc9dd859"
     },
     {
       "task_id": "LitQA2:91387526-9268-4a3c-9abe-73819707d0b0",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "assay-ranking-and-response",
+      "source_task_record_sha256": "aa0dd5980d6d69d0c91a003978f3e79c51101707870c72fbb55c10cd1629800d"
     },
     {
       "task_id": "LitQA2:7b98796f-25be-4c58-a52a-4e366c0ffd95",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "sequence-and-genome-accounting",
+      "source_task_record_sha256": "36a2a547af3fe1100647acd7367b151ee7838f35241f9343f671899a87208b76"
     },
     {
       "task_id": "LitQA2:5e20e26d-6192-4563-abb3-a4857e3dbc7c",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "assay-ranking-and-response",
+      "source_task_record_sha256": "3c7fb15b5f12c9a3a8d7c9fbd76d4a58487872950b484e90cfc7f987c4ba2a9a"
     },
     {
       "task_id": "LitQA2:b105af85-833e-48bc-ac78-48f73c9673fd",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "sequence-and-genome-accounting",
+      "source_task_record_sha256": "7cc8f397542a172de188a320ccbf80c91ad8d780a16f0f49b5fc5d0f3d9f61b7"
     },
     {
       "task_id": "LitQA2:5b6d6f82-a585-4aa8-9fe6-e7d35f7cb2ae",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "assay-ranking-and-response",
+      "source_task_record_sha256": "e28ebbde2c15895be42e40013c2b28f31abd4b54665691c73dc6375660efebbf"
     },
     {
       "task_id": "LitQA2:12321eab-6ad6-4218-8815-18bc51c14544",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "assay-ranking-and-response",
+      "source_task_record_sha256": "9e9d313794a3305a9eadaeb3a9909e4176e106181a4e71a3b6a5c7622b2e2cdb"
     },
     {
       "task_id": "LitQA2:c33446f6-fbff-4186-8a51-28a17f68bd40",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "method-and-protocol-provenance",
+      "source_task_record_sha256": "612be177033106e1d0327536ab592eff89105d479f8b4480a0e8a41b6f879eb4"
     },
     {
       "task_id": "LitQA2:b1d5a5f5-6e89-4dfb-b60d-5a9824b015f3",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "perturbation-and-phenotype-comparison",
+      "source_task_record_sha256": "8f44cfed1a77793ac55224b55abb41ae5f1a60c2f20399512162040f75d63e89"
     },
     {
       "task_id": "LitQA2:6aa10957-bdd9-4dab-a4e1-234a17cb87dd",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "perturbation-and-phenotype-comparison",
+      "source_task_record_sha256": "a44d493e4a3eb5e61abe8e67af885742386aad3c480e3ff4faf8347505ac7a42"
     },
     {
       "task_id": "LitQA2:28ebecdf-949e-4d20-aca9-5989b7a9d6e9",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "interaction-and-mutational-evidence",
+      "source_task_record_sha256": "081d53f1ca1562764e3ca3253e1987ca3924ed4f072629c36c81114f4ff2ea13"
     },
     {
       "task_id": "LitQA2:dbb51a1c-f9a2-4960-a93c-118957659790",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "sequence-and-genome-accounting",
+      "source_task_record_sha256": "993118fd6856bdad12ea890963bf46b3e0758f7c41751893ccfae46bd8dc28b7"
     },
     {
       "task_id": "LitQA2:3d40f373-59d3-4666-87bd-6db64fd7b4fb",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "entity-marker-and-localization-evidence",
+      "source_task_record_sha256": "e123495260d31447177da6a1a8ce8a58f63fbd0f211e8b651ef567861123c734"
     },
     {
       "task_id": "LitQA2:85c67ef3-322c-42b4-b745-c05e07e7b8ac",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "reported-quantity-and-denominator",
+      "source_task_record_sha256": "6177bd1289ab80023c712d8947b3ab1852c10b5bf9004bb8c8e21853fb44780f"
     },
     {
       "task_id": "LitQA2:653635b7-3bc6-4a7b-98c7-c02038c0e928",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "entity-marker-and-localization-evidence",
+      "source_task_record_sha256": "a884bf83ac915f0004b581ee8cfc9561b47d557a1a037f3f5cc6ddb9e32d8808"
     },
     {
       "task_id": "LitQA2:100b570f-1c4f-4214-8402-f1b15f9989b4",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "reported-quantity-and-denominator",
+      "source_task_record_sha256": "744d778e798c354b41494d3ef92a2a5dde674abf93c9c1e914bb2b6fecd1311b"
     },
     {
       "task_id": "LitQA2:0a9d6516-95ef-4d7b-a28d-d7cde27b7b55",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "reported-quantity-and-denominator",
+      "source_task_record_sha256": "b1c7441720f8a04b9c15635bb4663c25e87fdc6b49adaa4e0f750e5bb3f3d71e"
     },
     {
       "task_id": "LitQA2:8d61a14b-60ef-43b0-8003-b60cb6657428",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "entity-marker-and-localization-evidence",
+      "source_task_record_sha256": "26e1ce8ea386ccd870bc3ff696c6e3e850e3de62158abbda170d273083de2201"
     },
     {
       "task_id": "LitQA2:4d4cb121-9525-499a-9475-9b212465c72d",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "method-and-protocol-provenance",
+      "source_task_record_sha256": "f348f73845412cb23635ff3536c8b8514b650f6959de4275051213487f59e8ca"
     },
     {
       "task_id": "LitQA2:ca4c9d21-b842-4875-9a6a-bcb9f6c55073",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "entity-marker-and-localization-evidence",
+      "source_task_record_sha256": "458413d344155e684b2716415287441e0d241e1ff75fe79bae127063f892d905"
     },
     {
       "task_id": "LitQA2:c3816cb5-8c87-4946-b133-43f415ab6b2a",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "functional-enrichment",
+      "source_task_record_sha256": "3becadbdd3a4358d2ce70604aba11973eb1d56fa6c82764c20e54cffa07e4fc0"
     },
     {
       "task_id": "LitQA2:59745f75-52bf-4815-905c-3dfad1ef8923",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "entity-marker-and-localization-evidence",
+      "source_task_record_sha256": "bdc73a1d5967ec7e1a34216536a7873382d95ae17430350ca4fc6d3c100a7495"
     },
     {
       "task_id": "LitQA2:26691c84-514b-4712-a43e-09705d681e45",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "perturbation-and-phenotype-comparison",
+      "source_task_record_sha256": "b73f88d747e0818a2f0ade25ef4224b594bb3cfb5f1a17a43b0ab89a67db4934"
     },
     {
       "task_id": "LitQA2:0e53a08c-4252-4a84-962b-5b396f9740aa",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "perturbation-and-phenotype-comparison",
+      "source_task_record_sha256": "e3eee66bd28591df5efc23f3c1656f819683b9b21987388550629e4a16c7b900"
     },
     {
       "task_id": "LitQA2:8ade3e3a-4792-4965-b9d9-05e528ebbfa0",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "mechanistic-or-general-claim",
+      "source_task_record_sha256": "a1fc63ae23ee85ea42e2ac91de6aef36cccfe64cd5a179dd108dc80a52b56d47"
     },
     {
       "task_id": "LitQA2:f5a4b449-e647-4ae0-8419-c221792482c9",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "entity-marker-and-localization-evidence",
+      "source_task_record_sha256": "9c2d6408814cc24d2b399625d6a369bcfc4862b19d4c33a2c5fbd001c18035ae"
     },
     {
       "task_id": "LitQA2:5806ed2a-1005-44f1-8d70-332048fea8f4",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "entity-marker-and-localization-evidence",
+      "source_task_record_sha256": "79c80f3f461bac16a24aac42e6ea21d463cd703656c331603aa3597b61555945"
     },
     {
       "task_id": "LitQA2:6fff0994-6d02-470a-9d61-8e35420412b6",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "sequence-and-genome-accounting",
+      "source_task_record_sha256": "754fcc8b557af9e34524c953799ec570d95a6ae7e485dc0d5cfe65ef4ce86ba7"
     },
     {
       "task_id": "LitQA2:8266ac61-92d6-423d-8e7a-fe47b3a7e885",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "perturbation-and-phenotype-comparison",
+      "source_task_record_sha256": "21df69c554e1c8c7b218523e78253df9ef9dd0af87bfe1b8993216d2cfeab7e2"
     },
     {
       "task_id": "LitQA2:322454df-45a8-41b3-9b0a-4e808144023c",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "reported-quantity-and-denominator",
+      "source_task_record_sha256": "35abba64736ef3c63ea5290e852e227cb9a4259c76ef33945ad66bcbbbb68566"
     },
     {
       "task_id": "LitQA2:3c9f23e2-fdd0-431b-aca7-4f9556c78f1f",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "entity-marker-and-localization-evidence",
+      "source_task_record_sha256": "e9e09f982b731144399cb1023ae09eeb67f7ee928faa6a035581217d71a48bdb"
     },
     {
       "task_id": "LitQA2:983f1ef5-fc7d-4f4a-8f48-e704641eae12",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "functional-enrichment",
+      "source_task_record_sha256": "7fbe0458c0bceb397ad6dab88bec90ac814ba7cd2d2f6ba7e8734610e94d8b87"
     },
     {
       "task_id": "LitQA2:7d2c8d44-ecf3-40d2-ab69-b6195c46ffe9",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "perturbation-and-phenotype-comparison",
+      "source_task_record_sha256": "7b2a581659ba577fa7b858811427b374edafb4e4615ac5885aac7c37e8a0ef7c"
     },
     {
       "task_id": "LitQA2:720e20c2-9ad1-4d98-9f01-8b7fb3782a46",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "interaction-and-mutational-evidence",
+      "source_task_record_sha256": "f10687baf80467c82a56ac85d22acda725fd31747bce2094da337b9bf5ebc091"
     },
     {
       "task_id": "LitQA2:dbfbae3d-62f6-4710-8d13-8ce4c8485567",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "entity-marker-and-localization-evidence",
+      "source_task_record_sha256": "95a10977b2d837c2f1a5e23991c199451431f46ed88a59f34784f638d3aed761"
     },
     {
       "task_id": "LitQA2:7a42c784-7ae0-48fe-a71f-0a547b8fabb3",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "interaction-and-mutational-evidence",
+      "source_task_record_sha256": "95b091d622c228cf4c1f93ca01f1cd9ceaabd1582c816249c3417d167538bed5"
     },
     {
       "task_id": "LitQA2:0708b62f-9652-49eb-8ba6-28878afa7445",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "contact-and-connectivity-comparison",
+      "source_task_record_sha256": "c01a4196bc0b1e0a28ab51675005258debdccee9bdabbddf84634056d917aa7a"
     },
     {
       "task_id": "LitQA2:5b3b7d05-9e54-445c-b374-d4c6b60923b4",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "reported-quantity-and-denominator",
+      "source_task_record_sha256": "50cfdfd2e4d8d45b334cf8ae251de15a22428875b06cb81c7d18523826d51174"
     },
     {
       "task_id": "LitQA2:623a831f-41ee-4e0e-936a-87f93d96369e",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "structure-and-interface-measurement",
+      "source_task_record_sha256": "79a36fa91049a299898c2a50690378e65131e0f07833155ebeecd8f56417e94a"
     },
     {
       "task_id": "LitQA2:99e8fa71-b59c-4aef-8cf6-40102a10622f",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "molecular-feature-contrast",
+      "source_task_record_sha256": "84db282bce43eb03136fc1667da33ed417bdd2ed6ba1d01961756ce92788e581"
     },
     {
       "task_id": "LitQA2:0b1d5537-db47-420c-984b-9b56d38e6d98",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "interaction-and-mutational-evidence",
+      "source_task_record_sha256": "f664eb97e897a8a8b85e9101067e0bb2bbde0f83855765526f50b7423eec417e"
     },
     {
       "task_id": "LitQA2:ade96656-7ed1-4e21-b009-b7a73e13bff5",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "entity-marker-and-localization-evidence",
+      "source_task_record_sha256": "998fd541213762f6fb5f5c70c74abc0331afeec094e1da7b529dd337dbf6dfa8"
     },
     {
       "task_id": "LitQA2:78a2c1d2-f035-4c7d-a7ee-40dfd95ca88a",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "assay-ranking-and-response",
+      "source_task_record_sha256": "d3d632415cc3f364bd752b7b32b49b573b3866a2750aece98b138dde809e5943"
     },
     {
       "task_id": "LitQA2:224efcd7-3652-47f8-84dd-15b4c6fafae2",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "entity-marker-and-localization-evidence",
+      "source_task_record_sha256": "332f2df72fcac9b5bfb6b415e83abb73ddf8f93297020754aca262338135fe16"
     },
     {
       "task_id": "LitQA2:55187fb4-e7ee-4027-b74f-cab50f328442",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "molecular-feature-contrast",
+      "source_task_record_sha256": "fb31b2025947119ff17bfa7c1763b65ebce45ab3f238f2b4e6fc03a4d8298842"
     },
     {
       "task_id": "LitQA2:25a9cf59-1c28-4ddf-b797-f43efb9349e6",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "perturbation-and-phenotype-comparison",
+      "source_task_record_sha256": "6a5024497fe35440df069e59a32d8fcc98a269678e67dc5dc7dea9d7e0e222b0"
     },
     {
       "task_id": "LitQA2:cdc80639-dc21-4337-bccc-d61d9aec6560",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "interaction-and-mutational-evidence",
+      "source_task_record_sha256": "609e95682c03f128ae63b24f47d782024ef3c6312bc6909471a77d343bc4e1cf"
     },
     {
       "task_id": "LitQA2:12a20d8d-cd49-47eb-9a19-6a38519ee3dc",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "molecular-feature-contrast",
+      "source_task_record_sha256": "ce7d9316d063e83ddc9b2cf2a9edb9bd0f21b098e35a99092a071f891cf9bfe4"
     },
     {
       "task_id": "LitQA2:4bb69c9d-2485-42d2-b8aa-aa647b407ca4",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "molecular-feature-contrast",
+      "source_task_record_sha256": "a8da751f354ef8e909692612c20004339b6deecbdae05a0cba0fe5e129ca68aa"
     },
     {
       "task_id": "LitQA2:8c833521-56c4-458d-8c65-2bbf66190cae",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "molecular-feature-contrast",
+      "source_task_record_sha256": "027f70877518be4d322ec4ed117b5c939693f95e0b9856db4bae79d7d69687ec"
     },
     {
       "task_id": "LitQA2:255fd5fb-9623-4030-8bf2-253247df7c82",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "molecular-feature-contrast",
+      "source_task_record_sha256": "0cfb9d7f49906479bc3b79dcd229e950562e056298c3ab0705f544585b06e7b0"
     },
     {
       "task_id": "LitQA2:38ada695-2c79-459b-8e68-dbed734c74f9",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "molecular-feature-contrast",
+      "source_task_record_sha256": "17a04314093cc37ecdbfbd5e9977002679a2e9fbf0e81b2fae23542fc196ae67"
     },
     {
       "task_id": "LitQA2:925ffe20-b8a9-4ac4-943c-7a16966f4a4b",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "perturbation-and-phenotype-comparison",
+      "source_task_record_sha256": "2a7685902d2b009476778287775e5b6ee30f8a2dc3c66792682b9830d67c5f57"
     },
     {
       "task_id": "LitQA2:e763edaa-b112-460a-a564-d58a6685e639",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "perturbation-and-phenotype-comparison",
+      "source_task_record_sha256": "de21be078c167a05e669d1336382cf6009a4376cf3c165185d0f71ad202895a5"
     },
     {
       "task_id": "LitQA2:8af900bb-5794-40db-910e-10d5857ce5bd",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "contact-and-connectivity-comparison",
+      "source_task_record_sha256": "ff5ba684b227a273b77f6d301ec550acf3a96d690bdc6d0c97fd60bc7972595d"
     },
     {
       "task_id": "LitQA2:6194ebfc-2d5c-4ccc-8883-da7c471b61e6",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "contact-and-connectivity-comparison",
+      "source_task_record_sha256": "da73e1fe2c6f990daf35f7cc1d7816bc67ee4b37d529aef4ac60d26522070f7d"
     },
     {
       "task_id": "LitQA2:1f1b07d7-39ce-4665-9b70-4ab77e3c87aa",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "contact-and-connectivity-comparison",
+      "source_task_record_sha256": "b333dc2a4a09c315243494dc5f7f14360eaeee2b31e4ad2790221598579c9a0e"
     },
     {
       "task_id": "LitQA2:55668039-396e-488a-b2c3-bbe840550433",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "molecular-feature-contrast",
+      "source_task_record_sha256": "d9637dbc786d6ca5fb46d02d60e2c9600eb5c03366bd0efc70bac6db72f40d54"
     },
     {
       "task_id": "LitQA2:4f050bf3-27cd-4a14-8422-45df5e2bb079",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "sequence-and-genome-accounting",
+      "source_task_record_sha256": "d47998f3215c9ff9612acf19a2a3860494b4b6e2e47e61a8188ef2e7f107f006"
     },
     {
       "task_id": "LitQA2:cff00d08-5655-4214-97ac-8fa9504c1165",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "reported-quantity-and-denominator",
+      "source_task_record_sha256": "9aeb2bc09e3f245a27d16d131cc673c22b775c616396213e8856817a8c06fa25"
     },
     {
       "task_id": "LitQA2:0eeb7ea9-fc80-4dee-9418-1c328c3ab653",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "interaction-and-mutational-evidence",
+      "source_task_record_sha256": "51440d79cfd34ce286c5a2dd6c5d3b6cbda2ce42c4a55685d7d7eedb1b500dd3"
     },
     {
       "task_id": "LitQA2:658f7050-d137-477e-8693-26609080cecd",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "structure-and-interface-measurement",
+      "source_task_record_sha256": "c69ce016ba41c1dc8d069c40739376dbb66e3dcce514f2c651f5baf213571298"
     },
     {
       "task_id": "LitQA2:8696273a-7fea-411a-b6c6-0e826e1e02b5",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "contact-and-connectivity-comparison",
+      "source_task_record_sha256": "2faf354ac17b59c0424fd08e7e0713bf2e76c20ba42ccf4c166e04d87af4c261"
     },
     {
       "task_id": "LitQA2:99713efa-d1b1-4fc5-a4b1-cbae2b3a5798",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "reported-quantity-and-denominator",
+      "source_task_record_sha256": "254a5673e0a5ecf8d336144c0f96783d5b7cab7dd86e3e428779743667ea69e2"
     },
     {
       "task_id": "LitQA2:ce6dd5f7-0706-41dd-a383-9b0d22ef00a1",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "molecular-feature-contrast",
+      "source_task_record_sha256": "61c036ac0ad97a3182b357599f75bdc7f8400456d6075539ed6f4de19c7400e7"
     },
     {
       "task_id": "LitQA2:400786c1-e6c6-4f46-a501-86fdd048ed88",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "perturbation-and-phenotype-comparison",
+      "source_task_record_sha256": "4bff940a97d6892a9d05e3ac70199b1582de4ec59b9fb846dcb04bd6c0e42131"
     },
     {
       "task_id": "LitQA2:e820cbcf-6df1-4c1c-b985-c02f39f52781",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "perturbation-and-phenotype-comparison",
+      "source_task_record_sha256": "b71c9ca029d944ca95d312249faa76e18862891d2d33e6d1981d6bd0acd90328"
     },
     {
       "task_id": "LitQA2:230dec20-cd02-4613-a7b1-e28058ed46fe",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "perturbation-and-phenotype-comparison",
+      "source_task_record_sha256": "ea34a9bab7ac96f444593e5e9ecd85c0413d4ac732b6b2de3dafb6ad88e1ee7c"
     },
     {
       "task_id": "LitQA2:db851865-5cbf-4d55-b6db-34f22ef5e727",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "mechanistic-or-general-claim",
+      "source_task_record_sha256": "aae0fbe0c0db617df3f73cc0fdcf5756a33d78dec2088d3cb317ea9091d523b8"
     },
     {
       "task_id": "LitQA2:7975ddb0-a784-4f85-a297-c80e1cb5dcf2",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "interaction-and-mutational-evidence",
+      "source_task_record_sha256": "6dd6e8520c23c21d934ab72972db12e37d7b23f09596d0cc68df267e563cd6d9"
     },
     {
       "task_id": "LitQA2:a1d01019-d2b1-4619-92ec-7ea38578819f",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "mechanistic-or-general-claim",
+      "source_task_record_sha256": "f4f3400730a6b734002909916a27bca54da689d2c2123ef2bcaba1bc9e20c2ea"
     },
     {
       "task_id": "LitQA2:fe074387-3765-4020-8f5d-e395d1094121",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "reported-quantity-and-denominator",
+      "source_task_record_sha256": "57fc8acdd8a3d31ab41dd7b1a98f947fff8ccc9537817603638fc94ee52e0e3b"
     },
     {
       "task_id": "LitQA2:f0b6cea0-e005-47bc-be0d-9a10b219cae6",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "assay-ranking-and-response",
+      "source_task_record_sha256": "0a41796ead5edf5f34782bf8194cb943066b19a3838a06c8e300ee33ade2f974"
     },
     {
       "task_id": "LitQA2:ae02d0e9-edf5-4c39-a215-3cbc8f4c565d",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "sequence-and-genome-accounting",
+      "source_task_record_sha256": "1217ed5182d4a67991d271a3998faf9d0a796eee14d8c01f1d8516bfe7a33929"
     },
     {
       "task_id": "LitQA2:fd60a0e7-ba64-49a9-843a-6f5cb17c5fa9",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "mechanistic-or-general-claim",
+      "source_task_record_sha256": "3b6999baecae6fbaddf627ae95d7e34daff70067989bed1263a204675db27a17"
     },
     {
       "task_id": "LitQA2:14fd2b75-76fb-4c29-a21d-c557b2bcf2ff",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "structure-and-interface-measurement",
+      "source_task_record_sha256": "cbeef1f325872f7f15c5fd4ee051f729037221a325dc5e4bd4af85552dd96594"
     },
     {
       "task_id": "LitQA2:e9f142f0-8ef6-47cd-b846-7283a93308d4",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "mechanistic-or-general-claim",
+      "source_task_record_sha256": "97c8e190572d955d33612312b59f229e891114eb5b3774deb1a7ddb632698d97"
     },
     {
       "task_id": "LitQA2:398ebac1-fd2d-45b1-9415-d82db4b4d83c",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "structure-and-interface-measurement",
+      "source_task_record_sha256": "5918973e4ba432fd62870002b1473e5d8abd0f40a8b29f57d957078bedbd4f90"
     },
     {
       "task_id": "LitQA2:7e7150d6-bc73-4a29-a5b3-4ef8399ed947",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "assay-ranking-and-response",
+      "source_task_record_sha256": "57ff38d2074fc22304d52431ea527055071bd19ed5007d50e98c4b93c61cdac1"
     },
     {
       "task_id": "LitQA2:58b39fab-337b-452d-b74f-84f9a188ce88",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "entity-marker-and-localization-evidence",
+      "source_task_record_sha256": "d69491aaa8ec003703801fed25ddcf6d7d87788cb8925591f135bbb6e7d7cf6f"
     },
     {
       "task_id": "LitQA2:80e6571e-8f5d-496a-8ba3-9c9f5b783f5d",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "entity-marker-and-localization-evidence",
+      "source_task_record_sha256": "d2ed7be93774518887a062f589188c897766bc1b757e3d41309d2adf073167bd"
     },
     {
       "task_id": "LitQA2:154e7b14-4ed5-4cf3-9149-0c4843fc62cc",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "method-and-protocol-provenance",
+      "source_task_record_sha256": "fc324cbe7c0dc2f075fa0a5be49503a060fe172cfbd259b6919d6572180ea5d1"
     },
     {
       "task_id": "LitQA2:a71ef7a2-31a2-460d-9ff4-32d7722353c3",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "assay-ranking-and-response",
+      "source_task_record_sha256": "620a628a5e4763be37e84495e74e6c6e0627a6944bb1be477d9a654f351949e9"
     },
     {
       "task_id": "LitQA2:c624ed31-214f-4c80-9544-5514a096b1d3",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "molecular-feature-contrast",
+      "source_task_record_sha256": "24f776b29c01b6b4faf706442c3785e30026fc7f0df4be9af1e6f9be5c62c546"
     },
     {
       "task_id": "LitQA2:bcd2f213-c6c6-4660-af35-a7bd1c6a1170",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "molecular-feature-contrast",
+      "source_task_record_sha256": "ce85382341c613179801cfbb4f83e37b37e03c23c04b976a9e822b6ff93272c8"
     },
     {
       "task_id": "LitQA2:24fae97b-03f3-48b8-b623-abf07faee02e",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "molecular-feature-contrast",
+      "source_task_record_sha256": "b841278849bb199cf63071fbbd8255d0bcbcae9505c3532ba86cfe3b002ed5d7"
     },
     {
       "task_id": "LitQA2:ce93661b-e3c4-4a7a-96b6-87492259c501",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "assay-ranking-and-response",
+      "source_task_record_sha256": "89e005ddec1d2475b35cfd29b0959f83d5c5c1dbe47ab6693bbd9336f1a3108e"
     },
     {
       "task_id": "LitQA2:941c04dc-c89d-4a90-87b0-930625268a38",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "molecular-feature-contrast",
+      "source_task_record_sha256": "a8501d97906d960845d8aacb23839ede54dec5760c4ce73bb96fcf94cd6bb652"
     },
     {
       "task_id": "LitQA2:ea4ce240-2864-4ee5-9ffc-2dbda0f8f550",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "reported-quantity-and-denominator",
+      "source_task_record_sha256": "4a8db87e24434b1ad0968a0324685056bb26f702c6ddbddc5ffaa0a3c68b4eb3"
     },
     {
       "task_id": "LitQA2:cff68274-4bbe-4fa0-a181-36a9af3cc0f1",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "interaction-and-mutational-evidence",
+      "source_task_record_sha256": "2c0f75219ed0e98082f9bc3a1f766daeb0186a3f5a1c2f136166aacbbc65ccc1"
     },
     {
       "task_id": "LitQA2:2c262f91-52b6-421d-8341-8748f923459e",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "interaction-and-mutational-evidence",
+      "source_task_record_sha256": "3608f33e453d42031e7d252d9b64ebb5bd39e330f08b9d67b639f4d1cd770d7b"
     },
     {
       "task_id": "LitQA2:6f8a51e2-f7ad-4033-b43d-370348e4809f",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "structure-and-interface-measurement",
+      "source_task_record_sha256": "a6b565d8cb2408403a240b4cb15482ed566437cc698d2b9a4af5679c35d74c50"
     },
     {
       "task_id": "LitQA2:9a0b82cb-6a99-4e50-83fc-3ef2ebd277cc",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "model-performance-comparison",
+      "source_task_record_sha256": "ba9dd30420902f0e00fc4efd6013deb6f2a8259b9504cbc8de1cac3a7d23c6df"
     },
     {
       "task_id": "LitQA2:8b665114-7729-4dac-a64f-4862a5397b82",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "entity-marker-and-localization-evidence",
+      "source_task_record_sha256": "50a43626e8e610bba1dbfca544441895a5f332596536f562cc3b74f0cae59f13"
     },
     {
       "task_id": "LitQA2:5c808548-92c4-4ae7-990c-e2df81e3c2ae",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "entity-marker-and-localization-evidence",
+      "source_task_record_sha256": "1733770188b80cb5fef4636151a4d5c62a3403868083dd29153d9191fe6f2667"
     },
     {
       "task_id": "LitQA2:564e715f-8d30-410b-bdb5-0dc5206589a7",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "sequence-and-genome-accounting",
+      "source_task_record_sha256": "a8a5cac560ba757d052502826a33e23c040ab5b1daa5d89782e8769bc62f6917"
     },
     {
       "task_id": "LitQA2:e90ea0fc-4659-4b20-acae-75dc4b97a101",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "entity-marker-and-localization-evidence",
+      "source_task_record_sha256": "f786aa17c904f669922c4e7b8fdc4f81ab49785989d4b1a14b8734d1b4637d0f"
     },
     {
       "task_id": "LitQA2:c246753c-27d2-4ae4-8630-b9b4077ba6f6",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "interaction-and-mutational-evidence",
+      "source_task_record_sha256": "d216dcb91e04d53a6ddfe1cf60a69356a3c414e5b3fccf5b61c31bc4b72fd10f"
     },
     {
       "task_id": "LitQA2:22306bd7-7e84-415d-aebb-11c6312eb081",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "interaction-and-mutational-evidence",
+      "source_task_record_sha256": "2014c070407cdd6b534bde81fa36bbb0a258f7c9dba0762514d10763f57cdca8"
     },
     {
       "task_id": "LitQA2:7d71dffb-b591-4b88-b0c6-e125a1b083b4",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "entity-marker-and-localization-evidence",
+      "source_task_record_sha256": "c4980a9f6e078371b058bb7daf2905d4fb46e3341ce72b7da73380076769d235"
     },
     {
       "task_id": "LitQA2:fca26d7c-05cf-40b0-9fd6-a63ed7950909",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "method-and-protocol-provenance",
+      "source_task_record_sha256": "b1442df57328b1c1a30527d62667e284443aeefe57ec517538770745ddd38f35"
     },
     {
       "task_id": "LitQA2:c6e11fac-8f9c-4cf1-aa6e-4d25731ba74f",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "molecular-feature-contrast",
+      "source_task_record_sha256": "99e2f8c406fea0bb71a233e7fa837881357c82707a2d969f5e0145943d3d18d5"
     },
     {
       "task_id": "LitQA2:bace5737-ba26-422a-8706-0fb1e92b689f",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "molecular-feature-contrast",
+      "source_task_record_sha256": "f1b585b157b0dfd9ec9dee61fabaa240acce230f6d5a3a8891cdf93f0cfd2df7"
     },
     {
       "task_id": "LitQA2:ff7328e2-4954-46a2-8ea3-d40b4df0c0ea",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "entity-marker-and-localization-evidence",
+      "source_task_record_sha256": "50d7f1ac36f195570f7121b708aaf3f9f6719f370659927b10ba4f8f5b285798"
     },
     {
       "task_id": "LitQA2:76bcaeeb-93bd-4951-99b9-cf4613de1a37",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "sequence-and-genome-accounting",
+      "source_task_record_sha256": "6013e0e44ce4ed4aff29affb441a1705b836b94849b8e5228d398e7877cef22a"
     },
     {
       "task_id": "LitQA2:850f86d3-0139-43df-89fd-e606c30aaa8b",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "entity-marker-and-localization-evidence",
+      "source_task_record_sha256": "90d00c098c163645800afabeb8e19a0be3dce22e0c0b16316dc87d34aac431d0"
     },
     {
       "task_id": "LitQA2:df061613-2591-4faa-be03-791c76375cb5",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "interaction-and-mutational-evidence",
+      "source_task_record_sha256": "c88ad27ee65d609ea23c5e82217fa7462e20513a77a7940dc1053381596ce110"
     },
     {
       "task_id": "LitQA2:634f6745-f3b3-4cb1-9859-96ffb954b98a",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "assay-ranking-and-response",
+      "source_task_record_sha256": "858326644bc4dec4b888f8e0c0cf5b4c653f56f77f15574d3881d2ec2cdc58dc"
     },
     {
       "task_id": "LitQA2:d1eabedb-656f-4f89-a65f-4ed89478ba9f",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "assay-ranking-and-response",
+      "source_task_record_sha256": "7e713e4bd7849ef844c286dd5a5f980ab8db3a92613622e7611c7fb374a799b6"
     },
     {
       "task_id": "LitQA2:58f69c8d-cb94-4021-a84f-c549a7b976e1",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "assay-ranking-and-response",
+      "source_task_record_sha256": "f0d308ca578dd0da1470d18d096bf226b3d434a09317fda430b14190fb905d8a"
     },
     {
       "task_id": "LitQA2:20980744-f9ff-4e39-a08d-106eada6900c",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "interaction-and-mutational-evidence",
+      "source_task_record_sha256": "ad8ae1b349ed12bf3cf10dfc7731757f489601f6d0ee096d25a70bd2d7c68998"
     },
     {
       "task_id": "LitQA2:a6622141-68d6-418f-8e30-7a5eff3d4fa8",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "interaction-and-mutational-evidence",
+      "source_task_record_sha256": "2b8e893a15aab77c710516754a58704e0e0402cf80a2250cbebb85ce1b5e647f"
     },
     {
       "task_id": "LitQA2:9fe3ff3b-60cf-472d-ab1a-2bda1868f1b4",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "molecular-feature-contrast",
+      "source_task_record_sha256": "136bbe5ac5dd8222035ee96867e77d0a38fde5c53805dfd99d746455baef5f99"
     },
     {
       "task_id": "LitQA2:9088251a-99fe-4b91-b6a9-375154ec4f58",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "entity-marker-and-localization-evidence",
+      "source_task_record_sha256": "1c35be0e60c3caca23739b72635df291cc4b3b745613b9913e2b77b260a434e2"
     },
     {
       "task_id": "LitQA2:b8ec372b-ae29-473e-96bc-86ff1ead24ea",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "entity-marker-and-localization-evidence",
+      "source_task_record_sha256": "d6c2a9c349538cd90b092863e23a35fe80dea54645da871338c2e1655c344729"
     },
     {
       "task_id": "LitQA2:a45c277e-55d9-4e7f-b1de-37fc2e19daf6",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "entity-marker-and-localization-evidence",
+      "source_task_record_sha256": "0eb338ce58e505ecfb8a7014c828a84c1790178a48c29e92d5ed730e138881cd"
     },
     {
       "task_id": "LitQA2:a8aa19cc-e4d1-4aa1-8c4e-2a518b4c99d6",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "entity-marker-and-localization-evidence",
+      "source_task_record_sha256": "e121eca3cafa47269bc25fe698579a68c981861f406dc42aaf3e2f415bc4d6d5"
     },
     {
       "task_id": "LitQA2:2c3ba95c-47d5-4798-9911-ffdb11c940e4",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "molecular-feature-contrast",
+      "source_task_record_sha256": "e72b4ef929cf8b47fef541e814d62851171ebdfb6de0e03783f17e185c4c6dcc"
     },
     {
       "task_id": "LitQA2:49d2630e-9d26-4e12-89a3-3050a609abf5",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "molecular-feature-contrast",
+      "source_task_record_sha256": "d747d695390e3d5ea21efa9c727cc44c985c3953f66f73e33a15747984dac908"
     },
     {
       "task_id": "LitQA2:c758f685-ba4a-4bf0-bd85-567c60ff1508",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "molecular-feature-contrast",
+      "source_task_record_sha256": "c6752902aa63130735ab166a5d4d274688990c1c4e5c6cad35417d805f13a3d4"
     },
     {
       "task_id": "LitQA2:5966d3db-5a23-4ea7-a719-2472019d94a6",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "perturbation-and-phenotype-comparison",
+      "source_task_record_sha256": "46692546ba4fb2e5fd1622ae48c3b8dc7807d60002721268f7689193a405a74b"
     },
     {
       "task_id": "LitQA2:fd54d745-447c-4fcd-80de-463fcd3de6a4",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "molecular-feature-contrast",
+      "source_task_record_sha256": "4aa5a1c81837b53720bb5664402ca14c1d44ec1e3d546ac414c8f544d2d9306b"
     },
     {
       "task_id": "LitQA2:3f5bae15-bd5d-43e3-8e5e-944b1e533529",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "molecular-feature-contrast",
+      "source_task_record_sha256": "542ea4e7c2d225b89b3ae5d47cc486941a0217e4da769aa3bb4af05a3d06d195"
     },
     {
       "task_id": "LitQA2:4d11258d-ee8c-4bc7-91a8-613c7a41f139",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "interaction-and-mutational-evidence",
+      "source_task_record_sha256": "59878f7a543a3915d28471f16740315867e2380f5c73ff62d9773b7f4cb44527"
     },
     {
       "task_id": "LitQA2:1ff2b2e4-492e-4e35-bf33-f0fb53ab938c",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "interaction-and-mutational-evidence",
+      "source_task_record_sha256": "63606014100da8a163dff4a9375c697f6693e6fea816c050ee295181be912255"
     },
     {
       "task_id": "LitQA2:178a5e56-340f-4ba8-a3e5-f024ca016f40",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "structure-and-interface-measurement",
+      "source_task_record_sha256": "4dd48fa56612d6bcce9709ff627eff7ac4c850ccda5cca4836e83394623d2bfb"
     },
     {
       "task_id": "LitQA2:c75879f4-9329-4594-8f6a-c4d421f2439f",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "interaction-and-mutational-evidence",
+      "source_task_record_sha256": "025244baaaa5855b5c97a0be78e6b208c2f3d00e25814c79d368752c1f7e15e5"
     },
     {
       "task_id": "LitQA2:b2a0249b-2850-4576-8b78-8408c1e47324",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "interaction-and-mutational-evidence",
+      "source_task_record_sha256": "a09f3c09727b56a2a2ef36347619ab4541107bb9b4784997caf78e09d8be5921"
     },
     {
       "task_id": "LitQA2:f7346ea0-5f1b-45e9-a1d6-493c754159c1",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "perturbation-and-phenotype-comparison",
+      "source_task_record_sha256": "4b41e6818900717e7bd4d5a933f69be18ef7e230dfcb547b05517514f4270021"
     },
     {
       "task_id": "LitQA2:3d3fea17-c8ee-4005-94cb-d8798be696c3",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "reported-quantity-and-denominator",
+      "source_task_record_sha256": "f3b4517cac83df64f7f44f2972ec33dbf3ec338d1f8bf7c6a24fe63b1d647ff8"
     },
     {
       "task_id": "LitQA2:ab58e166-f0b5-49ae-ac56-c38b5d6e8aad",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "entity-marker-and-localization-evidence",
+      "source_task_record_sha256": "2a11adf7dfbe2eda4b3b7c9ae0f175c73c00ff199ddc86d9efd78b0c313763e2"
     },
     {
       "task_id": "LitQA2:a73b2c2d-a3ac-49e6-8e2e-44b4c1e6de94",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "molecular-feature-contrast",
+      "source_task_record_sha256": "31d690e338b53c5cbb34d3fb828415f71f1610500da147eb86763e133c1baf90"
     },
     {
       "task_id": "LitQA2:04dbe07d-8b2c-4daf-b5b2-ef0e93f1fd2a",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "structure-and-interface-measurement",
+      "source_task_record_sha256": "d3352bf11b30cfa65a42fb83cc2bba1f29de342632a3b41d59971f560995cf3e"
     },
     {
       "task_id": "LitQA2:4a6705b5-85e5-44c1-8444-65be30192802",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "perturbation-and-phenotype-comparison",
+      "source_task_record_sha256": "aafe78dc38ef0f830b2045e19aa7e3546c17e783ad3d31c3e2677392e57b8363"
     },
     {
       "task_id": "LitQA2:08397294-3d99-4790-915c-b8bcb1e9e661",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "assay-ranking-and-response",
+      "source_task_record_sha256": "0d34be9c051d90e2c12c7edb6e4e47c9465e09feb92194584d97bf5767192d1a"
     },
     {
       "task_id": "LitQA2:837b2489-723a-4099-9b68-c2a9ea688f4d",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "reported-quantity-and-denominator",
+      "source_task_record_sha256": "afbbde8d1c34ff8da3f94c993a37975ab22389506886a2b834670ab42b9c1775"
     },
     {
       "task_id": "LitQA2:745f5a0d-5f8f-405e-bb46-f37b3d1f0678",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "perturbation-and-phenotype-comparison",
+      "source_task_record_sha256": "d150a6d00b66a2202ccf7edbec4f1aaa1b14e7fe05fdbae99d7bf2ca26a104ad"
     },
     {
       "task_id": "LitQA2:bca1be77-208b-4d57-ac29-05aa6d58bdbf",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "entity-marker-and-localization-evidence",
+      "source_task_record_sha256": "7682f5115ae85f926ed2ba83be0adbce4973500699ae21e68f01011ce29b4de4"
     },
     {
       "task_id": "LitQA2:2dc20a2f-de54-4bfe-a34f-1ba395f342cf",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "reported-quantity-and-denominator",
+      "source_task_record_sha256": "230ded889fb398e3a4d4d90851a2a72f9a4dfd59b1f4c4df57f099f2755fa60d"
     },
     {
       "task_id": "LitQA2:afb36e40-0836-4810-909e-eabfe17dcd8b",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "molecular-feature-contrast",
+      "source_task_record_sha256": "00c58b115b39abce452eadca8d852a5d3eb132deafdd46e3714fd17769209cbc"
     },
     {
       "task_id": "LitQA2:c6f097c9-2216-4e98-af45-8101681b38ec",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "molecular-feature-contrast",
+      "source_task_record_sha256": "b8e488c76c273f0656845d69d9815c0d8177cabaa6e945a3e62c24fb2672e92c"
     },
     {
       "task_id": "LitQA2:9f797d29-9f3a-481d-b2fe-326cbc686273",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "assay-ranking-and-response",
+      "source_task_record_sha256": "7ebbc6681f3f75858404e1f927508ac1c081ea3d5b82362cad9f2796b3614999"
     },
     {
       "task_id": "LitQA2:0d5cf8a7-a240-4a8f-be4e-c16712f90d79",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "interaction-and-mutational-evidence",
+      "source_task_record_sha256": "6110720ed70916a41e0d9d903095edb6b20c10fa8e6d996469cb86298782386b"
     },
     {
       "task_id": "LitQA2:40400348-eabb-4b25-90d1-e33589d3e5a4",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "assay-ranking-and-response",
+      "source_task_record_sha256": "16a107a48bdb168967b9c12f403725bb3c16a91358bf54e57eeaeff9ea3f710e"
     },
     {
       "task_id": "LitQA2:4949fc05-5f78-4dd0-8d9c-3dbb6004740a",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "mechanistic-or-general-claim",
+      "source_task_record_sha256": "ad61f1940f9f7c35440c820e2267a18e254bd60834660241d96988f195b2a39d"
     },
     {
       "task_id": "LitQA2:c7b36a1c-ea80-4ae5-b2f1-3932cb16c3cf",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "assay-ranking-and-response",
+      "source_task_record_sha256": "5aa7510ea42cf18c3431b6ed9a07408aad9d9dcc97be82fa719c69d0c78c06be"
     },
     {
       "task_id": "LitQA2:ebe57888-662f-488f-ade1-c0aaffe638b1",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "molecular-feature-contrast",
+      "source_task_record_sha256": "d8889b2e47b02e9946980d371ea377edbc02259f1d3d21069f6a73989b4c08a9"
     },
     {
       "task_id": "LitQA2:ef07d562-fc18-43c9-8201-7a189d76eeb9",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "entity-marker-and-localization-evidence",
+      "source_task_record_sha256": "fe28da9e138e6469503d54c1e8205fbf3a00615ad49f298f974d0869e5ee0533"
     },
     {
       "task_id": "LitQA2:b331480e-dfc7-4e92-931a-c71f491c4795",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "structure-and-interface-measurement",
+      "source_task_record_sha256": "293519c981e5457d8e83ca692b46f8333ee60ffb547ced1dd4d2ff146797fe39"
     },
     {
       "task_id": "LitQA2:58950824-2665-445d-939b-9512d5d01a2b",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "molecular-feature-contrast",
+      "source_task_record_sha256": "a5c1e88f4f0e6fefa6a388b3f296415f34e7da25673960be5f70d7e5c01f5468"
     },
     {
       "task_id": "LitQA2:8d12cb90-73c6-4cc1-9f83-0fa9fd822e92",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-source-evidence-and-acceptance-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "scientific_pattern": "entity-marker-and-localization-evidence",
+      "source_task_record_sha256": "b6869644fe1cd91d02b9ec1a3db58ff8cdc128b6e4049fd17edf72d476d4f618"
     },
     {
       "task_id": "SuppQA:1b0eaf02-0861-40b6-89bf-a267c9c8c206",
@@ -3047,5 +3445,209 @@
       "portfolio-biomni-eval1-disease-database-difference"
     ],
     "scope": "One primary assignment per record, owned by the referenced question cards. Reuse adds no new question card, task, source-task alias or validated mapping."
+  },
+  "literature_review": {
+    "question_stems_reviewed": 199,
+    "review_basis": "Every pinned LitQA2 question stem was read; manual primary-pattern assignment uses the requested operation. Patterns do not imply interchangeable data or independent tasks.",
+    "question_only_metadata_sha256": "ead3b9ebe5bfbad5a8c98d87c60a98ae53d8756d9147f0a0d5b2e456aa226641",
+    "source_evidence_and_choices_inspected": false,
+    "new_question_cards": 0,
+    "validated_mappings_added": 0,
+    "acceptance_policy": "A source-reported result requires attributed evidence. Recomputing a superficially related quantity does not cover that endpoint. Use independent observed inputs, private input-reading oracles and complete deterministic artifact checks; never grade unrestricted entailment by citation identity.",
+    "routes": [
+      {
+        "pattern": "sequence-and-genome-accounting",
+        "records": 12,
+        "candidate_question": "What sequence features, coordinate relationships or population differences are supported by an independent observed sequence collection?",
+        "independent_input_boundary": "Pinned FASTA/GFF/VCF and sample/population manifests; choose the specific operation required by the reviewed endpoint. Sequence identity, repeat counts, copy-number normalization and FST are different analyses.",
+        "executable_artifacts": "Native parsing and the appropriate alignment, feature scan or population statistic; emit all feature/sample rows, coordinate conventions, denominators and provenance.",
+        "remaining_endpoint_gap": "Motif definition, isoform/domain boundaries, assembly scope and population estimator must be fixed per endpoint. A generic FASTA summary cannot cover all twelve questions.",
+        "related_existing_cards": [
+          "promptbio-design-reference-sequence-audit",
+          "compbio-design-variant-coordinate-crosswalk"
+        ],
+        "relationship": "component planning reference only; no source-target assignment or equivalence credit",
+        "implementation_ready": false
+      },
+      {
+        "pattern": "structure-and-interface-measurement",
+        "records": 12,
+        "candidate_question": "Which measured structural features distinguish the relevant conformers, interfaces or model predictions?",
+        "independent_input_boundary": "Independent experimental PDB/mmCIF and, where required, density maps, paired predictions or conformational ensembles; retain chain, residue, alternate-location and assembly identities.",
+        "executable_artifacts": "Emit complete residue/chain correspondence, contact or geometry tables and model-versus-experiment comparison using pinned native tools and explicit cutoffs.",
+        "remaining_endpoint_gap": "A coordinate distance cannot establish density support, conformational kinetics, mutation compensation or inhibitory selectivity. Obtain the matching evidence type before any assignment.",
+        "related_existing_cards": [
+          "labbench-supp-structure-ligands",
+          "biox-design-structure-complex-structure-evaluation"
+        ],
+        "relationship": "component planning reference only; no source-target assignment or equivalence credit",
+        "implementation_ready": false
+      },
+      {
+        "pattern": "contact-and-connectivity-comparison",
+        "records": 9,
+        "candidate_question": "How do observed contacts, anatomical connections or time-indexed cell counts differ across the declared groups?",
+        "independent_input_boundary": "Independent observed contact matrices, connectome edges, images or cell-count series plus biological sample, region and time metadata; do not merge these assay types merely because each contains contacts.",
+        "executable_artifacts": "Return the complete eligible nodes/features, per-replicate edges or counts, normalization, denominators, contrasts and any tied extrema.",
+        "remaining_endpoint_gap": "Chromatin contacts, synapses, cell infiltration and anatomical projections need distinct native inputs and definitions. Histological annotation or modality coverage may remain unresolved.",
+        "related_existing_cards": [
+          "portfolio-spatialbench-spatial-anatomical-structures"
+        ],
+        "relationship": "component planning reference only; no source-target assignment or equivalence credit",
+        "implementation_ready": false
+      },
+      {
+        "pattern": "molecular-feature-contrast",
+        "records": 34,
+        "candidate_question": "Which molecular features change between the specified observed conditions, and what fractions or ranked sets follow from those contrasts?",
+        "independent_input_boundary": "Independent replicated RNA, methylation, chromatin, phosphoproteomic or integration-site measurements with native annotations and sample manifests; preserve assay-specific context.",
+        "executable_artifacts": "Produce the full eligible-feature table, normalization/QC decisions, model or count-based estimates, uncertainty where justified, multiple-testing results and exact set denominators.",
+        "remaining_endpoint_gap": "An expression comparison does not establish splice order, chromatin causality or a reported study result. Match the assay, replicate unit, statistical threshold and question-specific estimand.",
+        "related_existing_cards": [
+          "labbench-supp-expression-evidence",
+          "promptbio-design-bisulfite-methylation-effects",
+          "bix-design-replicated-crispr-enrichment"
+        ],
+        "relationship": "component planning reference only; no source-target assignment or equivalence credit",
+        "implementation_ready": false
+      },
+      {
+        "pattern": "functional-enrichment",
+        "records": 3,
+        "candidate_question": "Which functions are enriched in an independently observed molecular feature set?",
+        "independent_input_boundary": "Observed feature measurements or deletions plus a pinned organism-specific gene universe, identifier map and annotation release.",
+        "executable_artifacts": "Emit complete feature eligibility, mapped/unmapped identifiers, term counts, background sizes, effect estimates and adjusted enrichment statistics.",
+        "remaining_endpoint_gap": "A database annotation does not establish experimental function. Preserve whether the endpoint requests enrichment of an observed set or biological interpretation of a single gene.",
+        "related_existing_cards": [
+          "portfolio-bioagent-cross-model-rnaseq-enrichment"
+        ],
+        "relationship": "component planning reference only; no source-target assignment or equivalence credit",
+        "implementation_ready": false
+      },
+      {
+        "pattern": "entity-marker-and-localization-evidence",
+        "records": 28,
+        "candidate_question": "Which entities, markers or localizations have the requested support in an independent observed study?",
+        "independent_input_boundary": "Complete relevant expression/localization, binding or intervention records and source metadata; use images with documented annotations when localization cannot be resolved from tables.",
+        "executable_artifacts": "Return an entity-by-condition evidence table, identity normalization, measured support, missingness and exact source locations; test marker specificity against the declared comparison populations.",
+        "remaining_endpoint_gap": "Entity identity alone cannot establish causal mediation, rescue, tissue specificity or clinical association. Several stems require additional intervention or confounder evidence beyond lookup.",
+        "related_existing_cards": [
+          "labbench-supp-expression-evidence",
+          "portfolio-baisbench-cell-type-expression-localization"
+        ],
+        "relationship": "component planning reference only; no source-target assignment or equivalence credit",
+        "implementation_ready": false
+      },
+      {
+        "pattern": "interaction-and-mutational-evidence",
+        "records": 24,
+        "candidate_question": "Which independently observed perturbations change measured interaction or activity under the declared assay?",
+        "independent_input_boundary": "Observed benign binding/activity measurements with full candidate sequences, controls, replicates and construct identities; retain experimental non-detection separately from untested cases.",
+        "executable_artifacts": "Emit complete candidate-by-assay effects, uncertainty, control normalization and sequence/construct reconciliation. Use concentration-response fitting only when the input actually supports it.",
+        "remaining_endpoint_gap": "Physical proximity cannot substitute for binding evidence; a non-significant change is not proof of no effect. Functional compensation, necessity and protection claims need the relevant experimental controls.",
+        "related_existing_cards": [
+          "portfolio-drugdiscoverybench-assay-regression-influence"
+        ],
+        "relationship": "component planning reference only; no source-target assignment or equivalence credit",
+        "implementation_ready": false
+      },
+      {
+        "pattern": "assay-ranking-and-response",
+        "records": 20,
+        "candidate_question": "How do independently observed assay responses rank after preserving conditions, units and comparison scope?",
+        "independent_input_boundary": "Complete observed dose/time/condition measurements, replicate and control metadata, censoring and detection limits; choose benign assay contexts independent of benchmark studies.",
+        "executable_artifacts": "Produce full response tables and the requested ratios, fitted constants, extrema or thresholds with ties, uncertainty and fitting diagnostics. Read all measurements rather than a preselected winner.",
+        "remaining_endpoint_gap": "Reported absence of transfection or activity must respect detection limits. Assays with different readouts or units cannot share a ranking without a justified normalization.",
+        "related_existing_cards": [
+          "promptbio-design-enzyme-kinetic-comparison",
+          "portfolio-drugdiscoverybench-assay-regression-influence"
+        ],
+        "relationship": "component planning reference only; no source-target assignment or equivalence credit",
+        "implementation_ready": false
+      },
+      {
+        "pattern": "reported-quantity-and-denominator",
+        "records": 20,
+        "candidate_question": "Which reported quantities and denominators describe an independent study, and do the associated calculations reconcile?",
+        "independent_input_boundary": "Full relevant published tables, sample/observation manifests and methods from one independently chosen observed study; maintain reported values separately from any recomputation.",
+        "executable_artifacts": "Emit evidence_locations.tsv and complete measurement/accounting tables, with units, time windows, eligible denominators, uncertainty and declared ratio-versus-percentage-point calculations.",
+        "remaining_endpoint_gap": "Approximate ranges, significance-dependent thresholds, biomechanical parameters and log-linear scaling require their own definitions. Extracting a number does not reproduce the underlying scientific analysis.",
+        "related_existing_cards": [
+          "labbench-supp-cohort-accounting",
+          "labbench-supp-mechanical-uncertainty"
+        ],
+        "relationship": "component planning reference only; no source-target assignment or equivalence credit",
+        "implementation_ready": false
+      },
+      {
+        "pattern": "perturbation-and-phenotype-comparison",
+        "records": 21,
+        "candidate_question": "Which observed phenotypes differ between the declared intervention and control groups?",
+        "independent_input_boundary": "Independent observed image, behavioral, electrophysiology or other phenotype records with animal/culture identity, time, controls and measurement definitions.",
+        "executable_artifacts": "Return per-replicate features, eligibility/QC, contrasts, uncertainty and complete relevant outcome tables. Include native image or signal processing where required by the endpoint.",
+        "remaining_endpoint_gap": "A treatment contrast does not by itself explain a mechanism or establish clinical generalization. Cell heterogeneity and morphology endpoints need the underlying feature space, not a scalar label.",
+        "related_existing_cards": [
+          "bix-design-colony-morphology-contrasts"
+        ],
+        "relationship": "component planning reference only; no source-target assignment or equivalence credit",
+        "implementation_ready": false
+      },
+      {
+        "pattern": "mechanistic-or-general-claim",
+        "records": 9,
+        "candidate_question": "Which observed results constrain a proposed mechanism or general biological claim?",
+        "independent_input_boundary": "Independent primary observations, competing hypotheses and explicit intervention/measurement assumptions; source text alone is insufficient for a new mechanistic inference.",
+        "executable_artifacts": "Only grade predefined quantitative contrasts or literal attributed evidence extraction when those preserve the question. Retain open-ended mechanistic explanation as an unresolved endpoint.",
+        "remaining_endpoint_gap": "No complete deterministic acceptance contract has been established. Do not substitute a matching citation, arbitrary causal graph or language-model judge.",
+        "related_existing_cards": [],
+        "relationship": "component planning reference only; no source-target assignment or equivalence credit",
+        "implementation_ready": false
+      },
+      {
+        "pattern": "method-and-protocol-provenance",
+        "records": 4,
+        "candidate_question": "Which method or implementation choices were reported, and what executable checks follow from an independently sourced method?",
+        "independent_input_boundary": "Rights-cleared original methods, code/configuration and input metadata from an independent study; literal provenance and mathematical implementation are separate deliverables.",
+        "executable_artifacts": "Extract exact method identifiers and source locations. For a computational constraint, separately test its mathematical invariant using the documented implementation and representative inputs.",
+        "remaining_endpoint_gap": "A named-method match cannot verify a holonomic constraint or symmetry implementation. Do not claim method execution from a prose extraction task.",
+        "related_existing_cards": [
+          "labbench-supp-computational-provenance"
+        ],
+        "relationship": "component planning reference only; no source-target assignment or equivalence credit",
+        "implementation_ready": false
+      },
+      {
+        "pattern": "open-literature-existence",
+        "records": 2,
+        "candidate_question": "Does a documented experiment exist within a declared, frozen literature collection?",
+        "independent_input_boundary": "An independent rights-cleared corpus with explicit release, search universe and inclusion boundaries.",
+        "executable_artifacts": "A positive result must identify verifiable evidence. A negative result can only mean no qualifying record in that finite corpus, with the searched universe and failure modes exposed.",
+        "remaining_endpoint_gap": "The source asks an open literature-existence question. A bounded search changes its scope; it cannot prove global absence or earn complete endpoint coverage.",
+        "related_existing_cards": [],
+        "relationship": "component planning reference only; no source-target assignment or equivalence credit",
+        "implementation_ready": false
+      },
+      {
+        "pattern": "model-performance-comparison",
+        "records": 1,
+        "candidate_question": "Which model has the largest fine-tuning gain under an independent, controlled held-out evaluation?",
+        "independent_input_boundary": "Matched pretrained/fine-tuned predictions on the same independently observed assay examples, identical evaluation groups and a declared metric; training logs are needed if training itself is claimed.",
+        "executable_artifacts": "Return complete per-example predictions, per-model baseline/fine-tuned metrics, paired gains and uncertainty. Keep evaluation labels private and preserve grouping against leakage.",
+        "remaining_endpoint_gap": "Best final score and largest gain are different endpoints. Frozen predictions exercise evaluation only; they cannot establish model training or transfer to the benchmark biological context.",
+        "related_existing_cards": [
+          "portfolio-biomlbench-held-out-assay-ranking-substitutions"
+        ],
+        "relationship": "component planning reference only; no source-target assignment or equivalence credit",
+        "implementation_ready": false
+      }
+    ],
+    "priority": "Investigate shared measured-contrast, assay, study-accounting and structure routes first. The two open-existence and nine general/mechanistic questions retain unresolved complete-endpoint contracts. All 199 remain gaps until source evidence and independent acceptance contracts justify assignment.",
+    "incorrect_output_requirements": [
+      "Wrong study, species, assay, group or time with the right numeric value must fail.",
+      "Missing eligible candidates or selected-only winners must fail; ties and measured non-detection stay explicit.",
+      "Changed units, denominator or ratio-versus-percentage-point semantics must fail.",
+      "A valid citation that does not support the requested field must not pass.",
+      "Recomputed and source-reported results must be distinguished; untested entities cannot become measured negatives."
+    ]
   }
 }

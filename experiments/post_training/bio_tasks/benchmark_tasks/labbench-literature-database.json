@@ -13,8 +13,8 @@
     "subtasks": 12,
     "workflow_families": 9,
     "individual_endpoint_reviews": 0,
-    "inspection": "All 801 identities/hashes enumerated. Every DbQA stem matches one of ten query schemas and routes to seven existing contracts; candidate sets and biological records remain uninspected. All 82 SuppQA stems/citations reviewed: 58 provisional assignments, 24 gaps. The 199 literature endpoints remain unreviewed.",
-    "individual_question_stems_reviewed": 82,
+    "inspection": "All 801 identities/hashes enumerated. DbQA: 520 query schemas, seven shared cards. SuppQA: 82 stems/citations, 58 provisional targets and 24 gaps. LitQA2: all 199 stems reviewed across 14 scientific patterns; candidates, source evidence and deterministic endpoint equivalence remain unresolved.",
+    "individual_question_stems_reviewed": 281,
     "individual_query_schemas_audited": 520
   },
   "source_files": [
@@ -5932,7 +5932,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "0df93b56f2087703768a9b146bdd04303c7da9f959cd2ab456158737b8e332d8"
+      "source_question_sha256": "0df93b56f2087703768a9b146bdd04303c7da9f959cd2ab456158737b8e332d8",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "assay-ranking-and-response",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:76184ccf-4bf0-469e-a442-11d04b4ff8b0",
@@ -5940,7 +5945,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "f841634e08fc9acbbc344f62c87538b2f4112fe0b238e901014d6d07dce11b02"
+      "source_question_sha256": "f841634e08fc9acbbc344f62c87538b2f4112fe0b238e901014d6d07dce11b02",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "contact-and-connectivity-comparison",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:39129e1c-096f-4414-bf4f-37fadbbe364c",
@@ -5948,7 +5958,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "32a3ceefa66bbc7060fa1a481e905e1f6c9a87f0444784c9ae308b8acec1924f"
+      "source_question_sha256": "32a3ceefa66bbc7060fa1a481e905e1f6c9a87f0444784c9ae308b8acec1924f",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "reported-quantity-and-denominator",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:27234279-f50c-4cfc-86e2-af68364a8f94",
@@ -5956,7 +5971,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "779cdb432807b35a2ded174d55d0e2e4b7b92bbf137bd14dd4045783420abe70"
+      "source_question_sha256": "779cdb432807b35a2ded174d55d0e2e4b7b92bbf137bd14dd4045783420abe70",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "sequence-and-genome-accounting",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:517e7cf8-c5d2-4391-9e2a-235b79d93050",
@@ -5964,7 +5984,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "5097d157e6f41279339957e934262ac9ead5123a6e6637fc298efe563f1eae02"
+      "source_question_sha256": "5097d157e6f41279339957e934262ac9ead5123a6e6637fc298efe563f1eae02",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "reported-quantity-and-denominator",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:cb710074-73a8-4407-b0c7-7dc868f1bc76",
@@ -5972,7 +5997,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "6298145ba703af8179eb981eb5f13e601e9aa5199290da96e6a5dc5865f11ce3"
+      "source_question_sha256": "6298145ba703af8179eb981eb5f13e601e9aa5199290da96e6a5dc5865f11ce3",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "reported-quantity-and-denominator",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:2c05315d-6898-4667-b454-d99b7381bedb",
@@ -5980,7 +6010,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "f5eed5910b14d6646dd65183ce65d28d42a40f4272845ff62df3da25c71bbb63"
+      "source_question_sha256": "f5eed5910b14d6646dd65183ce65d28d42a40f4272845ff62df3da25c71bbb63",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "mechanistic-or-general-claim",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:5c4c602c-9624-4eae-ac44-efe4c0dd10e6",
@@ -5988,7 +6023,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "66ea4a3d37849f2669cc8834811c13a7e499cf20f2f438a2407d5cdbaf4d76a7"
+      "source_question_sha256": "66ea4a3d37849f2669cc8834811c13a7e499cf20f2f438a2407d5cdbaf4d76a7",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "structure-and-interface-measurement",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:c9bdb9b5-28c1-44da-93b6-b1fc9d8bf369",
@@ -5996,7 +6036,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "8a96351d345a6ad774cd20981d11b8940be931879c67a6ed0c22ebc918454538"
+      "source_question_sha256": "8a96351d345a6ad774cd20981d11b8940be931879c67a6ed0c22ebc918454538",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "contact-and-connectivity-comparison",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:e6b0f9e5-e976-47dc-b839-0b2fca967e9e",
@@ -6004,7 +6049,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "a1d53f3d4cc49487d846d085cdc2764fb023c6a97c98de57336a2f7da97a5215"
+      "source_question_sha256": "a1d53f3d4cc49487d846d085cdc2764fb023c6a97c98de57336a2f7da97a5215",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "functional-enrichment",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:247eeb85-a552-4b87-b83e-327538fcb8a9",
@@ -6012,7 +6062,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "6e481ef3df50111f4032a2e911f731215fe108dee52be861d488abc32b3498c9"
+      "source_question_sha256": "6e481ef3df50111f4032a2e911f731215fe108dee52be861d488abc32b3498c9",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "reported-quantity-and-denominator",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:39c985ce-70e8-48e4-bd76-744cd07cb56a",
@@ -6020,7 +6075,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "d446e520355a3eba915a10fef47f51917fa5cb35503160d5cc4fa2df229dc762"
+      "source_question_sha256": "d446e520355a3eba915a10fef47f51917fa5cb35503160d5cc4fa2df229dc762",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "molecular-feature-contrast",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:a214f5f8-0de8-43cf-82e0-7930003e4a0c",
@@ -6028,7 +6088,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "ab82b605e058121fd48b0125408490aa0eb16526d30594ac1de9efc9637b58a8"
+      "source_question_sha256": "ab82b605e058121fd48b0125408490aa0eb16526d30594ac1de9efc9637b58a8",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "assay-ranking-and-response",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:a43e5166-d0e8-48f8-a113-648acac7ed59",
@@ -6036,7 +6101,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "ff5bef511eb05dceda5add3228e9613cf6078bae7a681bbb2f6f8bb15edeabc2"
+      "source_question_sha256": "ff5bef511eb05dceda5add3228e9613cf6078bae7a681bbb2f6f8bb15edeabc2",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "contact-and-connectivity-comparison",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:dd29920d-cb70-440f-961c-3e1103776c4f",
@@ -6044,7 +6114,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "e70e141b4eaa8dd5b2f398cc07d53b5f9b2ab12f531cab4cd1d349f7b2ab51ff"
+      "source_question_sha256": "e70e141b4eaa8dd5b2f398cc07d53b5f9b2ab12f531cab4cd1d349f7b2ab51ff",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "reported-quantity-and-denominator",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:7d805bb8-4c7c-431f-b068-acf5e5459985",
@@ -6052,7 +6127,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "ed3a44128699fe314b8408d14be2457e1a3c41d386b1160fba103a094636cd05"
+      "source_question_sha256": "ed3a44128699fe314b8408d14be2457e1a3c41d386b1160fba103a094636cd05",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "assay-ranking-and-response",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:8d7fa642-ee46-4a13-8ea9-61cc2d4f4ddd",
@@ -6060,7 +6140,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "7dc704e39743327d84b4ebe5cb3271c40af138ad5fe784845845b444d4c3aafa"
+      "source_question_sha256": "7dc704e39743327d84b4ebe5cb3271c40af138ad5fe784845845b444d4c3aafa",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "interaction-and-mutational-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:487539f9-2f17-4009-aa4a-c41322445f11",
@@ -6068,7 +6153,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "6111f6b0041717a8d075f7b4569ec4ea9c1e3d89f3dfe4fb7562bccdbe619148"
+      "source_question_sha256": "6111f6b0041717a8d075f7b4569ec4ea9c1e3d89f3dfe4fb7562bccdbe619148",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "interaction-and-mutational-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:5049c648-b1bb-4624-8824-9d93dfb04e51",
@@ -6076,7 +6166,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "bcdc2248ec86495d6b89184b287d537df408a95fdf3f69210be17bacd7fcf609"
+      "source_question_sha256": "bcdc2248ec86495d6b89184b287d537df408a95fdf3f69210be17bacd7fcf609",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "perturbation-and-phenotype-comparison",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:a18883e9-218a-4719-8d2c-cf94d740de1a",
@@ -6084,7 +6179,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "3b47ccbf2daa72f36e60916d2d8bb0d819ee54527777092942dc10f6bb41d497"
+      "source_question_sha256": "3b47ccbf2daa72f36e60916d2d8bb0d819ee54527777092942dc10f6bb41d497",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "perturbation-and-phenotype-comparison",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:d7833c0f-2a16-40d2-b6a0-6764aa3003a6",
@@ -6092,7 +6192,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "2c1c2fa020ee605aa8286398e915079d7a5ca7b27dff92edb6a0b28e08831c9f"
+      "source_question_sha256": "2c1c2fa020ee605aa8286398e915079d7a5ca7b27dff92edb6a0b28e08831c9f",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "perturbation-and-phenotype-comparison",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:1ccdc348-50e1-4941-9151-5e50411a2b41",
@@ -6100,7 +6205,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "de864f4517750cafc078265db358ea2b7cda9bf2f076d7e1eb4d623187f21ce7"
+      "source_question_sha256": "de864f4517750cafc078265db358ea2b7cda9bf2f076d7e1eb4d623187f21ce7",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "molecular-feature-contrast",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:1e5f5199-84f4-4133-ab87-2372fa6ca722",
@@ -6108,7 +6218,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "c67004e3c7eaad01b9b946e2b6a1a717fc2bc8a370815b81248061c8bc709e5a"
+      "source_question_sha256": "c67004e3c7eaad01b9b946e2b6a1a717fc2bc8a370815b81248061c8bc709e5a",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "interaction-and-mutational-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:d2860d38-dfb9-4b80-905f-812c32573915",
@@ -6116,7 +6231,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "d2bff33a9be2a0600bf38d6c0b4288cd3648baadf64ac39d90501524cb786f84"
+      "source_question_sha256": "d2bff33a9be2a0600bf38d6c0b4288cd3648baadf64ac39d90501524cb786f84",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "entity-marker-and-localization-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:77a41274-cd9c-48bc-a347-e0746907840d",
@@ -6124,7 +6244,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "17cd2b8019c8298284a723d56799756baaf729ab9e9523569eaad5b7fc873876"
+      "source_question_sha256": "17cd2b8019c8298284a723d56799756baaf729ab9e9523569eaad5b7fc873876",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "perturbation-and-phenotype-comparison",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:5a2128ad-3127-4595-b810-db128d1a2335",
@@ -6132,7 +6257,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "8ea47f3c9ad9eeb8d8ac225a7d55a23abd6d7931260ed6181e1fcfba8bab6eaf"
+      "source_question_sha256": "8ea47f3c9ad9eeb8d8ac225a7d55a23abd6d7931260ed6181e1fcfba8bab6eaf",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "structure-and-interface-measurement",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:d65103ae-c881-4116-a0a7-1b233eb6275a",
@@ -6140,7 +6270,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "fb784d4e1bfaf6b2cf09fcad6f92e4d2a253c0458fbbd0e370348db814b78c95"
+      "source_question_sha256": "fb784d4e1bfaf6b2cf09fcad6f92e4d2a253c0458fbbd0e370348db814b78c95",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "mechanistic-or-general-claim",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:ab5eb050-d134-4445-9307-6faa08be7474",
@@ -6148,7 +6283,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "3209aa7ccb9b922aa03565f909c79ec7dd4c25b2c2a8965813c89e7b0443a4f3"
+      "source_question_sha256": "3209aa7ccb9b922aa03565f909c79ec7dd4c25b2c2a8965813c89e7b0443a4f3",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "structure-and-interface-measurement",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:82de3e92-abe2-46ac-ad17-23417b9c4da7",
@@ -6156,7 +6296,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "2b19cf5af83c5a3f36e0bdb53befc120048536ebae7bcb56598fca10fd78d0eb"
+      "source_question_sha256": "2b19cf5af83c5a3f36e0bdb53befc120048536ebae7bcb56598fca10fd78d0eb",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "interaction-and-mutational-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:7cf0fcde-fea8-420c-8531-2f2fe9e38980",
@@ -6164,7 +6309,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "3bf669887c56ce5825e49ecd55dbd6b4128a71d485053a10eadffae99a9ea676"
+      "source_question_sha256": "3bf669887c56ce5825e49ecd55dbd6b4128a71d485053a10eadffae99a9ea676",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "open-literature-existence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:da5b2a8f-ba08-4692-851f-2e0bf142a02f",
@@ -6172,7 +6322,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "035a5a121e233468530233c53ac691c3f7ea3960be68b7f40b2281372f33fd12"
+      "source_question_sha256": "035a5a121e233468530233c53ac691c3f7ea3960be68b7f40b2281372f33fd12",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "open-literature-existence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:e2fb56b7-08cd-4dc0-bc63-b45931a74fc9",
@@ -6180,7 +6335,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "392e333d9eeca5fec48718716819cc7303981dc45d5182458bb6137323efbf84"
+      "source_question_sha256": "392e333d9eeca5fec48718716819cc7303981dc45d5182458bb6137323efbf84",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "contact-and-connectivity-comparison",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:eda34fde-798e-43a1-a9d3-a804d3d8ee4e",
@@ -6188,7 +6348,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "ab563cee18b9a43f57aa03ad4f8faf092ba71f3bf9ca666c5b333a23ed5c3886"
+      "source_question_sha256": "ab563cee18b9a43f57aa03ad4f8faf092ba71f3bf9ca666c5b333a23ed5c3886",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "perturbation-and-phenotype-comparison",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:0eede7a8-fe1f-42d3-a2c6-478083648644",
@@ -6196,7 +6361,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "0c165da22711ce5473ef1b486b20ab70ed37acd003f74aaa010107daf2bb3ddc"
+      "source_question_sha256": "0c165da22711ce5473ef1b486b20ab70ed37acd003f74aaa010107daf2bb3ddc",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "interaction-and-mutational-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:d1307e50-3c03-4c76-81ee-2decb5de5f14",
@@ -6204,7 +6374,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "72c26fd4dfa34e971026f56d212825e4be0d8dcb8ea92200ab04a04108665e91"
+      "source_question_sha256": "72c26fd4dfa34e971026f56d212825e4be0d8dcb8ea92200ab04a04108665e91",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "molecular-feature-contrast",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:10cece36-a507-4a93-9600-13f3e0e677f8",
@@ -6212,7 +6387,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "c8441bd9d87a3ae0aa8f7fb31f55d65ea177fcf353bf0b7be6d266277787a988"
+      "source_question_sha256": "c8441bd9d87a3ae0aa8f7fb31f55d65ea177fcf353bf0b7be6d266277787a988",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "molecular-feature-contrast",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:f5a84803-3917-43eb-801b-8dc0c5400da1",
@@ -6220,7 +6400,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "71f3f436eebf3c809c45a34bf76cc6cd53e937917bd7b932c8de496bbf9477f5"
+      "source_question_sha256": "71f3f436eebf3c809c45a34bf76cc6cd53e937917bd7b932c8de496bbf9477f5",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "assay-ranking-and-response",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:c47dd378-dde3-4a45-9184-6abfa6163717",
@@ -6228,7 +6413,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "27646279d747c47ab17c1e9a966f9ac9de0dc5449d22f3087b5956c1834ddb52"
+      "source_question_sha256": "27646279d747c47ab17c1e9a966f9ac9de0dc5449d22f3087b5956c1834ddb52",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "molecular-feature-contrast",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:0bac8974-554c-439a-a9a2-22fa509c8d5d",
@@ -6236,7 +6426,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "1af37bcf6b90f4e4e3547744c9ab26200b7947430e149d343d102b81fac8bd6e"
+      "source_question_sha256": "1af37bcf6b90f4e4e3547744c9ab26200b7947430e149d343d102b81fac8bd6e",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "mechanistic-or-general-claim",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:aaa85379-1e4b-4642-9ec4-e1a6d6c29c3b",
@@ -6244,7 +6439,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "05bd9fdb4ff83e9bfd9441b088ff226b6a51ba2c9ac32adec240e1ddb5446167"
+      "source_question_sha256": "05bd9fdb4ff83e9bfd9441b088ff226b6a51ba2c9ac32adec240e1ddb5446167",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "reported-quantity-and-denominator",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:aa1835b2-2b1c-4986-b7af-e174da0124b0",
@@ -6252,7 +6452,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "f37dc8ebb49c92777c7bc8c9c830b2305e9cce2156225667079135c710016f78"
+      "source_question_sha256": "f37dc8ebb49c92777c7bc8c9c830b2305e9cce2156225667079135c710016f78",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "reported-quantity-and-denominator",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:5a9c6697-a65c-49c0-9e02-38b2a276fde7",
@@ -6260,7 +6465,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "819d568242ab4ec6af3598471c674611fdb6199b51dbc8cf66f1626f3276c6da"
+      "source_question_sha256": "819d568242ab4ec6af3598471c674611fdb6199b51dbc8cf66f1626f3276c6da",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "reported-quantity-and-denominator",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:37a4d007-793e-4a89-922a-c1b05f4f82c1",
@@ -6268,7 +6478,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "ffb1a7143fd429863a4b61f08a581015c3ac19ee5586b346ee7cd16da23fe306"
+      "source_question_sha256": "ffb1a7143fd429863a4b61f08a581015c3ac19ee5586b346ee7cd16da23fe306",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "sequence-and-genome-accounting",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:c9baf8e0-c4c7-4ba3-b5c4-18e9af8b2df1",
@@ -6276,7 +6491,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "d9f55b1e8211cc96407118f5b057dc758a5f331b380892a7cdf6db6f0c75289c"
+      "source_question_sha256": "d9f55b1e8211cc96407118f5b057dc758a5f331b380892a7cdf6db6f0c75289c",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "structure-and-interface-measurement",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:d0f69626-66ee-4807-937d-c3a024441812",
@@ -6284,7 +6504,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "bef4d747052450e46517972104daeca56df60027304ad56fd9d1f586035c35fe"
+      "source_question_sha256": "bef4d747052450e46517972104daeca56df60027304ad56fd9d1f586035c35fe",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "molecular-feature-contrast",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:462a9f38-7cbe-4e12-a6e2-b1d7028c3a8b",
@@ -6292,7 +6517,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "cc432ca725949d1d9276a249872d1b385827dd5dbec24794d3b71367dffe4845"
+      "source_question_sha256": "cc432ca725949d1d9276a249872d1b385827dd5dbec24794d3b71367dffe4845",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "sequence-and-genome-accounting",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:86f111e5-402b-4ef5-b101-8be1bf5be7c6",
@@ -6300,7 +6530,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "74aad1097044ae0f4d509619bf8c50c257f945b155e138369a6f04960d3f46b0"
+      "source_question_sha256": "74aad1097044ae0f4d509619bf8c50c257f945b155e138369a6f04960d3f46b0",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "molecular-feature-contrast",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:cbe93a43-09cd-4cb4-9edd-f22fe8c28415",
@@ -6308,7 +6543,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "1486ed5f0b15bc96639b37ba44b82980a824c104056843af0187cb4c137cfaf9"
+      "source_question_sha256": "1486ed5f0b15bc96639b37ba44b82980a824c104056843af0187cb4c137cfaf9",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "molecular-feature-contrast",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:7a88e6f7-fb8e-4a24-b08d-9b7a6edafe57",
@@ -6316,7 +6556,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "12875017cccaf4c51b92ef48506ca2a45f0cff18c4842c58a25ea68e3f157a3e"
+      "source_question_sha256": "12875017cccaf4c51b92ef48506ca2a45f0cff18c4842c58a25ea68e3f157a3e",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "sequence-and-genome-accounting",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:91387526-9268-4a3c-9abe-73819707d0b0",
@@ -6324,7 +6569,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "3f072436a62f617332f3cffea7bb8f93dc580828b94d9eb6ed4154369b97d911"
+      "source_question_sha256": "3f072436a62f617332f3cffea7bb8f93dc580828b94d9eb6ed4154369b97d911",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "assay-ranking-and-response",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:7b98796f-25be-4c58-a52a-4e366c0ffd95",
@@ -6332,7 +6582,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "2869f22bfab5809ac78b3c5323b0a5c4a1cce5ed2a771241c10bf83af04e8157"
+      "source_question_sha256": "2869f22bfab5809ac78b3c5323b0a5c4a1cce5ed2a771241c10bf83af04e8157",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "sequence-and-genome-accounting",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:5e20e26d-6192-4563-abb3-a4857e3dbc7c",
@@ -6340,7 +6595,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "b9fcaf3f206b3c30c927319391b68a36dcf307746ad7294b57bd3339d3bc5a9d"
+      "source_question_sha256": "b9fcaf3f206b3c30c927319391b68a36dcf307746ad7294b57bd3339d3bc5a9d",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "assay-ranking-and-response",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:b105af85-833e-48bc-ac78-48f73c9673fd",
@@ -6348,7 +6608,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "468a6c16b4c1efdd546810cac1e0887c9c2acf49b932b177e6726cb4e00cb3e4"
+      "source_question_sha256": "468a6c16b4c1efdd546810cac1e0887c9c2acf49b932b177e6726cb4e00cb3e4",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "sequence-and-genome-accounting",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:5b6d6f82-a585-4aa8-9fe6-e7d35f7cb2ae",
@@ -6356,7 +6621,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "3b7fe4efe6ab6dbd259fb37fe0df243ef2351788d8b5550b7bd5b7a3b7b0715a"
+      "source_question_sha256": "3b7fe4efe6ab6dbd259fb37fe0df243ef2351788d8b5550b7bd5b7a3b7b0715a",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "assay-ranking-and-response",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:12321eab-6ad6-4218-8815-18bc51c14544",
@@ -6364,7 +6634,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "3850dc2378c6071bf082be5a57aa7669e7535ac05109a28ddcffb90607a0bdc3"
+      "source_question_sha256": "3850dc2378c6071bf082be5a57aa7669e7535ac05109a28ddcffb90607a0bdc3",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "assay-ranking-and-response",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:c33446f6-fbff-4186-8a51-28a17f68bd40",
@@ -6372,7 +6647,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "a3a613b8d9dc9268ff396da6eb92227928fea9af4259cea2b0b1353383ed9090"
+      "source_question_sha256": "a3a613b8d9dc9268ff396da6eb92227928fea9af4259cea2b0b1353383ed9090",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "method-and-protocol-provenance",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:b1d5a5f5-6e89-4dfb-b60d-5a9824b015f3",
@@ -6380,7 +6660,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "b6187b1188742a9958513e5e191bb175fb93047c3ec31db501ff878fbeeffee5"
+      "source_question_sha256": "b6187b1188742a9958513e5e191bb175fb93047c3ec31db501ff878fbeeffee5",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "perturbation-and-phenotype-comparison",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:6aa10957-bdd9-4dab-a4e1-234a17cb87dd",
@@ -6388,7 +6673,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "6128c69a5f86e1e64a45bfeec2157e1c696e55cfb3ba1ec8190595f213fa0fab"
+      "source_question_sha256": "6128c69a5f86e1e64a45bfeec2157e1c696e55cfb3ba1ec8190595f213fa0fab",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "perturbation-and-phenotype-comparison",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:28ebecdf-949e-4d20-aca9-5989b7a9d6e9",
@@ -6396,7 +6686,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "d2488f0a38e013e392411c9e7f775e1f3f72d9cd995ab6cfc0d9e212ca344a24"
+      "source_question_sha256": "d2488f0a38e013e392411c9e7f775e1f3f72d9cd995ab6cfc0d9e212ca344a24",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "interaction-and-mutational-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:dbb51a1c-f9a2-4960-a93c-118957659790",
@@ -6404,7 +6699,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "f0f662693f37578907224984c4793a095ca7400e6ca7ca7be7321d28b6e7828b"
+      "source_question_sha256": "f0f662693f37578907224984c4793a095ca7400e6ca7ca7be7321d28b6e7828b",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "sequence-and-genome-accounting",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:3d40f373-59d3-4666-87bd-6db64fd7b4fb",
@@ -6412,7 +6712,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "7bd8f84a6efc030530843aa7d2b142ec84a6904d1763291776737092f93c5610"
+      "source_question_sha256": "7bd8f84a6efc030530843aa7d2b142ec84a6904d1763291776737092f93c5610",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "entity-marker-and-localization-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:85c67ef3-322c-42b4-b745-c05e07e7b8ac",
@@ -6420,7 +6725,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "121e49568b8df4f17b1b9d30c090295272c2f129dcc40b1365e507822690cdd6"
+      "source_question_sha256": "121e49568b8df4f17b1b9d30c090295272c2f129dcc40b1365e507822690cdd6",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "reported-quantity-and-denominator",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:653635b7-3bc6-4a7b-98c7-c02038c0e928",
@@ -6428,7 +6738,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "fabf7ac2db95c445d1a02c26f61d21979c34ea5447f58d5a46dbf175f3b76a19"
+      "source_question_sha256": "fabf7ac2db95c445d1a02c26f61d21979c34ea5447f58d5a46dbf175f3b76a19",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "entity-marker-and-localization-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:100b570f-1c4f-4214-8402-f1b15f9989b4",
@@ -6436,7 +6751,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "04caa57d290e5eaeaada3d32ea811f8f59f352c67fd09d9ee54511d34679d28f"
+      "source_question_sha256": "04caa57d290e5eaeaada3d32ea811f8f59f352c67fd09d9ee54511d34679d28f",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "reported-quantity-and-denominator",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:0a9d6516-95ef-4d7b-a28d-d7cde27b7b55",
@@ -6444,7 +6764,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "00ece1795839fd5f00c0f4c6d504e60523bea73ffb7c47bb7043fdde52fd0e37"
+      "source_question_sha256": "00ece1795839fd5f00c0f4c6d504e60523bea73ffb7c47bb7043fdde52fd0e37",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "reported-quantity-and-denominator",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:8d61a14b-60ef-43b0-8003-b60cb6657428",
@@ -6452,7 +6777,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "94c5e65c3fca7ce9ed8e61499864dd58abb5861b87439d4299917c1dba06cd0d"
+      "source_question_sha256": "94c5e65c3fca7ce9ed8e61499864dd58abb5861b87439d4299917c1dba06cd0d",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "entity-marker-and-localization-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:4d4cb121-9525-499a-9475-9b212465c72d",
@@ -6460,7 +6790,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "62f1bed229f1efa1109e61d8cfae3af1a938be643e3cc6fccffb502dfba30871"
+      "source_question_sha256": "62f1bed229f1efa1109e61d8cfae3af1a938be643e3cc6fccffb502dfba30871",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "method-and-protocol-provenance",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:ca4c9d21-b842-4875-9a6a-bcb9f6c55073",
@@ -6468,7 +6803,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "5a301a4bd3b5c343570862ef535b50d888aa3e45ff23719ea9b0ef092fe6a68f"
+      "source_question_sha256": "5a301a4bd3b5c343570862ef535b50d888aa3e45ff23719ea9b0ef092fe6a68f",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "entity-marker-and-localization-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:c3816cb5-8c87-4946-b133-43f415ab6b2a",
@@ -6476,7 +6816,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "1804682de7f5a1cf6b40f2fa86985069e4a85157f5f4e9015063d60e8970eda2"
+      "source_question_sha256": "1804682de7f5a1cf6b40f2fa86985069e4a85157f5f4e9015063d60e8970eda2",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "functional-enrichment",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:59745f75-52bf-4815-905c-3dfad1ef8923",
@@ -6484,7 +6829,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "3aac409f86a3d50c715c6c10537e7b5b67bf2bf9d415c851281dcca4a6048e2f"
+      "source_question_sha256": "3aac409f86a3d50c715c6c10537e7b5b67bf2bf9d415c851281dcca4a6048e2f",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "entity-marker-and-localization-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:26691c84-514b-4712-a43e-09705d681e45",
@@ -6492,7 +6842,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "6895242a837187277205fc37657c7c29d210ebc6124d77348f47cb150e0ffdaa"
+      "source_question_sha256": "6895242a837187277205fc37657c7c29d210ebc6124d77348f47cb150e0ffdaa",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "perturbation-and-phenotype-comparison",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:0e53a08c-4252-4a84-962b-5b396f9740aa",
@@ -6500,7 +6855,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "49e17cf338d8295f8a23dd3a0c2634c0953b9f2c1f084fa9e392c58d23d5244d"
+      "source_question_sha256": "49e17cf338d8295f8a23dd3a0c2634c0953b9f2c1f084fa9e392c58d23d5244d",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "perturbation-and-phenotype-comparison",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:8ade3e3a-4792-4965-b9d9-05e528ebbfa0",
@@ -6508,7 +6868,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "1c088bd06aa9699bb2afe5c8d1d1df4b781e2d449275c63941cf7644b3f5daa6"
+      "source_question_sha256": "1c088bd06aa9699bb2afe5c8d1d1df4b781e2d449275c63941cf7644b3f5daa6",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "mechanistic-or-general-claim",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:f5a4b449-e647-4ae0-8419-c221792482c9",
@@ -6516,7 +6881,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "21c0f9c54923edc948409283bc87856faf15fe3c6616bf68b739f2cfddfdcfc8"
+      "source_question_sha256": "21c0f9c54923edc948409283bc87856faf15fe3c6616bf68b739f2cfddfdcfc8",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "entity-marker-and-localization-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:5806ed2a-1005-44f1-8d70-332048fea8f4",
@@ -6524,7 +6894,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "9a3417743c9b46e362e7d2e48e392c2983cdb4cc0a776159679d72c5bf340c43"
+      "source_question_sha256": "9a3417743c9b46e362e7d2e48e392c2983cdb4cc0a776159679d72c5bf340c43",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "entity-marker-and-localization-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:6fff0994-6d02-470a-9d61-8e35420412b6",
@@ -6532,7 +6907,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "84af2fc4218e789562bf1d76fe0590fa327d352cef4ba4f4d75bb629768960ca"
+      "source_question_sha256": "84af2fc4218e789562bf1d76fe0590fa327d352cef4ba4f4d75bb629768960ca",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "sequence-and-genome-accounting",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:8266ac61-92d6-423d-8e7a-fe47b3a7e885",
@@ -6540,7 +6920,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "c993a26c327cc97f60c198964fa724b74356cfc6f7332bb0e2a968e93cac8697"
+      "source_question_sha256": "c993a26c327cc97f60c198964fa724b74356cfc6f7332bb0e2a968e93cac8697",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "perturbation-and-phenotype-comparison",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:322454df-45a8-41b3-9b0a-4e808144023c",
@@ -6548,7 +6933,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "6789726051270ccbfdfd4c01492637234e339bfd43c7789ad791240d24fbc62b"
+      "source_question_sha256": "6789726051270ccbfdfd4c01492637234e339bfd43c7789ad791240d24fbc62b",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "reported-quantity-and-denominator",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:3c9f23e2-fdd0-431b-aca7-4f9556c78f1f",
@@ -6556,7 +6946,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "aca39b13e9d515629036c7f4684513baa023728fd4df89c5b4f542921522100d"
+      "source_question_sha256": "aca39b13e9d515629036c7f4684513baa023728fd4df89c5b4f542921522100d",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "entity-marker-and-localization-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:983f1ef5-fc7d-4f4a-8f48-e704641eae12",
@@ -6564,7 +6959,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "e30aec419a7607be2e22f94301fe238f7c6db8040b62a9c6705eb9fc9140fb60"
+      "source_question_sha256": "e30aec419a7607be2e22f94301fe238f7c6db8040b62a9c6705eb9fc9140fb60",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "functional-enrichment",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:7d2c8d44-ecf3-40d2-ab69-b6195c46ffe9",
@@ -6572,7 +6972,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "ee9643c98a8b2205d1ff637e938e1c145737a978254443a590a7cea4fd0e5363"
+      "source_question_sha256": "ee9643c98a8b2205d1ff637e938e1c145737a978254443a590a7cea4fd0e5363",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "perturbation-and-phenotype-comparison",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:720e20c2-9ad1-4d98-9f01-8b7fb3782a46",
@@ -6580,7 +6985,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "bf0de1aefe894a3911ffd6309add7a25f18904d96f44b27f3c5a8972c18f59b8"
+      "source_question_sha256": "bf0de1aefe894a3911ffd6309add7a25f18904d96f44b27f3c5a8972c18f59b8",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "interaction-and-mutational-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:dbfbae3d-62f6-4710-8d13-8ce4c8485567",
@@ -6588,7 +6998,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "93f4b27e4032622751f1e4c3311ce5f6832379b7fe69a2bbc9293ba08f5cc1ce"
+      "source_question_sha256": "93f4b27e4032622751f1e4c3311ce5f6832379b7fe69a2bbc9293ba08f5cc1ce",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "entity-marker-and-localization-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:7a42c784-7ae0-48fe-a71f-0a547b8fabb3",
@@ -6596,7 +7011,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "ff73c38297e6df2b09437cc44b9a1463e7ecc8cf4e191ad996d28d2e0d3c4495"
+      "source_question_sha256": "ff73c38297e6df2b09437cc44b9a1463e7ecc8cf4e191ad996d28d2e0d3c4495",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "interaction-and-mutational-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:0708b62f-9652-49eb-8ba6-28878afa7445",
@@ -6604,7 +7024,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "f25688cd4003dbdd2a5993f47d11285c305a9d691afcbde568214334face8b50"
+      "source_question_sha256": "f25688cd4003dbdd2a5993f47d11285c305a9d691afcbde568214334face8b50",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "contact-and-connectivity-comparison",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:5b3b7d05-9e54-445c-b374-d4c6b60923b4",
@@ -6612,7 +7037,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "9fbd3a5047b34433697e89c18ccc74ba439500662dc66384b8b075433810f983"
+      "source_question_sha256": "9fbd3a5047b34433697e89c18ccc74ba439500662dc66384b8b075433810f983",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "reported-quantity-and-denominator",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:623a831f-41ee-4e0e-936a-87f93d96369e",
@@ -6620,7 +7050,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "63e19af041cea6a2d2228e786150d7ed22339f47a6c8e73be217f28255d99abe"
+      "source_question_sha256": "63e19af041cea6a2d2228e786150d7ed22339f47a6c8e73be217f28255d99abe",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "structure-and-interface-measurement",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:99e8fa71-b59c-4aef-8cf6-40102a10622f",
@@ -6628,7 +7063,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "76874ec77c23864d93746964759495a97ad560313eb96266b83dc47a6b89fafc"
+      "source_question_sha256": "76874ec77c23864d93746964759495a97ad560313eb96266b83dc47a6b89fafc",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "molecular-feature-contrast",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:0b1d5537-db47-420c-984b-9b56d38e6d98",
@@ -6636,7 +7076,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "05ae439ca706ddc242a9fbf177b0d66fdde0abe21bed60d1e90555ecce9d9197"
+      "source_question_sha256": "05ae439ca706ddc242a9fbf177b0d66fdde0abe21bed60d1e90555ecce9d9197",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "interaction-and-mutational-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:ade96656-7ed1-4e21-b009-b7a73e13bff5",
@@ -6644,7 +7089,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "b5a0c47eca055827760a37f5dfc0b9344b82cfaa84455018b821c06f7f599293"
+      "source_question_sha256": "b5a0c47eca055827760a37f5dfc0b9344b82cfaa84455018b821c06f7f599293",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "entity-marker-and-localization-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:78a2c1d2-f035-4c7d-a7ee-40dfd95ca88a",
@@ -6652,7 +7102,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "272933a28d0da6c4803f587945a4b2f8df7afa0d0a2297d3c552ec4a684f3dc4"
+      "source_question_sha256": "272933a28d0da6c4803f587945a4b2f8df7afa0d0a2297d3c552ec4a684f3dc4",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "assay-ranking-and-response",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:224efcd7-3652-47f8-84dd-15b4c6fafae2",
@@ -6660,7 +7115,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "40c4371cc51808eac692c98f15507fe58b1aa13200622ce6a6742e8204826992"
+      "source_question_sha256": "40c4371cc51808eac692c98f15507fe58b1aa13200622ce6a6742e8204826992",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "entity-marker-and-localization-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:55187fb4-e7ee-4027-b74f-cab50f328442",
@@ -6668,7 +7128,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "e4d1cc9ba06a5918d3253475c74346dcc23d5d2789a796445c11a1d2e9b908af"
+      "source_question_sha256": "e4d1cc9ba06a5918d3253475c74346dcc23d5d2789a796445c11a1d2e9b908af",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "molecular-feature-contrast",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:25a9cf59-1c28-4ddf-b797-f43efb9349e6",
@@ -6676,7 +7141,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "5d18eee644eb26ae8b8929ce055c488c2d202cd19b7333996d7d9129248fdca0"
+      "source_question_sha256": "5d18eee644eb26ae8b8929ce055c488c2d202cd19b7333996d7d9129248fdca0",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "perturbation-and-phenotype-comparison",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:cdc80639-dc21-4337-bccc-d61d9aec6560",
@@ -6684,7 +7154,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "f561330978b4c96224cb85b58665585ea72a1203e6b26e2d569d513cb81ac1ef"
+      "source_question_sha256": "f561330978b4c96224cb85b58665585ea72a1203e6b26e2d569d513cb81ac1ef",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "interaction-and-mutational-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:12a20d8d-cd49-47eb-9a19-6a38519ee3dc",
@@ -6692,7 +7167,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "522946d901316610a82bb559b30e907b6a84c2f1ec26c523cfb095f5bca9dc3a"
+      "source_question_sha256": "522946d901316610a82bb559b30e907b6a84c2f1ec26c523cfb095f5bca9dc3a",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "molecular-feature-contrast",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:4bb69c9d-2485-42d2-b8aa-aa647b407ca4",
@@ -6700,7 +7180,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "b7f19a85d4186877befd9108d51231bd032ff726859ed5bef3f41d868addd6da"
+      "source_question_sha256": "b7f19a85d4186877befd9108d51231bd032ff726859ed5bef3f41d868addd6da",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "molecular-feature-contrast",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:8c833521-56c4-458d-8c65-2bbf66190cae",
@@ -6708,7 +7193,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "cb3c45718cc16648d37f5474bd45457e266545514c85239f688c011dd555042c"
+      "source_question_sha256": "cb3c45718cc16648d37f5474bd45457e266545514c85239f688c011dd555042c",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "molecular-feature-contrast",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:255fd5fb-9623-4030-8bf2-253247df7c82",
@@ -6716,7 +7206,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "9cb218de429d2631522095ef0909680f053d484621217176c63cb75bd790c40f"
+      "source_question_sha256": "9cb218de429d2631522095ef0909680f053d484621217176c63cb75bd790c40f",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "molecular-feature-contrast",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:38ada695-2c79-459b-8e68-dbed734c74f9",
@@ -6724,7 +7219,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "7f2f0d2e65f396b9156b009511c028259bf34caa652a482157cda5c8cd374359"
+      "source_question_sha256": "7f2f0d2e65f396b9156b009511c028259bf34caa652a482157cda5c8cd374359",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "molecular-feature-contrast",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:925ffe20-b8a9-4ac4-943c-7a16966f4a4b",
@@ -6732,7 +7232,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "bfae73693a2948898919fc71c237430e5c4a5c76774aa9f1e196b110f8823239"
+      "source_question_sha256": "bfae73693a2948898919fc71c237430e5c4a5c76774aa9f1e196b110f8823239",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "perturbation-and-phenotype-comparison",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:e763edaa-b112-460a-a564-d58a6685e639",
@@ -6740,7 +7245,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "3f391f0cfe98ffc2b08d7004fc09429cb0d59ff2af1cb9baeb6ab7599948fd49"
+      "source_question_sha256": "3f391f0cfe98ffc2b08d7004fc09429cb0d59ff2af1cb9baeb6ab7599948fd49",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "perturbation-and-phenotype-comparison",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:8af900bb-5794-40db-910e-10d5857ce5bd",
@@ -6748,7 +7258,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "eb892fc599e2f561fc577a2b95b12dc0cd8cf57673a189e1f6b84cdb87d859e4"
+      "source_question_sha256": "eb892fc599e2f561fc577a2b95b12dc0cd8cf57673a189e1f6b84cdb87d859e4",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "contact-and-connectivity-comparison",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:6194ebfc-2d5c-4ccc-8883-da7c471b61e6",
@@ -6756,7 +7271,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "ec2dd5f3aff2d1935bae076ea3c222ec54d1bd7a375b7c8d0cee147cf28b4f83"
+      "source_question_sha256": "ec2dd5f3aff2d1935bae076ea3c222ec54d1bd7a375b7c8d0cee147cf28b4f83",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "contact-and-connectivity-comparison",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:1f1b07d7-39ce-4665-9b70-4ab77e3c87aa",
@@ -6764,7 +7284,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "44da117ee65960b0971ed86da5d4a8c49529920fad468b1a5e88047f31f661d4"
+      "source_question_sha256": "44da117ee65960b0971ed86da5d4a8c49529920fad468b1a5e88047f31f661d4",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "contact-and-connectivity-comparison",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:55668039-396e-488a-b2c3-bbe840550433",
@@ -6772,7 +7297,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "0eb13a77c04eec4a1f793f449aca6f87f750c1c55a9d39324d821070a4d2dac3"
+      "source_question_sha256": "0eb13a77c04eec4a1f793f449aca6f87f750c1c55a9d39324d821070a4d2dac3",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "molecular-feature-contrast",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:4f050bf3-27cd-4a14-8422-45df5e2bb079",
@@ -6780,7 +7310,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "691f7b6f97a511c4d9ddb76c911fe8dd8e14e3bc31aef00aaf07851376073723"
+      "source_question_sha256": "691f7b6f97a511c4d9ddb76c911fe8dd8e14e3bc31aef00aaf07851376073723",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "sequence-and-genome-accounting",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:cff00d08-5655-4214-97ac-8fa9504c1165",
@@ -6788,7 +7323,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "2569b9fd5ed54f8a69f7b4be40b6b88c7a30363f028ca307c72749899bfa07f0"
+      "source_question_sha256": "2569b9fd5ed54f8a69f7b4be40b6b88c7a30363f028ca307c72749899bfa07f0",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "reported-quantity-and-denominator",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:0eeb7ea9-fc80-4dee-9418-1c328c3ab653",
@@ -6796,7 +7336,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "aa8327d67e2acdbf08be1a07a11433757a86ecf7612be7267915608f360c5b36"
+      "source_question_sha256": "aa8327d67e2acdbf08be1a07a11433757a86ecf7612be7267915608f360c5b36",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "interaction-and-mutational-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:658f7050-d137-477e-8693-26609080cecd",
@@ -6804,7 +7349,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "68b776445e2e54a4115a18611b4469fc33a9eb3405e9d9c81fc542fde792af09"
+      "source_question_sha256": "68b776445e2e54a4115a18611b4469fc33a9eb3405e9d9c81fc542fde792af09",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "structure-and-interface-measurement",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:8696273a-7fea-411a-b6c6-0e826e1e02b5",
@@ -6812,7 +7362,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "7ee4a5a98c9a194ea36542dde98ea1d45b1beb6ebe1d39ea5f439812847ce58d"
+      "source_question_sha256": "7ee4a5a98c9a194ea36542dde98ea1d45b1beb6ebe1d39ea5f439812847ce58d",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "contact-and-connectivity-comparison",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:99713efa-d1b1-4fc5-a4b1-cbae2b3a5798",
@@ -6820,7 +7375,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "b917f62270d4cc919e0b1f1f7a87b4e1a5539fdb135c65e7852c8a35fc1ce4f1"
+      "source_question_sha256": "b917f62270d4cc919e0b1f1f7a87b4e1a5539fdb135c65e7852c8a35fc1ce4f1",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "reported-quantity-and-denominator",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:ce6dd5f7-0706-41dd-a383-9b0d22ef00a1",
@@ -6828,7 +7388,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "e60a5421992fa11c2480c9e4634b3848294387d4a1593fa9cbd91fef1478ea96"
+      "source_question_sha256": "e60a5421992fa11c2480c9e4634b3848294387d4a1593fa9cbd91fef1478ea96",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "molecular-feature-contrast",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:400786c1-e6c6-4f46-a501-86fdd048ed88",
@@ -6836,7 +7401,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "eaae656a66887913bd8fbb47fdbf0c78c99b810f94a1bb3d2592402f65d9a620"
+      "source_question_sha256": "eaae656a66887913bd8fbb47fdbf0c78c99b810f94a1bb3d2592402f65d9a620",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "perturbation-and-phenotype-comparison",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:e820cbcf-6df1-4c1c-b985-c02f39f52781",
@@ -6844,7 +7414,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "2079389fdaedeb632e7ccafde19986185d67a50f5b9b2ad0dad1d9504136d551"
+      "source_question_sha256": "2079389fdaedeb632e7ccafde19986185d67a50f5b9b2ad0dad1d9504136d551",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "perturbation-and-phenotype-comparison",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:230dec20-cd02-4613-a7b1-e28058ed46fe",
@@ -6852,7 +7427,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "277123484bd8615fcace4b723e2e0d1599720652f0ee63dbe797387e0dc4568d"
+      "source_question_sha256": "277123484bd8615fcace4b723e2e0d1599720652f0ee63dbe797387e0dc4568d",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "perturbation-and-phenotype-comparison",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:db851865-5cbf-4d55-b6db-34f22ef5e727",
@@ -6860,7 +7440,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "4572d13a14fe42e12d240c8e9772dbf319425053f002fa8eace5a25e8ecb422b"
+      "source_question_sha256": "4572d13a14fe42e12d240c8e9772dbf319425053f002fa8eace5a25e8ecb422b",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "mechanistic-or-general-claim",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:7975ddb0-a784-4f85-a297-c80e1cb5dcf2",
@@ -6868,7 +7453,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "e3a4fb646f5eb532695c710f470e352b137f116c9c4499d5ad405a8d7feb28e2"
+      "source_question_sha256": "e3a4fb646f5eb532695c710f470e352b137f116c9c4499d5ad405a8d7feb28e2",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "interaction-and-mutational-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:a1d01019-d2b1-4619-92ec-7ea38578819f",
@@ -6876,7 +7466,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "7a2c048604d38a512d7ee0af90039368bf4f0cf29c65d8db1e73867246210e10"
+      "source_question_sha256": "7a2c048604d38a512d7ee0af90039368bf4f0cf29c65d8db1e73867246210e10",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "mechanistic-or-general-claim",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:fe074387-3765-4020-8f5d-e395d1094121",
@@ -6884,7 +7479,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "8107c2d2e3300afa3ce2746166bb9642fc681900748f333aa73e817b99009b22"
+      "source_question_sha256": "8107c2d2e3300afa3ce2746166bb9642fc681900748f333aa73e817b99009b22",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "reported-quantity-and-denominator",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:f0b6cea0-e005-47bc-be0d-9a10b219cae6",
@@ -6892,7 +7492,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "13b13322ed07b6739750fd37080d1adad75240e42e0a9a01833331b6837b2270"
+      "source_question_sha256": "13b13322ed07b6739750fd37080d1adad75240e42e0a9a01833331b6837b2270",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "assay-ranking-and-response",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:ae02d0e9-edf5-4c39-a215-3cbc8f4c565d",
@@ -6900,7 +7505,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "94ff849e772b7793abe602a0b5749ce9dc04371e6da6b312723ec7cb98a89a6c"
+      "source_question_sha256": "94ff849e772b7793abe602a0b5749ce9dc04371e6da6b312723ec7cb98a89a6c",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "sequence-and-genome-accounting",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:fd60a0e7-ba64-49a9-843a-6f5cb17c5fa9",
@@ -6908,7 +7518,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "2378a29def6e90f9e30ce7d07f206ffef784dcb21b1fa18a0a6bb6abd3f9ba92"
+      "source_question_sha256": "2378a29def6e90f9e30ce7d07f206ffef784dcb21b1fa18a0a6bb6abd3f9ba92",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "mechanistic-or-general-claim",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:14fd2b75-76fb-4c29-a21d-c557b2bcf2ff",
@@ -6916,7 +7531,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "4432f84829cdcf498b35286b4cb2b3730529cb04ef40ae49ad28830a25a4b7d1"
+      "source_question_sha256": "4432f84829cdcf498b35286b4cb2b3730529cb04ef40ae49ad28830a25a4b7d1",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "structure-and-interface-measurement",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:e9f142f0-8ef6-47cd-b846-7283a93308d4",
@@ -6924,7 +7544,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "899a7e3d3cf064f2085d875ed3086884bd0fbdcb0b0ac862dbc29e91219cbb97"
+      "source_question_sha256": "899a7e3d3cf064f2085d875ed3086884bd0fbdcb0b0ac862dbc29e91219cbb97",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "mechanistic-or-general-claim",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:398ebac1-fd2d-45b1-9415-d82db4b4d83c",
@@ -6932,7 +7557,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "d26473fb8c05c1b7e9ebbd97cc51ab84be1339eab5a59058aec7c70ec1b66245"
+      "source_question_sha256": "d26473fb8c05c1b7e9ebbd97cc51ab84be1339eab5a59058aec7c70ec1b66245",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "structure-and-interface-measurement",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:7e7150d6-bc73-4a29-a5b3-4ef8399ed947",
@@ -6940,7 +7570,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "1b025dadad218055797acd84f2ce0b7284d4fc47281df990ea8ce03d596ac4fc"
+      "source_question_sha256": "1b025dadad218055797acd84f2ce0b7284d4fc47281df990ea8ce03d596ac4fc",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "assay-ranking-and-response",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:58b39fab-337b-452d-b74f-84f9a188ce88",
@@ -6948,7 +7583,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "8f0ecec5b66f4d77547bd4d0d31f463e1167c1faf0167b285ce7a87356382d59"
+      "source_question_sha256": "8f0ecec5b66f4d77547bd4d0d31f463e1167c1faf0167b285ce7a87356382d59",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "entity-marker-and-localization-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:80e6571e-8f5d-496a-8ba3-9c9f5b783f5d",
@@ -6956,7 +7596,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "2510273eb36d7dc8b01d9e94822610559b4737fe3e445aeffab16467138c1cf7"
+      "source_question_sha256": "2510273eb36d7dc8b01d9e94822610559b4737fe3e445aeffab16467138c1cf7",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "entity-marker-and-localization-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:154e7b14-4ed5-4cf3-9149-0c4843fc62cc",
@@ -6964,7 +7609,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "841bbd56b1e14d47eea709ed75289578c0db460f4a621abcbfa09a0ef3226bab"
+      "source_question_sha256": "841bbd56b1e14d47eea709ed75289578c0db460f4a621abcbfa09a0ef3226bab",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "method-and-protocol-provenance",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:a71ef7a2-31a2-460d-9ff4-32d7722353c3",
@@ -6972,7 +7622,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "dee145ae1fa3bfe913746d40427c5c461e70c2d62be7598995a15cc1c96867a9"
+      "source_question_sha256": "dee145ae1fa3bfe913746d40427c5c461e70c2d62be7598995a15cc1c96867a9",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "assay-ranking-and-response",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:c624ed31-214f-4c80-9544-5514a096b1d3",
@@ -6980,7 +7635,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "0df329469f614b89dd26b20e47cddb021c0f3cc68f7767d009b4e53ea05555ce"
+      "source_question_sha256": "0df329469f614b89dd26b20e47cddb021c0f3cc68f7767d009b4e53ea05555ce",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "molecular-feature-contrast",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:bcd2f213-c6c6-4660-af35-a7bd1c6a1170",
@@ -6988,7 +7648,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "bb416fcd27a8b9a4fcf6688d31ecc714f35b0de63f866d6245df209c1761081a"
+      "source_question_sha256": "bb416fcd27a8b9a4fcf6688d31ecc714f35b0de63f866d6245df209c1761081a",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "molecular-feature-contrast",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:24fae97b-03f3-48b8-b623-abf07faee02e",
@@ -6996,7 +7661,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "d3bc4fe87782e14af0bb966a60a56148bbe8ee71f1f4c1dd75d60b7b3c3dff6a"
+      "source_question_sha256": "d3bc4fe87782e14af0bb966a60a56148bbe8ee71f1f4c1dd75d60b7b3c3dff6a",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "molecular-feature-contrast",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:ce93661b-e3c4-4a7a-96b6-87492259c501",
@@ -7004,7 +7674,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "75f96f0804a924ae31373079956100140304ae90abaa392e4342dd1a9ab0c1e2"
+      "source_question_sha256": "75f96f0804a924ae31373079956100140304ae90abaa392e4342dd1a9ab0c1e2",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "assay-ranking-and-response",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:941c04dc-c89d-4a90-87b0-930625268a38",
@@ -7012,7 +7687,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "acf21418059e2e2cda5cb4a46ccd78b12d038ab976395d40c50faa8adbc6c5ea"
+      "source_question_sha256": "acf21418059e2e2cda5cb4a46ccd78b12d038ab976395d40c50faa8adbc6c5ea",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "molecular-feature-contrast",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:ea4ce240-2864-4ee5-9ffc-2dbda0f8f550",
@@ -7020,7 +7700,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "33b4a8e05b8d6b0b39b601f3bd7fa9303bf1c9d34282b9544d31511e7b7db049"
+      "source_question_sha256": "33b4a8e05b8d6b0b39b601f3bd7fa9303bf1c9d34282b9544d31511e7b7db049",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "reported-quantity-and-denominator",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:cff68274-4bbe-4fa0-a181-36a9af3cc0f1",
@@ -7028,7 +7713,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "0bda7e9ecd8010c40ad9f4b5daf0104162d759d8922573648779a0ff54acf565"
+      "source_question_sha256": "0bda7e9ecd8010c40ad9f4b5daf0104162d759d8922573648779a0ff54acf565",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "interaction-and-mutational-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:2c262f91-52b6-421d-8341-8748f923459e",
@@ -7036,7 +7726,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "045966ad38581ef9c67bf64f95ed233aaf8bccd150899e9ff0544effe051d2be"
+      "source_question_sha256": "045966ad38581ef9c67bf64f95ed233aaf8bccd150899e9ff0544effe051d2be",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "interaction-and-mutational-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:6f8a51e2-f7ad-4033-b43d-370348e4809f",
@@ -7044,7 +7739,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "35b6833705c650607b79bd1b39b1f77b11de043c6e131ed6805c099df14b5f56"
+      "source_question_sha256": "35b6833705c650607b79bd1b39b1f77b11de043c6e131ed6805c099df14b5f56",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "structure-and-interface-measurement",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:9a0b82cb-6a99-4e50-83fc-3ef2ebd277cc",
@@ -7052,7 +7752,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "fcb392d34e3c9b88ee9cd50977fff0856aeb65d1554692cbcc62cfaddbe78806"
+      "source_question_sha256": "fcb392d34e3c9b88ee9cd50977fff0856aeb65d1554692cbcc62cfaddbe78806",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "model-performance-comparison",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:8b665114-7729-4dac-a64f-4862a5397b82",
@@ -7060,7 +7765,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "ea58dbb2c8d4aa03327ad17e84e3cfa16febb83bc6d09ebe01156c3021f27e47"
+      "source_question_sha256": "ea58dbb2c8d4aa03327ad17e84e3cfa16febb83bc6d09ebe01156c3021f27e47",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "entity-marker-and-localization-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:5c808548-92c4-4ae7-990c-e2df81e3c2ae",
@@ -7068,7 +7778,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "1d9e8e170a2ba013402618e99fea91d6f94851f448842f3b06b2e581be651c44"
+      "source_question_sha256": "1d9e8e170a2ba013402618e99fea91d6f94851f448842f3b06b2e581be651c44",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "entity-marker-and-localization-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:564e715f-8d30-410b-bdb5-0dc5206589a7",
@@ -7076,7 +7791,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "bbae677de52f120cd65fda37df2e5575ea2448621e526cf28f426ecb372159fd"
+      "source_question_sha256": "bbae677de52f120cd65fda37df2e5575ea2448621e526cf28f426ecb372159fd",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "sequence-and-genome-accounting",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:e90ea0fc-4659-4b20-acae-75dc4b97a101",
@@ -7084,7 +7804,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "d890b56982d11dc0bde60498fe40f5d75210011cfe1f9fc352a575c7e0a24349"
+      "source_question_sha256": "d890b56982d11dc0bde60498fe40f5d75210011cfe1f9fc352a575c7e0a24349",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "entity-marker-and-localization-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:c246753c-27d2-4ae4-8630-b9b4077ba6f6",
@@ -7092,7 +7817,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "2feafadd9ffb352ee9e24a0cda03b41a6ac7af7c9a02416c628336c9d015a355"
+      "source_question_sha256": "2feafadd9ffb352ee9e24a0cda03b41a6ac7af7c9a02416c628336c9d015a355",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "interaction-and-mutational-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:22306bd7-7e84-415d-aebb-11c6312eb081",
@@ -7100,7 +7830,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "504b6a0d8881c5514fd12d664e9fd581c7182be38d4d7e437aefaa813bea03f6"
+      "source_question_sha256": "504b6a0d8881c5514fd12d664e9fd581c7182be38d4d7e437aefaa813bea03f6",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "interaction-and-mutational-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:7d71dffb-b591-4b88-b0c6-e125a1b083b4",
@@ -7108,7 +7843,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "449ecd4644c8de05baac484fe963dbb7789265dbe4b2c7f8e1938c9267eb32ab"
+      "source_question_sha256": "449ecd4644c8de05baac484fe963dbb7789265dbe4b2c7f8e1938c9267eb32ab",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "entity-marker-and-localization-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:fca26d7c-05cf-40b0-9fd6-a63ed7950909",
@@ -7116,7 +7856,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "77ae9f49ea4443197a7ecac37a5a7c83cd0072f42868aea31bbfa36d8e2950ce"
+      "source_question_sha256": "77ae9f49ea4443197a7ecac37a5a7c83cd0072f42868aea31bbfa36d8e2950ce",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "method-and-protocol-provenance",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:c6e11fac-8f9c-4cf1-aa6e-4d25731ba74f",
@@ -7124,7 +7869,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "d3a784cce093181594e6092b54eb9d62eed7451d794a5d0965d59530f13bbf40"
+      "source_question_sha256": "d3a784cce093181594e6092b54eb9d62eed7451d794a5d0965d59530f13bbf40",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "molecular-feature-contrast",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:bace5737-ba26-422a-8706-0fb1e92b689f",
@@ -7132,7 +7882,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "82ba200da505563d2928580e434cb11381ca61e494017d1007f9cb682239f9b0"
+      "source_question_sha256": "82ba200da505563d2928580e434cb11381ca61e494017d1007f9cb682239f9b0",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "molecular-feature-contrast",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:ff7328e2-4954-46a2-8ea3-d40b4df0c0ea",
@@ -7140,7 +7895,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "08dd66efa0173a6816cd3ac1fc60c68ce947e9bb261c46c59265dd537d032af4"
+      "source_question_sha256": "08dd66efa0173a6816cd3ac1fc60c68ce947e9bb261c46c59265dd537d032af4",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "entity-marker-and-localization-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:76bcaeeb-93bd-4951-99b9-cf4613de1a37",
@@ -7148,7 +7908,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "147c50fae340188d42949bf8ab9fec054776c160e6f8df49fca7030efd5520a5"
+      "source_question_sha256": "147c50fae340188d42949bf8ab9fec054776c160e6f8df49fca7030efd5520a5",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "sequence-and-genome-accounting",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:850f86d3-0139-43df-89fd-e606c30aaa8b",
@@ -7156,7 +7921,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "213b7f5d4bc1a285b0f8b44ea19bd7d16287200596e2d2cee47f13a0bf40f4c6"
+      "source_question_sha256": "213b7f5d4bc1a285b0f8b44ea19bd7d16287200596e2d2cee47f13a0bf40f4c6",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "entity-marker-and-localization-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:df061613-2591-4faa-be03-791c76375cb5",
@@ -7164,7 +7934,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "cb8a3db2d1858e6f7a25c3bcb6d097cf2cdb0c693b7ea4c623049dceaaff6022"
+      "source_question_sha256": "cb8a3db2d1858e6f7a25c3bcb6d097cf2cdb0c693b7ea4c623049dceaaff6022",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "interaction-and-mutational-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:634f6745-f3b3-4cb1-9859-96ffb954b98a",
@@ -7172,7 +7947,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "6d70e16697f3e018931b7b511d362c4f598e6cfb01f4ac4832a9923d047e3348"
+      "source_question_sha256": "6d70e16697f3e018931b7b511d362c4f598e6cfb01f4ac4832a9923d047e3348",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "assay-ranking-and-response",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:d1eabedb-656f-4f89-a65f-4ed89478ba9f",
@@ -7180,7 +7960,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "52d230022ffd8fc99479c984510eaa0d41edf88a8744b7b780f5b62ba2749899"
+      "source_question_sha256": "52d230022ffd8fc99479c984510eaa0d41edf88a8744b7b780f5b62ba2749899",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "assay-ranking-and-response",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:58f69c8d-cb94-4021-a84f-c549a7b976e1",
@@ -7188,7 +7973,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "45702ed914c11b4e58d8b26e578db781b3bad31c6d452aff774fc8e0956ef386"
+      "source_question_sha256": "45702ed914c11b4e58d8b26e578db781b3bad31c6d452aff774fc8e0956ef386",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "assay-ranking-and-response",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:20980744-f9ff-4e39-a08d-106eada6900c",
@@ -7196,7 +7986,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "164fc581229ce08046a8675aa7eb1c8db4646ddaa06445590911aa818ab422df"
+      "source_question_sha256": "164fc581229ce08046a8675aa7eb1c8db4646ddaa06445590911aa818ab422df",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "interaction-and-mutational-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:a6622141-68d6-418f-8e30-7a5eff3d4fa8",
@@ -7204,7 +7999,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "ce4af29a6777653081b539d2732544743d3e4526da814e7f01c4473c40cc9c51"
+      "source_question_sha256": "ce4af29a6777653081b539d2732544743d3e4526da814e7f01c4473c40cc9c51",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "interaction-and-mutational-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:9fe3ff3b-60cf-472d-ab1a-2bda1868f1b4",
@@ -7212,7 +8012,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "74b989bd8d77a08a04aa74e0d091ae3dfc5539a009d68d0d38ac68092de91e6c"
+      "source_question_sha256": "74b989bd8d77a08a04aa74e0d091ae3dfc5539a009d68d0d38ac68092de91e6c",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "molecular-feature-contrast",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:9088251a-99fe-4b91-b6a9-375154ec4f58",
@@ -7220,7 +8025,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "4ab3aece4f9d5e3f2a0eab8048fa8edd04a0c9fd53dbc42ac010835888194c9d"
+      "source_question_sha256": "4ab3aece4f9d5e3f2a0eab8048fa8edd04a0c9fd53dbc42ac010835888194c9d",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "entity-marker-and-localization-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:b8ec372b-ae29-473e-96bc-86ff1ead24ea",
@@ -7228,7 +8038,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "c83b4292da52cd5fdfea2d40f46d86b25333a8127d34837b1255b6fba8dc2d77"
+      "source_question_sha256": "c83b4292da52cd5fdfea2d40f46d86b25333a8127d34837b1255b6fba8dc2d77",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "entity-marker-and-localization-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:a45c277e-55d9-4e7f-b1de-37fc2e19daf6",
@@ -7236,7 +8051,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "4858b6172f3d65a53122c019b96067449d76a12bc8797a88257958bb1cedcb71"
+      "source_question_sha256": "4858b6172f3d65a53122c019b96067449d76a12bc8797a88257958bb1cedcb71",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "entity-marker-and-localization-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:a8aa19cc-e4d1-4aa1-8c4e-2a518b4c99d6",
@@ -7244,7 +8064,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "26737a01171e38d42e25faa2ea5a3ed1c07d06c17b67ab6eeb549118419c51e7"
+      "source_question_sha256": "26737a01171e38d42e25faa2ea5a3ed1c07d06c17b67ab6eeb549118419c51e7",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "entity-marker-and-localization-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:2c3ba95c-47d5-4798-9911-ffdb11c940e4",
@@ -7252,7 +8077,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "5ebb5d0578d9f54cceca7610bf67287819ccd23f10dceb0680434aed5e9e4795"
+      "source_question_sha256": "5ebb5d0578d9f54cceca7610bf67287819ccd23f10dceb0680434aed5e9e4795",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "molecular-feature-contrast",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:49d2630e-9d26-4e12-89a3-3050a609abf5",
@@ -7260,7 +8090,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "65e3e72e586bd55cf9f121f0d48ceb175c20370ae223e2b383a89419a38564ed"
+      "source_question_sha256": "65e3e72e586bd55cf9f121f0d48ceb175c20370ae223e2b383a89419a38564ed",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "molecular-feature-contrast",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:c758f685-ba4a-4bf0-bd85-567c60ff1508",
@@ -7268,7 +8103,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "a7f12406c5c279d75f0bf78ffba90a27e3386abb753f3e898eb050f2e3f38005"
+      "source_question_sha256": "a7f12406c5c279d75f0bf78ffba90a27e3386abb753f3e898eb050f2e3f38005",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "molecular-feature-contrast",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:5966d3db-5a23-4ea7-a719-2472019d94a6",
@@ -7276,7 +8116,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "52ec6f465b2d92da57ece596eac85bd7f96e6c86b4ef0341062f6d97d538c40a"
+      "source_question_sha256": "52ec6f465b2d92da57ece596eac85bd7f96e6c86b4ef0341062f6d97d538c40a",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "perturbation-and-phenotype-comparison",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:fd54d745-447c-4fcd-80de-463fcd3de6a4",
@@ -7284,7 +8129,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "154b80add5d15faa7803e4a35e78d8f00aa51a6950b5d5734502d142f1ee7353"
+      "source_question_sha256": "154b80add5d15faa7803e4a35e78d8f00aa51a6950b5d5734502d142f1ee7353",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "molecular-feature-contrast",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:3f5bae15-bd5d-43e3-8e5e-944b1e533529",
@@ -7292,7 +8142,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "e62fbf739497ec2230117a56b6f959fd045f31f1f794d494f898ba78eaabe4a9"
+      "source_question_sha256": "e62fbf739497ec2230117a56b6f959fd045f31f1f794d494f898ba78eaabe4a9",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "molecular-feature-contrast",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:4d11258d-ee8c-4bc7-91a8-613c7a41f139",
@@ -7300,7 +8155,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "b7f927786f908f6e8a5d275faf3f1bd498849f2ddb6c766e4cfe498c1ab2b516"
+      "source_question_sha256": "b7f927786f908f6e8a5d275faf3f1bd498849f2ddb6c766e4cfe498c1ab2b516",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "interaction-and-mutational-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:1ff2b2e4-492e-4e35-bf33-f0fb53ab938c",
@@ -7308,7 +8168,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "c2f7b6807747b9683b0d08a4805a49f1f4046c279b1bf4a90f5e6eeab2cc4d4d"
+      "source_question_sha256": "c2f7b6807747b9683b0d08a4805a49f1f4046c279b1bf4a90f5e6eeab2cc4d4d",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "interaction-and-mutational-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:178a5e56-340f-4ba8-a3e5-f024ca016f40",
@@ -7316,7 +8181,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "9cd0f726255ccc57274f6c041cd98465001c056a1522735a185f12315f838d0c"
+      "source_question_sha256": "9cd0f726255ccc57274f6c041cd98465001c056a1522735a185f12315f838d0c",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "structure-and-interface-measurement",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:c75879f4-9329-4594-8f6a-c4d421f2439f",
@@ -7324,7 +8194,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "f7acddaeae5a398ec299e4dc476fc47783c1cba6fc7c624de939a7ecffd4162a"
+      "source_question_sha256": "f7acddaeae5a398ec299e4dc476fc47783c1cba6fc7c624de939a7ecffd4162a",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "interaction-and-mutational-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:b2a0249b-2850-4576-8b78-8408c1e47324",
@@ -7332,7 +8207,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "1052d3c47e4de8f58d4f3c8287bad131502d3572b650f3036ad5b57cbf9c59d5"
+      "source_question_sha256": "1052d3c47e4de8f58d4f3c8287bad131502d3572b650f3036ad5b57cbf9c59d5",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "interaction-and-mutational-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:f7346ea0-5f1b-45e9-a1d6-493c754159c1",
@@ -7340,7 +8220,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "1c46be64b8b38c481b5e8a4f5984e12934e18bdc5e7a14c0560ac19f6873427d"
+      "source_question_sha256": "1c46be64b8b38c481b5e8a4f5984e12934e18bdc5e7a14c0560ac19f6873427d",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "perturbation-and-phenotype-comparison",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:3d3fea17-c8ee-4005-94cb-d8798be696c3",
@@ -7348,7 +8233,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "8674289f6aef58d74ae209c251e8bb45f544ff3e3c3f7a577d3edcd5dc309751"
+      "source_question_sha256": "8674289f6aef58d74ae209c251e8bb45f544ff3e3c3f7a577d3edcd5dc309751",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "reported-quantity-and-denominator",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:ab58e166-f0b5-49ae-ac56-c38b5d6e8aad",
@@ -7356,7 +8246,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "d02ec3da952c4fd9478dcadc5a24ed50e887fd06e788f686af595b000c8124cc"
+      "source_question_sha256": "d02ec3da952c4fd9478dcadc5a24ed50e887fd06e788f686af595b000c8124cc",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "entity-marker-and-localization-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:a73b2c2d-a3ac-49e6-8e2e-44b4c1e6de94",
@@ -7364,7 +8259,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "55b3eddb1173607259035b407ef4d86a745f4db9ddfc2640fa0065f3fd2eff25"
+      "source_question_sha256": "55b3eddb1173607259035b407ef4d86a745f4db9ddfc2640fa0065f3fd2eff25",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "molecular-feature-contrast",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:04dbe07d-8b2c-4daf-b5b2-ef0e93f1fd2a",
@@ -7372,7 +8272,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "8f6db2874ffd5b46d799705d27ad48069ceb9fe7f9570ec96666f7ad4b41862d"
+      "source_question_sha256": "8f6db2874ffd5b46d799705d27ad48069ceb9fe7f9570ec96666f7ad4b41862d",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "structure-and-interface-measurement",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:4a6705b5-85e5-44c1-8444-65be30192802",
@@ -7380,7 +8285,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "1ba91447362cf930158ffed9e3a7f7839e225fadde9a5cd8d214529e06554753"
+      "source_question_sha256": "1ba91447362cf930158ffed9e3a7f7839e225fadde9a5cd8d214529e06554753",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "perturbation-and-phenotype-comparison",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:08397294-3d99-4790-915c-b8bcb1e9e661",
@@ -7388,7 +8298,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "94c92dc2ea1c87591c4156601ca0cecdb14949cb209ee8f7f9d807046a74cec8"
+      "source_question_sha256": "94c92dc2ea1c87591c4156601ca0cecdb14949cb209ee8f7f9d807046a74cec8",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "assay-ranking-and-response",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:837b2489-723a-4099-9b68-c2a9ea688f4d",
@@ -7396,7 +8311,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "2f14a93546f5cc408d505d4ed174753f2fd055698ebd5bf541f46bde9c880e68"
+      "source_question_sha256": "2f14a93546f5cc408d505d4ed174753f2fd055698ebd5bf541f46bde9c880e68",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "reported-quantity-and-denominator",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:745f5a0d-5f8f-405e-bb46-f37b3d1f0678",
@@ -7404,7 +8324,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "45e4ceb9b51244f56c3dd4d651915e703dffe62b01c803bd4f50c071237b2b10"
+      "source_question_sha256": "45e4ceb9b51244f56c3dd4d651915e703dffe62b01c803bd4f50c071237b2b10",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "perturbation-and-phenotype-comparison",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:bca1be77-208b-4d57-ac29-05aa6d58bdbf",
@@ -7412,7 +8337,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "f7681b14b92b54d73af07c71a21b5f1b3f7985f31790eecc02f0b39ac8c7633b"
+      "source_question_sha256": "f7681b14b92b54d73af07c71a21b5f1b3f7985f31790eecc02f0b39ac8c7633b",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "entity-marker-and-localization-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:2dc20a2f-de54-4bfe-a34f-1ba395f342cf",
@@ -7420,7 +8350,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "e443a21e50d473736819f6559fee26ded17f4bada00dffc8d461da7614bb17f0"
+      "source_question_sha256": "e443a21e50d473736819f6559fee26ded17f4bada00dffc8d461da7614bb17f0",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "reported-quantity-and-denominator",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:afb36e40-0836-4810-909e-eabfe17dcd8b",
@@ -7428,7 +8363,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "98690ac6b5a87c1efd6e1ace7fc0048621658a0b813df63c6ebdd3e74b6910c3"
+      "source_question_sha256": "98690ac6b5a87c1efd6e1ace7fc0048621658a0b813df63c6ebdd3e74b6910c3",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "molecular-feature-contrast",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:c6f097c9-2216-4e98-af45-8101681b38ec",
@@ -7436,7 +8376,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "6040af11203aa26ec0bbc28cd3f8d5c54fdb3a6d668e59e18551e21ea8e475d7"
+      "source_question_sha256": "6040af11203aa26ec0bbc28cd3f8d5c54fdb3a6d668e59e18551e21ea8e475d7",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "molecular-feature-contrast",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:9f797d29-9f3a-481d-b2fe-326cbc686273",
@@ -7444,7 +8389,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "8dbecdef26e082f646db81fb072b156b96255e942352500f0b48bbe476c1336c"
+      "source_question_sha256": "8dbecdef26e082f646db81fb072b156b96255e942352500f0b48bbe476c1336c",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "assay-ranking-and-response",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:0d5cf8a7-a240-4a8f-be4e-c16712f90d79",
@@ -7452,7 +8402,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "57a45fea4bc56e6a74df4bd2a967ae5afef7e92eda02431670807c91f0f72360"
+      "source_question_sha256": "57a45fea4bc56e6a74df4bd2a967ae5afef7e92eda02431670807c91f0f72360",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "interaction-and-mutational-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:40400348-eabb-4b25-90d1-e33589d3e5a4",
@@ -7460,7 +8415,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "4fd897e061d907af9062eec699f19e61e6f94860975e2a3073fc37a520e3a8a1"
+      "source_question_sha256": "4fd897e061d907af9062eec699f19e61e6f94860975e2a3073fc37a520e3a8a1",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "assay-ranking-and-response",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:4949fc05-5f78-4dd0-8d9c-3dbb6004740a",
@@ -7468,7 +8428,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "2632e9f104fb71ebcbf1114fc7bbc1ca58eb6e9d841dbdf8aacbb6dd15f6dd49"
+      "source_question_sha256": "2632e9f104fb71ebcbf1114fc7bbc1ca58eb6e9d841dbdf8aacbb6dd15f6dd49",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "mechanistic-or-general-claim",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:c7b36a1c-ea80-4ae5-b2f1-3932cb16c3cf",
@@ -7476,7 +8441,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "2b1761e1834bad86fa931ce299ca484eff069ce16dd8a5e17b83f57b1881a1cb"
+      "source_question_sha256": "2b1761e1834bad86fa931ce299ca484eff069ce16dd8a5e17b83f57b1881a1cb",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "assay-ranking-and-response",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:ebe57888-662f-488f-ade1-c0aaffe638b1",
@@ -7484,7 +8454,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "7e2244457d2dda08ed841a2bfaabb3459d7dc46c2178cf05c9541241d41c7c80"
+      "source_question_sha256": "7e2244457d2dda08ed841a2bfaabb3459d7dc46c2178cf05c9541241d41c7c80",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "molecular-feature-contrast",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:ef07d562-fc18-43c9-8201-7a189d76eeb9",
@@ -7492,7 +8467,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "5af84fddb344101a535983594b1a97edcc93b0f1f0975a61925c8e5908f9bcdf"
+      "source_question_sha256": "5af84fddb344101a535983594b1a97edcc93b0f1f0975a61925c8e5908f9bcdf",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "entity-marker-and-localization-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:b331480e-dfc7-4e92-931a-c71f491c4795",
@@ -7500,7 +8480,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "ed471cd9784f39f65a2e3a5063539a40f0f020a08a951bb662516b3e9390d443"
+      "source_question_sha256": "ed471cd9784f39f65a2e3a5063539a40f0f020a08a951bb662516b3e9390d443",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "structure-and-interface-measurement",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:58950824-2665-445d-939b-9512d5d01a2b",
@@ -7508,7 +8493,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "5c7b0010a848b992c834c52801528bb6b72c6ce0000c37e3fec092b9442bea44"
+      "source_question_sha256": "5c7b0010a848b992c834c52801528bb6b72c6ce0000c37e3fec092b9442bea44",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "molecular-feature-contrast",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "LitQA2:8d12cb90-73c6-4cc1-9f83-0fa9fd822e92",
@@ -7516,7 +8506,12 @@
       "source_configuration": "LitQA2",
       "source_subtask": "litqa-v2-public",
       "workflow_family": "literature-specific-evidence",
-      "source_question_sha256": "d024e0bbfdd17aca5a419ddfe25c80196a5db34c7cc064300c9400e1f731d7ca"
+      "source_question_sha256": "d024e0bbfdd17aca5a419ddfe25c80196a5db34c7cc064300c9400e1f731d7ca",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-reviewed-evidence-uninspected",
+        "scientific_pattern": "entity-marker-and-localization-evidence",
+        "proposed_design_id": null
+      }
     },
     {
       "task_id": "SuppQA:1b0eaf02-0861-40b6-89bf-a267c9c8c206",
@@ -8856,6 +9851,28 @@
     },
     "candidate_sets_inspected": false,
     "source_biological_records_inspected": false,
+    "validated_mappings_added": 0
+  },
+  "literature_review": {
+    "question_stems_reviewed": 199,
+    "pattern_counts": {
+      "sequence-and-genome-accounting": 12,
+      "structure-and-interface-measurement": 12,
+      "contact-and-connectivity-comparison": 9,
+      "molecular-feature-contrast": 34,
+      "functional-enrichment": 3,
+      "entity-marker-and-localization-evidence": 28,
+      "interaction-and-mutational-evidence": 24,
+      "assay-ranking-and-response": 20,
+      "reported-quantity-and-denominator": 20,
+      "perturbation-and-phenotype-comparison": 21,
+      "mechanistic-or-general-claim": 9,
+      "method-and-protocol-provenance": 4,
+      "open-literature-existence": 2,
+      "model-performance-comparison": 1
+    },
+    "design_file": "workflow_designs/labbench-literature-database.json",
+    "source_evidence_and_choices_inspected": false,
     "validated_mappings_added": 0
   }
 }

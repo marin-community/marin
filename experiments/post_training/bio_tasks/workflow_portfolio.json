@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T17:39:13.623789+00:00",
+  "updated_at": "2026-09-24T17:50:12.615871+00:00",
   "scope": "Full question-proposal portfolio for the 32 currently inventoried provisional-ID agentic releases. This planning index resolves every question card and records conditional consolidation; it creates no training task or validated coverage. Nine source leads without inventories remain outside the enumerated denominator.",
   "counts": {
     "source_releases": 32,
@@ -22,7 +22,7 @@
     "Do not turn registry configurations, repeated assays, source protocol variants or known aliases into automatic independent workflow credit.",
     "Scientific realism governs task boundaries. One task may use several native tools and produce many intermediate artifacts when they answer one question; unrelated estimands stay separate.",
     "ScholarQA-Bio contributes 1,451 enumerated question identities with unreviewed endpoint dispositions. These have no question-card assignments; source citation attribution uses a learned model, and deterministic numerical extraction does not cover unrestricted synthesis.",
-    "LAB-Bench contributes 801 scoped literature/database identities and nine shared family contracts. Supplementary questions have 58 provisional design assignments and 24 explicit gaps; 520 database schemas share seven existing question cards, while 199 literature questions retain endpoint-review gaps. Fifty Biomni DbQA stems overlap, with twenty ambiguous source matches; no additional aliases are credited."
+    "LAB-Bench contributes 801 scoped literature/database identities and nine shared family contracts. Supplementary questions have 58 provisional design assignments and 24 explicit gaps; 520 database schemas share seven existing question cards, while 199 reviewed literature stems retain evidence/acceptance gaps. Fifty Biomni DbQA stems overlap, with twenty ambiguous source matches; no additional aliases are credited."
   ],
   "source_question_files": [
     {
@@ -47,7 +47,7 @@
     },
     {
       "path": "workflow_designs/biomni-eval1.json",
-      "sha256": "75defa6f7382139f66347459c60a14e0422c4f456683de634f2e6f20ecf1204e"
+      "sha256": "394bf122394ed0eeaaf3f895f20aadec14d32f0d20f4ce72438d09018c54960f"
     },
     {
       "path": "workflow_designs/biokgbench.json",
@@ -99,7 +99,7 @@
     },
     {
       "path": "workflow_designs/labbench-literature-database.json",
-      "sha256": "5d5d10b0abbbbd297db4c53b68b8131bfb59c92f3a053c6dc23ab14a68d1bdc5"
+      "sha256": "14fc38ab94cc82a1c1ed81a760984ed120924ed666c52a7122c448262c9827e6"
     }
   ],
   "question_groups": [
