@@ -35,7 +35,9 @@ from tests.cluster.conftest import MARIN_GPU_CLUSTER
 
 PENDING_TIMEOUT = 30 * 60.0
 RUNTIME_TIMEOUT = 30 * 60.0
-TPU_RUNTIME_TIMEOUT = 60 * 60.0
+# A v6e-8 capacity queue and an Iris worker retry can consume the job wait
+# before this model finishes compiling and reaches the numerical gate.
+TPU_RUNTIME_TIMEOUT = 90 * 60.0
 
 pytestmark = [pytest.mark.cluster, pytest.mark.slow, pytest.mark.timeout(PENDING_TIMEOUT + RUNTIME_TIMEOUT + 300)]
 
