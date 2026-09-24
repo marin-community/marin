@@ -870,6 +870,21 @@
         ],
         "reference_genome": "GRCm38 (preparation metadata; exact gene annotation release still unverified)",
         "retrieval": "scRNAseq::fetchDataset(\"nestorowa-hsc-2016\", \"2024-04-18\"); run on reserved CPUs and freeze retrieved file hashes before recipe admission"
+      },
+      "direct_geo_metadata_review": {
+        "checked_at": "2026-09-24",
+        "series_matrix_url": "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE81nnn/GSE81682/matrix/GSE81682_series_matrix.txt.gz",
+        "series_matrix_sha256": "1ad91a9a9343c3e279c0921ba97015554dc5a283b457d84a5c1973e9719b5739",
+        "series_matrix_bytes": 91789,
+        "count_header_cells": 1920,
+        "geo_sample_records": 3840,
+        "scope": "Only the first count rows and the small series metadata were retrieved; the full count matrix has not been downloaded.",
+        "scientific_decisions": [
+          "The original count header has 1920 unique cell columns. GEO also includes 1920 sample titles with Rep in their cell label; their relationship to the count matrix needs explicit reconciliation before combining records.",
+          "The GEO broad sorting groups are HSPC, LT-HSC and Prog. They are not the retrospectively assigned fine cell types from the author FACS tables.",
+          "GEO reports mm10, GSNAP 2015-09-29 and unstranded HTSeq 0.5.3p3 counting; the exact gene-annotation release remains unverified.",
+          "Cell-level counts and ERCC controls must remain distinct from HTSeq rows beginning with double underscores. Missing author FACS measurements must not be fabricated."
+        ]
       }
     }
   }

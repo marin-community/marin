@@ -319,6 +319,13 @@ pairs. Adapted contracts require explicit completeness, uniqueness and missing-v
 checks. Task-specific grading configurations packaged with ground truth remain
 uninspected; the source benchmark has not been executed.
 
+TargetVal's pinned task constructor and runner have been inspected, but its gene-level
+IDs depend on external score tables and remain uninventoried. Requested sample counts
+and repeated model runs are not a task manifest. Its sequential testing pattern needs
+explicit nulls, denominators and stopping rules; permuted-data controls remain separate
+from observed biological inputs. The source inventory records these limits without
+adding task or execution coverage.
+
 For BixBench,
 shared workflow-family stages are distinguished from individual question endpoints;
 this inventory does not add execution coverage. Four RNA-seq component mappings now
