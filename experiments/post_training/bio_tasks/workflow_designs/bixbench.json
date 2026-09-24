@@ -1739,14 +1739,24 @@
           "source_question_sha256": "dc49b18260599c65bf828c8a28b3c90cba458d3586f599f76b0879120c38f82f",
           "view": "go_adjusted_tested",
           "operation": "Adjusted p of the declared T-cell-activation term after simplify; round to four decimals only if that exact term survives.",
-          "source_or_adaptation_limit": "Source term label must resolve to a stable GO ID before authoring; do not select observations to force enrichment."
+          "source_or_adaptation_limit": "Source term label must resolve to a stable GO ID before authoring; do not select observations to force enrichment.",
+          "authored_lookup": {
+            "term_id": "GO:0050863",
+            "term_label": "regulation of T cell activation",
+            "selection": "Source label matched exactly in GO.db 3.22.0; do not substitute an enriched neighbor."
+          }
         },
         {
           "task_id": "bix-1-q2",
           "source_question_sha256": "8c08e45f02e6a9cc50f831e12b32afddce9402f9f66677e2f0cc371eba696f47",
           "view": "go_raw_genome",
           "operation": "Adjusted p of the declared neutrophil-activation term after simplify using the raw-p-selected list and genome annotation background.",
-          "source_or_adaptation_limit": "The question calls a result a threshold. Treat it as a term result and preserve this interpretation explicitly."
+          "source_or_adaptation_limit": "The question calls a result a threshold. Treat it as a term result and preserve this interpretation explicitly.",
+          "authored_lookup": {
+            "term_id": "GO:0042119",
+            "term_label": "neutrophil activation",
+            "selection": "Source label matched exactly in GO.db 3.22.0; preserve absent/not-significant/removed statuses."
+          }
         },
         {
           "task_id": "bix-5-q1",
@@ -1760,7 +1770,8 @@
           "source_question_sha256": "3c71c34f973850bbae49d5abdba387e34a385eea883c8a75b276a3c4f970e22e",
           "view": "fibroblast_specific_go",
           "operation": "Most-enriched GO process from the independent fibroblast-specific contrast, with the same explicit ranking rule.",
-          "source_or_adaptation_limit": "The fibroblast label may map to a declared independently observed population; preserve population selection, contrast and enrichment ranking. Record that the source fibroblast finding is not reproduced."
+          "source_or_adaptation_limit": "The fibroblast label may map to a declared independently observed population; preserve population selection, contrast and enrichment ranking. Record that the source fibroblast finding is not reproduced.",
+          "authored_population": "basal; separate fit/enrichment pending"
         },
         {
           "task_id": "bix-49-q1",
@@ -1774,7 +1785,13 @@
           "source_question_sha256": "2b018ef66139e6e2bad807b039a10cd463be4d53717cb1c41feb09208e04900f",
           "view": "gene_results",
           "operation": "Original Wald padj for the declared named gene after the same fit and apeglm workflow.",
-          "source_or_adaptation_limit": "Shrinkage does not replace padj; GRIK5 absence or ambiguous mapping must be explicit."
+          "source_or_adaptation_limit": "Shrinkage does not replace padj; GRIK5 absence or ambiguous mapping must be explicit.",
+          "authored_lookup": {
+            "source_gene_symbol": "GRIK5",
+            "authored_gene_symbol": "Grik5",
+            "stable_id": null,
+            "status": "Resolve unique mouse identifier from the pinned OrgDb before authoring; do not choose by significance."
+          }
         },
         {
           "task_id": "bix-49-q3",
@@ -1795,7 +1812,13 @@
           "source_question_sha256": "9af0e2eded98daf4a87b8e3d900903a2a75aed3dfa8a83d97d5596482dfca9a6",
           "view": "gene_results",
           "operation": "Shrunken LFC for the declared named gene, rounded to two decimals.",
-          "source_or_adaptation_limit": "Return a status when absent/unestimable; do not use unshrunken LFC."
+          "source_or_adaptation_limit": "Return a status when absent/unestimable; do not use unshrunken LFC.",
+          "authored_lookup": {
+            "source_gene_symbol": "GRIK5",
+            "authored_gene_symbol": "Grik5",
+            "stable_id": null,
+            "status": "Resolve unique mouse identifier from the pinned OrgDb before authoring; do not choose by significance."
+          }
         }
       ],
       "workflow_adaptation_policy": "benchmark_coverage.json:workflow_adaptation_policy"
@@ -3770,8 +3793,8 @@
       "script": "sources/prepare_enrichment.R",
       "script_sha256": "07a5c3e2f0858fd12df0d9fbd6883382b84e6c7684298604f04872b4c561bbcf",
       "environment_lock": "sources/enrichment-preparation.lock.json",
-      "environment_lock_sha256": "fef98f5d856d6fd3b0aeae2b7ac910cd0c8eb9818004bb81b0a35b9a3576ee12",
-      "status": "Corrected diagnostic prepared; rerun pending. No native enrichment result or Harbor validation yet.",
+      "environment_lock_sha256": "70516dbbc397f2de03a1ca49b338321550193de0816229b54bec177a2cca6f09",
+      "status": "Second attempt failed before analysis because alphabetic explicit-package order ran annotation post-link scripts before yq. Correct dependency order and database/namespace preflight prepared; recovery not submitted. No native enrichment or Harbor result.",
       "failed_attempt": {
         "job_id": "/exedev/bio-enrichment-native-20260924-204426",
         "terminal_state": "FAILED",
@@ -3817,6 +3840,41 @@
         "member_sha256": "2ee01b8bc1d7ea5fd360730d7a1f2ef05c5eee44d3d5c2d5c72fcf2afd734833",
         "finding": "cleanContrast computes contrastAllZero for the compared groups and resets LFC/stat to zero and pvalue to one. Named coefficient results preserve the fitted coefficient."
       },
+      "validated_new_mappings": 0,
+      "environment_installation": "The lock list preserves the observed dependency order from the first successful installation. Preserve this order when writing micromamba @EXPLICIT input: Bioconductor data-package post-link scripts require yq and R to be installed first. Validate GO.db/org.Mm.eg.db SQLite hashes and load both namespaces before analysis; conda metadata and a zero installation exit code are insufficient.",
+      "environment_attempt": {
+        "job_id": "/exedev/bio-enrichment-native-20260924-210643",
+        "terminal_state": "FAILED",
+        "submitted_bundle_sha256": "da05b0d62dfce090ef8d2c825f9e21e59664f2c91a3feb7f3b6328201e4aa930",
+        "executed_script_sha256": "07a5c3e2f0858fd12df0d9fbd6883382b84e6c7684298604f04872b4c561bbcf",
+        "diagnostic_archive_sha256": "0e8d8caa9214afd490847521b8c827b01235b91a021cbc7bc87fab459ae7389b",
+        "installation_exit_code": 0,
+        "installation_seconds": 19.99914759999956,
+        "analysis_seconds": 8.225436253997032,
+        "failure": "GO.db and org.Mm.eg.db post-link scripts could not find yq; clusterProfiler then failed to load because GO.db was absent. No input counts were read by R and the corrected contrast assertion was not reached.",
+        "correction_evidence": {
+          "successful_order_packages": 277,
+          "r_base_index_zero_based": 103,
+          "yq_index_zero_based": 227,
+          "org_mm_eg_db_index_zero_based": 260,
+          "go_db_index_zero_based": 261
+        },
+        "automatic_retries": 0
+      }
+    },
+    "context_adaptation": {
+      "coverage_policy": "benchmark_coverage.json:workflow_adaptation_policy",
+      "source_context": "Human ASXL1 mutation versus control in the source study linked by all nine BixBench question records: doi:10.1172/jci.insight.167744. Retain each question hash and its separate method/output contract.",
+      "authored_context": "Observed GSE60450 mouse mammary development: lactation (2 dL) versus virgin within sorted luminal cells; retain pregnancy libraries for estimation. No pairing or disease labels are invented.",
+      "preserved_decisions": [
+        "Select the declared population from the original twelve libraries.",
+        "Use biological libraries as replication units, with declared design and coefficient direction.",
+        "Preserve raw versus adjusted significance masks, apeglm effect shrinkage and complete gene/term artifacts.",
+        "Keep tested-gene and genome-annotation backgrounds separate; record the authored OrgDb reference substitution for the source gencode background."
+      ],
+      "reference_substitutions": "Mouse org.Mm.eg.db/GO.db 3.22.0 replace the human gene/annotation context for the GO adaptation. Full OrgDb-annotated BP genes define the authored genome background; this does not reproduce the literal source gencode universe. GO:0050863 and GO:0042119 identities are preserved.",
+      "selection_timing": "Named GO terms come from the source questions and were resolved in the pinned annotation table. Grik5 is the declared mouse-symbol candidate for the GRIK5 lookup; require an unambiguous native identifier mapping before authoring. Do not select a replacement using observed significance.",
+      "separate_population_endpoint": "For bix-5-q4, adapt source fibroblast population selection to the independently observed basal population. A separate basal fit and enrichment result are required; the current luminal preparation provides no credit for this endpoint.",
       "validated_new_mappings": 0
     }
   }
