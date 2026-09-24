@@ -53,6 +53,7 @@ from marin.testing.inference.snowball_checkpoint import (
     prepare_bf16_parameters,
     read_executor_info,
 )
+from rigging.filesystem.storage_path import StoragePath
 
 from tests.cluster.conftest import MARIN_GPU_CLUSTER
 
@@ -290,7 +291,7 @@ def test_snowball_tpu_checkpoint_matches_levanter_inference_goldens(
             name=f"snowball-tpu-checkpoint-{run_id[:8]}",
             entrypoint=Entrypoint.from_callable(
                 assert_tpu_checkpoint_inference_matches_golden,
-                args=[expected_cases, f"{TPU_REPORT_ROOT}/{run_id}/levanter-native-tpu.json"],
+                args=[expected_cases, str(StoragePath(TPU_REPORT_ROOT) / run_id / "levanter-native-tpu.json")],
             ),
             resources=ResourceConfig.with_tpu(
                 "v6e-8",

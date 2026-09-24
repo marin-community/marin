@@ -29,6 +29,7 @@ from marin.testing.inference.snowball_backend_parity_jobs import (
     score_tpu_vllm_against_goldens,
     score_vllm_against_goldens,
 )
+from rigging.filesystem.storage_path import StoragePath
 
 from tests.cluster.conftest import MARIN_GPU_CLUSTER
 
@@ -92,7 +93,7 @@ def _tpu_vllm_job(goldens: tuple[RepresentativeGolden, ...]) -> JobRequest:
         name=f"snowball-parity-vllm-tpu-{run_id[:8]}",
         entrypoint=Entrypoint.from_callable(
             score_tpu_vllm_against_goldens,
-            args=[goldens, f"{TPU_REPORT_ROOT}/{run_id}/vllm-tpu.json"],
+            args=[goldens, str(StoragePath(TPU_REPORT_ROOT) / run_id / "vllm-tpu.json")],
         ),
         resources=ResourceConfig.with_tpu(
             "v6e-8",

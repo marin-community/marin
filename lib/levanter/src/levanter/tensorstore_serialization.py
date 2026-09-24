@@ -1315,7 +1315,9 @@ def tree_deserialize_leaves_tensorstore(
         def exemplar_dtype(leaf: Any) -> np.dtype[Any]:
             if is_named_array(leaf):
                 leaf = leaf.array
-            return np.dtype(leaf.dtype) if hasattr(leaf, "dtype") else np.asarray(leaf).dtype
+            if isinstance(leaf, (jax.Array, jax.ShapeDtypeStruct, np.ndarray, np.generic)):
+                return np.dtype(leaf.dtype)
+            return np.asarray(leaf).dtype
 
         dtypes_leaves = [exemplar_dtype(leaf) for leaf in exemplar_leaves]
 

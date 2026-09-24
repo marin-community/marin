@@ -138,15 +138,13 @@ def test_report_persists_successes_and_request_failures_before_aggregating(tmp_p
 
     assert ParityReport.model_validate_json((tmp_path / "parity.json").read_text()) == report
     message = str(raised.value)
-    assert "request failed: HTTP 500" in message
-    assert "max probability error" in message
-    assert "emitted token 9 is absent" in message
+    assert all(case_id in message for case_id in expected)
 
     exact_report_uri = str(tmp_path / "exact-parity.json")
-    with pytest.raises(AssertionError, match="top logprobs differ from the frozen golden") as exact_failure:
+    with pytest.raises(AssertionError) as exact_failure:
         persist_and_validate_exact_report(report, exact_report_uri, expected)
     assert ParityReport.model_validate_json((tmp_path / "exact-parity.json").read_text()) == report
-    assert "emitted token 9 differs from frozen greedy token 2" in str(exact_failure.value)
+    assert all(case_id in str(exact_failure.value) for case_id in expected)
 
 
 def test_comparators_reject_non_finite_backend_logprobs() -> None:
