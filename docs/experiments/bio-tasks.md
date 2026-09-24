@@ -172,7 +172,7 @@ generation immediately and leaves the manifest marked `incomplete`.
 Serve the output directory with `python -m http.server 8757 --directory /tmp/bio-tasks-example`
 and open `http://localhost:8757/`. The index groups tasks by recipe, with text search, domain filtering,
 format/skill labels, a data-origin filter (real data selected initially), and a separate
-50-repository execution-coverage table. A second page tracks 765 provisional ID task/protocol records and 90 held-out OOD
+50-repository execution-coverage table. A second page tracks 815 provisional ID task/protocol records and 90 held-out OOD
 BioMysteryBench identifiers, with filters for distribution, benchmark and coverage status, recipe examples, explicit gaps and
 local reference-check runtimes. Task pages show exact instructions, bounded input previews, expected
 outputs, negative controls, metadata, and verifier code. These pages contain answers

@@ -233,9 +233,10 @@ benchmark answers and biological fixtures are excluded from training authoring.
 | [scBench-Long](../../experiments/post_training/bio_tasks/benchmark_tasks/scbench-long.json) | 4 | Unverified |
 | [SpatialBench-Long](../../experiments/post_training/bio_tasks/benchmark_tasks/spatialbench-long.json) | 4 | Unverified |
 | [BixBench-Verified-50](../../experiments/post_training/bio_tasks/benchmark_tasks/bixbench-verified-50.json) | 50 (all overlap original IDs) | — |
+| [CellBench](../../experiments/post_training/bio_tasks/benchmark_tasks/cellbench.json) | 50 analysis-planning contexts | — |
 
-Of these 765 ID task/protocol records, 23 have manually assessed component mappings and
-742 are unmapped. None is marked workflow-validated. Other eligible sources
+Of these 815 ID task/protocol records, 23 have manually assessed component mappings and
+792 are unmapped. None is marked workflow-validated. Other eligible sources
 still need task-level inspection. The 90
 [BioMysteryBench identifiers](../../experiments/post_training/bio_tasks/benchmark_tasks/biomysterybench.json)
 are tracked separately as OOD, without workflow patterns or training mappings.
@@ -279,7 +280,16 @@ and 33 are unchanged. Per-record links preserve the relationship without implyin
 50 additional workflows. Revisions affect model design, filtering, units and
 denominators; capsule equivalence has not been verified.
 
-All 765 ID records have manually assessed workflow prerequisites. For BixBench,
+CellBench's 50 research contexts request proposed single-cell analyses. Their
+LLM judge compares proposals with hidden analysis ideas; the protocol does not
+validate executed biological artifacts. Context-derived analysis topics are
+recorded separately from executable requirements. Adapting a context requires an
+independent observed study and a quantitative endpoint. The pinned agent runner
+also references three CSV files absent from the release; source execution was not
+attempted.
+
+All 815 ID records have assessed workflow prerequisites or source planning
+requirements, with the distinction explicit. For BixBench,
 shared workflow-family stages are distinguished from individual question endpoints;
 this inventory does not add execution coverage. The inspection browser binds mappings
 to generated examples and their local reference results. These timings are solver-check runtimes, not teacher latency measurements.

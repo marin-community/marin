@@ -251,6 +251,18 @@
       "tasks_file": "benchmark_tasks/bixbench-verified-50.json",
       "source_inventory_name": "BixBench-Verified-50, Harbor CLI",
       "task_inventory_status": "released-task-metadata-assessed"
+    },
+    "CellBench": {
+      "revision": "5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b",
+      "source_url": "https://github.com/zou-group/CellVoyager/tree/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench",
+      "inventory_count": 50,
+      "public_inventory_count": 50,
+      "task_kind": "analysis-plan-proposal",
+      "training_mapping_allowed": true,
+      "distribution": "ID",
+      "tasks_file": "benchmark_tasks/cellbench.json",
+      "source_inventory_name": "CellBench (CellVoyager)",
+      "task_inventory_status": "public-context-and-protocol-assessed"
     }
   },
   "assessment_policy": "ID workflow prerequisites are manually inferred from permitted task descriptions. Shared family stages may exceed an individual endpoint; assess that endpoint before claiming coverage. Benchmark answers and biological fixtures are excluded from authoring."

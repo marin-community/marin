@@ -1,0 +1,1814 @@
+{
+  "benchmark": "CellBench",
+  "source_revision": "5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b",
+  "scope": "All 50 public research-context cases. The released benchmark requests analysis proposals and uses an LLM judge; it does not validate executed biological artifacts. Each context can request multiple analysis ideas, which are not counted as independent workflows here. Expected analysis lists, raw observations and trajectories are excluded from authoring.",
+  "release_execution_caveat": "The pinned agent runner names three CSV files absent from this tree; the base-model runner names the released cellbench_50.csv. Source execution was not attempted.",
+  "tasks": [
+    {
+      "task_id": "0",
+      "source_task_id": "0",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "e010e579aa784270453e69c7f5fef25bdc654ae362f1b926b8159994b19002ab",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "oral-tumor-cellular-heterogeneity",
+      "candidate_analysis_pattern": "tumor-state-characterization",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Keep anatomical site and co-occurring fibrosis distinct from inferred cell states."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Keep anatomical site and co-occurring fibrosis distinct from inferred cell states.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "1",
+      "source_task_id": "1",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "a0da00f6ae5facf6d7895f570c030d10dc358d19a48719c9199cf10adb6d4a6b",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "placental-host-cell-responses",
+      "candidate_analysis_pattern": "condition-specific-cell-responses",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Preserve gestational age, donor and placental cell lineage; restrict adaptation to analysis of measured host-cell responses."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Preserve gestational age, donor and placental cell lineage; restrict adaptation to analysis of measured host-cell responses.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "2",
+      "source_task_id": "2",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "1113f6db0d1d0560bf3a65e94587a7bbba589116b53406003ad06a84b1aefb1a",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "human-fetal-kidney-development",
+      "candidate_analysis_pattern": "developmental-cell-state-comparison",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Separate human observations from mouse-derived developmental assumptions."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Separate human observations from mouse-derived developmental assumptions.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "3",
+      "source_task_id": "3",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "4afc5d19f215e9d8b1bd3a65daf7998d6d861067593354db0a9fc35732f283c1",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "post-car-t-prolonged-cytopenia",
+      "candidate_analysis_pattern": "longitudinal-immune-cell-comparison",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Align treatment timing and patient outcomes; post-treatment association does not establish a mechanism of cytopenia."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Align treatment timing and patient outcomes; post-treatment association does not establish a mechanism of cytopenia.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "4",
+      "source_task_id": "4",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "58e2d54ecba5bb83795df1f09c2ef94e65b3343144c8af2b108a634b67d2f85e",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "crohn-disease-across-intestinal-sites",
+      "candidate_analysis_pattern": "paired-tissue-condition-comparison",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Retain paired inflamed and non-inflamed sites, anatomical location and patient identity."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Retain paired inflamed and non-inflamed sites, anatomical location and patient identity.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "5",
+      "source_task_id": "5",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "ac2d3522ca3726bb57c43e4ea9776618c72d4aabb57d7e7498597ba6776d5f04",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "healthy-tissue-t-cell-states",
+      "candidate_analysis_pattern": "cross-tissue-cell-state-comparison",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Separate activation and residence signatures from tissue composition and donor effects."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Separate activation and residence signatures from tissue composition and donor effects.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "6",
+      "source_task_id": "6",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "300d9b04ce13d55423926021c0dff460c51f891b64d18b133c08d5beccd686b4",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "dental-pulp-inflammation-and-repair",
+      "candidate_analysis_pattern": "disease-stage-cell-state-comparison",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Preserve lesion stage and sampling context; rare immune populations require adequate observed support."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Preserve lesion stage and sampling context; rare immune populations require adequate observed support.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "7",
+      "source_task_id": "7",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "ffb1892725b998cdd4bb468072bf09b80e4ecc69e1ead769bc497f0bd398c4dc",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "human-spinal-cord-development",
+      "candidate_analysis_pattern": "cross-species-developmental-comparison",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Align developmental stages and orthologs before interpreting human-specific cell programs."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Align developmental stages and orthologs before interpreting human-specific cell programs.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "8",
+      "source_task_id": "8",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "2f35a77299a8bf4289cb50ed25ad01bb680cc21abb38c1d050026553c5684881",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "airway-organoid-culture-states",
+      "candidate_analysis_pattern": "culture-condition-cell-state-comparison",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Quantify measured cell differentiation without proposing experimental optimization; preserve biological culture replicates."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Quantify measured cell differentiation without proposing experimental optimization; preserve biological culture replicates.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "9",
+      "source_task_id": "9",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "80458000ea489f9cd55163ac8f5fba98cdd917ce48973c8ae8a10a13d1a77701",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "cystic-fibrosis-lung-cell-context",
+      "candidate_analysis_pattern": "immune-structural-cell-comparison",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Separate compartment sampling, treatment exposure and donor effects from disease associations."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Separate compartment sampling, treatment exposure and donor effects from disease associations.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "10",
+      "source_task_id": "10",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "22d1c78b3a4fb16ccbf2e0bc63d6d466ccc31878b975a24ae5afae4a46ebc8b6",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "neonatal-lung-cell-maturation",
+      "candidate_analysis_pattern": "developmental-cell-state-comparison",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Establish the observed developmental range before inferring maturation or ordering states."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Establish the observed developmental range before inferring maturation or ordering states.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "11",
+      "source_task_id": "11",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "ac3ce367aad99d01ed838d75f1072d3557002367ed3aac2ffa71b4c3de7dd50d",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "gamma-delta-t-cells-across-age-and-site",
+      "candidate_analysis_pattern": "age-by-tissue-cell-comparison",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Retain age, donor and tissue sampling structure; composition and functional state are different endpoints."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Retain age, donor and tissue sampling structure; composition and functional state are different endpoints.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "12",
+      "source_task_id": "12",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "0ffff56733b5589ca4299cad04fbb0fd3648130823f51204c1ca96e3cf95c270",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "myocarditis-tissue-conditions",
+      "candidate_analysis_pattern": "condition-specific-cell-responses",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Distinguish observed inflammatory etiologies and clinical covariates without inferring causality from cell expression."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Distinguish observed inflammatory etiologies and clinical covariates without inferring causality from cell expression.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "13",
+      "source_task_id": "13",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "c10db242df526ab8ec4906c3657b8fb1d97280340204ae18897aab8471892af0",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "retinal-cell-types-and-regulation",
+      "candidate_analysis_pattern": "cell-type-regulatory-context",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "The source planning prompt is restricted to single-cell RNA analyses; regulatory or epigenomic extensions require explicit measured inputs."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "The source planning prompt is restricted to single-cell RNA analyses; regulatory or epigenomic extensions require explicit measured inputs.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "14",
+      "source_task_id": "14",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "6f7b41c9a0b3545e265a256aa0f540b5a81eab480dfe6b8c94a06f40b5e7176d",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "primate-cortical-cell-atlas",
+      "candidate_analysis_pattern": "cross-species-cell-type-comparison",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Match orthologs and homologous cell types before interpreting species-specific effects."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Match orthologs and homologous cell types before interpreting species-specific effects.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "15",
+      "source_task_id": "15",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "dc99025cf135ef3262fcba45eca85f8af73dd8d0b7ad4e93097a1a06f8a0e6ae",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "postnatal-thymic-progenitors",
+      "candidate_analysis_pattern": "developmental-lineage-hypotheses",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Transcriptomic trajectories and marker expression do not demonstrate lineage fate."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Transcriptomic trajectories and marker expression do not demonstrate lineage fate.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "16",
+      "source_task_id": "16",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "e5a1e60428255790c5c89449f95e107c70d6f31d36f03ae4cde36ba10bdca825",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "type-2-diabetes-islet-cell-programs",
+      "candidate_analysis_pattern": "donor-aware-disease-comparison",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Account for inter-donor heterogeneity and sampled cell counts before disease contrasts."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Account for inter-donor heterogeneity and sampled cell counts before disease contrasts.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "17",
+      "source_task_id": "17",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "ff5aecfdbd14001fa316c414b295e3c5ce2dd4541c45d82e9838b51dc966f29f",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "intrinsic-skin-aging-fibroblasts",
+      "candidate_analysis_pattern": "age-associated-cell-state-comparison",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Keep sun exposure separate from chronological age and retain donor-level replication."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Keep sun exposure separate from chronological age and retain donor-level replication.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "18",
+      "source_task_id": "18",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "0d1521528c638fe23e71bdacb5cb0ef19c6543576b572df2c2d7ae30ff15c3b5",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "acute-tendon-injury-cell-states",
+      "candidate_analysis_pattern": "injury-time-cell-state-comparison",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Preserve time after injury and cell compartment; a cross-sectional sample does not establish repair dynamics."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Preserve time after injury and cell compartment; a cross-sectional sample does not establish repair dynamics.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "19",
+      "source_task_id": "19",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "4623a62c20d6e67fba6585926ecf13a2a451d7eed84eba91279d385a304197ca",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "adult-intestinal-segment-atlas",
+      "candidate_analysis_pattern": "cross-tissue-cell-state-comparison",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Retain ileum, colon and rectum identity and donor effects in segment comparisons."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Retain ileum, colon and rectum identity and donor effects in segment comparisons.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "20",
+      "source_task_id": "20",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "6ea1853613077049863be489cc39f7489db31c14064eb08262330d70e068a50b",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "healthy-and-failing-heart-with-age",
+      "candidate_analysis_pattern": "age-by-disease-cell-comparison",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Account for single-cell versus single-nucleus sampling and clinical covariates."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Account for single-cell versus single-nucleus sampling and clinical covariates.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "21",
+      "source_task_id": "21",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "cca9ce043b0cb849453d9d12fe74f5c6c7c83472cea4c34fdd4f2972f22fba03",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "tissue-regulatory-t-cell-adaptation",
+      "candidate_analysis_pattern": "cross-species-tissue-cell-comparison",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Separate tissue adaptation from species and assay effects; do not treat inferred trajectories as direct migration."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Separate tissue adaptation from species and assay effects; do not treat inferred trajectories as direct migration.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "22",
+      "source_task_id": "22",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "115a068f8e23f1b32475f0cc03b7433b15b2c6b2302342a8a537eb071c7f1e47",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "adult-neural-stem-cell-injury-response",
+      "candidate_analysis_pattern": "injury-associated-cell-state-comparison",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Distinguish observed activation programs from prior lineage commitment or regenerative capacity."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Distinguish observed activation programs from prior lineage commitment or regenerative capacity.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "23",
+      "source_task_id": "23",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "4d4041932a668e0b59558ccdea896ebdb279c756aad95caadfbc8ea82a4bf5d0",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "pancreatic-endocrine-development-and-diabetes",
+      "candidate_analysis_pattern": "age-by-disease-cell-comparison",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Age and diabetes group differences require a design that supports disentangling them."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Age and diabetes group differences require a design that supports disentangling them.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "24",
+      "source_task_id": "24",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "150df11b490570bad327cafcb50c1c0c08dfd97bb297d7eff09664b57f29a46a",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "endometriosis-lesion-cell-heterogeneity",
+      "candidate_analysis_pattern": "paired-tissue-condition-comparison",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Keep lesion class, anatomical site, menstrual context and donor identity explicit."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Keep lesion class, anatomical site, menstrual context and donor identity explicit.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "25",
+      "source_task_id": "25",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "53226971fd35fadcfe9ffecbef2cc0389d0f8fa483db104ab94a6657e2bda83f",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "covid19-lung-cell-pathology",
+      "candidate_analysis_pattern": "condition-specific-cell-responses",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Separate measured host-cell pathology from clinical severity, treatment and sampling effects."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Separate measured host-cell pathology from clinical severity, treatment and sampling effects.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "26",
+      "source_task_id": "26",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "467c94fc248cdccb02644e751b5d256d610e51c90148399d0918f7fd9c359346",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "retinal-pigment-epithelium-and-choroid",
+      "candidate_analysis_pattern": "tissue-compartment-cell-characterization",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Retain the anatomical compartments and distinguish mixture composition from cell-intrinsic expression."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Retain the anatomical compartments and distinguish mixture composition from cell-intrinsic expression.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "27",
+      "source_task_id": "27",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "db06b602533d08a1c7cb891752e54eb96620edc154fe7fae07caab2820cfd0f8",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "plant-cell-defense-transcriptomics",
+      "candidate_analysis_pattern": "condition-specific-cell-responses",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Limit adaptation to observed plant host-defense expression; preserve tissue, time and biological replication."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Limit adaptation to observed plant host-defense expression; preserve tissue, time and biological replication.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "28",
+      "source_task_id": "28",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "a26bd1fcea574b9957598f99db3a1dfa66edafd7430594453f5da2cfee499e77",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "cervical-tumor-cell-heterogeneity",
+      "candidate_analysis_pattern": "tumor-state-characterization",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Cell-state associations alone do not establish clinical prognostic value or therapeutic efficacy."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Cell-state associations alone do not establish clinical prognostic value or therapeutic efficacy.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "29",
+      "source_task_id": "29",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "e3bfca512289860f026592e90ea82e9f79ab06b7508ce93c72c3a29270d5d0eb",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "developing-mouse-cortical-cell-atlas",
+      "candidate_analysis_pattern": "developmental-cell-state-comparison",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Align sampled developmental stages and distinguish inferred ordering from longitudinal measurement."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Align sampled developmental stages and distinguish inferred ordering from longitudinal measurement.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "30",
+      "source_task_id": "30",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "86b754399e8f91a49eda98f655e60aaa67a9b9c24faa8266dbc30232eb11ef58",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "thyroid-cancer-cell-state-progression",
+      "candidate_analysis_pattern": "disease-stage-cell-state-comparison",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Cross-sectional tumor states do not prove transformation trajectories or cell ancestry."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Cross-sectional tumor states do not prove transformation trajectories or cell ancestry.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "31",
+      "source_task_id": "31",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "a13c8b1434d6eca1b8347413b88119d4439a8c7553a20e0cb2c2b10743404d52",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "lung-adenocarcinoma-cell-context",
+      "candidate_analysis_pattern": "tumor-state-characterization",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Separate malignant-cell variation from microenvironment composition and donor-level clinical associations."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Separate malignant-cell variation from microenvironment composition and donor-level clinical associations.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "32",
+      "source_task_id": "32",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "2eced6d2989967066d99b4ecaac632e153a5c5556ef6583e5fee74861a01a25a",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "nasopharyngeal-tumor-cell-context",
+      "candidate_analysis_pattern": "tumor-state-characterization",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Preserve sample identity and distinguish cell-state expression from bulk composition effects."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Preserve sample identity and distinguish cell-state expression from bulk composition effects.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "33",
+      "source_task_id": "33",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "16ecaed3cbc65f57b325da6dce9fe402f6d164289d9c261aa47370efa2189be3",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "human-gastrulation-cell-atlas",
+      "candidate_analysis_pattern": "developmental-lineage-hypotheses",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "A single embryo does not supply independent biological replication for population-level claims."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "A single embryo does not supply independent biological replication for population-level claims.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "34",
+      "source_task_id": "34",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "0c3642ac55777b64b217e924409c7aa30ea4890744d232773b06bdaf53613938",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "human-blood-lineages-and-lncrna",
+      "candidate_analysis_pattern": "cell-type-feature-characterization",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Retain feature annotation versions and sparse detection of noncoding transcripts."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Retain feature annotation versions and sparse detection of noncoding transcripts.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "35",
+      "source_task_id": "35",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "182114ef752f827615a98bf338fb7579c9cedccb6ce7ed1ec053e2a6bfafb8d8",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "ovarian-cancer-metastatic-omentum",
+      "candidate_analysis_pattern": "tissue-compartment-cell-characterization",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Retain metastatic site and donor identity; immune-cell abundance alone does not establish function."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Retain metastatic site and donor identity; immune-cell abundance alone does not establish function.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "36",
+      "source_task_id": "36",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "3f3d2b864e7607825f787597ab99ef8b1d9561159a37253630318f0fa4496d72",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "pancreatic-precursor-to-cancer-cell-states",
+      "candidate_analysis_pattern": "disease-stage-cell-state-comparison",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Preserve histologic grade and donor sampling; inferred progression needs independent evidence."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Preserve histologic grade and donor sampling; inferred progression needs independent evidence.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "37",
+      "source_task_id": "37",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "64863ac25031ff311fa4b6d0dedbc21bacecbaf15b4cc42b2acc18766aa8a152",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "fetal-skin-immune-development",
+      "candidate_analysis_pattern": "developmental-cell-state-comparison",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Retain gestational age and rare-cell sampling limits before trajectory or program analysis."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Retain gestational age and rare-cell sampling limits before trajectory or program analysis.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "38",
+      "source_task_id": "38",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "e0e01f5f4d0c8984034640ac52014045209e8250630ee69e23b17779a0f99064",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "lung-squamous-tumor-cell-context",
+      "candidate_analysis_pattern": "tumor-state-characterization",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Keep tumor stage and clinical sampling distinct from inferred cell interactions."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Keep tumor stage and clinical sampling distinct from inferred cell interactions.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "39",
+      "source_task_id": "39",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "02e1e61e10186d7ecc46b3d7f06602e519a80367e5e47a83c9c613b0159195e4",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "psoriasis-ex-vivo-immune-cell-states",
+      "candidate_analysis_pattern": "condition-specific-cell-responses",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Ex-vivo cell emigration can alter sampled composition and expression; retain culture and donor context."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Ex-vivo cell emigration can alter sampled composition and expression; retain culture and donor context.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "40",
+      "source_task_id": "40",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "14e08efa5316b89c6b3602bb583b5953d7df4ed6504efd740fdf780afec1b4cc",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "matched-head-neck-primary-and-metastatic-tumors",
+      "candidate_analysis_pattern": "paired-tissue-condition-comparison",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Control paired patient identity and cellular composition before assigning metastatic expression effects."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Control paired patient identity and cellular composition before assigning metastatic expression effects.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "41",
+      "source_task_id": "41",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "c30178cf2cb544a51e3ecaaeaf40ca7cbcc62e372bf8df134b9fab3c13904f67",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "alzheimers-prefrontal-nuclei-and-pathology",
+      "candidate_analysis_pattern": "donor-aware-disease-comparison",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Preserve sex balance, donor and neuropathology measurements; nuclei are not independent patients."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Preserve sex balance, donor and neuropathology measurements; nuclei are not independent patients.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "42",
+      "source_task_id": "42",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "14468e1fb1befe3518a35c1580c0a5fb3a51a04cfb1131c999a7689a37796fda",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "small-cell-lung-cancer-primary-and-relapse",
+      "candidate_analysis_pattern": "paired-tissue-condition-comparison",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Preserve patient pairing, relapse and treatment status; disease compartments may be unbalanced."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Preserve patient pairing, relapse and treatment status; disease compartments may be unbalanced.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "43",
+      "source_task_id": "43",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "0c7d8462cbf7e72aefce519a71d5126dfb60ecc94856af95fdd296664302ae89",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "atherosclerotic-plaque-cell-context",
+      "candidate_analysis_pattern": "cell-type-regulatory-context",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Assign disease-associated loci only with declared external evidence; expression association alone does not link a variant to a target gene."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Assign disease-associated loci only with declared external evidence; expression association alone does not link a variant to a target gene.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "44",
+      "source_task_id": "44",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "f3ee93c2891d2b8e3a3b7287decd1a0738b61569b4b3c04c7a95a33573bb185b",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "supercentenarian-immune-cell-states",
+      "candidate_analysis_pattern": "age-associated-cell-state-comparison",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Separate exceptional-age cohort selection from longitudinal aging and preserve donor replication."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Separate exceptional-age cohort selection from longitudinal aging and preserve donor replication.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "45",
+      "source_task_id": "45",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "ad4cdb0930b4ff61fd339c9e98890ac6161f6a70dd91685e73fd1c4a3424eb22",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "hypertrophic-cardiomyopathy-cardiomyocytes",
+      "candidate_analysis_pattern": "donor-aware-disease-comparison",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Surgical sampling and cardiomyocyte selection limit generalization to other cardiac compartments."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Surgical sampling and cardiomyocyte selection limit generalization to other cardiac compartments.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "46",
+      "source_task_id": "46",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "a0a12ed5f2f55079e7e3b9199398434038e9fcd64b40864ceb383287af6a97e3",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "diabetic-foot-ulcer-healing-and-systemic-context",
+      "candidate_analysis_pattern": "paired-tissue-condition-comparison",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Retain healing outcome, diabetes controls, matched tissue sites and patient identity."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Retain healing outcome, diabetes controls, matched tissue sites and patient identity.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "47",
+      "source_task_id": "47",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "afb11db0cbfeccd4e216ad5825ddd45ea5fa562d2f062fcc190cce219d25074f",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "parkinsons-midbrain-cell-heterogeneity",
+      "candidate_analysis_pattern": "donor-aware-disease-comparison",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "The source explicitly names GSE157783; exclude that study lineage from training input selection."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "The source explicitly names GSE157783; exclude that study lineage from training input selection.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ],
+      "benchmark_data_lineages": [
+        {
+          "accession": "GSE157783",
+          "evidence": "Explicitly named in public research context."
+        }
+      ]
+    },
+    {
+      "task_id": "48",
+      "source_task_id": "48",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "16ae0cdcf4f1d68ec5f9950cc5cecb5f7304d34045bb33f403711b4c57b0d481",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "acute-kidney-injury-subtypes",
+      "candidate_analysis_pattern": "condition-specific-cell-responses",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Distinguish injury subtype and clinical covariates from cell-intrinsic responses."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Distinguish injury subtype and clinical covariates from cell-intrinsic responses.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    },
+    {
+      "task_id": "49",
+      "source_task_id": "49",
+      "source_metadata_url": "https://github.com/zou-group/CellVoyager/blob/5a61f6b36bc7e2dd2210024cbb94fb0dd1cbbc0b/CellBench/data/cellbench_50.csv",
+      "source_metadata_sha256": "60314ef059e59a06072421d226086ac0cbf662648a1e11b2f8650f4c0d72b788",
+      "source_context_sha256": "553cc69f7e1cfcf17ffa33366c4be67c6e0f185f79fff24463d2385f94a42ec2",
+      "source_task_kind": "analysis-plan-proposal",
+      "scientific_setting": "cross-species-lung-tumor-myeloid-cells",
+      "candidate_analysis_pattern": "cross-species-cell-type-comparison",
+      "workflow_family": "research-context-to-single-cell-analysis-plan",
+      "status": "unmapped",
+      "assessment": "Source runners and public research-context goals inspected. Expected analysis titles and descriptions were not read or used for authoring. Context-derived patterns are candidate analysis topics, not source-required executable workflows.",
+      "required_stages": [
+        "identify the scientific objective and available modality from the research context",
+        "propose a specific single-cell RNA analysis with an explicit comparison and sampling unit",
+        "state a hypothesis and analysis plan in the requested structured response"
+      ],
+      "scientific_decisions": [
+        "Match orthologs and myeloid populations while accounting for inter-patient and species sampling differences."
+      ],
+      "required_formats": [
+        "research-context-text",
+        "JSON-analysis-plan"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Match orthologs and myeloid populations while accounting for inter-patient and species sampling differences.",
+        "The source acceptance rule judges overlap with hidden analysis ideas; it cannot establish our deterministic executable reward.",
+        "Select an independent observed study and a concrete quantitative endpoint before authoring an executable task."
+      ]
+    }
+  ]
+}
