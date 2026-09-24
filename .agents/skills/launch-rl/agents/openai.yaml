@@ -1,0 +1,4 @@
+interface:
+  display_name: "Launch RL"
+  short_description: "Validate and launch Marin SkyRL experiments"
+  default_prompt: "Use $launch-rl to validate and launch this Marin RL experiment."

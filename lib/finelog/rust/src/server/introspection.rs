@@ -33,6 +33,7 @@ use crate::query::metadata_cache_stats;
 use crate::server::diagnostics::read_proc_self_status_kb;
 use crate::server::forwarding::ForwardingConfig;
 use crate::server::ingest_health::{IngestHealth, NamespaceRegistration};
+use crate::server::log_service::LogTailCache;
 use crate::store::segment::{
     segment_id_and_row_group_rows, segment_physical, LAYOUT_VERSION, MAX_ROW_GROUP_ROWS,
     TARGET_ROW_GROUP_BYTES,
@@ -45,6 +46,7 @@ struct IntrospectionState {
     store: Arc<Store>,
     health: Arc<IngestHealth>,
     forwarding: Option<ForwardingConfig>,
+    tail_cache: Arc<LogTailCache>,
 }
 
 /// When this process started, stamped at router-build time so uptime counts
@@ -132,10 +134,30 @@ struct MetadataCacheInfo {
 struct IndexCacheInfo {
     corrupt_bundles: i64,
     corrupt_sections: i64,
+    load_attempts: i64,
+    header_load_attempts: i64,
+    section_load_attempts: i64,
+    coalesced_waits: i64,
+    entries: i64,
+    bytes: i64,
+    budget_bytes: i64,
+    evictions: i64,
     exact_aggregate_full: i64,
     exact_aggregate_partial: i64,
     exact_aggregate_declined: i64,
     exact_aggregate_fallbacks: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LogTailCacheInfo {
+    entries: i64,
+    bytes: i64,
+    budget_bytes: i64,
+    hits: i64,
+    delta_scans: i64,
+    misses: i64,
+    evictions: i64,
 }
 
 /// The on-disk format policy this binary writes. A segment whose
@@ -161,6 +183,7 @@ struct ServerInfoResponse {
     ingest: Vec<NamespaceRegistration>,
     metadata_cache: MetadataCacheInfo,
     index_cache: IndexCacheInfo,
+    log_tail_cache: LogTailCacheInfo,
     format: FormatInfo,
 }
 
@@ -305,7 +328,9 @@ async fn get_server(State(state): State<IntrospectionState>) -> impl IntoRespons
     let memory = store.memory_summary();
     let cache = metadata_cache_stats();
     let corruption = store.indices().cache().corruption_counts();
+    let loads = store.indices().cache().load_stats();
     let aggregate = store.indices().cache().aggregate_stats();
+    let tail_cache = state.tail_cache.stats();
     Json(ServerInfoResponse {
         build: build_info(),
         process: ProcessInfo {
@@ -336,10 +361,27 @@ async fn get_server(State(state): State<IntrospectionState>) -> impl IntoRespons
         index_cache: IndexCacheInfo {
             corrupt_bundles: corruption.bundles as i64,
             corrupt_sections: corruption.sections as i64,
+            load_attempts: loads.attempts as i64,
+            header_load_attempts: loads.header_attempts as i64,
+            section_load_attempts: loads.section_attempts as i64,
+            coalesced_waits: loads.coalesced_waits as i64,
+            entries: loads.entries as i64,
+            bytes: loads.used_bytes as i64,
+            budget_bytes: loads.budget_bytes as i64,
+            evictions: loads.evictions as i64,
             exact_aggregate_full: aggregate.full as i64,
             exact_aggregate_partial: aggregate.partial as i64,
             exact_aggregate_declined: aggregate.declined as i64,
             exact_aggregate_fallbacks: aggregate.fallbacks as i64,
+        },
+        log_tail_cache: LogTailCacheInfo {
+            entries: tail_cache.entries as i64,
+            bytes: tail_cache.bytes as i64,
+            budget_bytes: tail_cache.budget_bytes as i64,
+            hits: tail_cache.hits as i64,
+            delta_scans: tail_cache.delta_scans as i64,
+            misses: tail_cache.misses as i64,
+            evictions: tail_cache.evictions as i64,
         },
         format: FormatInfo {
             layout_version: LAYOUT_VERSION,
@@ -570,6 +612,7 @@ pub fn introspection_router(
     store: Arc<Store>,
     health: Arc<IngestHealth>,
     forwarding: Option<ForwardingConfig>,
+    tail_cache: Arc<LogTailCache>,
 ) -> Router {
     process_started();
     Router::new()
@@ -580,5 +623,6 @@ pub fn introspection_router(
             store,
             health,
             forwarding,
+            tail_cache,
         })
 }

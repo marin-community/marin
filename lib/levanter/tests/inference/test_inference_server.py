@@ -17,6 +17,7 @@ from levanter.testing.model_configs import llama_test_config
 from levanter.trainer import TrainerConfig
 
 try:
+    from fastapi import HTTPException
     from fastapi.testclient import TestClient
     from openai.types import Completion
 
@@ -28,7 +29,9 @@ try:
         InferenceResponse,
         InferenceServer,
         InferenceServerConfig,
+        _compute_tokens,
     )
+    from levanter.inference.openai_protocol import ChatMessage
 
 except ImportError:
     pytest.skip("Serving imports not installed, use --extra=serve", allow_module_level=True)
@@ -230,6 +233,50 @@ def test_chat_completion_without_a_chat_template_is_rejected(test_client, monkey
 
     assert response.status_code == 400
     assert "no chat template" in response.json()["detail"]
+
+
+def test_chat_completion_renders_template_arguments_and_tool_definitions(local_gpt2_tokenizer):
+    tokenizer = local_gpt2_tokenizer.with_chat_template(
+        "{% if enable_thinking is sameas false %}thinking=disabled\n{% endif %}"
+        "{% if custom_instructions %}instructions={{ custom_instructions }}\n{% endif %}"
+        "{% if tools %}tool={{ tools[0]['function']['name'] }}\n{% endif %}"
+        "{% for message in messages %}{{ message['role'] }}: {{ message['content'] }}\n{% endfor %}"
+        "{% if add_generation_prompt %}assistant: {% endif %}"
+    )
+    tools = [
+        {
+            "type": "function",
+            "function": {"name": "lookup_weather", "parameters": {"type": "object"}},
+        }
+    ]
+
+    tokens = _compute_tokens(
+        [ChatMessage(role="user", content="Will it rain?")],
+        tokenizer,
+        tools,
+        chat_template_kwargs={
+            "enable_thinking": False,
+            "custom_instructions": "Be concise.",
+            "tools": [{"type": "function", "function": {"name": "ignored_tool"}}],
+        },
+    )
+    rendered = tokenizer.decode(tokens)
+
+    assert "thinking=disabled" in rendered
+    assert "instructions=Be concise." in rendered
+    assert "tool=lookup_weather" in rendered
+    assert "ignored_tool" not in rendered
+
+
+def test_chat_completion_rejects_rendering_argument_overrides(local_gpt2_tokenizer):
+    tokenizer = local_gpt2_tokenizer.with_chat_template(TEST_CHAT_TEMPLATE)
+
+    with pytest.raises(HTTPException):
+        _compute_tokens(
+            [ChatMessage(role="user", content="Hello")],
+            tokenizer,
+            chat_template_kwargs={"tokenize": False},
+        )
 
 
 class _OpenAITestTokenizer:

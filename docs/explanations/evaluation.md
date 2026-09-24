@@ -68,6 +68,26 @@ filters for one Evalchemy response share one rollout. Harbor's normalized `steps
 complete Harbor trajectory remain source objects and blobs, so normalization does not replace the
 raw record.
 
+### Speculative serving
+
+Pipeline evaluations declare their target and optional draft producer steps as dependencies. The
+evaluation step resolves their paths into a plain `ModelConfig` before submitting the shared
+Evalchemy or Harbor runner. Checked-in model configurations need no producer step. The inference
+worker resolves the draft URI through Marin's model-preparation path before it starts vLLM.
+Evaluation and inference library code receives resolved model URIs and serving settings.
+
+The target `ModelConfig` records its model identity, tokenizer URI, and tokenizer revision. The
+optional `ServeConfig.speculative` records the draft URI, artifact identity, method, and proposal
+length. EAGLE-3 serving requires the GPU vLLM backend.
+
+Each Evalchemy or Harbor run measures a separate window of the shared server's cumulative counters.
+`record.json.inference_metrics` stores prompt and generation token totals, elapsed wall time, and
+generation throughput. Drafted runs also store the number of verification steps, proposed draft
+tokens, accepted draft tokens, mean acceptance length, and draft acceptance rate. FineStore stores
+the normalized rollout rows; the record stores the bounded run summary. A pipeline
+`EvaluationResult` exposes each sealed FineStore archive through `results_paths`, so a downstream
+offline training step can consume the normalized rollouts directly.
+
 ### Rollout run catalog
 
 Completed and failed attempts are discoverable in Finelog's `marin.rollout_runs` table. Each row

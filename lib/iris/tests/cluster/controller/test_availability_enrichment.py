@@ -13,7 +13,6 @@ from iris.cluster.constraints import (
     AttributeValue,
     WellKnownAttribute,
     availability_constraint,
-    availability_key,
     region_constraint,
 )
 from iris.cluster.controller.codec import constraints_to_json
@@ -22,7 +21,7 @@ from iris.cluster.controller.scheduling.policy import (
     enrich_workers_with_availability,
 )
 from iris.cluster.controller.scheduling.scheduler import WorkerSnapshot
-from iris.cluster.types import LOCAL_ADMIN_SUBMITTER, JobName, PendingTask, WorkerId
+from iris.cluster.types import LOCAL_ADMIN_SUBMITTER, JobName, PendingTask, WorkerId, availability_key
 from rigging.timing import Timestamp
 
 

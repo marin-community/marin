@@ -51,6 +51,10 @@ dependencies = [
     "marin-dupekit",
 ]
 
+[project.scripts]
+# Friendly entry point for the grug fast_track scaling ladder: `uv run fast-track ...`.
+fast-track = "experiments.grug.fast_track.launch:main"
+
 [project.optional-dependencies]
 # Keep this CUDA stack separate from marin-levanter[gpu] while JaxPP requires
 # JAX <=0.11.0 and Levanter GPU pins 0.11.1. Once those versions align, make
