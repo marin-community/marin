@@ -1544,6 +1544,621 @@
         }
       ],
       "limitations": "One fresh inference case and two verifier-isolation controls using saved native outputs. No trial exceptions. All 12 summary quantities, complete trees and tables pass unchanged tolerances. This does not establish biological source independence, scientific approval or complete ID workflow coverage."
+    },
+    {
+      "job_id": "/exedev/bio-harbor-fullstudy-20260924-084258",
+      "source_revision": "5c5b253bde5eeec495fb6d61e63b85249572c6b2",
+      "harbor_revision": "d072bef08e54050880b484eb81d892944d1d82fb",
+      "daytona_version": "0.203.0",
+      "status": "validation-passed-cleanup-wrapper-failed",
+      "worker_exit_code": 1,
+      "harbor_exit_code": 0,
+      "cleanup_exit_code": 1,
+      "model_calls": 0,
+      "agent": "oracle",
+      "concurrent_trials": 1,
+      "attempts_per_case": 1,
+      "positive_cases": 2,
+      "negative_cases": 4,
+      "discriminating_negative_cases": 4,
+      "bundle_sha256": "d515291b6a2feccb89796e18b3f9b66d7db7cea6be55ae8bb4bf83251a0953f1",
+      "canonical_corpus_manifest_sha256": "527aeda9d5c2792f6ed3d53a393973cb190f21cbc7462803c632132dfcfb61b2",
+      "canonical_corpus_archive": {
+        "uri": "gs://marin-us-central2/bio-tasks/authoring/sha256/542ff576025ae3004a1a62f8f85816e80e31d2772e2e77d0b72cbb627a514be6/outputs.tar.zst",
+        "size_bytes": 243421549,
+        "sha256": "542ff576025ae3004a1a62f8f85816e80e31d2772e2e77d0b72cbb627a514be6"
+      },
+      "archive": {
+        "state": "preserved",
+        "uri": "gs://marin-us-central2/bio-tasks/harbor/sha256/97a096c6bc6aa0d1f089896eb3d8c4141eae36ce211b5160df771bf2a820969e/outputs.tar.zst",
+        "size_bytes": 179685474,
+        "sha256": "97a096c6bc6aa0d1f089896eb3d8c4141eae36ce211b5160df771bf2a820969e",
+        "provider_md5": "4iBW5p9y7ootm+kZ8Y5P1w==",
+        "generation": "1790241134078200",
+        "temporary_uri": "gs://marin-us-central2/tmp/ttl=7d/iris/task-outputs/exedev/bio-harbor-fullstudy-20260924-084258/0/dccbbd21761a43f7/outputs.tar.zst"
+      },
+      "controller_placement": {
+        "job_id": "/exedev/bio-harbor-fullstudy-20260924-084258",
+        "state": "failed",
+        "worker_id": "marin-tpu-v4-reserved-256-us-central2-b-20260922-2317-8259d330-worker-28",
+        "execution_cluster_id": "local",
+        "backend_id": "default",
+        "checked_at": "2026-09-24T09:05:10.225260+00:00",
+        "worker_metadata": [
+          {
+            "worker_id": "marin-tpu-v4-reserved-256-us-central2-b-20260922-2317-8259d330-worker-28",
+            "scale_group": "tpu_v4-reserved_256-us-central2-b",
+            "backend_id": "default",
+            "tpu_name": "t1v-n-9a98788d",
+            "gce_zone": "",
+            "gce_instance_name": "t1v-n-9a98788d-w-28"
+          }
+        ]
+      },
+      "agent_and_verifier_backend": "Daytona",
+      "cleanup": {
+        "initial": {
+          "checked_at": "2026-09-24T08:55:20.433389+00:00",
+          "trials": [
+            "real-proteome-domain-search-v1-2__VQjT2js",
+            "real-proteome-domain-search-v1-2__fpQATRv",
+            "real-proteome-domain-search-v1-2__rs8spsd",
+            "real-singlecell-read-qc-v1-20260__HD3N6pn",
+            "real-singlecell-read-qc-v1-20260__dMXHyzf",
+            "real-singlecell-read-qc-v1-20260__mYviYnL"
+          ],
+          "actions": [
+            {
+              "id": "46533feb-a539-4f27-a341-4817dad9901a",
+              "action": "wait-for-existing-deletion",
+              "state": "destroying",
+              "desired_state": "destroyed"
+            }
+          ],
+          "remaining": [
+            {
+              "id": "46533feb-a539-4f27-a341-4817dad9901a",
+              "state": "destroying",
+              "desired_state": "destroyed"
+            }
+          ]
+        },
+        "followup": {
+          "checked_at": "2026-09-24T09:07:29.205475+00:00",
+          "trials": [
+            "real-proteome-domain-search-v1-2__VQjT2js",
+            "real-proteome-domain-search-v1-2__fpQATRv",
+            "real-proteome-domain-search-v1-2__rs8spsd",
+            "real-singlecell-read-qc-v1-20260__HD3N6pn",
+            "real-singlecell-read-qc-v1-20260__dMXHyzf",
+            "real-singlecell-read-qc-v1-20260__mYviYnL"
+          ],
+          "remaining": [],
+          "resources_modified": 0,
+          "pages": 5,
+          "include_errored_deleted": true,
+          "method": "Documented GET /sandbox with cursor pagination and exact owned trial-label prefixes."
+        },
+        "decision": "All six trials completed. The wrapper checked a sandbox while deletion was still finishing; a subsequent paginated check found none remaining. Preserve the nonzero parent exit separately from passing scientific checks; no trial replay is needed."
+      },
+      "cases": [
+        {
+          "task_id": "real-singlecell-read-qc-v1-20260923-00000",
+          "recipe": "real-singlecell-read-qc",
+          "repository_indices": [
+            23
+          ],
+          "task_sha256": "dd18fec7d26237f556bfc1fc5d8e17e56fadddce6576451ef86eea196392593e",
+          "contract_sha256": "e9ea57770f61db54b4b64447cdad8a192d0c5d0c2820d492769c118124ba7fa8",
+          "expected_reward": 1,
+          "control": "positive",
+          "source_ledger_validation": {
+            "missing_artifact:cell_qc.tsv": 0.0,
+            "missing_table_row:cell_qc.tsv": 0.0,
+            "duplicate_table_row:cell_qc.tsv": 0.0,
+            "changed_table_value:cell_qc.tsv": 0.0,
+            "missing_artifact:feature_qc.tsv": 0.0,
+            "missing_table_row:feature_qc.tsv": 0.0,
+            "duplicate_table_row:feature_qc.tsv": 0.0,
+            "changed_table_value:feature_qc.tsv": 0.0,
+            "missing_artifact:filtered_counts.mtx.gz": 0.0,
+            "changed_matrix_count:filtered_counts.mtx.gz": 0.0,
+            "oracle": 1.0,
+            "row_permutation": 1.0,
+            "empty": 0.0,
+            "missing_id": 0.0,
+            "duplicate_id": 0.0,
+            "retained_every_cell": 0.0,
+            "malformed": 0.0
+          },
+          "reward": 1.0,
+          "passed": true,
+          "exception_info": null,
+          "failed_summary_checks": [],
+          "artifact_checks": {
+            "cell_qc.tsv": {
+              "passed": true,
+              "rows": 1920,
+              "missing": [],
+              "failures": []
+            },
+            "feature_qc.tsv": {
+              "passed": true,
+              "rows": 46170,
+              "missing": [],
+              "failures": []
+            },
+            "filtered_counts.mtx.gz": {
+              "passed": true,
+              "nonzeros": 17332418,
+              "sha256": "f5e8bc5f75ce034eedcc6de388f5f174755f4534f0eb6079ed78edd4e2a77a51"
+            }
+          },
+          "task_file_hashes": {
+            "environment/Dockerfile": "569c846099b763780bda14d6b68bc8e07ece6c7496c4cbcb3aeb67583f127434",
+            "environment/install_environment.py": "4579b40d1aed17372500ed10f243af705c54f087de364b808ca989ec9c210956",
+            "environment/packages.lock.json": "c89452bda066f0b1235bcce92453babbf0c7801ef9cd2bf333e1813bdc972d4a",
+            "instruction.md": "d4cf4d75652c53b1126aab3f59a487c5e45d7dabf90844225928ababd19b1d6f",
+            "setup_files/inputs/cells.tsv": "8f8b2176a1569accc5ed9c03f7e2ce1470f7255f8d5974b1d4d163078a280653",
+            "setup_files/inputs/features.tsv": "79efe29bde9c987bf721ecdbf049897d7b8c88dcafd42317c83f8c2283c96199",
+            "setup_files/inputs/matrix.mtx.gz": "c926b3accc702c40dd871d7dbd133917f7841974db1065cb951b1b13cd5f6769",
+            "setup_files/inputs/query.json": "ef3a7b634fe84a9df7f16fdd4ecd8421adb99bd31fad270d6ffbda4178788758",
+            "solution/oracle.pyz": "b8f512b7ed3baa39b7c68c8912e81015e2bc2e16a73f6360387e63653d06420d",
+            "solution/solve.sh": "d96dd7ae57c4967f4d266d95af686aa1108e5e42a8cb36d09e0a98744ecbeb96",
+            "task.toml": "b02c050d09aa634366d533415c4e309a1c9b1e1813c0fec983d86cd7ff0cc348",
+            "tests/Dockerfile": "5fa0097a20bb226afe4d0dd4ad5bac035642ce760fcd4c106762d5d4eee044dd",
+            "tests/reference.json": "e9ea57770f61db54b4b64447cdad8a192d0c5d0c2820d492769c118124ba7fa8",
+            "tests/test.sh": "0a123d54664bc69887619dd3c54164b49f7ae0e81d7c473dc5239f399ee6dfc4",
+            "tests/verifier.pyz": "02a2f5e61984a4f238b8faf99a8ad0231021b7e45c06e93dec6bc7a591a2c5ba"
+          },
+          "artifact_sha256": {
+            "answer.json": "f61cbcd80fec1109485940bb4b6d9b37d33a4345c7982eab7ea85426b1c78c75",
+            "cell_qc.tsv": "33670399c5785e5a9edba6a7321248deac20eaccef1f2f72f7817bc092937bd6",
+            "feature_qc.tsv": "31eda719b248237312e03a13fe3d573b05dc5c861808bc9786bfc0afc1b6d357",
+            "filtered_counts.mtx.gz": "b60a4ed433fa8e6cf8b4852160ba7396fb0dd3415472032140cde4170b987216",
+            "manifest.json": "5188478e887eeb3fa57ed63ae86b92e88634e16b458d6d8cb3b8d212bcda63b9"
+          },
+          "seconds": {
+            "environment_setup": 5.448033,
+            "agent_setup": 9.6e-05,
+            "agent_execution": 108.220575,
+            "verifier": 78.341068
+          },
+          "started_at": "2026-09-24T08:52:01.416770Z",
+          "finished_at": "2026-09-24T08:55:16.684324Z"
+        },
+        {
+          "task_id": "real-singlecell-read-qc-v1-20260923-00000-changed-count",
+          "recipe": "real-singlecell-read-qc",
+          "repository_indices": [
+            23
+          ],
+          "task_sha256": "dd18fec7d26237f556bfc1fc5d8e17e56fadddce6576451ef86eea196392593e",
+          "contract_sha256": "e9ea57770f61db54b4b64447cdad8a192d0c5d0c2820d492769c118124ba7fa8",
+          "expected_reward": 0,
+          "control": "changed-count-with-correct-summary",
+          "source_ledger_validation": {
+            "missing_artifact:cell_qc.tsv": 0.0,
+            "missing_table_row:cell_qc.tsv": 0.0,
+            "duplicate_table_row:cell_qc.tsv": 0.0,
+            "changed_table_value:cell_qc.tsv": 0.0,
+            "missing_artifact:feature_qc.tsv": 0.0,
+            "missing_table_row:feature_qc.tsv": 0.0,
+            "duplicate_table_row:feature_qc.tsv": 0.0,
+            "changed_table_value:feature_qc.tsv": 0.0,
+            "missing_artifact:filtered_counts.mtx.gz": 0.0,
+            "changed_matrix_count:filtered_counts.mtx.gz": 0.0,
+            "oracle": 1.0,
+            "row_permutation": 1.0,
+            "empty": 0.0,
+            "missing_id": 0.0,
+            "duplicate_id": 0.0,
+            "retained_every_cell": 0.0,
+            "malformed": 0.0
+          },
+          "canonical_task_id": "real-singlecell-read-qc-v1-20260923-00000",
+          "control_source": "Canonical validated oracle artifacts; only the named artifact is corrupted. No model calls.",
+          "reward": 0.0,
+          "passed": true,
+          "exception_info": null,
+          "failed_summary_checks": [],
+          "artifact_checks": {
+            "cell_qc.tsv": {
+              "passed": true,
+              "rows": 1920,
+              "missing": [],
+              "failures": []
+            },
+            "feature_qc.tsv": {
+              "passed": true,
+              "rows": 46170,
+              "missing": [],
+              "failures": []
+            },
+            "filtered_counts.mtx.gz": {
+              "passed": false,
+              "nonzeros": 17332418,
+              "sha256": "13919492b58d3b3ad33917d7011c60371a248630b38fa50d8b82988dc1a09f96"
+            }
+          },
+          "task_file_hashes": {
+            "environment/Dockerfile": "569c846099b763780bda14d6b68bc8e07ece6c7496c4cbcb3aeb67583f127434",
+            "environment/install_environment.py": "4579b40d1aed17372500ed10f243af705c54f087de364b808ca989ec9c210956",
+            "environment/packages.lock.json": "c89452bda066f0b1235bcce92453babbf0c7801ef9cd2bf333e1813bdc972d4a",
+            "instruction.md": "d4cf4d75652c53b1126aab3f59a487c5e45d7dabf90844225928ababd19b1d6f",
+            "setup_files/inputs/cells.tsv": "8f8b2176a1569accc5ed9c03f7e2ce1470f7255f8d5974b1d4d163078a280653",
+            "setup_files/inputs/features.tsv": "79efe29bde9c987bf721ecdbf049897d7b8c88dcafd42317c83f8c2283c96199",
+            "setup_files/inputs/matrix.mtx.gz": "c926b3accc702c40dd871d7dbd133917f7841974db1065cb951b1b13cd5f6769",
+            "setup_files/inputs/query.json": "ef3a7b634fe84a9df7f16fdd4ecd8421adb99bd31fad270d6ffbda4178788758",
+            "solution/control/answer.json": "f61cbcd80fec1109485940bb4b6d9b37d33a4345c7982eab7ea85426b1c78c75",
+            "solution/control/cell_qc.tsv": "33670399c5785e5a9edba6a7321248deac20eaccef1f2f72f7817bc092937bd6",
+            "solution/control/feature_qc.tsv": "31eda719b248237312e03a13fe3d573b05dc5c861808bc9786bfc0afc1b6d357",
+            "solution/control/filtered_counts.mtx.gz": "399dd7ea42b4fe27f6e371b37172c8fd79dc6c46dc45ef384455963ff7584489",
+            "solution/oracle.pyz": "b8f512b7ed3baa39b7c68c8912e81015e2bc2e16a73f6360387e63653d06420d",
+            "solution/solve.sh": "f8e9a73d03980fed4d086fbef22725fd52af0d0ec65a754e0389ba2761303cf7",
+            "task.toml": "b02c050d09aa634366d533415c4e309a1c9b1e1813c0fec983d86cd7ff0cc348",
+            "tests/Dockerfile": "5fa0097a20bb226afe4d0dd4ad5bac035642ce760fcd4c106762d5d4eee044dd",
+            "tests/reference.json": "e9ea57770f61db54b4b64447cdad8a192d0c5d0c2820d492769c118124ba7fa8",
+            "tests/test.sh": "0a123d54664bc69887619dd3c54164b49f7ae0e81d7c473dc5239f399ee6dfc4",
+            "tests/verifier.pyz": "02a2f5e61984a4f238b8faf99a8ad0231021b7e45c06e93dec6bc7a591a2c5ba"
+          },
+          "artifact_sha256": {
+            "answer.json": "f61cbcd80fec1109485940bb4b6d9b37d33a4345c7982eab7ea85426b1c78c75",
+            "cell_qc.tsv": "33670399c5785e5a9edba6a7321248deac20eaccef1f2f72f7817bc092937bd6",
+            "feature_qc.tsv": "31eda719b248237312e03a13fe3d573b05dc5c861808bc9786bfc0afc1b6d357",
+            "filtered_counts.mtx.gz": "399dd7ea42b4fe27f6e371b37172c8fd79dc6c46dc45ef384455963ff7584489",
+            "manifest.json": "5188478e887eeb3fa57ed63ae86b92e88634e16b458d6d8cb3b8d212bcda63b9"
+          },
+          "seconds": {
+            "environment_setup": 1.211751,
+            "agent_setup": 8.7e-05,
+            "agent_execution": 1.138162,
+            "verifier": 78.896288
+          },
+          "started_at": "2026-09-24T08:50:36.943675Z",
+          "finished_at": "2026-09-24T08:52:01.409210Z"
+        },
+        {
+          "task_id": "real-singlecell-read-qc-v1-20260923-00000-missing-feature-row",
+          "recipe": "real-singlecell-read-qc",
+          "repository_indices": [
+            23
+          ],
+          "task_sha256": "dd18fec7d26237f556bfc1fc5d8e17e56fadddce6576451ef86eea196392593e",
+          "contract_sha256": "e9ea57770f61db54b4b64447cdad8a192d0c5d0c2820d492769c118124ba7fa8",
+          "expected_reward": 0,
+          "control": "missing-feature-row-with-correct-summary",
+          "source_ledger_validation": {
+            "missing_artifact:cell_qc.tsv": 0.0,
+            "missing_table_row:cell_qc.tsv": 0.0,
+            "duplicate_table_row:cell_qc.tsv": 0.0,
+            "changed_table_value:cell_qc.tsv": 0.0,
+            "missing_artifact:feature_qc.tsv": 0.0,
+            "missing_table_row:feature_qc.tsv": 0.0,
+            "duplicate_table_row:feature_qc.tsv": 0.0,
+            "changed_table_value:feature_qc.tsv": 0.0,
+            "missing_artifact:filtered_counts.mtx.gz": 0.0,
+            "changed_matrix_count:filtered_counts.mtx.gz": 0.0,
+            "oracle": 1.0,
+            "row_permutation": 1.0,
+            "empty": 0.0,
+            "missing_id": 0.0,
+            "duplicate_id": 0.0,
+            "retained_every_cell": 0.0,
+            "malformed": 0.0
+          },
+          "canonical_task_id": "real-singlecell-read-qc-v1-20260923-00000",
+          "control_source": "Canonical validated oracle artifacts; only the named artifact is corrupted. No model calls.",
+          "reward": 0.0,
+          "passed": true,
+          "exception_info": null,
+          "failed_summary_checks": [],
+          "artifact_checks": {
+            "cell_qc.tsv": {
+              "passed": true,
+              "rows": 1920,
+              "missing": [],
+              "failures": []
+            },
+            "feature_qc.tsv": {
+              "passed": false,
+              "rows": 46169,
+              "missing": [
+                "ERCC-00171"
+              ],
+              "failures": []
+            }
+          },
+          "task_file_hashes": {
+            "environment/Dockerfile": "569c846099b763780bda14d6b68bc8e07ece6c7496c4cbcb3aeb67583f127434",
+            "environment/install_environment.py": "4579b40d1aed17372500ed10f243af705c54f087de364b808ca989ec9c210956",
+            "environment/packages.lock.json": "c89452bda066f0b1235bcce92453babbf0c7801ef9cd2bf333e1813bdc972d4a",
+            "instruction.md": "d4cf4d75652c53b1126aab3f59a487c5e45d7dabf90844225928ababd19b1d6f",
+            "setup_files/inputs/cells.tsv": "8f8b2176a1569accc5ed9c03f7e2ce1470f7255f8d5974b1d4d163078a280653",
+            "setup_files/inputs/features.tsv": "79efe29bde9c987bf721ecdbf049897d7b8c88dcafd42317c83f8c2283c96199",
+            "setup_files/inputs/matrix.mtx.gz": "c926b3accc702c40dd871d7dbd133917f7841974db1065cb951b1b13cd5f6769",
+            "setup_files/inputs/query.json": "ef3a7b634fe84a9df7f16fdd4ecd8421adb99bd31fad270d6ffbda4178788758",
+            "solution/control/answer.json": "f61cbcd80fec1109485940bb4b6d9b37d33a4345c7982eab7ea85426b1c78c75",
+            "solution/control/cell_qc.tsv": "33670399c5785e5a9edba6a7321248deac20eaccef1f2f72f7817bc092937bd6",
+            "solution/control/feature_qc.tsv": "0a6bbd2222f5fff44a78211d14041d968bf32330b427e681e8191f043de3e20b",
+            "solution/control/filtered_counts.mtx.gz": "b60a4ed433fa8e6cf8b4852160ba7396fb0dd3415472032140cde4170b987216",
+            "solution/oracle.pyz": "b8f512b7ed3baa39b7c68c8912e81015e2bc2e16a73f6360387e63653d06420d",
+            "solution/solve.sh": "f8e9a73d03980fed4d086fbef22725fd52af0d0ec65a754e0389ba2761303cf7",
+            "task.toml": "b02c050d09aa634366d533415c4e309a1c9b1e1813c0fec983d86cd7ff0cc348",
+            "tests/Dockerfile": "5fa0097a20bb226afe4d0dd4ad5bac035642ce760fcd4c106762d5d4eee044dd",
+            "tests/reference.json": "e9ea57770f61db54b4b64447cdad8a192d0c5d0c2820d492769c118124ba7fa8",
+            "tests/test.sh": "0a123d54664bc69887619dd3c54164b49f7ae0e81d7c473dc5239f399ee6dfc4",
+            "tests/verifier.pyz": "02a2f5e61984a4f238b8faf99a8ad0231021b7e45c06e93dec6bc7a591a2c5ba"
+          },
+          "artifact_sha256": {
+            "answer.json": "f61cbcd80fec1109485940bb4b6d9b37d33a4345c7982eab7ea85426b1c78c75",
+            "cell_qc.tsv": "33670399c5785e5a9edba6a7321248deac20eaccef1f2f72f7817bc092937bd6",
+            "feature_qc.tsv": "0a6bbd2222f5fff44a78211d14041d968bf32330b427e681e8191f043de3e20b",
+            "filtered_counts.mtx.gz": "b60a4ed433fa8e6cf8b4852160ba7396fb0dd3415472032140cde4170b987216",
+            "manifest.json": "5188478e887eeb3fa57ed63ae86b92e88634e16b458d6d8cb3b8d212bcda63b9"
+          },
+          "seconds": {
+            "environment_setup": 35.884023,
+            "agent_setup": 8.2e-05,
+            "agent_execution": 1.159743,
+            "verifier": 29.148192
+          },
+          "started_at": "2026-09-24T08:49:27.216250Z",
+          "finished_at": "2026-09-24T08:50:36.936367Z"
+        },
+        {
+          "task_id": "real-proteome-domain-search-v1-20260923-00000",
+          "recipe": "real-proteome-domain-search",
+          "repository_indices": [
+            11
+          ],
+          "task_sha256": "7c08c2f49c8bd5209ba88b7cc73f952423e6ba302b7b8facfdc964af470bb1c9",
+          "contract_sha256": "aac22549955bec1eb2e28da2a0aa81809858fd6f16f3ac4442786297a2f02046",
+          "expected_reward": 1,
+          "control": "positive",
+          "source_ledger_validation": {
+            "missing_artifact:domains.tsv": 0.0,
+            "missing_table_row:domains.tsv": 0.0,
+            "duplicate_table_row:domains.tsv": 0.0,
+            "changed_table_value:domains.tsv": 0.0,
+            "missing_artifact:proteins.tsv": 0.0,
+            "missing_table_row:proteins.tsv": 0.0,
+            "duplicate_table_row:proteins.tsv": 0.0,
+            "changed_table_value:proteins.tsv": 0.0,
+            "oracle": 1.0,
+            "row_permutation": 1.0,
+            "empty": 0.0,
+            "missing_id": 0.0,
+            "duplicate_id": 0.0,
+            "searched_only_matches": 0.0,
+            "malformed": 0.0
+          },
+          "reward": 1.0,
+          "passed": true,
+          "exception_info": null,
+          "failed_summary_checks": [],
+          "artifact_checks": {
+            "domains.tsv": {
+              "passed": true,
+              "rows": 6,
+              "missing": [],
+              "failures": []
+            },
+            "proteins.tsv": {
+              "passed": true,
+              "rows": 4403,
+              "missing": [],
+              "failures": []
+            }
+          },
+          "task_file_hashes": {
+            "environment/Dockerfile": "569c846099b763780bda14d6b68bc8e07ece6c7496c4cbcb3aeb67583f127434",
+            "environment/install_environment.py": "4579b40d1aed17372500ed10f243af705c54f087de364b808ca989ec9c210956",
+            "environment/packages.lock.json": "a71b166938087d7b0c6c4fc0a158b8ff35f6b62d122947ec45f983cd277fdc7e",
+            "instruction.md": "19b216b65ee78dad86cd870aeff5c26cf93a7c9eeca9f8cdb2446c5f872b3a55",
+            "setup_files/inputs/models.hmm": "bae24a07fb9ed4ed985b6a0b4d133515cca2bd49bdc154cd6291c5751f3b649f",
+            "setup_files/inputs/proteins.fa": "a8052a607a98d2444c9d5dd685bd1370150df8c5570c3116811544bbf3d093a2",
+            "setup_files/inputs/proteins.tsv": "b0ef6b7faef4b3b06cd96f844710dc193c3ab748ff3c3bdd0b5a6e0937ef1590",
+            "setup_files/inputs/query.json": "73f86dfa99f20d648a166cc98c1bec06da61dd2bfec02e47efcf26b34e74ee83",
+            "solution/oracle.pyz": "b8f512b7ed3baa39b7c68c8912e81015e2bc2e16a73f6360387e63653d06420d",
+            "solution/solve.sh": "5172eaa35c54a0d4cbc5acedf448b70676a7c59194cacd64e11a5fa3ef6e83c5",
+            "task.toml": "d1a72e51d403864e0fa6c3f7107dc472bbef2088a39a494f1e1e43345555e953",
+            "tests/Dockerfile": "5fa0097a20bb226afe4d0dd4ad5bac035642ce760fcd4c106762d5d4eee044dd",
+            "tests/reference.json": "aac22549955bec1eb2e28da2a0aa81809858fd6f16f3ac4442786297a2f02046",
+            "tests/test.sh": "0a123d54664bc69887619dd3c54164b49f7ae0e81d7c473dc5239f399ee6dfc4",
+            "tests/verifier.pyz": "02a2f5e61984a4f238b8faf99a8ad0231021b7e45c06e93dec6bc7a591a2c5ba"
+          },
+          "artifact_sha256": {
+            "answer.json": "c98f9f63b1100296fc0c62fb26f3fe6b83a348b6833170b6ce0fa84543f19365",
+            "domains.tsv": "2f7e9cac7167649534dc862cd3cce402f7669d54827564f6823dda65cc1480eb",
+            "manifest.json": "04f1d710ba68a8db2e47985a84f50e734ee1dff5554285514e4a5a8b66b7e799",
+            "proteins.tsv": "5f45c4022bbe007e4773b374cb9adf876482bf57264fbe72db87592c4b06cb15"
+          },
+          "seconds": {
+            "environment_setup": 1.27095,
+            "agent_setup": 7.3e-05,
+            "agent_execution": 0.801332,
+            "verifier": 9.365352
+          },
+          "started_at": "2026-09-24T08:49:14.268507Z",
+          "finished_at": "2026-09-24T08:49:27.209659Z"
+        },
+        {
+          "task_id": "real-proteome-domain-search-v1-20260923-00000-changed-domain-sequence",
+          "recipe": "real-proteome-domain-search",
+          "repository_indices": [
+            11
+          ],
+          "task_sha256": "7c08c2f49c8bd5209ba88b7cc73f952423e6ba302b7b8facfdc964af470bb1c9",
+          "contract_sha256": "aac22549955bec1eb2e28da2a0aa81809858fd6f16f3ac4442786297a2f02046",
+          "expected_reward": 0,
+          "control": "changed-domain-sequence-with-correct-summary",
+          "source_ledger_validation": {
+            "missing_artifact:domains.tsv": 0.0,
+            "missing_table_row:domains.tsv": 0.0,
+            "duplicate_table_row:domains.tsv": 0.0,
+            "changed_table_value:domains.tsv": 0.0,
+            "missing_artifact:proteins.tsv": 0.0,
+            "missing_table_row:proteins.tsv": 0.0,
+            "duplicate_table_row:proteins.tsv": 0.0,
+            "changed_table_value:proteins.tsv": 0.0,
+            "oracle": 1.0,
+            "row_permutation": 1.0,
+            "empty": 0.0,
+            "missing_id": 0.0,
+            "duplicate_id": 0.0,
+            "searched_only_matches": 0.0,
+            "malformed": 0.0
+          },
+          "canonical_task_id": "real-proteome-domain-search-v1-20260923-00000",
+          "control_source": "Canonical validated oracle artifacts; only the named artifact is corrupted. No model calls.",
+          "reward": 0.0,
+          "passed": true,
+          "exception_info": null,
+          "failed_summary_checks": [],
+          "artifact_checks": {
+            "domains.tsv": {
+              "passed": false,
+              "rows": 6,
+              "missing": [],
+              "failures": [
+                {
+                  "id": "PF00042.29:P24232:1",
+                  "field": "sequence"
+                }
+              ]
+            },
+            "proteins.tsv": {
+              "passed": true,
+              "rows": 4403,
+              "missing": [],
+              "failures": []
+            }
+          },
+          "task_file_hashes": {
+            "environment/Dockerfile": "569c846099b763780bda14d6b68bc8e07ece6c7496c4cbcb3aeb67583f127434",
+            "environment/install_environment.py": "4579b40d1aed17372500ed10f243af705c54f087de364b808ca989ec9c210956",
+            "environment/packages.lock.json": "a71b166938087d7b0c6c4fc0a158b8ff35f6b62d122947ec45f983cd277fdc7e",
+            "instruction.md": "19b216b65ee78dad86cd870aeff5c26cf93a7c9eeca9f8cdb2446c5f872b3a55",
+            "setup_files/inputs/models.hmm": "bae24a07fb9ed4ed985b6a0b4d133515cca2bd49bdc154cd6291c5751f3b649f",
+            "setup_files/inputs/proteins.fa": "a8052a607a98d2444c9d5dd685bd1370150df8c5570c3116811544bbf3d093a2",
+            "setup_files/inputs/proteins.tsv": "b0ef6b7faef4b3b06cd96f844710dc193c3ab748ff3c3bdd0b5a6e0937ef1590",
+            "setup_files/inputs/query.json": "73f86dfa99f20d648a166cc98c1bec06da61dd2bfec02e47efcf26b34e74ee83",
+            "solution/control/answer.json": "c98f9f63b1100296fc0c62fb26f3fe6b83a348b6833170b6ce0fa84543f19365",
+            "solution/control/domains.tsv": "a9220ba84217aea17b26486f5788ef270537f494c755bfff8600dcd8b4905663",
+            "solution/control/proteins.tsv": "5f45c4022bbe007e4773b374cb9adf876482bf57264fbe72db87592c4b06cb15",
+            "solution/oracle.pyz": "b8f512b7ed3baa39b7c68c8912e81015e2bc2e16a73f6360387e63653d06420d",
+            "solution/solve.sh": "f8e9a73d03980fed4d086fbef22725fd52af0d0ec65a754e0389ba2761303cf7",
+            "task.toml": "d1a72e51d403864e0fa6c3f7107dc472bbef2088a39a494f1e1e43345555e953",
+            "tests/Dockerfile": "5fa0097a20bb226afe4d0dd4ad5bac035642ce760fcd4c106762d5d4eee044dd",
+            "tests/reference.json": "aac22549955bec1eb2e28da2a0aa81809858fd6f16f3ac4442786297a2f02046",
+            "tests/test.sh": "0a123d54664bc69887619dd3c54164b49f7ae0e81d7c473dc5239f399ee6dfc4",
+            "tests/verifier.pyz": "02a2f5e61984a4f238b8faf99a8ad0231021b7e45c06e93dec6bc7a591a2c5ba"
+          },
+          "artifact_sha256": {
+            "answer.json": "c98f9f63b1100296fc0c62fb26f3fe6b83a348b6833170b6ce0fa84543f19365",
+            "domains.tsv": "a9220ba84217aea17b26486f5788ef270537f494c755bfff8600dcd8b4905663",
+            "manifest.json": "04f1d710ba68a8db2e47985a84f50e734ee1dff5554285514e4a5a8b66b7e799",
+            "proteins.tsv": "5f45c4022bbe007e4773b374cb9adf876482bf57264fbe72db87592c4b06cb15"
+          },
+          "seconds": {
+            "environment_setup": 1.560458,
+            "agent_setup": 8.4e-05,
+            "agent_execution": 0.546764,
+            "verifier": 10.186635
+          },
+          "started_at": "2026-09-24T08:49:00.449339Z",
+          "finished_at": "2026-09-24T08:49:14.261819Z"
+        },
+        {
+          "task_id": "real-proteome-domain-search-v1-20260923-00000-false-zero-hit-coverage",
+          "recipe": "real-proteome-domain-search",
+          "repository_indices": [
+            11
+          ],
+          "task_sha256": "7c08c2f49c8bd5209ba88b7cc73f952423e6ba302b7b8facfdc964af470bb1c9",
+          "contract_sha256": "aac22549955bec1eb2e28da2a0aa81809858fd6f16f3ac4442786297a2f02046",
+          "expected_reward": 0,
+          "control": "false-zero-hit-coverage-with-correct-summary",
+          "source_ledger_validation": {
+            "missing_artifact:domains.tsv": 0.0,
+            "missing_table_row:domains.tsv": 0.0,
+            "duplicate_table_row:domains.tsv": 0.0,
+            "changed_table_value:domains.tsv": 0.0,
+            "missing_artifact:proteins.tsv": 0.0,
+            "missing_table_row:proteins.tsv": 0.0,
+            "duplicate_table_row:proteins.tsv": 0.0,
+            "changed_table_value:proteins.tsv": 0.0,
+            "oracle": 1.0,
+            "row_permutation": 1.0,
+            "empty": 0.0,
+            "missing_id": 0.0,
+            "duplicate_id": 0.0,
+            "searched_only_matches": 0.0,
+            "malformed": 0.0
+          },
+          "canonical_task_id": "real-proteome-domain-search-v1-20260923-00000",
+          "control_source": "Canonical validated oracle artifacts; only the named artifact is corrupted. No model calls.",
+          "reward": 0.0,
+          "passed": true,
+          "exception_info": null,
+          "failed_summary_checks": [],
+          "artifact_checks": {
+            "domains.tsv": {
+              "passed": true,
+              "rows": 6,
+              "missing": [],
+              "failures": []
+            },
+            "proteins.tsv": {
+              "passed": false,
+              "rows": 4403,
+              "missing": [],
+              "failures": [
+                {
+                  "id": "A0A385XJ53",
+                  "field": "covered_residues"
+                }
+              ]
+            }
+          },
+          "task_file_hashes": {
+            "environment/Dockerfile": "569c846099b763780bda14d6b68bc8e07ece6c7496c4cbcb3aeb67583f127434",
+            "environment/install_environment.py": "4579b40d1aed17372500ed10f243af705c54f087de364b808ca989ec9c210956",
+            "environment/packages.lock.json": "a71b166938087d7b0c6c4fc0a158b8ff35f6b62d122947ec45f983cd277fdc7e",
+            "instruction.md": "19b216b65ee78dad86cd870aeff5c26cf93a7c9eeca9f8cdb2446c5f872b3a55",
+            "setup_files/inputs/models.hmm": "bae24a07fb9ed4ed985b6a0b4d133515cca2bd49bdc154cd6291c5751f3b649f",
+            "setup_files/inputs/proteins.fa": "a8052a607a98d2444c9d5dd685bd1370150df8c5570c3116811544bbf3d093a2",
+            "setup_files/inputs/proteins.tsv": "b0ef6b7faef4b3b06cd96f844710dc193c3ab748ff3c3bdd0b5a6e0937ef1590",
+            "setup_files/inputs/query.json": "73f86dfa99f20d648a166cc98c1bec06da61dd2bfec02e47efcf26b34e74ee83",
+            "solution/control/answer.json": "c98f9f63b1100296fc0c62fb26f3fe6b83a348b6833170b6ce0fa84543f19365",
+            "solution/control/domains.tsv": "2f7e9cac7167649534dc862cd3cce402f7669d54827564f6823dda65cc1480eb",
+            "solution/control/proteins.tsv": "b6d0a92a698893c1eb952ada5cf367bd70ffc0fbea05760e2ef6b83772485c93",
+            "solution/oracle.pyz": "b8f512b7ed3baa39b7c68c8912e81015e2bc2e16a73f6360387e63653d06420d",
+            "solution/solve.sh": "f8e9a73d03980fed4d086fbef22725fd52af0d0ec65a754e0389ba2761303cf7",
+            "task.toml": "d1a72e51d403864e0fa6c3f7107dc472bbef2088a39a494f1e1e43345555e953",
+            "tests/Dockerfile": "5fa0097a20bb226afe4d0dd4ad5bac035642ce760fcd4c106762d5d4eee044dd",
+            "tests/reference.json": "aac22549955bec1eb2e28da2a0aa81809858fd6f16f3ac4442786297a2f02046",
+            "tests/test.sh": "0a123d54664bc69887619dd3c54164b49f7ae0e81d7c473dc5239f399ee6dfc4",
+            "tests/verifier.pyz": "02a2f5e61984a4f238b8faf99a8ad0231021b7e45c06e93dec6bc7a591a2c5ba"
+          },
+          "artifact_sha256": {
+            "answer.json": "c98f9f63b1100296fc0c62fb26f3fe6b83a348b6833170b6ce0fa84543f19365",
+            "domains.tsv": "2f7e9cac7167649534dc862cd3cce402f7669d54827564f6823dda65cc1480eb",
+            "manifest.json": "04f1d710ba68a8db2e47985a84f50e734ee1dff5554285514e4a5a8b66b7e799",
+            "proteins.tsv": "b6d0a92a698893c1eb952ada5cf367bd70ffc0fbea05760e2ef6b83772485c93"
+          },
+          "seconds": {
+            "environment_setup": 19.109122,
+            "agent_setup": 0.0001,
+            "agent_execution": 0.575106,
+            "verifier": 36.224301
+          },
+          "started_at": "2026-09-24T08:48:02.490446Z",
+          "finished_at": "2026-09-24T08:49:00.442078Z"
+        }
+      ],
+      "limitations": "Two fresh oracle executions and four isolated artifact-corruption controls with identical correct summaries. No model calls, unchanged biological inputs and tolerances. Does not establish scientific approval, biological source independence, complete ID workflow coverage or training readiness."
     }
   ]
 }

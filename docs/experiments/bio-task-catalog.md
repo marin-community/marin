@@ -220,8 +220,10 @@ retains exact model/proteome hashes and the serial package build. The reference
 and validation each took under one second on a reserved TRC CPU. Only the supplied
 profiles are searched; this is not complete functional annotation. Both phases
 passed before the parent job failed during unrelated single-cell packaging due
-to a missing SciPy import dependency. That failure is preserved. Full-corpus package checks now pass;
-Harbor checks remain pending.
+to a missing SciPy import dependency. That failure is preserved. Full-corpus package checks now pass.
+A fresh Harbor oracle completed in 0.8 seconds; separate verifiers accepted its
+complete outputs and rejected changed domain sequence and false zero-hit coverage
+with identical correct summaries.
 
 The full observed GSE81682 QC workflow supplies 1,920 cells and 46,170 features.
 Actual Scanpy and an independent streaming oracle agree on both complete QC tables
@@ -233,8 +235,14 @@ pins inputs, packages, artifacts and resources. This checks cell/gene filtering
 and identity-preserving sparse export. Normalization, annotation, clustering and
 donor-level comparisons remain separate workflow gaps. The one-recipe package build
 passed its oracle and all 15 negative controls in 591 seconds with 971 MiB peak RSS.
-Harbor execution remains pending; the inspected source does not establish exact
-benchmark independence.
+The fresh Harbor oracle completed in 108.2 seconds; the separate verifier took
+78.3 seconds. Changed-count and missing-feature-row controls received zero with
+identical correct summaries. All six single-cell/domain cases passed. The wrapper
+failed after observing a sandbox still being deleted; an independent paginated
+check found none remaining. The
+[container evidence](../../experiments/post_training/bio_tasks/container_validation.json)
+preserves both outcomes and the durable regional archive. The inspected biological
+source does not establish exact benchmark independence.
 
 The [agentic source inventory](../../experiments/post_training/bio_tasks/benchmark_sources.json)
 records all 48 benchmark/protocol rows from the spreadsheet's Agentic (Harbor) tab:
