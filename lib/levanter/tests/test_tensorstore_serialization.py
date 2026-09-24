@@ -27,6 +27,7 @@ from levanter.checkpoint import load_checkpoint, save_checkpoint
 from levanter.checkpoint_manifest import CHECKPOINT_FORMAT_VERSION, manifest_path, read_manifest
 from levanter.models.gpt2 import Gpt2Mlp
 from levanter.tensorstore_serialization import (
+    DtypeSource,
     TensorStoreReadConfig,
     TensorStoreWriteConfig,
     _capped_chunk_shape,
@@ -41,6 +42,44 @@ from levanter.testing import eight_device_checkpoints
 from levanter.testing.eight_device_checkpoints import run_on_eight_devices
 
 _ASYNC_TEST_TIMEOUT = 5
+
+
+@pytest.mark.parametrize("checkpoint_format", ["ocdbt", "legacy"])
+def test_tensorstore_checkpoint_can_restore_as_exemplar_dtype(checkpoint_format: str):
+    with use_test_mesh():
+        source = jnp.array([-1000.125, -1.0001, -0.0, 0.33333334, 1.0001, 1000.125], dtype=jnp.float32)
+        expected = source.astype(jnp.bfloat16)
+        exemplar = jax.ShapeDtypeStruct(source.shape, jnp.bfloat16)
+
+        with TemporaryDirectory() as tmpdir:
+            if checkpoint_format == "ocdbt":
+                tree_serialize_leaves_tensorstore(tmpdir, {"x": source})
+            else:
+                manager = array_ser.GlobalAsyncCheckpointManager()
+                manager.serialize_with_paths([source], [f"{tmpdir}/x"])
+                manager.wait_until_finished()
+            restored_from_checkpoint_dtype = tree_deserialize_leaves_tensorstore(tmpdir, {"x": exemplar})["x"]
+            restored_as_exemplar_dtype = tree_deserialize_leaves_tensorstore(
+                tmpdir,
+                {"x": exemplar},
+                dtype_source=DtypeSource.EXEMPLAR,
+            )["x"]
+
+        assert restored_from_checkpoint_dtype.dtype == source.dtype
+        np.testing.assert_array_equal(np.asarray(restored_from_checkpoint_dtype), np.asarray(source))
+        assert restored_as_exemplar_dtype.dtype == jnp.bfloat16
+        np.testing.assert_array_equal(np.asarray(restored_as_exemplar_dtype), np.asarray(expected))
+
+
+def test_exemplar_dtype_restore_rejects_cross_region_checkpoint(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(tensorstore_serialization, "is_cross_region_url", lambda _: True)
+
+    with pytest.raises(ValueError, match="cannot account for source bytes"):
+        tree_deserialize_leaves_tensorstore(
+            "gs://remote-bucket/checkpoint",
+            {"x": jax.ShapeDtypeStruct((1,), jnp.bfloat16)},
+            dtype_source=DtypeSource.EXEMPLAR,
+        )
 
 
 def test_build_kvstore_spec_normalizes_file_uri(tmp_path):
