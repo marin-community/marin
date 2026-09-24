@@ -58,7 +58,6 @@ class _PreparedDocument:
     index: int
     chars: int
     ngrams: np.ndarray
-    text: str
 
 
 @dataclass(frozen=True)
@@ -74,12 +73,12 @@ class Removal:
 
 @dataclass(frozen=True)
 class CandidateDuplicate:
-    """Scores for one possible member and representative pair."""
+    """One possible duplicate pair with its prepared n-gram hashes."""
 
     member_index: int
     representative_index: int
-    containment: float
-    jaccard: float
+    member_ngrams: np.ndarray
+    representative_ngrams: np.ndarray
 
 
 def ngram_hashes(text: str, ngram_size: int) -> np.ndarray:
@@ -109,7 +108,6 @@ def _prepare(documents: Sequence[str], params: ClusterDedupParams) -> list[_Prep
                 index=index,
                 chars=len(document),
                 ngrams=ngram_hashes(document, params.ngram_size),
-                text=document,
             )
         )
     return prepared
@@ -210,7 +208,7 @@ def find_candidate_duplicates(
     documents: Sequence[str],
     params: ClusterDedupParams,
 ) -> Iterator[tuple[CandidateDuplicate, ...]]:
-    """Find scored candidates for each member in comparison order.
+    """Find possible representative pairs for each member.
 
     Representatives have at least as many characters as their members.
     Input order resolves equal-length processing ties. Indexed candidates use
@@ -221,9 +219,8 @@ def find_candidate_duplicates(
         params: Duplicate-rule thresholds and work bounds.
 
     Yields:
-        One tuple for each member that has possible representatives. A tuple
-        includes scores below the containment threshold so the resolver can
-        calculate the comparison count.
+        One tuple for each member that has possible representatives. Each tuple
+        has the representatives in comparison order.
     """
     prepared = _prepare(documents, params)
     order = sorted(range(len(prepared)), key=lambda index: (-prepared[index].chars, index))
@@ -240,18 +237,15 @@ def find_candidate_duplicates(
             if ngram_index is None
             else _index_candidates(member_prepared, ngram_index, rank, params).tolist()
         )
-        candidate_duplicates = []
+        candidate_duplicates: list[CandidateDuplicate] = []
         for representative in candidates:
             other = prepared[representative]
-            shared = _overlap(member_prepared.ngrams, other.ngrams)
-            containment = shared / member_prepared.ngrams.size
-            union = member_prepared.ngrams.size + other.ngrams.size - shared
             candidate_duplicates.append(
                 CandidateDuplicate(
                     member_index=member,
                     representative_index=representative,
-                    containment=containment,
-                    jaccard=shared / union if union else 1.0,
+                    member_ngrams=member_prepared.ngrams,
+                    representative_ngrams=other.ngrams,
                 )
             )
         if candidate_duplicates:
@@ -277,21 +271,40 @@ def resolve_duplicate_clusters(
     removed = np.zeros(len(documents), dtype=bool)
     removals: list[Removal] = []
     token_cache: dict[int, frozenset[str]] = {}
+    order = sorted(range(len(documents)), key=lambda index: (-len(documents[index]), index))
+    rank = np.empty(len(documents), dtype=np.int64)
+    rank[order] = np.arange(len(order))
+    previous_member_rank = -1
     for candidates in candidate_groups:
+        if not candidates:
+            raise ValueError("Candidate groups must not be empty")
+        member_index = candidates[0].member_index
+        member_rank = rank[member_index]
+        if member_rank <= previous_member_rank:
+            raise ValueError("Candidate groups must follow member processing order")
+        previous_member_rank = member_rank
+
         comparisons = 0
         for candidate in candidates:
+            if candidate.member_index != member_index:
+                raise ValueError("A candidate group must contain one member")
+            if rank[candidate.representative_index] >= member_rank:
+                raise ValueError("A representative must occur before its member")
             if removed[candidate.representative_index]:
                 continue
             comparisons += 1
-            if candidate.containment < params.minimum_containment:
+            shared = _overlap(candidate.member_ngrams, candidate.representative_ngrams)
+            containment = shared / candidate.member_ngrams.size
+            if containment < params.minimum_containment:
                 continue
+            union = candidate.member_ngrams.size + candidate.representative_ngrams.size - shared
             removed[candidate.member_index] = True
             removals.append(
                 Removal(
                     member_index=candidate.member_index,
                     representative_index=candidate.representative_index,
-                    containment=candidate.containment,
-                    jaccard=candidate.jaccard,
+                    containment=containment,
+                    jaccard=shared / union if union else 1.0,
                     novel_tokens=_novel_token_count(
                         candidate.member_index,
                         candidate.representative_index,

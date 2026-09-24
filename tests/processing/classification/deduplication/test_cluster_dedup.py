@@ -11,6 +11,7 @@ from marin.processing.classification.deduplication.cluster_dedup import (
     ClusterDedupParams,
     Removal,
     find_candidate_duplicates,
+    ngram_hashes,
     resolve_duplicate_clusters,
 )
 
@@ -217,19 +218,36 @@ def test_production_candidate_cap_applies_before_removed_representatives_are_exc
 
 
 def test_resolver_uses_external_candidates_and_skips_removed_representatives():
-    documents = [ORIGINAL, SHORTER_COPY, EXCERPT]
+    documents = [ORIGINAL, SHORTER_COPY, UNRELATED, EXCERPT]
+    ngrams = [ngram_hashes(document, 3) for document in documents]
     candidate_groups = [
         (
             CandidateDuplicate(
                 member_index=1,
                 representative_index=0,
-                containment=26 / 29,
-                jaccard=26 / 32,
+                member_ngrams=ngrams[1],
+                representative_ngrams=ngrams[0],
             ),
         ),
         (
-            CandidateDuplicate(member_index=2, representative_index=1, containment=1.0, jaccard=14 / 29),
-            CandidateDuplicate(member_index=2, representative_index=0, containment=1.0, jaccard=14 / 29),
+            CandidateDuplicate(
+                member_index=3,
+                representative_index=1,
+                member_ngrams=ngrams[3],
+                representative_ngrams=ngrams[1],
+            ),
+            CandidateDuplicate(
+                member_index=3,
+                representative_index=2,
+                member_ngrams=ngrams[3],
+                representative_ngrams=ngrams[2],
+            ),
+            CandidateDuplicate(
+                member_index=3,
+                representative_index=0,
+                member_ngrams=ngrams[3],
+                representative_ngrams=ngrams[0],
+            ),
         ),
     ]
 
@@ -245,12 +263,12 @@ def test_resolver_uses_external_candidates_and_skips_removed_representatives():
             comparisons=1,
         ),
         Removal(
-            member_index=2,
+            member_index=3,
             representative_index=0,
             containment=1.0,
             jaccard=14 / 29,
             novel_tokens=0,
-            comparisons=1,
+            comparisons=2,
         ),
     ]
 
