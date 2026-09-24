@@ -569,7 +569,20 @@ def regenerate_generated_pins(dependencies: tuple[LockedDependency, ...], *, che
     )
 
 
-def _install_gpu_manifest(manifest_path: Path, manifest: dict, rendered: str, *, kind: str) -> None:
+def _gpu_artifact_identity(release: VllmGpuRelease) -> tuple[str, tuple[tuple[str, str], ...]]:
+    """Identify the source and wheel bytes that crossed the GPU gates."""
+    wheels = tuple(sorted((wheel.architecture, wheel.sha256) for wheel in release.wheels))
+    return release.source_commit, wheels
+
+
+def _install_gpu_manifest(
+    manifest_path: Path,
+    manifest: dict,
+    rendered: str,
+    *,
+    kind: str,
+    expected_release: VllmGpuRelease | None = None,
+) -> None:
     """Validate and install rendered gpu.toml, then regenerate external_dependencies.py.
 
     ``manifest_path`` is a ``marin-vllm-gpu-manifest.json`` downloaded from the fork release;
@@ -582,7 +595,9 @@ def _install_gpu_manifest(manifest_path: Path, manifest: dict, rendered: str, *,
         handle.write(rendered)
         staging = Path(handle.name)
     try:
-        load_vllm_gpu_release(staging)
+        release = load_vllm_gpu_release(staging)
+        if expected_release is not None and _gpu_artifact_identity(release) != _gpu_artifact_identity(expected_release):
+            raise ValueError("promoted release does not match the staged candidate source and wheel bytes")
         staging.replace(VLLM_GPU_RELEASE_CONFIG)
     finally:
         staging.unlink(missing_ok=True)
@@ -592,9 +607,12 @@ def _install_gpu_manifest(manifest_path: Path, manifest: dict, rendered: str, *,
 
 
 def promote_gpu_release(manifest_path: Path) -> None:
+    candidate = load_vllm_gpu_release(VLLM_GPU_RELEASE_CONFIG)
+    if not candidate.release_tag.startswith(GPU_STAGED_CANDIDATE_TAG_PREFIX):
+        raise ValueError("current vLLM GPU pin is not a staged candidate")
     manifest = json.loads(manifest_path.read_text())
     rendered = render_gpu_release_toml(manifest)
-    _install_gpu_manifest(manifest_path, manifest, rendered, kind="release")
+    _install_gpu_manifest(manifest_path, manifest, rendered, kind="release", expected_release=candidate)
 
 
 def stage_gpu_candidate(manifest_path: Path) -> None:
