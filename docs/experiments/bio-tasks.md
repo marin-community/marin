@@ -128,7 +128,7 @@ generation immediately and leaves the manifest marked `incomplete`.
 Serve the output directory with `python -m http.server 8757 --directory /tmp/bio-tasks-example`
 and open `http://localhost:8757/`. The index groups tasks by recipe, with text search, domain filtering,
 format/skill labels, a data-origin filter (real data selected initially), and a separate
-50-repository execution-coverage table. A second page tracks 365 provisional ID task identifiers and 90 held-out OOD
+50-repository execution-coverage table. A second page tracks 428 provisional ID task identifiers and 90 held-out OOD
 BioMysteryBench identifiers, with filters for distribution, benchmark and coverage status, recipe examples, explicit gaps and
 local reference-check runtimes. Task pages show exact instructions, bounded input previews, expected
 outputs, negative controls, metadata, and verifier code. These pages contain answers
@@ -144,6 +144,8 @@ and must remain outside solver environments. The bundle contains:
 - `source_inventory.json`: all 50 repository assessments and original adoption metadata.
 - `data_sources.json`: biological accessions, source licenses, content hashes and transformations.
 - `benchmark_coverage.json` and `benchmark-coverage.html`: pinned ID/OOD task inventory, mapping gaps and example evidence.
+- `benchmark_tasks/`: per-benchmark task records and workflow-pattern indexes, with public versus advertised counts.
+- `benchmark_sources.json` and `benchmark-sources.html`: all 48 agentic benchmark/protocol rows, provisional ID/OOD policy and source-inspection status.
 - `native_validation.json` and `native_validation_runs/`: indexed, checksum-pinned package execution evidence.
 - `repository_coverage.json`: explicit recipe mappings and CLI/API execution evidence status.
 

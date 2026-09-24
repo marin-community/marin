@@ -201,12 +201,37 @@ package checks measure different things from workflow coverage. The following
 assessment uses public benchmark descriptions and the program's prior source
 inspection; it is a qualitative gap analysis, not a benchmark coverage score.
 
-The [task-level registry](../../experiments/post_training/bio_tasks/benchmark_coverage.json)
-retains 365 provisional ID identifiers at pinned dataset revisions: 205 BixBench,
-100 CompBioBench, 50 BiomniBench-DA and 10 BioAgent. Twenty-three have manually assessed
-component mappings and 342 are unmapped. The 90 BioMysteryBench identifiers are
-tracked separately as OOD; their task formulations remain excluded from training authoring. None is marked workflow-validated.
-All 365 ID records now have manually assessed workflow prerequisites. For BixBench,
+The [agentic source inventory](../../experiments/post_training/bio_tasks/benchmark_sources.json)
+records all 48 benchmark/protocol rows from the spreadsheet's Agentic (Harbor) tab:
+42 provisional ID and six OOD. Protocol variants and subsets overlap; these are
+not counts of independent datasets. The non-agentic tab is outside this program.
+Terminal-Bench-Science (full/lite), GeneBench (original/Pro), BioMysteryBench and
+SciCode retain their OOD assignments and cannot supply training task formulations.
+
+The [task-level index](../../experiments/post_training/bio_tasks/benchmark_coverage.json)
+links one versioned file per inspected benchmark. Each ID record includes a stable
+task ID, workflow pattern, required stages and formats, recipe mappings, evidence
+and remaining gaps. Source revisions and hashes identify the inspected metadata;
+benchmark answers and biological fixtures are excluded from training authoring.
+
+| Benchmark inventory | Assessed public ID tasks | Advertised full suite, when larger |
+| --- | ---: | ---: |
+| [BixBench](../../experiments/post_training/bio_tasks/benchmark_tasks/bixbench.json) | 205 | — |
+| [CompBioBench](../../experiments/post_training/bio_tasks/benchmark_tasks/compbiobench.json) | 100 | — |
+| [BiomniBench-DA](../../experiments/post_training/bio_tasks/benchmark_tasks/biomnibench-da.json) | 50 | — |
+| [BioAgent](../../experiments/post_training/bio_tasks/benchmark_tasks/bioagent.json) | 10 | — |
+| [scBench](../../experiments/post_training/bio_tasks/benchmark_tasks/scbench.json) | 6 | 195 |
+| [SpatialBench](../../experiments/post_training/bio_tasks/benchmark_tasks/spatialbench.json) | 16 | 159 |
+| [EpiBench](../../experiments/post_training/bio_tasks/benchmark_tasks/epibench.json) | 7 | 106 |
+| [Bio-Task Bench](../../experiments/post_training/bio_tasks/benchmark_tasks/bio-task-bench.json) | 34 | — |
+
+Of these 428 ID task records, 23 have manually assessed component mappings and
+405 are unmapped. None is marked workflow-validated. Other eligible sources
+still need task-level inspection. The 90
+[BioMysteryBench identifiers](../../experiments/post_training/bio_tasks/benchmark_tasks/biomysterybench.json)
+are tracked separately as OOD, without workflow patterns or training mappings.
+
+All 428 ID records have manually assessed workflow prerequisites. For BixBench,
 shared workflow-family stages are distinguished from individual question endpoints;
 this inventory does not add execution coverage. The inspection browser binds mappings
 to generated examples and their local reference results. These timings are solver-check runtimes, not teacher latency measurements.

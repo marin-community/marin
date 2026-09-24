@@ -1,0 +1,236 @@
+{
+  "benchmark": "scBench",
+  "scope": "All publicly released example task descriptions at the pinned revision; full-suite coverage is not implied.",
+  "pattern_scope": "Manually assessed workflow operations and scientific decisions; task descriptions, answer values, rubrics and biological fixtures are excluded.",
+  "advertised_total": 195,
+  "public_inventory_count": 6,
+  "unreleased_or_uninventoried_count": 189,
+  "workflow_patterns": {
+    "single-nucleus-cluster-annotation": [
+      "T04a_endothelin_niche_sources"
+    ],
+    "single-cell-clonal-genotypes": [
+      "tapestri_ccus_clustering_12_largest_mutant_clone"
+    ],
+    "paired-donor-pseudobulk": [
+      "DE01_pseudobulk_de"
+    ],
+    "single-cell-pca-diagnostics": [
+      "dr_05_pca_preprocessing_sentinels"
+    ],
+    "depth-aware-variable-genes": [
+      "NRM01_sparse_normalization"
+    ],
+    "panel-aware-single-cell-qc": [
+      "bd_rhapsody_tnbc_panel_aware_qc"
+    ]
+  },
+  "tasks": [
+    {
+      "task_id": "T04a_endothelin_niche_sources",
+      "source_metadata_url": "https://github.com/latchbio/scbench/blob/0bc34032bfa402dad29fc40b4cf10ea8fc03193e/evals/cell_typing/T04a_endothelin_niche_sources.json",
+      "source_metadata_sha256": "f1094e2c03f76a44adbc107a01a825cb47b7c7aa3feed3450af80aab3ba791b7",
+      "source_tags": [
+        "cell_typing"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "single-nucleus-cluster-annotation",
+      "required_stages": [
+        "normalize nuclear counts",
+        "select variable genes",
+        "embed and cluster",
+        "score lineage markers",
+        "assess panel detection bias"
+      ],
+      "scientific_decisions": [
+        "Require measured marker-detection evidence; a numerical cluster assignment alone cannot establish a causal explanation for missed cells."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Require measured marker-detection evidence; a numerical cluster assignment alone cannot establish a causal explanation for missed cells.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "tapestri_ccus_clustering_12_largest_mutant_clone",
+      "source_metadata_url": "https://github.com/latchbio/scbench/blob/0bc34032bfa402dad29fc40b4cf10ea8fc03193e/evals/clustering/tapestri_ccus_clustering_12_largest_mutant_clone.json",
+      "source_metadata_sha256": "7503253437920b65ac991b4bfa338c3d2e6ca980dc819b73fa218dec2cb23ac3",
+      "source_tags": [
+        "clustering"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "single-cell-clonal-genotypes",
+      "required_stages": [
+        "select eligible patient sample",
+        "inspect all candidate driver loci",
+        "distinguish somatic calls",
+        "require complete genotypes",
+        "construct clone profiles",
+        "quantify largest mutant clone"
+      ],
+      "scientific_decisions": [
+        "Use genotype-defined clones, all retained driver loci and an explicit missing-call denominator."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Use genotype-defined clones, all retained driver loci and an explicit missing-call denominator.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "DE01_pseudobulk_de",
+      "source_metadata_url": "https://github.com/latchbio/scbench/blob/0bc34032bfa402dad29fc40b4cf10ea8fc03193e/evals/differential_expression/DE01_pseudobulk_de.json",
+      "source_metadata_sha256": "b28e0e60648e6543c695d7cfb100f6facde9b0421e184187fc324221afec167b",
+      "source_tags": [
+        "differential_expression"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "paired-donor-pseudobulk",
+      "required_stages": [
+        "select cell population and perturbation",
+        "require matched donor conditions",
+        "aggregate raw counts by donor",
+        "filter genes",
+        "fit paired contrast",
+        "adjust tests"
+      ],
+      "scientific_decisions": [
+        "Cells are observations nested in donors; preserve donor pairing and per-condition eligibility."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Cells are observations nested in donors; preserve donor pairing and per-condition eligibility.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "dr_05_pca_preprocessing_sentinels",
+      "source_metadata_url": "https://github.com/latchbio/scbench/blob/0bc34032bfa402dad29fc40b4cf10ea8fc03193e/evals/dimensionality_reduction/dr_05_pca_preprocessing_sentinels.json",
+      "source_metadata_sha256": "d9965187ad47254bfc879088bdcf35ea4f20180a7be41df2f214b4f039d763e9",
+      "source_tags": [
+        "dimensionality_reduction"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "single-cell-pca-diagnostics",
+      "required_stages": [
+        "inspect matrix transformation",
+        "choose feature preprocessing",
+        "compute shared PCA embedding",
+        "measure loading concentration",
+        "check library-size association"
+      ],
+      "scientific_decisions": [
+        "Compute both diagnostics from the same embedding; do not double-log already transformed counts."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Compute both diagnostics from the same embedding; do not double-log already transformed counts.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "NRM01_sparse_normalization",
+      "source_metadata_url": "https://github.com/latchbio/scbench/blob/0bc34032bfa402dad29fc40b4cf10ea8fc03193e/evals/normalization/NRM01_sparse_normalization.json",
+      "source_metadata_sha256": "506b4c69b8661aa9cfae71e127532feb1016fd5b35651b6a519d6cd861c1e5a5",
+      "source_tags": [
+        "normalization"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "depth-aware-variable-genes",
+      "required_stages": [
+        "inspect sparse count depth",
+        "filter rare genes",
+        "select variance-stabilization method",
+        "identify variable genes",
+        "quantify prevalence"
+      ],
+      "scientific_decisions": [
+        "Keep sparse observations and distinguish technical depth from biological variability."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Keep sparse observations and distinguish technical depth from biological variability.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "bd_rhapsody_tnbc_panel_aware_qc",
+      "source_metadata_url": "https://github.com/latchbio/scbench/blob/0bc34032bfa402dad29fc40b4cf10ea8fc03193e/evals/qc/bd_rhapsody_tnbc_panel_aware_qc.json",
+      "source_metadata_sha256": "1b5740720c82ce1eebb350d20be4a5a1b70af9589b6e403b93965438bb20d6bb",
+      "source_tags": [
+        "qc"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "panel-aware-single-cell-qc",
+      "required_stages": [
+        "inspect targeted feature panel",
+        "join specimen compartments",
+        "select QC criteria",
+        "annotate immune populations",
+        "report retained population summaries"
+      ],
+      "scientific_decisions": [
+        "Whole-transcriptome gene-count or mitochondrial cutoffs may be inappropriate for targeted panels."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Whole-transcriptome gene-count or mitochondrial cutoffs may be inappropriate for targeted panels.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    }
+  ]
+}

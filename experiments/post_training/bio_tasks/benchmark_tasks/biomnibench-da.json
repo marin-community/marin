@@ -1,0 +1,1710 @@
+{
+  "benchmark": "BiomniBench-DA",
+  "scope": "Permitted task metadata and manually assessed workflow patterns; no benchmark answers or biological fixtures. OOD records are identifiers only.",
+  "pattern_scope": "Workflow-family prerequisites may exceed an individual endpoint; inspect each task required_stages and remaining_gaps.",
+  "workflow_patterns": {
+    "cell-composition": [
+      "da-1-3",
+      "da-14-3",
+      "da-17-1"
+    ],
+    "clinical-association": [
+      "da-1-4",
+      "da-13-3",
+      "da-15-7",
+      "da-3-4"
+    ],
+    "protein-predictor-evaluation": [
+      "da-10-1",
+      "da-10-3"
+    ],
+    "cell-communication": [
+      "da-11-1"
+    ],
+    "perturbation-enrichment": [
+      "da-12-2",
+      "da-20-3"
+    ],
+    "survival-association": [
+      "da-12-4",
+      "da-9-1"
+    ],
+    "longitudinal-proteomics": [
+      "da-13-1"
+    ],
+    "multi-study-concordance": [
+      "da-13-5",
+      "da-13-6"
+    ],
+    "signature-clustering": [
+      "da-14-1"
+    ],
+    "gene-correlation": [
+      "da-14-8"
+    ],
+    "bulk-differential-expression": [
+      "da-15-1",
+      "da-19-1"
+    ],
+    "coexpression-network": [
+      "da-15-2"
+    ],
+    "multi-omics-concordance": [
+      "da-15-8"
+    ],
+    "unsupervised-clinical-subtyping": [
+      "da-16-1"
+    ],
+    "celltype-differential-expression": [
+      "da-17-3"
+    ],
+    "composition-interaction": [
+      "da-17-5"
+    ],
+    "cohort-mutation-landscape": [
+      "da-18-1"
+    ],
+    "pathway-mutation-burden": [
+      "da-18-5"
+    ],
+    "mutation-cooccurrence": [
+      "da-18-7",
+      "da-3-5"
+    ],
+    "chromatin-differential-binding": [
+      "da-19-3",
+      "da-19-4"
+    ],
+    "chromatin-accessibility": [
+      "da-19-6"
+    ],
+    "transcriptome-similarity": [
+      "da-20-1"
+    ],
+    "factorial-differential-expression": [
+      "da-20-4"
+    ],
+    "cross-trait-genetics": [
+      "da-24-3"
+    ],
+    "mutation-clinical-association": [
+      "da-25-1"
+    ],
+    "dependency-association": [
+      "da-26-2"
+    ],
+    "synthetic-lethality-prioritization": [
+      "da-26-4"
+    ],
+    "matrix-factorization-subtyping": [
+      "da-4-1"
+    ],
+    "survival-stratification": [
+      "da-4-6"
+    ],
+    "repertoire-sharing": [
+      "da-4-7"
+    ],
+    "multi-omics-target-prioritization": [
+      "da-5-1"
+    ],
+    "phosphoproteomics-target-prioritization": [
+      "da-5-3"
+    ],
+    "longitudinal-expression": [
+      "da-6-2"
+    ],
+    "cross-tissue-response": [
+      "da-6-5"
+    ],
+    "adjusted-cohort-association": [
+      "da-8-1"
+    ],
+    "crossover-interaction": [
+      "da-8-2"
+    ],
+    "metabolomics-mediation": [
+      "da-8-3"
+    ],
+    "cross-omics-correlation": [
+      "da-9-7"
+    ]
+  },
+  "tasks": [
+    {
+      "task_id": "da-1-3",
+      "source_tags": [
+        "oncology",
+        "cell-composition"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "join cells to donors and tissues",
+        "cell-type eligibility",
+        "within-sample proportions",
+        "between-tissue enrichment"
+      ],
+      "remaining_gaps": [
+        "Use replicated tissues and donor-aware tests; do not treat cells as independent biological replicates.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "cell metadata",
+        "donor metadata",
+        "count matrix"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "cell-composition"
+    },
+    {
+      "task_id": "da-1-4",
+      "source_tags": [
+        "oncology",
+        "association-testing"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "identify baseline samples",
+        "within-patient cell fractions",
+        "join longitudinal outcome",
+        "correlation and multiplicity"
+      ],
+      "remaining_gaps": [
+        "Preserve baseline/timepoint selection and one independent observation per patient.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "cell metadata",
+        "patient outcomes"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "clinical-association"
+    },
+    {
+      "task_id": "da-10-1",
+      "source_tags": [
+        "general-biology",
+        "predictive-modeling"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "resolve protein sets and duplicates",
+        "sequence composition",
+        "join predictor scores",
+        "ROC and precision-recall by class"
+      ],
+      "remaining_gaps": [
+        "Use independent protein labels and full predictor outputs; sequence composition alone does not validate prediction.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "FASTA",
+        "protein set membership",
+        "predictor scores"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "protein-predictor-evaluation"
+    },
+    {
+      "task_id": "da-10-3",
+      "source_tags": [
+        "general-biology",
+        "predictive-modeling"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "resolve dataset membership",
+        "hold fixed negative set",
+        "score ranking",
+        "per-dataset performance comparison"
+      ],
+      "remaining_gaps": [
+        "Preserve overlapping membership and the same negative universe; report tied-score handling and uncertainty.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "membership matrix",
+        "predictor scores"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "protein-predictor-evaluation"
+    },
+    {
+      "task_id": "da-11-1",
+      "source_tags": [
+        "immunology",
+        "cell-cell-communication"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "select cell populations",
+        "expression/layer QC",
+        "ligand-receptor scoring",
+        "pathway aggregation",
+        "interaction ranking"
+      ],
+      "remaining_gaps": [
+        "Require a frozen ligand-receptor reference and real expression; predicted interactions do not establish causal suppression.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "H5AD",
+        "cell metadata",
+        "ligand-receptor database"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "cell-communication"
+    },
+    {
+      "task_id": "da-12-2",
+      "source_tags": [
+        "oncology",
+        "pathway-enrichment"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "fit separate perturbation contrasts",
+        "select shared significant genes",
+        "resolve gene-set universe",
+        "pathway enrichment"
+      ],
+      "remaining_gaps": [
+        "Require both fitted contrasts and appropriate tested-gene universe; descriptive fold changes are insufficient.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "count matrices",
+        "design metadata",
+        "gene sets"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "perturbation-enrichment"
+    },
+    {
+      "task_id": "da-12-4",
+      "source_tags": [
+        "oncology",
+        "survival-analysis"
+      ],
+      "status": "component-only",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [
+        "real-clinical-adjusted-cox"
+      ],
+      "required_stages": [
+        "join patients and microbial features",
+        "encode time and censoring",
+        "univariate Cox models",
+        "hazard direction and significance"
+      ],
+      "remaining_gaps": [
+        "Specify censoring, time units and compositional preprocessing; fit survival models with diagnostics.",
+        "Validate the connected workflow and native output artifacts on independent real biological data.",
+        "The PBC cohort checks general clinical-analysis stages; benchmark-specific immune/protein/microbial measurements and the complete dependent workflow are not covered."
+      ],
+      "required_formats": [
+        "microbial abundance",
+        "survival table"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [
+        "survival:PBC"
+      ],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "survival-association",
+      "mapped_stages": [
+        "complete-case cohort selection",
+        "Cox partial-likelihood fitting",
+        "hazard-ratio and Wald uncertainty reporting"
+      ]
+    },
+    {
+      "task_id": "da-13-1",
+      "source_tags": [
+        "metabolic",
+        "differential-expression"
+      ],
+      "status": "component-only",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [
+        "real-clinical-paired-visits"
+      ],
+      "required_stages": [
+        "match baseline and follow-up",
+        "proteomic QC",
+        "paired treatment contrast",
+        "regimen interaction",
+        "multiple testing"
+      ],
+      "remaining_gaps": [
+        "Preserve patient pairing and separate within-regimen change from the between-regimen interaction.",
+        "Validate the connected workflow and native output artifacts on independent real biological data.",
+        "The PBC cohort checks general clinical-analysis stages; benchmark-specific immune/protein/microbial measurements and the complete dependent workflow are not covered."
+      ],
+      "required_formats": [
+        "protein abundance",
+        "patient treatment/timepoint metadata"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [
+        "survival:PBC"
+      ],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "longitudinal-proteomics",
+      "mapped_stages": [
+        "subject-level visit matching",
+        "complete-pair measurement changes"
+      ]
+    },
+    {
+      "task_id": "da-13-3",
+      "source_tags": [
+        "metabolic",
+        "association-testing"
+      ],
+      "status": "component-only",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [
+        "real-clinical-paired-visits"
+      ],
+      "required_stages": [
+        "pair baseline and follow-up",
+        "compute subject-level changes",
+        "join body measurements",
+        "protein-outcome correlations"
+      ],
+      "remaining_gaps": [
+        "Avoid correlating unmatched samples or treating repeated visits as independent subjects.",
+        "Validate the connected workflow and native output artifacts on independent real biological data.",
+        "The PBC cohort checks general clinical-analysis stages; benchmark-specific immune/protein/microbial measurements and the complete dependent workflow are not covered."
+      ],
+      "required_formats": [
+        "protein abundance",
+        "paired body measurements"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [
+        "survival:PBC"
+      ],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "clinical-association",
+      "mapped_stages": [
+        "subject-level visit matching",
+        "complete-pair measurement changes"
+      ]
+    },
+    {
+      "task_id": "da-13-5",
+      "source_tags": [
+        "metabolic",
+        "cross-cohort-comparison"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "fit treatment contrast",
+        "resolve protein identifiers",
+        "join independent sex effects",
+        "overlap and direction concordance"
+      ],
+      "remaining_gaps": [
+        "Use independent studies and a shared measured-protein universe rather than selected hits alone.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "protein effects",
+        "external association table"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "multi-study-concordance"
+    },
+    {
+      "task_id": "da-13-6",
+      "source_tags": [
+        "metabolic",
+        "cross-cohort-comparison"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "fit longitudinal effects",
+        "harmonize protein identifiers",
+        "join external treatment effects",
+        "direction/size concordance"
+      ],
+      "remaining_gaps": [
+        "Separate menopause associations from hormone-treatment effects and preserve comparison direction.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "protein abundance",
+        "external study effects"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "multi-study-concordance"
+    },
+    {
+      "task_id": "da-14-1",
+      "source_tags": [
+        "immunology",
+        "clustering"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "join patients and signature scores",
+        "pairwise correlations",
+        "distance construction",
+        "hierarchical clustering"
+      ],
+      "remaining_gaps": [
+        "Fix missing-value policy, correlation metric and linkage; evaluate cluster equivalence rather than label numbers.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "signature score matrix",
+        "patient metadata"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "signature-clustering"
+    },
+    {
+      "task_id": "da-14-3",
+      "source_tags": [
+        "immunology",
+        "association-testing"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "resolve patient eligibility",
+        "assign subgroup labels",
+        "count unique patients",
+        "calculate proportions"
+      ],
+      "remaining_gaps": [
+        "Specify denominator and handling of missing subgroup assignments.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "patient subgroup table",
+        "eligibility metadata"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "cell-composition"
+    },
+    {
+      "task_id": "da-14-8",
+      "source_tags": [
+        "immunology",
+        "association-testing"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "resolve gene-set members",
+        "select patients",
+        "normalize expression",
+        "within-set pairwise correlation",
+        "aggregate evidence"
+      ],
+      "remaining_gaps": [
+        "Include all eligible gene pairs and control missingness; do not count self-correlations.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "expression matrix",
+        "gene sets",
+        "patient metadata"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "gene-correlation"
+    },
+    {
+      "task_id": "da-15-1",
+      "source_tags": [
+        "neurology",
+        "differential-expression"
+      ],
+      "status": "component-only",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [
+        "real-rnaseq-library-qc",
+        "real-rnaseq-size-factors",
+        "real-rnaseq-normalized-contrast"
+      ],
+      "required_stages": [
+        "join tissue/diagnosis metadata",
+        "count QC",
+        "fit disease contrast",
+        "multiple testing",
+        "rank effects"
+      ],
+      "remaining_gaps": [
+        "Benchmark-specific design and statistical model",
+        "Executable interpretation contract; no LLM judge",
+        "Fit replicated differential expression with relevant covariates; normalization and descriptive contrast alone are insufficient.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "count matrix",
+        "sample design metadata"
+      ],
+      "required_tools": [
+        "differential expression package"
+      ],
+      "independent_data_sources": [
+        "GSE60450"
+      ],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "bulk-differential-expression"
+    },
+    {
+      "task_id": "da-15-2",
+      "source_tags": [
+        "neurology",
+        "co-expression-networks"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "filter and normalize expression",
+        "detect outlier samples",
+        "select network power",
+        "build adjacency and topological overlap",
+        "identify modules",
+        "relate eigengenes to traits"
+      ],
+      "remaining_gaps": [
+        "Implement actual WGCNA inference with enough independent samples; graph arithmetic on supplied edges is insufficient.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "expression matrix",
+        "sample traits"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "coexpression-network"
+    },
+    {
+      "task_id": "da-15-7",
+      "source_tags": [
+        "neurology",
+        "association-testing"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "select eligible disease samples",
+        "join disease duration",
+        "expression QC",
+        "gene-wise correlation",
+        "multiple testing"
+      ],
+      "remaining_gaps": [
+        "Retain patient identity and valid duration units; report multiplicity across all tested genes.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "expression matrix",
+        "patient duration/covariates"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "clinical-association"
+    },
+    {
+      "task_id": "da-15-8",
+      "source_tags": [
+        "neurology",
+        "multi-omic-integration"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "fit tissue-level differential effects",
+        "map genes and proteins",
+        "intersect measured features",
+        "compare effect direction across assays"
+      ],
+      "remaining_gaps": [
+        "Use independently measured assay layers and identifier mappings; correlation of copied tables is not multi-omics coverage.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "RNA counts",
+        "two proteomics matrices",
+        "sample designs"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "multi-omics-concordance"
+    },
+    {
+      "task_id": "da-16-1",
+      "source_tags": [
+        "metabolic",
+        "clustering"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "normalize expression",
+        "PCA or hierarchical clustering",
+        "select clusters",
+        "join clinical traits",
+        "test trait enrichment"
+      ],
+      "remaining_gaps": [
+        "Avoid choosing clusters using the held-out clinical labels; preserve mixed ordinal/categorical outcomes.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "expression matrix",
+        "clinical severity table"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "unsupervised-clinical-subtyping"
+    },
+    {
+      "task_id": "da-17-1",
+      "source_tags": [
+        "immunology",
+        "cell-composition"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "QC cells",
+        "annotate populations",
+        "aggregate per patient",
+        "compare disease groups",
+        "multiple testing"
+      ],
+      "remaining_gaps": [
+        "Require patient replication and compositional denominators; pooled cell counts cannot establish group significance.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "count matrix",
+        "cell annotations",
+        "patient metadata"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "cell-composition"
+    },
+    {
+      "task_id": "da-17-3",
+      "source_tags": [
+        "immunology",
+        "differential-expression"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "select monocyte population",
+        "aggregate counts by donor",
+        "fit disease contrast",
+        "multiple testing"
+      ],
+      "remaining_gaps": [
+        "Fit donor-level pseudobulk or a justified repeated-measure model; do not test cells as independent donors.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "H5AD or Matrix Market",
+        "cell and donor metadata"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "celltype-differential-expression"
+    },
+    {
+      "task_id": "da-17-5",
+      "source_tags": [
+        "immunology",
+        "cell-composition"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "join diagnosis and ancestry",
+        "aggregate cell frequencies by patient",
+        "fit diagnosis-by-ancestry interaction",
+        "multiple testing"
+      ],
+      "remaining_gaps": [
+        "Require represented groups and an identifiable interaction; separate within-group effects from interaction evidence.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "cell metadata",
+        "patient ancestry/diagnosis"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "composition-interaction"
+    },
+    {
+      "task_id": "da-18-1",
+      "source_tags": [
+        "oncology",
+        "mutation-analysis"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "resolve receptor categories",
+        "select eligible samples",
+        "normalize variant annotations",
+        "aggregate alterations by patient/gene",
+        "compare subtype frequencies"
+      ],
+      "remaining_gaps": [
+        "Handle multiple samples per patient and mutation eligibility; preserve subtype-specific denominators.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "MAF or VCF",
+        "clinical receptor metadata"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "cohort-mutation-landscape"
+    },
+    {
+      "task_id": "da-18-5",
+      "source_tags": [
+        "oncology",
+        "mutation-analysis"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "select treatment/receptor cohort",
+        "join pathway membership",
+        "identify eligible alterations",
+        "union affected patients",
+        "calculate prevalence"
+      ],
+      "remaining_gaps": [
+        "Count each patient once across pathway genes and multiple alterations; enforce therapy timing.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "MAF or VCF",
+        "pathway genes",
+        "clinical/treatment metadata"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "pathway-mutation-burden"
+    },
+    {
+      "task_id": "da-18-7",
+      "source_tags": [
+        "oncology",
+        "mutation-analysis"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "select treatment/receptor cohort",
+        "construct patient-level binary events",
+        "build contingency table",
+        "test exclusivity or cooccurrence"
+      ],
+      "remaining_gaps": [
+        "Use a shared eligible patient universe including double negatives and a prespecified statistical test.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "mutation calls",
+        "clinical/treatment metadata",
+        "pathway genes"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "mutation-cooccurrence"
+    },
+    {
+      "task_id": "da-19-1",
+      "source_tags": [
+        "oncology",
+        "differential-expression"
+      ],
+      "status": "component-only",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [
+        "real-rnaseq-library-qc",
+        "real-rnaseq-size-factors",
+        "real-rnaseq-normalized-contrast"
+      ],
+      "required_stages": [
+        "match treatment samples",
+        "count QC",
+        "fit treatment contrast",
+        "multiple testing",
+        "rank downregulated genes"
+      ],
+      "remaining_gaps": [
+        "Benchmark-specific design and statistical model",
+        "Executable interpretation contract; no LLM judge",
+        "Fit the full differential model and retain effect direction; descriptive fold change is insufficient.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "count matrix",
+        "replicated treatment design"
+      ],
+      "required_tools": [
+        "differential expression package"
+      ],
+      "independent_data_sources": [
+        "GSE60450"
+      ],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "bulk-differential-expression"
+    },
+    {
+      "task_id": "da-19-3",
+      "source_tags": [
+        "oncology",
+        "chromatin-profiling"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "QC alignments",
+        "define consensus regions",
+        "count fragments",
+        "normalize with controls",
+        "fit differential occupancy"
+      ],
+      "remaining_gaps": [
+        "Provide real signal and control libraries with replicates; supplied peak scores omit occupancy inference.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "BAM",
+        "BED consensus peaks",
+        "replicate/control metadata"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "chromatin-differential-binding"
+    },
+    {
+      "task_id": "da-19-4",
+      "source_tags": [
+        "oncology",
+        "chromatin-profiling"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "define enhancer regions",
+        "count signal and control fragments",
+        "normalize libraries",
+        "fit differential enrichment",
+        "rank decreased regions"
+      ],
+      "remaining_gaps": [
+        "Preserve enhancer definition and control correction; thresholding a fabricated track does not establish differential binding.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "BAM",
+        "BED enhancer annotations",
+        "replicate/control metadata"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "chromatin-differential-binding"
+    },
+    {
+      "task_id": "da-19-6",
+      "source_tags": [
+        "oncology",
+        "chromatin-profiling"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "QC ATAC libraries",
+        "build common regions",
+        "count fragments",
+        "normalize",
+        "compare distributions and differential regions"
+      ],
+      "remaining_gaps": [
+        "Global claims need a justified normalization/reference strategy; library-normalized counts alone cannot show absolute global shifts.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "BAM or fragment BED",
+        "region set",
+        "replicate metadata"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "chromatin-accessibility"
+    },
+    {
+      "task_id": "da-20-1",
+      "source_tags": [
+        "general-biology",
+        "clustering"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "select baseline samples",
+        "normalize expression",
+        "select comparable genes",
+        "sample correlation/PCA",
+        "compare cell-type groups"
+      ],
+      "remaining_gaps": [
+        "Retain biological replicates and restrict to baseline before assessing similarity.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "count matrix",
+        "cell-type and treatment metadata"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "transcriptome-similarity"
+    },
+    {
+      "task_id": "da-20-3",
+      "source_tags": [
+        "general-biology",
+        "pathway-enrichment"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "fit within-cell-type treatment contrasts",
+        "construct ranked gene lists",
+        "pathway enrichment",
+        "compare pathway direction across cell types"
+      ],
+      "remaining_gaps": [
+        "Require fitted contrasts and frozen gene-set mappings; distinguish overrepresentation from ranked enrichment.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "count matrix",
+        "factorial design",
+        "gene-set database"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "perturbation-enrichment"
+    },
+    {
+      "task_id": "da-20-4",
+      "source_tags": [
+        "general-biology",
+        "pathway-enrichment"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "fit cell-type and treatment design",
+        "estimate within-type contrasts",
+        "test interactions",
+        "compare shared and divergent gene effects"
+      ],
+      "remaining_gaps": [
+        "Use a treatment-by-cell-type interaction to establish differences; significance in only one group is insufficient.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "count matrix",
+        "factorial sample metadata"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "factorial-differential-expression"
+    },
+    {
+      "task_id": "da-24-3",
+      "source_tags": [
+        "metabolic",
+        "gwas-eqtl"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "harmonize variants and effect alleles",
+        "QC GWAS summaries",
+        "resolve shared loci",
+        "estimate cross-trait evidence"
+      ],
+      "remaining_gaps": [
+        "Specify locus overlap versus genetic correlation/colocalization; preserve ancestry, allele alignment and sample-overlap assumptions.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "GWAS summary statistics",
+        "LD reference",
+        "trait metadata"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "cross-trait-genetics"
+    },
+    {
+      "task_id": "da-25-1",
+      "source_tags": [
+        "oncology",
+        "mutation-analysis"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "filter clinical significance",
+        "aggregate patient-gene events",
+        "rank prevalence",
+        "join clinical stage",
+        "association tests"
+      ],
+      "remaining_gaps": [
+        "Use frozen annotation evidence and patient denominators; correct multiplicity and stage encoding.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "MAF or VCF",
+        "pathogenicity annotations",
+        "clinical stage"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "mutation-clinical-association"
+    },
+    {
+      "task_id": "da-26-2",
+      "source_tags": [
+        "oncology",
+        "predictive-modeling"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "align expression and dependency samples",
+        "separate patient/cell-line cohorts",
+        "fit biomarker associations",
+        "multiple testing",
+        "compare evidence across cohorts"
+      ],
+      "remaining_gaps": [
+        "Avoid interpreting nonsignificance in one cohort as a difference; test effect heterogeneity and guard target leakage.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "expression matrices",
+        "dependency scores",
+        "cohort metadata"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "dependency-association"
+    },
+    {
+      "task_id": "da-26-4",
+      "source_tags": [
+        "oncology",
+        "predictive-modeling"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "align multi-omics samples",
+        "cross-validated lasso",
+        "mutation exclusivity tests",
+        "join paralog/PPI priors",
+        "rank supported candidates"
+      ],
+      "remaining_gaps": [
+        "Preserve held-out model selection and independent priors; predictions require explicit scoring rather than causal claims.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "multi-omics matrices",
+        "dependency scores",
+        "mutation matrix",
+        "interaction priors"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "synthetic-lethality-prioritization"
+    },
+    {
+      "task_id": "da-3-4",
+      "source_tags": [
+        "oncology",
+        "mutation-analysis"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "select unique patient samples",
+        "compute or normalize mutation burden",
+        "join response",
+        "fit association and uncertainty"
+      ],
+      "remaining_gaps": [
+        "Respect callable territory and patient replication; counts from incomparable assays are not comparable burden.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "mutation calls or burden table",
+        "response metadata"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "clinical-association"
+    },
+    {
+      "task_id": "da-3-5",
+      "source_tags": [
+        "oncology",
+        "mutation-analysis"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "normalize mutation identities",
+        "construct patient-level events",
+        "join response",
+        "per-mutation enrichment",
+        "multiple testing"
+      ],
+      "remaining_gaps": [
+        "Retain all eligible patients including mutation-negative controls and sparse-table test policy.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "mutation table",
+        "patient response metadata"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "mutation-cooccurrence"
+    },
+    {
+      "task_id": "da-4-1",
+      "source_tags": [
+        "oncology",
+        "clustering"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "construct patient-composition matrix",
+        "validate nonnegative input",
+        "fit NMF across ranks",
+        "assess stability",
+        "assign subtypes"
+      ],
+      "remaining_gaps": [
+        "Choose rank with prespecified stability/reconstruction criteria and retain repeated-run evidence.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "cell-composition matrix",
+        "patient metadata"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "matrix-factorization-subtyping"
+    },
+    {
+      "task_id": "da-4-6",
+      "source_tags": [
+        "oncology",
+        "survival-analysis"
+      ],
+      "status": "component-only",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [
+        "real-clinical-kaplan-meier"
+      ],
+      "required_stages": [
+        "join pathological response and cell scores",
+        "restrict eligible cohort",
+        "define score strata",
+        "encode censoring",
+        "compare recurrence outcomes"
+      ],
+      "remaining_gaps": [
+        "Specify cutoff and eligible denominator before outcome analysis; avoid choosing thresholds to maximize significance.",
+        "Validate the connected workflow and native output artifacts on independent real biological data.",
+        "The PBC cohort checks general clinical-analysis stages; benchmark-specific immune/protein/microbial measurements and the complete dependent workflow are not covered."
+      ],
+      "required_formats": [
+        "patient response",
+        "cell scores",
+        "survival table"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [
+        "survival:PBC"
+      ],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "survival-stratification",
+      "mapped_stages": [
+        "eligible patient denominator",
+        "censoring-aware survival estimation"
+      ]
+    },
+    {
+      "task_id": "da-4-7",
+      "source_tags": [
+        "oncology",
+        "tcr-repertoire"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "QC productive receptor calls",
+        "resolve chain/CDR3 clonotypes",
+        "identify expanded populations",
+        "join cell state",
+        "count cross-patient sharing"
+      ],
+      "remaining_gaps": [
+        "Define paired-chain clonotypes and expansion thresholds; repeated cells are not distinct patient support.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "TCR contigs/clonotypes",
+        "cell states",
+        "patient metadata"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "repertoire-sharing"
+    },
+    {
+      "task_id": "da-5-1",
+      "source_tags": [
+        "oncology",
+        "multi-omic-integration"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "fit tumor/normal protein contrast",
+        "map protein-gene identifiers",
+        "join cell-line dependency",
+        "filter druggability",
+        "rank candidates"
+      ],
+      "remaining_gaps": [
+        "Use independent assays and explicit dependency thresholds; preserve protein/isoform mapping ambiguity.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "proteomics matrix",
+        "CRISPR dependency",
+        "druggability catalog"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "multi-omics-target-prioritization"
+    },
+    {
+      "task_id": "da-5-3",
+      "source_tags": [
+        "oncology",
+        "multi-omic-integration"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "QC and normalize phosphosites",
+        "fit tumor/normal contrast",
+        "annotate activating sites",
+        "map host genes",
+        "join dependencies and druggability"
+      ],
+      "remaining_gaps": [
+        "Retain residue positions, localization confidence and protein abundance confounding; gene-level abundance cannot substitute for phosphosites.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "phosphosite intensities",
+        "site annotations",
+        "CRISPR dependency"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "phosphoproteomics-target-prioritization"
+    },
+    {
+      "task_id": "da-6-2",
+      "source_tags": [
+        "cardiovascular",
+        "longitudinal-analysis"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "join sex and timepoints",
+        "normalize expression",
+        "fit temporal and sex interaction",
+        "cluster trajectories",
+        "multiple testing"
+      ],
+      "remaining_gaps": [
+        "Use the actual longitudinal or independent-sampling design and test sex-by-time interaction.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "count matrix",
+        "sex/time/subject metadata"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "longitudinal-expression"
+    },
+    {
+      "task_id": "da-6-5",
+      "source_tags": [
+        "cardiovascular",
+        "multi-omic-integration"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "fit tissue-specific training effects",
+        "harmonize molecular identifiers",
+        "compare response signatures",
+        "cluster tissue similarities"
+      ],
+      "remaining_gaps": [
+        "Avoid treating baseline tissue differences as training effects; preserve tissue-specific measured-feature universes.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "multi-tissue measurements",
+        "training/time metadata"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "cross-tissue-response"
+    },
+    {
+      "task_id": "da-8-1",
+      "source_tags": [
+        "metabolic",
+        "association-testing"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "exclude preload meals",
+        "calculate meal-level rises",
+        "aggregate per subject",
+        "derive cohort threshold",
+        "select subjects",
+        "join metabolomics",
+        "covariate-adjusted regressions"
+      ],
+      "remaining_gaps": [
+        "Preserve baseline/peak units and replicate weighting; use subject-level cohort selection before model fitting.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "meal time series",
+        "participant covariates",
+        "metabolomics matrix"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "adjusted-cohort-association"
+    },
+    {
+      "task_id": "da-8-2",
+      "source_tags": [
+        "metabolic",
+        "association-testing"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "pair meal challenges by participant",
+        "derive peak reductions",
+        "join baseline metabolic status",
+        "fit preload-by-status interaction"
+      ],
+      "remaining_gaps": [
+        "Account for repeated participants and challenge baselines; a difference of unpaired means is insufficient.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "paired challenge time series",
+        "participant covariates"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "crossover-interaction"
+    },
+    {
+      "task_id": "da-8-3",
+      "source_tags": [
+        "metabolic",
+        "differential-expression"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "derive participant phenotypes",
+        "test differential metabolites",
+        "multiple testing",
+        "fit specified mediator/outcome models",
+        "quantify indirect effects"
+      ],
+      "remaining_gaps": [
+        "State temporal/confounding assumptions and avoid causal claims from cross-sectional mediation alone.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "metabolomics",
+        "meal phenotypes",
+        "metabolic outcomes"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "metabolomics-mediation"
+    },
+    {
+      "task_id": "da-9-1",
+      "source_tags": [
+        "oncology",
+        "survival-analysis"
+      ],
+      "status": "component-only",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [
+        "real-clinical-kaplan-meier",
+        "real-clinical-adjusted-cox"
+      ],
+      "required_stages": [
+        "select treatment and baseline cohort",
+        "compute patient cell frequencies",
+        "encode survival/censoring",
+        "fit biomarker models",
+        "multiple testing"
+      ],
+      "remaining_gaps": [
+        "Do not classify censored patients as one-year survivors without follow-up; avoid cutoff selection on outcomes.",
+        "Validate the connected workflow and native output artifacts on independent real biological data.",
+        "The PBC cohort checks general clinical-analysis stages; benchmark-specific immune/protein/microbial measurements and the complete dependent workflow are not covered."
+      ],
+      "required_formats": [
+        "cell frequencies",
+        "therapy/timepoint metadata",
+        "survival table"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [
+        "survival:PBC"
+      ],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "survival-association",
+      "mapped_stages": [
+        "censoring-aware survival estimation",
+        "adjusted Cox model fitting"
+      ]
+    },
+    {
+      "task_id": "da-9-7",
+      "source_tags": [
+        "oncology",
+        "association-testing"
+      ],
+      "status": "unmapped",
+      "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
+      "recipes": [],
+      "required_stages": [
+        "select on-treatment visit",
+        "match patient immune and protein samples",
+        "QC modalities",
+        "pairwise correlations",
+        "multiple testing"
+      ],
+      "remaining_gaps": [
+        "Preserve matched patients and visit identity; use patient-level associations and a common eligible set.",
+        "Validate the connected workflow and native output artifacts on independent real biological data."
+      ],
+      "required_formats": [
+        "immune-cell frequencies",
+        "protein abundance",
+        "visit metadata"
+      ],
+      "required_tools": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "cross-omics-correlation"
+    }
+  ]
+}

@@ -1,0 +1,1367 @@
+{
+  "benchmark": "Bio-Task Bench",
+  "scope": "All publicly released example task descriptions at the pinned revision; full-suite coverage is not implied.",
+  "pattern_scope": "Manually assessed workflow operations and scientific decisions; task descriptions, answer values, rubrics and biological fixtures are excluded.",
+  "advertised_total": 34,
+  "public_inventory_count": 34,
+  "unreleased_or_uninventoried_count": 0,
+  "workflow_patterns": {
+    "controlled-peak-calling": [
+      "chipseq-001"
+    ],
+    "sequence-motif-enrichment": [
+      "chipseq-002"
+    ],
+    "peak-gene-context": [
+      "chipseq-003"
+    ],
+    "replicated-differential-binding": [
+      "chipseq-004"
+    ],
+    "confounder-aware-enhancer-comparison": [
+      "chipseq-005"
+    ],
+    "guide-effect-summary": [
+      "crispr-001"
+    ],
+    "essential-gene-ranking": [
+      "crispr-002"
+    ],
+    "guide-to-gene-screen-analysis": [
+      "crispr-003"
+    ],
+    "assembly-contiguity-summary": [
+      "assembly-001"
+    ],
+    "assembly-join-ranking": [
+      "assembly-002"
+    ],
+    "assembly-error-summary": [
+      "assembly-003"
+    ],
+    "long-read-length-qc": [
+      "lrs-001"
+    ],
+    "long-read-indel-burden": [
+      "lrs-002"
+    ],
+    "extended-cigar-error-profile": [
+      "lrs-003"
+    ],
+    "assay-intensity-summary": [
+      "metab-001",
+      "prot-001"
+    ],
+    "assay-effect-ranking": [
+      "metab-002",
+      "prot-002"
+    ],
+    "metabolomic-differential-abundance": [
+      "metab-003"
+    ],
+    "methylation-summary": [
+      "meth-001"
+    ],
+    "methylation-effect-ranking": [
+      "meth-002"
+    ],
+    "coverage-aware-differential-methylation": [
+      "meth-003"
+    ],
+    "cross-modal-feature-association": [
+      "moi-001"
+    ],
+    "cross-modal-effect-ranking": [
+      "moi-002"
+    ],
+    "cross-modal-pathway-concordance": [
+      "moi-003"
+    ],
+    "population-differentiation": [
+      "popgen-001"
+    ],
+    "population-frequency-ranking": [
+      "popgen-002"
+    ],
+    "genotype-equilibrium-test": [
+      "popgen-003"
+    ],
+    "genotype-pca-outliers": [
+      "popgen-004"
+    ],
+    "proteomic-differential-abundance": [
+      "prot-003"
+    ],
+    "spatial-expression-gradient": [
+      "stx-001"
+    ],
+    "spatial-expression-localization": [
+      "stx-002"
+    ],
+    "spatial-cluster-summary": [
+      "stx-003"
+    ],
+    "spatial-composition": [
+      "stx-004"
+    ]
+  },
+  "tasks": [
+    {
+      "task_id": "chipseq-001",
+      "source_metadata_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/chip-seq/chipseq-001/task.json",
+      "source_metadata_sha256": "f7345a2298059c18a08398b46f0e593541b928f3f9ca554089ba5879044c8e4d",
+      "source_tags": [
+        "chip-seq"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "controlled-peak-calling",
+      "required_stages": [
+        "read treatment and matched control",
+        "choose assay-appropriate peak model",
+        "call and export genomic peaks"
+      ],
+      "scientific_decisions": [
+        "Control background and coordinate conventions must be explicit."
+      ],
+      "required_formats": [
+        "BED6/tagAlign"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [
+        "MACS2",
+        "MACS3",
+        "HOMER"
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Control background and coordinate conventions must be explicit.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "chipseq-002",
+      "source_metadata_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/chip-seq/chipseq-002/task.json",
+      "source_metadata_sha256": "424df1b875d6e0be7ad0fe33db25fcf5eb756fdb184fa0c30b0f9eb5ac5356aa",
+      "source_tags": [
+        "chip-seq"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "sequence-motif-enrichment",
+      "required_stages": [
+        "read peak sequences",
+        "choose sequence background",
+        "discover motifs",
+        "quantify enrichment and sequence prevalence"
+      ],
+      "scientific_decisions": [
+        "Control sequence composition and define motif equivalence."
+      ],
+      "required_formats": [
+        "FASTA"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [
+        "HOMER",
+        "MEME suite"
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Control sequence composition and define motif equivalence.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "chipseq-003",
+      "source_metadata_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/chip-seq/chipseq-003/task.json",
+      "source_metadata_sha256": "d277fb70864b1240ccd8867ff513ffa9b3043dfe979927d55c037fdd6cabfa9d",
+      "source_tags": [
+        "chip-seq"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "peak-gene-context",
+      "required_stages": [
+        "join peak and annotation assembly",
+        "derive strand-aware transcript starts",
+        "assign feature classes",
+        "report closest transcription start"
+      ],
+      "scientific_decisions": [
+        "Resolve overlapping feature classes, transcript multiplicity, distance sign and ties."
+      ],
+      "required_formats": [
+        "BED",
+        "GTF"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [
+        "HOMER",
+        "ChIPseeker",
+        "bedtools"
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Resolve overlapping feature classes, transcript multiplicity, distance sign and ties.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "chipseq-004",
+      "source_metadata_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/chip-seq/chipseq-004/task.json",
+      "source_metadata_sha256": "fbf67e9587e7e0cca78f8f642766f9fcc1f072efe8ac8029a48ffc4598312913",
+      "source_tags": [
+        "chip-seq"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "replicated-differential-binding",
+      "required_stages": [
+        "join replicated count columns",
+        "normalize counts",
+        "fit condition contrast",
+        "adjust multiple tests",
+        "export all regions"
+      ],
+      "scientific_decisions": [
+        "Use biological replicates and raw counts; preserve effect direction and tested universe."
+      ],
+      "required_formats": [
+        "TSV",
+        "BED"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [
+        "DESeq2",
+        "edgeR",
+        "limma",
+        "scipy"
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Use biological replicates and raw counts; preserve effect direction and tested universe.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "chipseq-005",
+      "source_metadata_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/chip-seq/chipseq-005/task.json",
+      "source_metadata_sha256": "85dd2487f29634c3c18ffba6c9389146edad87ebea25c80d12dd394f4bcd5799",
+      "source_tags": [
+        "chip-seq"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "confounder-aware-enhancer-comparison",
+      "required_stages": [
+        "call replicate peaks against controls",
+        "construct consensus universe",
+        "apply spike-in normalization",
+        "exclude promoter, blacklist and CNV effects",
+        "quantify distal differences",
+        "annotate genes"
+      ],
+      "scientific_decisions": [
+        "Nearest genes are annotations, not established enhancer targets. Declare the consensus and spike-in conventions."
+      ],
+      "required_formats": [
+        "BED6/tagAlign",
+        "TSV",
+        "GTF",
+        "BED"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [
+        "MACS3",
+        "bedtools",
+        "samtools",
+        "DESeq2",
+        "edgeR",
+        "limma",
+        "scipy",
+        "statsmodels"
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Nearest genes are annotations, not established enhancer targets. Declare the consensus and spike-in conventions.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "crispr-001",
+      "source_metadata_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/crispr-screens/crispr-001/task.json",
+      "source_metadata_sha256": "3c13d98c4aa47cc1b4e5a7b9c5e4af33761441eb4ecb05dde4068065a5c5d319",
+      "source_tags": [
+        "crispr-screens"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "guide-effect-summary",
+      "required_stages": [
+        "read guide effects",
+        "summarize distribution",
+        "classify dropout",
+        "report denominator"
+      ],
+      "scientific_decisions": [
+        "This begins at supplied guide effects; it does not exercise screen normalization or inference."
+      ],
+      "required_formats": [
+        "TSV"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [
+        "Python",
+        "R"
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "This begins at supplied guide effects; it does not exercise screen normalization or inference.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "crispr-002",
+      "source_metadata_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/crispr-screens/crispr-002/task.json",
+      "source_metadata_sha256": "de2b35e2fbb9fa4aeac57620b38a497ef206d302235b9f7c9b7d88fdaefb08cd",
+      "source_tags": [
+        "crispr-screens"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "essential-gene-ranking",
+      "required_stages": [
+        "read gene scores",
+        "establish score direction",
+        "rank genes with ties",
+        "export selected genes"
+      ],
+      "scientific_decisions": [
+        "A ranking of supplied scores does not establish differential essentiality."
+      ],
+      "required_formats": [
+        "TSV"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [
+        "Python",
+        "R"
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "A ranking of supplied scores does not establish differential essentiality.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "crispr-003",
+      "source_metadata_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/crispr-screens/crispr-003/task.json",
+      "source_metadata_sha256": "9d28ab407d69b558ea6dc581fd7b867ccb04ca06ec53ada173a270a3b465f4d2",
+      "source_tags": [
+        "crispr-screens"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "guide-to-gene-screen-analysis",
+      "required_stages": [
+        "join counts to guide library",
+        "retain replicate and guide identities",
+        "estimate guide effects",
+        "aggregate genes",
+        "test and adjust hypotheses"
+      ],
+      "scientific_decisions": [
+        "Review the biological replication unit; guide-level pooling must not silently replace replicate-aware inference."
+      ],
+      "required_formats": [
+        "TSV"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [
+        "Python",
+        "R",
+        "scipy"
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Review the biological replication unit; guide-level pooling must not silently replace replicate-aware inference.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "assembly-001",
+      "source_metadata_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/genome-assembly/assembly-001/task.json",
+      "source_metadata_sha256": "8f582cd0c84c3715e49360373fbbecbf1e53d744c55b24810f4e17b2d455327d",
+      "source_tags": [
+        "genome-assembly"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "assembly-contiguity-summary",
+      "required_stages": [
+        "read contig lengths",
+        "sum assembled bases",
+        "compute length-weighted N50",
+        "report contig counts"
+      ],
+      "scientific_decisions": [
+        "Contiguity does not establish sequence accuracy or completeness."
+      ],
+      "required_formats": [
+        "TSV"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [
+        "Python",
+        "R",
+        "QUAST"
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Contiguity does not establish sequence accuracy or completeness.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "assembly-002",
+      "source_metadata_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/genome-assembly/assembly-002/task.json",
+      "source_metadata_sha256": "82b4f6f534bb4dc42d65d3b7ff50293ecd439b4abc0d8b8d99d04f274198bad2",
+      "source_tags": [
+        "genome-assembly"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "assembly-join-ranking",
+      "required_stages": [
+        "read overlap candidates",
+        "combine aligned extent and identity",
+        "rank candidate joins",
+        "retain contig identities"
+      ],
+      "scientific_decisions": [
+        "Candidate scores do not establish that a join is biologically valid."
+      ],
+      "required_formats": [
+        "TSV"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [
+        "Python",
+        "R"
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Candidate scores do not establish that a join is biologically valid.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "assembly-003",
+      "source_metadata_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/genome-assembly/assembly-003/task.json",
+      "source_metadata_sha256": "15dad2a743caeac42dff62e67b6270e38843db65039699f8afee8287cf1c9e5b",
+      "source_tags": [
+        "genome-assembly"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "assembly-error-summary",
+      "required_stages": [
+        "join aligned base totals and mismatches",
+        "calculate error rates",
+        "classify contigs"
+      ],
+      "scientific_decisions": [
+        "Declare the aligned-base denominator and unaligned sequence policy."
+      ],
+      "required_formats": [
+        "TSV"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [
+        "Python",
+        "R"
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Declare the aligned-base denominator and unaligned sequence policy.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "lrs-001",
+      "source_metadata_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/long-read-sequencing/lrs-001/task.json",
+      "source_metadata_sha256": "8f66874d510259d2092942a98c6b275efeb28dd4f92dbe3d6fee7b80a4b57223",
+      "source_tags": [
+        "long-read-sequencing"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "long-read-length-qc",
+      "required_stages": [
+        "read length distribution",
+        "calculate count and mean",
+        "compute base-weighted N50"
+      ],
+      "scientific_decisions": [
+        "Read N50 and mean use different weighting."
+      ],
+      "required_formats": [
+        "TSV"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [
+        "Python",
+        "R",
+        "NanoStat"
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Read N50 and mean use different weighting.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "lrs-002",
+      "source_metadata_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/long-read-sequencing/lrs-002/task.json",
+      "source_metadata_sha256": "767c5d0036ea6dbe5732d57df8f3c08466ceb3b65bb0163f12029306dbf44994",
+      "source_tags": [
+        "long-read-sequencing"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "long-read-indel-burden",
+      "required_stages": [
+        "join insertion and deletion summaries",
+        "calculate indel burden",
+        "rank reads"
+      ],
+      "scientific_decisions": [
+        "Keep event counts distinct from affected bases."
+      ],
+      "required_formats": [
+        "TSV"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [
+        "Python",
+        "R",
+        "awk"
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Keep event counts distinct from affected bases.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "lrs-003",
+      "source_metadata_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/long-read-sequencing/lrs-003/task.json",
+      "source_metadata_sha256": "3c8b1e0a2eafb3143706d16f6bad7284f6d12858fa9792ae223f19818920eb15",
+      "source_tags": [
+        "long-read-sequencing"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "extended-cigar-error-profile",
+      "required_stages": [
+        "parse extended CIGAR",
+        "accumulate matches, mismatches, indels and clipping",
+        "compute error denominator",
+        "classify reads"
+      ],
+      "scientific_decisions": [
+        "Soft clipping is not an aligned-base error; ordinary M operations cannot distinguish matches and mismatches."
+      ],
+      "required_formats": [
+        "TSV"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [
+        "Python",
+        "R",
+        "pysam"
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Soft clipping is not an aligned-base error; ordinary M operations cannot distinguish matches and mismatches.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "metab-001",
+      "source_metadata_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/metabolomics/metab-001/task.json",
+      "source_metadata_sha256": "0a43d8a84042d4d697903443c964b33d9b77e4e40b84fc443481260cc03bcdd9",
+      "source_tags": [
+        "metabolomics"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "assay-intensity-summary",
+      "required_stages": [
+        "read feature intensities",
+        "establish logarithm scale",
+        "summarize abundance distribution"
+      ],
+      "scientific_decisions": [
+        "Use observed assay values and explicit handling of missing or censored intensities."
+      ],
+      "required_formats": [
+        "TSV"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [
+        "Python",
+        "R"
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Use observed assay values and explicit handling of missing or censored intensities.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "metab-002",
+      "source_metadata_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/metabolomics/metab-002/task.json",
+      "source_metadata_sha256": "c72f19d600a3bc147d2a469ef3cc54343a923829e9501c02b273e8bdd5290ef1",
+      "source_tags": [
+        "metabolomics"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "assay-effect-ranking",
+      "required_stages": [
+        "join condition-level feature means",
+        "compute directional and absolute differences",
+        "rank features"
+      ],
+      "scientific_decisions": [
+        "Ranking supplied means does not establish statistical significance."
+      ],
+      "required_formats": [
+        "TSV"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [
+        "Python",
+        "R"
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Ranking supplied means does not establish statistical significance.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "metab-003",
+      "source_metadata_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/metabolomics/metab-003/task.json",
+      "source_metadata_sha256": "4479d88cf011f71deb89bbb9288cb188758f30326e1d658fdc138af0a9545628",
+      "source_tags": [
+        "metabolomics"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "metabolomic-differential-abundance",
+      "required_stages": [
+        "join sample metadata",
+        "transform measured intensities",
+        "fit group comparisons",
+        "adjust multiple tests",
+        "export full results"
+      ],
+      "scientific_decisions": [
+        "Preserve replicates and specify missingness, zeros and the statistical model."
+      ],
+      "required_formats": [
+        "TSV"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [
+        "Python",
+        "R",
+        "scipy",
+        "statsmodels"
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Preserve replicates and specify missingness, zeros and the statistical model.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "meth-001",
+      "source_metadata_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/methylation-analysis/meth-001/task.json",
+      "source_metadata_sha256": "ee977a4fdd532ce938e25618b9ac8e1da04f8c6586eb5b422f5bb569e218c6a9",
+      "source_tags": [
+        "methylation-analysis"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "methylation-summary",
+      "required_stages": [
+        "read per-site methylation fractions",
+        "establish eligible sites",
+        "summarize methylation"
+      ],
+      "scientific_decisions": [
+        "Distinguish site-weighted and coverage-weighted summaries."
+      ],
+      "required_formats": [
+        "TSV"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [
+        "Python",
+        "R",
+        "methylKit"
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Distinguish site-weighted and coverage-weighted summaries.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "meth-002",
+      "source_metadata_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/methylation-analysis/meth-002/task.json",
+      "source_metadata_sha256": "80c00fb39b504591181c5a56051744b33bd0b21cc1a5caad27d47fe5d62f5b59",
+      "source_tags": [
+        "methylation-analysis"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "methylation-effect-ranking",
+      "required_stages": [
+        "join condition-level CpG estimates",
+        "calculate absolute methylation shifts",
+        "rank sites"
+      ],
+      "scientific_decisions": [
+        "A large shift alone does not establish differential methylation."
+      ],
+      "required_formats": [
+        "TSV"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [
+        "Python",
+        "R",
+        "methylKit"
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "A large shift alone does not establish differential methylation.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "meth-003",
+      "source_metadata_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/methylation-analysis/meth-003/task.json",
+      "source_metadata_sha256": "f3bacb6742ade4b57a2ede390e2102f3d8b1ee979b34a99a58214ca993226eca",
+      "source_tags": [
+        "methylation-analysis"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "coverage-aware-differential-methylation",
+      "required_stages": [
+        "derive fractions from methylated and total reads",
+        "filter by per-sample coverage",
+        "compare biological groups",
+        "adjust multiple tests"
+      ],
+      "scientific_decisions": [
+        "Keep coverage and biological replication distinct; justify the statistical model for fractions."
+      ],
+      "required_formats": [
+        "TSV"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [
+        "Python",
+        "R",
+        "scipy",
+        "statsmodels"
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Keep coverage and biological replication distinct; justify the statistical model for fractions.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "moi-001",
+      "source_metadata_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/multi-omics-integration/moi-001/task.json",
+      "source_metadata_sha256": "7e6819663c46094194e1782fdff162a197d645b8fd4e827893ed155a603c5712",
+      "source_tags": [
+        "multi-omics-integration"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "cross-modal-feature-association",
+      "required_stages": [
+        "match gene identities across modalities",
+        "calculate rank association",
+        "report uncertainty and direction"
+      ],
+      "scientific_decisions": [
+        "Across-gene association is not a patient-level causal relationship."
+      ],
+      "required_formats": [
+        "TSV"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [
+        "scipy",
+        "numpy",
+        "pandas",
+        "R"
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Across-gene association is not a patient-level causal relationship.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "moi-002",
+      "source_metadata_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/multi-omics-integration/moi-002/task.json",
+      "source_metadata_sha256": "09dbe39934fcfc0b7fe21812aa0f9ad3e04b0ed267ed0063e7142cabea9b32f1",
+      "source_tags": [
+        "multi-omics-integration"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "cross-modal-effect-ranking",
+      "required_stages": [
+        "join transcript and protein effects",
+        "align units",
+        "combine effect magnitudes",
+        "rank features"
+      ],
+      "scientific_decisions": [
+        "A combined magnitude score can hide opposite effect directions."
+      ],
+      "required_formats": [
+        "TSV"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [
+        "scipy",
+        "numpy",
+        "pandas",
+        "R"
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "A combined magnitude score can hide opposite effect directions.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "moi-003",
+      "source_metadata_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/multi-omics-integration/moi-003/task.json",
+      "source_metadata_sha256": "1fad21d041f0321d4864aa34a98615d3faef559db45e7d6ec5daa4fceb5f4c36",
+      "source_tags": [
+        "multi-omics-integration"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "cross-modal-pathway-concordance",
+      "required_stages": [
+        "join pathway summaries",
+        "calculate declared joint signal",
+        "classify concordance"
+      ],
+      "scientific_decisions": [
+        "A minimum-signal proxy does not establish a biochemical bottleneck or pathway activation."
+      ],
+      "required_formats": [
+        "TSV"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [
+        "scipy",
+        "numpy",
+        "pandas",
+        "R"
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "A minimum-signal proxy does not establish a biochemical bottleneck or pathway activation.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "popgen-001",
+      "source_metadata_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/population-genetics/popgen-001/task.json",
+      "source_metadata_sha256": "b85bc0ca4156c1b98c3c25a27da5382fa1663bdbb4127bf48ae43068163ab600",
+      "source_tags": [
+        "population-genetics"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "population-differentiation",
+      "required_stages": [
+        "join allele frequencies and sample sizes",
+        "calculate declared Fst components",
+        "aggregate across loci",
+        "summarize differentiated sites"
+      ],
+      "scientific_decisions": [
+        "Pin the estimator and locus aggregation; unequal population sizes matter."
+      ],
+      "required_formats": [
+        "TSV"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [
+        "Python",
+        "R",
+        "scikit-allel",
+        "VCFtools"
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Pin the estimator and locus aggregation; unequal population sizes matter.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "popgen-002",
+      "source_metadata_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/population-genetics/popgen-002/task.json",
+      "source_metadata_sha256": "b07a9329cb1c63bba3e414425ede897d3d6f05e236d672350e409a251c57b2b8",
+      "source_tags": [
+        "population-genetics"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "population-frequency-ranking",
+      "required_stages": [
+        "align allele definitions",
+        "compare population frequencies",
+        "rank loci"
+      ],
+      "scientific_decisions": [
+        "Align reference/alternate alleles before comparing frequencies."
+      ],
+      "required_formats": [
+        "TSV"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [
+        "Python",
+        "R",
+        "awk"
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Align reference/alternate alleles before comparing frequencies.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "popgen-003",
+      "source_metadata_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/population-genetics/popgen-003/task.json",
+      "source_metadata_sha256": "d5f16d8666f7013a21f0f458f2ac4963e3b47b986f2be3c684a6ef6fa847a852",
+      "source_tags": [
+        "population-genetics"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "genotype-equilibrium-test",
+      "required_stages": [
+        "derive allele frequencies from genotype counts",
+        "calculate equilibrium test",
+        "report site decisions"
+      ],
+      "scientific_decisions": [
+        "State exact versus asymptotic testing and rare-genotype handling."
+      ],
+      "required_formats": [
+        "TSV"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [
+        "Python",
+        "R",
+        "PLINK"
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "State exact versus asymptotic testing and rare-genotype handling.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "popgen-004",
+      "source_metadata_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/population-genetics/popgen-004/task.json",
+      "source_metadata_sha256": "71658d70ca69503e490f61706719516c450d588dcce2821035365fd553a32329",
+      "source_tags": [
+        "population-genetics"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "genotype-pca-outliers",
+      "required_stages": [
+        "prepare dosage matrix",
+        "select centering and scaling",
+        "compute sample PCs",
+        "standardize scores",
+        "flag outliers"
+      ],
+      "scientific_decisions": [
+        "Specify missingness, scaling and PCA sign equivalence; outliers are not automatically erroneous samples."
+      ],
+      "required_formats": [
+        "TSV"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [
+        "Python",
+        "R",
+        "PLINK"
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Specify missingness, scaling and PCA sign equivalence; outliers are not automatically erroneous samples.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "prot-001",
+      "source_metadata_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/proteomics/prot-001/task.json",
+      "source_metadata_sha256": "ea291c83074e7293c28f0a8a29e221eb934e2b33610cf7e018395f7ec2b260c8",
+      "source_tags": [
+        "proteomics"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "assay-intensity-summary",
+      "required_stages": [
+        "read measured protein intensities",
+        "establish logarithm scale",
+        "summarize abundance distribution"
+      ],
+      "scientific_decisions": [
+        "Use observed assay values and explicit missing-intensity handling."
+      ],
+      "required_formats": [
+        "TSV"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [
+        "Python",
+        "R"
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Use observed assay values and explicit missing-intensity handling.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "prot-002",
+      "source_metadata_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/proteomics/prot-002/task.json",
+      "source_metadata_sha256": "d766c94db648a4be0461a1de98c3ccaa4613a5843f566f9f77a2aa05245faff8",
+      "source_tags": [
+        "proteomics"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "assay-effect-ranking",
+      "required_stages": [
+        "join condition-level protein means",
+        "compute effect magnitude",
+        "rank proteins"
+      ],
+      "scientific_decisions": [
+        "Ranking supplied means does not establish statistical significance."
+      ],
+      "required_formats": [
+        "TSV"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [
+        "Python",
+        "R"
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Ranking supplied means does not establish statistical significance.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "prot-003",
+      "source_metadata_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/proteomics/prot-003/task.json",
+      "source_metadata_sha256": "fde0c29892954fcd878dfd205a2cfbdd78c6e2cd108bf7268c1a0d0bf40cd779",
+      "source_tags": [
+        "proteomics"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "proteomic-differential-abundance",
+      "required_stages": [
+        "join sample groups",
+        "log-transform and normalize intensities",
+        "fit group comparisons",
+        "adjust multiple tests"
+      ],
+      "scientific_decisions": [
+        "Handle missingness and detection limits explicitly; preserve biological replicates."
+      ],
+      "required_formats": [
+        "TSV"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [
+        "Python",
+        "R",
+        "scipy",
+        "statsmodels",
+        "limma"
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Handle missingness and detection limits explicitly; preserve biological replicates.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "stx-001",
+      "source_metadata_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/spatial-transcriptomics/stx-001/task.json",
+      "source_metadata_sha256": "b8919f2927ece5148b8542b4f207f68799b50f3299d61214597755399c42054b",
+      "source_tags": [
+        "spatial-transcriptomics"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "spatial-expression-gradient",
+      "required_stages": [
+        "join expression to coordinates",
+        "estimate axis-expression association",
+        "report direction and uncertainty"
+      ],
+      "scientific_decisions": [
+        "A spatial gradient is descriptive unless the dependence structure is modeled."
+      ],
+      "required_formats": [
+        "TSV"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [
+        "Python",
+        "R",
+        "Scanpy"
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "A spatial gradient is descriptive unless the dependence structure is modeled.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "stx-002",
+      "source_metadata_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/spatial-transcriptomics/stx-002/task.json",
+      "source_metadata_sha256": "cde72cbd243df85f040bbaf3069470c4dfec4e3d40716c1ae6db2a66310c9e69",
+      "source_tags": [
+        "spatial-transcriptomics"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "spatial-expression-localization",
+      "required_stages": [
+        "align expression and coordinates",
+        "define tissue center and distance groups",
+        "compare local expression",
+        "rank genes"
+      ],
+      "scientific_decisions": [
+        "Geometric center is a chosen spatial statistic, not an anatomical niche definition."
+      ],
+      "required_formats": [
+        "TSV"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [
+        "Python",
+        "R",
+        "Squidpy"
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Geometric center is a chosen spatial statistic, not an anatomical niche definition.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "stx-003",
+      "source_metadata_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/spatial-transcriptomics/stx-003/task.json",
+      "source_metadata_sha256": "229ab95c1cd546568dc4cd883fc76508ac12c726f6f1454f5010cb2191cc5c35",
+      "source_tags": [
+        "spatial-transcriptomics"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "spatial-cluster-summary",
+      "required_stages": [
+        "join cluster membership and coordinates",
+        "aggregate expression and positions",
+        "classify cluster summaries"
+      ],
+      "scientific_decisions": [
+        "Preserve tissue/sample identity and distinguish supplied labels from inferred clusters."
+      ],
+      "required_formats": [
+        "TSV"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [
+        "Python",
+        "R",
+        "Scanpy"
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Preserve tissue/sample identity and distinguish supplied labels from inferred clusters.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "stx-004",
+      "source_metadata_url": "https://github.com/GPTomics/bioTaskBench/blob/c9206d570098349143fec3d14d97699928a3bb13/tests/spatial-transcriptomics/stx-004/task.json",
+      "source_metadata_sha256": "9794183095061948ac8712513f80ee9515ac287ee74361c0f30035b99821cf84",
+      "source_tags": [
+        "spatial-transcriptomics"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "spatial-composition",
+      "required_stages": [
+        "assign spatial regions",
+        "count cell types within regions",
+        "compute region-specific fractions"
+      ],
+      "scientific_decisions": [
+        "Coordinate quadrants are geometric regions; they need biological justification before being called tissue niches."
+      ],
+      "required_formats": [
+        "TSV"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [
+        "Python",
+        "R",
+        "pandas"
+      ],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Coordinate quadrants are geometric regions; they need biological justification before being called tissue niches.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    }
+  ]
+}

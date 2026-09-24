@@ -1,0 +1,389 @@
+{
+  "benchmark": "BioAgent",
+  "scope": "Permitted task metadata and manually assessed workflow patterns; no benchmark answers or biological fixtures. OOD records are identifiers only.",
+  "pattern_scope": "Workflow-family prerequisites may exceed an individual endpoint; inspect each task required_stages and remaining_gaps.",
+  "workflow_patterns": {
+    "cross-model-rnaseq-enrichment": [
+      "alzheimer-mouse"
+    ],
+    "orthology-and-phylogeny": [
+      "comparative-genomics"
+    ],
+    "inherited-variant-prioritization": [
+      "cystic-fibrosis"
+    ],
+    "reads-to-differential-expression": [
+      "deseq"
+    ],
+    "read-mapping-and-variant-comparison": [
+      "evolution"
+    ],
+    "variant-calling-and-truth-comparison": [
+      "giab"
+    ],
+    "metagenomic-taxonomic-profile": [
+      "metagenomics"
+    ],
+    "single-cell-condition-comparison": [
+      "single-cell"
+    ],
+    "transcript-abundance": [
+      "transcript-quant"
+    ],
+    "metagenomic-assembly-and-classification": [
+      "viral-metagenomics"
+    ]
+  },
+  "tasks": [
+    {
+      "task_id": "alzheimer-mouse",
+      "source_tags": [],
+      "status": "component-only",
+      "assessment": "Manual workflow decomposition; shared operations only. No reproduction of benchmark inputs or expected outputs.",
+      "recipes": [
+        "real-rnaseq-size-factors",
+        "real-rnaseq-normalized-contrast",
+        "differential-expression-bh"
+      ],
+      "required_stages": [
+        "normalize counts",
+        "differential expression across models",
+        "KEGG enrichment",
+        "cross-model comparison"
+      ],
+      "remaining_gaps": [
+        "DE model and KEGG enrichment",
+        "Compose model-level comparisons on independent studies"
+      ],
+      "required_formats": [
+        "count matrix",
+        "sample metadata",
+        "pathway annotations"
+      ],
+      "required_tools": [
+        "DESeq2",
+        "pathway enrichment"
+      ],
+      "independent_data_sources": [
+        "GSE60450"
+      ],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "cross-model-rnaseq-enrichment"
+    },
+    {
+      "task_id": "comparative-genomics",
+      "source_tags": [],
+      "status": "component-only",
+      "assessment": "Component mapping: deposited phage annotations now exercise protein extraction from complete real genomes. These genomes are not a substitute for the multi-genome ortholog, alignment and tree-inference workflow.",
+      "recipes": [
+        "sequence-identity-clusters",
+        "alignment-column-filter",
+        "newick-distances",
+        "real-genome-cds-extraction",
+        "real-genome-translation",
+        "real-protein-alignment"
+      ],
+      "required_stages": [
+        "protein extraction",
+        "ortholog identification",
+        "alignment",
+        "phylogeny"
+      ],
+      "remaining_gaps": [
+        "An ortholog pipeline on independent related genomes; the globin alignment includes paralogs and does not establish orthology",
+        "Tree inference and cross-genome interpretation, beyond CDS extraction and alignment"
+      ],
+      "required_formats": [
+        "FASTA",
+        "GFF",
+        "Newick"
+      ],
+      "required_tools": [
+        "ortholog clustering",
+        "aligner",
+        "tree inference"
+      ],
+      "independent_data_sources": [
+        "RefSeq:NC_001422.1",
+        "RefSeq:NC_001416.1",
+        "RefSeq:NC_001604.1",
+        "UniProt:globins-20260923"
+      ],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "orthology-and-phylogeny"
+    },
+    {
+      "task_id": "cystic-fibrosis",
+      "source_tags": [],
+      "status": "component-only",
+      "assessment": "Manual workflow decomposition; shared operations only. No reproduction of benchmark inputs or expected outputs.",
+      "recipes": [
+        "vcf-genotype-masking",
+        "vcf-multiallelic-splitting",
+        "variant-coding-consequences"
+      ],
+      "required_stages": [
+        "variant QC",
+        "inheritance filtering",
+        "functional annotation",
+        "causal prioritization"
+      ],
+      "remaining_gaps": [
+        "Real pedigree and variants",
+        "Penetrance, segregation and candidate prioritization"
+      ],
+      "required_formats": [
+        "VCF",
+        "pedigree",
+        "GFF/FASTA"
+      ],
+      "required_tools": [
+        "variant annotation"
+      ],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "inherited-variant-prioritization"
+    },
+    {
+      "task_id": "deseq",
+      "source_tags": [],
+      "status": "component-only",
+      "assessment": "Manual workflow decomposition; shared operations only. No reproduction of benchmark inputs or expected outputs.",
+      "recipes": [
+        "fastq-quality-trimming",
+        "real-rnaseq-size-factors",
+        "differential-expression-bh"
+      ],
+      "required_stages": [
+        "read QC",
+        "alignment",
+        "gene counting",
+        "DESeq2 model"
+      ],
+      "remaining_gaps": [
+        "Actual reads through counts and fitted DE model"
+      ],
+      "required_formats": [
+        "FASTQ",
+        "FASTA/GTF",
+        "count matrix"
+      ],
+      "required_tools": [
+        "aligner",
+        "DESeq2"
+      ],
+      "independent_data_sources": [
+        "GSE60450"
+      ],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "reads-to-differential-expression"
+    },
+    {
+      "task_id": "evolution",
+      "source_tags": [],
+      "status": "component-only",
+      "assessment": "Manual workflow decomposition; shared operations only. No reproduction of benchmark inputs or expected outputs.",
+      "recipes": [
+        "dna-unique-mapping",
+        "sam-allele-pileup",
+        "vcf-site-filtering"
+      ],
+      "required_stages": [
+        "align reads",
+        "call variants",
+        "filter variants",
+        "compare variants"
+      ],
+      "remaining_gaps": [
+        "Real reads and coverage distributions",
+        "Native probabilistic variant calling and representation-aware comparison"
+      ],
+      "required_formats": [
+        "FASTQ",
+        "BAM",
+        "VCF"
+      ],
+      "required_tools": [
+        "aligner",
+        "variant caller"
+      ],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "read-mapping-and-variant-comparison"
+    },
+    {
+      "task_id": "giab",
+      "source_tags": [],
+      "status": "component-only",
+      "assessment": "Manual workflow decomposition; shared operations only. No reproduction of benchmark inputs or expected outputs.",
+      "recipes": [
+        "dna-unique-mapping",
+        "sam-allele-pileup",
+        "vcf-site-filtering"
+      ],
+      "required_stages": [
+        "align reads",
+        "call variants",
+        "filter variants",
+        "compare variants"
+      ],
+      "remaining_gaps": [
+        "Real reads and coverage distributions",
+        "Native probabilistic variant calling and representation-aware comparison"
+      ],
+      "required_formats": [
+        "FASTQ",
+        "BAM",
+        "VCF"
+      ],
+      "required_tools": [
+        "aligner",
+        "variant caller"
+      ],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "variant-calling-and-truth-comparison"
+    },
+    {
+      "task_id": "metagenomics",
+      "source_tags": [],
+      "status": "component-only",
+      "assessment": "Manual workflow decomposition; shared operations only. No reproduction of benchmark inputs or expected outputs.",
+      "recipes": [
+        "taxonomic-lca",
+        "taxonomy-counts",
+        "bray-curtis"
+      ],
+      "required_stages": [
+        "read QC",
+        "taxonomic classification",
+        "relative abundance"
+      ],
+      "remaining_gaps": [
+        "Real reads and pinned reference database",
+        "Native classification and abundance estimation"
+      ],
+      "required_formats": [
+        "FASTQ",
+        "taxonomy report"
+      ],
+      "required_tools": [
+        "taxonomic classifier"
+      ],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "metagenomic-taxonomic-profile"
+    },
+    {
+      "task_id": "single-cell",
+      "source_tags": [],
+      "status": "component-only",
+      "assessment": "Manual workflow decomposition; shared operations only. No reproduction of benchmark inputs or expected outputs.",
+      "recipes": [
+        "matrixmarket-cell-qc",
+        "matrixmarket-log-normalization",
+        "donor-counts",
+        "cell-fractions"
+      ],
+      "required_stages": [
+        "QC",
+        "normalization",
+        "embedding and clustering",
+        "cell annotation",
+        "condition comparison"
+      ],
+      "remaining_gaps": [
+        "Real donor-aware sparse matrix",
+        "Embedding, clustering, marker annotation and condition modeling"
+      ],
+      "required_formats": [
+        "10x Matrix Market",
+        "H5AD",
+        "sample metadata"
+      ],
+      "required_tools": [
+        "Scanpy or Seurat"
+      ],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "single-cell-condition-comparison"
+    },
+    {
+      "task_id": "transcript-quant",
+      "source_tags": [],
+      "status": "component-only",
+      "assessment": "Manual workflow decomposition; shared operations only. No reproduction of benchmark inputs or expected outputs.",
+      "recipes": [
+        "transcript-tpm"
+      ],
+      "required_stages": [
+        "read mapping",
+        "transcript quantification",
+        "abundance reporting"
+      ],
+      "remaining_gaps": [
+        "Real paired reads and transcriptome",
+        "Native abundance estimation instead of supplied counts"
+      ],
+      "required_formats": [
+        "FASTQ",
+        "FASTA",
+        "quantification table"
+      ],
+      "required_tools": [
+        "Salmon or kallisto"
+      ],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "transcript-abundance"
+    },
+    {
+      "task_id": "viral-metagenomics",
+      "source_tags": [],
+      "status": "component-only",
+      "assessment": "Component mapping: observed PhiX sequencing now exercises read QC and paired FASTQ filtering. A single-virus reference sample does not reproduce metagenomic diversity, assembly or taxonomic inference.",
+      "recipes": [
+        "assembly-nx",
+        "protein-local-search",
+        "taxonomic-lca",
+        "real-fastq-pair-filter",
+        "real-fastq-cycle-quality",
+        "real-fastq-quality-yield"
+      ],
+      "required_stages": [
+        "read QC",
+        "assembly",
+        "viral identification",
+        "taxonomic classification"
+      ],
+      "remaining_gaps": [
+        "Real reads to contigs",
+        "Virus detection and reference database validation"
+      ],
+      "required_formats": [
+        "FASTQ",
+        "FASTA",
+        "alignment report"
+      ],
+      "required_tools": [
+        "assembler",
+        "similarity search"
+      ],
+      "independent_data_sources": [
+        "ENA:ERR266411"
+      ],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "workflow_family": "metagenomic-assembly-and-classification"
+    }
+  ]
+}

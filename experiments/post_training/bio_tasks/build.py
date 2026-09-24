@@ -347,8 +347,63 @@ def inspection_page(root: Path, task: Identity, instance: Instance, files: TaskF
     (root / "inspect" / f"{task.task_id}.html").write_text(page)
 
 
+def benchmark_source_page(output: Path, inventory: dict) -> None:
+    rows = []
+    counts = Counter(source["distribution"] for source in inventory["sources"])
+    for source in inventory["sources"]:
+        if source["sheet"] != "Agentic (Harbor)":
+            raise ValueError("Only agentic benchmark sources belong in this collection")
+        if source["distribution"] == "OOD" and source["training_mapping_allowed"]:
+            raise ValueError(f"OOD source allows training mapping: {source['name']}")
+        detail = source.get("authoring_assessment", source["inspection"])
+        inventory_link = (
+            f'<br><a href="{html.escape(source["task_inventory"])}">Task inventory and workflow patterns</a>'
+            if "task_inventory" in source
+            else "<br>Task inventory pending."
+        )
+        rows.append(
+            f'<tr data-distribution="{source["distribution"]}"><td>'
+            f'<a href="{html.escape(source["source_url"])}">{html.escape(source["name"])}</a></td>'
+            f'<td>{source["distribution"]}</td><td>{html.escape(source["scientific_scope"])}</td>'
+            f'<td>{html.escape(source["scoring_access"])}</td><td>{html.escape(detail)}{inventory_link}</td></tr>'
+        )
+    page = (
+        '<!doctype html><meta charset="utf-8"><title>Agentic benchmark sources</title>'
+        "<style>body{margin:2rem;font:16px system-ui}td,th{padding:.5rem;text-align:left;vertical-align:top}"
+        "tr{border-bottom:1px solid #ddd}table{border-collapse:collapse}input,select{font:inherit;padding:.5rem}</style>"
+        '<a href="index.html">Corpus</a> · <a href="benchmark-coverage.html">Task-level coverage</a>'
+        "<h1>Agentic benchmark sources</h1>"
+        f'<p>{counts["ID"]} provisional ID and {counts["OOD"]} OOD benchmark/protocol rows. '
+        "The inventory covers the Agentic (Harbor) tab only. Protocol variants and subsets can share tasks; "
+        "these counts do not count independent datasets or validated workflows.</p>"
+        "<p>Source eligibility and task coverage are separate. The linked inventories record publicly inspectable tasks "
+        "and workflow patterns. Unreleased tasks and sources awaiting inspection are identified explicitly. "
+        "All existing OOD labels remain held out.</p>"
+        '<p><a href="benchmark_sources.json">Versioned source inventory and evidence</a></p>'
+        '<input id="search" type="search" placeholder="Search benchmark or workflow" aria-label="Search sources"> '
+        '<select id="distribution" aria-label="Filter distribution"><option value="ID">Provisional ID</option>'
+        '<option value="OOD">OOD holdouts</option><option value="">All sources</option></select>'
+        "<table><thead><tr><th>Benchmark / protocol</th><th>Distribution</th><th>Scientific scope</th>"
+        "<th>Scoring access</th><th>Assessment</th></tr></thead><tbody>"
+        + "".join(rows)
+        + '</tbody></table><script>const q=document.querySelector("#search"),d=document.querySelector("#distribution");'
+        'function filter(){for(const r of document.querySelectorAll("tbody tr"))'
+        "{r.hidden=!(r.textContent.toLowerCase().includes(q.value.toLowerCase())&&"
+        "(!d.value||r.dataset.distribution===d.value));}}"
+        'q.addEventListener("input",filter);d.addEventListener("change",filter);filter();</script>'
+    )
+    (output / "benchmark-sources.html").write_text(page)
+
+
 def benchmark_page(output: Path, registry: dict) -> None:
     rows = []
+    inventory_rows = []
+    for name, source in registry["benchmarks"].items():
+        inventory_rows.append(
+            f'<tr><td>{html.escape(name)}</td><td>{source["distribution"]}</td>'
+            f'<td>{source["inventory_count"]}</td><td>{source.get("advertised_total", "—")}</td>'
+            f'<td><a href="{html.escape(source["tasks_file"])}">Task IDs and patterns</a></td></tr>'
+        )
     for task in registry["tasks"]:
         source = registry["benchmarks"][task["benchmark"]]
         examples = " ".join(
@@ -359,7 +414,7 @@ def benchmark_page(output: Path, registry: dict) -> None:
             f'<tr data-benchmark="{html.escape(task["benchmark"])}" data-status="{task["status"]}" '
             f'data-distribution="{source["distribution"]}">'
             f'<td>{source["distribution"]}</td><td>{html.escape(task["benchmark"])}</td>'
-            f'<td><a href="{html.escape(source["source_url"])}">'
+            f'<td><a href="{html.escape(task.get("source_metadata_url", source["source_url"]))}">'
             f'{html.escape(task["task_id"])}</a></td><td>{task["status"]}</td>'
             "<td><details><summary>Stages, gaps and evidence</summary>"
             f"<pre>{details}</pre>{examples}</details></td></tr>"
@@ -380,23 +435,30 @@ def benchmark_page(output: Path, registry: dict) -> None:
         '<!doctype html><meta charset="utf-8"><title>Benchmark workflow coverage</title>'
         "<style>body{margin:2rem;font:16px system-ui}td,th{padding:.5rem;text-align:left;vertical-align:top}"
         "pre{white-space:pre-wrap;max-width:70rem}select,input{padding:.5rem}[hidden]{display:none}</style>"
-        '<a href="index.html">Corpus</a><h1>Benchmark workflow coverage</h1>'
+        '<a href="index.html">Corpus</a> · <a href="benchmark-sources.html">All agentic sources</a>'
+        "<h1>Benchmark workflow coverage</h1>"
         f'<p>{len(registry["tasks"])} task identifiers. {html.escape(str(dict(summaries)))}</p>'
         "<p>Component mappings identify shared operations. They do not establish benchmark workflow coverage. "
         "Reference runtimes below measure local solver checks, not teacher attempts. "
         "BioMysteryBench is OOD and excluded from training authoring. "
         "ID workflow coverage is the task-dataset target.</p>"
         '<p><a href="benchmark_coverage.json">Download pinned registry</a></p>'
+        "<table><thead><tr><th>Benchmark</th><th>Distribution</th><th>Inventoried tasks</th>"
+        "<th>Advertised full suite</th><th>Versioned inventory</th></tr></thead><tbody>"
+        + "".join(inventory_rows)
+        + "</tbody></table><p>Counts describe the pinned public release. Protocol variants can share tasks. "
+        "An inventory entry does not imply a validated training workflow.</p>"
         '<input id="search" type="search" placeholder="Search IDs, stages or gaps" aria-label="Search tasks">'
         '<select id="distribution" aria-label="Distribution"><option selected>ID</option><option>OOD</option>'
         '<option value="">All distributions</option></select>'
         f'<select id="benchmark" aria-label="Benchmark"><option value="">All benchmarks</option>{options}</select>'
         f'<select id="status" aria-label="Coverage status"><option value="">All statuses</option>{statuses}</select>'
-        "<table><thead><tr><th>Distribution</th><th>Benchmark</th><th>Task</th><th>Coverage</th><th>Details</th></tr></thead><tbody>"
+        '<table id="tasks"><thead><tr><th>Distribution</th><th>Benchmark</th><th>Task</th>'
+        "<th>Coverage</th><th>Details</th></tr></thead><tbody>"
         + "".join(rows)
         + '</tbody></table><script>const q=document.querySelector("#search"),b=document.querySelector("#benchmark"),'
         's=document.querySelector("#status"),d=document.querySelector("#distribution");'
-        'function filter(){for(const r of document.querySelectorAll("tbody tr"))'
+        'function filter(){for(const r of document.querySelectorAll("#tasks tbody tr"))'
         "{r.hidden=!(r.textContent.toLowerCase().includes(q.value.toLowerCase())&&"
         "(!b.value||r.dataset.benchmark===b.value)&&(!s.value||r.dataset.status===s.value)&&"
         "(!d.value||r.dataset.distribution===d.value));}}"
@@ -439,8 +501,33 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
     (output / "container_validation.json").write_bytes(container_evidence)
     data_sources = (SOURCE_DIR / "data_sources.json").read_bytes()
     (output / "data_sources.json").write_bytes(data_sources)
+    benchmark_sources = (SOURCE_DIR / "benchmark_sources.json").read_bytes()
+    (output / "benchmark_sources.json").write_bytes(benchmark_sources)
+    benchmark_source_page(output, json.loads(benchmark_sources))
     benchmark_bytes = (SOURCE_DIR / "benchmark_coverage.json").read_bytes()
     benchmark_registry = json.loads(benchmark_bytes)
+    benchmark_registry["tasks"] = []
+    benchmark_task_hashes = {}
+    source_policy = {source["name"]: source for source in json.loads(benchmark_sources)["sources"]}
+    for name, source in benchmark_registry["benchmarks"].items():
+        policy = source_policy[source["source_inventory_name"]]
+        if (source["distribution"], source["training_mapping_allowed"]) != (
+            policy["distribution"],
+            policy["training_mapping_allowed"],
+        ):
+            raise ValueError(f"Task inventory contradicts benchmark source policy: {name}")
+        relative = source["tasks_file"]
+        content = (SOURCE_DIR / relative).read_bytes()
+        part = json.loads(content)
+        if part["benchmark"] != name or len(part["tasks"]) != source["inventory_count"]:
+            raise ValueError(f"Benchmark task inventory identity/count mismatch: {name}")
+        if len({task["task_id"] for task in part["tasks"]}) != len(part["tasks"]):
+            raise ValueError(f"Duplicate benchmark task IDs: {name}")
+        target = output / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+        benchmark_task_hashes[relative] = hashlib.sha256(content).hexdigest()
+        benchmark_registry["tasks"].extend({"benchmark": name, **task} for task in part["tasks"])
     known_recipes = {recipe.id for recipe in RECIPES}
     for task in benchmark_registry["tasks"]:
         benchmark = benchmark_registry["benchmarks"][task["benchmark"]]
@@ -481,6 +568,8 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
         "native_validation_run_sha256": native_run_hashes,
         "data_sources_sha256": hashlib.sha256(data_sources).hexdigest(),
         "benchmark_mapping_source_sha256": hashlib.sha256(benchmark_bytes).hexdigest(),
+        "benchmark_sources_sha256": hashlib.sha256(benchmark_sources).hexdigest(),
+        "benchmark_task_inventory_sha256": benchmark_task_hashes,
         "repository_tool_execution": {row["name"]: row["tool_execution"] for row in coverage},
     }
     # A failed generation leaves an explicit incomplete manifest, never an apparently finished release.
@@ -679,7 +768,8 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
         '<p><a href="native_validation.json">Recorded package reference checks</a> · '
         '<a href="container_validation.json">Earlier Harbor oracle trials</a> '
         "(apply only to their recorded task and grader hashes).</p>"
-        '<p><a href="benchmark-coverage.html">Inspect workflow coverage: '
+        '<p><a href="benchmark-sources.html">Agentic benchmark source inventory</a> · '
+        '<a href="benchmark-coverage.html">Inspect current task-level workflow coverage: '
         f'{distribution_counts["ID"]} ID tasks; {distribution_counts["OOD"]} OOD tasks held out</a> · '
         '<a href="data_sources.json">Biological sources and provenance</a></p>'
         "<details><summary>All 50 repositories: scientific operation and execution status</summary>"

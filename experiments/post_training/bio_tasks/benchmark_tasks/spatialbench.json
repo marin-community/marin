@@ -1,0 +1,586 @@
+{
+  "benchmark": "SpatialBench",
+  "scope": "All publicly released example task descriptions at the pinned revision; full-suite coverage is not implied.",
+  "pattern_scope": "Manually assessed workflow operations and scientific decisions; task descriptions, answer values, rubrics and biological fixtures are excluded.",
+  "advertised_total": 159,
+  "public_inventory_count": 16,
+  "unreleased_or_uninventoried_count": 143,
+  "workflow_patterns": {
+    "spatially-resolved-cell-subtypes": [
+      "curio_ovary_cumulus_gc_count_immature"
+    ],
+    "spatial-anatomical-structures": [
+      "curio_ovary_follicle_count_immature"
+    ],
+    "spatial-cell-timecourse": [
+      "curio_ovary_oocyte_count_per_timepoint"
+    ],
+    "spatial-detection-resolution": [
+      "visium_bone_celltype_lineage_resolution_limit"
+    ],
+    "spatial-cell-composition-timecourse": [
+      "xenium_kidney_celltype_fib_immune_temporal"
+    ],
+    "sample-confounded-clustering": [
+      "curio_ovary_batch_driven_clustering",
+      "DR01_batch_confounded_clustering"
+    ],
+    "donor-aware-feature-comparison": [
+      "MOTIF04_neuronal_female_tf_family"
+    ],
+    "donor-aware-genome-wide-comparison": [
+      "SPATIAL10_genome_wide_de_pct"
+    ],
+    "batch-correction-diagnostics": [
+      "NORM01_batch_correction"
+    ],
+    "targeted-panel-cell-contrast": [
+      "norm_01_opc_olig_maturation_foldchange"
+    ],
+    "targeted-panel-coexpression": [
+      "norm_02_myelin_gene_coexpression_normalization"
+    ],
+    "spatial-segmentation-qc": [
+      "qc_01_endothelial_doublet_assessment"
+    ],
+    "donor-aware-control-gene-test": [
+      "SPATIAL07_sex_housekeeping_de"
+    ],
+    "niche-versus-tissue-enrichment": [
+      "xenium_kidney_spatial_cn7_composition_day14"
+    ],
+    "spatial-cell-colocalization": [
+      "xenium_kidney_spatial_fibro_inflammatory_niche_emergence_2"
+    ]
+  },
+  "tasks": [
+    {
+      "task_id": "curio_ovary_cumulus_gc_count_immature",
+      "source_metadata_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/cell_typing/curio_ovary_cumulus_gc_count_immature.json",
+      "source_metadata_sha256": "a28d71af7941a0b936c47273d71395d253ac10dde78d6394f3aad71053f3c83e",
+      "source_tags": [
+        "cell_typing"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "spatially-resolved-cell-subtypes",
+      "required_stages": [
+        "select tissue/time",
+        "identify broad cell lineages",
+        "locate neighboring anatomical cell types",
+        "refine subtype by spatial context",
+        "count subtype"
+      ],
+      "scientific_decisions": [
+        "Marker similarity alone cannot establish a spatially defined subtype."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Marker similarity alone cannot establish a spatially defined subtype.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "curio_ovary_follicle_count_immature",
+      "source_metadata_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/cell_typing/curio_ovary_follicle_count_immature.json",
+      "source_metadata_sha256": "c66fdc5d88f908e6f70dd39fe3ded06a0b4645889b7ac8bd6f45afc41ca259ec",
+      "source_tags": [
+        "cell_typing"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "spatial-anatomical-structures",
+      "required_stages": [
+        "select tissue/time",
+        "combine cell annotations and coordinates",
+        "group spatially contiguous structures",
+        "require constituent cell types",
+        "count structures"
+      ],
+      "scientific_decisions": [
+        "Define physical adjacency and object separation; nearby beads are not independent structures."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Define physical adjacency and object separation; nearby beads are not independent structures.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "curio_ovary_oocyte_count_per_timepoint",
+      "source_metadata_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/cell_typing/curio_ovary_oocyte_count_per_timepoint.json",
+      "source_metadata_sha256": "44f4e0599703ba09afba85d41a59993a3fda5e40ba1d83ca37e9af573f8626fc",
+      "source_tags": [
+        "cell_typing"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "spatial-cell-timecourse",
+      "required_stages": [
+        "annotate target cell type",
+        "preserve sample/time identity",
+        "count by time",
+        "describe temporal pattern"
+      ],
+      "scientific_decisions": [
+        "Distinguish capture counts from absolute cell abundance and specify normalization when comparing tissues."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Distinguish capture counts from absolute cell abundance and specify normalization when comparing tissues.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "visium_bone_celltype_lineage_resolution_limit",
+      "source_metadata_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/cell_typing/visium_bone_celltype_lineage_resolution_limit.json",
+      "source_metadata_sha256": "0a07273a7b55246e59a1d844bd997eb00b30379a7fe26e860b8f10f9e261d3d4",
+      "source_tags": [
+        "cell_typing"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "spatial-detection-resolution",
+      "required_stages": [
+        "inspect assay sparsity",
+        "quantify raw marker detection",
+        "assess spatial coherence",
+        "report resolvable lineages"
+      ],
+      "scientific_decisions": [
+        "Cell-lineage certainty needs evidence and an explicit resolution criterion, not a single marker hit."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Cell-lineage certainty needs evidence and an explicit resolution criterion, not a single marker hit.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "xenium_kidney_celltype_fib_immune_temporal",
+      "source_metadata_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/cell_typing/xenium_kidney_celltype_fib_immune_temporal.json",
+      "source_metadata_sha256": "835ad447bd9acec25f696d6a1e5c0bc4c99fe6beb3696806d1aff71de71db727",
+      "source_tags": [
+        "cell_typing"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "spatial-cell-composition-timecourse",
+      "required_stages": [
+        "annotate panel-aware cell populations",
+        "join time and tissue metadata",
+        "calculate within-sample proportions",
+        "identify temporal maxima"
+      ],
+      "scientific_decisions": [
+        "Denominators must use the same tissue compartment and sampling unit."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Denominators must use the same tissue compartment and sampling unit.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "curio_ovary_batch_driven_clustering",
+      "source_metadata_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/clustering/curio_ovary_batch_driven_clustering.json",
+      "source_metadata_sha256": "f51d616be08e2790384ce9cf5b65d5bc9eb53938e4beadd3dccc6f20b47915d4",
+      "source_tags": [
+        "clustering"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "sample-confounded-clustering",
+      "required_stages": [
+        "inspect sample and time design",
+        "normalize and cluster",
+        "calculate sample composition within clusters",
+        "quantify dominance"
+      ],
+      "scientific_decisions": [
+        "Time and sequencing batch may be confounded; numerical integration cannot identify unmeasured biology."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Time and sequencing batch may be confounded; numerical integration cannot identify unmeasured biology.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "MOTIF04_neuronal_female_tf_family",
+      "source_metadata_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/differential_expression/MOTIF04_neuronal_female_tf_family.json",
+      "source_metadata_sha256": "cc6908af5ec630915eb549df33e2bdef811343607c40ff1fc9452e561be979ef",
+      "source_tags": [
+        "differential_expression"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "donor-aware-feature-comparison",
+      "required_stages": [
+        "select cell population",
+        "join donor group metadata",
+        "define independent samples",
+        "test feature effects",
+        "count directional discoveries"
+      ],
+      "scientific_decisions": [
+        "Inspect donor-level replication and distinguish raw from adjusted significance."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Inspect donor-level replication and distinguish raw from adjusted significance.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "SPATIAL10_genome_wide_de_pct",
+      "source_metadata_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/differential_expression/SPATIAL10_genome_wide_de_pct.json",
+      "source_metadata_sha256": "20cd3efdd7ae50b68f40030e274f8f96aee55cfee658f39bb3b05e83cf493374",
+      "source_tags": [
+        "differential_expression"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "donor-aware-genome-wide-comparison",
+      "required_stages": [
+        "join donor group labels",
+        "define independent samples",
+        "test the stated feature universe",
+        "summarize discovery fraction"
+      ],
+      "scientific_decisions": [
+        "Do not treat spatial barcodes as independent donors; distinguish gene activity from RNA expression."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Do not treat spatial barcodes as independent donors; distinguish gene activity from RNA expression.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "DR01_batch_confounded_clustering",
+      "source_metadata_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/dimensionality_reduction/DR01_batch_confounded_clustering.json",
+      "source_metadata_sha256": "a3e25379f73edead899722770e9053f16fb06866f543e693ebc80024e814389b",
+      "source_tags": [
+        "dimensionality_reduction"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "sample-confounded-clustering",
+      "required_stages": [
+        "inspect transformed matrix and sample design",
+        "select variable features",
+        "compute PCs and clusters",
+        "quantify donor dominance"
+      ],
+      "scientific_decisions": [
+        "Keep preprocessing and cluster evaluation tied to the same cell identities."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Keep preprocessing and cluster evaluation tied to the same cell identities.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "NORM01_batch_correction",
+      "source_metadata_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/normalization/NORM01_batch_correction.json",
+      "source_metadata_sha256": "764c4eda63044afbe227c4f09bc3b7dd42b0c70ccf19de25828993a1cbedbf18",
+      "source_tags": [
+        "normalization"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "batch-correction-diagnostics",
+      "required_stages": [
+        "inspect sample design",
+        "normalize and integrate",
+        "quantify sample structure after correction"
+      ],
+      "scientific_decisions": [
+        "Assess whether batch and biology are identifiable; avoid erasing group effects to improve mixing."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Assess whether batch and biology are identifiable; avoid erasing group effects to improve mixing.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "norm_01_opc_olig_maturation_foldchange",
+      "source_metadata_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/normalization/norm_01_opc_olig_maturation_foldchange.json",
+      "source_metadata_sha256": "af4af52757882e57df695d6789a24403147b41a49fbe45acfdeb3dd2d6b74869",
+      "source_tags": [
+        "normalization"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "targeted-panel-cell-contrast",
+      "required_stages": [
+        "select tissue, age and cell populations",
+        "choose panel-appropriate normalization",
+        "calculate marker contrast"
+      ],
+      "scientific_decisions": [
+        "Targeted panels can violate whole-transcriptome normalization assumptions; declare effect units and pseudocounts."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Targeted panels can violate whole-transcriptome normalization assumptions; declare effect units and pseudocounts.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "norm_02_myelin_gene_coexpression_normalization",
+      "source_metadata_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/normalization/norm_02_myelin_gene_coexpression_normalization.json",
+      "source_metadata_sha256": "d4b199b85fad963115602f83adc177393e8172c8c63a52ba2f6b084657c92a72",
+      "source_tags": [
+        "normalization"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "targeted-panel-coexpression",
+      "required_stages": [
+        "select matching tissue, age and lineage",
+        "choose panel-appropriate normalization",
+        "compute gene-gene rank association"
+      ],
+      "scientific_decisions": [
+        "Library-size normalization can induce associations; retain zero and tie conventions."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Library-size normalization can induce associations; retain zero and tie conventions.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "qc_01_endothelial_doublet_assessment",
+      "source_metadata_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/qc/qc_01_endothelial_doublet_assessment.json",
+      "source_metadata_sha256": "392b8fbd0e43cc33b2600e801f14183b80ac08392f0485ff6b2c753e5fdf5c13",
+      "source_tags": [
+        "qc"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "spatial-segmentation-qc",
+      "required_stages": [
+        "inspect cell boundaries and expression",
+        "distinguish coexpression from segmentation overlap",
+        "estimate doublet fraction"
+      ],
+      "scientific_decisions": [
+        "Marker coexpression alone does not identify true doublets; independent spatial/segmentation evidence is needed."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Marker coexpression alone does not identify true doublets; independent spatial/segmentation evidence is needed.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "SPATIAL07_sex_housekeeping_de",
+      "source_metadata_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/spatial_analysis/SPATIAL07_sex_housekeeping_de.json",
+      "source_metadata_sha256": "501664bb67c51ebf8cbb87b34d6e8ee9902cdad5024bb803a796fac7249a7ad4",
+      "source_tags": [
+        "spatial_analysis"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "donor-aware-control-gene-test",
+      "required_stages": [
+        "establish donor groups",
+        "inspect control-gene data",
+        "define independent sampling unit",
+        "test group differences",
+        "summarize control findings"
+      ],
+      "scientific_decisions": [
+        "Avoid circular grouping and barcode pseudoreplication; control genes are not guaranteed invariant."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Avoid circular grouping and barcode pseudoreplication; control genes are not guaranteed invariant.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "xenium_kidney_spatial_cn7_composition_day14",
+      "source_metadata_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/spatial_analysis/xenium_kidney_spatial_cn7_composition_day14.json",
+      "source_metadata_sha256": "19ffed66980a5309203b2d8cf8c23a9d25721ac9ecfac096c26bca8907d3d244",
+      "source_tags": [
+        "spatial_analysis"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "niche-versus-tissue-enrichment",
+      "required_stages": [
+        "select expanded niche/time",
+        "count within-niche cell populations",
+        "calculate matched tissue frequencies",
+        "compute relative enrichment"
+      ],
+      "scientific_decisions": [
+        "The most abundant population and the most enriched population are different quantities."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "The most abundant population and the most enriched population are different quantities.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "xenium_kidney_spatial_fibro_inflammatory_niche_emergence_2",
+      "source_metadata_url": "https://github.com/latchbio/spatialbench/blob/5042c4f3ee597da1590650c7b894d068ae968e26/example_evals/spatial_analysis/xenium_kidney_spatial_fibro_inflammatory_niche_emergence_2.json",
+      "source_metadata_sha256": "ca90d1fb51f7eed35e5ecebb91960ddeb808b08a3117c13863ee02216127cf73",
+      "source_tags": [
+        "spatial_analysis"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "spatial-cell-colocalization",
+      "required_stages": [
+        "annotate panel-aware populations",
+        "construct within-section spatial neighbors",
+        "compute neighborhood composition",
+        "summarize temporal colocalization"
+      ],
+      "scientific_decisions": [
+        "Do not connect different tissue sections; specify neighbor size, self-neighbor and tissue-edge policies."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Do not connect different tissue sections; specify neighbor size, self-neighbor and tissue-edge policies.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    }
+  ]
+}

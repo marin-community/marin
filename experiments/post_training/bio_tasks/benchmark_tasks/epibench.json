@@ -1,0 +1,285 @@
+{
+  "benchmark": "EpiBench",
+  "scope": "All publicly released example task descriptions at the pinned revision; full-suite coverage is not implied.",
+  "pattern_scope": "Manually assessed workflow operations and scientific decisions; task descriptions, answer values, rubrics and biological fixtures are excluded.",
+  "advertised_total": 106,
+  "public_inventory_count": 7,
+  "unreleased_or_uninventoried_count": 99,
+  "workflow_patterns": {
+    "atac-consensus-and-tss-context": [
+      "atac_1a"
+    ],
+    "enhancer-motif-program": [
+      "chipseq_K2"
+    ],
+    "direction-aware-multiomic-events": [
+      "cold_03b"
+    ],
+    "paired-regulatory-methylation-expression": [
+      "gse149608_c3_enhancer_methylation"
+    ],
+    "assembly-aware-promoter-methylation": [
+      "gse149608_wnt2_promoter_genome_build"
+    ],
+    "broad-chromatin-assay-comparison": [
+      "zebrafish_009c_cutnrun_vs_chip_h3k9me3"
+    ],
+    "multi-mark-promoter-context": [
+      "zebrafish_014g_h2az_bivalent_promoters"
+    ]
+  },
+  "tasks": [
+    {
+      "task_id": "atac_1a",
+      "source_metadata_url": "https://github.com/latchbio/epibench/blob/6bc01f15125f5a01ab78ce1fd2fc2c51c4ca04f3/evals/atac_1a/eval.json",
+      "source_metadata_sha256": "982fcc2cf0c70c8c80338de1ef9c4ffac328000e775c3909ad81768445031f02",
+      "source_tags": [
+        "qc"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "atac-consensus-and-tss-context",
+      "required_stages": [
+        "read aligned fragments and sample design",
+        "select insertion/fragment peak convention",
+        "call sample peaks",
+        "form design-aware consensus",
+        "annotate transcript-start proximity"
+      ],
+      "scientific_decisions": [
+        "Freeze assembly, peak-calling representation, replicate consensus and TSS denominator."
+      ],
+      "required_formats": [
+        "BAM",
+        "GTF",
+        "sample sheet"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Freeze assembly, peak-calling representation, replicate consensus and TSS denominator.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "chipseq_K2",
+      "source_metadata_url": "https://github.com/latchbio/epibench/blob/6bc01f15125f5a01ab78ce1fd2fc2c51c4ca04f3/evals/chipseq_K2/eval.json",
+      "source_metadata_sha256": "294ce479ad5966f6151826917eb615908b604e901462262c2f0ee87c04fd55fb",
+      "source_tags": [
+        "differential_expression"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "enhancer-motif-program",
+      "required_stages": [
+        "select distal enhancer peak universe",
+        "extract matched genome sequences",
+        "build sequence background",
+        "calculate motif enrichment",
+        "compare motif families"
+      ],
+      "scientific_decisions": [
+        "A disease label is not evidence for the leading motif program; overlapping motif families need equivalence rules."
+      ],
+      "required_formats": [
+        "BAM",
+        "BED",
+        "coverage tracks",
+        "FASTA",
+        "motif database"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "A disease label is not evidence for the leading motif program; overlapping motif families need equivalence rules.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "cold_03b",
+      "source_metadata_url": "https://github.com/latchbio/epibench/blob/6bc01f15125f5a01ab78ce1fd2fc2c51c4ca04f3/evals/cold_03b/eval.json",
+      "source_metadata_sha256": "a2e7f7cd29b9f45fac3dd27a1f99d031499acbdafa97f8347c2c45e26a152fba",
+      "source_tags": [
+        "differential_expression"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "direction-aware-multiomic-events",
+      "required_stages": [
+        "retain condition and effect-direction labels",
+        "match accessibility events to RNA changes",
+        "classify support",
+        "annotate transcription-start context",
+        "compare event classes"
+      ],
+      "scientific_decisions": [
+        "Pooling before matching loses condition/direction information; transcript proximity does not prove regulation."
+      ],
+      "required_formats": [
+        "BED",
+        "differential-expression tables",
+        "GTF"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Pooling before matching loses condition/direction information; transcript proximity does not prove regulation.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "gse149608_c3_enhancer_methylation",
+      "source_metadata_url": "https://github.com/latchbio/epibench/blob/6bc01f15125f5a01ab78ce1fd2fc2c51c4ca04f3/evals/gse149608_c3_enhancer_methylation/eval.json",
+      "source_metadata_sha256": "524fa656ab76483795745bcb48917ba26333913c84d30728caf34abf998e3472",
+      "source_tags": [
+        "differential_expression"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "paired-regulatory-methylation-expression",
+      "required_stages": [
+        "join matched biological specimens",
+        "estimate promoter methylation and expression effects",
+        "select joint effect class",
+        "quantify nearby enhancer changes"
+      ],
+      "scientific_decisions": [
+        "Preserve tumor-normal pairing and avoid mechanistic claims from association alone."
+      ],
+      "required_formats": [
+        "methylation matrix",
+        "RNA counts",
+        "chromatin-state intervals",
+        "sample pairing"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Preserve tumor-normal pairing and avoid mechanistic claims from association alone.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "gse149608_wnt2_promoter_genome_build",
+      "source_metadata_url": "https://github.com/latchbio/epibench/blob/6bc01f15125f5a01ab78ce1fd2fc2c51c4ca04f3/evals/gse149608_wnt2_promoter_genome_build/eval.json",
+      "source_metadata_sha256": "424b66b1730b94cca122e2643ae840e71449cd61265087f82eb40bf071be9d5c",
+      "source_tags": [
+        "differential_expression"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "assembly-aware-promoter-methylation",
+      "required_stages": [
+        "identify coordinate assembly",
+        "resolve gene transcription start",
+        "define promoter window",
+        "intersect CpG sites",
+        "summarize tumor methylation"
+      ],
+      "scientific_decisions": [
+        "Coordinate build and promoter window are part of the scientific contract."
+      ],
+      "required_formats": [
+        "Parquet",
+        "assembly-specific annotation"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Coordinate build and promoter window are part of the scientific contract.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "zebrafish_009c_cutnrun_vs_chip_h3k9me3",
+      "source_metadata_url": "https://github.com/latchbio/epibench/blob/6bc01f15125f5a01ab78ce1fd2fc2c51c4ca04f3/evals/zebrafish_009c_cutnrun_vs_chip_h3k9me3/eval.json",
+      "source_metadata_sha256": "1efca12679c382b9e90d656301914e75d170e5425bb07ea025e9017678f966c2",
+      "source_tags": [
+        "qc"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "broad-chromatin-assay-comparison",
+      "required_stages": [
+        "combine assay replicates",
+        "call mark-appropriate broad domains",
+        "compare peak overlap",
+        "quantify fragment enrichment",
+        "measure interval-union coverage"
+      ],
+      "scientific_decisions": [
+        "Broad chromatin domains require assay-aware background and overlap denominators."
+      ],
+      "required_formats": [
+        "BAM",
+        "broadPeak"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Broad chromatin domains require assay-aware background and overlap denominators.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "zebrafish_014g_h2az_bivalent_promoters",
+      "source_metadata_url": "https://github.com/latchbio/epibench/blob/6bc01f15125f5a01ab78ce1fd2fc2c51c4ca04f3/evals/zebrafish_014g_h2az_bivalent_promoters/eval.json",
+      "source_metadata_sha256": "fa418d0a426b2ef6534a86ba30d6051eee1907f943a17a2238bbfdd5c8f3e4e9",
+      "source_tags": [
+        "differential_expression"
+      ],
+      "status": "unmapped",
+      "assessment": "Permitted public task description manually assessed; benchmark inputs, answers and grading targets are not training seeds.",
+      "workflow_family": "multi-mark-promoter-context",
+      "required_stages": [
+        "derive promoters from strand-aware annotation",
+        "intersect multiple histone-mark peak sets",
+        "classify promoters",
+        "compare conditional and background rates",
+        "count joint occupancy"
+      ],
+      "scientific_decisions": [
+        "Retain unique promoter/gene policies and denominators; joint occupancy does not establish a deposition mechanism."
+      ],
+      "required_formats": [
+        "narrowPeak",
+        "broadPeak",
+        "GTF"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Retain unique promoter/gene policies and denominators; joint occupancy does not establish a deposition mechanism.",
+        "Author and validate the connected operation on independent observed biological inputs with complete artifact checks."
+      ]
+    }
+  ]
+}
