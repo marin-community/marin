@@ -206,8 +206,10 @@ retains 365 provisional ID identifiers at pinned dataset revisions: 205 BixBench
 100 CompBioBench, 50 BiomniBench-DA and 10 BioAgent. Twenty-three have manually assessed
 component mappings and 342 are unmapped. The 90 BioMysteryBench identifiers are
 tracked separately as OOD; their task formulations remain excluded from training authoring. None is marked workflow-validated.
-The inspection browser binds mappings to generated examples and their local reference
-results. These timings are solver-check runtimes, not teacher latency measurements.
+All 365 ID records now have manually assessed workflow prerequisites. For BixBench,
+shared workflow-family stages are distinguished from individual question endpoints;
+this inventory does not add execution coverage. The inspection browser binds mappings
+to generated examples and their local reference results. These timings are solver-check runtimes, not teacher latency measurements.
 
 Twenty-two recipes supply unchanged biological observations or declared observed subsets:
 
