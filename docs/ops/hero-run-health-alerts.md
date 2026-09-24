@@ -56,15 +56,19 @@ a training run with no signal that it happened. That is what `iris_state_stale` 
 Uniform routing over the hero rung's experts is 5.951 entropy, so falling entropy is expert collapse.
 The 7% drop limit sits above the intermittent 5% spikes a healthy MoE run shows.
 
-The enrollment query returns the latest `execution_uid` with each phase heartbeat. One subsequent,
-bounded `levanter.metrics` scan per bridge cache interval feeds all three rules, using exact
-cluster, run, and execution predicates rather than scanning the table again to rediscover the
-attempt. `loss_jump` reads its two loss windows against each other, so it filters them to that same
-execution. A retry keeps the run ID and takes a new `execution_uid`, so partitioning on the run alone
-would sum one attempt's skipped steps into the next and compare evaluations across a restore that
-redid steps. Process zero is the stable choice because Levanter publishes tracker metrics only from
-it. The evaluation check retains the newest three samples from that execution. A check reads a newest
-sample only while it is under 15 minutes old, except evaluations, which remain fresh for 30 minutes.
+The enrollment query discovers phase heartbeats over the one-hour enrollment window and returns the
+latest `execution_uid` with each one. If Iris still reports a run whose phase heartbeat is older, the
+bridge recovers its execution identity with a separate 24-hour query restricted to that exact
+cluster and `run_id`. This keeps the silent-run check without making healthy evaluations scan a day
+of every hero partition. One subsequent, bounded `levanter.metrics` scan per bridge cache interval
+feeds all three rules, using exact cluster, run, and execution predicates rather than scanning the
+table again to rediscover the attempt. `loss_jump` reads its two loss windows against each other, so
+it filters them to that same execution. A retry keeps the run ID and takes a new `execution_uid`, so
+partitioning on the run alone would sum one attempt's skipped steps into the next and compare
+evaluations across a restore that redid steps. Process zero is the stable choice because Levanter
+publishes tracker metrics only from it. The evaluation check retains the newest three samples from
+that execution. A check reads a newest sample only while it is under 15 minutes old, except
+evaluations, which remain fresh for 30 minutes.
 
 The throughput checks count how much of the window sat below the floor rather than averaging it —
 the median comparison the Pushover monitor makes, which keeps one restart step at zero from reading

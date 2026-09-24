@@ -12,7 +12,16 @@ dashboard never sends admin RPC SQL, and every route feeds Infinity's backend pa
 Routes, grouped by source (cluster is a path segment where it applies):
 
     GET /finelog/{cluster}/query?sql=&from=&to=  finelog SQL (window macros, cached per bucket)
+    GET /finelog/{cluster}/v1/node/overview       bounded shared Node Details dataset
+    GET /finelog/{cluster}/v1/training/overview   bounded shared Training dataset
+    GET /finelog/{cluster}/v1/runs/overview       bounded shared multi-run dataset
+    GET /finelog/{cluster}/v1/rl/overview         bounded shared RL dataset
+    GET /finelog/{cluster}/v1/rl/recent           bounded recent RL runs
+    GET /finelog/{cluster}/v1/async-rl/overview   bounded shared async RL dataset
+    GET /finelog/{cluster}/v1/accelerator/overview bounded shared accelerator dataset
+    GET /finelog/{cluster}/v1/jobs/overview       five namespace-bounded Jobs sources
     GET /finelog/{cluster}/v1/vllm/overview       bounded per-job/run vLLM telemetry
+    GET /finelog/{cluster}/v1/zephyr/overview     bounded ranked shuffle snapshot
     GET /finelog/marin/fleet_health              hub query health + k8s mirror readiness
     GET /finelog/{cluster}/alerts/query          alert SQL; no data when Finelog is unavailable
     GET /finelog/marin/relay_status              direct regional relay heartbeats
@@ -74,12 +83,17 @@ Loom one also exchanges tokens and creates a run over HTTP.
 
 import json
 import logging
-from collections.abc import Hashable, Mapping, Sequence
+import threading
+import time
+from collections.abc import Callable, Hashable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 
 import pyarrow as pa
 import uvicorn
+from accelerator_observability import accelerator_overview_dataset
+from async_rl_observability import async_rl_overview_dataset
 from cache import TtlCache
 from config import (
     BRIDGE_PORT,
@@ -92,8 +106,11 @@ from config import (
     BridgeConfig,
     ClusterTarget,
 )
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
+from dashboard_dataset import DashboardDataset, project_dataset, validate_table_budget
 from errors import FinelogUnavailableError, UpstreamError
-from finelog.errors import QueryResultTooLargeError
+from finelog.errors import QueryResultTooLargeError, QueryTimeoutError, StatsError
 from finelog_health import FinelogHealth
 from finelog_source import FinelogSource, MetricSource
 from github_app import GithubAppAuth
@@ -110,8 +127,17 @@ from hero_health import (
     telemetry_alert_rows,
     watched_runs,
 )
-from hero_runs import HeroRun, RunIdentity, active_hero_runs, phase_enrollment_query, task_state_query
+from hero_runs import (
+    HeroRun,
+    RunIdentity,
+    active_hero_runs,
+    phase_execution_query,
+    phase_root_key,
+    recent_phase_query,
+    task_state_query,
+)
 from iris_source import IrisSource
+from jobs_observability import jobs_overview_dataset
 from k8s_source import K8sFleet, K8sSource
 from loom_alerts import (
     LoomAlertClient,
@@ -123,20 +149,30 @@ from loom_alerts import (
 )
 from loss_spikes import loss_spike_alert_rows, loss_window_query
 from nightly_config import NIGHTLY_LANES
+from node_observability import node_overview_dataset
 from relay_health import relay_alert_rows
+from rl_observability import recent_rl_runs_dataset, rl_overview_dataset
 from rl_producers import check_window, collect_producers
+from runs_observability import runs_overview_dataset
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
+from training_observability import training_overview_dataset
 from training_stalls import telemetry_query, training_stall_alert_rows
 from vllm_observability import (
+    VLLM_DETAIL_MAX_WINDOW_MS,
     VLLM_MAX_RESULT_ROWS,
+    VLLM_MAX_SERIES,
     VLLM_OVERVIEW_SECTIONS,
     VllmIdentityField,
     vllm_overview_query,
+    vllm_overview_table,
+    vllm_run_summary_samples_query,
+    vllm_run_summary_table,
 )
 from wandb_source import WandbSource
+from zephyr_observability import zephyr_overview_dataset
 from zephyr_stalls import zephyr_progress_query, zephyr_stall_alert_rows
 
 logger = logging.getLogger(__name__)
@@ -232,14 +268,16 @@ def substitute_time_macros(sql: str, start: datetime | None, end: datetime | Non
 def _json_safe(value: object) -> object:
     """Coerce one Arrow cell into a JSON-serializable value.
 
-    Timestamps become epoch milliseconds (naive cells read as UTC); bytes become
-    text; everything else passes through.
+    Timestamps become epoch milliseconds (naive cells read as UTC), bytes become
+    text, and decimals become floats. Everything else passes through.
     """
     if isinstance(value, datetime):
         at = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
         return round(at.timestamp() * 1000)
     if isinstance(value, (bytes, bytearray)):
         return bytes(value).decode("utf-8", "replace")
+    if isinstance(value, Decimal):
+        return float(value)
     return value
 
 
@@ -312,6 +350,103 @@ class _BadRequest(Exception):
     """A malformed request, surfaced as HTTP 400."""
 
 
+def _vllm_status_row(status: str, message: str) -> dict[str, object]:
+    return {
+        "t": None,
+        "section": "diagnostic_status",
+        "metric": "query",
+        "stat": "state",
+        "series": message,
+        "value": None,
+        "unit": None,
+        "status": status,
+        "samples": None,
+        "gap_seconds": None,
+    }
+
+
+def _vllm_attention_row(rows: list[dict[str, object]], *, summary_only: bool) -> dict[str, object]:
+    """Compare already projected server counters without inferring request outcomes."""
+    if summary_only:
+        observed = [
+            row["value"] for row in rows if row["section"] == "run_summary" and row["metric"] == "ttft_observations"
+        ]
+        observations = float(observed[0]) if observed and isinstance(observed[0], (int, float)) else None
+        finishes = [
+            float(row["value"])
+            for row in rows
+            if row["section"] == "run_summary"
+            and row["metric"] == "request_success_total"
+            and isinstance(row["value"], (int, float))
+        ]
+        finished = sum(finishes) if finishes else None
+    else:
+        observed = next(
+            (
+                row["samples"]
+                for row in rows
+                if row["section"] == "latency" and row["metric"] == "ttft" and row["stat"] == "mean"
+            ),
+            None,
+        )
+        observations = float(observed) if isinstance(observed, (int, float)) else None
+        finish_samples = next((row["samples"] for row in rows if row["section"] == "length_finish_fraction"), None)
+        finished = float(finish_samples) if isinstance(finish_samples, (int, float)) else None
+
+    if observations is None or finished is None:
+        state = "no_conclusion"
+        message = (
+            "Comparable first-token and engine-finish counts unavailable. Check server detail and evaluator in Iris."
+        )
+        gap = None
+    elif observations > finished:
+        state = "check_count_gap"
+        message = (
+            f"{observations:g} first-token observations vs {finished:g} request_success_total finishes. "
+            "Partial ranges can differ; check the evaluator in Iris."
+        )
+        gap = observations - finished
+    else:
+        state = "no_conclusion"
+        message = "No excess first-token observations in this range. Check evaluator in Iris for client outcomes."
+        gap = observations - finished
+
+    return {
+        **_vllm_status_row(state, message),
+        "metric": "run attention",
+        "stat": "selected-range count comparison",
+        "value": gap,
+        "unit": "observations minus finishes",
+        "ttft_observations": observations,
+        "request_success_finishes": finished,
+    }
+
+
+def _vllm_unavailable_attention_row(status: str) -> dict[str, object]:
+    state = "no_conclusion" if status == "empty" else "unavailable"
+    message = (
+        "No server telemetry in this range. Check the serve ID and evaluator in Iris."
+        if status == "empty"
+        else "Server comparison unavailable. Retry or narrow the range, then check the evaluator in Iris."
+    )
+    return {
+        **_vllm_status_row(state, message),
+        "metric": "run attention",
+        "ttft_observations": None,
+        "request_success_finishes": None,
+    }
+
+
+def _vllm_query_timed_out(error: BaseException) -> bool:
+    while error is not None:
+        if isinstance(error, (QueryTimeoutError, TimeoutError)):
+            return True
+        if isinstance(error, ConnectError) and error.code == Code.DEADLINE_EXCEEDED:
+            return True
+        error = error.__cause__
+    return False
+
+
 def _require(params, name: str) -> str:
     value = params.get(name)
     if not value:
@@ -335,6 +470,13 @@ def _require_time(params, name: str) -> datetime:
         return _parse_time(raw, name)
     except ValueError as err:
         raise _BadRequest(str(err)) from err
+
+
+def _csv_values(params, name: str) -> tuple[str, ...]:
+    values = tuple(value for value in _require(params, name).split(",") if value)
+    if not values:
+        raise _BadRequest(f"{name} must name at least one value")
+    return values
 
 
 def _bucket(at: datetime | None, ttl: float) -> int | None:
@@ -419,7 +561,178 @@ def create_app(
     github_cache: TtlCache = TtlCache(config.github_cache_ttl)
     k8s_cache: TtlCache = TtlCache(config.k8s_cache_ttl)
     wandb_cache: TtlCache = TtlCache(config.github_cache_ttl)
+    # Grafana and the bridge share one CPU and 2 GiB. Serialize these bounded
+    # local projections within one app; the cache coalesces identical panels.
+    dashboard_projection_lock = threading.Lock()
     finelog_queries = _FinelogQueries(config, finelog_sources, finelog_cache)
+
+    def dataset_rows(target: ClusterTarget, dataset: DashboardDataset) -> list[dict[str, object]]:
+        key = (target.name, dataset.name, *dataset.cache_key)
+
+        def run() -> list[dict[str, object]]:
+            source = finelog_sources[target.name]
+            source_tables: dict[str, pa.Table] = {}
+            started = time.monotonic()
+            for source_query in dataset.sources:
+                query_started = time.monotonic()
+                table = source.query(source_query.sql, max_rows=min(source_query.max_rows, config.max_rows))
+                validate_table_budget(
+                    source_query.name,
+                    table,
+                    max_rows=source_query.max_rows,
+                    max_samples=source_query.max_samples,
+                )
+                source_tables[source_query.name] = table
+                logger.info(
+                    "dashboard dataset source dataset=%s source=%s cluster=%s rows=%d elapsed_ms=%d",
+                    dataset.name,
+                    source_query.name,
+                    target.name,
+                    table.num_rows,
+                    round((time.monotonic() - query_started) * 1000),
+                )
+            rows = project_dataset(
+                dataset,
+                source_tables,
+                dashboard_projection_lock,
+                rows_to_json,
+                min(dataset.max_result_rows, config.max_rows),
+            )
+            logger.info(
+                "dashboard dataset complete dataset=%s cluster=%s sources=%d rows=%d elapsed_ms=%d",
+                dataset.name,
+                target.name,
+                len(dataset.sources),
+                len(rows),
+                round((time.monotonic() - started) * 1000),
+            )
+            return rows
+
+        return finelog_cache.get_or_compute(key, run)
+
+    def dashboard_dataset_response(
+        request: Request,
+        name: str,
+        build: Callable[[Mapping[str, str], int, int], DashboardDataset],
+    ) -> JSONResponse:
+        try:
+            target = _target_for(request.path_params["cluster"], finelog_sources)
+            params = request.query_params
+            view = params.get("view")
+            start_ms = round(_require_time(params, "from").timestamp() * 1000)
+            end_ms = round(_require_time(params, "to").timestamp() * 1000)
+            try:
+                dataset = build(params, start_ms, end_ms)
+            except ValueError as err:
+                raise _BadRequest(str(err)) from err
+            if view and view not in dataset.views:
+                raise _BadRequest(f"unknown {name} view {view!r}; configured: {sorted(dataset.views)}")
+            rows = dataset_rows(target, dataset)
+            return JSONResponse(rows if not view else [row for row in rows if row["section"] == view])
+        except _BadRequest as err:
+            return JSONResponse({"error": str(err)}, status_code=400)
+        except QueryResultTooLargeError as err:
+            return JSONResponse({"error": f"{err}; narrow the {name} filters or time range"}, status_code=400)
+
+    def node_overview(request: Request) -> JSONResponse:
+        return dashboard_dataset_response(
+            request,
+            "node overview",
+            lambda params, start_ms, end_ms: node_overview_dataset(
+                _csv_values(params, "clusters"),
+                _csv_values(params, "nodes"),
+                start_ms,
+                end_ms,
+                int(_require(params, "bucket_ms")),
+            ),
+        )
+
+    def zephyr_overview(request: Request) -> JSONResponse:
+        return dashboard_dataset_response(
+            request,
+            "Zephyr overview",
+            lambda params, start_ms, end_ms: zephyr_overview_dataset(
+                _require(params, "execution_id"), _require(params, "stage_name"), start_ms, end_ms
+            ),
+        )
+
+    def training_overview(request: Request) -> JSONResponse:
+        return dashboard_dataset_response(
+            request,
+            "Training overview",
+            lambda params, start_ms, end_ms: training_overview_dataset(
+                _require(params, "run"), start_ms, end_ms, int(_require(params, "bucket_ms"))
+            ),
+        )
+
+    def runs_overview(request: Request) -> JSONResponse:
+        return dashboard_dataset_response(
+            request,
+            "Runs overview",
+            lambda params, start_ms, end_ms: runs_overview_dataset(
+                _csv_values(params, "clusters"),
+                _csv_values(params, "runs"),
+                start_ms,
+                end_ms,
+                int(_require(params, "bucket_ms")),
+            ),
+        )
+
+    def accelerator_overview(request: Request) -> JSONResponse:
+        return dashboard_dataset_response(
+            request,
+            "Accelerator overview",
+            lambda params, start_ms, end_ms: accelerator_overview_dataset(
+                _csv_values(params, "clusters"), start_ms, end_ms, int(_require(params, "bucket_ms"))
+            ),
+        )
+
+    def jobs_overview(request: Request) -> JSONResponse:
+        return dashboard_dataset_response(
+            request,
+            "Jobs overview",
+            lambda params, start_ms, end_ms: jobs_overview_dataset(
+                _csv_values(params, "clusters"),
+                tuple(value for value in params.get("jobs", "").split(",") if value),
+                start_ms,
+                end_ms,
+                int(_require(params, "bucket_ms")),
+            ),
+        )
+
+    def rl_overview(request: Request) -> JSONResponse:
+        return dashboard_dataset_response(
+            request,
+            "RL overview",
+            lambda params, start_ms, end_ms: rl_overview_dataset(
+                _csv_values(params, "clusters"),
+                _require(params, "run"),
+                start_ms,
+                end_ms,
+                int(_require(params, "bucket_ms")),
+            ),
+        )
+
+    def recent_rl_runs(request: Request) -> JSONResponse:
+        return dashboard_dataset_response(
+            request,
+            "recent RL runs",
+            lambda _params, start_ms, end_ms: recent_rl_runs_dataset(start_ms, end_ms),
+        )
+
+    def async_rl_overview(request: Request) -> JSONResponse:
+        return dashboard_dataset_response(
+            request,
+            "async RL overview",
+            lambda params, start_ms, end_ms: async_rl_overview_dataset(
+                _csv_values(params, "clusters"),
+                _require(params, "run"),
+                _require(params, "job"),
+                _csv_values(params, "executions"),
+                start_ms,
+                end_ms,
+            ),
+        )
 
     def vllm_overview(request: Request) -> JSONResponse:
         try:
@@ -430,7 +743,7 @@ def create_app(
             except ValueError as err:
                 allowed = ", ".join(field.value for field in VllmIdentityField)
                 raise _BadRequest(f"identity_kind must be one of: {allowed}") from err
-            identity = _require(params, "identity")
+            identity = params.get("identity_override") or _require(params, "identity")
             view = params.get("view")
             if view and view not in VLLM_OVERVIEW_SECTIONS:
                 raise _BadRequest(f"unknown vLLM overview view {view!r}; configured: {sorted(VLLM_OVERVIEW_SECTIONS)}")
@@ -470,18 +783,79 @@ def create_app(
                     overview.start_ms,
                     overview.end_ms,
                 )
-                table = finelog_sources[target.name].query(
-                    overview.sql,
+                if overview.end_ms - overview.start_ms > VLLM_DETAIL_MAX_WINDOW_MS:
+                    series = finelog_sources[target.name].query(
+                        vllm_run_summary_samples_query(overview), max_rows=VLLM_MAX_SERIES
+                    )
+                    table = vllm_run_summary_table(overview, series, dashboard_projection_lock, max_rows=config.max_rows)
+                    rows = rows_to_json(table)
+                    if not rows:
+                        return [
+                            _vllm_status_row("empty", "No vLLM telemetry for this serve and time range"),
+                            _vllm_unavailable_attention_row("empty"),
+                        ]
+                    hours = (overview.end_ms - overview.start_ms) / 3_600_000
+                    rows.append(
+                        _vllm_status_row(
+                            "summary_only",
+                            f"{hours:g}h selected: hourly tokens and observed summary signals only. "
+                            "Zoom to 7h or less for engine, latency, and outcome detail.",
+                        )
+                    )
+                    rows.append(_vllm_attention_row(rows, summary_only=True))
+                    return rows
+
+                series = finelog_sources[target.name].query(overview.samples_sql, max_rows=VLLM_MAX_SERIES)
+                table = vllm_overview_table(
+                    overview,
+                    series,
+                    dashboard_projection_lock,
                     max_rows=min(config.max_rows, VLLM_MAX_RESULT_ROWS),
                 )
-                return rows_to_json(table)
+                rows = rows_to_json(table)
+                empty = any(row["section"] == "freshness" and row["status"] == "no_data" for row in rows)
+                rows.extend(
+                    {**row, "section": "run_summary"}
+                    for row in tuple(rows)
+                    if row["section"] in ("counter_total", "request_outcome", "length_finish_fraction")
+                )
+                rows.append(
+                    _vllm_status_row(
+                        "empty" if empty else "detail",
+                        (
+                            "No vLLM telemetry for this serve and time range"
+                            if empty
+                            else "Detailed engine telemetry for the selected range"
+                        ),
+                    )
+                )
+                rows.append(
+                    _vllm_unavailable_attention_row("empty") if empty else _vllm_attention_row(rows, summary_only=False)
+                )
+                return rows
 
-            rows = finelog_cache.get_or_compute(key, run)
+            def run_with_status():
+                # Cache the classified status itself. Cached exceptions lose their
+                # cause, which otherwise turns a timeout into a generic error.
+                try:
+                    return run()
+                except QueryResultTooLargeError as err:
+                    return [
+                        _vllm_status_row("sample_limit", f"{err}; zoom to a shorter range"),
+                        _vllm_unavailable_attention_row("sample_limit"),
+                    ]
+                except StatsError as err:
+                    logger.warning("vLLM diagnostic query failed: %s", err)
+                    status = "query_timeout" if _vllm_query_timed_out(err) else "query_error"
+                    return [
+                        _vllm_status_row(status, f"Finelog {status.replace('_', ' ')}; retry or narrow the range"),
+                        _vllm_unavailable_attention_row(status),
+                    ]
+
+            rows = finelog_cache.get_or_compute(key, run_with_status)
             return JSONResponse(rows if not view else [row for row in rows if row.get("section") == view])
         except _BadRequest as err:
             return JSONResponse({"error": str(err)}, status_code=400)
-        except QueryResultTooLargeError as err:
-            return JSONResponse({"error": f"{err}; narrow the vLLM time range"}, status_code=400)
 
     def rl_producers(request: Request) -> JSONResponse:
         try:
@@ -588,8 +962,21 @@ def create_app(
 
     def hero_watched_runs(target: ClusterTarget, now: datetime) -> tuple[WatchedRun, ...]:
         """Hero roots either Iris or Levanter still reports, for the run-health rules."""
-        phase_runs = hero_query("hero_phase_enrollment", now, target, lambda: phase_enrollment_query(now))
-        return watched_runs(hero_task_states(target, now), phase_runs, now)
+        task_states = hero_task_states(target, now)
+        active_runs = active_hero_runs(task_states, now)
+        recent_phase = hero_query("hero_recent_phase", now, target, lambda: recent_phase_query(now))
+        recent_roots = {key for row in recent_phase.to_pylist() if (key := phase_root_key(row)) is not None}
+        missing_phase = tuple(run for run in active_runs if (run.cluster, run.root_job) not in recent_roots)
+        if not missing_phase:
+            return watched_runs(task_states, recent_phase, now)
+
+        phase_history = hero_query(
+            "hero_phase_execution",
+            now,
+            target,
+            lambda: phase_execution_query(now, missing_phase),
+        )
+        return watched_runs(task_states, pa.concat_tables((recent_phase, phase_history)), now)
 
     def hero_signals(target: ClusterTarget, now: datetime, runs: tuple[WatchedRun, ...]) -> Signals:
         """One telemetry scan behind every run-health rule."""
@@ -948,7 +1335,16 @@ def create_app(
             Route("/wandb/report/{chart}", wandb_report_chart),
             Route("/finelog/{cluster}/query", finelog_queries.query),
             Route("/finelog/{cluster}/alerts/query", finelog_queries.alert_query),
+            Route("/finelog/{cluster}/v1/node/overview", node_overview),
+            Route("/finelog/{cluster}/v1/accelerator/overview", accelerator_overview),
+            Route("/finelog/{cluster}/v1/jobs/overview", jobs_overview),
+            Route("/finelog/{cluster}/v1/rl/overview", rl_overview),
+            Route("/finelog/{cluster}/v1/async-rl/overview", async_rl_overview),
+            Route("/finelog/{cluster}/v1/rl/recent", recent_rl_runs),
+            Route("/finelog/{cluster}/v1/runs/overview", runs_overview),
+            Route("/finelog/{cluster}/v1/training/overview", training_overview),
             Route("/finelog/{cluster}/v1/vllm/overview", vllm_overview),
+            Route("/finelog/{cluster}/v1/zephyr/overview", zephyr_overview),
             Route("/finelog/{cluster}/v1/rl/producers", rl_producers),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/fleet_health", finelog_fleet_health),
             Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/relay_status", finelog_relay_status),

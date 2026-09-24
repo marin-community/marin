@@ -20,21 +20,19 @@ takes an arbitrary populate callback for callers that need a custom source.
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import json
 import logging
 import os
 import re
 import tempfile
-import threading
 import time
-from collections.abc import Callable, Generator
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 
 import fsspec
 from huggingface_hub import hf_hub_download, list_repo_files, model_info
-from rigging.filesystem.distributed_lock import HEARTBEAT_INTERVAL, DistributedLease, LeaseLostError, create_lock
+from rigging.filesystem.distributed_lock import create_lock, lease_refresh
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.factory import url_to_fs
 
@@ -119,8 +117,17 @@ def cache_to_prefix(
         if fs.exists(marker):
             logger.info("model cache populated while acquiring lock: %s", cache_path)
             return cache_path
-        with _heartbeat(lock):
-            _populate(fs, cache_path, marker, populate, metadata)
+        with lease_refresh(lock):
+            logger.info("model cache miss; populating %s", cache_path)
+            # Object stores have no real directories, but local/posix-backed fsspec
+            # filesystems need the prefix to exist before files are written into it.
+            fs.makedirs(cache_path, exist_ok=True)
+            populate(fs, cache_path)
+            # Marker last: its presence is the cache-hit signal, so a crashed
+            # populate never reads as complete. Keep its write under the heartbeat
+            # because object-store operations can stall past the lease timeout.
+            with fs.open(marker, "w") as handle:
+                json.dump(asdict(metadata), handle, sort_keys=True)
         return cache_path
     finally:
         lock.release()
@@ -238,49 +245,3 @@ def _stream_hf_snapshot(fs: fsspec.AbstractFileSystem, dest: str, model_id: str,
             fs.makedirs(remote_path.rsplit("/", 1)[0], exist_ok=True)
             fs.put_file(local_path, remote_path)
             os.remove(local_path)
-
-
-def _populate(
-    fs: fsspec.AbstractFileSystem,
-    cache_path: str,
-    marker: str,
-    populate: Populate,
-    metadata: CacheMetadata,
-) -> None:
-    """Stream the snapshot into *cache_path* via *populate*, then write metadata to *marker*."""
-    logger.info("model cache miss; populating %s", cache_path)
-    # Object stores have no real directories, but local/posix-backed fsspec
-    # filesystems need the prefix to exist before files are written into it.
-    fs.makedirs(cache_path, exist_ok=True)
-    populate(fs, cache_path)
-    # Marker last: its presence is the cache-hit signal, so a crashed populate won't read as complete.
-    with fs.open(marker, "w") as handle:
-        json.dump(asdict(metadata), handle, sort_keys=True)
-
-
-@contextlib.contextmanager
-def _heartbeat(lock: DistributedLease) -> Generator[None, None, None]:
-    """Refresh *lock*'s lease on a daemon thread for the duration of the block.
-
-    A large download can take far longer than ``HEARTBEAT_TIMEOUT``; without
-    refreshing, blocked workers would treat the lease as stale and start their
-    own downloads. ``LeaseLostError`` is logged but not raised: a duplicate
-    download is wasteful but not incorrect (the marker-last write stays atomic).
-    """
-    stop = threading.Event()
-
-    def _beat() -> None:
-        while not stop.wait(HEARTBEAT_INTERVAL):
-            try:
-                lock.refresh()
-            except LeaseLostError:
-                logger.error("Lease lost for %s while populating cache", lock.lock_path, exc_info=True)
-                return
-
-    thread = threading.Thread(target=_beat, daemon=True)
-    thread.start()
-    try:
-        yield
-    finally:
-        stop.set()
-        thread.join(timeout=5)

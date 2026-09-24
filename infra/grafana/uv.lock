@@ -746,6 +746,7 @@ name = "marin-infra-grafana"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "duckdb" },
     { name = "google-cloud-compute" },
     { name = "httpx" },
     { name = "marin-finelog" },
@@ -763,6 +764,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "duckdb", specifier = ">=1.4.3,<2" },
     { name = "google-cloud-compute", specifier = ">=1.19" },
     { name = "httpx", specifier = ">=0.28.1,<1" },
     { name = "marin-finelog", specifier = ">=0.2.53.dev0" },

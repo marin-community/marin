@@ -19,11 +19,9 @@ from dataclasses import dataclass, replace
 from rigging.log_setup import slow_log
 
 from iris.cluster.constraints import (
-    AVAILABILITY_PREFIX,
     AttributeValue,
     PlacementRequirements,
     WellKnownAttribute,
-    availability_key,
     extract_placement_requirements,
     is_availability_key,
     split_hard_soft,
@@ -61,10 +59,12 @@ from iris.cluster.controller.scheduling.scheduler import (
 from iris.cluster.controller.task_state import job_scheduling_deadline, task_row_can_be_scheduled
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import (
+    AVAILABILITY_PREFIX,
     JobName,
     PendingTask,
     UserBudgetDefaults,
     WorkerId,
+    availability_key,
     is_job_finished,
 )
 from iris.rpc import job_pb2

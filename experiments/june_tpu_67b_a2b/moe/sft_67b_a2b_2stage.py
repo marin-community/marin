@@ -114,8 +114,7 @@ _model = dataclasses.replace(
     use_array_stacked_blocks=True,
     qk_mult=_QK_MULT,
     max_seq_len=_SEQ,  # training seq len = model.max_seq_len; RoPE is position-computed (no param change)
-    # H100 GPU attention backend. gpu_fa4_cute (not gpu_fa4_thd) because sliding_window=2048 is a short
-    # window; thd only handles full-causal windows (canary_ferry.py maps thd -> window=2*seq to fake it).
+    # GPU attention backend for Blackwell targets.
     attention_implementation="gpu_fa4_cute",
     # Blocked-vocab (cut) cross-entropy: avoids materializing the [tokens, vocab] logits tile at seq32k
     # (~15.7 GiB/dev on the default full-logits GPU path).

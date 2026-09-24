@@ -13,6 +13,8 @@ bound for its handlers. ``/api/marina/*`` is the surface shared by every
 app (the app directory and the caller's identity); ``/`` lists the apps. A per-app
 Content-Security-Policy restricts what the page may fetch to itself, the manifest's
 ``connect_src``, and the configured Loom origin for apps that enable the agent panel.
+The public-applet deployment uses the same kernel with checked-in apps disabled and
+admits only GET and HEAD routes for applets whose stored mode is public.
 """
 
 import html
@@ -23,6 +25,7 @@ import re
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -35,6 +38,7 @@ from rigging.filesystem.storage_path import prefix_join
 from rigging.server_auth import (
     RequestAuthPolicy,
     RouteAuthMiddleware,
+    VerifiedIdentity,
     extract_bearer_token,
     identity_scope,
     public,
@@ -51,6 +55,7 @@ from marina.applets import (
     AppletBackendUnavailable,
     AppletConflict,
     AppletForbidden,
+    AppletMode,
     AppletNotFound,
     AppletPackage,
     AppletRuntime,
@@ -71,7 +76,6 @@ INDEX_FILE = "index.html"
 # A file committed as `x.gz` is served at `x` with a Content-Encoding header, so a large
 # static asset can live in the repository compressed.
 PRECOMPRESSED_SUFFIX = ".gz"
-# Cloud Run sets K_SERVICE in every container; its presence means IAP is the front door.
 CLOUD_RUN_SERVICE_ENV = "K_SERVICE"
 APPS_DIR_ENV = "MARINA_APPS_DIR"
 DATA_ROOT_ENV = "MARINA_DATA_ROOT"
@@ -83,6 +87,8 @@ HOST_APPS_ENV = "MARINA_HOST_APPS"
 # space holds the apps and a link from one app to another resolves against this origin.
 CANONICAL_ORIGIN_ENV = "MARINA_CANONICAL_ORIGIN"
 APPLET_ORIGIN_ENV = "MARINA_APPLET_ORIGIN"
+PUBLIC_APPLET_ORIGIN_ENV = "MARINA_PUBLIC_APPLET_ORIGIN"
+MARINA_SURFACE_ENV = "MARINA_SURFACE"
 APPLET_HOSTS_ENV = "MARINA_APPLET_HOSTS"
 APPLET_OPERATORS_ENV = "MARINA_APPLET_OPERATORS"
 AGENT_ORIGIN_ENV = "MARINA_AGENT_ORIGIN"
@@ -105,6 +111,11 @@ class AgentPanelService:
     origin: str
 
 
+class MarinaSurface(StrEnum):
+    AUTHENTICATED = "authenticated"
+    PUBLIC_APPLETS = "public_applets"
+
+
 @dataclass(frozen=True)
 class MarinaConfig:
     apps_dir: Path
@@ -120,19 +131,26 @@ class MarinaConfig:
     canonical_origin: str | None = None
     # A separate IAP-gated origin that exposes only /a/* applet routes.
     applet_origin: str | None = None
+    # An unauthenticated origin that exposes GET/HEAD routes for public applets only.
+    public_applet_origin: str | None = None
+    surface: MarinaSurface = MarinaSurface.AUTHENTICATED
     applet_hosts: dict[str, uuid.UUID] = field(default_factory=dict)
     applet_operators: frozenset[str] = frozenset()
     agent_panel: AgentPanelService | None = None
 
     @classmethod
     def from_env(cls, default_apps_dir: Path) -> "MarinaConfig":
-        """Resolve the process configuration once; refuse to start on Cloud Run without IAP."""
+        """Resolve process configuration and require IAP on the authenticated Cloud Run surface."""
         apps_dir = Path(os.environ.get(APPS_DIR_ENV) or default_apps_dir)
         data_root = os.environ.get(DATA_ROOT_ENV)
         if not data_root:
             raise ValueError(f"{DATA_ROOT_ENV} is not set")
+        try:
+            surface = MarinaSurface(os.environ.get(MARINA_SURFACE_ENV, MarinaSurface.AUTHENTICATED))
+        except ValueError as error:
+            raise ValueError(f"{MARINA_SURFACE_ENV} must be authenticated or public_applets") from error
         audience = os.environ.get(IAP_AUDIENCE_ENV) or None
-        if os.environ.get(CLOUD_RUN_SERVICE_ENV) and not audience:
+        if os.environ.get(CLOUD_RUN_SERVICE_ENV) and not audience and surface is MarinaSurface.AUTHENTICATED:
             raise ValueError(f"{IAP_AUDIENCE_ENV} must be set when running on Cloud Run")
         return cls(
             apps_dir=apps_dir,
@@ -142,6 +160,8 @@ class MarinaConfig:
             host_apps=parse_host_mapping(os.environ.get(HOST_APPS_ENV, ""), HOST_APPS_ENV),
             canonical_origin=(os.environ.get(CANONICAL_ORIGIN_ENV) or "").rstrip("/") or None,
             applet_origin=(os.environ.get(APPLET_ORIGIN_ENV) or "").rstrip("/") or None,
+            public_applet_origin=(os.environ.get(PUBLIC_APPLET_ORIGIN_ENV) or "").rstrip("/") or None,
+            surface=surface,
             applet_hosts={
                 host: uuid.UUID(applet_id)
                 for host, applet_id in parse_host_mapping(os.environ.get(APPLET_HOSTS_ENV, ""), APPLET_HOSTS_ENV).items()
@@ -199,6 +219,21 @@ def named_applet_hosts(app: ASGIApp, hosts: dict[str, uuid.UUID]) -> ASGIApp:
             await send(message)
 
         return await app(rewritten, receive, send_response)
+
+    return serve
+
+
+def public_applet_surface(app: ASGIApp) -> ASGIApp:
+    """Expose health and read-only applet routes from an unauthenticated service."""
+
+    async def serve(scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            return await app(scope, receive, send)
+        path = scope["path"]
+        method = scope["method"]
+        if method in {"GET", "HEAD"} and (path == "/healthz" or path == "/a" or path.startswith("/a/")):
+            return await app(scope, receive, send)
+        return await JSONResponse({"error": "not found"}, status_code=404)(scope, receive, send)
 
     return serve
 
@@ -265,7 +300,21 @@ def app_directory(apps: list[AppManifest]) -> list[dict[str, str]]:
     return [{"name": app.name, "title": app.title, "description": app.description, "path": app.path} for app in apps]
 
 
-def applet_directory(store: AppletStore | None, applet_origin: str | None) -> list[dict[str, object]]:
+def applet_url(
+    path: str,
+    mode: AppletMode,
+    applet_origin: str | None,
+    public_applet_origin: str | None,
+) -> str:
+    origin = public_applet_origin if mode is AppletMode.PUBLIC else applet_origin
+    return (origin or "") + path
+
+
+def applet_directory(
+    store: AppletStore | None,
+    applet_origin: str | None,
+    public_applet_origin: str | None,
+) -> list[dict[str, object]]:
     if store is None:
         return []
     return [
@@ -273,10 +322,11 @@ def applet_directory(store: AppletStore | None, applet_origin: str | None) -> li
             "name": str(applet.id),
             "title": applet.title,
             "description": applet.description,
-            "path": (applet_origin or "") + applet.path,
+            "path": applet_url(applet.path, applet.mode, applet_origin, public_applet_origin),
             "kind": "applet",
             "published_by": applet.owner,
             "version": applet.current_version,
+            "mode": applet.mode.value,
         }
         for applet in store.active_applets()
     ]
@@ -516,13 +566,23 @@ async def uploaded_applet_package(request: Request) -> AppletPackage:
     return package
 
 
-def publish_result_response(published: PublishResult, applet_origin: str | None) -> JSONResponse:
+def publish_result_response(
+    published: PublishResult,
+    applet_origin: str | None,
+    public_applet_origin: str | None,
+) -> JSONResponse:
     return JSONResponse(
         {
             "id": str(published.applet_id),
             "version": published.version,
+            "mode": published.mode.value,
             "path": published.path,
-            "url": (applet_origin or "") + published.path,
+            "url": applet_url(
+                published.path,
+                published.mode,
+                applet_origin,
+                public_applet_origin,
+            ),
         },
         status_code=201,
     )
@@ -531,11 +591,11 @@ def publish_result_response(published: PublishResult, applet_origin: str | None)
 async def dispatch_applet_api(
     store: AppletStore | None,
     runtime: AppletRuntime | None,
-    policy: RequestAuthPolicy,
     applet_id: uuid.UUID,
     version: int | None,
     path: str,
     request: Request,
+    identity: VerifiedIdentity | None,
 ) -> Response:
     if store is None or runtime is None:
         raise HTTPException(status_code=404, detail="applet API not found")
@@ -544,7 +604,7 @@ async def dispatch_applet_api(
         if selected_version is None:
             selected_version = await run_in_threadpool(store.current_version, applet_id)
         applet_api = await run_in_threadpool(runtime.api, applet_id, selected_version)
-        with identity_scope(identity_for(request, policy)):
+        with identity_scope(identity):
             return await call_applet_api(applet_api, request, path)
     except AppletNotFound as error:
         raise HTTPException(status_code=404, detail="applet API not found") from error
@@ -582,16 +642,28 @@ def validate_applet_hosts(config: MarinaConfig) -> None:
     """Reject named applet hosts that overlap other Marina origins."""
     reserved_hosts = set(config.host_apps)
     reserved_hosts.update(
-        urlparse(origin).hostname for origin in (config.canonical_origin, config.applet_origin) if origin
+        urlparse(origin).hostname
+        for origin in (config.canonical_origin, config.applet_origin, config.public_applet_origin)
+        if origin
     )
     if reserved_hosts.intersection(config.applet_hosts):
         raise ValueError(f"{APPLET_HOSTS_ENV} must not reuse a Marina or legacy app host")
 
 
+def validate_applet_origin(origin: str | None, environment_name: str) -> None:
+    if origin is None:
+        return
+    parsed = urlparse(origin)
+    if parsed.hostname is None or parsed.scheme not in {"http", "https"} or parsed.path not in {"", "/"}:
+        raise ValueError(f"{environment_name} must be an absolute URL")
+
+
 def create_app(config: MarinaConfig) -> ASGIApp:
     validate_agent_panel(config.agent_panel, config.iap_audience)
     validate_applet_hosts(config)
-    apps = discover_apps(config.apps_dir)
+    validate_applet_origin(config.applet_origin, APPLET_ORIGIN_ENV)
+    validate_applet_origin(config.public_applet_origin, PUBLIC_APPLET_ORIGIN_ENV)
+    apps = [] if config.surface is MarinaSurface.PUBLIC_APPLETS else discover_apps(config.apps_dir)
     shadowed = sorted(app.name for app in apps if app.name in KERNEL_PREFIXES)
     if shadowed:
         raise ValueError(f"app {shadowed[0]!r} is named for a kernel route; rename it")
@@ -616,6 +688,25 @@ def create_app(config: MarinaConfig) -> ASGIApp:
     applet_store = AppletStore(config.database) if config.database is not None else None
     applet_runtime = AppletRuntime(applet_store) if applet_store is not None else None
 
+    def request_identity(request: Request) -> VerifiedIdentity:
+        try:
+            return identity_for(request, policy)
+        except ValueError as error:
+            raise HTTPException(status_code=401, detail="authentication required") from error
+
+    def require_applet_read(applet_id: uuid.UUID, request: Request) -> None:
+        if config.surface is MarinaSurface.AUTHENTICATED:
+            request_identity(request)
+            return
+        if applet_store is None:
+            raise HTTPException(status_code=404, detail="applet not found")
+        try:
+            mode = applet_store.access_mode(applet_id)
+        except AppletNotFound as error:
+            raise HTTPException(status_code=404, detail="applet not found") from error
+        if mode is not AppletMode.PUBLIC:
+            raise HTTPException(status_code=404, detail="applet not found")
+
     @api.get("/healthz", include_in_schema=False)
     @public
     def healthz() -> JSONResponse:
@@ -624,12 +715,21 @@ def create_app(config: MarinaConfig) -> ASGIApp:
     @api.get("/api/marina/apps")
     @requires_auth
     def list_apps() -> JSONResponse:
-        return JSONResponse({"apps": [*app_directory(apps), *applet_directory(applet_store, config.applet_origin)]})
+        return JSONResponse(
+            {
+                "apps": [
+                    *app_directory(apps),
+                    *applet_directory(applet_store, config.applet_origin, config.public_applet_origin),
+                ]
+            }
+        )
 
     @api.get("/api/marina/applets")
     @requires_auth
     def list_applets() -> JSONResponse:
-        return JSONResponse({"applets": applet_directory(applet_store, config.applet_origin)})
+        return JSONResponse(
+            {"applets": applet_directory(applet_store, config.applet_origin, config.public_applet_origin)}
+        )
 
     @api.get("/api/marina/me")
     @requires_auth
@@ -642,24 +742,31 @@ def create_app(config: MarinaConfig) -> ASGIApp:
     @api.get("/", include_in_schema=False)
     @requires_auth
     def landing() -> HTMLResponse:
-        return HTMLResponse(landing_page(apps, applet_directory(applet_store, config.applet_origin)))
+        return HTMLResponse(
+            landing_page(apps, applet_directory(applet_store, config.applet_origin, config.public_applet_origin))
+        )
 
     @api.post("/api/marina/applets")
     @requires_auth
-    async def publish_applet(request: Request) -> JSONResponse:
+    async def publish_applet(request: Request, mode: AppletMode = AppletMode.PRIVATE) -> JSONResponse:
         if applet_store is None:
             raise HTTPException(status_code=503, detail="Marina has no database configured")
         package = await uploaded_applet_package(request)
         try:
             owner = identity_for(request, policy).user_id
-            published = await run_in_threadpool(applet_store.publish, package, owner)
+            published = await run_in_threadpool(applet_store.publish, package, owner, mode=mode)
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
-        return publish_result_response(published, config.applet_origin)
+        return publish_result_response(published, config.applet_origin, config.public_applet_origin)
 
     @api.post("/api/marina/applets/{applet_id}")
     @requires_auth
-    async def update_applet(applet_id: uuid.UUID, base_version: int, request: Request) -> JSONResponse:
+    async def update_applet(
+        applet_id: uuid.UUID,
+        base_version: int,
+        request: Request,
+        mode: AppletMode | None = None,
+    ) -> JSONResponse:
         if applet_store is None:
             raise HTTPException(status_code=503, detail="Marina has no database configured")
         package = await uploaded_applet_package(request)
@@ -672,6 +779,7 @@ def create_app(config: MarinaConfig) -> ASGIApp:
                 applet_id,
                 base_version,
                 config.applet_operators,
+                mode,
             )
             retained = await run_in_threadpool(applet_store.versions, applet_id)
             assert applet_runtime is not None
@@ -688,7 +796,7 @@ def create_app(config: MarinaConfig) -> ASGIApp:
             raise HTTPException(status_code=403, detail="only the publisher may update this applet") from error
         except AppletConflict as error:
             raise HTTPException(status_code=409, detail="applet has a newer current version") from error
-        return publish_result_response(published, config.applet_origin)
+        return publish_result_response(published, config.applet_origin, config.public_applet_origin)
 
     @api.get("/api/marina/applets/{applet_id}")
     @requires_auth
@@ -697,6 +805,7 @@ def create_app(config: MarinaConfig) -> ASGIApp:
             raise HTTPException(status_code=404, detail="applet not found")
         try:
             current = await run_in_threadpool(applet_store.current_version, applet_id)
+            mode = await run_in_threadpool(applet_store.access_mode, applet_id)
             versions = await run_in_threadpool(applet_store.versions, applet_id)
         except AppletNotFound as error:
             raise HTTPException(status_code=404, detail="applet not found") from error
@@ -704,7 +813,14 @@ def create_app(config: MarinaConfig) -> ASGIApp:
             {
                 "id": str(applet_id),
                 "current_version": current,
-                "url": f"{config.applet_origin or ''}/a/{applet_id}/",
+                "mode": mode.value,
+                "url": applet_url(
+                    f"/a/{applet_id}/",
+                    mode,
+                    config.applet_origin,
+                    config.public_applet_origin,
+                ),
+                "authenticated_url": f"{config.applet_origin or ''}/a/{applet_id}/",
                 "versions": [
                     {
                         "version": item.version,
@@ -714,6 +830,50 @@ def create_app(config: MarinaConfig) -> ASGIApp:
                     }
                     for item in versions
                 ],
+            }
+        )
+
+    @api.put("/api/marina/applets/{applet_id}/mode")
+    @requires_auth
+    async def set_applet_mode(applet_id: uuid.UUID, request: Request) -> JSONResponse:
+        if applet_store is None:
+            raise HTTPException(status_code=404, detail="applet not found")
+        body = await request_json(request)
+        if (
+            not isinstance(body, dict)
+            or not isinstance(body.get("mode"), str)
+            or not isinstance(body.get("base_version"), int)
+        ):
+            raise HTTPException(status_code=400, detail="body must contain mode and integer base_version")
+        try:
+            mode = AppletMode(body["mode"])
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail="mode must be private or public") from error
+        actor = identity_for(request, policy).user_id
+        try:
+            await run_in_threadpool(
+                applet_store.set_mode,
+                applet_id,
+                mode,
+                actor,
+                body["base_version"],
+                config.applet_operators,
+            )
+        except AppletNotFound as error:
+            raise HTTPException(status_code=404, detail="applet not found") from error
+        except AppletForbidden as error:
+            raise HTTPException(
+                status_code=403, detail="only the publisher or an operator may change this applet's mode"
+            ) from error
+        except AppletConflict as error:
+            raise HTTPException(status_code=409, detail="applet has a newer current version") from error
+        path = f"/a/{applet_id}/"
+        return JSONResponse(
+            {
+                "id": str(applet_id),
+                "version": body["base_version"],
+                "mode": mode.value,
+                "url": applet_url(path, mode, config.applet_origin, config.public_applet_origin),
             }
         )
 
@@ -768,13 +928,15 @@ def create_app(config: MarinaConfig) -> ASGIApp:
         return Response(status_code=204)
 
     @api.get("/a/{applet_id}", include_in_schema=False)
-    @requires_auth
-    def applet_without_slash(applet_id: uuid.UUID) -> RedirectResponse:
+    @public
+    def applet_without_slash(applet_id: uuid.UUID, request: Request) -> RedirectResponse:
+        require_applet_read(applet_id, request)
         return RedirectResponse(f"/a/{applet_id}/")
 
     @api.get("/a/{applet_id}/", include_in_schema=False)
-    @requires_auth
-    def current_applet(applet_id: uuid.UUID) -> RedirectResponse:
+    @public
+    def current_applet(applet_id: uuid.UUID, request: Request) -> RedirectResponse:
+        require_applet_read(applet_id, request)
         if applet_store is None:
             raise HTTPException(status_code=404, detail="applet not found")
         try:
@@ -828,21 +990,61 @@ def create_app(config: MarinaConfig) -> ASGIApp:
 
     @api.api_route(
         "/a/{applet_id}/api/{path:path}",
-        methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+        methods=["GET", "HEAD"],
         include_in_schema=False,
     )
-    @requires_auth
-    async def current_applet_api(applet_id: uuid.UUID, path: str, request: Request) -> Response:
-        return await dispatch_applet_api(applet_store, applet_runtime, policy, applet_id, None, path, request)
+    @public
+    async def current_applet_api_read(applet_id: uuid.UUID, path: str, request: Request) -> Response:
+        if config.surface is MarinaSurface.PUBLIC_APPLETS:
+            await run_in_threadpool(require_applet_read, applet_id, request)
+        identity = None if config.surface is MarinaSurface.PUBLIC_APPLETS else request_identity(request)
+        return await dispatch_applet_api(applet_store, applet_runtime, applet_id, None, path, request, identity)
 
     @api.api_route(
         "/a/{applet_id}/v/{version}/api/{path:path}",
-        methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+        methods=["GET", "HEAD"],
+        include_in_schema=False,
+    )
+    @public
+    async def versioned_applet_api_read(applet_id: uuid.UUID, version: int, path: str, request: Request) -> Response:
+        if config.surface is MarinaSurface.PUBLIC_APPLETS:
+            await run_in_threadpool(require_applet_read, applet_id, request)
+        identity = None if config.surface is MarinaSurface.PUBLIC_APPLETS else request_identity(request)
+        return await dispatch_applet_api(applet_store, applet_runtime, applet_id, version, path, request, identity)
+
+    @api.api_route(
+        "/a/{applet_id}/api/{path:path}",
+        methods=["POST", "PUT", "PATCH", "DELETE"],
         include_in_schema=False,
     )
     @requires_auth
-    async def versioned_applet_api(applet_id: uuid.UUID, version: int, path: str, request: Request) -> Response:
-        return await dispatch_applet_api(applet_store, applet_runtime, policy, applet_id, version, path, request)
+    async def current_applet_api_write(applet_id: uuid.UUID, path: str, request: Request) -> Response:
+        return await dispatch_applet_api(
+            applet_store,
+            applet_runtime,
+            applet_id,
+            None,
+            path,
+            request,
+            identity_for(request, policy),
+        )
+
+    @api.api_route(
+        "/a/{applet_id}/v/{version}/api/{path:path}",
+        methods=["POST", "PUT", "PATCH", "DELETE"],
+        include_in_schema=False,
+    )
+    @requires_auth
+    async def versioned_applet_api_write(applet_id: uuid.UUID, version: int, path: str, request: Request) -> Response:
+        return await dispatch_applet_api(
+            applet_store,
+            applet_runtime,
+            applet_id,
+            version,
+            path,
+            request,
+            identity_for(request, policy),
+        )
 
     def applet_file_response(applet_id: uuid.UUID, version: int, path: str, request: Request) -> Response:
         if applet_store is None:
@@ -860,7 +1062,11 @@ def create_app(config: MarinaConfig) -> ASGIApp:
             raise HTTPException(status_code=404, detail="applet file not found") from error
         etag = f'"{stored.digest.hex()}"'
         headers = {
-            "Cache-Control": "private, max-age=31536000, immutable",
+            "Cache-Control": (
+                "public, no-cache"
+                if config.surface is MarinaSurface.PUBLIC_APPLETS
+                else "private, max-age=31536000, immutable"
+            ),
             "Content-Security-Policy": content_security_policy(record.manifest.connect_src),
             "ETag": etag,
             "Vary": "Accept-Encoding",
@@ -876,8 +1082,9 @@ def create_app(config: MarinaConfig) -> ASGIApp:
         methods=["GET", "HEAD"],
         include_in_schema=False,
     )
-    @requires_auth
+    @public
     def applet_root(applet_id: uuid.UUID, version: int, request: Request) -> Response:
+        require_applet_read(applet_id, request)
         return applet_file_response(applet_id, version, "", request)
 
     @api.api_route(
@@ -885,19 +1092,15 @@ def create_app(config: MarinaConfig) -> ASGIApp:
         methods=["GET", "HEAD"],
         include_in_schema=False,
     )
-    @requires_auth
+    @public
     def applet_file(applet_id: uuid.UUID, version: int, path: str, request: Request) -> Response:
+        require_applet_read(applet_id, request)
         return applet_file_response(applet_id, version, path, request)
 
     if config.applet_origin is not None:
         parsed_applet_origin = urlparse(config.applet_origin)
         applet_host = parsed_applet_origin.hostname
-        if (
-            applet_host is None
-            or parsed_applet_origin.scheme not in {"http", "https"}
-            or parsed_applet_origin.path not in {"", "/"}
-        ):
-            raise ValueError(f"{APPLET_ORIGIN_ENV} must be an absolute URL")
+        assert applet_host is not None
 
         @api.middleware("http")
         async def isolate_applet_host(request: Request, call_next):
@@ -958,4 +1161,6 @@ def create_app(config: MarinaConfig) -> ASGIApp:
         install_app_routes(api, app, config.data_root, config.agent_panel)
 
     authenticated = RouteAuthMiddleware(api, policy)
+    if config.surface is MarinaSurface.PUBLIC_APPLETS:
+        return public_applet_surface(authenticated)
     return named_applet_hosts(authenticated, config.applet_hosts) if config.applet_hosts else authenticated
