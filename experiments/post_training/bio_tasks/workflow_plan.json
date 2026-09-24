@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T18:01:27.407970+00:00",
+  "updated_at": "2026-09-24T18:07:52.900463+00:00",
   "basis_revision": "952929c306",
   "scope": "Agentic provisional-ID benchmarks only; preserve all existing OOD exclusions. Plan the broad task set before further recipe implementation.",
   "authoring_unit": "One coherent observed-data task per recipe by default. Proposed questions are separate task designs, not repeated instances. They may be split or merged after endpoint and runtime checks.",
@@ -9,11 +9,11 @@
   "source_inventory_files": [
     {
       "path": "experiments/post_training/bio_tasks/benchmark_coverage.json",
-      "sha256": "280a52fa5581688e3216773b1418a99e3af862de9e07d647123ed5f150e5e959"
+      "sha256": "e536ef7d9ee2247b6cc64f4a0b747e7ff78a1bfd5cfdb26929e3fb712ca6857a"
     },
     {
       "path": "experiments/post_training/bio_tasks/benchmark_sources.json",
-      "sha256": "33a05343707601ad5838d015012b589fb7126ff52b85e7e4ef7347221e57ec2b"
+      "sha256": "aa0ed6d55e0f1451dc198bdc0598bcbffd742a2382dc167f5b1bdda8ba7bac09"
     }
   ],
   "question_inspection_evidence": {
@@ -12164,11 +12164,11 @@
         "evidence-meta-analysis"
       ],
       "routing_basis": "stem-review-with-component-limits-no-equivalence",
-      "inspection_tier": "800-stems-reviewed-651-unreviewed-synthesis-unresolved",
+      "inspection_tier": "all-stems-reviewed-synthesis-unresolved",
       "task_ids_reference": {
         "path": "benchmark_tasks/scholarqabench-bio.json",
         "field": "tasks[].task_id",
-        "sha256": "65f4c19c5a4866ddbb4addb6c3d6d86261592e6312cfbd41209a6930680f3537",
+        "sha256": "e24b1155003253deb69c8de19c923c2cc33a1b0345c19560fda6cd370ce749db",
         "record_count": 1451
       }
     },
@@ -13204,7 +13204,7 @@
     },
     "ScholarQABench \u2014 biomedicine": {
       "source_inventory_path": "experiments/post_training/bio_tasks/benchmark_tasks/scholarqabench-bio.json",
-      "source_inventory_sha256": "65f4c19c5a4866ddbb4addb6c3d6d86261592e6312cfbd41209a6930680f3537",
+      "source_inventory_sha256": "e24b1155003253deb69c8de19c923c2cc33a1b0345c19560fda6cd370ce749db",
       "source_revision": "95e6fc52b0a8a0ce0a74956029991e3bb00c38b9",
       "task_inventory_status": "identities-and-question-hashes-only",
       "record_count": 1451,
@@ -13216,8 +13216,7 @@
         "literature-endpoint-and-deterministic-contract-review": 1451
       },
       "reconciled_inspection_tier_counts": {
-        "question-stem-reviewed-synthesis-contract-unresolved": 800,
-        "shared-protocol-only-individual-endpoint-unreviewed": 651
+        "question-stem-reviewed-synthesis-contract-unresolved": 1451
       },
       "initial_group_referenced_record_count": 0,
       "new_expansion_card_record_count": 0,
@@ -13517,11 +13516,11 @@
     },
     {
       "path": "workflow_designs/scholarqabench-bio.json",
-      "sha256": "5796c5ca90b2527e6cdfb79039cd02aebb8204541a4a4af72718105ae003d155",
+      "sha256": "30188bebb4503b17271dabac4ce08600483c56db4d53903f36c0790a463b92bc",
       "benchmark_id": "ScholarQABench \u2014 biomedicine",
       "inventory_records_with_gap_dispositions": 1451,
       "proposed_question_cards": 0,
-      "inspection_basis": "All identities/hashes; 800 stems reviewed, 651 unreviewed; no synthesis contract assigned."
+      "inspection_basis": "All identities/hashes; all 1,451 stems reviewed; no synthesis contract assigned."
     },
     {
       "path": "workflow_designs/bioagent.json",
@@ -13544,7 +13543,7 @@
   "authoring_phase": "question-portfolio-planning",
   "portfolio_index": {
     "path": "workflow_portfolio.json",
-    "sha256": "1142bf038a7e119f9f7424738ae792702276444203d929977444eed15647538c",
+    "sha256": "e50f80db9dab7840ac95b73412a252b422b7ce210a5294b12154987dd874e10b",
     "counts": {
       "source_releases": 32,
       "inventory_records": 5133,

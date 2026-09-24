@@ -325,7 +325,7 @@ benchmark answers and biological fixtures are excluded from training authoring.
 | [DrugDiscoveryBench](../../experiments/post_training/bio_tasks/benchmark_tasks/drugdiscoverybench.json) | All 82 complete public prompts and endpoints assessed | 82; full-release ID equality unverified |
 | [SciGym](../../experiments/post_training/bio_tasks/benchmark_tasks/scigym.json) | All 350 supplied model structures audited; biological endpoints and observed-data adaptations unresolved | — |
 | [BioKGBench KGCheck](../../experiments/post_training/bio_tasks/benchmark_tasks/biokgbench.json) | All 225 agentic rows; shared instructions and final scorer reviewed, individual evidence uninspected | — |
-| [ScholarQA-Bio](../../experiments/post_training/bio_tasks/benchmark_tasks/scholarqabench-bio.json) | All 1,451 public IDs/hashes; first 800 stems reviewed with component limits, 651 unreviewed; full synthesis contracts unresolved | — |
+| [ScholarQA-Bio](../../experiments/post_training/bio_tasks/benchmark_tasks/scholarqabench-bio.json) | All 1,451 stems reviewed; 553 possible quantitative components and 898 open synthesis/strategy requests; full synthesis contracts unresolved | — |
 | [LAB-Bench literature/database](../../experiments/post_training/bio_tasks/benchmark_tasks/labbench-literature-database.json) | 801 public IDs/hashes; 520 database schemas link to 7 existing cards, 58 supplementary targets to 16 cards; 199 literature stems reviewed across 14 patterns; 223 endpoint contracts and source evidence remain open | Private subset not enumerated |
 
 Of these 5,133 ID task/protocol/definition records, 47 have manually assessed component mappings,
@@ -395,8 +395,8 @@ adds 1,451 unique public question identifiers and question-text hashes. The pinn
 README lists long-form answers and citation scoring, with no answer-label availability
 indicated for this subset. The citation scorer uses a learned attribution model;
 its code was inspected but not run. Source questions, inspiring papers and answer
-contexts are not vendored. The first 800 stems have individual topic/component reviews;
-651 remain unreviewed. All records remain unmapped with complete synthesis contracts
+contexts are not vendored. All 1,451 stems have individual topic/component reviews.
+All records remain unmapped with complete synthesis contracts
 unresolved; deterministic citation linkage alone cannot validate literature synthesis.
 
 LABBench2's pinned dataset card declares 1,912 rows in its `all` configuration.

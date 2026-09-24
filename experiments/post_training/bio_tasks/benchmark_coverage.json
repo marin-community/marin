@@ -434,7 +434,7 @@
       "distribution": "ID",
       "tasks_file": "benchmark_tasks/scholarqabench-bio.json",
       "source_inventory_name": "ScholarQABench \u2014 biomedicine",
-      "task_inventory_status": "all 1,451 IDs/hashes; first 800 stems reviewed, 651 unreviewed; complete synthesis acceptance unresolved"
+      "task_inventory_status": "all 1,451 IDs/hashes; all 1,451 stems reviewed; complete synthesis acceptance unresolved"
     },
     "LAB-Bench tool-enabled literature/database": {
       "revision": "5c77cec648430f30611808808861eb86f81d5eaa",
