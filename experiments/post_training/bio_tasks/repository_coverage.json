@@ -442,7 +442,8 @@
       "recipes": [
         "matrixmarket-cell-qc",
         "donor-counts",
-        "cell-fractions"
+        "cell-fractions",
+        "real-singlecell-read-qc"
       ],
       "source_url": "https://github.com/scverse/scanpy/blob/0d5fd16234865619d2f5097d33fc4281900a2bc2/tests/test_qc_metrics.py",
       "tool_execution": {
@@ -451,7 +452,17 @@
         "source_revision": "d0af512687173dbacf34daa4959201ad14d39b19",
         "instances": 3,
         "passing_instances": 3,
-        "scope": "matrixmarket-cell-qc"
+        "scope": "matrixmarket-cell-qc",
+        "additional_observed_check": {
+          "checks_file": "native_validation_runs/40ed93019b52.json",
+          "recipe": "real-singlecell-read-qc",
+          "source_revision": "7157e66472ab1388fde0bd0a3a82581e04229c16",
+          "distinct_studies": 1,
+          "input_cells": 1920,
+          "input_features": 46170,
+          "filtered_nonzeros": 17332418,
+          "status": "passed-reference-and-independent-oracle"
+        }
       },
       "scope": "Calculate per-cell counts, detected genes, and supplied gene-set fractions; aggregate raw counts by donor.",
       "limitations": "Direct sums and nonzero counts on fresh matrices, plus independent donor/cell ledgers. Compare IDs and denominators. Vary raw versus transformed layers; do not reuse benchmark PBMC fixtures."

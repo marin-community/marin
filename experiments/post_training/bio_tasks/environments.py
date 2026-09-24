@@ -30,6 +30,7 @@ PROFILES = {
     ),
     "real-rnaseq-go-enrichment": EnvironmentProfile(5, "native_validation_runs/e39ec1c86f62.json", 4096, "HASWELL"),
     "real-cox1-tree-comparison": EnvironmentProfile(28, "native_validation_runs/e2f647365a6f.json", 2048),
+    "real-singlecell-read-qc": EnvironmentProfile(23, "native_validation_runs/40ed93019b52.json", 4096),
 }
 
 
@@ -54,7 +55,7 @@ def environment_files(recipe: str, base_image: str) -> TaskFiles:
         "--prefix /opt/bio && rm /opt/bio-build/install_environment.py\n"
         "ENV PATH=/opt/bio/bin:$PATH\n"
         "ENV OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 "
-        "POLARS_MAX_THREADS=1 RAYON_NUM_THREADS=1\n"
+        "POLARS_MAX_THREADS=1 RAYON_NUM_THREADS=1 NUMBA_NUM_THREADS=1\n"
     )
     if profile.blas_core is not None:
         dockerfile += f"ENV OPENBLAS_CORETYPE={profile.blas_core}\n"

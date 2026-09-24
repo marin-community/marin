@@ -40,7 +40,9 @@ from experiments.post_training.tasktrove.taskbinary import read_task_binary, wri
 
 BASE_IMAGE = "python:3.12-slim@sha256:" + "0" * 64
 TOOL_REF = "12bbd5d45b1b176167ab3cfe905e06004c2f02e3"
-PYTHON_RECIPES = tuple(recipe for recipe in RECIPES if recipe.oracle_runtime == OracleRuntime.PYTHON)
+QUICK_PYTHON_RECIPES = tuple(
+    recipe for recipe in RECIPES if recipe.oracle_runtime == OracleRuntime.PYTHON and recipe.oracle_timeout <= 30
+)
 
 
 def test_cached_inputs_reach_oracle_and_preserve_binary_bytes(tmp_path):
@@ -145,7 +147,7 @@ def test_copied_fastq_fails_even_with_identical_summary_counts(tmp_path):
                 recipe,
                 marks=[pytest.mark.data_integration, pytest.mark.timeout(recipe.oracle_timeout + 30)],
             )
-            if recipe.oracle_runtime != OracleRuntime.PYTHON
+            if recipe not in QUICK_PYTHON_RECIPES
             else recipe
         )
         for recipe in RECIPES
@@ -153,8 +155,8 @@ def test_copied_fastq_fails_even_with_identical_summary_counts(tmp_path):
     ids=lambda recipe: recipe.id,
 )
 @pytest.mark.parametrize("seed", [0, 1, 20260923])
-def test_generated_reference_accepts_independent_solver_and_rejects_scientific_errors(recipe, seed):
-    checks = validate_instance(recipe, recipe.generate(seed))
+def test_generated_reference_accepts_independent_solver_and_rejects_scientific_errors(recipe, seed, pytestconfig):
+    checks = validate_instance(recipe, recipe.generate(seed), source_cache=pytestconfig.getoption("bio_source_cache"))
     assert checks["oracle"] == checks["row_permutation"] == 1
     assert all(value == 0 for name, value in checks.items() if name not in {"oracle", "row_permutation"})
 
@@ -439,11 +441,11 @@ def test_vcf_minimization_trims_suffix_first_and_preserves_an_anchor(tmp_path):
 @pytest.mark.timeout(300)
 def test_corpus_roundtrip_separates_oracles_and_grades_packaged_answers(tmp_path):
     output = tmp_path / "corpus"
-    manifest = build(output, 3, 20260923, BASE_IMAGE, TOOL_REF, tuple(recipe.id for recipe in PYTHON_RECIPES))
+    manifest = build(output, 3, 20260923, BASE_IMAGE, TOOL_REF, tuple(recipe.id for recipe in QUICK_PYTHON_RECIPES))
     rows = pq.read_table(output / "tasks" / "part-00000.parquet").to_pylist()
-    assert manifest["tasks"] == len(rows) == 3 * len(PYTHON_RECIPES)
+    assert manifest["tasks"] == len(rows) == 3 * len(QUICK_PYTHON_RECIPES)
     assert Counter(row["template_id"] for row in rows) == {
-        f"{recipe.id}-v{recipe.version}": 3 for recipe in PYTHON_RECIPES
+        f"{recipe.id}-v{recipe.version}": 3 for recipe in QUICK_PYTHON_RECIPES
     }
     assert manifest["counts"]["train"] == len(rows)
     assert {path.name for path in (output / "harbor").iterdir()} == {"train"}

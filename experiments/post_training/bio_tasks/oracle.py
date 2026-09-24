@@ -25,6 +25,7 @@ from experiments.post_training.bio_tasks.solvers.real_genomes import SOLVERS as 
 from experiments.post_training.bio_tasks.solvers.real_phylogeny import solve_phylogeny as solve_cox1_phylogeny
 from experiments.post_training.bio_tasks.solvers.real_reads import OUTPUT_SOLVERS as READ_OUTPUT_SOLVERS
 from experiments.post_training.bio_tasks.solvers.real_rnaseq import OUTPUT_SOLVERS as RNASEQ_OUTPUT_SOLVERS
+from experiments.post_training.bio_tasks.solvers.real_singlecell import solve_singlecell
 from experiments.post_training.bio_tasks.solvers.real_structure import SOLVERS as REAL_STRUCTURE_SOLVERS
 from experiments.post_training.bio_tasks.solvers.repo_formats import SOLVERS as REPO_FORMATS_SOLVERS
 from experiments.post_training.bio_tasks.solvers.repo_sequences import SOLVERS as REPO_SEQUENCES_SOLVERS
@@ -39,6 +40,7 @@ OUTPUT_SOLVERS = {
     **ALIGNMENT_OUTPUT_SOLVERS,
     **RNASEQ_OUTPUT_SOLVERS,
     "real-cox1-tree-comparison": solve_cox1_phylogeny,
+    "real-singlecell-read-qc": solve_singlecell,
 }
 
 

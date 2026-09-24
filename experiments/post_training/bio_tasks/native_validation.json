@@ -979,6 +979,47 @@
         ]
       },
       "limitations": "Three packages share one observed alignment, not three biological datasets. Every tree, branch length, pairwise distance and RF comparison passes; all ten missing/changed-artifact controls fail. Different inference optimizations do not establish species-tree truth or permit raw-likelihood comparison. Harbor portability, scientific review and exact benchmark-lineage independence remain pending."
+    },
+    {
+      "checked_at": "2026-09-24",
+      "source_revision": "7157e66472ab1388fde0bd0a3a82581e04229c16",
+      "environment_kind": "CPU-only task on existing reserved TRC host; checksum-locked Scanpy; independent streaming oracle",
+      "region": "us-central2",
+      "storage_backend": "GCS",
+      "job_id": "/exedev/bio-singlecell-qc-mask-20260924-070605",
+      "base_image": "python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c",
+      "resources": {
+        "cpu": 1,
+        "memory_gib": 16,
+        "disk_gib": 48,
+        "job_timeout_seconds": 3600,
+        "automatic_retries": 0
+      },
+      "input_bundle_sha256": "153f1574a3f8a08fd8cf01cf922ba56dca835d1bbb4cf4ebd9bc094085d0b981",
+      "output_archive_sha256": "ca42194ddfc6d741ce85f28a80afa083635b1543efaa7a9ca8a9a41449e8c558",
+      "output_archive_bytes": 120824403,
+      "output_archive_url": "gs://marin-us-central2/bio-tasks/authoring/sha256/ca42194ddfc6d741ce85f28a80afa083635b1543efaa7a9ca8a9a41449e8c558/outputs.tar.zst",
+      "archive_storage_status": "verified-provider-size-and-md5",
+      "checks_file": "native_validation_runs/40ed93019b52.json",
+      "checks_sha256": "40ed93019b52f58d4b851be2c991f9d77afa872a84aa79110dc4ce17477d2d2f",
+      "summary": {
+        "expected_repositories": 50,
+        "attempted_repositories": 1,
+        "passed_repositories": 1,
+        "execution_failed_repositories": 0,
+        "planned_cases": 1,
+        "completed_cases": 1,
+        "passing_cases": 1,
+        "distinct_biological_inputs": 1
+      },
+      "reference_seconds": 97.83551635399635,
+      "oracle_seconds": 219.4379015940067,
+      "limitations": "One observed cell-QC workflow; broad gates are not fine cell types or biological replicates. No normalization, embedding, annotation or donor-level inference. Source-lineage screening and packaged Harbor validation remain pending.",
+      "storage_check": {
+        "size_bytes": 120824403,
+        "md5": "VfKutzrvh38jLSiww2JI/A==",
+        "generation": "1790234998081364"
+      }
     }
   ],
   "numerical_portability": [

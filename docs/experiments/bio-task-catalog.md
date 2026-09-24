@@ -6,7 +6,7 @@ program decisions, collection policy, and results; this file holds the detailed
 coverage and source evidence. [Generator documentation](bio-tasks.md) lists the
 implemented recipes and how to inspect their examples.
 
-The implementation has **140 recipes across 13 domains**, with one task per
+The implementation has **141 recipes across 13 domains**, with one task per
 recipe by default and one train split. The [implemented recipe matrix](bio-task-recipes.md)
 records the supplied formats, skills, and source-repository mappings. Sections below
 also retain candidate capabilities beyond the current implementation. Source inspection
@@ -204,11 +204,22 @@ supplies imaging operations. Distinguish measuring supplied masks from segmentin
 
 ## ID workflow coverage and input realism
 
-The 140 recipes include twenty-five using real observations and 115 simulated component
+The 141 recipes include twenty-six using real observations and 115 simulated component
 controls. They do **not** establish coverage of complete ID benchmark workflows. Repository count, format count, and successful
 package checks measure different things from workflow coverage. The following
 assessment uses public benchmark descriptions and the program's prior source
 inspection; it is a qualitative gap analysis, not a benchmark coverage score.
+
+The full observed GSE81682 QC workflow supplies 1,920 cells and 46,170 features.
+Actual Scanpy and an independent streaming oracle agree on both complete QC tables
+and all 17,332,418 retained matrix entries; changing one count fails with correct
+summaries. Reference computation took 97.8 seconds, oracle computation 219.4 seconds
+and artifact grading 149–151 seconds on a reserved TRC CPU host. The
+[native record](../../experiments/post_training/bio_tasks/native_validation_runs/40ed93019b52.json)
+pins inputs, packages, artifacts and resources. This checks cell/gene filtering
+and identity-preserving sparse export. Normalization, annotation, clustering and
+donor-level comparisons remain separate workflow gaps. Packaged and Harbor checks
+are pending; the inspected source does not establish exact benchmark independence.
 
 The [agentic source inventory](../../experiments/post_training/bio_tasks/benchmark_sources.json)
 records all 48 benchmark/protocol rows from the spreadsheet's Agentic (Harbor) tab:

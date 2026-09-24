@@ -842,29 +842,9 @@
         "unique_proteins": 89,
         "accessions": 94
       }
-    }
-  },
-  "excluded_candidate_lineages": [
-    {
-      "lineage": "Zeisel-2015-cortex-3005",
-      "status": "excluded-benchmark-input",
-      "benchmark": "Liu-single-cell",
-      "task_ids": [
-        "gimvi"
-      ],
-      "reason": "The public benchmark prompt uses the scvi cortex loader. The official scVI dataset description identifies its 3005-cell cortex data as Zeisel et al. (2015). A separately downloaded copy or subset would retain this biological lineage.",
-      "evidence_urls": [
-        "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
-        "https://docs.scvi-tools.org/en/1.1.4/api/reference/scvi.data.cortex.html",
-        "https://scvi-tools.org/blog/autotune/"
-      ],
-      "candidate_download_status": "not downloaded or used in task inputs",
-      "screened_at": "2026-09-24"
-    }
-  ],
-  "candidate_sources": {
+    },
     "GSE81682": {
-      "status": "full-original-counts-preserved-and-roundtrip-validated; task admission pending",
+      "status": "full-study-QC-reference-and-independent-oracle-validated; candidate-training-recipe",
       "landing_page": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE81682",
       "lineage": "GSE81682:Nestorowa-mouse-HSPC",
       "observations": "Mouse hematopoietic stem/progenitor Smart-seq2 counts with index-sorting measurements and ERCC spike-ins.",
@@ -1058,16 +1038,115 @@
         "scope": "Original GEO counts and metadata; does not license copying the article, figures, author-website assets or benchmark fixtures."
       },
       "qc_preparation": {
-        "status": "reference-and-oracle-implemented; full-study validation pending",
-        "source_revision": "f025377e0cf77007963d867a2b9ae3d106197321",
+        "status": "passed",
+        "source_revision": "7157e66472ab1388fde0bd0a3a82581e04229c16",
         "environment_lock": "sources/scanpy-preparation.lock.json",
         "environment_lock_sha256": "c89452bda066f0b1235bcce92453babbf0c7801ef9cd2bf333e1813bdc972d4a",
         "packages": 167,
         "package_download_bytes": 246874017,
         "policy": "Explicit descriptive cell and gene filtering; no donor, fine cell-type or mitochondrial assignments inferred. Counts are read counts, not UMIs.",
-        "first_attempt": "/exedev/bio-singlecell-qc-20260924-064859"
+        "first_attempt": "/exedev/bio-singlecell-qc-20260924-064859",
+        "job_id": "/exedev/bio-singlecell-qc-mask-20260924-070605",
+        "checks_file": "native_validation_runs/40ed93019b52.json",
+        "checks_sha256": "40ed93019b52f58d4b851be2c991f9d77afa872a84aa79110dc4ce17477d2d2f",
+        "summary": {
+          "input_cells": 1920,
+          "retained_cells": 1422,
+          "input_features": 46170,
+          "retained_features": 40312,
+          "output_nonzeros": 17332418,
+          "output_read_counts": 2677371925
+        },
+        "resources": {
+          "grade-oracle": {
+            "module": "validate",
+            "status": "passed",
+            "seconds": 149.416852734008,
+            "peak_rss_kib": 119980,
+            "finished_at": "2026-09-24T07:17:24.313818+00:00"
+          },
+          "oracle": {
+            "module": "validate",
+            "status": "passed",
+            "seconds": 219.4379015940067,
+            "peak_rss_kib": 69984,
+            "finished_at": "2026-09-24T07:14:54.826370+00:00"
+          },
+          "negative": {
+            "module": "validate",
+            "status": "passed",
+            "seconds": 211.97842852800386,
+            "peak_rss_kib": 120096,
+            "finished_at": "2026-09-24T07:20:56.387075+00:00"
+          },
+          "reference": {
+            "module": "experiments.post_training.bio_tasks.sources.prepare_singlecell_qc",
+            "status": "passed",
+            "seconds": 97.83551635399635,
+            "peak_rss_kib": 1160204,
+            "finished_at": "2026-09-24T07:08:43.780228+00:00"
+          },
+          "grade-reference": {
+            "module": "validate",
+            "status": "passed",
+            "seconds": 151.0826566439937,
+            "peak_rss_kib": 119728,
+            "finished_at": "2026-09-24T07:11:15.306118+00:00"
+          }
+        }
+      },
+      "data_origin": "real",
+      "citation": "Nestorowa et al., Blood (2016), doi:10.1182/blood-2016-05-716480; GSE81682.",
+      "license": "GEO public-data use/distribution policy; no dataset-specific license identified",
+      "license_source": "https://www.ncbi.nlm.nih.gov/geo/info/disclaimer.html",
+      "assets": {
+        "gse81682-qc-reference.json.gz": {
+          "url": "gs://marin-us-central2/bio-tasks/authoring/sha256/ca42194ddfc6d741ce85f28a80afa083635b1543efaa7a9ca8a9a41449e8c558/outputs.tar.zst",
+          "content_sha256": "c86ae6f55edb878b75a77781af35e4d636db47874b8b150a9a4e0936a40fecab",
+          "vendored_sha256": "b0868aaac2df1ba6251eba90466e31778f8a19e76920bf60ce17bd9d5e1dc81f",
+          "content_bytes": 8939327,
+          "vendored_bytes": 567808,
+          "transformation": "Actual Scanpy outputs from full original counts; independent streaming oracle and complete artifacts agree. Private reference, never solver input."
+        }
+      },
+      "file_inputs": {
+        "cells.tsv": {
+          "sha256": "8f8b2176a1569accc5ed9c03f7e2ce1470f7255f8d5974b1d4d163078a280653",
+          "bytes": 97831,
+          "uri": "gs://marin-us-central2/bio-tasks/sources/sha256/8f8b2176a1569accc5ed9c03f7e2ce1470f7255f8d5974b1d4d163078a280653"
+        },
+        "features.tsv": {
+          "sha256": "79efe29bde9c987bf721ecdbf049897d7b8c88dcafd42317c83f8c2283c96199",
+          "bytes": 1383828,
+          "uri": "gs://marin-us-central2/bio-tasks/sources/sha256/79efe29bde9c987bf721ecdbf049897d7b8c88dcafd42317c83f8c2283c96199"
+        },
+        "matrix.mtx.gz": {
+          "sha256": "c926b3accc702c40dd871d7dbd133917f7841974db1065cb951b1b13cd5f6769",
+          "bytes": 76277182,
+          "uri": "gs://marin-us-central2/bio-tasks/sources/sha256/c926b3accc702c40dd871d7dbd133917f7841974db1065cb951b1b13cd5f6769"
+        }
       }
-    },
+    }
+  },
+  "excluded_candidate_lineages": [
+    {
+      "lineage": "Zeisel-2015-cortex-3005",
+      "status": "excluded-benchmark-input",
+      "benchmark": "Liu-single-cell",
+      "task_ids": [
+        "gimvi"
+      ],
+      "reason": "The public benchmark prompt uses the scvi cortex loader. The official scVI dataset description identifies its 3005-cell cortex data as Zeisel et al. (2015). A separately downloaded copy or subset would retain this biological lineage.",
+      "evidence_urls": [
+        "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+        "https://docs.scvi-tools.org/en/1.1.4/api/reference/scvi.data.cortex.html",
+        "https://scvi-tools.org/blog/autotune/"
+      ],
+      "candidate_download_status": "not downloaded or used in task inputs",
+      "screened_at": "2026-09-24"
+    }
+  ],
+  "candidate_sources": {
     "UniProt:UP000000625-20260924": {
       "landing_page": "https://www.uniprot.org/proteomes/UP000000625",
       "lineage": "UniProt:UP000000625",

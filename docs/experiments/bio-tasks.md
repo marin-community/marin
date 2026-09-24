@@ -1,6 +1,6 @@
 # Synthetic biology task generation
 
-The generators in `experiments/post_training/bio_tasks/` implement 140
+The generators in `experiments/post_training/bio_tasks/` implement 141
 recipes from [the biology data program](https://github.com/marin-community/marin/issues/9257).
 They combine independently sourced real observations with synthetic correctness controls, establish references,
 execute separate input-reading oracle solutions, and package tasks for Harbor.
@@ -11,13 +11,13 @@ the original 2026-07-28 downloads/stars/citations. The maintained
 format coverage, with the original adoption inventory preserved as a separate file.
 
 The [implemented recipe list](bio-task-recipes.md) records every operation, skill,
-format profile, and repository mapping. The 140 recipes span 13 domains:
+format profile, and repository mapping. The 141 recipes span 13 domains:
 
 | Domain | Recipes |
 |---|---:|
 | sequence | 24 |
 | genomic intervals | 10 |
-| expression | 17 |
+| expression | 18 |
 | sequencing reads | 18 |
 | variants | 9 |
 | phylogeny | 12 |
@@ -29,8 +29,8 @@ format profile, and repository mapping. The 140 recipes span 13 domains:
 | assays and metabolomics | 7 |
 | workflow and identifiers | 2 |
 
-The default build contains one task per recipe: 140 authoring examples, comprising
-25 real-data candidates and 115 simulated controls. Add another task from a recipe
+The default build contains one task per recipe: 141 authoring examples, comprising
+26 real-data candidates and 115 simulated controls. Add another task from a recipe
 only when its dataset, study design, modality or scientific decision contributes
 meaningful coverage. Deterministic generators can still produce extra validation
 cases without adding them to training. The manifest marks
@@ -90,9 +90,23 @@ The full GSE81682 candidate has 1,920 cells, 46,078 endogenous features and 92 E
 controls. Sparse conversion preserved all 22,590,142 nonzero counts and their
 identities exactly. The 76,277,182-byte compressed MatrixMarket file and its
 feature/cell tables are preserved in regional GCS; `data_sources.json` records
-SHA-256 hashes and retrieval locations. This source is not yet a registered task.
-Donor/pool reconciliation, redistribution terms and benchmark-lineage review
-remain open. The broad sorting gates do not provide fine cell labels or donors.
+SHA-256 hashes and retrieval locations. `real-singlecell-read-qc` applies explicit
+cell and gene filters, preserves both complete QC tables, and exports the filtered
+matrix. Actual Scanpy and an independent streaming oracle agree on all 17,332,418
+retained entries, 1,422 cells and 40,312 endogenous genes. Changing one count fails
+with correct summaries. The reference took 97.8 seconds and 1.11 GiB peak RSS;
+the oracle took 219.4 seconds and 68 MiB. Full artifact grading took 149–151 seconds
+and about 117 MiB. These are measured on one reserved TRC CPU host, with no model
+calls. Packaged corpus and Harbor checks remain pending. GEO reuse policy and study
+attribution are recorded; donor/pool reconciliation and benchmark-lineage review
+remain open. Broad sorting gates do not provide fine cell labels or donors.
+
+The build requires `--source-cache` pointing to files named by their recorded
+SHA-256 values for this full-study recipe. It does not download data implicitly.
+The corresponding slow integration tests accept `--bio-source-cache`. Run full
+study checks on appropriately sized compute; the default local suite keeps the
+small correctness fixtures. Inspection pages preview up to 8,000 decoded bytes
+from cached files, including gzip-compressed count matrices.
 
 Connected DESeq2 differential-expression and GO-enrichment candidates are defined in
 `generators/real_rnaseq.py`. Their private fits use unchanged GSE60450 observations;
@@ -136,6 +150,7 @@ with a 500 MiB workload limit. From the repository root:
 ```bash
 uv run python -m experiments.post_training.bio_tasks.build \
   --output /tmp/bio-tasks-example \
+  --source-cache /path/to/sha256-source-cache \
   --instances-per-recipe 1 \
   --seed 20260923 \
   --base-image python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c \
@@ -185,7 +200,7 @@ Duplicate coordinates, explicit zeros, missing entries and changed counts fail.
 The verifier streams decoded entries to disk and uses GNU sort with one worker
 and a 32 MiB buffer to establish canonical coordinate order. Compressed, decoded
 and line-size limits bound input expansion. Matrix tasks allow 300 seconds for
-verification; full-study performance validation remains pending. Pair matrices
+verification; the observed 17.3-million-entry matrix passes in about 150 seconds. Pair matrices
 with checked feature/cell index tables to bind coordinates to biological identities.
 Protein alignment tasks accept different aligned FASTA files if they preserve every
 input residue and reach 95% of the sum of independently computed optimal pairwise
