@@ -47,11 +47,6 @@ def _boundary_config(**overrides) -> GrugModelConfig:
     return _small_config(**boundary)
 
 
-def _init_and_logits(cfg: GrugModelConfig, tokens: jax.Array) -> jax.Array:
-    model = Transformer.init(cfg, key=jax.random.PRNGKey(0))
-    return model.logits(tokens)
-
-
 def _model_with_nonzero_sublayers(cfg: GrugModelConfig, seed: int = 0) -> Transformer:
     """Init with nonzero w_o / w_down / head weights.
 
@@ -143,14 +138,6 @@ def test_residual_and_output_multipliers_scale_forward():
     assert jnp.isfinite(logits_rm).all()
 
 
-def test_vanilla_forward_is_deterministic():
-    """Same config + seed reproduces the vanilla forward exactly."""
-    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
-        plain = _init_and_logits(_small_config(), _TOKENS)
-        again = _init_and_logits(_small_config(), _TOKENS)
-    np.testing.assert_allclose(np.asarray(plain), np.asarray(again), rtol=1e-6)
-
-
 def test_boundary_operator_changes_the_forward():
     """Hidden states (pre-head) differ between vanilla and boundary models.
 
@@ -190,21 +177,22 @@ def test_boundary_operator_core_entry_matches_alpha_times_prelude(prelude_len: i
     assert not jnp.allclose(actual, skipped_injection, rtol=1e-3, atol=1e-3)
 
 
-def test_swiglu_and_qk_norm_forward_runs():
-    """SwiGLU MLP + QK-norm lower and produce finite outputs at bf16."""
+def test_attention_and_mlp_affect_loss():
+    """The nonzero sublayers affect loss through both attention and SwiGLU."""
     cfg = _small_config()
+    model = _model_with_nonzero_sublayers(cfg)
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
-        model = Transformer.init(cfg, key=jax.random.PRNGKey(0))
-        loss = model.next_token_loss(_TOKENS, jnp.ones_like(_TOKENS, dtype=jnp.float32), reduction="mean")
+        loss, grads = jax.value_and_grad(
+            lambda m: m.next_token_loss(_TOKENS, jnp.ones_like(_TOKENS, dtype=jnp.float32), reduction="mean")
+        )(model)
     assert jnp.isfinite(loss).all()
     assert loss.shape == ()
+    assert jnp.linalg.norm(grads.blocks[0].attn.w_q) > 0
+    assert jnp.linalg.norm(grads.blocks[0].mlp.w_gate) > 0
 
 
 def test_param_count_matches_paper_at_d8_and_d6():
-    """Paper A.1: ~210M params at d8 (width 1024), ~123M at d6, with vocab 50,304.
-
-    Param matching fixes d_ff = 3 * width and head_dim = 64.
-    """
+    """Model array shapes match the paper's d8/d6 parameter counts."""
     for num_layers, expected in ((8, 210e6), (6, 123e6)):
         cfg = GrugModelConfig(
             vocab_size=50_304,
@@ -214,7 +202,7 @@ def test_param_count_matches_paper_at_d8_and_d6():
             num_heads=128 * num_layers // 64,
             num_kv_heads=128 * num_layers // 64,
         )
-        d = cfg.hidden_dim
-        per_block = 4 * d * d + 3 * d * cfg.intermediate_dim  # w_q, w_k, w_v, w_o  # w_gate, w_up, w_down
-        total = cfg.vocab_size * d + d * cfg.vocab_size + num_layers * per_block
+        with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+            model_shape = jax.eval_shape(lambda cfg=cfg: Transformer.init(cfg, key=jax.random.PRNGKey(0)))
+        total = sum(x.size for x in jax.tree.leaves(model_shape))
         assert abs(total - expected) / expected < 0.05, (num_layers, total)

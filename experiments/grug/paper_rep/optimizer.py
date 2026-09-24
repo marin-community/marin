@@ -109,7 +109,7 @@ class PaperMuonConfig(OptimizerConfig):
                 return "adamw_embed"
             if "output_proj" in path_lower:
                 return "adamw_head"
-            if hasattr(param, "ndim") and param.ndim >= 2:
+            if isinstance(param, jax.Array) and param.ndim >= 2:
                 return "muon"
             return "adamw_embed"
 

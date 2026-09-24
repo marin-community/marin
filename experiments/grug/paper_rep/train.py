@@ -84,7 +84,6 @@ class GrugRunConfig:
     model: GrugModelConfig
     data: LmDataConfig
     resources: ResourceConfig
-    output_path: str = ""
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
     trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
@@ -263,12 +262,10 @@ def _make_train_step(
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
 
-    @functools.partial(jax.jit, donate_argnums=(0,), static_argnames=("compute_watch",))
+    @functools.partial(jax.jit, donate_argnums=(0,))
     def train_step(
         state: GrugTrainState,
         batch,
-        *,
-        compute_watch: bool = False,
     ):
         def loss_fn(params):
             compute_params = mp.cast_to_compute(params)
@@ -449,7 +446,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         last_loss: float | jax.Array = 0.0
         last_step_duration = 0.0
 
-        # Main optimization loop.
         try:
             while int(state.step) < trainer.num_train_steps:
                 with jax.profiler.TraceAnnotation("load_batch"):

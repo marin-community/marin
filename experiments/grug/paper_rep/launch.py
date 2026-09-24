@@ -17,7 +17,7 @@ Comparing these against Table 6 tests whether the paper's central
 base-size claim (Operator-1 beats Vanilla even under the transferred recipe)
 replicates outside the paper's stack.
 
-Submit (v4-8, one arm at a time)::
+Submit one arm at a time::
 
     .venv/bin/iris --cluster=marin job run --no-wait \\
         -e WANDB_API_KEY "$WANDB_API_KEY" \\
@@ -49,7 +49,7 @@ from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.training.training import LevanterCheckpoint, resolve_checkpointer_output_path
 
 from experiments.datasets.fineweb_gpt2 import fineweb_10bt_gpt2_dataset, fineweb_validation_gpt2_dataset
-from experiments.grug.paper_rep.model import GrugModelConfig
+from experiments.grug.paper_rep.model import PAPER_VOCAB_SIZE, GrugModelConfig
 from experiments.grug.paper_rep.recipes import (
     OPERATOR1_RECIPE,
     VANILLA_RECIPE,
@@ -122,11 +122,7 @@ def _resolve_tracker(tracker: TrackerConfig, run_id: str) -> TrackerConfig:
 
 
 def run_paper_rep_trial(config: PaperRepLaunchConfig) -> None:
-    """Map launch knobs onto a full Levanter trainer and dispatch the run.
-
-    Runs inline on the launcher; ``run_grug`` submits the training job to Fray
-    and blocks until it completes.
-    """
+    """Submit one paper-replication arm with the configured trainer."""
     initialize_from = latest_checkpoint_path(config.init_from) if config.init_from is not None else None
     trainer = TrainerConfig(
         id=config.run_id,
@@ -177,7 +173,7 @@ def paper_rep_arm(
     model = model_config(
         recipe,
         num_layers=_NUM_LAYERS,
-        vocab_size=50_304,
+        vocab_size=PAPER_VOCAB_SIZE,
         max_seq_len=_MAX_SEQ_LEN,
         boundary_operator=boundary_operator,
     )
@@ -280,7 +276,7 @@ _OWN_MODEL_CLUSTER = {
 }
 # Second-stage split of the init cluster: embedding-side scales vs depth
 # multipliers. The first-stage screen isolated the cluster; these arms
-# attribute it to individual knobs.
+# compare the two knob pairs.
 _OWN_EMBED_CLUSTER = {
     "wte": OPERATOR1_RECIPE.wte,
     "uis": OPERATOR1_RECIPE.uis,
@@ -338,7 +334,7 @@ _ARMS = {
 }
 
 
-def materialize_data(*, version: str | None = None) -> list[ArtifactStep[TokenizedCache]]:
+def materialize_data() -> list[ArtifactStep[TokenizedCache]]:
     """Materialize the FineWeb caches once, before any training arm.
 
     Returns the two tokenized-cache handles; running this step downloads and

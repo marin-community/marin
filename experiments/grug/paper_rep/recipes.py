@@ -12,7 +12,7 @@ the Vanilla recipe.
 
 from dataclasses import dataclass
 
-from experiments.grug.paper_rep.model import GrugModelConfig, split_prelude_core_coda
+from experiments.grug.paper_rep.model import PAPER_VOCAB_SIZE, GrugModelConfig, split_prelude_core_coda
 from experiments.grug.paper_rep.optimizer import PaperMuonConfig
 
 
@@ -73,7 +73,7 @@ def model_config(
     recipe: PaperRecipe,
     *,
     num_layers: int,
-    vocab_size: int = 50_304,
+    vocab_size: int = PAPER_VOCAB_SIZE,
     max_seq_len: int = 2048,
     boundary_operator: bool = False,
     injection_scale: float = 1.0,

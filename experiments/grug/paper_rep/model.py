@@ -33,6 +33,8 @@ from levanter.grug.attention import AttentionMask, RotaryConfig, apply_rotary_em
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import Pbatch, Pembed_vocab, Plm_head, Plogits
 
+PAPER_VOCAB_SIZE = 50_304
+
 
 @dataclass(frozen=True)
 class GrugModelConfig:
@@ -43,7 +45,7 @@ class GrugModelConfig:
     initial values; launch-time recipes override them with the Table 5 values.
     """
 
-    vocab_size: int = 50_304
+    vocab_size: int = PAPER_VOCAB_SIZE
     hidden_dim: int = 1024
     intermediate_dim: int = 3072
     num_layers: int = 8
@@ -363,6 +365,7 @@ def debug_mesh_and_token_pspec(num_devices: int, model_axis_size: int = 1) -> tu
 
 __all__ = [
     "MLP",
+    "PAPER_VOCAB_SIZE",
     "Block",
     "BlockSplit",
     "CausalSelfAttention",
