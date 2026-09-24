@@ -112,7 +112,7 @@ def grpo_loss(
     config: GrpoConfig,
     accumulation_steps: int,
 ) -> tuple[jax.Array, dict[str, Metric]]:
-    """Return loss and additive metrics for Levanter gradient accumulation.
+    """Return loss and metrics for Levanter gradient accumulation.
 
     Pass the number of execution microbatches as accumulation_steps to cancel
     Levanter's gradient averaging. All other inputs are sliced from the full
