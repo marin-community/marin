@@ -178,6 +178,15 @@ fitted gene-level results. These contracts check every ID and quantity, declared
 numeric tolerances and missingness. Row and column order may vary; wrong values,
 duplicate or missing IDs, malformed rows and nonfinite values fail. A correct
 final summary cannot compensate for an incorrect required intermediate table.
+Integer count matrices can require complete MatrixMarket coordinate artifacts,
+plain or gzip-compressed. Verification checks dimensions, every positive count
+and its 1-based coordinate; entry order, whitespace and comments may vary.
+Duplicate coordinates, explicit zeros, missing entries and changed counts fail.
+The verifier streams decoded entries to disk and uses GNU sort with one worker
+and a 32 MiB buffer to establish canonical coordinate order. Compressed, decoded
+and line-size limits bound input expansion. Matrix tasks allow 300 seconds for
+verification; full-study performance validation remains pending. Pair matrices
+with checked feature/cell index tables to bind coordinates to biological identities.
 Protein alignment tasks accept different aligned FASTA files if they preserve every
 input residue and reach 95% of the sum of independently computed optimal pairwise
 scores (twice BLOSUM62, gap opening 20, extension 1). Each admitted instance must
@@ -191,7 +200,7 @@ generation immediately and leaves the manifest marked `incomplete`.
 Serve the output directory with `python -m http.server 8757 --directory /tmp/bio-tasks-example`
 and open `http://localhost:8757/`. The index groups tasks by recipe, with text search, domain filtering,
 format/skill labels, a data-origin filter (real data selected initially), and a separate
-50-repository execution-coverage table. A second page tracks 815 provisional ID task/protocol records and 90 held-out OOD
+50-repository execution-coverage table. A second page tracks the build's frozen provisional ID task/protocol records and 90 held-out OOD
 BioMysteryBench identifiers, with filters for distribution, benchmark and coverage status, recipe examples, explicit gaps and
 local reference-check runtimes. Task pages show exact instructions, bounded input previews, expected
 outputs, negative controls, metadata, and verifier code. These pages contain answers
@@ -245,8 +254,11 @@ alone do not freeze all build-time transitive packages.
 on the host. It does not establish container execution, network isolation, or
 scientific approval. Scientific review remains pending. The committed
 [container evidence](../../experiments/post_training/bio_tasks/container_validation.json)
-records 18 passing oracle trials and five rejected negative controls for six recipes
-at their recorded task and grader hashes. A new build requires checks against its
+records passing oracle trials and rejected artifact controls at their recorded task
+and grader hashes, including complete RNA-seq tables and COX1 trees and distances.
+The COX1 validation passed all three cases; its enclosing worker failed on a
+concurrent sandbox deletion, and a subsequent check confirmed no owned sandboxes
+remained. A new build requires checks against its
 own hashes. Before task release, review every selected task and validate its
 reference/failing solutions through the selected Harbor backend. Keep additional
 null, boundary and invalid-input cases in the validation suite.

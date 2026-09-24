@@ -60,7 +60,12 @@ trees, 3,916 distance rows, three RF comparisons and ten rejected artifact contr
 That case represents 94 source accessions through 89 distinct proteins and a fixed
 558-column MAFFT alignment. Different search optimizations and a single-gene sample
 do not establish species-tree truth or justify ranking raw likelihoods. These checks
-do not establish tool availability in generated Harbor tasks or complete workflows.
+do not establish complete benchmark workflows. The COX1 task also passed in Harbor:
+one fresh oracle finished in 622.3 seconds, and changed-tree and missing-distance-row
+controls received zero with correct summaries. The enclosing worker failed on a
+redundant sandbox deletion (HTTP 409); a subsequent paginated check found no owned
+sandboxes remaining. The [container record](../../experiments/post_training/bio_tasks/container_validation.json)
+retains both the passing validation and the cleanup failure.
 Snakemake executes included lanes grouped by sample; MultiQC parses supplied
 FastQC reports before comparison with raw FASTQ counts. FastQC passed all three
 cases; Nextflow passed after adding `ps` for its metrics collector. API/CLI usage
@@ -392,8 +397,9 @@ Twenty-five recipes supply unchanged biological observations or declared observe
   unchanged proteins in a fixed 558-column MAFFT alignment. The connected workflow
   infers three gene trees and compares their complete branches, distances and
   unrooted bipartitions. A separate Biopython calculation checks the input-reading
-  oracle's measurements. The native oracle passed in 17.1 minutes; Harbor portability
-  and benchmark-lineage screening remain pending.
+  oracle's measurements. The native oracle passed in 17.1 minutes and the Harbor
+  oracle in 10.4 minutes with unchanged tolerances. Benchmark-lineage screening
+  remains pending.
 
 - **Mayo PBC study:** 418 baseline records and 1,945 follow-up observations. Three
   recipes cover randomized-cohort selection, composite-endpoint Kaplan-Meier

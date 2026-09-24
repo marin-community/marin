@@ -1216,6 +1216,334 @@
         }
       ],
       "limitations": "Canonical cases only. Complete tables and both changed-intermediate controls pass with the Haswell kernel and unchanged tolerances. These results do not establish biological source independence, scientific review or complete ID workflow coverage."
+    },
+    {
+      "job_id": "/exedev/bio-harbor-cox1-20260924-061127",
+      "source_revision": "4b3188238ff3436b7a97b4fd360ffcca2795b8af",
+      "harbor_revision": "d072bef08e54050880b484eb81d892944d1d82fb",
+      "daytona_version": "0.203.0",
+      "status": "validation-passed-cleanup-wrapper-failed",
+      "worker_exit_code": 1,
+      "model_calls": 0,
+      "agent": "oracle",
+      "concurrent_trials": 1,
+      "attempts_per_case": 1,
+      "positive_cases": 1,
+      "negative_cases": 2,
+      "discriminating_negative_cases": 2,
+      "bundle_sha256": "ed6a3f6fcd3bc501bd59fadb7e84392dd1973b5e336a795853bdcfe6a130a2b0",
+      "archive": {
+        "state": "uploaded",
+        "uri": "gs://marin-us-central2/tmp/ttl=7d/iris/task-outputs/exedev/bio-harbor-cox1-20260924-061127/0/0533c2a35d98471d/outputs.tar.zst",
+        "size_bytes": 403351,
+        "sha256": "240bb2f80b121c6c914cf5f820fb2151ea102650b46a216bca391d336c7f6233",
+        "ttl_days": 7
+      },
+      "controller_placement": {
+        "job_id": "/exedev/bio-harbor-cox1-20260924-061127",
+        "state": "failed",
+        "worker_id": "marin-tpu-v4-reserved-256-us-central2-b-20260922-2317-8259d330-worker-28",
+        "execution_cluster_id": "local",
+        "backend_id": "default",
+        "checked_at": "2026-09-24T06:25:00.248527+00:00",
+        "worker_metadata": [
+          {
+            "worker_id": "marin-tpu-v4-reserved-256-us-central2-b-20260922-2317-8259d330-worker-28",
+            "scale_group": "tpu_v4-reserved_256-us-central2-b",
+            "backend_id": "default",
+            "tpu_name": "t1v-n-9a98788d",
+            "gce_zone": "",
+            "gce_instance_name": "t1v-n-9a98788d-w-28"
+          }
+        ]
+      },
+      "agent_and_verifier_backend": "Daytona",
+      "cleanup": {
+        "initial_error": "Daytona HTTP 409: Sandbox state change in progress, during a redundant delete after Harbor completed all trials. The cleanup wrapper raised before writing its report.",
+        "followup": {
+          "checked_at": "2026-09-24T06:31:56.746416+00:00",
+          "trials": [
+            "real-cox1-tree-comparison-v1-202__3GfMdKR",
+            "real-cox1-tree-comparison-v1-202__9MKUvDG",
+            "real-cox1-tree-comparison-v1-202__VDWqMPj"
+          ],
+          "remaining": [],
+          "resources_modified": 0,
+          "pages": 5,
+          "include_errored_deleted": true,
+          "method": "Documented GET /sandbox with cursor pagination and exact owned trial-label prefixes."
+        },
+        "decision": "Check the current owned sandbox state before retrying deletion. Do not rerun completed inference or change passing grades because cleanup overlapped deletion."
+      },
+      "cases": [
+        {
+          "task_id": "real-cox1-tree-comparison-v1-20260923-00000",
+          "recipe": "real-cox1-tree-comparison",
+          "repository_indices": [
+            28,
+            29,
+            30
+          ],
+          "task_sha256": "1e7518d40954abca7b1188db5466cbb30f713389d1db0a229f759ef4b0d6b6af",
+          "contract_sha256": "9c76dc51af6e26495fb216dd4bbcb9ba91cd47a94cae9e3c0f3f7b71ef797953",
+          "expected_reward": 1,
+          "control": "positive",
+          "reward": 1.0,
+          "passed": true,
+          "exception_info": null,
+          "failed_summary_checks": [],
+          "artifact_checks": {
+            "distances.tsv": {
+              "passed": true,
+              "rows": 3916,
+              "missing": [],
+              "failures": []
+            },
+            "comparisons.tsv": {
+              "passed": true,
+              "rows": 3,
+              "missing": [],
+              "failures": []
+            },
+            "iqtree.nwk": {
+              "passed": true,
+              "tips": 89,
+              "edges": 175,
+              "changed_edges": []
+            },
+            "fasttree.nwk": {
+              "passed": true,
+              "tips": 89,
+              "edges": 175,
+              "changed_edges": []
+            },
+            "raxml.nwk": {
+              "passed": true,
+              "tips": 89,
+              "edges": 175,
+              "changed_edges": []
+            }
+          },
+          "task_file_hashes": {
+            "environment/Dockerfile": "dc8b5ec22567928c322b653bee58aa39acb27079259f8a40a58fc876b7013d23",
+            "environment/install_environment.py": "4579b40d1aed17372500ed10f243af705c54f087de364b808ca989ec9c210956",
+            "environment/packages.lock.json": "31356d3b938be13a17e12119f555db3259a9d34012e26effd2e4ce3a9f57ef67",
+            "instruction.md": "5fcf3a74defeeda235206c78a82486a1924896ce19a3d46cd4ea90cef1f6754b",
+            "setup_files/inputs/accessions.tsv": "b18127b796086a2ac2e64877b0e90473d8b25800ef8eacd3827513d4f786fb59",
+            "setup_files/inputs/alignment.fa": "f17b96e80f9c471ee58d5daf5dd1f7ea1f2020b25feb9c6f768588783b997e13",
+            "setup_files/inputs/query.json": "9ed493ee63a03cd38dbe426e9d83f2a9b2e4daeac80ac0a81dd2a10aba84d9e7",
+            "solution/oracle.pyz": "18ac0cb313b442584fda58499fc36c64566d6a064363e31ff7666ba1b007e2b8",
+            "solution/solve.sh": "91b5ac461dc70f22217d75d24a29218995d6545cbe97fbc584bcec18e61ef9b4",
+            "task.toml": "68490ae435b4e36d63d54b7c16ee217e94d4ed2182d27a85f2a478bdc7fb0c43",
+            "tests/Dockerfile": "63d257fadffcfe69050ee5c96d5d75677088d38b2910717283bfcd1432368ae5",
+            "tests/reference.json": "5ae06b22fd8beceb11698c5240e197b814d4056bae847d8a7e16cfc2ccdd550c",
+            "tests/test.sh": "0a123d54664bc69887619dd3c54164b49f7ae0e81d7c473dc5239f399ee6dfc4",
+            "tests/verifier.pyz": "95ba853eafb429cd96059eb5eda404cb9f1394463e752fad3d817aa0551e1781"
+          },
+          "artifact_sha256": {
+            "answer.json": "6f5f9682dfdf6224fa2434a8471a0ffcbcee36d18cf6aa55c105bd20644c8f60",
+            "comparisons.tsv": "88047244038c872f4409f232dfb9d1ccfc4ec86c11fadf2d5f133c4c4129bb50",
+            "distances.tsv": "8f47a678c349ff06a111a4bce5dbf5a12c0f2a7f3251ca6fb265eddc577c125b",
+            "fasttree.nwk": "d8d5b4a869ed3b5887bdce504d2d30f72b12636b7693ca0af1d711fff9c68490",
+            "iqtree.nwk": "5f8431012c8eb22a09849fc5a378fb1fa997e087caf935be8fd8984348cfae70",
+            "manifest.json": "7f3bd8fbad89ad0d1de535786eb2f97d845ff5aef4fdeb03df51f5997528f82e",
+            "raxml.nwk": "89a34eb84edc1818d0b8448dec99ba47d50c1e163ebfadbb5b8045e8de7cf706"
+          },
+          "seconds": {
+            "environment_setup": 1.180926,
+            "agent_setup": 7.2e-05,
+            "agent_execution": 622.277711,
+            "verifier": 6.690219
+          },
+          "started_at": "2026-09-24T06:13:32.090492Z",
+          "finished_at": "2026-09-24T06:24:04.099948Z"
+        },
+        {
+          "task_id": "real-cox1-tree-comparison-v1-20260923-00000-changed-tree",
+          "recipe": "real-cox1-tree-comparison",
+          "repository_indices": [
+            28,
+            29,
+            30
+          ],
+          "task_sha256": "1e7518d40954abca7b1188db5466cbb30f713389d1db0a229f759ef4b0d6b6af",
+          "contract_sha256": "9c76dc51af6e26495fb216dd4bbcb9ba91cd47a94cae9e3c0f3f7b71ef797953",
+          "expected_reward": 0,
+          "control": "changed-tree-with-correct-summary",
+          "canonical_task_id": "real-cox1-tree-comparison-v1-20260923-00000",
+          "control_source": "Native oracle artifacts; only the named artifact is corrupted. This case checks verifier isolation, not a fresh inference run.",
+          "reward": 0.0,
+          "passed": true,
+          "exception_info": null,
+          "failed_summary_checks": [],
+          "artifact_checks": {
+            "distances.tsv": {
+              "passed": true,
+              "rows": 3916,
+              "missing": [],
+              "failures": []
+            },
+            "comparisons.tsv": {
+              "passed": true,
+              "rows": 3,
+              "missing": [],
+              "failures": []
+            },
+            "iqtree.nwk": {
+              "passed": false,
+              "tips": 89,
+              "edges": 175,
+              "changed_edges": [
+                "B0FWC7"
+              ]
+            },
+            "fasttree.nwk": {
+              "passed": true,
+              "tips": 89,
+              "edges": 175,
+              "changed_edges": []
+            },
+            "raxml.nwk": {
+              "passed": true,
+              "tips": 89,
+              "edges": 175,
+              "changed_edges": []
+            }
+          },
+          "task_file_hashes": {
+            "environment/Dockerfile": "dc8b5ec22567928c322b653bee58aa39acb27079259f8a40a58fc876b7013d23",
+            "environment/install_environment.py": "4579b40d1aed17372500ed10f243af705c54f087de364b808ca989ec9c210956",
+            "environment/packages.lock.json": "31356d3b938be13a17e12119f555db3259a9d34012e26effd2e4ce3a9f57ef67",
+            "instruction.md": "5fcf3a74defeeda235206c78a82486a1924896ce19a3d46cd4ea90cef1f6754b",
+            "setup_files/inputs/accessions.tsv": "b18127b796086a2ac2e64877b0e90473d8b25800ef8eacd3827513d4f786fb59",
+            "setup_files/inputs/alignment.fa": "f17b96e80f9c471ee58d5daf5dd1f7ea1f2020b25feb9c6f768588783b997e13",
+            "setup_files/inputs/query.json": "9ed493ee63a03cd38dbe426e9d83f2a9b2e4daeac80ac0a81dd2a10aba84d9e7",
+            "solution/control/answer.json": "b140e3957e1f347d18b31a84b5223a22028806a7c705812839c8dcc12bd11562",
+            "solution/control/comparisons.tsv": "88047244038c872f4409f232dfb9d1ccfc4ec86c11fadf2d5f133c4c4129bb50",
+            "solution/control/distances.tsv": "8f47a678c349ff06a111a4bce5dbf5a12c0f2a7f3251ca6fb265eddc577c125b",
+            "solution/control/fasttree.nwk": "d8d5b4a869ed3b5887bdce504d2d30f72b12636b7693ca0af1d711fff9c68490",
+            "solution/control/iqtree.nwk": "20b0d746acba2d4982ae9cf7828b5d06df66c6bad3f5a1096a5e1f1926822b00",
+            "solution/control/raxml.nwk": "89a34eb84edc1818d0b8448dec99ba47d50c1e163ebfadbb5b8045e8de7cf706",
+            "solution/oracle.pyz": "18ac0cb313b442584fda58499fc36c64566d6a064363e31ff7666ba1b007e2b8",
+            "solution/solve.sh": "f8e9a73d03980fed4d086fbef22725fd52af0d0ec65a754e0389ba2761303cf7",
+            "task.toml": "68490ae435b4e36d63d54b7c16ee217e94d4ed2182d27a85f2a478bdc7fb0c43",
+            "tests/Dockerfile": "63d257fadffcfe69050ee5c96d5d75677088d38b2910717283bfcd1432368ae5",
+            "tests/reference.json": "5ae06b22fd8beceb11698c5240e197b814d4056bae847d8a7e16cfc2ccdd550c",
+            "tests/test.sh": "0a123d54664bc69887619dd3c54164b49f7ae0e81d7c473dc5239f399ee6dfc4",
+            "tests/verifier.pyz": "95ba853eafb429cd96059eb5eda404cb9f1394463e752fad3d817aa0551e1781"
+          },
+          "artifact_sha256": {
+            "answer.json": "b140e3957e1f347d18b31a84b5223a22028806a7c705812839c8dcc12bd11562",
+            "comparisons.tsv": "88047244038c872f4409f232dfb9d1ccfc4ec86c11fadf2d5f133c4c4129bb50",
+            "distances.tsv": "8f47a678c349ff06a111a4bce5dbf5a12c0f2a7f3251ca6fb265eddc577c125b",
+            "fasttree.nwk": "d8d5b4a869ed3b5887bdce504d2d30f72b12636b7693ca0af1d711fff9c68490",
+            "iqtree.nwk": "20b0d746acba2d4982ae9cf7828b5d06df66c6bad3f5a1096a5e1f1926822b00",
+            "manifest.json": "7f3bd8fbad89ad0d1de535786eb2f97d845ff5aef4fdeb03df51f5997528f82e",
+            "raxml.nwk": "89a34eb84edc1818d0b8448dec99ba47d50c1e163ebfadbb5b8045e8de7cf706"
+          },
+          "seconds": {
+            "environment_setup": 1.232717,
+            "agent_setup": 7.8e-05,
+            "agent_execution": 0.471696,
+            "verifier": 3.821557
+          },
+          "started_at": "2026-09-24T06:13:24.879602Z",
+          "finished_at": "2026-09-24T06:13:32.083205Z"
+        },
+        {
+          "task_id": "real-cox1-tree-comparison-v1-20260923-00000-missing-distance-row",
+          "recipe": "real-cox1-tree-comparison",
+          "repository_indices": [
+            28,
+            29,
+            30
+          ],
+          "task_sha256": "1e7518d40954abca7b1188db5466cbb30f713389d1db0a229f759ef4b0d6b6af",
+          "contract_sha256": "9c76dc51af6e26495fb216dd4bbcb9ba91cd47a94cae9e3c0f3f7b71ef797953",
+          "expected_reward": 0,
+          "control": "missing-distance-row-with-correct-summary",
+          "canonical_task_id": "real-cox1-tree-comparison-v1-20260923-00000",
+          "control_source": "Native oracle artifacts; only the named artifact is corrupted. This case checks verifier isolation, not a fresh inference run.",
+          "reward": 0.0,
+          "passed": true,
+          "exception_info": null,
+          "failed_summary_checks": [],
+          "artifact_checks": {
+            "distances.tsv": {
+              "passed": false,
+              "rows": 3915,
+              "missing": [
+                "Q9ZZM6:Q9ZZY9"
+              ],
+              "failures": []
+            },
+            "comparisons.tsv": {
+              "passed": true,
+              "rows": 3,
+              "missing": [],
+              "failures": []
+            },
+            "iqtree.nwk": {
+              "passed": true,
+              "tips": 89,
+              "edges": 175,
+              "changed_edges": []
+            },
+            "fasttree.nwk": {
+              "passed": true,
+              "tips": 89,
+              "edges": 175,
+              "changed_edges": []
+            },
+            "raxml.nwk": {
+              "passed": true,
+              "tips": 89,
+              "edges": 175,
+              "changed_edges": []
+            }
+          },
+          "task_file_hashes": {
+            "environment/Dockerfile": "dc8b5ec22567928c322b653bee58aa39acb27079259f8a40a58fc876b7013d23",
+            "environment/install_environment.py": "4579b40d1aed17372500ed10f243af705c54f087de364b808ca989ec9c210956",
+            "environment/packages.lock.json": "31356d3b938be13a17e12119f555db3259a9d34012e26effd2e4ce3a9f57ef67",
+            "instruction.md": "5fcf3a74defeeda235206c78a82486a1924896ce19a3d46cd4ea90cef1f6754b",
+            "setup_files/inputs/accessions.tsv": "b18127b796086a2ac2e64877b0e90473d8b25800ef8eacd3827513d4f786fb59",
+            "setup_files/inputs/alignment.fa": "f17b96e80f9c471ee58d5daf5dd1f7ea1f2020b25feb9c6f768588783b997e13",
+            "setup_files/inputs/query.json": "9ed493ee63a03cd38dbe426e9d83f2a9b2e4daeac80ac0a81dd2a10aba84d9e7",
+            "solution/control/answer.json": "b140e3957e1f347d18b31a84b5223a22028806a7c705812839c8dcc12bd11562",
+            "solution/control/comparisons.tsv": "88047244038c872f4409f232dfb9d1ccfc4ec86c11fadf2d5f133c4c4129bb50",
+            "solution/control/distances.tsv": "2835d2fdef17ee1d718f18bd01f02d09b5e73e9a9d3c7f74974212b24234aa07",
+            "solution/control/fasttree.nwk": "d8d5b4a869ed3b5887bdce504d2d30f72b12636b7693ca0af1d711fff9c68490",
+            "solution/control/iqtree.nwk": "5f8431012c8eb22a09849fc5a378fb1fa997e087caf935be8fd8984348cfae70",
+            "solution/control/raxml.nwk": "89a34eb84edc1818d0b8448dec99ba47d50c1e163ebfadbb5b8045e8de7cf706",
+            "solution/oracle.pyz": "18ac0cb313b442584fda58499fc36c64566d6a064363e31ff7666ba1b007e2b8",
+            "solution/solve.sh": "f8e9a73d03980fed4d086fbef22725fd52af0d0ec65a754e0389ba2761303cf7",
+            "task.toml": "68490ae435b4e36d63d54b7c16ee217e94d4ed2182d27a85f2a478bdc7fb0c43",
+            "tests/Dockerfile": "63d257fadffcfe69050ee5c96d5d75677088d38b2910717283bfcd1432368ae5",
+            "tests/reference.json": "5ae06b22fd8beceb11698c5240e197b814d4056bae847d8a7e16cfc2ccdd550c",
+            "tests/test.sh": "0a123d54664bc69887619dd3c54164b49f7ae0e81d7c473dc5239f399ee6dfc4",
+            "tests/verifier.pyz": "95ba853eafb429cd96059eb5eda404cb9f1394463e752fad3d817aa0551e1781"
+          },
+          "artifact_sha256": {
+            "answer.json": "b140e3957e1f347d18b31a84b5223a22028806a7c705812839c8dcc12bd11562",
+            "comparisons.tsv": "88047244038c872f4409f232dfb9d1ccfc4ec86c11fadf2d5f133c4c4129bb50",
+            "distances.tsv": "2835d2fdef17ee1d718f18bd01f02d09b5e73e9a9d3c7f74974212b24234aa07",
+            "fasttree.nwk": "d8d5b4a869ed3b5887bdce504d2d30f72b12636b7693ca0af1d711fff9c68490",
+            "iqtree.nwk": "5f8431012c8eb22a09849fc5a378fb1fa997e087caf935be8fd8984348cfae70",
+            "manifest.json": "7f3bd8fbad89ad0d1de535786eb2f97d845ff5aef4fdeb03df51f5997528f82e",
+            "raxml.nwk": "89a34eb84edc1818d0b8448dec99ba47d50c1e163ebfadbb5b8045e8de7cf706"
+          },
+          "seconds": {
+            "environment_setup": 17.66429,
+            "agent_setup": 0.000108,
+            "agent_execution": 0.515766,
+            "verifier": 30.176042
+          },
+          "started_at": "2026-09-24T06:12:34.415534Z",
+          "finished_at": "2026-09-24T06:13:24.871536Z"
+        }
+      ],
+      "limitations": "One fresh inference case and two verifier-isolation controls using saved native outputs. No trial exceptions. All 12 summary quantities, complete trees and tables pass unchanged tolerances. This does not establish biological source independence, scientific approval or complete ID workflow coverage."
     }
   ]
 }

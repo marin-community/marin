@@ -7,6 +7,7 @@ uv run python -m experiments.post_training.bio_tasks.build --help
 """
 
 import argparse
+import gzip
 import hashlib
 import html
 import io
@@ -38,6 +39,7 @@ from experiments.post_training.tasktrove.taskbinary import TaskFiles, write_task
 SOURCE_DIR = Path(__file__).parent
 HARBOR_REVISION = "d072bef08e54050880b484eb81d892944d1d82fb"
 MAX_DISTINCT_INSTANCE_ATTEMPTS = 64
+MATRIX_VERIFICATION_TIMEOUT = 300
 PARQUET_SCHEMA = pa.schema(
     [
         ("path", pa.string()),
@@ -250,6 +252,31 @@ def validate_instance(
             artifact.write_text(changed)
             artifact_checks[f"changed_branch:{name}"] = grade_files(reference, answer).reward
             artifact.write_text(original)
+        for name, target in instance.contract.matrices.items():
+            artifact = root / name
+            original = root / (name + ".original")
+            artifact.rename(original)
+            artifact_checks[f"missing_artifact:{name}"] = grade_files(reference, answer).reward
+            opener = gzip.open if name.endswith(".gz") else open
+            with opener(original, "rb") as source, opener(artifact, "wb") as destination:
+                shape_seen = False
+                for line in source:
+                    stripped = line.strip()
+                    if not stripped or stripped.startswith(b"%"):
+                        destination.write(line)
+                    elif not shape_seen:
+                        destination.write(line)
+                        shape_seen = True
+                    else:
+                        row, column, value = map(int, stripped.split())
+                        destination.write(f"{row} {column} {value + 1}\n".encode())
+                        shutil.copyfileobj(source, destination)
+                        break
+                if target.nonzeros == 0:
+                    destination.write(b"1 1 1\n")
+            artifact_checks[f"changed_matrix_count:{name}"] = grade_files(reference, answer).reward
+            artifact.unlink()
+            original.rename(artifact)
         if any(value != 0 for value in artifact_checks.values()):
             raise ValueError(f"{recipe.id}: invalid native artifact passed: {artifact_checks}")
         if previous_outputs:
@@ -309,11 +336,12 @@ def task_files(
         "generation_seed": str(task.seed),
         "scientific_review": "pending",
     }
-    config = tomlkit.parse(render_task_toml(1800, 60, metadata))
+    verification_timeout = MATRIX_VERIFICATION_TIMEOUT if instance.contract.matrices else 60
+    config = tomlkit.parse(render_task_toml(1800, verification_timeout, metadata))
     config["artifacts"] = ["/app/answer.json", *(f"/app/{name}" for name in instance.contract.artifacts())]
     # A fresh verifier environment receives only the declared submitted artifacts.
     config["verifier"] = {
-        "timeout_sec": 60,
+        "timeout_sec": verification_timeout,
         "environment_mode": "separate",
         "environment": {"allow_internet": False, "cpus": 1, "memory_mb": 1024},
     }
@@ -389,6 +417,7 @@ def inspection_page(root: Path, task: Identity, instance: Instance, files: TaskF
                 "fastq": {name: target.model_dump() for name, target in instance.contract.fastq.items()},
                 "alignments": {name: target.model_dump() for name, target in instance.contract.alignments.items()},
                 "trees": {name: target.model_dump() for name, target in instance.contract.trees.items()},
+                "matrices": {name: target.model_dump() for name, target in instance.contract.matrices.items()},
                 "tables": {
                     name: {
                         "columns": {column: spec.model_dump() for column, spec in target.columns.items()},
@@ -711,6 +740,10 @@ def build(
                                     name: target.model_dump() for name, target in instance.contract.alignments.items()
                                 },
                                 "tables": {name: target.expected for name, target in instance.contract.tables.items()},
+                                "trees": {name: target.model_dump() for name, target in instance.contract.trees.items()},
+                                "matrices": {
+                                    name: target.model_dump() for name, target in instance.contract.matrices.items()
+                                },
                             },
                             sort_keys=True,
                         ).encode()

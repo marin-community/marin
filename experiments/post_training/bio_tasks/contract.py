@@ -5,10 +5,15 @@
 
 import argparse
 import csv
+import gzip
 import hashlib
 import json
 import math
+import os
 import re
+import subprocess
+import tempfile
+import zlib
 from itertools import combinations
 from pathlib import Path
 from typing import Literal
@@ -19,6 +24,8 @@ from tasktrove_verify.grade import Reward, infra_error, invalid_task, scored, wr
 from experiments.post_training.bio_tasks.solvers.newick import newick, weighted_splits
 
 MAX_ANSWER_BYTES = 2 * 1024 * 1024
+MAX_MATRIX_LINE_BYTES = 64 * 1024
+MATRIX_SORT_TIMEOUT = 120
 Scalar = int | float | str | None
 
 
@@ -119,6 +126,99 @@ class TreeContract(BaseModel):
         if any(not math.isfinite(self.atol + self.rtol * length) for length in edges.values()):
             raise ValueError("nonfinite tree tolerance")
         return self
+
+
+class MatrixMarketContract(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    rows: int = Field(gt=0)
+    columns: int = Field(gt=0)
+    nonzeros: int = Field(ge=0)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    max_bytes: int = Field(gt=0, le=1024 * 1024 * 1024)
+    max_decoded_bytes: int = Field(gt=0, le=2 * 1024 * 1024 * 1024)
+
+    @model_validator(mode="after")
+    def validate_shape(self) -> "MatrixMarketContract":
+        if self.nonzeros > self.rows * self.columns:
+            raise ValueError("Matrix nonzero count exceeds its dimensions")
+        return self
+
+
+def check_matrix(path: Path, target: MatrixMarketContract) -> dict:
+    """Check every positive integer entry, allowing arbitrary coordinate order."""
+    if path.stat().st_size > target.max_bytes:
+        raise ValueError("matrix_too_large")
+    with tempfile.TemporaryDirectory(prefix="bio-matrix-") as directory:
+        root = Path(directory)
+        coordinates = root / "coordinates.txt"
+        opener = gzip.open if path.suffix == ".gz" else open
+        try:
+            with opener(path, "rb") as source, coordinates.open("wb") as destination:
+                header = source.readline(MAX_MATRIX_LINE_BYTES + 1)
+                consumed = len(header)
+                if len(header) > MAX_MATRIX_LINE_BYTES or consumed > target.max_decoded_bytes:
+                    raise ValueError("matrix_decoded_size")
+                if header.lower().split() != [b"%%matrixmarket", b"matrix", b"coordinate", b"integer", b"general"]:
+                    raise ValueError("matrix_header")
+                shape = None
+                count = 0
+                while line := source.readline(MAX_MATRIX_LINE_BYTES + 1):
+                    consumed += len(line)
+                    if len(line) > MAX_MATRIX_LINE_BYTES or consumed > target.max_decoded_bytes:
+                        raise ValueError("matrix_decoded_size")
+                    stripped = line.strip()
+                    if not stripped or stripped.startswith(b"%"):
+                        continue
+                    fields = stripped.split()
+                    if len(fields) != 3 or any(not re.fullmatch(rb"\+?[0-9]+", field) for field in fields):
+                        raise ValueError("matrix_integer_coordinates")
+                    values = tuple(int(field) for field in fields)
+                    if shape is None:
+                        shape = values
+                        if shape != (target.rows, target.columns, target.nonzeros):
+                            raise ValueError("matrix_shape")
+                        continue
+                    row, column, value = values
+                    if not (1 <= row <= target.rows and 1 <= column <= target.columns and 0 < value < 2**63):
+                        raise ValueError("matrix_coordinate_or_count")
+                    count += 1
+                    if count > target.nonzeros:
+                        raise ValueError("matrix_extra_entries")
+                    destination.write(f"{row} {column} {value}\n".encode())
+                if shape is None or count != target.nonzeros:
+                    raise ValueError("matrix_missing_entries")
+        except (gzip.BadGzipFile, EOFError, zlib.error) as error:
+            raise ValueError("malformed_gzip_matrix") from error
+        ordered = root / "ordered.txt"
+        with ordered.open("wb") as destination:
+            subprocess.run(
+                [
+                    "sort",
+                    "--buffer-size=32M",
+                    "--parallel=1",
+                    "--temporary-directory=" + str(root),
+                    "-k1,1n",
+                    "-k2,2n",
+                    str(coordinates),
+                ],
+                stdout=destination,
+                stderr=subprocess.PIPE,
+                check=True,
+                timeout=MATRIX_SORT_TIMEOUT,
+                env={**os.environ, "LC_ALL": "C"},
+            )
+        digest = hashlib.sha256()
+        previous = None
+        with ordered.open("rb") as source:
+            for line in source:
+                coordinate = line.split()[:2]
+                if coordinate == previous:
+                    raise ValueError("matrix_duplicate_coordinate")
+                previous = coordinate
+                digest.update(line)
+        actual = digest.hexdigest()
+        return {"passed": actual == target.sha256, "nonzeros": count, "sha256": actual}
 
 
 def check_tree(path: Path, target: TreeContract) -> dict:
@@ -282,6 +382,7 @@ class Contract(BaseModel):
     alignments: dict[str, AlignmentContract] = Field(default_factory=dict)
     tables: dict[str, TableContract] = Field(default_factory=dict)
     trees: dict[str, TreeContract] = Field(default_factory=dict)
+    matrices: dict[str, MatrixMarketContract] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_reference(self) -> "Contract":
@@ -296,7 +397,7 @@ class Contract(BaseModel):
         return [{"id": key, **value} for key, value in self.expected.items()]
 
     def artifacts(self) -> tuple[str, ...]:
-        return (*self.fastq, *self.alignments, *self.tables, *self.trees)
+        return (*self.fastq, *self.alignments, *self.tables, *self.trees, *self.matrices)
 
     def instructions(self) -> str:
         lines = [
@@ -351,6 +452,17 @@ class Contract(BaseModel):
                 "Child order, internal labels, comments and root placement are ignored; a degree-two root's "
                 "two edges are added. Do not include unary nodes or a nonzero root stem. "
                 "This verifies reproduction of the specified analysis, not a true species phylogeny."
+            )
+        for name, target in self.matrices.items():
+            lines.append(
+                f"Also write /app/{name} as MatrixMarket coordinate integer general, "
+                f"with {target.rows} rows, {target.columns} columns and {target.nonzeros} positive entries. "
+                "Use one 1-based coordinate per nonzero count, with no duplicate coordinates or explicit zeros. "
+                "Every count and coordinate is checked; entry order, whitespace and comments are ignored. "
+                "Use gzip compression for a .gz filename. Integer counts must be below 2^63. "
+                f"The file must be at most {target.max_bytes} bytes, at most {target.max_decoded_bytes} "
+                f"decoded bytes, and at most {MAX_MATRIX_LINE_BYTES} bytes per line. "
+                "A correct JSON summary alone does not pass."
             )
         return "\n".join(lines)
 
@@ -452,10 +564,22 @@ def grade_files(reference: Path, answer: Path) -> Reward:
                 checks[name] = check_tree(path, target)
             except (ValueError, RecursionError) as error:
                 return scored(0, reason=str(error), artifact=name)
+        if any(not check["passed"] for check in checks.values()):
+            return scored(0, **verdict.detail, artifact_checks=checks)
+        for name, target in contract.matrices.items():
+            path = answer.parent / name
+            if path.is_symlink() or not path.is_file():
+                return scored(0, reason="missing_or_nonregular_matrix", artifact=name)
+            try:
+                checks[name] = check_matrix(path, target)
+            except ValueError as error:
+                return scored(0, reason=str(error), artifact=name)
         return scored(float(all(check["passed"] for check in checks.values())), **verdict.detail, artifact_checks=checks)
     except UnicodeDecodeError:
         return scored(0, reason="malformed_utf8")
     except OSError as error:
+        return infra_error(str(error))
+    except subprocess.SubprocessError as error:
         return infra_error(str(error))
 
 
