@@ -5,8 +5,8 @@ contains **147 proposed questions across 52 scientific workstreams**, with revie
 assignments for all **2,881 inventoried task, protocol or dataset-definition records
 across 30 ID releases**. It records exact task IDs, input designs, required artifacts,
 verification approaches and unresolved data/endpoint requirements. These are
-proposals; they add **zero validated mappings**. Twelve eligible source rows still
-lack task inventories and remain explicit gaps.
+proposals; they add **zero validated mappings**. Twelve provisional-ID source leads still
+lack task inventories and remain explicit access or enumeration gaps.
 
 Choose the next coherent task by its expected gain in currently missing, distinct
 ID benchmark tasks. Recompute after each completed or rejected candidate.
@@ -43,10 +43,16 @@ benchmark accuracy, general solvability or training benefit. The server did not
 expose its maximum context length or weight revision, and the rendered chat
 template was not inspected. No LLM judge or bulk teacher collection was used.
 
-Before new recipe implementation, repair three demonstrated interface problems:
-make `/opt/bio/bin` available in the actual agent shell, display exact summary IDs
-and a value-free schema, and report artifact checks even when summary validation
-fails. Preserve strict grading and the original attempts.
+The generator now shows a value-free record example and makes the RNA task's single
+`comparison` record explicit. Verification reports artifact checks even when the
+summary fails, preserving reward zero. This incurs the usual artifact read/sort
+cost even for a malformed summary; existing file bounds and the 60-second verifier
+limit (300 seconds for matrix tasks) still apply. Infrastructure failures remain
+unscored. Original attempts and grades are unchanged.
+
+Native environment contexts now export `/opt/bio/bin` from `/etc/profile.d/bio.sh`
+as well as Docker `ENV`. The pinned Harbor terminal starts `bash --login`; a
+fresh container/terminal check of this change is still required before release.
 
 ## Proposed scientific workstreams
 
@@ -156,8 +162,8 @@ artifact checks to GPT-6 Sol; simpler mechanical work can use GPT-6 Luna. Assign
 explicit outputs, allowed actions and a stopping point. Review evidence before
 integration, and avoid simultaneous heavy local work.
 
-Completed: the observed PhiX assembly workflow validates the CompBioBench N50
-adaptation. Its original Drosophila fixture and answer were not used; release-level
+Completed: the observed PhiX assembly workflow validates an N50-specific CompBioBench
+mapping. Its original Drosophila fixture and answer were not used; release-level
 scientific and biological-lineage review remain open. The issue's
 [opening ledger](https://github.com/marin-community/marin/issues/9257) tracks task,
 validated mapping and repository counts separately from this prospective plan.

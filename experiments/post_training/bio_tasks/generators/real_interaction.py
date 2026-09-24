@@ -170,8 +170,9 @@ def generate_interaction(_seed: int) -> Instance:
         "gene_calls.tsv with the three directions, all_testable (finite raw p, BH and effect for all "
         "contrasts), one_population_only (exactly one within-population direction nonzero), "
         "one_population_only_without_interaction (that flag and interaction direction zero), and "
-        "both_same_direction (both within-population directions nonzero and equal). Summarize counts "
-        "as id=comparison. One-population significance does not establish different responses; a "
+        "both_same_direction (both within-population directions nonzero and equal). Write answer.json "
+        "as an array containing exactly one object with id=comparison and all six summary fields together. "
+        "One-population significance does not establish different responses; a "
         "non-significant interaction or matching directions does not establish equivalence. These "
         "post-test effect cutoffs are not formal tests against a nonzero effect threshold. Stage "
         "associations in this small observational study do not establish causal or drug-safety effects.",

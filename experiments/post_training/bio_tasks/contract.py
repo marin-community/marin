@@ -458,7 +458,16 @@ class Contract(BaseModel):
         lines = [
             "Write /app/answer.json as a JSON array of records, with one record per requested id.",
             "Each record must contain a string id and exactly the fields below. Record order is irrelevant.",
+            "All fields belong together in each record; field names are not separate record IDs.",
             "Do not duplicate or omit IDs. Extra IDs/fields, booleans as numbers, and nonfinite numbers fail.",
+            "Example of one record in the array: repeat the record for every requested ID. "
+            "Replace all angle-bracket placeholders with the requested IDs and computed values.",
+            "```json",
+            json.dumps(
+                [{"id": "<requested record id>", **{name: f"<{column.kind}>" for name, column in self.columns.items()}}],
+                indent=2,
+            ),
+            "```",
         ]
         for name, column in self.columns.items():
             tolerance = ""
@@ -581,31 +590,39 @@ def grade_files(reference: Path, answer: Path) -> Reward:
         return infra_error(str(error))
     try:
         if answer.is_symlink() or not answer.is_file():
-            return scored(0, reason="missing_or_nonregular_answer")
-        with answer.open("rb") as handle:
-            raw = handle.read(MAX_ANSWER_BYTES + 1)
-        if len(raw) > MAX_ANSWER_BYTES:
-            return scored(0, reason="answer_too_large")
-        verdict = grade_answer(contract, raw.decode("utf-8"))
-        if verdict.reward != 1 or not contract.artifacts():
+            verdict = scored(0, reason="missing_or_nonregular_answer")
+        else:
+            with answer.open("rb") as handle:
+                raw = handle.read(MAX_ANSWER_BYTES + 1)
+            if len(raw) > MAX_ANSWER_BYTES:
+                verdict = scored(0, reason="answer_too_large")
+            else:
+                try:
+                    verdict = grade_answer(contract, raw.decode("utf-8"))
+                except UnicodeDecodeError:
+                    verdict = scored(0, reason="malformed_utf8")
+        if not contract.artifacts():
             return verdict
         checks = {}
         for name, target in contract.fasta.items():
             path = answer.parent / name
             if path.is_symlink() or not path.is_file():
-                return scored(0, reason="missing_or_nonregular_fasta", artifact=name)
+                checks[name] = {"passed": False, "reason": "missing_or_nonregular_fasta"}
+                continue
             try:
                 checks[name] = check_fasta(path, target)
             except ValueError as error:
-                return scored(0, reason=str(error), artifact=name)
+                checks[name] = {"passed": False, "reason": str(error)}
         for name, target in contract.fastq.items():
             path = answer.parent / name
             if path.is_symlink() or not path.is_file():
-                return scored(0, reason="missing_or_nonregular_fastq", artifact=name)
+                checks[name] = {"passed": False, "reason": "missing_or_nonregular_fastq"}
+                continue
             try:
                 records, digest = fastq_digest(path, target.max_bytes)
             except ValueError as error:
-                return scored(0, reason=str(error), artifact=name)
+                checks[name] = {"passed": False, "reason": str(error)}
+                continue
             checks[name] = {
                 "records": records,
                 "sha256": digest,
@@ -614,40 +631,41 @@ def grade_files(reference: Path, answer: Path) -> Reward:
         for name, target in contract.alignments.items():
             path = answer.parent / name
             if path.is_symlink() or not path.is_file():
-                return scored(0, reason="missing_or_nonregular_alignment", artifact=name)
+                checks[name] = {"passed": False, "reason": "missing_or_nonregular_alignment"}
+                continue
             try:
                 checks[name] = check_alignment(path, target)
             except ValueError as error:
-                return scored(0, reason=str(error), artifact=name)
+                checks[name] = {"passed": False, "reason": str(error)}
         for name, target in contract.tables.items():
             path = answer.parent / name
             if path.is_symlink() or not path.is_file():
-                return scored(0, reason="missing_or_nonregular_table", artifact=name)
+                checks[name] = {"passed": False, "reason": "missing_or_nonregular_table"}
+                continue
             try:
                 checks[name] = check_table(path, target)
             except (ValueError, csv.Error) as error:
-                return scored(0, reason=str(error), artifact=name)
+                checks[name] = {"passed": False, "reason": str(error)}
         for name, target in contract.trees.items():
             path = answer.parent / name
             if path.is_symlink() or not path.is_file():
-                return scored(0, reason="missing_or_nonregular_tree", artifact=name)
+                checks[name] = {"passed": False, "reason": "missing_or_nonregular_tree"}
+                continue
             try:
                 checks[name] = check_tree(path, target)
             except (ValueError, RecursionError) as error:
-                return scored(0, reason=str(error), artifact=name)
-        if any(not check["passed"] for check in checks.values()):
-            return scored(0, **verdict.detail, artifact_checks=checks)
+                checks[name] = {"passed": False, "reason": str(error)}
         for name, target in contract.matrices.items():
             path = answer.parent / name
             if path.is_symlink() or not path.is_file():
-                return scored(0, reason="missing_or_nonregular_matrix", artifact=name)
+                checks[name] = {"passed": False, "reason": "missing_or_nonregular_matrix"}
+                continue
             try:
                 checks[name] = check_matrix(path, target)
             except ValueError as error:
-                return scored(0, reason=str(error), artifact=name)
-        return scored(float(all(check["passed"] for check in checks.values())), **verdict.detail, artifact_checks=checks)
-    except UnicodeDecodeError:
-        return scored(0, reason="malformed_utf8")
+                checks[name] = {"passed": False, "reason": str(error)}
+        passed = verdict.reward == 1 and all(check["passed"] for check in checks.values())
+        return scored(float(passed), **verdict.detail, artifact_checks=checks)
     except OSError as error:
         return infra_error(str(error))
     except subprocess.SubprocessError as error:

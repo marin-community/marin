@@ -200,5 +200,12 @@
       "action": "Retain summary-schema failure and also report complete artifact checks; never promote a failed original attempt or relax tolerances to pass it."
     }
   ],
-  "interpretation": "The two traces demonstrate intended scientific tool workflows within the budget. One strict success and one schema failure do not establish general solvability, benchmark coverage or training benefit."
+  "interpretation": "The two traces demonstrate intended scientific tool workflows within the budget. One strict success and one schema failure do not establish general solvability, benchmark coverage or training benefit.",
+  "followup_validation": {
+    "summary_shape": "Generator shows a placeholder record example; RNA explicitly requires one comparison record containing all six fields. No computed IDs or values are exposed.",
+    "artifact_diagnostics": "Focused regressions cover malformed JSON, wrong record shape, invalid UTF-8 and missing summaries alongside valid and malformed TSVs; reward stays zero and every TSV check is retained.",
+    "cost_limit": "Artifacts are checked even after summary failure. Existing per-file limits and Harbor verifier timeout apply; no aggregate artifact-byte limit was added, and infrastructure failures remain unscored.",
+    "shell_path": "Added /etc/profile.d/bio.sh export alongside Docker ENV. The pinned Harbor tmux_session.py starts bash --login. Fresh container/terminal verification remains pending.",
+    "original_attempts_unchanged": true
+  }
 }

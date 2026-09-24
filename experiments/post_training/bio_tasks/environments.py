@@ -60,6 +60,7 @@ def environment_files(recipe: str, base_image: str) -> TaskFiles:
         "RUN python3 /opt/bio-build/install_environment.py --lock /opt/bio-build/packages.lock.json "
         "--prefix /opt/bio && rm /opt/bio-build/install_environment.py\n"
         "ENV PATH=/opt/bio/bin:$PATH\n"
+        "RUN printf '%s\\n' 'export PATH=/opt/bio/bin:$PATH' > /etc/profile.d/bio.sh\n"
         "ENV OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 "
         "POLARS_MAX_THREADS=1 RAYON_NUM_THREADS=1 NUMBA_NUM_THREADS=1\n"
     )
