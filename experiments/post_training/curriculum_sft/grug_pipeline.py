@@ -48,7 +48,7 @@ def render_generated_chat(config: RenderConfig) -> Artifact:
 
 
 def packed_grug_data(*, rendered_path: str, cache_path: str, tokenizer: str, context_length: int) -> LmDataConfig:
-    """Use Will's text-token packing and cross-conversation attention mask semantics."""
+    """Pack rendered conversations without attention across conversation boundaries."""
     return LmDataConfig(
         tokenizer=tokenizer,
         cache_dir=None,
