@@ -54,7 +54,7 @@ def restore_model(request: SampleRequest, mesh: jax.sharding.Mesh) -> Transforme
     metadata = json.loads((checkpoint_path / "metadata.json").read_text())
     if digest(metadata) != request.checkpoint.metadata_digest or metadata.get("is_temporary") is not False:
         raise ValueError("Checkpoint metadata changed or checkpoint is not permanent")
-    config = draccus.decode(GrugModelConfig, request.spec.model)
+    config = draccus.decode(GrugModelConfig, request.model)
     template = eqx.filter_eval_shape(Transformer.init, config, key=jax.random.PRNGKey(0))
     manifest = read_manifest(checkpoint)
     if manifest is not None:
@@ -126,7 +126,7 @@ def expected_logprobs(
 
 
 def sample(request: SampleRequest, store_root: str) -> None:
-    """Run one rack of native inference and commit one validated result on process zero."""
+    """Run native inference for one checkpoint and save one validated result on process zero."""
     total = Timer()
     DistributedConfig().initialize()
     # Each rank keeps warnings and errors. Process zero writes shared progress.
@@ -142,8 +142,11 @@ def sample(request: SampleRequest, store_root: str) -> None:
     logger.info("Install kernel cache")
     with log_time("Kernel cache setup"):
         install(cutlass_kernel_cache())
-    if jax.device_count() != request.spec.batch_size or jax.default_backend() != "gpu":
-        raise ValueError("The hero sampler requires one GPU per batch row")
+    if jax.default_backend() != "gpu":
+        raise ValueError("The hero sampler requires the JAX GPU backend")
+    # One row per GPU: the batch axis is sharded across the whole mesh. A wider rack covers the
+    # prompt bank in fewer passes without changing what any row generates.
+    batch_size = jax.device_count()
     logger.info("Load tokenizer: %s at %s", request.spec.tokenizer, request.spec.tokenizer_revision)
     with log_time("Tokenizer loading"):
         tokenizer = AutoTokenizer.from_pretrained(request.spec.tokenizer, revision=request.spec.tokenizer_revision)
@@ -157,9 +160,15 @@ def sample(request: SampleRequest, store_root: str) -> None:
     for prompt, ids in zip(request.spec.prompts, prompt_ids, strict=True):
         if not prompt.expected:
             raise ValueError(f"Prompt has no expected completion: {prompt.id}")
-        expected = tokenizer.encode(prompt.expected, add_special_tokens=False)
-        if not expected or len(ids) + len(expected) > request.spec.context_length:
-            raise ValueError(f"Expected completion does not fit the context: {prompt.id}")
+        combined = tokenizer.encode(prompt.text + prompt.expected, add_special_tokens=True)
+        if combined[: len(ids)] != ids:
+            raise ValueError(
+                f"Reference tokenization changes the prompt tokens: {prompt.id}. "
+                "Move shared formatting into the prompt so its tokens remain a prefix."
+            )
+        expected = combined[len(ids) :]
+        if not expected or len(ids) + len(expected) + 1 > request.spec.context_length:
+            raise ValueError(f"Expected completion with EOS does not fit the context: {prompt.id}")
         expected_ids.append(expected)
     logger.info(
         "Tokenization completed: prompt tokens=%d, expected tokens=%d, context=%d, max new tokens=%d",
@@ -202,15 +211,17 @@ def sample(request: SampleRequest, store_root: str) -> None:
                 request.spec,
                 prompt_ids,
                 expected_ids,
+                batch_size=batch_size,
                 eos_token_id=tokenizer.eos_token_id,
                 logprobs=logprobs,
                 decode=decode,
             )
-        logger.info("Start completion generation")
+        logger.info("Start completion generation: %d samples per prompt", request.spec.completions_per_prompt)
         with log_time("Completion generation and decoding"):
             completions = generate(
                 request.spec,
                 prompt_ids,
+                batch_size=batch_size,
                 eos_token_id=tokenizer.eos_token_id,
                 logits=logits,
                 decode=decode,
@@ -221,7 +232,7 @@ def sample(request: SampleRequest, store_root: str) -> None:
         )
         if jax.process_index() == 0:
             logger.info(
-                "Validate and save %d completions to %s (sample=%s)", len(completions), store_root, request.sample_id
+                "Validate and save %d prompt sets to %s (sample=%s)", len(completions), store_root, request.sample_id
             )
             with log_time("Result validation and upload"):
                 SampleStore(store_root).save_result(
@@ -233,11 +244,13 @@ def sample(request: SampleRequest, store_root: str) -> None:
                     )
                 )
             logger.info(
-                "Sample completed: checkpoint step=%d, prompts=%d, generated tokens=%d, total=%.1f seconds. "
+                "Sample completed: checkpoint step=%d, prompts=%d, completions=%d, "
+                "generated tokens=%d, total=%.1f seconds. "
                 "The report will include this result after its next publication.",
                 request.checkpoint.step,
                 len(completions),
-                sum(len(completion.token_ids) for completion in completions),
+                sum(len(row.samples) for row in completions),
+                sum(len(sample.token_ids) for row in completions for sample in row.samples),
                 total.elapsed_seconds(),
             )
 

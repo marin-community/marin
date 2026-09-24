@@ -62,6 +62,22 @@ def test_sample_reader_returns_typed_filtered_page(tmp_path) -> None:
     assert [row.doc_id for row in page.rows] == ["incorrect"]
 
 
+def test_sample_reader_uses_the_declared_primary_metric(tmp_path) -> None:
+    fs, root = url_to_fs(str(tmp_path))
+    sample = EvalSample(
+        task="drop",
+        doc_id="1",
+        kind=SampleKind.GENERATION,
+        metrics={"exact_match,none": 0.0, "f1,none": 0.5},
+        correct=False,
+    )
+    write_sample_parquet(fs, f"{root}/samples_drop_20260719.parquet", [sample])
+
+    page = fetch_samples(str(tmp_path), "drop", offset=0, limit=1, correct="all", primary_metric_name="f1")
+
+    assert page.primary_metric == "f1,none"
+
+
 def test_grading_is_derived_and_round_trips(tmp_path) -> None:
     fs, root = url_to_fs(str(tmp_path))
     sample = sample_from_lm_eval(
@@ -84,6 +100,25 @@ def test_grading_is_derived_and_round_trips(tmp_path) -> None:
     assert row.grading.metric == "exact_match,flexible-extract"
     assert row.grading.filter == "flexible-extract"
     assert row.grading.passed is True
+
+
+def test_sample_export_uses_the_declared_metric():
+    sample = sample_from_lm_eval(
+        "drop",
+        {
+            "doc_id": 1,
+            "arguments": [["Question"]],
+            "resps": [["answer"]],
+            "target": "answer",
+            "exact_match,none": 0.0,
+            "f1,none": 1.0,
+        },
+        "f1",
+    )
+
+    assert sample.correct is True
+    assert sample.grading is not None
+    assert sample.grading.metric == "f1,none"
 
 
 def test_artifact_fetch_returns_run_local_object(tmp_path) -> None:

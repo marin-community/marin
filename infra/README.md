@@ -1,32 +1,54 @@
-# Autoscaling Clusters for Marin Data Processing
-Marin compute runs on GCP TPUs (provided by TRC) and CoreWeave GPUs. The named
-cluster configs in `lib/iris/config/` are the source of truth:
+# Marin infrastructure
 
-- `marin` (production GCP): a single multi-region cluster whose TPU pools span
-  v4 (us-central2), v5e (us-west4, europe-west4), v5p (us-central1, us-east5),
-  and v6e (us-east1, us-east5, europe-west4).
-- `marin-dev`: dev cluster with smaller scale caps.
-- `cw-rno2a`, `cw-us-east-02a`, `cw-us-east-08a`, `cw-us-west-04a`: CoreWeave
-  GPU clusters (see `lib/iris/docs/coreweave.md`).
+This page routes infrastructure work to the repository's operational and
+deployment documentation. New team members should start with
+[Internal onboarding](../docs/dev-guide/guidelines-internal.md). Most experiment
+development does not require the deployment procedures on this page.
 
+## Start here
 
+| Task | Documentation |
+| --- | --- |
+| Submit, inspect, or debug a job | [Iris operations](../lib/iris/OPS.md) |
+| Understand Iris scheduling and configuration | [Iris README](../lib/iris/README.md) |
+| Build or debug a data pipeline | [Zephyr README](../lib/zephyr/README.md) and [operations guide](../lib/zephyr/OPS.md) |
+| Add or change Pulumi-managed infrastructure | [Pulumi project guide](pulumi.md) |
+| Deploy Marin services | [Deployment guide](deploy/README.md) |
+| Build or operate a Marina app | [Marina README](marina/README.md) |
 
-## Cluster Infrastructure
+## Shared compute
+
+Marin compute runs on GCP TPUs and CoreWeave GPUs. The files in
+`lib/iris/config/` are the source of truth for named clusters, regions, and
+accelerator pools. Use Iris to list the clusters available in the current
+checkout; do not copy a static fleet list into other documentation.
+
+## Cluster infrastructure
 
 Marin clusters run on [Iris](../lib/iris/README.md) for orchestration (job/task
 scheduling, node provisioning), fray for distributed execution (Iris-backed),
 and [zephyr](../lib/zephyr/README.md) for data pipelines.
 
-## Preemptibility
+## Worker loss and durable state
 
-It is important to understand that almost all of our compute is **preemptible**.  This means that the VMs can be shut down at
-any time by Google, and we will lose all data on them. Preemptibility imposes a lot of constraints on how we design:
+Google TPU workers are preemptible. CoreWeave GPU nodes are non-preemptible,
+but node and runtime failures still occur. Code for both platforms as though a
+worker can disappear at any time. Its local disk is not durable.
 
-- When possible, setup should be fast.
-- Jobs should be written into small checkpointable units, that can be rescheduled if they fail.
-- Jobs should be idempotent and should be able to be restarted from the last checkpoint and not get confused if any partial mess is left behind.
-- Checkpoint often, use GCS for anything durable.
-- If you need absolutely need something to not crash, ask to schedule it on the head node. Do not do anything heavy on the head node.
+- Keep worker startup and task environment setup fast.
+- Split work into checkpointable units that Iris can reschedule.
+- Make each unit idempotent so retrying it after partial output is safe.
+- Write checkpoints and other durable artifacts to the cluster-provided
+  `MARIN_PREFIX`, not to a worker's local disk.
+
+The [Datakit sampling pipeline](../experiments/datakit/cluster/domain/v0/sample.py)
+shows the data-processing pattern: each shard has an independent output and the
+writer uses `skip_existing=True`, so a restart preserves completed shards. For
+training, see [Grug checkpoints and resume](../experiments/grug/README.md#checkpoints-and-resume).
+
+Use [Iris operations](../lib/iris/OPS.md) for current scheduling and recovery
+procedures. Do not start, stop, or restart a shared cluster without explicit
+approval.
 
 ## Data Processing with Zephyr
 
@@ -71,10 +93,9 @@ Jobs should still follow these principles for preemptible compute:
 To keep our Docker artifact registries tidy, we provide a script and Makefile target to automatically configure a cleanup policy for all our standard GCP regions. This policy deletes images older than 30 days from the registry,
 except we keep the most recent 16 tags.
 
-The canonical region list is sourced from `config/marin.yaml`
-(us-central1, us-central2, us-east1, us-east5, us-west1, us-west4, europe-west4) — the same
-single source of truth used by the regional data-bucket Pulumi component. Scripts read that
-map rather than hardcoding regions, so they never drift from the runtime view of the fleet.
+The canonical region list is sourced from `config/marin.yaml`, the
+same source used by the regional data-bucket Pulumi component. Scripts read
+that map so they stay aligned with the runtime fleet.
 
 ### Script: `infra/configure_gcp_registry.py`
 - This script sets a cleanup policy on a GCP Artifact Registry repository to delete images older than 30 days (keeping the 16 most recent tags).

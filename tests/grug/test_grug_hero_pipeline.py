@@ -45,9 +45,9 @@ def _tiny_hero(qb_estimator: QbEstimator) -> tuple[Mesh, Transformer]:
         initializer_std=0.2,
     )
     mesh = Mesh(
-        np.asarray(jax.devices()[:1]).reshape(1, 1, 1, 1),
-        ("replica_dcn", "data", "expert", "model"),
-        axis_types=(AxisType.Explicit,) * 4,
+        np.asarray(jax.devices()[:1]).reshape(1, 1, 1, 1, 1),
+        ("replica_dcn", "data", "expert", "context", "model"),
+        axis_types=(AxisType.Explicit,) * 5,
     )
     with jax.set_mesh(mesh):
         model = Transformer.init(config, key=jax.random.key(42))

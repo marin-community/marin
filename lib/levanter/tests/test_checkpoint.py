@@ -3,14 +3,17 @@
 
 import dataclasses
 import datetime
+import io
 import json
 import os
 import pathlib
 import tempfile
+from contextlib import contextmanager
 from datetime import timedelta
 
 import equinox
 import equinox as eqx
+import fsspec
 import haliax as hax
 import jax
 import jax.experimental.array_serialization.serialization as array_ser
@@ -21,11 +24,12 @@ import levanter.tensorstore_serialization as tensorstore_serialization
 import numpy as np
 import optax
 import pytest
-from rigging import telemetry
 from chex import assert_trees_all_close, assert_trees_all_equal
+from fsspec.implementations.memory import MemoryFileSystem
 from haliax import Axis
 from jax import ShapeDtypeStruct
 from jax import numpy as jnp
+from rigging import telemetry
 from rigging.filesystem.storage_path import StoragePath
 from rigging.testing import RecordingTelemetryTransport
 from levanter.testing.helpers import MLP, arrays_only, assert_trees_not_close, use_test_mesh
@@ -34,6 +38,7 @@ from levanter.callbacks import StepInfo
 from levanter.checkpoint import (
     CheckpointCandidate,
     CheckpointDebugConfig,
+    CheckpointRetention,
     Checkpointer,
     CheckpointerConfig,
     CheckpointInterval,
@@ -86,6 +91,50 @@ def _write_checkpoint_metadata(path: pathlib.Path, *, step: int, timestamp: str,
     path.mkdir(parents=True)
     with (path / "metadata.json").open("w") as f:
         json.dump({"step": step, "timestamp": timestamp, "is_temporary": is_temporary}, f)
+
+
+class _DeleteDeniedMemoryFileSystem(MemoryFileSystem):
+    protocol = "delete-denied"
+    store: dict[str, bytes] = {}
+    pseudo_dirs = [""]
+
+    def rm(self, path, recursive=False, maxdepth=None):
+        raise PermissionError("deletion denied")
+
+
+def test_checkpoint_metadata_remote_commit_does_not_require_delete():
+    fsspec.register_implementation("delete-denied", _DeleteDeniedMemoryFileSystem, clobber=True)
+    _DeleteDeniedMemoryFileSystem.clear_instance_cache()
+    checkpoint_path = "delete-denied://bucket/checkpoints/step-7"
+
+    checkpoint_module._save_metadata(checkpoint_path, 7, False, {"model": "hero"})
+
+    metadata = json.loads((StoragePath(checkpoint_path) / "metadata.json").read_text())
+    assert metadata["step"] == 7
+    assert metadata["is_temporary"] is False
+    assert metadata["model"] == "hero"
+
+
+def test_checkpoint_metadata_failed_publication_is_not_discoverable(monkeypatch):
+    fsspec.register_implementation("delete-denied", _DeleteDeniedMemoryFileSystem, clobber=True)
+    _DeleteDeniedMemoryFileSystem.clear_instance_cache()
+    checkpoint_path = "delete-denied://bucket/failed-publication/step-8"
+    StoragePath(checkpoint_path).mkdirs()
+
+    @contextmanager
+    def fail_on_close(self, mode="rb", **kwargs):
+        # Buffer the object like a remote upload, then fail before publication at close.
+        with io.StringIO() as buffer:
+            yield buffer
+            raise OSError("object publication failed")
+
+    monkeypatch.setattr(StoragePath, "open", fail_on_close)
+
+    with pytest.raises(OSError, match="object publication failed"):
+        checkpoint_module._save_metadata(checkpoint_path, 8, False)
+
+    assert not (StoragePath(checkpoint_path) / "metadata.json").exists()
+    assert discover_latest_checkpoint("delete-denied://bucket/failed-publication") is None
 
 
 def test_checkpointer_changing_policy():
@@ -876,8 +925,8 @@ def test_checkpointer_coalesces_requests_into_one_temporary_checkpoint(tmp_path)
         temporary_base_path=temporary_path,
     )
 
-    checkpointer.request_checkpoint()
-    checkpointer.request_checkpoint()
+    checkpointer.request_checkpoint(CheckpointRetention.TEMPORARY)
+    checkpointer.request_checkpoint(CheckpointRetention.TEMPORARY)
     _on_step(checkpointer, 1)
     _on_step(checkpointer, 2)
     checkpointer.wait_until_finished()
@@ -896,12 +945,39 @@ def test_requested_checkpoint_does_not_downgrade_scheduled_permanent_checkpoint(
         temporary_base_path=temporary_path,
     )
 
-    checkpointer.request_checkpoint()
+    checkpointer.request_checkpoint(CheckpointRetention.TEMPORARY)
     _on_step(checkpointer, 1)
     checkpointer.wait_until_finished()
 
     assert _get_checkpoint_steps(permanent_path) == [1]
     assert not temporary_path.exists()
+
+
+def test_permanent_request_saves_permanent_checkpoint_and_prunes_temporaries(tmp_path):
+    permanent_path = tmp_path / "checkpoints"
+    temporary_path = tmp_path / "temporary"
+    checkpointer = Checkpointer(
+        permanent_path,
+        None,
+        [],
+        temporary_base_path=temporary_path,
+    )
+
+    checkpointer.request_checkpoint(CheckpointRetention.TEMPORARY)
+    _on_step(checkpointer, 1)
+    checkpointer.wait_until_finished()
+    assert _get_checkpoint_steps(temporary_path) == [1]
+
+    # A temporary request made in the same step does not downgrade the permanent one.
+    checkpointer.request_checkpoint(CheckpointRetention.PERMANENT)
+    checkpointer.request_checkpoint(CheckpointRetention.TEMPORARY)
+    _on_step(checkpointer, 2)
+    checkpointer.wait_until_finished()
+
+    assert _get_checkpoint_steps(permanent_path) == [2]
+    metadata = json.loads((permanent_path / "step-2" / "metadata.json").read_text())
+    assert metadata["is_temporary"] is False
+    assert _get_checkpoint_steps(temporary_path) == []
 
 
 def test_load_from_checkpoint_or_initialize():

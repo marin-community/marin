@@ -28,6 +28,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
 from levanter.kernels.pallas.short_conv import (
     ShortConvBlockSizes,
@@ -327,6 +328,75 @@ def test_channel_axis_gate_consults_the_mesh_not_just_the_spec(model_size, shoul
             assert "shard_map" in str(jaxpr)
 
 
+@pytest.mark.parametrize(("model_size", "should_reject"), [(1, False), (2, True)])
+def test_context_parallel_path_keeps_the_channel_axis_gate(model_size, should_reject):
+    """The halo path shards the sequence by design, but a genuinely sharded channel axis must
+    still raise there, exactly as on the unsharded path, instead of being silently all-gathered."""
+    mesh = jax.sharding.AbstractMesh(
+        axis_sizes=(1, 1, 2, 1, model_size),
+        axis_names=("replica_dcn", "data", "context", "expert", "model"),
+        axis_types=(jax.sharding.AxisType.Explicit,) * 5,
+    )
+    weight, x, segment_ids, _ = _inputs(2, 32, 8, 4, seed=11, dtype=jnp.float32, packed=True)
+
+    def fn(w, xx, seg):
+        xx = jax.sharding.reshard(xx, jax.sharding.PartitionSpec(("data", "expert"), "context", "model"))
+        seg = jax.sharding.reshard(seg, jax.sharding.PartitionSpec(("data", "expert"), "context"))
+        return short_conv(w, xx, seg, implementation="reference", batch_axes=("data", "expert"))
+
+    with jax.sharding.use_abstract_mesh(mesh):
+        if should_reject:
+            with pytest.raises(ValueError, match="unsharded channel axis"):
+                jax.make_jaxpr(fn)(weight, x, segment_ids)
+        else:
+            text = str(jax.make_jaxpr(fn)(weight, x, segment_ids))
+            assert "ppermute" in text
+            for banned in ("all_gather", "all_reduce", "psum", "all_to_all", "reduce_scatter"):
+                assert banned not in text, f"the halo exchange lowered through an unexpected {banned}"
+
+
+def test_context_parallel_path_rejects_a_batch_axis_it_would_gather():
+    """A batch sharded over an axis missing from ``batch_axes`` must raise, not be all-gathered.
+
+    The shard-local path can skip the shard_map when no batch axis is active, but the halo
+    path cannot: resharding to ``P(None, "context", None)`` would replicate the batch.
+    """
+    mesh = jax.sharding.AbstractMesh(
+        axis_sizes=(2, 2, 2),
+        axis_names=("fsdp", "context", "spare"),
+        axis_types=(jax.sharding.AxisType.Explicit,) * 3,
+    )
+    weight, x, segment_ids, _ = _inputs(2, 32, 8, 4, seed=11, dtype=jnp.float32, packed=True)
+
+    def fn(w, xx, seg):
+        xx = jax.sharding.reshard(xx, P("fsdp", "context", None))
+        seg = jax.sharding.reshard(seg, P("fsdp", "context"))
+        return short_conv(w, xx, seg, implementation="reference", batch_axes=("data",))
+
+    with jax.sharding.use_abstract_mesh(mesh), pytest.raises(ValueError, match="not in batch_axes"):
+        jax.make_jaxpr(fn)(weight, x, segment_ids)
+
+
+def test_context_axis_named_in_batch_axes_shards_only_the_sequence():
+    """Grug's token axes list ``context`` next to the batch axes; it must not be spelled twice."""
+    mesh = jax.sharding.AbstractMesh(
+        axis_sizes=(2, 2, 2),
+        axis_names=("data", "context", "expert"),
+        axis_types=(jax.sharding.AxisType.Explicit,) * 3,
+    )
+    weight, x, segment_ids, _ = _inputs(4, 32, 8, 4, seed=11, dtype=jnp.float32, packed=True)
+
+    def fn(w, xx, seg):
+        xx = jax.sharding.reshard(xx, P(("data", "expert"), "context", None))
+        seg = jax.sharding.reshard(seg, P(("data", "expert"), "context"))
+        return short_conv(w, xx, seg, implementation="reference", batch_axes=("data", "expert", "context"))
+
+    with jax.sharding.use_abstract_mesh(mesh):
+        jaxpr = jax.make_jaxpr(fn)(weight, x, segment_ids)
+    assert "ppermute" in str(jaxpr)
+    assert "all_gather" not in str(jaxpr)
+
+
 def test_short_conv_rejects_mixed_dtypes():
     """Mixed weight/activation dtypes are rejected at the boundary. The reference promotes
     (fp32) while the Pallas kernel outputs ``x.dtype``, so accepting mixed inputs would make
@@ -335,3 +405,102 @@ def test_short_conv_rejects_mixed_dtypes():
     x = jnp.ones((1, 16, 8), dtype=jnp.bfloat16)
     with pytest.raises(ValueError, match="share a dtype"):
         short_conv(weight, x)
+
+
+@pytest.mark.skipif(jax.device_count() < 8, reason="Requires eight devices")
+@pytest.mark.parametrize("implementation", ["reference", "pallas_gpu"])
+@pytest.mark.parametrize("context", [2, 4])
+@pytest.mark.parametrize("packed", [True, False])
+@pytest.mark.parametrize("width", [1, 4, 17])
+@pytest.mark.parametrize("dtype", [jnp.bfloat16, jnp.float32])
+def test_context_parallel_halo_matches_the_unsharded_reference(implementation, context, packed, width, dtype):
+    """Check packed/unpacked values and gradients across context shards and halo sizes."""
+    batch, seq, channels = 2, 32, 8
+    mesh = Mesh(
+        np.asarray(jax.devices()[:8]).reshape(batch, context, 8 // (batch * context)),
+        ("data", "context", "spare"),
+        axis_types=(AxisType.Explicit,) * 3,
+    )
+    blocks = ShortConvBlockSizes(s_block_size=max(8, width - 1), c_block_size=8)
+    rng = np.random.default_rng(width)
+    weight = jnp.asarray(rng.standard_normal((width, channels)) * 0.5, dtype)
+    x = jnp.asarray(rng.standard_normal((batch, seq, channels)), dtype)
+    cotangent = jnp.asarray(rng.standard_normal((batch, seq, channels)), dtype)
+    segment_ids = None
+    if packed:
+        # Put a document boundary inside the context=4 left halo.
+        segment_ids = jnp.asarray(
+            np.concatenate([np.zeros((batch, 5)), np.full((batch, 2), 7), np.full((batch, seq - 7), 9)], axis=1),
+            jnp.int32,
+        )
+
+    def conv(w, xx, seg):
+        return short_conv(w, xx, seg, implementation=implementation, block_sizes=blocks, batch_axes=("data",))
+
+    def loss(w, xx, seg):
+        return jnp.sum(conv(w, xx, seg) * cotangent)
+
+    def reference_loss(w, xx, seg):
+        return jnp.sum(short_conv_reference(w, xx, seg) * cotangent)
+
+    with jax.set_mesh(mesh), interpret_mode():
+        x_sharded = jax.device_put(x, NamedSharding(mesh, P("data", "context", None)))
+        seg_sharded = None
+        if segment_ids is not None:
+            seg_sharded = jax.device_put(segment_ids, NamedSharding(mesh, P("data", "context")))
+
+        if width - 1 > seq // context:
+            with pytest.raises(ValueError, match="halo"):
+                conv(weight, x_sharded, seg_sharded)
+            return
+
+        got = jax.jit(conv)(weight, x_sharded, seg_sharded)
+        want = short_conv_reference(weight, x, segment_ids)
+        if dtype == jnp.bfloat16:
+            np.testing.assert_array_equal(_bits(got), _bits(want))
+        else:
+            # CPU fusion and the sum of partial gradients can change fp32 rounding.
+            np.testing.assert_allclose(np.asarray(got), np.asarray(want), rtol=1e-6, atol=1e-6)
+            dw_want, dx_want = jax.jit(jax.grad(reference_loss, argnums=(0, 1)))(weight, x, segment_ids)
+            dw_got, dx_got = jax.jit(jax.grad(loss, argnums=(0, 1)))(weight, x_sharded, seg_sharded)
+            np.testing.assert_allclose(np.asarray(dx_got), np.asarray(dx_want), rtol=1e-6, atol=1e-6)
+            np.testing.assert_allclose(np.asarray(dw_got), np.asarray(dw_want), rtol=1e-6, atol=1e-6)
+
+
+@pytest.mark.skipif(jax.device_count() < 8, reason="Requires eight devices")
+def test_channel_axis_gate_reads_concrete_shardings_on_an_auto_mesh():
+    mesh = Mesh(np.asarray(jax.devices()[:8]).reshape(2, 4), ("data", "model"), axis_types=(AxisType.Auto,) * 2)
+    weight = jnp.ones((4, 8), jnp.bfloat16)
+    x = jax.device_put(jnp.ones((2, 32, 8), jnp.bfloat16), NamedSharding(mesh, P("data", None, "model")))
+    with jax.set_mesh(mesh), interpret_mode(), pytest.raises(ValueError, match="unsharded channel axis"):
+        short_conv(weight, x, implementation="pallas_gpu", block_sizes=ShortConvBlockSizes(8, 8))
+
+
+@pytest.mark.parametrize("width", [1, 4])
+def test_context_parallel_pallas_matches_reference(width):
+    if jax.default_backend() != "gpu" or jax.device_count() < 4:
+        pytest.skip("requires four GPUs for context-parallel Pallas convolution")
+    mesh = Mesh(np.asarray(jax.devices()[:4]), ("context",), axis_types=(AxisType.Explicit,))
+    weight, x, segment_ids, cotangent = _inputs(1, 256, 128, width, seed=17, dtype=jnp.float32, packed=True)
+    # local_seq 64 + halo rounds to 128: two sequence blocks, so the general programs run too.
+    blocks = ShortConvBlockSizes(s_block_size=64, c_block_size=128)
+
+    def reference_loss(w, xx):
+        return jnp.sum(short_conv_reference(w, xx, segment_ids) * cotangent)
+
+    want = short_conv_reference(weight, x, segment_ids)
+    want_dw, want_dx = jax.grad(reference_loss, argnums=(0, 1))(weight, x)
+    with jax.set_mesh(mesh):
+        sharded_x = jax.device_put(x, NamedSharding(mesh, P(None, "context", None)))
+        sharded_seg = jax.device_put(segment_ids, NamedSharding(mesh, P(None, "context")))
+
+        def forward(w, xx):
+            return short_conv(w, xx, sharded_seg, implementation="pallas_gpu", block_sizes=blocks)
+
+        def loss(w, xx):
+            return jnp.sum(forward(w, xx) * cotangent)
+
+        got = forward(weight, sharded_x)
+        got_dw, got_dx = jax.grad(loss, argnums=(0, 1))(weight, sharded_x)
+    for actual, expected in ((got, want), (got_dw, want_dw), (got_dx, want_dx)):
+        np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)

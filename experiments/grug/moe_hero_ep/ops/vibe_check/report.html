@@ -49,8 +49,9 @@
   </div>
   <label id="prompt-control">Prompt<select id="prompt"></select></label>
   <div class="legend" id="probability-legend">Token probability:</div>
-  <p class="muted">Colors show model probabilities before temperature scaling. Hover, focus, or tap a token to see its probability and the five most likely tokens.</p>
+  <p class="muted">Colors show model probabilities before temperature scaling. ↵ marks a newline. Hover, focus, or tap a token to see its probability and the five most likely tokens.</p>
   <p id="error" role="alert"></p>
+  <p id="comparison-note" class="muted"></p>
   <div class="comparison"><article id="a"></article><article id="b"></article></div>
   <details><summary>All completed sample sets</summary>
     <table><thead><tr><th>Checkpoint</th><th>Sample set</th></tr></thead><tbody id="inventory"></tbody></table>
@@ -65,9 +66,43 @@
     const right = document.getElementById('right');
     const prompt = document.getElementById('prompt');
     const cache = new Map();
+    const missingPromptText = 'Prompt text was not recorded.';
+    const unknownRelease = 'Unknown sampling version';
     let draw = 0;
     function element(tag, text) { const node = document.createElement(tag); node.textContent = text; return node; }
-    function label(entry) { return `${entry.step.toLocaleString()} · ${entry.run_id} · ${entry.id.slice(0, 8)}`; }
+    function label(entry) { return `${entry.step?.toLocaleString() ?? 'Unknown step'} · ${entry.run_id} · ${entry.release ?? unknownRelease} · ${entry.id.slice(0, 8)}`; }
+    function records(value) { return Array.isArray(value) ? value.filter(row => row && typeof row === 'object') : []; }
+    function validLogprob(value) { return typeof value === 'number' && Number.isFinite(value) && value <= 0; }
+    function normalizeScores(value) {
+      if (!Array.isArray(value)) return null;
+      return records(value).map(token => ({
+        ...token,
+        text: typeof token.text === 'string' ? token.text : '',
+        logprob: validLogprob(token.logprob) ? token.logprob : null,
+        top_tokens: records(token.top_tokens).filter(candidate => validLogprob(candidate.logprob)),
+      }));
+    }
+    function normalizeResult(data) {
+      const request = data.request ?? {};
+      const spec = request.spec ?? {};
+      const sources = records(spec.prompts).map(row => ({...row,
+        text: typeof row.text === 'string' ? row.text : missingPromptText}));
+      const prompts = new Map(sources.filter(row => typeof row.id === 'string').map(row => [row.id, row]));
+      const completions = records(data.completions).map((row, index) => {
+        const id = row.prompt_id ?? sources[index]?.id ?? `unknown-${index}`;
+        const source = prompts.get(id) ?? {id};
+        const expected = normalizeScores(row.expected_scores);
+        prompts.set(id, {...source, text: typeof source.text === 'string' ? source.text : missingPromptText,
+          expected: source.expected ?? (expected ? expected.map(token => token.text).join('') : null)});
+        const samples = Array.isArray(row.samples) ? records(row.samples) : [row];
+        return {...row, prompt_id: id, expected_scores: expected, samples: samples.map((sample, sampleIndex) => {
+          const scores = normalizeScores(sample.token_scores);
+          return {...sample, sample_index: sample.sample_index ?? sampleIndex, token_scores: scores,
+            text: typeof sample.text === 'string' ? sample.text : (scores ? scores.map(token => token.text).join('') : 'Completion text was not recorded.')};
+        })};
+      });
+      return {...data, request: {...request, spec: {...spec, prompts: [...prompts.values()]}}, completions};
+    }
     const tooltip = document.getElementById('token-tooltip');
     function probabilityColor(logprob) { return `hsl(${120 * Math.sqrt(Math.exp(logprob))} 70% 82%)`; }
     function probabilityText(logprob) {
@@ -81,16 +116,19 @@
       document.getElementById('probability-legend').append(swatch);
     }
     function tokenLabel(token, eos) {
-      if (token.token_id === eos) return '⟨EOS⟩';
+      if (eos != null && token.token_id === eos) return '⟨EOS⟩';
       return token.text ? JSON.stringify(token.text) : '⟨empty text / byte fragment⟩';
     }
     function hideTooltip() { tooltip.hidden = true; }
     function showTooltip(node, token, eos) {
       tooltip.replaceChildren();
       tooltip.append(element('strong', tokenLabel(token, eos)));
-      tooltip.append(element('div', `Token ID ${token.token_id} · ln p = ${token.logprob.toFixed(4)}`));
-      const chosen = element('span', probabilityText(token.logprob)); chosen.className = 'probability';
-      chosen.style.backgroundColor = probabilityColor(token.logprob); tooltip.append(chosen);
+      const scored = validLogprob(token.logprob);
+      tooltip.append(element('div', `Token ID ${token.token_id ?? 'unknown'} · ln p = ${scored ? token.logprob.toFixed(4) : 'not recorded'}`));
+      if (scored) {
+        const chosen = element('span', probabilityText(token.logprob)); chosen.className = 'probability';
+        chosen.style.backgroundColor = probabilityColor(token.logprob); tooltip.append(chosen);
+      }
       const table = document.createElement('table');
       const heading = document.createElement('tr');
       heading.append(element('th', 'Most likely tokens'), element('th', 'ID'), element('th', 'Probability')); table.append(heading);
@@ -102,7 +140,7 @@
         name.style.backgroundColor = probabilityColor(candidate.logprob); name.className = 'probability';
         row.append(name, element('td', String(candidate.token_id)), value); table.append(row);
       }
-      tooltip.append(table); tooltip.hidden = false;
+      tooltip.append(token.top_tokens.length ? table : element('p', 'Top-token probabilities were not recorded.')); tooltip.hidden = false;
       const bounds = node.getBoundingClientRect();
       const left = Math.max(12, Math.min(bounds.left, innerWidth - tooltip.offsetWidth - 12));
       const top = bounds.bottom + tooltip.offsetHeight + 8 < innerHeight
@@ -116,25 +154,28 @@
     function tokenSequence(scores, text, eos) {
       const block = document.createElement('div');
       const pre = document.createElement('pre'); block.append(pre);
-      if (scores == null) {
+      if (scores == null || scores.map(token => token.text).join('') !== text) {
         pre.textContent = text;
-        block.append(element('p', 'Token probabilities were not recorded for this completion.'));
+        block.append(element('p', scores == null ? 'Token probabilities were not recorded for this completion.' : 'Saved token scores do not match this text.'));
         return block;
       }
       for (const token of scores) {
-        const span = element('span', token.text); span.className = token.text ? 'token' : 'token empty';
-        span.style.backgroundColor = probabilityColor(token.logprob);
+        const text = eos != null && token.token_id === eos ? tokenLabel(token, eos) : token.text.replace(/\r\n|\r|\n/g, '↵\n');
+        const span = element('span', text); span.className = text ? 'token' : 'token empty';
+        if (validLogprob(token.logprob)) span.style.backgroundColor = probabilityColor(token.logprob);
         span.tabIndex = 0;
-        span.setAttribute('aria-label', `${tokenLabel(token, eos)}: ${probabilityText(token.logprob)}`);
+        span.setAttribute('aria-label', `${tokenLabel(token, eos)}: ${validLogprob(token.logprob) ? probabilityText(token.logprob) : 'probability not recorded'}`);
         span.setAttribute('aria-describedby', 'token-tooltip');
         for (const event of ['mouseenter', 'focus', 'click']) span.addEventListener(event, () => showTooltip(span, token, eos));
         for (const event of ['mouseleave', 'blur']) span.addEventListener(event, hideTooltip);
         pre.append(span);
       }
-      if (scores.length) {
+      if (scores.length && scores.every(token => validLogprob(token.logprob))) {
         const total = scores.reduce((sum, token) => sum + token.logprob, 0);
         const summary = element('p', `${scores.length} scored tokens · total ln p: ${total.toFixed(2)} · mean token probability (geometric): ${probabilityText(total / scores.length)}`);
         summary.className = 'muted score-summary'; block.append(summary);
+      } else if (scores.length) {
+        block.append(element('p', 'Some token probabilities were not recorded. Sequence totals are unavailable.'));
       }
       return block;
     }
@@ -142,10 +183,16 @@
     if (report.previous_url) {
       const previous = document.getElementById('previous'); previous.href = report.previous_url; previous.hidden = false;
     }
-    for (const entry of report.entries) {
+    const versionOrder = new Intl.Collator('en', {numeric: true});
+    const selectionEntries = [...report.entries].sort((a, b) => {
+      const releaseA = a.release === unknownRelease ? '' : a.release ?? '';
+      const releaseB = b.release === unknownRelease ? '' : b.release ?? '';
+      return versionOrder.compare(releaseB, releaseA) || (b.step ?? -1) - (a.step ?? -1);
+    });
+    for (const entry of selectionEntries) {
       for (const select of [left, right]) { const option = element('option', label(entry)); option.value = entry.id; select.append(option); }
       const row = document.createElement('tr');
-      for (const value of [`${entry.step} · ${entry.run_id}`, entry.id.slice(0, 12)]) row.append(element('td', value));
+      for (const value of [`${entry.step ?? 'Unknown step'} · ${entry.run_id} · ${entry.release ?? unknownRelease}`, entry.id.slice(0, 12)]) row.append(element('td', value));
       document.getElementById('inventory').append(row);
     }
     async function result(id) {
@@ -153,7 +200,7 @@
       if (!cache.has(id)) {
         const response = await fetch(byId[id].url);
         if (!response.ok) throw new Error(`Cannot load sample ${id}: HTTP ${response.status}`);
-        cache.set(id, await response.json());
+        cache.set(id, normalizeResult(await response.json()));
       }
       return cache.get(id);
     }
@@ -173,28 +220,35 @@
       if (!id) { target.append(element('p', 'No completed sample sets.')); return; }
       const entry = byId[id]; target.append(element('h2', label(entry)));
       const source = data.request.spec.prompts.find(item => item.id === promptId);
-      const completion = data.completions.find(item => item.prompt_id === promptId);
-      if (!source || !completion) { target.append(element('p', 'This prompt is not in this sample set.')); return; }
+      const promptResult = data.completions.find(item => item.prompt_id === promptId);
+      if (!source || !promptResult) { target.append(element('p', 'This prompt is not in this sample set.')); return; }
       const input = element('pre', source.text); input.className = 'prompt'; target.append(input);
-      target.append(element('h2', 'Generated completion'));
-      const generated = tokenSequence(completion.token_scores, completion.text, data.eos_token_id);
-      if (promptId === 'svg-cat-unicycle') {
-        target.append(svgPreview(completion.text));
-        const sourceCode = document.createElement('details');
-        sourceCode.append(element('summary', 'SVG source'), generated);
-        target.append(sourceCode);
-      } else {
-        target.append(generated);
+      for (const completion of promptResult.samples) {
+        const section = document.createElement('section');
+        section.append(element('h2', `Completion ${completion.sample_index + 1}`));
+        const generated = tokenSequence(completion.token_scores, completion.text, data.eos_token_id);
+        if (promptId === 'svg-cat-unicycle') {
+          section.append(svgPreview(completion.text));
+          const sourceCode = document.createElement('details');
+          sourceCode.append(element('summary', 'SVG source'), generated);
+          section.append(sourceCode);
+        } else {
+          section.append(generated);
+        }
+        section.append(element('p', `${completion.token_ids?.length ?? completion.token_scores?.length ?? 'Unknown number of'} new tokens · stop: ${completion.stop_reason ?? 'not recorded'} · seed: ${completion.seed ?? 'not recorded'} · temperature: ${data.request.spec.temperature ?? 'not recorded'}`));
+        target.append(section);
       }
       if (source.expected) {
         const want = document.createElement('details');
         want.open = true;
         want.append(element('summary', 'Expected completion'));
         want.append(element('p', 'Each probability uses the prompt and the preceding expected tokens. Open-ended references are examples of valid answers.'));
-        want.append(tokenSequence(completion.expected_scores, source.expected, data.eos_token_id));
+        if (data.eos_token_id != null && promptResult.expected_scores?.at(-1)?.token_id === data.eos_token_id) {
+          want.append(element('p', 'The final EOS token measures the probability of stopping after this reference. The probability totals include EOS.'));
+        }
+        want.append(tokenSequence(promptResult.expected_scores, source.expected, data.eos_token_id));
         target.append(want);
       }
-      target.append(element('p', `${completion.token_ids.length} new tokens · stop: ${completion.stop_reason} · seed: ${source.seed} · temperature: ${data.request.spec.temperature}`));
       const raw = element('a', 'Download result and full provenance'); raw.href = entry.url; target.append(raw);
       const details = document.createElement('details'); details.append(element('summary', 'Generation settings'));
       details.append(element('pre', JSON.stringify({checkpoint: data.request.checkpoint, source_revision: data.request.source_revision, ...data.request.spec, prompts: undefined}, null, 2)));
@@ -205,7 +259,8 @@
       const ticket = ++draw;
       document.getElementById('error').textContent = '';
       try {
-        const [a, b] = await Promise.all([result(left.value), result(right.value)]);
+        const loaded = await Promise.allSettled([result(left.value), result(right.value)]);
+        const [a, b] = loaded.map(item => item.status === 'fulfilled' ? item.value : null);
         if (ticket !== draw) return;
         const selected = prompt.value || new URLSearchParams(location.hash.slice(1)).get('prompt');
         const prompts = new Map();
@@ -213,14 +268,22 @@
         prompt.replaceChildren();
         for (const row of prompts.values()) { const option = element('option', `${row.id} — ${row.text.slice(0, 90)}`); option.value = row.id; prompt.append(option); }
         if (prompts.has(selected)) prompt.value = selected;
-        panel(document.getElementById('a'), left.value, a, prompt.value);
-        panel(document.getElementById('b'), right.value, b, prompt.value);
+        for (const [index, target, id, data] of [[0, 'a', left.value, a], [1, 'b', right.value, b]]) {
+          const node = document.getElementById(target);
+          if (loaded[index].status === 'rejected') node.replaceChildren(element('p', `Cannot load this result: ${loaded[index].reason}`));
+          else panel(node, id, data, prompt.value);
+        }
+        const leftSpec = byId[left.value]?.spec_id;
+        const rightSpec = byId[right.value]?.spec_id;
+        document.getElementById('comparison-note').textContent = leftSpec && rightSpec && leftSpec !== rightSpec
+          ? 'These samples use different prompts or generation settings. Probability differences can reflect those changes.' : '';
         history.replaceState(null, '', '#' + new URLSearchParams({a: left.value, b: right.value, prompt: prompt.value}));
       } catch (error) { if (ticket === draw) document.getElementById('error').textContent = String(error); }
     }
     const selection = new URLSearchParams(location.hash.slice(1));
-    left.value = byId[selection.get('a')] ? selection.get('a') : (report.entries[0]?.id || '');
-    right.value = byId[selection.get('b')] ? selection.get('b') : (report.entries[1]?.id || left.value);
+    const previousCheckpoint = report.entries.find(entry => entry.step != null && entry.step < report.entries[0]?.step);
+    left.value = byId[selection.get('a')] ? selection.get('a') : (previousCheckpoint?.id || report.entries[1]?.id || report.entries[0]?.id || '');
+    right.value = byId[selection.get('b')] ? selection.get('b') : (report.entries[0]?.id || '');
     for (const select of [left, right, prompt]) select.addEventListener('change', render);
     render();
   </script>

@@ -27,7 +27,7 @@ from jax.tree_util import register_dataclass
 from jaxtyping import Array, Float, Int
 from levanter.data.text.examples import GrugLmExample
 from levanter.grug.attention import AttentionMask, fa4_cute_segment_bounds
-from levanter.grug.grug_moe import MOE_REMAT_SAVE_NAMES
+from levanter.grug.grug_moe import MOE_REMAT_SAVE_NAMES, reduce_moe_routing_stats
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.pipeline import evenly_partition_layers
 
@@ -48,7 +48,6 @@ from experiments.grug.moe_hero_ep.model import (
     _batch_reshard,
     _embedding_gather,
     _init_weight,
-    _reduce_router_stats,
     _unstacked_blocks,
 )
 from experiments.grug.moe_hero_ep.train import _tree_to_memory_kind
@@ -124,8 +123,9 @@ def make_pipeline_mesh(
         )
 
     data_axis_size = jax.device_count() // fixed_axes
-    shape = (config.mpmd_stages, replica_axis_size, data_axis_size, expert_axis_size, 1)
-    axis_names = (_PIPELINE_AXIS, *BATCH_AXES, "model")
+    # Hero parameter shardings name context even when context parallelism is disabled.
+    shape = (config.mpmd_stages, replica_axis_size, data_axis_size, expert_axis_size, 1, 1)
+    axis_names = (_PIPELINE_AXIS, *BATCH_AXES, "context", "model")
     devices = np.asarray(jax.devices(), dtype=object).reshape(shape)
     mesh = Mesh(devices, axis_names, axis_types=(AxisType.Explicit,) * len(axis_names))
     if mesh.is_multi_process:
@@ -211,11 +211,10 @@ class GrugMoePipelineStage(eqx.Module):
             block_metrics.append(metrics)
 
         stacked = jax.tree.map(lambda *values: jnp.stack(values), *block_metrics)
-        reduced = _reduce_router_stats(
+        reduced = reduce_moe_routing_stats(
             stacked,
             num_experts=cfg.num_experts,
             num_experts_per_token=cfg.num_experts_per_token,
-            num_tokens=hidden.shape[0] * hidden.shape[1],
         )
         return hidden, {f"{key}_per_layer": value for key, value in reduced.items()}
 

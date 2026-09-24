@@ -4,9 +4,11 @@
 import contextlib
 import functools
 import json
+import threading
 import warnings
+from collections import defaultdict
 from dataclasses import fields
-from typing import Any, Callable, Optional, TypeVar
+from typing import Any, Callable, Optional, Sequence, TypeVar
 
 import equinox as eqx
 import haliax as hax
@@ -124,6 +126,10 @@ def move_tree_to_memory_kind(tree: T, *, memory_kind: str) -> T:
 
 
 _sync_counter = 0
+# Barrier IDs advance separately for each group; other pipeline stages may enter
+# a different number of collectives. The process key also supports local simulations.
+_group_sync_counters: dict[tuple[int, tuple[int, ...]], int] = defaultdict(int)
+_group_sync_mutex = threading.Lock()
 
 
 def multihost_broadcast_sync(obj: X, is_source: Optional[bool] = None, timeout: float = 200.0) -> X:
@@ -158,26 +164,44 @@ def multihost_broadcast_sync(obj: X, is_source: Optional[bool] = None, timeout: 
     return obj
 
 
-def multihost_allgather_sync(obj: X, timeout: float = 200.0) -> list[X]:
-    """Exchange a JSON-serializable value among all JAX processes."""
+def multihost_allgather_sync(obj: X, timeout: float = 200.0, *, process_ids: Sequence[int] | None = None) -> list[X]:
+    """Exchange a JSON-serializable value among all or selected JAX processes."""
     global _sync_counter
     process_count = jax.process_count()
-    if process_count == 1:
+    participants = tuple(range(process_count)) if process_ids is None else tuple(sorted(set(process_ids)))
+    if jax.process_index() not in participants:
+        raise ValueError(f"process {jax.process_index()} is not in allgather participants {participants}")
+    if len(participants) == 1:
         return [obj]
 
     client = jax_distributed.global_state.client
     if client is None:
         raise RuntimeError("multihost_allgather_sync requires jax distributed client to be initialized")
 
-    key = f"LEVANTER_MULTIHOST_ALLGATHER_SYNC{_sync_counter}"
+    if process_ids is None:
+        sequence = _sync_counter
+        key = f"LEVANTER_MULTIHOST_ALLGATHER_SYNC{sequence}"
+        barrier = f"multihost_allgather_sync{sequence}"
+    else:
+        counter_key = (jax.process_index(), participants)
+        with _group_sync_mutex:
+            sequence = _group_sync_counters[counter_key]
+            _group_sync_counters[counter_key] += 1
+        group = "-".join(map(str, participants))
+        key = f"LEVANTER_MULTIHOST_GROUP_ALLGATHER_SYNC/{group}/{sequence}"
+        barrier = f"multihost_group_allgather_sync/{group}/{sequence}"
     client.key_value_set(f"{key}/{jax.process_index()}", json.dumps(obj))
-    client.wait_at_barrier(f"multihost_allgather_sync{_sync_counter}", timeout_in_ms=int(timeout * 1000.0))
+    if process_ids is None:
+        client.wait_at_barrier(barrier, timeout_in_ms=int(timeout * 1000.0))
+    else:
+        client.wait_at_barrier(barrier, timeout_in_ms=int(timeout * 1000.0), process_ids=participants)
 
     gathered = [
         json.loads(client.blocking_key_value_get(f"{key}/{process_index}", timeout_in_ms=int(timeout * 1000.0)))
-        for process_index in range(process_count)
+        for process_index in participants
     ]
-    _sync_counter += 1
+    if process_ids is None:
+        _sync_counter += 1
     return gathered
 
 
@@ -344,7 +368,7 @@ def best_effort_sharding(shape, *, devices=None, mesh=None):
     if mesh is None:
         # TODO: we shouldn't be getting a concrete mesh here. Need to fix/remove this whole function
         mesh = get_concrete_mesh()
-        if mesh is not None and mesh.shape == ():
+        if mesh is not None and mesh.empty:
             mesh = None
 
     if mesh is None:

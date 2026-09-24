@@ -16,13 +16,12 @@ does not write around it and keeps a reordered answer wrong. Everything else is 
 Expected text that math-verify cannot parse raises ``InvalidTask``.
 """
 
-import math
 import re
 import threading
 from pathlib import Path
 
-from tasktrove_verify.grade import InvalidTask, Reward, read_output, scored
-from tasktrove_verify.modes.extract import extract_boxed, last_line, strip_math_delimiters
+from tasktrove_verify.grade import InvalidTask, Reward, numeric_tolerance, read_output, scored
+from tasktrove_verify.modes.extract import BOXED, extract_boxed, last_line, strip_math_delimiters
 from tasktrove_verify.spec import MathSpec, MathType, NumericSpec
 
 SET_TYPES = frozenset({MathType.SET, MathType.INTERVAL})
@@ -106,7 +105,8 @@ def _grade_symbolic(spec: MathSpec, workspace: Path) -> Reward:
     text = read_output(spec, workspace)
     if text is None:
         return scored(0.0, reason="no_output")
-    candidate = extract_boxed(text) or last_line(text) or ""
+    boxed = extract_boxed(text)
+    candidate = (boxed or "") if BOXED in text else last_line(text) or ""
     parsed = _parsed_members(candidate) if is_list else [_parse(candidate)]
     if not any(parsed):
         return scored(0.0, reason="unparsable", extracted=candidate, expected=spec.expected)
@@ -120,7 +120,7 @@ def _grade_symbolic(spec: MathSpec, workspace: Path) -> Reward:
 
 def _last_number(text: str) -> float | None:
     boxed = extract_boxed(text)
-    sources = [boxed, text] if boxed else [text]
+    sources = [boxed or ""] if BOXED in text else [text]
     for source in sources:
         matches = NUMBER.findall(source)
         if matches:
@@ -129,15 +129,13 @@ def _last_number(text: str) -> float | None:
 
 
 def _grade_numeric(spec: NumericSpec, workspace: Path) -> Reward:
-    if not math.isfinite(spec.expected):
-        raise InvalidTask(f"numeric expected must be a finite number, got {spec.expected}")
+    tolerance = numeric_tolerance(spec)
     text = read_output(spec, workspace)
     if text is None:
         return scored(0.0, reason="no_output")
     value = _last_number(text)
     if value is None:
         return scored(0.0, reason="no_number", expected=spec.expected)
-    tolerance = max(spec.tolerance_abs, spec.tolerance_rel * abs(spec.expected))
     match = abs(value - spec.expected) <= tolerance
     return scored(float(match), extracted=value, expected=spec.expected, tolerance=tolerance)
 

@@ -112,6 +112,12 @@ TOKENS_PER_ACTIVE_PARAM = 791
 # A crash costs at most this much training time. A hero checkpoint is several TB, thus a shorter
 # interval would spend a large part of the run inside a checkpoint write.
 RESUME_SAVE_INTERVAL = timedelta(hours=1)
+# Rolling resume checkpoints expire this many days after they are written. The live run's newest one
+# is at most RESUME_SAVE_INTERVAL old, so the TTL only deletes checkpoints that replaced runs leave
+# behind. Each is several TB in a zone with a 100 TiB quota, which the 14-day default let fill
+# (#8506, 2026-09-23). A run stalled this long without saving resumes from its newest permanent
+# checkpoint instead.
+RESUME_CHECKPOINT_TTL_DAYS = 3
 # A rung runs up to 176 tasks for hundreds of GPU-days, where a hardware fault or a host
 # out-of-memory on one task is routine. A rung resumes from its newest checkpoint, thus a retry
 # continues the run instead of repeating it. Retry deeply so one bad task does not end a rung.
@@ -229,6 +235,7 @@ def build_ladder_run(
         training_data_mode=TrainingDataMode.MIXTURE,
         watch_mode=WatchMode.INLINE,
         save_checkpoints=True,
+        gc_interval=100,
     )
     train_resources = ResourceConfig.with_gpu(
         "GB200",
@@ -245,7 +252,7 @@ def build_ladder_run(
 
     def build_config(ctx: StepContext) -> GrugRunConfig:
         permanent_checkpoint_path = prefix_join(ctx.output_path, "checkpoints")
-        temporary_checkpoint_path = temporary_checkpoint_base_path(ctx.output_path)
+        temporary_checkpoint_path = temporary_checkpoint_base_path(ctx.output_path, ttl_days=RESUME_CHECKPOINT_TTL_DAYS)
         load_checkpoint_path = [permanent_checkpoint_path, temporary_checkpoint_path]
         if initialize_from_checkpoint is not None:
             load_checkpoint_path.append(initialize_from_checkpoint)
