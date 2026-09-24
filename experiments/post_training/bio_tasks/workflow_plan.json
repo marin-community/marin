@@ -71,8 +71,8 @@
     "proposed_task_questions": 147,
     "validated_coverage_added_by_plan": 0,
     "unrouted_family_groups": 0,
-    "detailed_question_cards": 699,
-    "proposed_task_groups_after_conditional_consolidation": 658
+    "detailed_question_cards": 702,
+    "proposed_task_groups_after_conditional_consolidation": 661
   },
   "workstreams": [
     {
@@ -13394,11 +13394,11 @@
     },
     {
       "path": "workflow_designs/biokgbench.json",
-      "sha256": "45093bdd7448e8fd7ad8045630f9150ebc1c8acbd2c35fd0d234ae7847ca15ce",
+      "sha256": "2a2ce504a79404e6ceddce8823f37e3965b774d860b48e6cce989b876e127c59",
       "benchmark_id": "BioKGBench KGCheck",
       "inventory_records_assigned": 225,
-      "proposed_question_cards": 3,
-      "inspection_basis": "Shared-protocol/configuration/question-family review, not individual evidence review. Source limits remain attached.",
+      "proposed_question_cards": 6,
+      "inspection_basis": "All 225 instruction identities and typed roles checked; six name/presence/relation contracts; graph, evidence and labels uninspected.",
       "relationship_to_workstream_questions": "Refines existing workstreams; no independent task count or completed coverage forecast."
     },
     {
@@ -13511,12 +13511,12 @@
   "authoring_phase": "question-portfolio-planning",
   "portfolio_index": {
     "path": "workflow_portfolio.json",
-    "sha256": "d6b2157956940f54d69a1f2723f7174993d3449525f5612495543af8d82b6669",
+    "sha256": "fd482deab98e41c7c00209f6d1f2ba834f96d07725c1680b80cac858baca0780",
     "counts": {
       "source_releases": 32,
       "inventory_records": 5133,
-      "question_cards": 699,
-      "proposed_task_groups": 658,
+      "question_cards": 702,
+      "proposed_task_groups": 661,
       "conditional_consolidations": 25,
       "non_alias_records_linked_to_questions": 3058,
       "known_cross_release_alias_records": 50,

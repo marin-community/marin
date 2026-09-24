@@ -9,7 +9,7 @@ individual-endpoint review gaps, and retains one excluded objective. Nine provis
 source leads still lack task inventories; each now has an explicit access, identity,
 endpoint or scope disposition in the source catalog.
 
-The portfolio contains **699 question cards and 658 proposed task groups**, including
+The portfolio contains **702 question cards and 661 proposed task groups**, including
 25 conditional combinations of question cards. These are planning units, with
 substantial differences in source inspection depth. They add zero validated mappings
 and do not set a target dataset size. Each combined question retains all member
@@ -46,7 +46,7 @@ question completes a benchmark endpoint, and the proposed question count is not 
 coverage forecast or a cap on authoring.
 
 All 30 original proposed combinations have now received a scientific planning
-review. Five were split completely and seven narrowed across the two review passes;
+review. Five were split completely and eight narrowed across the endpoint reviews;
 25 combinations remain conditional. Each retained combination records its biological
 unit, complete artifact set, deterministic checks, incorrect-output checks and
 unresolved input/method decisions. The individual question cards still have uneven
@@ -212,7 +212,7 @@ The expanded portfolio also includes the following source-specific plans:
 |---|---:|---:|---|
 | [BioML-bench](../../experiments/post_training/bio_tasks/workflow_designs/biomlbench.json) | 406 | 25 | Registry/configuration review; 24 definitions appear in the released experiment list |
 | [Biomni-Eval1](../../experiments/post_training/bio_tasks/workflow_designs/biomni-eval1.json) | 433 | 20 | Shared protocols plus reviewed sequence/database questions; individual evidence remains unreviewed |
-| [BioKGBench](../../experiments/post_training/bio_tasks/workflow_designs/biokgbench.json) | 225 | 3 | Structured graph evidence can be verified; unrestricted literature entailment and absence claims remain gaps |
+| [BioKGBench](../../experiments/post_training/bio_tasks/workflow_designs/biokgbench.json) | 225 | 6 | Structured graph evidence can be verified; unrestricted literature entailment and absence claims remain gaps |
 | [PromptBio-Bench](../../experiments/post_training/bio_tasks/workflow_designs/promptbio-bench.json) | 244 | 101 | Exact versioned patterns and artifact specifications; assay and numeric decisions remain |
 | [BixBench3](../../experiments/post_training/bio_tasks/workflow_designs/bixbench3.json) | 20 | 19 | Nineteen endpoint proposals; one excluded objective retained |
 | [DrugDiscoveryBench](../../experiments/post_training/bio_tasks/workflow_designs/drugdiscoverybench.json) | 82 | 27 | Public-preview endpoint-stage review; independent evidence and inputs needed |
@@ -224,6 +224,20 @@ The expanded portfolio also includes the following source-specific plans:
 | [BixBench-Verified-50](../../experiments/post_training/bio_tasks/workflow_designs/bixbench-verified-50.json) | 50 | 0 new | Known aliases; 17 revised question texts retain separate protocol review |
 | [ScholarQA-Bio](../../experiments/post_training/bio_tasks/workflow_designs/scholarqabench-bio.json) | 1,451 | 0 | All stems reviewed; 553 possible quantitative components, 898 open synthesis/strategy requests; all complete synthesis contracts unresolved |
 | [LAB-Bench literature/database](../../experiments/post_training/bio_tasks/workflow_designs/labbench-literature-database.json) | 801 | 16 + 7 shared | 520 database schemas reuse existing cards; 58 supplementary targets; all 199 literature stems reviewed across 14 patterns, with source evidence and acceptance unresolved |
+
+BioKGBench's 225 instruction identities now route to six contracts: protein names
+(55), entry presence (45), protein-pair evidence (94), cellular localization (11),
+tissue evidence (11) and disease evidence (9). The last three require different
+observations and cannot inherit a protein-interaction verifier. Protein-pair evidence
+can still conditionally share a question with the 45 Biomni/LAB prediction queries,
+provided the outputs preserve measured versus predicted support.
+
+The contracts retain native UniProt history, PSI-MI interaction records and
+qualifier-aware GO annotations where applicable. Names are compared under a declared
+field schema; database absence needs a complete scoped index or authoritative history.
+Localization, tissue detection and disease association each preserve their evidence
+limits. Graph, biological-evidence and label fields remain uninspected; the review
+adds no validated mapping or literature-entailment guarantee.
 
 [ScholarQA-Bio's public file](../../experiments/post_training/bio_tasks/benchmark_tasks/scholarqabench-bio.json)
 contains 1,451 distinct question IDs. Its source protocol produces long-form literature

@@ -5,8 +5,8 @@
   "counts": {
     "source_releases": 32,
     "inventory_records": 5133,
-    "question_cards": 699,
-    "proposed_task_groups": 658,
+    "question_cards": 702,
+    "proposed_task_groups": 661,
     "conditional_consolidations": 25,
     "non_alias_records_linked_to_questions": 3058,
     "known_cross_release_alias_records": 50,
@@ -51,7 +51,7 @@
     },
     {
       "path": "workflow_designs/biokgbench.json",
-      "sha256": "45093bdd7448e8fd7ad8045630f9150ebc1c8acbd2c35fd0d234ae7847ca15ce"
+      "sha256": "2a2ce504a79404e6ceddce8823f37e3965b774d860b48e6cce989b876e127c59"
     },
     {
       "path": "workflow_designs/promptbio-bench.json",
@@ -570,29 +570,29 @@
       }
     },
     {
-      "proposed_task_id": "directed-interaction-evidence",
-      "scientific_question": "Which directed biological interaction claims are supported by frozen independent evidence with compatible entity, assay and context identities?",
+      "proposed_task_id": "protein-interaction-evidence",
+      "scientific_question": "Which protein-pair claims agree with observed, curated and predicted evidence after identity, assay and relation semantics are reconciled?",
       "question_card_ids": [
-        "portfolio-biokgbench-directed-relation-evidence",
+        "portfolio-biokgbench-protein-interaction-evidence",
         "portfolio-biomni-eval1-interaction-database-query"
       ],
       "consolidation": "conditional-combined-question",
-      "condition_for_one_task": "Verify full typed directed edges and source evidence under a prespecified rule, including unresolved claims. Structural citation matching alone cannot satisfy literature entailment or biological absence claims. Biomni DBQA asks for prediction-resource membership. Keep a separate prediction-membership table and acceptance predicate; experimental support or graph direction cannot replace that endpoint. If one independent resource bundle cannot support both questions, split the group.",
+      "condition_for_one_task": "One independent protein-pair resource bundle must support both relation-evidence review and prediction-resource membership, with separate tables and acceptance predicates. Respect each relation's symmetry or direction; stored orientation is not causality. If the resources cannot support one coherent comparison, split the task.",
       "benchmark_record_scope": {
-        "BioKGBench KGCheck": 125,
+        "BioKGBench KGCheck": 94,
         "Biomni-Eval1 tool-enabled": 5,
         "LAB-Bench tool-enabled literature/database": 40
       },
-      "scope_record_count": 170,
+      "scope_record_count": 139,
       "workstreams": [
         "database-identity-evidence"
       ],
       "acceptance_planning_review": {
-        "biological_unit": "Typed entity pair, relation and experimental context in a frozen evidence release.",
-        "complete_artifacts": "Complete query/entity map, every candidate directed edge, evidence/source identifiers, context, support class and unresolved/contradicted states.",
-        "deterministic_acceptance": "Independently recompute directed typed joins under explicit evidence rules; citations must point to correct entries. Grade structured predicates only, with no inference from citation presence to entailment.",
-        "required_incorrect_output_checks": "Reverse an edge; substitute predicted association for measured interaction; turn missing evidence into a negative experimental result.",
-        "unresolved_before_assignment": "Independent evidence exports, relation-specific rules and exact coverage limit for source literature questions. Resolve Biomni prediction-resource membership separately from BioKGBench relation evidence; do not assume prediction records are observations or interactions are causal directed edges.",
+        "biological_unit": "Resolved protein pair, exact relation and assay/context in a frozen evidence release.",
+        "complete_artifacts": "All candidate identities, relation claims, measured/curated evidence and separate prediction memberships; methods, source records, contexts and unresolved/contradicted states.",
+        "deterministic_acceptance": "Independently recompute typed joins with declared directionality and evidence rules. Citation membership alone does not prove literature entailment.",
+        "required_incorrect_output_checks": "Erase genuine direction or invent causal direction; substitute prediction/co-complex membership for measured direct interaction; turn missing evidence into a negative result.",
+        "unresolved_before_assignment": "Independent observed evidence exports, source-specific prediction resource, exact edge meanings and scientific acceptance for CURATED/absence claims. Tissue, localization and disease endpoints now have separate cards.",
         "status": "planning-contract-not-executed"
       }
     },
@@ -10330,6 +10330,51 @@
       "workstreams": [
         "rna-seq-contrast-enrichment"
       ]
+    },
+    {
+      "proposed_task_id": "portfolio-biokgbench-protein-cellular-localization-evidence",
+      "scientific_question": "Which protein-localization claims are supported or contradicted by versioned cellular-component annotations under explicit evidence rules?",
+      "question_card_ids": [
+        "portfolio-biokgbench-protein-cellular-localization-evidence"
+      ],
+      "consolidation": "retain-distinct-question",
+      "scope_record_count": 11,
+      "benchmark_record_scope": {
+        "BioKGBench KGCheck": 11
+      },
+      "workstreams": [
+        "database-identity-evidence"
+      ]
+    },
+    {
+      "proposed_task_id": "portfolio-biokgbench-protein-tissue-evidence",
+      "scientific_question": "Which tissue-expression claims agree with observed protein measurements after tissue and assay identities are reconciled?",
+      "question_card_ids": [
+        "portfolio-biokgbench-protein-tissue-evidence"
+      ],
+      "consolidation": "retain-distinct-question",
+      "scope_record_count": 11,
+      "benchmark_record_scope": {
+        "BioKGBench KGCheck": 11
+      },
+      "workstreams": [
+        "database-identity-evidence"
+      ]
+    },
+    {
+      "proposed_task_id": "portfolio-biokgbench-protein-disease-evidence",
+      "scientific_question": "Which protein\u2013disease claims match the explicitly typed evidence in independent versioned disease-association records?",
+      "question_card_ids": [
+        "portfolio-biokgbench-protein-disease-evidence"
+      ],
+      "consolidation": "retain-distinct-question",
+      "scope_record_count": 9,
+      "benchmark_record_scope": {
+        "BioKGBench KGCheck": 9
+      },
+      "workstreams": [
+        "database-identity-evidence"
+      ]
     }
   ],
   "planning_review_order": [
@@ -10389,8 +10434,8 @@
     },
     {
       "rank": 10,
-      "proposed_task_id": "directed-interaction-evidence",
-      "reason": "Directed typed evidence can reuse the same frozen independent data sources; source negation and literature endpoints need faithful acceptance review.",
+      "proposed_task_id": "protein-interaction-evidence",
+      "reason": "Protein-pair evidence and prediction membership may share inputs but retain separate semantics. Localization, tissue and disease claims are now distinct; literature and absence claims remain unresolved.",
       "predicted_validated_gain": null
     },
     {
@@ -10646,8 +10691,8 @@
       },
       {
         "previous_group_id": "directed-interaction-evidence",
-        "decision": "retain-conditional",
-        "reason": "Typed directed relations can share structured evidence contracts. Unrestricted literature interpretation remains outside deterministic structured coverage."
+        "decision": "narrow",
+        "reason": "Retain only 94 BioKGBench protein-pair endpoints with the 45 cross-release prediction queries. Split 11 localization, 11 tissue and nine disease endpoints into their own contracts; do not impose causal direction on symmetric associations."
       },
       {
         "previous_group_id": "population-genotype-qc",

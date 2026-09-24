@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
   "updated_at": "2026-09-24T14:55:14.334043+00:00",
-  "scope": "Shared-protocol question planning for three large provisional-ID agentic inventories. Original inspection limits remain; these cards are not reviewed individual biological cases or validated coverage.",
+  "scope": "Question planning for all 225 agentic BioKGBench KGCheck records. Protein names, entry presence and four typed relation families have distinct contracts; accession-specific graph/evidence/label contents remain uninspected. No validated coverage.",
   "basis_revision": "26e308ecb2",
   "counts": {
     "source_releases": 1,
     "task_protocol_or_definition_records": 225,
-    "question_cards": 3,
+    "question_cards": 6,
     "validated_new_mappings": 0
   },
   "defaults": {
@@ -26,7 +26,7 @@
     {
       "proposed_id": "portfolio-biokgbench-protein-attribute-reconciliation",
       "benchmark": "BioKGBench KGCheck",
-      "scientific_question": "Which protein attributes in an independent graph agree with the pinned source records, and which remain contradicted or unresolved?",
+      "scientific_question": "Which protein-name claims in an independent graph agree with the corresponding versioned protein records?",
       "source_family": "protein-attribute-reconciliation",
       "benchmark_targets": [
         {
@@ -470,19 +470,16 @@
           ]
         }
       ],
-      "source_inspection_tier": "shared-pattern-only",
+      "source_inspection_tier": "all-assigned-instruction-forms-reviewed; accession-specific-evidence-uninspected",
       "source_planning_disposition": "accession-evidence-review",
       "matching_workstreams": [
         "database-identity-evidence"
       ],
       "required_endpoint_stages": [
-        "resolve protein identifier, species and source version",
-        "query the graph node and requested attribute",
-        "retrieve the corresponding database record and distinguish missing fields from missing entries",
-        "reconcile naming and identifier changes and preserve the evidence"
+        "Resolve accession/version/taxon; parse the exact named field; compare both observed sources under a frozen normalization rule; retain alternate names, missing fields and unresolved schema meanings."
       ],
       "observed_input_requirements": [
-        "Pinned public gene/protein/variant/database exports with accession versions, species, directed relations, dates and evidence identifiers."
+        "Independent UniProt flatfiles/JSON, version history and an observed graph/export with a documented name-field schema. Preserve accession, entry version, sequence version, taxon and all name classes."
       ],
       "required_formats": [
         "JSON reconciliation result",
@@ -490,16 +487,22 @@
         "graph node/property records"
       ],
       "proposed_artifact_requirements": [
-        "Identity map, provenance manifest, directed edge/evidence tables, contradictions, structured answer and supporting accession/span references"
+        "accession_versions.tsv, complete named-field values and source spans, comparison_rules.json, and every query disposition with mismatch/absence/schema reason."
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "All 55 source instructions ask for the name attribute. Freeze whether the graph schema means recommended protein name, entry name or another labelled field; do not substitute gene symbol, accession or free-text synonym.",
+        "Use genuine published record versions or historical exports for real discrepancies; do not fabricate corrupted biological claims as the main training input."
+      ],
       "deterministic_verification_approach": [
-        "Deterministic joins, direction/type checks and evidence-span linkage; unknown is allowed; a text citation match does not establish full scientific entailment."
+        "Native UniProt parsing plus independent exact-field reconciliation. Reject gene-symbol substitution, collapsing sequence and entry versions, treating alternate-name membership as exact recommended-name equality and accepting only a final label."
       ],
-      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "status": "endpoint-contract-planned-independent-snapshots-and-native-runtime-unresolved",
       "validated_new_mappings": 0,
-      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
-      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+      "evaluation_contract": "Require the exact source field, accession/version/taxon map and complete name comparison for every query. Accept equality only under the declared name-class and normalization rule; unresolved schema or retrieval states cannot be guessed from a final support/refute label.",
+      "source_protocol_limits": "The 55 prompts specify the name attribute but do not identify its native database field or reveal the graph value. Graph and reference records remain uninspected. Freeze the field semantics before claiming source-endpoint equivalence.",
+      "native_format_references": [
+        "https://www.uniprot.org/help/entry_history"
+      ]
     },
     {
       "proposed_id": "portfolio-biokgbench-database-entry-reconciliation",
@@ -868,7 +871,7 @@
           ]
         }
       ],
-      "source_inspection_tier": "shared-pattern-only",
+      "source_inspection_tier": "all-assigned-instruction-forms-reviewed; accession-specific-evidence-uninspected",
       "source_planning_disposition": "accession-evidence-review",
       "matching_workstreams": [
         "database-identity-evidence"
@@ -880,7 +883,7 @@
         "separate missing, obsolete, redirected and inaccessible records and export reconciliation"
       ],
       "observed_input_requirements": [
-        "Pinned public gene/protein/variant/database exports with accession versions, species, directed relations, dates and evidence identifiers."
+        "Independent observed graph/database exports and genuine entry-history records at stated dates. Keep deletion, merge/redirect and retrieval-failure evidence; lack of a record in a downloaded subset is not authoritative global absence."
       ],
       "required_formats": [
         "JSON reconciliation result",
@@ -888,22 +891,28 @@
         "versioned database record and identifier history"
       ],
       "proposed_artifact_requirements": [
-        "Identity map, provenance manifest, directed edge/evidence tables, contradictions, structured answer and supporting accession/span references"
+        "complete query IDs, source/index manifests with scope and checksums, graph and database presence tables, historical accession events and one reconciliation disposition per query."
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "All 45 source instructions compare graph presence with database presence after removed entries. Define the exact release and completeness boundary for both sources.",
+        "Use an authoritative complete scoped index or explicit provider deletion/history event for an absence conclusion. Transport failure, unqueried accession and a missing local subset row remain unresolved."
+      ],
       "deterministic_verification_approach": [
-        "Deterministic joins, direction/type checks and evidence-span linkage; unknown is allowed; a text citation match does not establish full scientific entailment."
+        "Independent complete-set membership and accession-event joins plus native record parsing. Reject silent redirects, failed retrieval labelled absent, filtered-subset absence labelled deletion and incomplete query outputs."
       ],
-      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "status": "endpoint-contract-planned-independent-snapshots-and-native-runtime-unresolved",
       "validated_new_mappings": 0,
-      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
-      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+      "evaluation_contract": "Require all declared query IDs and both source membership states at explicit releases. A deletion/absence conclusion needs a complete scoped index or authoritative history; preserve unresolved access and identifier states. The source binary endpoint may need an explicitly labelled three-state adaptation.",
+      "source_protocol_limits": "The 45 prompts ask about record presence, not biological existence. The graph and source record histories remain uninspected; no valid negative result follows from a missing row in a partial export.",
+      "native_format_references": [
+        "https://www.uniprot.org/help/entry_history"
+      ]
     },
     {
-      "proposed_id": "portfolio-biokgbench-directed-relation-evidence",
+      "proposed_id": "portfolio-biokgbench-protein-interaction-evidence",
       "benchmark": "BioKGBench KGCheck",
-      "scientific_question": "Which directed biological graph edges are supported by independent structured experimental evidence rather than co-mention or undirected association?",
-      "source_family": "directed-relation-evidence",
+      "scientific_question": "Which protein-pair claims agree with the measured, curated or predicted evidence in frozen independent interaction resources?",
+      "source_family": "protein-interaction-evidence",
       "benchmark_targets": [
         {
           "task_id": "kgcheck-dev-010",
@@ -966,33 +975,6 @@
           "entity_types_in_instruction": [
             "Protein",
             "Protein"
-          ]
-        },
-        {
-          "task_id": "kgcheck-dev-017",
-          "source_task_record_sha256": "9c5c49f861bfbede66466cf5f691014ea7a82172344da2e04d7b63bece8ab3bc",
-          "source_check_type": "existing one-hop",
-          "entity_types_in_instruction": [
-            "Protein",
-            "Cellular_component"
-          ]
-        },
-        {
-          "task_id": "kgcheck-dev-018",
-          "source_task_record_sha256": "ff58be410f2712a72f5595d1371a25d444e31e3b212aa13d9b0ca6f56d6a0dd3",
-          "source_check_type": "existing one-hop",
-          "entity_types_in_instruction": [
-            "Protein",
-            "Cellular_component"
-          ]
-        },
-        {
-          "task_id": "kgcheck-dev-019",
-          "source_task_record_sha256": "7e5de078ba78ce0530c3bbee59c3ed11ff36b4d864762b6c5bc284fa7a3416ac",
-          "source_check_type": "existing one-hop",
-          "entity_types_in_instruction": [
-            "Protein",
-            "Cellular_component"
           ]
         },
         {
@@ -1761,30 +1743,95 @@
           ]
         },
         {
-          "task_id": "kgcheck-test-175",
-          "source_task_record_sha256": "a0b0de726460204acf0f4fc57fbd59793b3ebda2027b853ae078252ac7482817",
+          "task_id": "kgcheck-test-198",
+          "source_task_record_sha256": "15b851760fa33c97d4e0bae1ba1b39813e7008a4c147e22a390c34b2b8ae3024",
           "source_check_type": "potential one-hop",
           "entity_types_in_instruction": [
             "Protein",
-            "Tissue"
+            "Protein"
           ]
         },
         {
-          "task_id": "kgcheck-test-176",
-          "source_task_record_sha256": "2bed66cd6578c3951120c75379fbc71c308ed4a6e317e2b06ee51b043515518b",
+          "task_id": "kgcheck-test-203",
+          "source_task_record_sha256": "487df7f26bd5acef0f6d944635c63434489f4397643eadfaf79641a047ace4e5",
           "source_check_type": "potential one-hop",
           "entity_types_in_instruction": [
             "Protein",
-            "Tissue"
+            "Protein"
+          ]
+        }
+      ],
+      "source_inspection_tier": "all-assigned-instruction-forms-and-typed-entity-roles-reviewed; biological-evidence-uninspected",
+      "source_planning_disposition": "relation-specific-input-and-acceptance-plan",
+      "matching_workstreams": [
+        "database-identity-evidence"
+      ],
+      "required_endpoint_stages": [
+        "Resolve both proteins and species; inspect the exact edge type and directionality; reconcile every claimed pair with method-labelled source records; retain prediction, co-complex, physical association and direct-interaction evidence classes separately."
+      ],
+      "observed_input_requirements": [
+        "Independent observed interaction records in PSI-MI MITAB/XML with participant accession/taxon, assay detection method, interaction type, publication and source-record IDs; freeze any separate prediction resource. Preserve complexes and expansion method instead of claiming every co-complex pair is direct binding."
+      ],
+      "required_formats": [
+        "protein FASTA/identifier map",
+        "PSI-MI MITAB or XML",
+        "typed graph edge export",
+        "prediction membership TSV when applicable"
+      ],
+      "proposed_artifact_requirements": [
+        "pair_identity.tsv, complete edge_claims.tsv and source_evidence.tsv with detection method/interaction type/complex expansion and citation IDs; pair_dispositions.tsv with supporting, contradicting and unresolved evidence. Include all candidate pairs, even absent or unmapped ones."
+      ],
+      "source_specific_decisions": [
+        "Define symmetric-pair normalization only for declared symmetric relations. Stored graph orientation is not causal direction. A STRING association or predicted interaction is not experimental direct binding. CURATED claims needing literature entailment remain unresolved unless a predeclared structured evidence predicate covers the claim."
+      ],
+      "deterministic_verification_approach": [
+        "Independently join typed identities and recompute each frozen evidence predicate; validate source IDs and record completeness. Reject prediction-as-experiment, co-complex-as-direct-binding, wrong taxon, lost direction on a directed relation and absence-as-negative. Validate the native resource parser on the same files."
+      ],
+      "status": "typed-endpoint-contract-planned-independent-inputs-and-literature-equivalence-unresolved",
+      "validated_new_mappings": 0,
+      "evaluation_contract": "Require every identity, claim and eligible evidence record. A private input-reading oracle checks the declared structured predicate; do not require support/refute when the independent observations only justify unresolved. This third state is an explicit adaptation of the binary source endpoint.",
+      "source_protocol_limits": "Source instructions do not reveal the graph edge type, its CURATED marker or the needed scientific evidence. The graph/evidence/label fields remain uninspected. All source requests to confirm nonexistence retain an open-world limitation; no full mapping follows from typed-query agreement alone.",
+      "remaining_decisions": [
+        "Pin independent input accession/release, rights, checksum, schema and benchmark-cohort lineage.",
+        "Review actual claim semantics, native parser versions, numerical tolerances and unresolved/negative-evidence rules before predicting full coverage.",
+        "Measure complete offline Harbor oracle/verifier runtime within the 30-minute target."
+      ],
+      "native_format_references": [
+        "https://www.ebi.ac.uk/training/online/courses/intact-quick-tour/getting-data-from-intact/",
+        "https://www.ebi.ac.uk/intact/validator/start.xhtml"
+      ]
+    },
+    {
+      "proposed_id": "portfolio-biokgbench-protein-cellular-localization-evidence",
+      "benchmark": "BioKGBench KGCheck",
+      "scientific_question": "Which protein-localization claims are supported or contradicted by versioned cellular-component annotations under explicit evidence rules?",
+      "source_family": "protein-cellular-localization-evidence",
+      "benchmark_targets": [
+        {
+          "task_id": "kgcheck-dev-017",
+          "source_task_record_sha256": "9c5c49f861bfbede66466cf5f691014ea7a82172344da2e04d7b63bece8ab3bc",
+          "source_check_type": "existing one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Cellular_component"
           ]
         },
         {
-          "task_id": "kgcheck-test-177",
-          "source_task_record_sha256": "83aa9b38c45e501e51dce37b9b9c4e9fc7f1d38e75b78fcecf74c5db5dfc5284",
-          "source_check_type": "potential one-hop",
+          "task_id": "kgcheck-dev-018",
+          "source_task_record_sha256": "ff58be410f2712a72f5595d1371a25d444e31e3b212aa13d9b0ca6f56d6a0dd3",
+          "source_check_type": "existing one-hop",
           "entity_types_in_instruction": [
             "Protein",
-            "Disease"
+            "Cellular_component"
+          ]
+        },
+        {
+          "task_id": "kgcheck-dev-019",
+          "source_task_record_sha256": "7e5de078ba78ce0530c3bbee59c3ed11ff36b4d864762b6c5bc284fa7a3416ac",
+          "source_check_type": "existing one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Cellular_component"
           ]
         },
         {
@@ -1794,33 +1841,6 @@
           "entity_types_in_instruction": [
             "Protein",
             "Cellular_component"
-          ]
-        },
-        {
-          "task_id": "kgcheck-test-179",
-          "source_task_record_sha256": "4155761e659db98740e53b0ee76dcacd89727c72f62340a6e069da584a0b3423",
-          "source_check_type": "potential one-hop",
-          "entity_types_in_instruction": [
-            "Protein",
-            "Disease"
-          ]
-        },
-        {
-          "task_id": "kgcheck-test-180",
-          "source_task_record_sha256": "2c0c012c817228f08b3f84455d07accf095fefcb0fc4c6473df5bc97b1477c07",
-          "source_check_type": "existing one-hop",
-          "entity_types_in_instruction": [
-            "Protein",
-            "Tissue"
-          ]
-        },
-        {
-          "task_id": "kgcheck-test-181",
-          "source_task_record_sha256": "cfac8e04bd8b8105e8482f78bccabea815643f59a0c9e1a431fd7e994846307c",
-          "source_check_type": "existing one-hop",
-          "entity_types_in_instruction": [
-            "Protein",
-            "Tissue"
           ]
         },
         {
@@ -1851,12 +1871,123 @@
           ]
         },
         {
-          "task_id": "kgcheck-test-185",
-          "source_task_record_sha256": "7ea4dcc656827256924ed6c02e0eb832e3b7f6160b7cb58f611162e6d678c4a5",
+          "task_id": "kgcheck-test-187",
+          "source_task_record_sha256": "4c201e6810764cdc6cc1c31633f91bb5fe5e87bda09c198cd77e7e0e09b02867",
           "source_check_type": "existing one-hop",
           "entity_types_in_instruction": [
             "Protein",
-            "Disease"
+            "Cellular_component"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-192",
+          "source_task_record_sha256": "7e9b6454990ea61946b68f5666790ace210ff99a914ba88eb3d60a8879d2ad60",
+          "source_check_type": "existing one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Cellular_component"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-200",
+          "source_task_record_sha256": "086f1e5168986e242632cae386c792baa971f92ad7a02cfe00697ae549f760ea",
+          "source_check_type": "existing one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Cellular_component"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-204",
+          "source_task_record_sha256": "170bccb10467e3f687e4f93378c079cee989d094d55c5e85940282bf509847f5",
+          "source_check_type": "existing one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Cellular_component"
+          ]
+        }
+      ],
+      "source_inspection_tier": "all-assigned-instruction-forms-and-typed-entity-roles-reviewed; biological-evidence-uninspected",
+      "source_planning_disposition": "relation-specific-input-and-acceptance-plan",
+      "matching_workstreams": [
+        "database-identity-evidence"
+      ],
+      "required_endpoint_stages": [
+        "Resolve proteins and cellular-component terms; inspect term obsolescence/alternate IDs and annotation qualifiers; apply declared evidence and context eligibility; evaluate direct and permitted ancestor assertions separately."
+      ],
+      "observed_input_requirements": [
+        "Independent observed protein-localization evidence and a pinned GO GAF/GPAD export, matching ontology structure and accession/taxon map. Retain relation, NOT qualifier, evidence code, reference, date and annotation extension; distinguish experimental evidence from automated annotation."
+      ],
+      "required_formats": [
+        "GAF 2.2 or GPAD/GPI",
+        "GO OBO/OWL",
+        "protein identifier map",
+        "typed graph edge export"
+      ],
+      "proposed_artifact_requirements": [
+        "protein_term_identity.tsv, complete eligible/excluded_annotations.tsv, ontology_paths.tsv for propagated support, evidence references and localization_dispositions.tsv with context and reason codes."
+      ],
+      "source_specific_decisions": [
+        "Freeze which ontology relations support propagation, and never propagate NOT as an ordinary positive annotation. A missing localization record is unresolved; a NOT qualifier is explicit negative annotation subject to its context. Cellular component is not interchangeable with biological process, molecular function or whole tissue."
+      ],
+      "deterministic_verification_approach": [
+        "Native GAF/ontology parsing plus independent relation/qualifier-aware joins and graph traversal. Reject ignored NOT, wrong ontology aspect, unsupported ancestor paths, automated annotations relabelled as measurements and deletion of conflicting evidence."
+      ],
+      "status": "typed-endpoint-contract-planned-independent-inputs-and-literature-equivalence-unresolved",
+      "validated_new_mappings": 0,
+      "evaluation_contract": "Require every identity, claim and eligible evidence record. A private input-reading oracle checks the declared structured predicate; do not require support/refute when the independent observations only justify unresolved. This third state is an explicit adaptation of the binary source endpoint.",
+      "source_protocol_limits": "Source instructions do not reveal the graph edge type, its CURATED marker or the needed scientific evidence. The graph/evidence/label fields remain uninspected. All source requests to confirm nonexistence retain an open-world limitation; no full mapping follows from typed-query agreement alone.",
+      "remaining_decisions": [
+        "Pin independent input accession/release, rights, checksum, schema and benchmark-cohort lineage.",
+        "Review actual claim semantics, native parser versions, numerical tolerances and unresolved/negative-evidence rules before predicting full coverage.",
+        "Measure complete offline Harbor oracle/verifier runtime within the 30-minute target."
+      ],
+      "native_format_references": [
+        "https://www.geneontology.org/docs/go-annotations/",
+        "https://www.geneontology.org/docs/guide-go-evidence-codes/",
+        "https://www.geneontology.org/docs/download-go-annotations/"
+      ]
+    },
+    {
+      "proposed_id": "portfolio-biokgbench-protein-tissue-evidence",
+      "benchmark": "BioKGBench KGCheck",
+      "scientific_question": "Which tissue-expression claims agree with observed protein measurements after tissue and assay identities are reconciled?",
+      "source_family": "protein-tissue-evidence",
+      "benchmark_targets": [
+        {
+          "task_id": "kgcheck-test-175",
+          "source_task_record_sha256": "a0b0de726460204acf0f4fc57fbd59793b3ebda2027b853ae078252ac7482817",
+          "source_check_type": "potential one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Tissue"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-176",
+          "source_task_record_sha256": "2bed66cd6578c3951120c75379fbc71c308ed4a6e317e2b06ee51b043515518b",
+          "source_check_type": "potential one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Tissue"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-180",
+          "source_task_record_sha256": "2c0c012c817228f08b3f84455d07accf095fefcb0fc4c6473df5bc97b1477c07",
+          "source_check_type": "existing one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Tissue"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-181",
+          "source_task_record_sha256": "cfac8e04bd8b8105e8482f78bccabea815643f59a0c9e1a431fd7e994846307c",
+          "source_check_type": "existing one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Tissue"
           ]
         },
         {
@@ -1866,15 +1997,6 @@
           "entity_types_in_instruction": [
             "Protein",
             "Tissue"
-          ]
-        },
-        {
-          "task_id": "kgcheck-test-187",
-          "source_task_record_sha256": "4c201e6810764cdc6cc1c31633f91bb5fe5e87bda09c198cd77e7e0e09b02867",
-          "source_check_type": "existing one-hop",
-          "entity_types_in_instruction": [
-            "Protein",
-            "Cellular_component"
           ]
         },
         {
@@ -1896,30 +2018,12 @@
           ]
         },
         {
-          "task_id": "kgcheck-test-190",
-          "source_task_record_sha256": "401defa18e4dc3718e9b43b2a9155358a8e91088958fef4ec03029732f3bfc84",
-          "source_check_type": "existing one-hop",
-          "entity_types_in_instruction": [
-            "Protein",
-            "Disease"
-          ]
-        },
-        {
           "task_id": "kgcheck-test-191",
           "source_task_record_sha256": "9bc884a6afe3be343f77701075d2e2d92f901a63deab6d92cac46ed73398b252",
           "source_check_type": "existing one-hop",
           "entity_types_in_instruction": [
             "Protein",
             "Tissue"
-          ]
-        },
-        {
-          "task_id": "kgcheck-test-192",
-          "source_task_record_sha256": "7e9b6454990ea61946b68f5666790ace210ff99a914ba88eb3d60a8879d2ad60",
-          "source_check_type": "existing one-hop",
-          "entity_types_in_instruction": [
-            "Protein",
-            "Cellular_component"
           ]
         },
         {
@@ -1941,6 +2045,94 @@
           ]
         },
         {
+          "task_id": "kgcheck-test-197",
+          "source_task_record_sha256": "a2ded4c4a55b890feb3e0303aa2c5e5a98a6b056411eefee7a874c54d223eef9",
+          "source_check_type": "existing one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Tissue"
+          ]
+        }
+      ],
+      "source_inspection_tier": "all-assigned-instruction-forms-and-typed-entity-roles-reviewed; biological-evidence-uninspected",
+      "source_planning_disposition": "relation-specific-input-and-acceptance-plan",
+      "matching_workstreams": [
+        "database-identity-evidence"
+      ],
+      "required_endpoint_stages": [
+        "Resolve protein and tissue granularity; link graph claims to matching assay/specimen records; apply prespecified measurement/QC rules; retain biological replicate summaries and conflicting assays; report detected, not-detected-under-assay or unresolved states."
+      ],
+      "observed_input_requirements": [
+        "Independent observed tissue protein measurements with assay/antibody identifiers, tissue ontology mapping, specimen or donor units, detection thresholds, QC and missing-value codes. Keep RNA expression and inferred tissue specificity in separate evidence classes."
+      ],
+      "required_formats": [
+        "measured tissue-expression TSV",
+        "tissue ontology/identifier map",
+        "assay and specimen metadata",
+        "typed graph edge export"
+      ],
+      "proposed_artifact_requirements": [
+        "protein_tissue_identity.tsv, complete observation/QC table, assay-specific detection summaries with denominators, conflicting-evidence ledger and tissue_claim_dispositions.tsv."
+      ],
+      "source_specific_decisions": [
+        "Not detected in an assay is not proof of absence from a tissue. Tissue and cell type are distinct annotation levels. Do not substitute transcript abundance for measured protein abundance, or assign absent donor measurements a zero."
+      ],
+      "deterministic_verification_approach": [
+        "Recompute eligibility and summaries from measurements, verifying units, tissue mapping and specimen counts. Reject RNA-as-protein support, missing-as-zero, unsupported pooling across tissue subtypes and omission of discordant assays."
+      ],
+      "status": "typed-endpoint-contract-planned-independent-inputs-and-literature-equivalence-unresolved",
+      "validated_new_mappings": 0,
+      "evaluation_contract": "Require every identity, claim and eligible evidence record. A private input-reading oracle checks the declared structured predicate; do not require support/refute when the independent observations only justify unresolved. This third state is an explicit adaptation of the binary source endpoint.",
+      "source_protocol_limits": "Source instructions do not reveal the graph edge type, its CURATED marker or the needed scientific evidence. The graph/evidence/label fields remain uninspected. All source requests to confirm nonexistence retain an open-world limitation; no full mapping follows from typed-query agreement alone.",
+      "remaining_decisions": [
+        "Pin independent input accession/release, rights, checksum, schema and benchmark-cohort lineage.",
+        "Review actual claim semantics, native parser versions, numerical tolerances and unresolved/negative-evidence rules before predicting full coverage.",
+        "Measure complete offline Harbor oracle/verifier runtime within the 30-minute target."
+      ]
+    },
+    {
+      "proposed_id": "portfolio-biokgbench-protein-disease-evidence",
+      "benchmark": "BioKGBench KGCheck",
+      "scientific_question": "Which protein\u2013disease claims match the explicitly typed evidence in independent versioned disease-association records?",
+      "source_family": "protein-disease-evidence",
+      "benchmark_targets": [
+        {
+          "task_id": "kgcheck-test-177",
+          "source_task_record_sha256": "83aa9b38c45e501e51dce37b9b9c4e9fc7f1d38e75b78fcecf74c5db5dfc5284",
+          "source_check_type": "potential one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Disease"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-179",
+          "source_task_record_sha256": "4155761e659db98740e53b0ee76dcacd89727c72f62340a6e069da584a0b3423",
+          "source_check_type": "potential one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Disease"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-185",
+          "source_task_record_sha256": "7ea4dcc656827256924ed6c02e0eb832e3b7f6160b7cb58f611162e6d678c4a5",
+          "source_check_type": "existing one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Disease"
+          ]
+        },
+        {
+          "task_id": "kgcheck-test-190",
+          "source_task_record_sha256": "401defa18e4dc3718e9b43b2a9155358a8e91088958fef4ec03029732f3bfc84",
+          "source_check_type": "existing one-hop",
+          "entity_types_in_instruction": [
+            "Protein",
+            "Disease"
+          ]
+        },
+        {
           "task_id": "kgcheck-test-195",
           "source_task_record_sha256": "2edd42ab29db2100f0fcac2258db6025eaa1c7db4c3d344c5447ea865bf6e3d7",
           "source_check_type": "existing one-hop",
@@ -1959,39 +2151,12 @@
           ]
         },
         {
-          "task_id": "kgcheck-test-197",
-          "source_task_record_sha256": "a2ded4c4a55b890feb3e0303aa2c5e5a98a6b056411eefee7a874c54d223eef9",
-          "source_check_type": "existing one-hop",
-          "entity_types_in_instruction": [
-            "Protein",
-            "Tissue"
-          ]
-        },
-        {
-          "task_id": "kgcheck-test-198",
-          "source_task_record_sha256": "15b851760fa33c97d4e0bae1ba1b39813e7008a4c147e22a390c34b2b8ae3024",
-          "source_check_type": "potential one-hop",
-          "entity_types_in_instruction": [
-            "Protein",
-            "Protein"
-          ]
-        },
-        {
           "task_id": "kgcheck-test-199",
           "source_task_record_sha256": "6d8b0ab0a5aed58242cae20b66fdd138961fcb22ba6d90049bc50569e0105840",
           "source_check_type": "existing one-hop",
           "entity_types_in_instruction": [
             "Protein",
             "Disease"
-          ]
-        },
-        {
-          "task_id": "kgcheck-test-200",
-          "source_task_record_sha256": "086f1e5168986e242632cae386c792baa971f92ad7a02cfe00697ae549f760ea",
-          "source_check_type": "existing one-hop",
-          "entity_types_in_instruction": [
-            "Protein",
-            "Cellular_component"
           ]
         },
         {
@@ -2011,59 +2176,65 @@
             "Protein",
             "Disease"
           ]
-        },
-        {
-          "task_id": "kgcheck-test-203",
-          "source_task_record_sha256": "487df7f26bd5acef0f6d944635c63434489f4397643eadfaf79641a047ace4e5",
-          "source_check_type": "potential one-hop",
-          "entity_types_in_instruction": [
-            "Protein",
-            "Protein"
-          ]
-        },
-        {
-          "task_id": "kgcheck-test-204",
-          "source_task_record_sha256": "170bccb10467e3f687e4f93378c079cee989d094d55c5e85940282bf509847f5",
-          "source_check_type": "existing one-hop",
-          "entity_types_in_instruction": [
-            "Protein",
-            "Cellular_component"
-          ]
         }
       ],
-      "source_inspection_tier": "shared-pattern-only",
-      "source_planning_disposition": "accession-evidence-review",
+      "source_inspection_tier": "all-assigned-instruction-forms-and-typed-entity-roles-reviewed; biological-evidence-uninspected",
+      "source_planning_disposition": "relation-specific-input-and-acceptance-plan",
       "matching_workstreams": [
         "database-identity-evidence"
       ],
       "required_endpoint_stages": [
-        "resolve both typed entities and the exact relation semantics",
-        "query directed relations, node presence and source provenance",
-        "retrieve supporting or contradicting source records and literature when required",
-        "distinguish physical interaction, association, localization and inferred annotation",
-        "export relation, evidence identifiers and a scoped conclusion"
+        "Resolve both entities without collapsing disease subtypes; inspect the requested relation; join compatible evidence records; preserve direction, population and conflicting results; report the scoped evidence disposition."
       ],
       "observed_input_requirements": [
-        "Pinned public gene/protein/variant/database exports with accession versions, species, directed relations, dates and evidence identifiers."
+        "Independent observed or curated disease-association evidence with stable protein/gene and disease IDs, population, study design, effect/uncertainty when available, evidence type and publication/source-record identifiers. Preserve genetic association, mechanism, biomarker and treatment evidence as different relations."
       ],
       "required_formats": [
-        "JSON conclusion and evidence ledger",
-        "literature/PDF evidence where required",
-        "typed graph edges and source TSV tables",
-        "versioned database responses"
+        "disease evidence TSV/JSON",
+        "protein/gene and disease ontology maps",
+        "typed graph edge export",
+        "study metadata"
       ],
       "proposed_artifact_requirements": [
-        "Identity map, provenance manifest, directed edge/evidence tables, contradictions, structured answer and supporting accession/span references"
+        "entity_identity.tsv, every candidate claim, complete supporting/contradicting evidence rows with study/predicate/context, effect estimates and uncertainties where supplied, and scoped disease_dispositions.tsv."
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "A biomarker association does not establish causality, treatment benefit or pathogenicity. Freeze a relation-specific predicate and include unmeasured/unresolved states. Free-form literature-based truth judgments remain a full-endpoint gap, even when citation IDs can be checked."
+      ],
       "deterministic_verification_approach": [
-        "Deterministic joins, direction/type checks and evidence-span linkage; unknown is allowed; a text citation match does not establish full scientific entailment."
+        "Independently reproduce typed joins and predicates against pinned records; reject mismatched disease subtype/population, association-as-causality, treatment-as-risk evidence, contradictory evidence removal and citation-only acceptance."
       ],
-      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "status": "typed-endpoint-contract-planned-independent-inputs-and-literature-equivalence-unresolved",
       "validated_new_mappings": 0,
-      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
-      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+      "evaluation_contract": "Require every identity, claim and eligible evidence record. A private input-reading oracle checks the declared structured predicate; do not require support/refute when the independent observations only justify unresolved. This third state is an explicit adaptation of the binary source endpoint.",
+      "source_protocol_limits": "Source instructions do not reveal the graph edge type, its CURATED marker or the needed scientific evidence. The graph/evidence/label fields remain uninspected. All source requests to confirm nonexistence retain an open-world limitation; no full mapping follows from typed-query agreement alone.",
+      "remaining_decisions": [
+        "Pin independent input accession/release, rights, checksum, schema and benchmark-cohort lineage.",
+        "Review actual claim semantics, native parser versions, numerical tolerances and unresolved/negative-evidence rules before predicting full coverage.",
+        "Measure complete offline Harbor oracle/verifier runtime within the 30-minute target."
+      ]
     }
   ],
-  "definition_discrepancies": []
+  "definition_discrepancies": [],
+  "typed_endpoint_review": {
+    "instruction_records_checked": 225,
+    "question_cards": 6,
+    "protein_names": 55,
+    "entry_presence": 45,
+    "relation_entity_pairs": {
+      "Protein/Protein": 94,
+      "Protein/Cellular_component": 11,
+      "Protein/Tissue": 11,
+      "Protein/Disease": 9
+    },
+    "source_fields_used": [
+      "instruction"
+    ],
+    "source_fields_excluded": [
+      "graph",
+      "evidence",
+      "label"
+    ],
+    "validated_mappings_added": 0
+  }
 }
