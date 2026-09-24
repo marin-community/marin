@@ -194,6 +194,23 @@
       "tasks_file": "benchmark_tasks/liu-single-cell.json",
       "source_inventory_name": "Liu et al., single-cell agent benchmark",
       "task_inventory_status": "public-task-metadata-assessed"
+    },
+    "sc-HeurekaBench": {
+      "revision": "c2a2b2fcdc5244220ff60f65483bc084c72a8cf1",
+      "source_url": "https://github.com/mlbio-epfl/HeurekaBench/tree/c2a2b2fcdc5244220ff60f65483bc084c72a8cf1/scheurekabench",
+      "inventory_count": 130,
+      "public_inventory_count": 130,
+      "protocol_counts": {
+        "oeq": 64,
+        "mcq": 66
+      },
+      "shared_insight_count": 52,
+      "shared_study_count": 13,
+      "training_mapping_allowed": true,
+      "distribution": "ID",
+      "tasks_file": "benchmark_tasks/sc-heurekabench.json",
+      "source_inventory_name": "sc-HeurekaBench",
+      "task_inventory_status": "public-task-metadata-assessed"
     }
   },
   "assessment_policy": "ID workflow prerequisites are manually inferred from permitted task descriptions. Shared family stages may exceed an individual endpoint; assess that endpoint before claiming coverage. Benchmark answers and biological fixtures are excluded from authoring."

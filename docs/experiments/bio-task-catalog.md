@@ -229,9 +229,10 @@ benchmark answers and biological fixtures are excluded from training authoring.
 | [DiscoveryBench, biology](../../experiments/post_training/bio_tasks/benchmark_tasks/discoverybench.json) | 26 | — |
 | [VariantBench](../../experiments/post_training/bio_tasks/benchmark_tasks/variantbench.json) | 8 (6 main, 2 supplemental) | 118 main |
 | [Liu et al., single-cell](../../experiments/post_training/bio_tasks/benchmark_tasks/liu-single-cell.json) | 63 (50 main, 13 additional datasets) | — |
+| [sc-HeurekaBench](../../experiments/post_training/bio_tasks/benchmark_tasks/sc-heurekabench.json) | 130 (64 open-answer, 66 multiple-choice) | — |
 
-Of these 577 ID task records, 23 have manually assessed component mappings and
-554 are unmapped. None is marked workflow-validated. Other eligible sources
+Of these 707 ID task records, 23 have manually assessed component mappings and
+684 are unmapped. None is marked workflow-validated. Other eligible sources
 still need task-level inspection. The 90
 [BioMysteryBench identifiers](../../experiments/post_training/bio_tasks/benchmark_tasks/biomysterybench.json)
 are tracked separately as OOD, without workflow patterns or training mappings.
@@ -255,7 +256,14 @@ Zeisel cortex data used by `scvi.data.cortex`. The source manifest records this
 exclusion and primary evidence; downloading another copy would not make the
 biological observations independent.
 
-All 577 ID records have manually assessed workflow prerequisites. For BixBench,
+sc-HeurekaBench's six full, lite and TU protocol files contain 130 distinct
+formulation/input records sharing 52 insight groups across 13 studies. Exact
+aliases share one record; changed questions or declared input descriptions
+retain separate records. These counts do not measure independent workflows.
+Its open-answer judge cannot supply our acceptance rule: each adapted task needs
+quantitative artifacts, deterministic grading and independent observed inputs.
+
+All 707 ID records have manually assessed workflow prerequisites. For BixBench,
 shared workflow-family stages are distinguished from individual question endpoints;
 this inventory does not add execution coverage. The inspection browser binds mappings
 to generated examples and their local reference results. These timings are solver-check runtimes, not teacher latency measurements.
