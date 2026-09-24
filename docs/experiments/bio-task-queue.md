@@ -30,11 +30,20 @@ visual quality. Keep their source IDs and uncovered scope explicit; they do not
 block independently ready tasks. Numerical components alone do not earn full
 coverage of a source question that also requires an ungraded result.
 
-**Current phase: question planning and consolidation before further implementation.**
-The portfolio records a 20-item review order and an implementation assignment
-contract. No task or implementation worker is selected. Freeze independent observed
-inputs, scientific estimands, native methods and complete deterministic acceptance
-for the selected questions before assigning bounded task-creation work.
+**Current phase: prepare selected task contracts.** The broad question portfolio
+and consolidation pass are complete with explicit source and endpoint gaps. All
+5,133 inventoried records have one primary disposition, and all 702 cards have a
+scientific question, input requirements, proposed outputs and a verification
+approach. These checks establish a planning baseline, not executable acceptance.
+The portfolio's `planning_readiness` audit records the evidence and its limits.
+
+The next preparation target is the ortholog-signal comparison: resolve exact input
+rights and lineage, then verify that the observed alignments support the complete
+47-endpoint contract. Its existing native tree checks provide a starting point;
+they do not complete the task. No implementation packet or worker is assigned.
+Freeze the selected inputs, methods, artifacts and deterministic acceptance before
+implementation. If a candidate cannot satisfy those requirements, record the gap
+and advance to another feasible candidate without weakening its endpoints.
 
 When authoring resumes, choose the next coherent task by its expected gain in currently missing, distinct
 ID benchmark tasks. Recompute after each completed or rejected candidate.

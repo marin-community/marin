@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T19:40:35.474041+00:00",
+  "updated_at": "2026-09-24T20:19:20.985223+00:00",
   "basis_revision": "c3a42fa5cf",
   "scope": "Provisional ID agentic benchmarks only. This queue selects new authoring work; it does not change benchmark coverage states.",
   "selection_policy": {
@@ -23,7 +23,7 @@
     "scope_limit": "Ranks compare the currently assessed candidate set, not all possible workflows in all releases. Source-review backlog entries remain explicit and can change the ranking."
   },
   "selected_candidate": null,
-  "selection_reason": "Question portfolio now accounts for all 5,133 inventoried records. Review its conditional consolidations, source inspection limits and input/acceptance contracts before selecting implementation work. The eight earlier assessed gains remain conditional and are not a global ranking.",
+  "selection_reason": "The broad question portfolio and consolidation pass are complete with explicit limits. No new implementation packet is ready. Prepare the prioritized task inputs and acceptance contracts; existing conditional gains are not a global ranking or validated coverage.",
   "candidates": [
     {
       "id": "multi-locus-phylogenomic-signal",
@@ -1193,7 +1193,7 @@
   ],
   "execution_policy": {
     "coordination": "The lead selects candidates, designs scientifically coherent workflows, evaluates source suitability, reviews oracle independence and approves coverage-state changes.",
-    "delegation": "Use one bounded worker for factual source search, pinned installation, routine oracle execution or artifact validation. Start with gpt-6-sol; simpler mechanical work can use gpt-6-luna when scoped clearly.",
+    "delegation": "For explicitly requested concurrency, use at most one bounded worker for factual source search, pinned installation, routine oracle execution or artifact validation after a concrete packet is ready. Prefer gpt-6-sol, or gpt-6-luna for clearly scoped mechanical work; do not spawn proactively on this shared VM.",
     "max_active_child_workers": 1,
     "worker_boundaries": [
       "No nested delegation.",
@@ -1226,19 +1226,19 @@
     },
     "next_actions": [
       {
-        "id": "portfolio-consolidation-review",
-        "work": "Review the 25 retained conditional combinations and standalone questions against complete source endpoints. Share acquisition work without conflating scientific objectives."
+        "id": "prepare-selected-task-contract",
+        "work": "Follow next_preparation; resolve exact observed input provenance and complete numerical acceptance before any implementation assignment."
       },
       {
-        "id": "source-and-acceptance-contracts",
-        "work": "For prioritized question groups, specify independent observed input accessions and study structure, exact formats and artifacts, required native methods and deterministic acceptance before implementation assignment. Unsupported free-form objectives and inaccessible sources remain explicit."
+        "id": "reassess-feasible-gain",
+        "work": "After preparing or deferring a candidate, recompute missing distinct scientific endpoints and feasibility. Do not count aliases, shared components or uninspected registry rows as completed workflows."
       }
     ],
     "task_protocol": "Harbor only; see workflow_portfolio.json assignment_contract.execution_protocol.",
     "scoring_scope": "Prioritize realistic tasks whose scientific outputs have direct executable checks. Defer subjective interpretation, visual quality or other endpoints without a defensible deterministic reward; retain exact source IDs and the uncovered endpoint. Do not introduce an LLM judge, contrived proxy or special protocol merely to increase coverage, and do not let these endpoints block independently ready tasks."
   },
   "portfolio_plan": "workflow_plan.json",
-  "authoring_phase": "question-portfolio-planning",
+  "authoring_phase": "task-contract-preparation",
   "portfolio_review_progress": {
     "source_releases": 32,
     "inventory_records": 5133,
@@ -1250,9 +1250,30 @@
     "excluded_records": 1,
     "validated_new_mappings": 0,
     "portfolio_file": "workflow_portfolio.json",
-    "portfolio_sha256": "e1b4020bd42f423dbd01418de2d51ed9b37d221912d18b6e9bad6ebf2b500833",
-    "limit": "All 30 original cross-card combinations have scientific planning dispositions; 25 remain conditional. Complete input and acceptance contracts, individual-card review and inaccessible-source dispositions are still required. No implementation is selected and validated coverage is unchanged.",
+    "portfolio_sha256": "838a23f149ee4563bd240e0f5fab23d4e672ba8411e5b3532abbaa0f7ab0d886",
+    "limit": "Broad question planning and all 30 original consolidation reviews are complete with explicit source/endpoint dispositions; 25 combinations remain conditional. Resolve selected-task input, method and acceptance gaps before implementation, and source-specific evidence gaps before coverage claims. No implementation is selected and validated coverage is unchanged.",
     "question_records_with_gap_dispositions": 1674,
     "system_records_with_endpoint_gap_dispositions": 350
+  },
+  "next_preparation": {
+    "proposed_task_id": "ortholog-signal-comparison",
+    "status": "input-and-acceptance-preparation; not-implementation-assigned",
+    "selection_basis": "First in the existing scientific review order: 47 named BixBench endpoints share matched locus artifacts, and the 30-locus observed candidate already has bounded native tree checks. This is a preparation priority, not a measured or global validated-gain ranking.",
+    "source_designs": [
+      "workflow_designs/bixbench.json",
+      "workflow_designs/multilocus_source.json"
+    ],
+    "required_decisions": [
+      "Resolve exact mirror/archive member identity and redistribution evidence for the selected alignment/tree bytes, or select another suitable observed source.",
+      "Complete benchmark-study lineage screening using permitted ID question metadata; a new mirror URL or different archive does not establish independent observations.",
+      "Check complete alignment metrics and required subset eligibility against all 47 contracts; do not manufacture missing residues or select loci by desired metric outcomes.",
+      "Freeze the final task packet, complete native oracle and independent verifier design, including clade, rooting, filtering, statistical and undefined-result conventions."
+    ],
+    "exit_conditions": {
+      "prepared": "A reviewable input/acceptance packet resolves the selected task requirements and can be assigned for implementation.",
+      "deferred": "A remaining access, rights, scientific or runtime gap cannot be resolved within authorized bounded work; record the exact gap and advance to another feasible preparation candidate."
+    },
+    "predicted_validated_gain": null,
+    "execution_boundary": "No model calls, new cloud job, implementation assignment or child agent is launched by this selection. Existing shared-node and explicit-concurrency requirements still apply."
   }
 }

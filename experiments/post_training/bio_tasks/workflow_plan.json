@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T19:40:35.474041+00:00",
+  "updated_at": "2026-09-24T20:19:20.985223+00:00",
   "basis_revision": "952929c306",
-  "scope": "Agentic provisional-ID benchmarks only; preserve all existing OOD exclusions. Plan the broad task set before further recipe implementation.",
+  "scope": "Agentic provisional-ID benchmarks only; preserve all existing OOD exclusions. The broad question portfolio is complete with explicit limits. Prepare selected input and acceptance contracts before further recipe implementation.",
   "authoring_unit": "One coherent observed-data task per recipe by default. Proposed questions are separate task designs, not repeated instances. They may be split or merged after endpoint and runtime checks.",
   "coverage_goal": "Aim to cover most missing distinct ID task workflows. Keep the full inventoried denominator, known protocol aliases, per-benchmark progress and every unresolved or excluded endpoint visible. Plan membership is not a coverage forecast; exact endpoint assignments and independent inputs still require review.",
   "count_policy": "Only the 50 explicitly related BixBench-Verified-50 records are collapsed for unique counts. Other shared-task, insight, study, protocol and source-ID fields remain as relation evidence, not inferred equivalence. No disposition or group label is coverage credit.",
@@ -13301,11 +13301,18 @@
   "implementation_sequence": [
     {
       "phase": "question-portfolio-review",
-      "work": "Complete question-level portfolio planning across all provisional-ID agentic releases, retaining identity-only and inaccessible sources as explicit gaps."
+      "work": "Complete question-level portfolio planning across all provisional-ID agentic releases, retaining identity-only and inaccessible sources as explicit gaps.",
+      "status": "complete-with-recorded-source-and-endpoint-gaps"
     },
     {
       "phase": "cross-benchmark-consolidation",
-      "work": "Consolidate equivalent cross-benchmark questions and shared real-data prerequisites without merging distinct estimands or protocol requirements."
+      "work": "Consolidate equivalent cross-benchmark questions and shared real-data prerequisites without merging distinct estimands or protocol requirements.",
+      "status": "reviewed; 25-combinations-remain-conditional-on-selected-inputs"
+    },
+    {
+      "phase": "task-contract-preparation",
+      "work": "Resolve exact real inputs, method choices and complete deterministic acceptance for prioritized questions. Preserve per-source review limits; a deferred question does not block unrelated ready work.",
+      "status": "active"
     },
     {
       "phase": "implementation-assignment",
@@ -13513,10 +13520,10 @@
       "shared_external_question_cards": 7
     }
   ],
-  "authoring_phase": "question-portfolio-planning",
+  "authoring_phase": "task-contract-preparation",
   "portfolio_index": {
     "path": "workflow_portfolio.json",
-    "sha256": "e1b4020bd42f423dbd01418de2d51ed9b37d221912d18b6e9bad6ebf2b500833",
+    "sha256": "838a23f149ee4563bd240e0f5fab23d4e672ba8411e5b3532abbaa0f7ab0d886",
     "counts": {
       "source_releases": 32,
       "inventory_records": 5133,
@@ -13530,6 +13537,6 @@
       "question_records_with_gap_dispositions": 1674,
       "system_records_with_endpoint_gap_dispositions": 350
     },
-    "status": "question-portfolio-with-conditional-consolidation-input-and-acceptance-designs-pending"
+    "status": "question-portfolio-complete-with-explicit-limits; selected-task-contracts-pending"
   }
 }

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T19:40:35.474041+00:00",
+  "updated_at": "2026-09-24T20:19:20.985223+00:00",
   "scope": "Full question-proposal portfolio for the 32 currently inventoried provisional-ID agentic releases. This planning index resolves every question card and records conditional consolidation; it creates no training task or validated coverage. Nine source leads without inventories remain outside the enumerated denominator.",
   "counts": {
     "source_releases": 32,
@@ -10606,7 +10606,7 @@
     "Before implementation assignment: resolve each selected question into independent input accession/license/checksum and exact schemas, method versions, scientific estimand, complete private oracle/verifier contract and bounded runtime design.",
     "Preserve unsupported source objectives and inaccessible releases in the ledger instead of manufacturing equivalence.",
     "Review the full source-level portfolio and cross-benchmark consolidation before launching task-creation agents. No implementation agent is assigned by this file.",
-    "All 30 originally proposed cross-card combinations now have a planning review; 25 remain conditional. Before calling the full plan ready, resolve individual-card acceptance gaps, uninspected prompt schemas and the missing source inventories or record an explicit scoped disposition for each.",
+    "All 30 original cross-card combinations have been reviewed; 25 remain conditional. The recorded planning_readiness audit separates the complete broad question plan from per-task input, method, prompt-parity and acceptance gaps. Those gaps remain binding before assignment or source-coverage claims for each selected task.",
     "Endpoints that are not amenable to deterministic scoring may be explicitly deferred. Their unresolved rubric is not a completion gate for the remaining authoring plan or a release gate for independently verified tasks; report the uncovered scope honestly."
   ],
   "assignment_contract": {
@@ -10617,7 +10617,7 @@
       "Implement one agreed task and native reference from a frozen contract, using existing helpers.",
       "Run one bounded oracle/verifier validation on authorized remote compute and return complete evidence."
     ],
-    "concurrency": "Do not launch while question planning is active. After the portfolio is ready, at most one child alongside the parent on this VM, with shared-node load and memory checks and no concurrent heavy commands.",
+    "concurrency": "Question-portfolio planning is recorded as complete with explicit limits. Assign implementation only after a selected task packet passes the assignment gate. On this VM, launch a child only for explicitly requested concurrency, at most one alongside the parent, after load/memory checks and without concurrent heavy commands.",
     "return_requirements": [
       "Changed files and scoped checks; exact source provenance/rights and package versions.",
       "Reference solution reads inputs and passes all artifact checks; specified incorrect-artifact controls fail.",
@@ -10933,5 +10933,119 @@
       "finding": "Complete the description-level planning pass. Correct metric/schema conflicts, retain actual biological output scope, distinguish reference labels from observed outcomes and keep fixed-answer QA without an LLM judge. Sixty descriptions still lack official-byte parity.",
       "validated_new_mappings": 0
     }
-  ]
+  ],
+  "planning_readiness": {
+    "reviewed_at": "2026-09-24",
+    "basis_revision": "b30fab9ea8a55e8ecda8c252af7aa3c1ef518079",
+    "status": "question-portfolio-complete-with-explicit-limits; ready-for-task-contract-preparation",
+    "decision": "The broad question set and consolidation pass have a complete planning disposition. Prepare selected task contracts next; do not require every inaccessible source, unsupported endpoint or unselected task input to be resolved before independently feasible work can proceed.",
+    "evidence": {
+      "inventory_records_with_one_primary_disposition": 5133,
+      "records_linked_to_proposals": 3058,
+      "known_alias_records": 50,
+      "explicit_endpoint_or_system_gaps": 2024,
+      "excluded_records": 1,
+      "question_cards_with_question_input_output_and_verification_fields": 702,
+      "question_cards_assigned_once": 702,
+      "proposed_task_groups": 661,
+      "source_design_files": [
+        {
+          "path": "workflow_designs/biomnibench-da.json",
+          "question_cards": 45
+        },
+        {
+          "path": "workflow_designs/bixbench.json",
+          "question_cards": 27
+        },
+        {
+          "path": "workflow_designs/compbiobench.json",
+          "question_cards": 84
+        },
+        {
+          "path": "workflow_designs/additional_benchmarks.json",
+          "question_cards": 162
+        },
+        {
+          "path": "workflow_designs/biomlbench.json",
+          "question_cards": 25
+        },
+        {
+          "path": "workflow_designs/biomni-eval1.json",
+          "question_cards": 20
+        },
+        {
+          "path": "workflow_designs/biokgbench.json",
+          "question_cards": 6
+        },
+        {
+          "path": "workflow_designs/promptbio-bench.json",
+          "question_cards": 101
+        },
+        {
+          "path": "workflow_designs/bixbench3.json",
+          "question_cards": 19
+        },
+        {
+          "path": "workflow_designs/drugdiscoverybench.json",
+          "question_cards": 27
+        },
+        {
+          "path": "workflow_designs/liu-single-cell.json",
+          "question_cards": 49
+        },
+        {
+          "path": "workflow_designs/bio-task-bench.json",
+          "question_cards": 10
+        },
+        {
+          "path": "workflow_designs/bioxarena.json",
+          "question_cards": 76
+        },
+        {
+          "path": "workflow_designs/cellbench.json",
+          "question_cards": 22
+        },
+        {
+          "path": "workflow_designs/scigym.json",
+          "question_cards": 3
+        },
+        {
+          "path": "workflow_designs/bixbench-verified-50.json",
+          "question_cards": 0
+        },
+        {
+          "path": "workflow_designs/scholarqabench-bio.json",
+          "question_cards": 0
+        },
+        {
+          "path": "workflow_designs/bioagent.json",
+          "question_cards": 10
+        },
+        {
+          "path": "workflow_designs/labbench-literature-database.json",
+          "question_cards": 16
+        }
+      ],
+      "original_cross_card_combinations_reviewed": 30,
+      "combinations_still_conditional": 25,
+      "uninventoried_source_leads_with_explicit_dispositions": 9,
+      "source_and_inventory_hashes": "Existing detailed_design_files, source_question_files and source_inventory_files contain the checked content hashes."
+    },
+    "scope_limits": [
+      "Field presence proves a recorded proposal, not scientific correctness, a fully specified estimator, source equivalence, implementation feasibility or executable acceptance.",
+      "Question/protocol/family inspections retain their recorded limits. BioXArena has 60 mirror-only descriptions; BioMLBench assay registries, BioKGBench relation instances and several database/context tasks still lack per-instance evidence review. They cannot receive full source coverage from a generic family implementation.",
+      "CellBench has context-inspired adaptations, SciGym has 350 unresolved system endpoints, and ScholarQA/LAB literature gaps retain explicit dispositions. These do not become equivalent deterministic tasks by appearing in the plan.",
+      "Every deferred scientific conclusion remains uncredited. Unsupported scoring and unavailable-source dispositions apply only to their recorded scope and do not shrink the dataset objective or erase the backlog.",
+      "The 702 cards include deferred and shared-protocol proposals. The 661 groups are neither a required final task count nor a promise that all groups can be implemented faithfully."
+    ],
+    "assignment_gate_unchanged": [
+      "For the selected task, resolve exact independent observed inputs or clearly labeled shared reference resources, redistribution terms, lineage, checksums, schemas and biological units.",
+      "Freeze the scientific question, required source-specific stages, native package/method versions, full artifact schema and deterministic acceptance, including incorrect-output controls and numerical invariances.",
+      "Design a bounded Harbor environment and private input-reading oracle; measure complete execution before accepting the task and promoting coverage.",
+      "Revisit a conditional combination when selected inputs cannot satisfy all inherited endpoints; split it instead of weakening the required workflow."
+    ],
+    "new_implementation_packets_ready": 0,
+    "validated_new_mappings": 0,
+    "dataset_release_ready": false
+  }
 }
