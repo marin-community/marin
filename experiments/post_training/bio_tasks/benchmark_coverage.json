@@ -305,6 +305,20 @@
       "discovery_questions": 193,
       "annotation_datasets": 15,
       "data_revision": "0d52b6dbc37ba6e1168c20abb230ddc0ce00d0e4"
+    },
+    "PromptBio-Bench": {
+      "revision": "078420b69e25c41c99a79135724b6ae6a6c82b69",
+      "source_url": "https://huggingface.co/datasets/promptbio-ai/promptbio-bench-data/blob/078420b69e25c41c99a79135724b6ae6a6c82b69",
+      "inventory_count": 244,
+      "public_inventory_count": 244,
+      "training_mapping_allowed": true,
+      "distribution": "ID",
+      "tasks_file": "benchmark_tasks/promptbio-bench.json",
+      "source_inventory_name": "PromptBio-Bench",
+      "task_inventory_status": "all-244-agent-facing-questions-and-output-specifications-assessed",
+      "task_metadata_bytes": 155545,
+      "required_output_artifact_count": 316,
+      "source_data_and_evaluators_inspected": false
     }
   },
   "assessment_policy": "ID workflow prerequisites are manually inferred from permitted task descriptions. Shared family stages may exceed an individual endpoint; assess that endpoint before claiming coverage. Benchmark answers and biological fixtures are excluded from authoring."

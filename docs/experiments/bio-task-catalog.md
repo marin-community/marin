@@ -270,9 +270,10 @@ benchmark answers and biological fixtures are excluded from training authoring.
 | [BioML-bench](../../experiments/post_training/bio_tasks/benchmark_tasks/biomlbench.json) | 406 registry definitions; 24 selected by the released experiment | — |
 | [BixBench3](../../experiments/post_training/bio_tasks/benchmark_tasks/bixbench3.json) | 20 IDs; 19 full prompts and 131 output artifacts assessed, one objective excluded | — |
 | [BAISBench](../../experiments/post_training/bio_tasks/benchmark_tasks/baisbench.json) | 193 discovery questions across 41 studies; 15 annotation dataset identities | — |
+| [PromptBio-Bench](../../experiments/post_training/bio_tasks/benchmark_tasks/promptbio-bench.json) | All 244 task definitions; 27 workflow families and 316 required-output declarations | — |
 
-Of these 1,449 ID task/protocol/definition records, 46 have manually assessed component mappings,
-1,402 are unmapped and one is excluded from authoring. None is marked workflow-validated. Other eligible sources
+Of these 1,693 ID task/protocol/definition records, 46 have manually assessed component mappings,
+1,646 are unmapped and one is excluded from authoring. None is marked workflow-validated. Other eligible sources
 still need task-level inspection. The 90
 [BioMysteryBench identifiers](../../experiments/post_training/bio_tasks/benchmark_tasks/biomysterybench.json)
 are tracked separately as OOD, without workflow patterns or training mappings.
@@ -282,6 +283,17 @@ for 18 original BixBench endpoints and five overlapping Verified-50 protocols.
 These 23 mappings share one biological input. Cross-gene and biological-group
 aggregation, native PhyKIT agreement and benchmark-lineage screening remain
 pending; method replicates do not substitute for gene or biological replicates.
+
+PromptBio-Bench includes all 131 bioinformatics and 113 data-science task
+definitions at the pinned release. Every question and required-output declaration
+has been inspected and paraphrased into a task-specific workflow pattern. Input
+formats inferred from filenames are labelled; biological input contents, evaluator
+files and reference answers were not downloaded. All 244 tasks remain unmapped.
+The source permits 60 minutes per task; that is a timeout, not measured runtime.
+Adapted tasks still require a measured solve within 30 minutes. Modelling tasks
+can contain internal train/test cohorts while the released task dataset keeps its
+single train split. Plotting tasks need checks of the underlying results and
+scientific encodings; an existing image file is insufficient.
 
 BAISBench question stems have manually assessed workflow patterns. Task1 has
 dataset identities and a broad annotation pattern; its scoring implementation
