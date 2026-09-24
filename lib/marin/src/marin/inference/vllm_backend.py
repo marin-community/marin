@@ -120,10 +120,15 @@ class VllmBackend:
         subprocess_env: Mapping[str, str] | None = None,
     ) -> Iterator[VllmEnvironment]:
         """Start vLLM without imposing HTTP readiness on the caller."""
+        chat_template_content = (
+            spec.chat_template_content
+            if spec.chat_template_content is not None
+            else read_tool_chat_template(spec.tokenizer_source, spec.tokenizer_revision)
+        )
         resolved_port = _reserve_localhost_port(self.host) if self.port is None else self.port
         model = self._model_config(spec)
         launcher = _with_subprocess_env(vllm_launcher(self.config), subprocess_env)
-        with _chat_template_argument(spec.chat_template_content) as chat_template_args:
+        with _chat_template_argument(chat_template_content) as chat_template_args:
             with VllmEnvironment(
                 model=model,
                 host=self.host,

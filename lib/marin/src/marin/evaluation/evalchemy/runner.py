@@ -166,6 +166,7 @@ def _coverage_with_aggregate_counts(
         if reported is None or not float(reported).is_integer() or int(reported) != entry.n_attempted:
             continue
         reconciled[task] = TaskCoverage(
+            n_benchmark=entry.n_benchmark,
             n_attempted=entry.n_attempted,
             n_scored=entry.n_attempted,
             n_correct=None,

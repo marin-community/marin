@@ -840,9 +840,18 @@ def _add_lm_eval_rows(
         logger.warning("samples file %s is empty; skipping archive export", filename)
         return []
     task = task_name or _task_from_filename(filename, ".jsonl")
-    samples = [sample for raw in rows for sample in samples_from_lm_eval(task, raw, primary_metric_name)]
-    for sample in samples:
-        store.add_sample(sample)
+    samples = []
+    for raw in rows:
+        normalized = samples_from_lm_eval(task, raw, primary_metric_name)
+        variants = raw.get("filter_variants")
+        filters = (
+            [variant.get("filter") for variant in variants]
+            if isinstance(variants, list) and variants
+            else [raw.get("filter")]
+        )
+        for sample, extraction_filter in zip(normalized, filters, strict=True):
+            store.add_sample(sample, extraction_filter=extraction_filter if isinstance(extraction_filter, str) else None)
+        samples.extend(normalized)
     return samples
 
 
