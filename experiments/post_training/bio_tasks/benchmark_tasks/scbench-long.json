@@ -1,0 +1,159 @@
+{
+  "benchmark": "scBench-Long",
+  "source_revision": "99da791f028343b3a0a08933c1089ee294c9c253",
+  "scope": "All four public task descriptions. This is a released subset; the full-suite task denominator is unverified. Published model-run counts do not establish the number of independent tasks.",
+  "tasks": [
+    {
+      "task_id": "green_2_tme_context_dependence",
+      "source_task_id": "green_2_tme_context_dependence",
+      "source_metadata_url": "https://github.com/latchbio/scbench-long/blob/99da791f028343b3a0a08933c1089ee294c9c253/evals/green_2_tme_context_dependence/eval.json",
+      "source_metadata_sha256": "f87a9bc9e9e96ec6eaec82d8c40883c76e14c2a7b621210428b0a02c1b1c6529",
+      "status": "unmapped",
+      "assessment": "Public task descriptions assessed. Raw biological fixtures, answer vocabularies, grading answers and model trajectories were not inspected for training authoring; input formats include workflow prerequisites requiring schema verification.",
+      "workflow_family": "paired-rna-accessibility-regulatory-comparison",
+      "required_stages": [
+        "join RNA cells to sample-specific ATAC fragments",
+        "score declared expression programs and chromatin accessibility per replicate",
+        "compare locus accessibility, motif or regulator activity and expression across controlled models",
+        "test confounding and summarize supported regulatory associations"
+      ],
+      "scientific_decisions": [
+        "Shared receptor and antigen context does not remove all model confounders; chromatin accessibility and regulator expression are not direct causal activity measurements."
+      ],
+      "required_formats": [
+        "H5AD",
+        "ATAC-fragments-TSV-gzip",
+        "JSON-vocabulary"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Shared receptor and antigen context does not remove all model confounders; chromatin accessibility and regulator expression are not direct causal activity measurements.",
+        "Inspect input schemas and screen independent biological lineages; author complete quantitative artifacts with deterministic acceptance rules.",
+        "Measure a coherent observed subset that preserves replication and the scientific comparison within the 30-minute limit."
+      ]
+    },
+    {
+      "task_id": "10x_5p_melanoma_swapped_sortgate_cd8_state_data_fidelity_probe_v1",
+      "source_task_id": "10x_5p_melanoma_swapped_sortgate_cd8_state_data_fidelity_probe_v1",
+      "source_metadata_url": "https://github.com/latchbio/scbench-long/blob/99da791f028343b3a0a08933c1089ee294c9c253/evals/10x_5p_melanoma_swapped_sortgate_cd8_state_data_fidelity_probe_v1/eval.json",
+      "source_metadata_sha256": "ce7c831ac3bc26d63c6da4026e89d3caddf36c15dd42bf1d53b770d8e90e66ec",
+      "status": "unmapped",
+      "assessment": "Public task descriptions assessed. Raw biological fixtures, answer vocabularies, grading answers and model trajectories were not inspected for training authoring; input formats include workflow prerequisites requiring schema verification.",
+      "workflow_family": "paired-transcriptome-repertoire-comparison",
+      "required_stages": [
+        "join RNA, TCR, patient and sort-gate identifiers",
+        "annotate CD8 states using expression support",
+        "compare state frequencies and clonotype expansion within patients with depth adjustment",
+        "assemble quantitative state, repertoire and contamination evidence"
+      ],
+      "scientific_decisions": [
+        "Verify sort-gate claims against the observations; distinguish naive and precursor exhausted states, doublets, and depth-sensitive clonal metrics."
+      ],
+      "required_formats": [
+        "single-cell-expression-matrix",
+        "TCR-contig-table",
+        "cell-metadata",
+        "JSON-vocabulary"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Verify sort-gate claims against the observations; distinguish naive and precursor exhausted states, doublets, and depth-sensitive clonal metrics.",
+        "Inspect input schemas and screen independent biological lineages; author complete quantitative artifacts with deterministic acceptance rules.",
+        "Measure a coherent observed subset that preserves replication and the scientific comparison within the 30-minute limit."
+      ]
+    },
+    {
+      "task_id": "gse155381_q7_xspecies_epi_communication",
+      "source_task_id": "gse155381_q7_xspecies_epi_communication",
+      "source_metadata_url": "https://github.com/latchbio/scbench-long/blob/99da791f028343b3a0a08933c1089ee294c9c253/evals/gse155381_q7_xspecies_epi_communication/eval.json",
+      "source_metadata_sha256": "203f26753fb6703225cf7e44c8d05d2c78eda40df9694b3a0fe3d97c708c3271",
+      "status": "unmapped",
+      "assessment": "Public task descriptions assessed. Raw biological fixtures, answer vocabularies, grading answers and model trajectories were not inspected for training authoring; input formats include workflow prerequisites requiring schema verification.",
+      "workflow_family": "cross-species-expression-supported-communication",
+      "required_stages": [
+        "retain species, embryo, cohort and developmental-stage identity",
+        "map homologous genes under an explicit orthology rule",
+        "select sender and receiver epiblast populations",
+        "test frozen ligand-receptor pairs with stage-aware nulls and report complete directional evidence"
+      ],
+      "scientific_decisions": [
+        "Human-derived and host cells have distinct origins; orthology, developmental stage and sampling imbalance affect inferred directionality. Expression-supported interactions do not demonstrate signaling."
+      ],
+      "required_formats": [
+        "single-cell-expression-matrix",
+        "cell-metadata",
+        "orthology-table",
+        "interaction-priors",
+        "JSON-vocabulary"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Human-derived and host cells have distinct origins; orthology, developmental stage and sampling imbalance affect inferred directionality. Expression-supported interactions do not demonstrate signaling.",
+        "Inspect input schemas and screen independent biological lineages; author complete quantitative artifacts with deterministic acceptance rules.",
+        "Measure a coherent observed subset that preserves replication and the scientific comparison within the 30-minute limit."
+      ],
+      "benchmark_data_lineages": [
+        {
+          "accession": "GSE155381",
+          "evidence": "Source task identifier and public study description; exclude this study lineage from training input selection."
+        }
+      ]
+    },
+    {
+      "task_id": "gse297023_q2_senescence_not_mechanism",
+      "source_task_id": "gse297023_q2_senescence_not_mechanism",
+      "source_metadata_url": "https://github.com/latchbio/scbench-long/blob/99da791f028343b3a0a08933c1089ee294c9c253/evals/gse297023_q2_senescence_not_mechanism/eval.json",
+      "source_metadata_sha256": "98f555763a9ab40e79208d9a6d459fe3c04e127d4d3d44efa7501d7c295ec285",
+      "status": "unmapped",
+      "assessment": "Public task descriptions assessed. Raw biological fixtures, answer vocabularies, grading answers and model trajectories were not inspected for training authoring; input formats include workflow prerequisites requiring schema verification.",
+      "workflow_family": "cohort-design-and-expression-program-audit",
+      "required_stages": [
+        "audit age, cohort, replicate and cancer-cell annotations",
+        "establish which age contrasts the observed cohort supports",
+        "quantify prespecified arrest, secretory and age-associated programs",
+        "report measured effects and distinguish supported associations from mechanistic hypotheses"
+      ],
+      "scientific_decisions": [
+        "Do not manufacture a young-versus-old contrast if the profiled cohort lacks it; overlapping gene signatures do not prove senescence or causation."
+      ],
+      "required_formats": [
+        "single-cell-expression-matrix",
+        "cell-metadata",
+        "gene-program-table",
+        "JSON-vocabulary"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Do not manufacture a young-versus-old contrast if the profiled cohort lacks it; overlapping gene signatures do not prove senescence or causation.",
+        "Inspect input schemas and screen independent biological lineages; author complete quantitative artifacts with deterministic acceptance rules.",
+        "Measure a coherent observed subset that preserves replication and the scientific comparison within the 30-minute limit."
+      ],
+      "benchmark_data_lineages": [
+        {
+          "accession": "GSE297023",
+          "evidence": "Source task identifier and public study description; exclude this study lineage from training input selection."
+        }
+      ]
+    }
+  ]
+}

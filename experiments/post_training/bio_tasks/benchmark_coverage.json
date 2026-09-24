@@ -211,6 +211,30 @@
       "tasks_file": "benchmark_tasks/sc-heurekabench.json",
       "source_inventory_name": "sc-HeurekaBench",
       "task_inventory_status": "public-task-metadata-assessed"
+    },
+    "scBench-Long": {
+      "revision": "99da791f028343b3a0a08933c1089ee294c9c253",
+      "source_url": "https://github.com/latchbio/scbench-long/tree/99da791f028343b3a0a08933c1089ee294c9c253",
+      "inventory_count": 4,
+      "public_inventory_count": 4,
+      "full_suite_inventory_complete": false,
+      "training_mapping_allowed": true,
+      "distribution": "ID",
+      "tasks_file": "benchmark_tasks/scbench-long.json",
+      "source_inventory_name": "scBench-Long",
+      "task_inventory_status": "public-subset-metadata-assessed"
+    },
+    "SpatialBench-Long": {
+      "revision": "7de13d39ebbffee4db42675620fe0d97647e399e",
+      "source_url": "https://github.com/latchbio/spatialbench-long/tree/7de13d39ebbffee4db42675620fe0d97647e399e",
+      "inventory_count": 4,
+      "public_inventory_count": 4,
+      "full_suite_inventory_complete": false,
+      "training_mapping_allowed": true,
+      "distribution": "ID",
+      "tasks_file": "benchmark_tasks/spatialbench-long.json",
+      "source_inventory_name": "SpatialBench-Long",
+      "task_inventory_status": "public-subset-metadata-assessed"
     }
   },
   "assessment_policy": "ID workflow prerequisites are manually inferred from permitted task descriptions. Shared family stages may exceed an individual endpoint; assess that endpoint before claiming coverage. Benchmark answers and biological fixtures are excluded from authoring."

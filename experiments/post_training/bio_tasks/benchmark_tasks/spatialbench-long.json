@@ -1,0 +1,147 @@
+{
+  "benchmark": "SpatialBench-Long",
+  "source_revision": "7de13d39ebbffee4db42675620fe0d97647e399e",
+  "scope": "All four public task descriptions. This is a released subset; the full-suite task denominator is unverified. Published model-run counts do not establish the number of independent tasks.",
+  "tasks": [
+    {
+      "task_id": "opticnerve_merfish_spatial_colocalization_enrichment",
+      "source_task_id": "opticnerve_merfish_spatial_colocalization_enrichment",
+      "source_metadata_url": "https://github.com/latchbio/spatialbench-long/blob/7de13d39ebbffee4db42675620fe0d97647e399e/evals/opticnerve_merfish_spatial_colocalization_enrichment/eval.json",
+      "source_metadata_sha256": "edd79b3ed00b28fbb2ed85b88e981ec47957b5c053f09d5a69160601a3734e24",
+      "status": "unmapped",
+      "assessment": "Public task descriptions assessed. Raw biological fixtures, answer vocabularies, grading answers and model trajectories were not inspected for training authoring; input formats include workflow prerequisites requiring schema verification.",
+      "workflow_family": "section-aware-spatial-neighborhood-enrichment",
+      "required_stages": [
+        "annotate measured cells with declared expression rules",
+        "construct spatial neighborhoods within valid section and field boundaries",
+        "compare heterotypic neighbor counts with a declared label-permutation null",
+        "rank enrichment and depletion with replicate-aware uncertainty"
+      ],
+      "scientific_decisions": [
+        "Specify distance units, neighborhood scale, section boundaries and null strata; hidden condition names need not be decoded."
+      ],
+      "required_formats": [
+        "H5AD",
+        "spatial-coordinates",
+        "JSON-vocabulary"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Specify distance units, neighborhood scale, section boundaries and null strata; hidden condition names need not be decoded.",
+        "Inspect input schemas and screen independent biological lineages; author complete quantitative artifacts with deterministic acceptance rules.",
+        "Measure a coherent observed subset that preserves replication and the scientific comparison within the 30-minute limit."
+      ]
+    },
+    {
+      "task_id": "visium_perineural_proximity",
+      "source_task_id": "visium_perineural_proximity",
+      "source_metadata_url": "https://github.com/latchbio/spatialbench-long/blob/7de13d39ebbffee4db42675620fe0d97647e399e/evals/visium_perineural_proximity/eval.json",
+      "source_metadata_sha256": "0f1c94546573c109e78d4466698fe696f5067407bff6c3b8274c1456b261634d",
+      "status": "unmapped",
+      "assessment": "Public task descriptions assessed. Raw biological fixtures, answer vocabularies, grading answers and model trajectories were not inspected for training authoring; input formats include workflow prerequisites requiring schema verification.",
+      "workflow_family": "spatial-image-and-compartment-proximity",
+      "required_stages": [
+        "align Visium spots, tissue compartments and serial-section stain measurements",
+        "identify nerve niches and calculate valid within-section distances",
+        "derive patient-aware distance and collagen baselines",
+        "test state-specific proximity against within-tumor label shuffles"
+      ],
+      "scientific_decisions": [
+        "Preserve registration uncertainty and pixel-to-distance scaling; pooling spots can create section-mix artifacts and pseudoreplication."
+      ],
+      "required_formats": [
+        "Visium",
+        "histology-image",
+        "registered-stain-measurements",
+        "spatial-coordinates",
+        "JSON-vocabulary"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Preserve registration uncertainty and pixel-to-distance scaling; pooling spots can create section-mix artifacts and pseudoreplication.",
+        "Inspect input schemas and screen independent biological lineages; author complete quantitative artifacts with deterministic acceptance rules.",
+        "Measure a coherent observed subset that preserves replication and the scientific comparison within the 30-minute limit."
+      ]
+    },
+    {
+      "task_id": "lineage_metastasis_multilayer_niche_mapping",
+      "source_task_id": "lineage_metastasis_multilayer_niche_mapping",
+      "source_metadata_url": "https://github.com/latchbio/spatialbench-long/blob/7de13d39ebbffee4db42675620fe0d97647e399e/evals/lineage_metastasis_multilayer_niche_mapping/eval.json",
+      "source_metadata_sha256": "744206af446f4e869cb86060ac0b94c67bffb1b240c13d2005f106416078e507",
+      "status": "unmapped",
+      "assessment": "Public task descriptions assessed. Raw biological fixtures, answer vocabularies, grading answers and model trajectories were not inspected for training authoring; input formats include workflow prerequisites requiring schema verification.",
+      "workflow_family": "lineage-to-spatial-expression-programs",
+      "required_stages": [
+        "join spatial spots, samples and lineage barcodes",
+        "quantify lineage similarity between primary and metastatic regions",
+        "define comparable primary-tumor regions from lineage evidence",
+        "contrast measured expression programs within the primary tumor"
+      ],
+      "scientific_decisions": [
+        "One animal supports within-sample analysis, not population-level metastasis claims; keep lineage-based region selection independent of expression endpoints."
+      ],
+      "required_formats": [
+        "spatial-expression-matrix",
+        "spatial-coordinates",
+        "lineage-barcode-table",
+        "JSON-vocabulary"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "One animal supports within-sample analysis, not population-level metastasis claims; keep lineage-based region selection independent of expression endpoints.",
+        "Inspect input schemas and screen independent biological lineages; author complete quantitative artifacts with deterministic acceptance rules.",
+        "Measure a coherent observed subset that preserves replication and the scientific comparison within the 30-minute limit."
+      ]
+    },
+    {
+      "task_id": "xenium_organoid_spatial_niche_disruption",
+      "source_task_id": "xenium_organoid_spatial_niche_disruption",
+      "source_metadata_url": "https://github.com/latchbio/spatialbench-long/blob/7de13d39ebbffee4db42675620fe0d97647e399e/evals/xenium_organoid_spatial_niche_disruption/eval.json",
+      "source_metadata_sha256": "3dfdc7bb51936060c7c9ebc7f1dacfa63f8474ad5aa4af00326bbd5a94986698",
+      "status": "unmapped",
+      "assessment": "Public task descriptions assessed. Raw biological fixtures, answer vocabularies, grading answers and model trajectories were not inspected for training authoring; input formats include workflow prerequisites requiring schema verification.",
+      "workflow_family": "reference-to-spatial-niche-comparison",
+      "required_stages": [
+        "align transcriptomic reference and spatial feature identifiers",
+        "transfer supported cell-state labels with uncertainty",
+        "define spatial neighborhoods and niches under fixed rules",
+        "compare niche abundance across biological organoid replicates"
+      ],
+      "scientific_decisions": [
+        "Freeze the definition and ranking of niche changes; apparent architecture differences can reflect segmentation, cell density or annotation uncertainty."
+      ],
+      "required_formats": [
+        "single-cell-expression-matrix",
+        "Xenium",
+        "spatial-coordinates",
+        "JSON-vocabulary"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Freeze the definition and ranking of niche changes; apparent architecture differences can reflect segmentation, cell density or annotation uncertainty.",
+        "Inspect input schemas and screen independent biological lineages; author complete quantitative artifacts with deterministic acceptance rules.",
+        "Measure a coherent observed subset that preserves replication and the scientific comparison within the 30-minute limit."
+      ]
+    }
+  ]
+}
