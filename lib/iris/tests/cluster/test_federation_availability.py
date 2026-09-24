@@ -281,7 +281,8 @@ def test_a_tracked_preempting_backend_beats_a_shape_only_one():
 
 
 def test_a_tracked_preempting_peer_beats_a_shape_only_peer():
-    # Same ordering across peers, where the legacy peer also sorts first by id.
+    # Same ordering across peers: no later tie-break can promote the legacy peer over
+    # the one whose capacity the parent can measure.
     peers = [
         _peer("cw-legacy", [_backend("b", free=0, supplies=False)]),
         _peer("cw-metric", [_backend("b", free=0, held={_BATCH: 64})]),
@@ -374,10 +375,10 @@ def test_a_cpu_reservation_reads_capacity_a_gpu_job_took_earlier_in_the_pass():
     assert [(p.job_id.to_wire(), p.peer_id) for p in promotions] == [("/u/gpu", "cw-big"), ("/u/cpu", "cw-small")]
 
 
-def test_a_reserved_token_the_job_also_requests_keeps_best_fit_packing():
-    # --reserve H100 on an 8-GPU H100 job names a token the gate already counts. Best fit
-    # still wins (the tight peer, not the empty one): the job spends those chips, and a
-    # preference on top would pull placement the other way.
+def test_a_reserved_token_the_job_also_requests_is_not_double_counted():
+    # --reserve H100 on an 8-GPU H100 job names a token the gate already counts, so the
+    # job carries no preference and placement stays the plain best fit: the tight peer,
+    # not the empty one.
     peers = [_peer("cw-a", [_backend("b", free=8)]), _peer("cw-b", [_backend("b", free=64)])]
     candidate = _reserve_candidate("j", _gpu("h100", 8))
     assert candidate.preferred_tokens == ()
