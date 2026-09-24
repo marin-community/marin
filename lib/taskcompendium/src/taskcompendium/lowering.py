@@ -8,8 +8,6 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-import msgspec
-
 from taskcompendium.grading import validate_verifier
 from taskcompendium.models import SCHEMA_VERSION, AnswerFormat, Source, TaskRequirements, TaskSpec, VerifierSpec
 from taskcompendium.rendering import Rendering, render_instruction
@@ -45,7 +43,7 @@ def read_specification(path: Path) -> TaskSpec:
     specification = TaskSpec(
         id=data["id"],
         instructions=data["instructions"],
-        verifier=msgspec.convert(data["verifier"], type=VerifierSpec, strict=True),
+        verifier=VerifierSpec(**data["verifier"]),
         source=Source(**data["source"]),
         requirements=TaskRequirements(
             capabilities=tuple(data["requirements"]["capabilities"]),
@@ -84,7 +82,9 @@ def lower_to_harbor(
     (destination / "environment").mkdir()
     (destination / "instruction.md").write_text(instruction)
     (destination / "task.toml").write_text('version = "1.0"\n\n[environment]\nallow_internet = false\n')
-    (destination / "specification.json").write_text(json.dumps(dataclasses.asdict(specification), indent=2) + "\n")
+    payload = dataclasses.asdict(specification)
+    payload["verifier"] = {"kind": specification.verifier.kind, "parameters": specification.verifier.parameters}
+    (destination / "specification.json").write_text(json.dumps(payload, indent=2) + "\n")
     (destination / "binding.json").write_text(json.dumps(dataclasses.asdict(binding), indent=2) + "\n")
     (destination / "rendering.json").write_text(json.dumps(dataclasses.asdict(rendering), indent=2) + "\n")
     return destination

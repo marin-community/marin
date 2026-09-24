@@ -14,7 +14,7 @@ from threading import Thread
 import pytest
 from harbor.models.task.task import Task
 
-from taskcompendium.grading import exact_answer
+from taskcompendium.grading import Outcome, exact_answer, grade_answer
 from taskcompendium.harbor.runner import HarborLaunch, run_trial
 from taskcompendium.lowering import HarborTaskBinding, lower_to_harbor, read_specification
 from taskcompendium.models import AnswerFormat, Source, TaskRequirements, TaskSpec, VerifierSpec
@@ -177,6 +177,22 @@ def test_exported_specification_resolves_verifier_in_fresh_process(tmp_path, spe
     completed = subprocess.run([sys.executable, "-c", script, str(task)], capture_output=True, text=True, check=True)
 
     assert json.loads(completed.stdout) == {"status": "graded", "reward": 1.0}
+
+
+def test_verifier_parameters_cannot_change_exported_or_live_grading(tmp_path, specification):
+    parameters = {"expected": "12", "ignore_case": True, "ignore_whitespace": True}
+    verifier = VerifierSpec("exact_answer", parameters)
+    specification = dataclasses.replace(specification, verifier=verifier)
+    parameters["expected"] = "13"
+    verifier.parameters["expected"] = "13"
+
+    rendering = Rendering("plain", AnswerFormat.PLAIN)
+    result = grade_answer(specification, rendering, "12")
+    assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
+    task = lower_to_harbor(specification, rendering, HarborTaskBinding(), tmp_path / "task")
+    exported = read_specification(task / "specification.json")
+    assert grade_answer(exported, rendering, "12").reward == 1.0
+    assert grade_answer(exported, rendering, "13").reward == 0.0
 
 
 def test_old_verifier_schema_is_rejected_on_read(tmp_path, specification):
