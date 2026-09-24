@@ -229,11 +229,10 @@ def _cache_slug(model: str) -> str:
 
 
 def _stream_hf_snapshot(fs: fsspec.AbstractFileSystem, dest: str, model_id: str, revision: str | None) -> None:
-    """Copy every file of HF repo *model_id* into *dest*, one file at a time.
+    """Copy missing or mismatched HF repo files into *dest*, one file at a time.
 
-    Each file is downloaded to a scratch dir, uploaded to ``dest``, then deleted
-    before the next download, so peak local disk is one file rather than the full
-    repo.
+    Each downloaded file is verified against pinned metadata before upload and
+    then deleted, so peak local disk is one file rather than the full repo.
     """
     files = model_info(model_id, revision=revision, files_metadata=True).siblings
     if files is None:
@@ -245,8 +244,8 @@ def _stream_hf_snapshot(fs: fsspec.AbstractFileSystem, dest: str, model_id: str,
             if _matches_hf_file(fs, remote_path, file):
                 continue
             local_path = hf_hub_download(model_id, file.rfilename, revision=revision, local_dir=scratch)
-            local_fs = fsspec.filesystem("file")
-            if not _matches_hf_file(local_fs, local_path, file):
+            local_fs, local_fs_path = url_to_fs(local_path)
+            if not _matches_hf_file(local_fs, local_fs_path, file):
                 raise ValueError(f"Hugging Face file does not match pinned metadata: {file.rfilename}")
             # Local/posix-backed fsspec filesystems don't auto-create parents; object
             # stores treat this as a no-op since they have no real directories.
