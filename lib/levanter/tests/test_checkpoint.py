@@ -53,7 +53,8 @@ from levanter.checkpoint import (
     save_checkpoint,
     unregister_debug_checkpointer_state_provider,
 )
-from levanter.trainer import TrainerConfig
+from levanter.tracker import NoopConfig
+from levanter.trainer import Trainer, TrainerConfig
 from levanter.trainer_state import TrainerState
 from levanter.utils import jax_utils
 
@@ -84,6 +85,37 @@ def _on_step(checkpointer: Checkpointer, step: int, *, force: bool = False):
 def _get_checkpoint_steps(checkpoint_dir):
     paths = list(pathlib.Path(checkpoint_dir).iterdir())
     return sorted([_load_metadata(f)["step"] for f in paths])
+
+
+def test_noop_resume_runs_final_hooks_without_rewriting_checkpoint(tmp_path, monkeypatch):
+    checkpoint = tmp_path / "step-0"
+    checkpoint.write_text("saved before resume")
+    final_steps = []
+
+    class FileCheckpointer:
+        def on_step(self, *, tree, step, force):
+            checkpoint.write_text("rewritten after resume")
+
+        def wait_until_finished(self):
+            pass
+
+    monkeypatch.setattr(CheckpointerConfig, "create", lambda self, run_id: FileCheckpointer())
+    config = TrainerConfig(
+        id="noop-resume",
+        num_train_steps=1,
+        train_batch_size=1,
+        tracker=NoopConfig(),
+        require_accelerator=False,
+    )
+    trainer = Trainer(config, optax.sgd(0.1), lambda model, batch: 0.0)
+    trainer.add_hook(lambda info: final_steps.append(info.step))
+    state = _dummy_step_info(0).state
+
+    with trainer:
+        trainer.train(state, [])
+
+    assert checkpoint.read_text() == "saved before resume"
+    assert final_steps == [0]
 
 
 def _write_checkpoint_metadata(path: pathlib.Path, *, step: int, timestamp: str, is_temporary: bool = False) -> None:

@@ -297,6 +297,7 @@ class Trainer:
         self.optimizer = optimizer
         self._raw_loss_function = loss_fn
         self._checkpointer: Optional[Checkpointer] = None
+        self._skip_checkpoint_for_noop_resume = False
         self._xla_dump_upload: Callable[[StepInfo], None] | None = None
 
         # Use existing global tracker if available (e.g., from levanter.initialize()),
@@ -603,7 +604,11 @@ class Trainer:
                 "Running final hooks only."
             )
             info = StepInfo(state, 0.0, 0.0, _event_handler=self.hooks.emit_event)
-            self.run_hooks(info, force=True)
+            self._skip_checkpoint_for_noop_resume = True
+            try:
+                self.run_hooks(info, force=True)
+            finally:
+                self._skip_checkpoint_for_noop_resume = False
             return info
 
         info: Optional[StepInfo[S]] = None
@@ -636,6 +641,8 @@ class Trainer:
         self._checkpointer = checkpointer
 
         def checkpoint_hook(info, force=False):
+            if self._skip_checkpoint_for_noop_resume:
+                return
             with progress_event_scope(
                 info.emit_event,
                 ProgressEvent.CHECKPOINT_STARTED,
