@@ -23,6 +23,11 @@ class WorkflowScope(StrEnum):
     CONNECTED = "connected"
 
 
+class OracleRuntime(StrEnum):
+    PYTHON = "python"
+    R = "r"
+
+
 @dataclass(frozen=True)
 class Instance:
     instruction: str
@@ -46,6 +51,7 @@ class Recipe:
     domain: str = ""
     repositories: tuple[str, ...] = ()
     oracle_timeout: int = 30
+    oracle_runtime: OracleRuntime = OracleRuntime.PYTHON
 
 
 def csv_text(rows: list[dict]) -> str:

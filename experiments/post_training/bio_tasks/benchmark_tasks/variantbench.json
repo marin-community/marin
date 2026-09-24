@@ -1,0 +1,303 @@
+{
+  "benchmark": "VariantBench",
+  "source_revision": "a1cd271bc3671c6ecef05176d33d29e5c490438c",
+  "scope": "Eight public metadata records: six from the main 118-evaluation suite and two supplemental neoantigen examples outside that suite. These are eight inspected records, not eight of 118 benchmark tasks.",
+  "tasks": [
+    {
+      "task_id": "cis_mr_bcaa",
+      "source_metadata_url": "https://github.com/latchbio/variantbench/blob/a1cd271bc3671c6ecef05176d33d29e5c490438c/evals/cis_mr_bcaa/eval.json",
+      "source_metadata_sha256": "30c79d8a5803ba0771c573a0ef958c68795a5d3468528f07b3a3aa9e1e44759f",
+      "source_tags": [
+        "Population & Statistical Genomics"
+      ],
+      "source_suite": "main-benchmark",
+      "status": "unmapped",
+      "assessment": "Public task description assessed for workflow requirements; source inputs, task text, answers and trajectories are excluded from training authoring. Input files were not retrieved.",
+      "workflow_family": "cis-mendelian-randomization",
+      "required_stages": [
+        "harmonize exposure and outcome summary alleles",
+        "select usable independent cis instruments",
+        "account for linkage disequilibrium",
+        "fit locus-specific causal estimates",
+        "assess instrument strength and horizontal pleiotropy"
+      ],
+      "scientific_decisions": [
+        "Do not substitute genetic correlation or nearby-gene association for a causal intervention estimate; preserve uncertainty and non-identifiability when instruments are absent."
+      ],
+      "required_formats": [
+        "GWAS-summary-statistics",
+        "LD-matrix",
+        "gene-locus-annotation"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Do not substitute genetic correlation or nearby-gene association for a causal intervention estimate; preserve uncertainty and non-identifiability when instruments are absent.",
+        "Implement and validate the connected workflow using independent real observations, pinned methods and complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "fine_mapping_effector_gene_prioritization",
+      "source_metadata_url": "https://github.com/latchbio/variantbench/blob/a1cd271bc3671c6ecef05176d33d29e5c490438c/evals/fine_mapping_effector_gene_prioritization/eval.json",
+      "source_metadata_sha256": "fdfba2f6aa01848b8a4a2de86fdee592d751eef3826bcde72db99f0972b2200b",
+      "source_tags": [
+        "Population & Statistical Genomics"
+      ],
+      "source_suite": "main-benchmark",
+      "status": "unmapped",
+      "assessment": "Public task description assessed for workflow requirements; source inputs, task text, answers and trajectories are excluded from training authoring. Input files were not retrieved.",
+      "workflow_family": "credible-set-mechanistic-evidence",
+      "required_stages": [
+        "join credible-set variants to functional annotations",
+        "count protein-altering variants",
+        "compare cis and trans association evidence",
+        "rank supported mechanisms with explicit evidence limits"
+      ],
+      "scientific_decisions": [
+        "Computational benignness predictions and absent cis association cannot alone exclude coding effects; distinguish prioritization from proof of causality."
+      ],
+      "required_formats": [
+        "credible-set-table",
+        "variant-consequence-table",
+        "QTL-summary-statistics"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Computational benignness predictions and absent cis association cannot alone exclude coding effects; distinguish prioritization from proof of causality.",
+        "Implement and validate the connected workflow using independent real observations, pinned methods and complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "chry_father_son_concordance_11",
+      "source_metadata_url": "https://github.com/latchbio/variantbench/blob/a1cd271bc3671c6ecef05176d33d29e5c490438c/evals/chry_father_son_concordance_11/eval.json",
+      "source_metadata_sha256": "fa5760b25ea3eef21217f21ab7ea26cd6096d5a7037a545c2ca6e879216f9cd8",
+      "source_tags": [
+        "Personal & Clinical Genomics"
+      ],
+      "source_suite": "main-benchmark",
+      "status": "unmapped",
+      "assessment": "Public task description assessed for workflow requirements; source inputs, task text, answers and trajectories are excluded from training authoring. Input files were not retrieved.",
+      "workflow_family": "sex-chromosome-family-concordance",
+      "required_stages": [
+        "verify reference assembly and pseudoautosomal boundaries",
+        "select biallelic SNVs and callable genotypes",
+        "compare related samples under the correct ploidy model",
+        "inspect read support for apparent discordance"
+      ],
+      "scientific_decisions": [
+        "Distinguish measured discordance from an inheritance-based expectation; declare mapping, genotype-quality and missingness rules before grading."
+      ],
+      "required_formats": [
+        "VCF",
+        "BED-PAR-regions",
+        "BAM"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Distinguish measured discordance from an inheritance-based expectation; declare mapping, genotype-quality and missingness rules before grading.",
+        "Implement and validate the connected workflow using independent real observations, pinned methods and complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "ont_rfc1_repeat_expansion_pathogenicity",
+      "source_metadata_url": "https://github.com/latchbio/variantbench/blob/a1cd271bc3671c6ecef05176d33d29e5c490438c/evals/ont_rfc1_repeat_expansion_pathogenicity/eval.json",
+      "source_metadata_sha256": "ed409ec97f45aa4fa1e366246ea73ebf2b6666c06e4e48c7c74579227534d17a",
+      "source_tags": [
+        "Personal & Clinical Genomics"
+      ],
+      "source_suite": "main-benchmark",
+      "status": "unmapped",
+      "assessment": "Public task description assessed for workflow requirements; source inputs, task text, answers and trajectories are excluded from training authoring. Input files were not retrieved.",
+      "workflow_family": "long-read-repeat-genotyping",
+      "required_stages": [
+        "extract repeat-spanning aligned reads",
+        "resolve allele-level repeat structure",
+        "estimate motif composition with strand and base-quality controls",
+        "report repeat lengths and allele evidence"
+      ],
+      "scientific_decisions": [
+        "Repeat length alone is insufficient for motif-dependent interpretation; retain read support, sequencing uncertainty and explicitly frozen interpretation rules."
+      ],
+      "required_formats": [
+        "BAM",
+        "tandem-repeat-catalog",
+        "FASTA-reference"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Repeat length alone is insufficient for motif-dependent interpretation; retain read support, sequencing uncertainty and explicitly frozen interpretation rules.",
+        "Implement and validate the connected workflow using independent real observations, pinned methods and complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "small_variant_calling_mnv_codon_consequence",
+      "source_metadata_url": "https://github.com/latchbio/variantbench/blob/a1cd271bc3671c6ecef05176d33d29e5c490438c/evals/small_variant_calling_mnv_codon_consequence/eval.json",
+      "source_metadata_sha256": "63222431a048c8d6c7e9d4c5ba282bb971e753a2eb724b7d59ec263827b6852d",
+      "source_tags": [
+        "Variant Calling & QC"
+      ],
+      "source_suite": "main-benchmark",
+      "status": "unmapped",
+      "assessment": "Public task description assessed for workflow requirements; source inputs, task text, answers and trajectories are excluded from training authoring. Input files were not retrieved.",
+      "workflow_family": "read-phased-codon-consequences",
+      "required_stages": [
+        "join coding variants to reference transcripts",
+        "identify same-codon combinations with unresolved phase",
+        "infer haplotypes from aligned read support",
+        "recompute joint coding consequences",
+        "compare joint and single-variant classifications"
+      ],
+      "scientific_decisions": [
+        "Preserve transcript choice, alleles and phase uncertainty; independent SNV annotations do not establish the combined consequence."
+      ],
+      "required_formats": [
+        "VCF",
+        "BAM",
+        "FASTA",
+        "GFF3/GTF"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Preserve transcript choice, alleles and phase uncertainty; independent SNV annotations do not establish the combined consequence.",
+        "Implement and validate the connected workflow using independent real observations, pinned methods and complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "sv_chromosome_end_signal",
+      "source_metadata_url": "https://github.com/latchbio/variantbench/blob/a1cd271bc3671c6ecef05176d33d29e5c490438c/evals/sv_chromosome_end_signal/eval.json",
+      "source_metadata_sha256": "0c27ce9c834272364ac76ce10f86671764144991b12adb1ffc4e4a3d36eed3a2",
+      "source_tags": [
+        "Variant Calling & QC"
+      ],
+      "source_suite": "main-benchmark",
+      "status": "unmapped",
+      "assessment": "Public task description assessed for workflow requirements; source inputs, task text, answers and trajectories are excluded from training authoring. Input files were not retrieved.",
+      "workflow_family": "structural-variant-distribution-qc",
+      "required_stages": [
+        "reconcile retained sample genotypes and INFO summaries",
+        "normalize event types and coordinates",
+        "measure chromosome-relative positional distributions",
+        "compare patterns under an explicit ascertainment model"
+      ],
+      "scientific_decisions": [
+        "Chromosome-end enrichment is study and callability dependent; define an independently justified baseline rather than treating a hidden modified distribution as universal biology."
+      ],
+      "required_formats": [
+        "SV-VCF",
+        "FASTA-index"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Chromosome-end enrichment is study and callability dependent; define an independently justified baseline rather than treating a hidden modified distribution as universal biology.",
+        "Implement and validate the connected workflow using independent real observations, pinned methods and complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "osteosarcoma_wes_stage3_called_vcf_neoantigen_gene_recall",
+      "source_metadata_url": "https://github.com/latchbio/variantbench/blob/a1cd271bc3671c6ecef05176d33d29e5c490438c/evals/osteosarcoma_wes_stage3_called_vcf_neoantigen_gene_recall/eval.json",
+      "source_metadata_sha256": "b811a74f98d4c62e120a5b63fa1071b66416e20230f56c1b64bc220231a04dfa",
+      "source_tags": [
+        "Neoantigen Prediction"
+      ],
+      "source_suite": "supplemental-example",
+      "status": "unmapped",
+      "assessment": "Public task description assessed for workflow requirements; source inputs, task text, answers and trajectories are excluded from training authoring. Input files were not retrieved.",
+      "workflow_family": "somatic-calls-to-expressed-epitope-candidates",
+      "required_stages": [
+        "apply caller-aware somatic quality selection",
+        "annotate short and structural variants under a pinned transcript set",
+        "join tumor expression with versioned identifiers",
+        "construct altered peptides",
+        "score against specified HLA alleles and report qualifying candidates"
+      ],
+      "scientific_decisions": [
+        "Preserve matched-normal evidence, expression, transcript phase and peptide-level outputs; gene-list recall alone permits large false-positive sets."
+      ],
+      "required_formats": [
+        "VCF",
+        "copy-number-segments",
+        "FASTA",
+        "GTF",
+        "RSEM-results",
+        "HLA-typing"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Preserve matched-normal evidence, expression, transcript phase and peptide-level outputs; gene-list recall alone permits large false-positive sets.",
+        "Implement and validate the connected workflow using independent real observations, pinned methods and complete artifact checks."
+      ]
+    },
+    {
+      "task_id": "eval_stage4_annotated_vcf",
+      "source_metadata_url": "https://github.com/latchbio/variantbench/blob/a1cd271bc3671c6ecef05176d33d29e5c490438c/evals/eval_stage4_annotated_vcf/eval.json",
+      "source_metadata_sha256": "93fa5da24a1beb2d0bdbf7250e297d61cccd1af787268db9dfc5e706af530004",
+      "source_tags": [
+        "Neoantigen Prediction"
+      ],
+      "source_suite": "supplemental-example",
+      "status": "unmapped",
+      "assessment": "Public task description assessed for workflow requirements; source inputs, task text, answers and trajectories are excluded from training authoring. Input files were not retrieved.",
+      "workflow_family": "annotated-somatic-variants-to-epitope-candidates",
+      "required_stages": [
+        "select supported annotated somatic variants",
+        "join gene and isoform expression",
+        "construct variant-bearing peptide sequences",
+        "score explicit HLA binding models",
+        "aggregate qualified peptides with gene provenance"
+      ],
+      "scientific_decisions": [
+        "Use fixed expression and binding criteria and check every peptide-level artifact; an unrestricted list of annotated genes must fail."
+      ],
+      "required_formats": [
+        "annotated-VCF",
+        "RSEM-results",
+        "HLA-typing",
+        "FASTA"
+      ],
+      "required_tools": [],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Use fixed expression and binding criteria and check every peptide-level artifact; an unrestricted list of annotated genes must fail.",
+        "Implement and validate the connected workflow using independent real observations, pinned methods and complete artifact checks."
+      ]
+    }
+  ]
+}

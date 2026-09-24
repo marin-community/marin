@@ -5,8 +5,9 @@ operations inspired by the inspected source repositories plus additional computa
 Repository mappings describe the source of an operation; actual CLI/API execution is tracked separately
 in the [catalog](bio-task-catalog.md#repository-execution-coverage). See [build instructions](bio-tasks.md).
 
-All instances have independently checked references, input-reading solvers, and scientific negative
-controls. Host checks do not establish container execution or scientific approval. The supplied format
+All instances have checked references, input-reading solvers, and scientific negative
+controls. DESeq2 workflows share the fitted statistical engine with their references;
+enrichment probabilities use independent SciPy and R implementations. Host checks do not establish container execution or scientific approval. The supplied format
 profiles are bounded: text intermediates do not count as native BAM, H5AD, SRA, or OME-TIFF coverage.
 
 Real-data recipes retain full matrices, structures and genomes or explicitly bounded observed read subsets, with biological lineage; the remaining recipes are simulated
@@ -64,6 +65,8 @@ correctness controls. See [provenance and limitations](bio-task-catalog.md#id-wo
 | `real-rnaseq-cpm-filter` | gene-count-tsv, sample-metadata-tsv | sample-identifiers, biological-replicates, raw-counts, library-normalization | edgeR |
 | `real-rnaseq-size-factors` | gene-count-tsv, sample-metadata-tsv | sample-identifiers, biological-replicates, raw-counts, library-normalization | DESeq2 |
 | `real-rnaseq-normalized-contrast` | gene-count-tsv, sample-metadata-tsv | sample-identifiers, biological-replicates, raw-counts, library-normalization | DESeq2 |
+| `real-rnaseq-differential-expression` | TSV-count-matrix, TSV-sample-metadata, JSON-query | sample-identity, biological-replication, negative-binomial-model, contrasts, multiple-testing | DESeq2 |
+| `real-rnaseq-go-enrichment` | TSV-count-matrix, TSV-sample-metadata, JSON-query | sample-identity, biological-replication, negative-binomial-model, contrasts, multiple-testing, tested-gene-universe, enrichment | DESeq2 |
 | `donor-counts` | csv-header | sample-joins, raw-counts, biological-replication | Scanpy |
 | `cell-fractions` | csv-header | sample-joins, cohort-selection, denominators | Scanpy |
 | `transcript-tpm` | csv-header | transcript-joins, abundance-units, decoys | Salmon, kallisto |

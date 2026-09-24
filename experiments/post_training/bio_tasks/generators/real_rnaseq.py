@@ -16,7 +16,7 @@ from scipy.stats import false_discovery_control, hypergeom
 from experiments.post_training.bio_tasks.contract import Column, Contract, TableContract
 from experiments.post_training.bio_tasks.generators.real_expression import integer, observations
 from experiments.post_training.bio_tasks.real_data import mammary_samples, source_text, tsv_text
-from experiments.post_training.bio_tasks.recipe_types import DataOrigin, Instance, Recipe, WorkflowScope
+from experiments.post_training.bio_tasks.recipe_types import DataOrigin, Instance, OracleRuntime, Recipe, WorkflowScope
 
 STAGES = ("virgin", "18.5 dP", "2 dL")
 NAMES = ("real-rnaseq-differential-expression", "real-rnaseq-go-enrichment")
@@ -250,6 +250,7 @@ RECIPES = tuple(
         (SOURCE_URL,),
         partial(generate_rnaseq, operation=name),
         oracle_timeout=180,
+        oracle_runtime=OracleRuntime.R,
     )
     for name in NAMES
 )

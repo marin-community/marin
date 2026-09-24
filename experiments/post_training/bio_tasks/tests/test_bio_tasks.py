@@ -26,6 +26,7 @@ from experiments.post_training.bio_tasks.oracle import (
     solve_sites,
     solve_taxonomy,
 )
+from experiments.post_training.bio_tasks.recipe_types import OracleRuntime
 from experiments.post_training.bio_tasks.recipes import RECIPES
 from experiments.post_training.bio_tasks.solvers.formats import reverse_complement, translate
 from experiments.post_training.bio_tasks.solvers.imaging import solve_imaging
@@ -38,6 +39,7 @@ from experiments.post_training.tasktrove.taskbinary import read_task_binary
 
 BASE_IMAGE = "python:3.12-slim@sha256:" + "0" * 64
 TOOL_REF = "12bbd5d45b1b176167ab3cfe905e06004c2f02e3"
+PYTHON_RECIPES = tuple(recipe for recipe in RECIPES if recipe.oracle_runtime == OracleRuntime.PYTHON)
 
 
 def test_native_fastq_output_requires_correct_records_even_when_summary_passes(tmp_path):
@@ -108,7 +110,14 @@ def test_copied_fastq_fails_even_with_identical_summary_counts(tmp_path):
         validate_instance(recipe, first, previous_outputs=(previous,))
 
 
-@pytest.mark.parametrize("recipe", RECIPES, ids=lambda recipe: recipe.id)
+@pytest.mark.parametrize(
+    "recipe",
+    [
+        pytest.param(recipe, marks=pytest.mark.data_integration) if recipe.oracle_runtime == OracleRuntime.R else recipe
+        for recipe in RECIPES
+    ],
+    ids=lambda recipe: recipe.id,
+)
 @pytest.mark.parametrize("seed", [0, 1, 20260923])
 def test_generated_reference_accepts_independent_solver_and_rejects_scientific_errors(recipe, seed):
     checks = validate_instance(recipe, recipe.generate(seed))
@@ -396,10 +405,12 @@ def test_vcf_minimization_trims_suffix_first_and_preserves_an_anchor(tmp_path):
 @pytest.mark.timeout(300)
 def test_corpus_roundtrip_separates_oracles_and_grades_packaged_answers(tmp_path):
     output = tmp_path / "corpus"
-    manifest = build(output, 3, 20260923, BASE_IMAGE, TOOL_REF)
+    manifest = build(output, 3, 20260923, BASE_IMAGE, TOOL_REF, tuple(recipe.id for recipe in PYTHON_RECIPES))
     rows = pq.read_table(output / "tasks" / "part-00000.parquet").to_pylist()
-    assert manifest["tasks"] == len(rows) == 3 * len(RECIPES)
-    assert Counter(row["template_id"] for row in rows) == {f"{recipe.id}-v{recipe.version}": 3 for recipe in RECIPES}
+    assert manifest["tasks"] == len(rows) == 3 * len(PYTHON_RECIPES)
+    assert Counter(row["template_id"] for row in rows) == {
+        f"{recipe.id}-v{recipe.version}": 3 for recipe in PYTHON_RECIPES
+    }
     assert manifest["counts"]["train"] == len(rows)
     assert {path.name for path in (output / "harbor").iterdir()} == {"train"}
     for row in rows:
@@ -461,9 +472,15 @@ def test_corpus_roundtrip_separates_oracles_and_grades_packaged_answers(tmp_path
 
 def test_rebuilding_same_recipe_seeds_produces_identical_archives(tmp_path):
     left, right = tmp_path / "left", tmp_path / "right"
-    build(left, 1, 3, BASE_IMAGE, TOOL_REF)
-    build(right, 1, 3, BASE_IMAGE, TOOL_REF)
+    selected = ("strand-extraction", "real-fastq-fixed-trim")
+    manifest = build(left, 1, 3, BASE_IMAGE, TOOL_REF, selected)
+    build(right, 1, 3, BASE_IMAGE, TOOL_REF, selected)
     assert (left / "ledger.jsonl").read_bytes() == (right / "ledger.jsonl").read_bytes()
     left_rows = pq.read_table(left / "tasks" / "part-00000.parquet").to_pylist()
     right_rows = pq.read_table(right / "tasks" / "part-00000.parquet").to_pylist()
     assert left_rows == right_rows
+    assert {row["family"] for row in left_rows} == set(selected)
+    assert manifest["tasks"] == len(selected)
+    registry = json.loads((left / "benchmark_coverage.json").read_text())
+    task_ids = {row["path"] for row in left_rows}
+    assert all(set(item["examples"]).issubset(task_ids) for item in registry["tasks"])

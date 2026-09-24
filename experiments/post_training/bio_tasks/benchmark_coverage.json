@@ -167,6 +167,20 @@
       "eligibility_filter": "real collection and domain == biology",
       "source_claim_group_count": 10,
       "source_study_count": 2
+    },
+    "VariantBench": {
+      "revision": "a1cd271bc3671c6ecef05176d33d29e5c490438c",
+      "source_url": "https://github.com/latchbio/variantbench/tree/a1cd271bc3671c6ecef05176d33d29e5c490438c",
+      "inventory_count": 8,
+      "advertised_total": 118,
+      "public_inventory_count": 8,
+      "main_suite_public_inventory_count": 6,
+      "supplemental_inventory_count": 2,
+      "training_mapping_allowed": true,
+      "distribution": "ID",
+      "tasks_file": "benchmark_tasks/variantbench.json",
+      "source_inventory_name": "VariantBench",
+      "task_inventory_status": "public-examples-assessed"
     }
   },
   "assessment_policy": "ID workflow prerequisites are manually inferred from permitted task descriptions. Shared family stages may exceed an individual endpoint; assess that endpoint before claiming coverage. Benchmark answers and biological fixtures are excluded from authoring."

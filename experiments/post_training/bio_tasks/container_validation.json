@@ -692,6 +692,222 @@
           }
         ]
       }
+    },
+    {
+      "job_id": "/exedev/bio-harbor-rnaseq-oracles-20260924-023858",
+      "source_revision": "bc7171111b4bcebd44c68befbcd2cdbd43e58210",
+      "harbor_revision": "d072bef08e54050880b484eb81d892944d1d82fb",
+      "status": "oracle-reference-mismatch",
+      "model_calls": 0,
+      "agent": "oracle",
+      "concurrent_trials": 1,
+      "attempts_per_case": 1,
+      "attempted_cases": 4,
+      "passing_positive_cases": 1,
+      "expected_positive_cases": 2,
+      "negative_cases": 2,
+      "discriminating_negative_cases": 1,
+      "reason": "DE passed. GO summary and all 6021 enrichment rows passed, but neg_log10_p and neg_log10_padj for gene 76453 differed from the TRC reference beyond declared tolerance. Both mutation trials scored zero, but the GO mutation is not a discriminating control until its positive case passes. Numerical portability investigation pending; no tolerances changed.",
+      "archive": {
+        "uri": "gs://marin-us-central2/tmp/ttl=7d/iris/task-outputs/exedev/bio-harbor-rnaseq-oracles-20260924-023858/0/7f4300177dad867a/outputs.tar.zst",
+        "size_bytes": 3294450,
+        "sha256": "f63f78b5c418dbd35127a2e953215f6b4d454883458ac4fea961055468e096c8",
+        "ttl_days": 7
+      },
+      "agent_and_verifier_backend": "Daytona",
+      "controller_placement": {
+        "job_id": "/exedev/bio-harbor-rnaseq-oracles-20260924-023858",
+        "state": "failed",
+        "worker_id": "marin-tpu-v4-reserved-256-us-central2-b-20260922-2317-8259d330-worker-28",
+        "execution_cluster_id": "local",
+        "backend_id": "default",
+        "checked_at": "2026-09-24T02:55:02.396891+00:00",
+        "worker_metadata": [
+          {
+            "worker_id": "marin-tpu-v4-reserved-256-us-central2-b-20260922-2317-8259d330-worker-28",
+            "scale_group": "tpu_v4-reserved_256-us-central2-b",
+            "backend_id": "default",
+            "tpu_name": "t1v-n-9a98788d",
+            "gce_zone": "",
+            "gce_instance_name": "t1v-n-9a98788d-w-28"
+          }
+        ]
+      },
+      "cleanup_remaining": 0,
+      "cases": [
+        {
+          "task_id": "real-rnaseq-differential-expression-v1-20260923-00000",
+          "recipe": "real-rnaseq-differential-expression",
+          "repository_index": 5,
+          "task_sha256": "bccd82ce38902eef1baa37d749d368aab8ec86f6ca16e01ca712d4381e322e3b",
+          "expected_reward": 1,
+          "control": "positive",
+          "reward": 1.0,
+          "expected_reward_matched": true,
+          "exception_info": null,
+          "failed_summary_checks": [],
+          "artifact_checks": {
+            "sample_qc.tsv": {
+              "passed": true,
+              "rows": 6,
+              "missing": [],
+              "failures": []
+            },
+            "de_results.tsv": {
+              "passed": true,
+              "rows": 16659,
+              "missing": [],
+              "failures": []
+            }
+          },
+          "artifact_sha256": {
+            "answer.json": "da4f37edd2164fbf7a9c8cc41baf4f97268b0bc96706a34430ff6ab60b94c89a",
+            "de_results.tsv": "9fddce72507993d2edb2ba96bbf5e21374d0896971cb491c92b1e2956c5a7aa4",
+            "manifest.json": "78a113dde58f85ddebdd4459b129195d945d473b4e5b16439132e2708b077733",
+            "sample_qc.tsv": "0eac70386f63331ba36fc9bd9903a1b36a9e0cb6a1cbb5e12bd1d425c10f778b"
+          }
+        },
+        {
+          "task_id": "real-rnaseq-differential-expression-v1-20260923-00000-negative-intermediate",
+          "recipe": "real-rnaseq-differential-expression",
+          "repository_index": 5,
+          "task_sha256": "bccd82ce38902eef1baa37d749d368aab8ec86f6ca16e01ca712d4381e322e3b",
+          "expected_reward": 0,
+          "control": "changed-intermediate-with-correct-summary",
+          "canonical_task_id": "real-rnaseq-differential-expression-v1-20260923-00000",
+          "reward": 0.0,
+          "expected_reward_matched": true,
+          "exception_info": null,
+          "failed_summary_checks": [],
+          "artifact_checks": {
+            "sample_qc.tsv": {
+              "passed": true,
+              "rows": 6,
+              "missing": [],
+              "failures": []
+            },
+            "de_results.tsv": {
+              "passed": false,
+              "rows": 16659,
+              "missing": [],
+              "failures": [
+                {
+                  "id": "19888",
+                  "field": "base_mean"
+                }
+              ]
+            }
+          },
+          "artifact_sha256": {
+            "answer.json": "da4f37edd2164fbf7a9c8cc41baf4f97268b0bc96706a34430ff6ab60b94c89a",
+            "de_results.tsv": "b262729ea4b2d8a15fccd1f3949dc31ed6e2c8a3c830880615087301f9db48c8",
+            "manifest.json": "78a113dde58f85ddebdd4459b129195d945d473b4e5b16439132e2708b077733",
+            "sample_qc.tsv": "0eac70386f63331ba36fc9bd9903a1b36a9e0cb6a1cbb5e12bd1d425c10f778b"
+          }
+        },
+        {
+          "task_id": "real-rnaseq-go-enrichment-v1-20260923-00000",
+          "recipe": "real-rnaseq-go-enrichment",
+          "repository_index": 5,
+          "task_sha256": "9b8821b7acefe4edcaf6013f34384256c53a01f6c49adc263d0cc3dcfbd84cbc",
+          "expected_reward": 1,
+          "control": "positive",
+          "reward": 0.0,
+          "expected_reward_matched": false,
+          "exception_info": null,
+          "failed_summary_checks": [],
+          "artifact_checks": {
+            "sample_qc.tsv": {
+              "passed": true,
+              "rows": 6,
+              "missing": [],
+              "failures": []
+            },
+            "de_results.tsv": {
+              "passed": false,
+              "rows": 17361,
+              "missing": [],
+              "failures": [
+                {
+                  "id": "76453",
+                  "field": "neg_log10_p"
+                },
+                {
+                  "id": "76453",
+                  "field": "neg_log10_padj"
+                }
+              ]
+            },
+            "enrichment.tsv": {
+              "passed": true,
+              "rows": 6021,
+              "missing": [],
+              "failures": []
+            }
+          },
+          "artifact_sha256": {
+            "answer.json": "91700df9669ee7f1b2c2c7f26529fab9792a00b79423a393d94a005ad4517b14",
+            "de_results.tsv": "f3adcd35ee3667616ddeda3a26de528712aeee76ac5bfd9607a0bb417749d8a2",
+            "enrichment.tsv": "45684a063baca2b2103315431582ed83baf27df062088186a5e80427327482c6",
+            "manifest.json": "047ca9e33e594b7eca77cfdbdffc452db552504433a41963aa4b5df2609b9043",
+            "sample_qc.tsv": "852d6f3c6a7b6128d04ac5a952f4c1b3b591237a3efff78fcd2be60852b8f9aa"
+          }
+        },
+        {
+          "task_id": "real-rnaseq-go-enrichment-v1-20260923-00000-negative-intermediate",
+          "recipe": "real-rnaseq-go-enrichment",
+          "repository_index": 5,
+          "task_sha256": "9b8821b7acefe4edcaf6013f34384256c53a01f6c49adc263d0cc3dcfbd84cbc",
+          "expected_reward": 0,
+          "control": "changed-intermediate-with-correct-summary",
+          "canonical_task_id": "real-rnaseq-go-enrichment-v1-20260923-00000",
+          "reward": 0.0,
+          "expected_reward_matched": true,
+          "exception_info": null,
+          "failed_summary_checks": [],
+          "artifact_checks": {
+            "sample_qc.tsv": {
+              "passed": true,
+              "rows": 6,
+              "missing": [],
+              "failures": []
+            },
+            "de_results.tsv": {
+              "passed": false,
+              "rows": 17361,
+              "missing": [],
+              "failures": [
+                {
+                  "id": "76453",
+                  "field": "neg_log10_p"
+                },
+                {
+                  "id": "76453",
+                  "field": "neg_log10_padj"
+                }
+              ]
+            },
+            "enrichment.tsv": {
+              "passed": false,
+              "rows": 6021,
+              "missing": [],
+              "failures": [
+                {
+                  "id": "GO:0000012",
+                  "field": "overlap"
+                }
+              ]
+            }
+          },
+          "artifact_sha256": {
+            "answer.json": "91700df9669ee7f1b2c2c7f26529fab9792a00b79423a393d94a005ad4517b14",
+            "de_results.tsv": "f3adcd35ee3667616ddeda3a26de528712aeee76ac5bfd9607a0bb417749d8a2",
+            "enrichment.tsv": "e95663b6804ed2e4c5c097e4d0cf2e51d1ffed8d590d62679b4580bde04da35b",
+            "manifest.json": "047ca9e33e594b7eca77cfdbdffc452db552504433a41963aa4b5df2609b9043",
+            "sample_qc.tsv": "852d6f3c6a7b6128d04ac5a952f4c1b3b591237a3efff78fcd2be60852b8f9aa"
+          }
+        }
+      ]
     }
   ]
 }

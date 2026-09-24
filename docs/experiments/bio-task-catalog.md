@@ -6,7 +6,7 @@ program decisions, collection policy, and results; this file holds the detailed
 coverage and source evidence. [Generator documentation](bio-tasks.md) lists the
 implemented recipes and how to inspect their examples.
 
-The implementation has **137 recipes across 13 domains**, with one task per
+The implementation has **139 recipes across 13 domains**, with one task per
 recipe by default and one train split. The [implemented recipe matrix](bio-task-recipes.md)
 records the supplied formats, skills, and source-repository mappings. Sections below
 also retain candidate capabilities beyond the current implementation. Source inspection
@@ -195,7 +195,7 @@ supplies imaging operations. Distinguish measuring supplied masks from segmentin
 
 ## ID workflow coverage and input realism
 
-The 137 recipes include twenty-two using real observations and 115 simulated component
+The 139 recipes include twenty-four using real observations and 115 simulated component
 controls. They do **not** establish coverage of complete ID benchmark workflows. Repository count, format count, and successful
 package checks measure different things from workflow coverage. The following
 assessment uses public benchmark descriptions and the program's prior source
@@ -227,9 +227,10 @@ benchmark answers and biological fixtures are excluded from training authoring.
 | [ScienceAgentBench, bioinformatics](../../experiments/post_training/bio_tasks/benchmark_tasks/scienceagentbench.json) | 27 | — |
 | [CORE-Bench, biomedical](../../experiments/post_training/bio_tasks/benchmark_tasks/core-bench.json) | 25 | — |
 | [DiscoveryBench, biology](../../experiments/post_training/bio_tasks/benchmark_tasks/discoverybench.json) | 26 | — |
+| [VariantBench](../../experiments/post_training/bio_tasks/benchmark_tasks/variantbench.json) | 8 (6 main, 2 supplemental) | 118 main |
 
-Of these 506 ID task records, 23 have manually assessed component mappings and
-483 are unmapped. None is marked workflow-validated. Other eligible sources
+Of these 514 ID task records, 23 have manually assessed component mappings and
+491 are unmapped. None is marked workflow-validated. Other eligible sources
 still need task-level inspection. The 90
 [BioMysteryBench identifiers](../../experiments/post_training/bio_tasks/benchmark_tasks/biomysterybench.json)
 are tracked separately as OOD, without workflow patterns or training mappings.
@@ -242,20 +243,27 @@ Capsule patterns use public metadata; analysis scripts and raw schemas remain
 uninspected. Source train/test partitions do not create additional splits here.
 DiscoveryBench records 26 query variants grouped into ten claims across two
 biological studies; these variants are not independent workflow coverage.
+VariantBench exposes six main-suite examples and two supplemental neoantigen
+examples. Keep the supplemental examples outside the main-suite denominator.
 
-All 506 ID records have manually assessed workflow prerequisites. For BixBench,
+All 514 ID records have manually assessed workflow prerequisites. For BixBench,
 shared workflow-family stages are distinguished from individual question endpoints;
 this inventory does not add execution coverage. The inspection browser binds mappings
 to generated examples and their local reference results. These timings are solver-check runtimes, not teacher latency measurements.
 
-Twenty-two recipes supply unchanged biological observations or declared observed subsets:
+Twenty-four recipes supply unchanged biological observations or declared observed subsets:
 
 - **GSE60450:** 27,179 genes and 12 libraries from mouse mammary basal/luminal cells,
   with two biological replicates per population and stage. Tasks cover library QC,
   CPM filtering, DESeq2-convention size factors, and descriptive normalized contrasts.
   Counts and metadata require an identifier join because their orders differ.
   Normalization uses the full matrix; a 256-gene reporting panel bounds the answer.
-  The contrasts do not claim fitted differential-expression significance.
+  These component contrasts do not claim fitted differential-expression significance.
+  Two connected workflows additionally fit all retained genes with DESeq2 and carry
+  directional selections into a frozen GO-BP universe. Their six native cases pass
+  complete QC, gene and term-table checks. In Harbor, DE passed while GO failed
+  two probability fields for one fitted gene despite matching its final result.
+  Numerical portability, scientific review and benchmark-lineage review remain open.
 - **PDB 1UBQ, 1CRN and 4HHB:** complete deposited mmCIF inputs for per-chain geometry
   and residue contact degree. Construction references parse the paired PDB deposits;
   independent solvers parse mmCIF. Model, alternate-conformer and author-ID rules

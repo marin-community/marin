@@ -1,6 +1,6 @@
 # Synthetic biology task generation
 
-The generators in `experiments/post_training/bio_tasks/` implement 137
+The generators in `experiments/post_training/bio_tasks/` implement 139
 recipes from [the biology data program](https://github.com/marin-community/marin/issues/9257).
 They combine independently sourced real observations with synthetic correctness controls, establish references,
 execute separate input-reading oracle solutions, and package tasks for Harbor.
@@ -11,13 +11,13 @@ the original 2026-07-28 downloads/stars/citations. The maintained
 format coverage, with the original adoption inventory preserved as a separate file.
 
 The [implemented recipe list](bio-task-recipes.md) records every operation, skill,
-format profile, and repository mapping. The 137 recipes span 13 domains:
+format profile, and repository mapping. The 139 recipes span 13 domains:
 
 | Domain | Recipes |
 |---|---:|
 | sequence | 24 |
 | genomic intervals | 10 |
-| expression | 15 |
+| expression | 17 |
 | sequencing reads | 18 |
 | variants | 9 |
 | phylogeny | 11 |
@@ -29,8 +29,8 @@ format profile, and repository mapping. The 137 recipes span 13 domains:
 | assays and metabolomics | 7 |
 | workflow and identifiers | 2 |
 
-The default build contains one task per recipe: 137 authoring examples, comprising
-22 real-data candidates and 115 simulated controls. Add another task from a recipe
+The default build contains one task per recipe: 139 authoring examples, comprising
+24 real-data candidates and 115 simulated controls. Add another task from a recipe
 only when its dataset, study design, modality or scientific decision contributes
 meaningful coverage. Deterministic generators can still produce extra validation
 cases without adding them to training. The manifest marks
@@ -74,7 +74,8 @@ still need scripts. `native_validation.json` indexes separate checksum-pinned
 files under `native_validation_runs/`; earlier failures and resolved environments
 remain in that history. The three real-data recipes checked with MUSCLE, fastp and Picard now have
 image-build contexts with the exact resolved package artifacts and checksums.
-Other recipes currently use Python-only environments. Package checks alone do not
+The two connected DESeq2 recipes also have locked R image contexts. Other recipes
+currently use Python-only environments. Package checks alone do not
 establish successful execution in these Harbor images. Repository source revisions and
 runtime package versions are different provenance fields and must remain separate.
 
@@ -89,8 +90,10 @@ Connected DESeq2 differential-expression and GO-enrichment candidates are define
 the public annotation snapshot preserves propagated biological-process membership
 from org.Mm.eg.db and GO.db 3.22.0. Six native oracle cases pass on reserved TRC
 CPUs, checking 16,659–17,361 fitted genes and 5,898–6,021 GO terms per case. They
-remain outside the default corpus while Harbor container validation is pending. No benchmark inputs or model
-calls were used to prepare these references.
+are registered as authoring candidates. The Harbor DE case passed; the GO case
+matched its summary and enrichment table but failed two probability fields for one
+fitted gene. Numerical portability is under investigation; tolerances are unchanged.
+No benchmark inputs or model calls were used to prepare these references.
 
 `sources/prepare_deseq.R` prepares all contrasts, fitted size factors and frozen
 annotations on a CPU worker with R 4.5.3 and DESeq2 1.50.2. After verifying the
@@ -112,7 +115,9 @@ python -m experiments.post_training.bio_tasks.sources.validate_rnaseq \
 It checks complete QC, fitted-gene and enrichment tables as well as summaries and
 negative controls. R validation requires remote compute on the shared authoring VM.
 
-From the repository root:
+Build all recipes on a CPU host with the pinned R environment on `PATH`. The
+measured native R peak exceeds 1 GiB; do not run the full build on a shared VM
+with a 500 MiB workload limit. From the repository root:
 
 ```bash
 uv run python -m experiments.post_training.bio_tasks.build \
@@ -123,6 +128,12 @@ uv run python -m experiments.post_training.bio_tasks.build \
   --tool-ref 12bbd5d45b1b176167ab3cfe905e06004c2f02e3
 ```
 
+Use `--recipes <id> [<id> ...]` for an explicit smaller build, such as
+`--recipes strand-extraction real-fastq-fixed-trim`. The manifest lists selected IDs
+and the total registered count; benchmark mappings retain their full inventory,
+with example links only for the selected recipes. Omission builds every recipe
+and runs every oracle. It does not silently skip missing runtimes.
+
 Task observations live under `setup_files/inputs/`. The pinned Harbor runtime uploads
 that directory into each fresh sandbox; `/app/inputs` points to it. Biological inputs
 and private references therefore do not change the reusable image build context.
@@ -131,8 +142,8 @@ against the successful reference run, installs its explicit package set offline,
 and removes the download cache. Agent and verifier execution both disable internet.
 Image-build network access is separate from solve-time access.
 
-The output directory must not exist. Generation runs one small reference process
-at a time. Each instance must pass its independent oracle, preserve row-order
+The output directory must not exist. Generation runs one reference process
+at a time. Each instance must pass its executable oracle, preserve row-order
 invariance, and reject empty, malformed, duplicate-ID, missing-ID, and recipe-specific
 scientifically wrong answers. FASTQ-producing tasks additionally check complete
 ordered read IDs, sequences and qualities in submitted native files. Missing,
@@ -156,7 +167,7 @@ generation immediately and leaves the manifest marked `incomplete`.
 Serve the output directory with `python -m http.server 8757 --directory /tmp/bio-tasks-example`
 and open `http://localhost:8757/`. The index groups tasks by recipe, with text search, domain filtering,
 format/skill labels, a data-origin filter (real data selected initially), and a separate
-50-repository execution-coverage table. A second page tracks 506 provisional ID task identifiers and 90 held-out OOD
+50-repository execution-coverage table. A second page tracks 514 provisional ID task identifiers and 90 held-out OOD
 BioMysteryBench identifiers, with filters for distribution, benchmark and coverage status, recipe examples, explicit gaps and
 local reference-check runtimes. Task pages show exact instructions, bounded input previews, expected
 outputs, negative controls, metadata, and verifier code. These pages contain answers

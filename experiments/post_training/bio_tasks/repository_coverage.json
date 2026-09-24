@@ -85,7 +85,9 @@
         "bulk-size-factors",
         "sample-sheet-lanes",
         "real-rnaseq-size-factors",
-        "real-rnaseq-normalized-contrast"
+        "real-rnaseq-normalized-contrast",
+        "real-rnaseq-differential-expression",
+        "real-rnaseq-go-enrichment"
       ],
       "source_url": "https://github.com/thelovelab/DESeq2/blob/9e885b581380291797f2777145c395f50aaaa72b/tests/testthat/test_model_matrix.R",
       "tool_execution": {
@@ -96,8 +98,8 @@
         "passing_instances": 3,
         "scope": "bulk-size-factors"
       },
-      "scope": "Diagnose confounded designs and construct estimable contrasts; collapse technical sequencing runs by biological sample.",
-      "limitations": "Use independent linear algebra for estimability and integer sums for collapseReplicates. Preserve biological replicates. Full dispersion estimation, shrinkage, and fitted DE tests require stronger numerical references."
+      "scope": "Diagnose confounded designs, preserve biological replicates, fit a three-stage negative-binomial model and carry its directional gene selections into a frozen GO universe.",
+      "limitations": "Connected GSE60450 fits and input-reading oracles share the pinned DESeq2 statistical engine. Six native cases check every fitted gene and eligible GO term; enrichment probabilities are cross-checked with SciPy and R. Shrinkage, multifactor designs, ontology simplification, broader benchmark-lineage screening and scientific review remain outside this validation."
     },
     {
       "index": 6,

@@ -481,7 +481,14 @@ def benchmark_page(output: Path, registry: dict) -> None:
     (output / "benchmark-coverage.html").write_text(page)
 
 
-def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, tool_ref: str) -> dict:
+def build(
+    output: Path,
+    instances_per_recipe: int,
+    seed: int,
+    base_image: str,
+    tool_ref: str,
+    recipe_ids: tuple[str, ...] | None = None,
+) -> dict:
     """Stream validated task binaries, manifests, oracles, and private inspection pages."""
     if instances_per_recipe < 1 or seed < 0:
         raise ValueError("instances_per_recipe must be positive and seed must be nonnegative")
@@ -489,6 +496,11 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
         raise ValueError("base_image must be a digest-pinned Python image")
     if not re.fullmatch(r"[0-9a-f]{40}", tool_ref):
         raise ValueError("tool_ref must be a full Marin commit SHA")
+    known_recipes = {recipe.id for recipe in RECIPES}
+    if recipe_ids is not None:
+        if not recipe_ids or len(set(recipe_ids)) != len(recipe_ids) or set(recipe_ids) - known_recipes:
+            raise ValueError("recipe_ids must contain distinct registered recipe IDs")
+    recipes = tuple(recipe for recipe in RECIPES if recipe_ids is None or recipe.id in recipe_ids)
     output.mkdir(parents=True, exist_ok=False)
     (output / "tasks").mkdir()
     (output / "inspect").mkdir()
@@ -541,7 +553,6 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
         target.write_bytes(content)
         benchmark_task_hashes[relative] = hashlib.sha256(content).hexdigest()
         benchmark_registry["tasks"].extend({"benchmark": name, **task} for task in part["tasks"])
-    known_recipes = {recipe.id for recipe in RECIPES}
     for task in benchmark_registry["tasks"]:
         benchmark = benchmark_registry["benchmarks"][task["benchmark"]]
         if benchmark["distribution"] not in {"ID", "OOD"}:
@@ -564,6 +575,8 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
         "training_ready": False,
         "seed": seed,
         "instances_per_recipe": instances_per_recipe,
+        "recipe_ids": [recipe.id for recipe in recipes],
+        "registered_recipe_count": len(RECIPES),
         "base_image": base_image,
         "tasktrove_revision": tool_ref,
         "harbor_revision": HARBOR_REVISION,
@@ -592,7 +605,7 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
         (output / "ledger.jsonl").open("w") as ledger,
         pq.ParquetWriter(output / "tasks" / "part-00000.parquet", PARQUET_SCHEMA) as writer,
     ):
-        for recipe in RECIPES:
+        for recipe in recipes:
             index_rows = []
             for index in range(instances_per_recipe):
                 task = identity(recipe, seed, index)
@@ -646,7 +659,7 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
                     "converter": "bio-tasks-v1",
                     "mode": "script",
                     "dockerfile_id": image_id,
-                    "language": "python",
+                    "language": recipe.oracle_runtime.value,
                     "tags": [
                         task.split,
                         "offline",
@@ -715,13 +728,13 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
         tasks=counts["train"],
         dockerfiles=dockerfiles,
         by_source={"bio-tasks": {"converted": counts["train"]}},
-        recipe_formats={recipe.id: recipe.formats for recipe in RECIPES},
-        recipe_domains={recipe.id: recipe.domain for recipe in RECIPES},
-        domain_counts=dict(Counter(recipe.domain for recipe in RECIPES)),
+        recipe_formats={recipe.id: recipe.formats for recipe in recipes},
+        recipe_domains={recipe.id: recipe.domain for recipe in recipes},
+        domain_counts=dict(Counter(recipe.domain for recipe in recipes)),
         data_origin_counts=dict(origins),
     )
     for task in benchmark_registry["tasks"]:
-        entries = [entry for recipe in task["recipes"] for entry in examples[recipe]]
+        entries = [entry for recipe in task["recipes"] for entry in examples.get(recipe, ())]
         task["examples"] = [entry["task_id"] for entry in entries]
         task["validation_evidence"] = [
             {
@@ -729,7 +742,7 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
                 "task_sha256": entry["task_sha256"],
                 "data_origin": entry["data_origin"],
                 "sources": entry["biological_sources"],
-                "independent_solver": "passed",
+                "executable_oracle": "passed",
                 "reference_validation_seconds": entry["reference_validation_seconds"],
             }
             for entry in entries
@@ -754,7 +767,10 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
             status = f'<a href="{html.escape(evidence)}">{status}</a>'
         repository_rows.append(
             f'<tr><td>{row["index"]}</td><td>{html.escape(row["name"])}</td><td>'
-            + ", ".join(f'<a href="#{name}">{name}</a>' for name in row["recipes"])
+            + ", ".join(
+                f'<a href="#{name}">{name}</a>' if name in examples else f"{name} (outside this build)"
+                for name in row["recipes"]
+            )
             + f"</td><td>{status}</td></tr>"
         )
     passed_packages = sum(row["tool_execution"]["status"] == "passed_reference_check" for row in coverage)
@@ -766,13 +782,14 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
         "[hidden]{display:none!important}</style>"
         "<h1>Biology task inspection</h1><p>Private references included. Scientific review and container validation "
         "are pending. No teacher attempts have run.</p>"
-        f"<p>{len(RECIPES)} recipes &times; {instances_per_recipe} examples = {counts['train']} tasks. "
+        f"<p>{len(recipes)} of {len(RECIPES)} registered recipes &times; "
+        f"{instances_per_recipe} examples = {counts['train']} tasks. "
         "All tasks belong to the train split.</p>"
         f"<p>Data origins: {html.escape(str(dict(origins)))}. Real observations are authoring candidates; "
         "simulated examples are small correctness controls. Benchmark data-lineage exclusion, scientific review "
         "and end-to-end workflow validation remain pending.</p>"
         "<p>All 50 source repositories have an explicit recipe mapping below. The table tracks separately "
-        "recorded package checks. Locked MUSCLE, fastp and Picard image contexts are prepared "
+        "recorded package checks. Locked MUSCLE, fastp, Picard and DESeq2 image contexts are prepared "
         "for their real-data tasks; "
         "other environments contain Python only. Container execution and teacher tool use require separate checks.</p>"
         f"<p>{passed_packages}/50 packages have recorded successful native reference checks.</p>"
@@ -821,8 +838,17 @@ def main() -> None:
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--base-image", required=True, help="digest-pinned Python image with pip and venv")
     parser.add_argument("--tool-ref", required=True, help="full Marin commit for tasktrove-verify")
+    parser.add_argument("--recipes", nargs="+", help="explicit recipe IDs; omitted builds every registered recipe")
     args = parser.parse_args()
-    print(json.dumps(build(args.output, args.instances_per_recipe, args.seed, args.base_image, args.tool_ref), indent=2))
+    manifest = build(
+        args.output,
+        args.instances_per_recipe,
+        args.seed,
+        args.base_image,
+        args.tool_ref,
+        None if args.recipes is None else tuple(args.recipes),
+    )
+    print(json.dumps(manifest, indent=2))
 
 
 if __name__ == "__main__":
