@@ -57,7 +57,11 @@ for preflight, the 200-step trial, and rollback. `current_run.py` records the
 current run ID. `trigger_hero.sh` records the handoff checkpoint and W&B fork point.
 Update the run ID, handoff checkpoint, and fork point together and land them on main.
 Record the old run's exact launch SHA and command for rollback.
-The checkpoint must be complete and protected from cleanup through the trial.
+The handoff must be a complete permanent checkpoint: the newest scheduled one, or one requested from the old
+run's `training-control` endpoint with the `request-permanent-checkpoint` header value (see
+[Train an LM](../../../docs/tutorials/train-an-lm.md)). Permanent checkpoints are written to the run's
+output root and never pruned. Rolling resume checkpoints expire three days after they are written, so
+those a replaced run leaves behind clear themselves.
 
 Both commands below require `WANDB_API_KEY`, an authenticated GitHub CLI (`gh`),
 and a pristine checkout. Fork creation requires fetched main; subsequent launches
