@@ -13333,7 +13333,7 @@
   "detailed_design_files": [
     {
       "path": "workflow_designs/biomnibench-da.json",
-      "sha256": "8f32f5c2d0042c91bfae663d94300f4fbbbd8926a7977faf7967711cb9c24a8d",
+      "sha256": "ab42f025a6f03169507d772dd61c4b95c82d08a6fb444d1b4003f5a14b245a3c",
       "benchmark_id": "BiomniBench-DA",
       "reviewed_question_ids": 50,
       "proposed_designs": 45,
@@ -13516,7 +13516,7 @@
   "authoring_phase": "question-portfolio-planning",
   "portfolio_index": {
     "path": "workflow_portfolio.json",
-    "sha256": "971d8ccf32044101843a6c03d21c0123e65b1fd9df276158adfc12854907e0f5",
+    "sha256": "e1b4020bd42f423dbd01418de2d51ed9b37d221912d18b6e9bad6ebf2b500833",
     "counts": {
       "source_releases": 32,
       "inventory_records": 5133,

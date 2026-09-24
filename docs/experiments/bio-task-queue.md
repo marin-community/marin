@@ -68,7 +68,7 @@ ranking is separate from database entry/attribute reconciliation.
 ## Endpoint contracts
 
 The [BiomniBench-DA designs](../../experiments/post_training/bio_tasks/workflow_designs/biomnibench-da.json)
-refine all 50 public question endpoints into 45 proposed tasks. Each design specifies
+refine all 50 public question endpoints into 45 design cards. Each design specifies
 observed inputs, proposed artifact tables and key columns, decisions to freeze, verifier checks and
 unresolved data/runtime requirements. These refine the 147 broad questions; they
 are not 45 additional tasks or validated mappings. The question-only review found
@@ -81,6 +81,16 @@ GWAS and survival-proportion questions retain their unresolved estimands. Negati
 controls specify incorrect submitted artifacts; random label permutations are not
 assumed to change significance. Independent input selection, complete schemas and
 native reference execution remain required before authoring is considered ready.
+
+All 50 cached instruction files match the pinned repository's Git blob hashes.
+Their expert-judge trace rubric is not part of the authored Harbor protocol.
+The scoring-scope review retains 44 quantitative workflow proposals spanning 49
+source questions and defers the undefined cross-metabolite GWAS question. Each
+card records computable outputs, required definitions and ungraded claims.
+Therapeutic TCR suitability, translational relevance and unsupported causal or
+absolute-shift conclusions remain outside numerical coverage. Reports and plots
+can be inspected without a prose or visual-quality judge. These are scope decisions,
+not implemented tasks or new validated mappings.
 
 The [BixBench endpoint designs](../../experiments/post_training/bio_tasks/workflow_designs/bixbench.json)
 assign all 205 questions to 27 proposed workflows. Full gene, pathway, variant and

@@ -1250,7 +1250,7 @@
     "excluded_records": 1,
     "validated_new_mappings": 0,
     "portfolio_file": "workflow_portfolio.json",
-    "portfolio_sha256": "971d8ccf32044101843a6c03d21c0123e65b1fd9df276158adfc12854907e0f5",
+    "portfolio_sha256": "e1b4020bd42f423dbd01418de2d51ed9b37d221912d18b6e9bad6ebf2b500833",
     "limit": "All 30 original cross-card combinations have scientific planning dispositions; 25 remain conditional. Complete input and acceptance contracts, individual-card review and inaccessible-source dispositions are still required. No implementation is selected and validated coverage is unchanged.",
     "question_records_with_gap_dispositions": 1674,
     "system_records_with_endpoint_gap_dispositions": 350

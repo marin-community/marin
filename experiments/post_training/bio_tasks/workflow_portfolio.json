@@ -27,7 +27,7 @@
   "source_question_files": [
     {
       "path": "workflow_designs/biomnibench-da.json",
-      "sha256": "8f32f5c2d0042c91bfae663d94300f4fbbbd8926a7977faf7967711cb9c24a8d"
+      "sha256": "ab42f025a6f03169507d772dd61c4b95c82d08a6fb444d1b4003f5a14b245a3c"
     },
     {
       "path": "workflow_designs/bixbench.json",
@@ -1197,7 +1197,12 @@
       },
       "workstreams": [
         "population-genetics"
-      ]
+      ],
+      "authoring_disposition": {
+        "status": "deferred-undefined-scientific-endpoint",
+        "reason": "Source da-24-3 does not identify traits or a statistic; named GWAS alternatives are not an exact endpoint.",
+        "resume_condition": "Choose and justify one scientific endpoint with suitable independent GWAS/LD inputs before assignment."
+      }
     },
     {
       "proposed_task_id": "biomni-design-30-tumor-variant-stage",

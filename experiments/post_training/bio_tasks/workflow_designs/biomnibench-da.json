@@ -51,7 +51,21 @@
       "deterministic_verifier_design": "Recompute every donor denominator and contrast from cells; compare full table to independent reference within frozen tolerances.",
       "negative_controls": "Corrupt a donor denominator or report a contrast for an ineligible cell type; both output mutations must fail.",
       "unresolved_independent_data_and_runtime_assumptions": "Need independent cohort containing all three compartments and enough paired donors; count-model runtime must be measured.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "Complete donor/tissue/cell-population counts and denominators; tumor-versus-normal and tumor-versus-blood effects with uncertainty and a declared joint enrichment rule.",
+        "required_definition_or_evidence": "Require both comparison tissues and a donor-aware design. A zero observed count is distinct from an unsampled tissue or ineligible donor.",
+        "ungraded_or_deferred_claims": "Do not certify universal tumor exclusivity from finite sampling. Open biological interpretation is inspectable but ungraded.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-1-3",
+            "question_sha256": "72c76065803f65bb0a660e9f41a1ac43e9a5233eddb812e9a23433ae9887c5cc",
+            "instruction_sha256": "1f3d6be0015cb118289667d3c8fcd44b825e4d0fe19b4bfcaacda7bf918e61fa",
+            "instruction_git_blob_sha1": "5848cd26b857e8372620aac263c07e43fb7ad1a4"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-02-baseline-fraction-response",
@@ -84,7 +98,21 @@
       "deterministic_verifier_design": "Independent patient join, date ordering and correlation recomputation across all eligible cell types.",
       "negative_controls": "Duplicate a patient outcome join or use a post-outcome sample as baseline; the submitted join and associations must fail.",
       "unresolved_independent_data_and_runtime_assumptions": "Need independent longitudinal clinical outcome plus baseline cells; no inference of treatment causality.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "Baseline population fractions joined to one response measurement per patient; complete across-patient association table, direction and uncertainty.",
+        "required_definition_or_evidence": "The prompt wording for each patient does not provide repeated response/fraction pairs for within-patient correlations. Declare the across-patient estimand and baseline tissue/time window.",
+        "ungraded_or_deferred_claims": "Association does not establish a treatment mechanism or predictive validation. Free-form implications are ungraded.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-1-4",
+            "question_sha256": "59ec346f621fcd71d9133e19cbd0459e3602fa65f5201aa0db8e5efd04927277",
+            "instruction_sha256": "b277926d483b097a553ac92880fa2f16c2acd5a26270e3eca960daf0d3258ad0",
+            "instruction_git_blob_sha1": "fdde3a4a2945cbf59c8ff9564eb988109436cab2"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-03-protein-class-predictors",
@@ -115,7 +143,21 @@
       "negative_controls": "Reverse a nonconstant score vector without updating its metrics, and duplicate a protein across fit/evaluation groups; reject both when the frozen design separates those groups.",
       "unresolved_independent_data_and_runtime_assumptions": "Independent experimental class labels and predictor score availability may be limiting; fixed scores keep task within 30 minutes.",
       "status": "proposed-design-only-no-coverage-credit",
-      "routing_limit": "Scientific index only; this endpoint retains its detailed standalone contract and does not become covered by another workstream question."
+      "routing_limit": "Scientific index only; this endpoint retains its detailed standalone contract and does not become covered by another workstream question.",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "Amino-acid composition contrasts for the declared assembly classes, plus complete classifier performance for every required predictor and positive/negative universe.",
+        "required_definition_or_evidence": "Keep PScore, PLAAC, catGRANULE and FuzDrop availability explicit. Missing required scores cannot be replaced by a different predictor; preserve class labels, sequence identity and independent evaluation membership.",
+        "ungraded_or_deferred_claims": "Known class annotations and predictor discrimination do not establish new experimental phase-separation behavior.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-10-1",
+            "question_sha256": "1e12d4df7f0d06ea39d1c2af52a10195ffe7b2c3fa7c0f4a4a46a51ff992be9a",
+            "instruction_sha256": "7128dd414de6fee2b2a068c7593be8c5efa024f21c932c3b71287879d4eda92c",
+            "instruction_git_blob_sha1": "571787517a7500e9b13639e640fc4308252c2bcb"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-04-protein-participant-screening",
@@ -146,7 +188,21 @@
       "negative_controls": "Substitute a different negative universe or flip a membership label in the submitted artifacts; reject against the frozen inputs.",
       "unresolved_independent_data_and_runtime_assumptions": "Need independently curated positive and organelle-control sets sharing identifiers and available frozen scores.",
       "status": "proposed-design-only-no-coverage-credit",
-      "routing_limit": "Scientific index only; this endpoint retains its detailed standalone contract and does not become covered by another workstream question."
+      "routing_limit": "Scientific index only; this endpoint retains its detailed standalone contract and does not become covered by another workstream question.",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "Per-predictor, per-dataset screening metrics against the same negative universe and prespecified paired differences between participant and organelle-control datasets.",
+        "required_definition_or_evidence": "Freeze positive/negative overlap removal, training-protein exclusion, score orientation, metric and uncertainty unit. Shared proteins/backgrounds make dataset metrics dependent.",
+        "ungraded_or_deferred_claims": "Consistently better needs an explicit comparison rule; an informal visual impression is not scored.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-10-3",
+            "question_sha256": "845f52c1fe363979c5e776420b74de224f45a186f301b311559f05bf1043307a",
+            "instruction_sha256": "e0802e35df22f95a1938be506efb61d448bdc74d4a118796383f5d37ddf150de",
+            "instruction_git_blob_sha1": "93dbaed5ef5f0ac1edadf31ee6a18185e62e7495"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-05-cell-communication",
@@ -180,7 +236,21 @@
       "deterministic_verifier_design": "Recompute expression support and pair/pathway scores with complete pair universe and donor strata.",
       "negative_controls": "Swap the submitted source/target identities or insert a pair absent from the frozen database; reject provenance and directional mismatches.",
       "unresolved_independent_data_and_runtime_assumptions": "Need independent cohort with both rare cell states and adequate donors; functional suppression cannot be graded from expression alone.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "Expression-supported directional ligand/receptor pairs and pathway scores between the two defined cell populations, with the reference MHC-I pathway excluded from the requested ranking.",
+        "required_definition_or_evidence": "Pin gates, expression layer, ligand/receptor complexes, database and donor aggregation. Rank a specified inference method, retaining complete eligible pair/pathway tables.",
+        "ungraded_or_deferred_claims": "Retain communication inference as a numerical workflow. Defer claims that inferred pathways actually cause suppression or cytotoxic targeting without independent functional assays.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-11-1",
+            "question_sha256": "49a04f319ede5878c59a37ea8a33ca6ebb867845eb1369c7315fdb5024a29e01",
+            "instruction_sha256": "d5f9c760f72a1a71579d808f33fb4e9cc1644248119a3535011824ad18d42b0d",
+            "instruction_git_blob_sha1": "80052fdce06d532ceac8f65a2b0e03ca00feeb91"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-06-shared-perturbation-enrichment",
@@ -216,7 +286,21 @@
       "deterministic_verifier_design": "Recompute both full contrasts, intersection and hypergeometric/rank test from eligible genes.",
       "negative_controls": "Insert a gene absent from one eligible perturbation contrast into the shared set, or change the enrichment universe size; reject both.",
       "unresolved_independent_data_and_runtime_assumptions": "Need independently observed matched gain/loss experiments with replication; two full fits must meet 30 minutes.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "Both perturbation differential-expression tables, the exact shared-gene set and G2M enrichment contingency/statistic with its declared p-value.",
+        "required_definition_or_evidence": "Freeze whether shared means intersection regardless of effect direction or a concordant-direction intersection. Preserve the source p<0.05 request separately from any additional multiple-testing report.",
+        "ungraded_or_deferred_claims": "A shared enrichment result does not show that gain and loss perturbations act by the same mechanism.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-12-2",
+            "question_sha256": "d0ee9fbf2af1ef3590a639e4d8fa9892dd92c16a26e04ab3e608ec6e1c709153",
+            "instruction_sha256": "8b418846803b4eefe297faf41f879fa57b7d987f611427af79be92d85f304399",
+            "instruction_git_blob_sha1": "9de1fe4526937fe765ad22e3489c9d691ac66ec1"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-07-microbe-survival",
@@ -249,7 +333,21 @@
       "deterministic_verifier_design": "Re-fit or independently compute Cox partial likelihood for all eligible taxa and check named prespecified target row.",
       "negative_controls": "Flip an event indicator in the submitted patient table or misreport a hazard ratio relative to its log-hazard; reject both.",
       "unresolved_independent_data_and_runtime_assumptions": "Need independent cohort with both microbial data and survival; avoid interpreting association as microbial causation.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "A complete univariate microbial-feature Cox screen including the focal taxon, with HR, uncertainty, test p-value, eligibility and fit status.",
+        "required_definition_or_evidence": "Preserve the requested HR>1 and raw p<0.05 rule. An adjusted model or FDR-only selection is a separately labeled analysis; absence of the focal taxon cannot become a negative result.",
+        "ungraded_or_deferred_claims": "Computable prognostic association remains eligible. Treatment recommendations and causal microbial mechanisms are outside scoring.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-12-4",
+            "question_sha256": "a022422f38640b24b5c69c750611220529b1602b825062c0d37f81c76e93161a",
+            "instruction_sha256": "81036233e1cce4ba0915ff54a9e1568f9c8bc5c612875cffe2067b5368fead06",
+            "instruction_git_blob_sha1": "5fe2b7b36e7cb0eeb5cf3abd1b17a77cb71d444d"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-08-longitudinal-protein-body",
@@ -291,7 +389,27 @@
       "deterministic_verifier_design": "Recompute participant change, full protein effects and protein-body correlations from matched IDs.",
       "negative_controls": "Swap follow-up patient IDs or duplicate a participant in the submitted change table; reject the invalid pairing.",
       "unresolved_independent_data_and_runtime_assumptions": "Both endpoints require the same independently measured participants and assays; split if body measures are unmatched or fit exceeds 30 minutes.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "Paired baseline-to-follow-up protein changes, direct regimen-by-time contrasts, and protein/body-change associations on explicitly matched participants.",
+        "required_definition_or_evidence": "Use the specified follow-up window, align signs of body changes and separate within-regimen effects from the direct regimen difference. Repeated visits are not independent patients.",
+        "ungraded_or_deferred_claims": "Observational regimen differences do not establish comparative treatment efficacy; that interpretation is ungraded.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-13-1",
+            "question_sha256": "eab5c2a5a87ea218b16afa8ddd4e0aba3ec072e2a824cdc3e678b2fec58ceb65",
+            "instruction_sha256": "f6ad9ce710ffb23301e11019bb6b2b3ab0946a4a22f0d006d291d4385809ee99",
+            "instruction_git_blob_sha1": "b59aceb46adc5fcd3f5f414e76b05d623648a5c5"
+          },
+          {
+            "task_id": "da-13-3",
+            "question_sha256": "7c4165f833776e5ebd0681ddfc7e68d51315718da4a30c3eb147bd6b05b4fc0e",
+            "instruction_sha256": "d8505bc749d01d7df24aa6e701499afc03ac1c4ca23cf9b6eebe116a80e64fa5",
+            "instruction_git_blob_sha1": "387cea6de4a2f5ce61176277be4e75119c9b6ea9"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-09-gaht-external-sex-concordance",
@@ -322,7 +440,21 @@
       "negative_controls": "Reverse a nonzero submitted effect or remove a measured null protein from the matched universe; reject orientation or eligibility mismatch.",
       "unresolved_independent_data_and_runtime_assumptions": "Need two independent cohorts with mappable common proteins and enough complete measures.",
       "status": "proposed-design-only-no-coverage-credit",
-      "routing_limit": "Scientific index only; this endpoint retains its detailed standalone contract and does not become covered by another workstream question."
+      "routing_limit": "Scientific index only; this endpoint retains its detailed standalone contract and does not become covered by another workstream question.",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "A harmonized protein universe, each study contrast, overlap counts/enrichment and directional concordance between treatment and external sex associations.",
+        "required_definition_or_evidence": "Freeze protein/isoform mapping, eligible assay intersection and the direction of the external sex contrast before counting concordance.",
+        "ungraded_or_deferred_claims": "Unmeasured proteins cannot be treated as null associations. Shared proteins do not establish that the biological processes are equivalent.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-13-5",
+            "question_sha256": "3bc2aa91c10c4171fc98750e89ee46b93f8fd5ca3ce767c584ddc518d1269a62",
+            "instruction_sha256": "9c482bdfc2f116aa872e519cc2a64931eb6124700bb483d661a2c640f621a0d7",
+            "instruction_git_blob_sha1": "5917659da1f13cb88ac45062f7b090179bd8577f"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-10-gaht-menopause-concordance",
@@ -353,7 +485,21 @@
       "negative_controls": "Swap comparator IDs in the submitted paired-effect table or pool the two comparator summaries; reject against their distinct source contrasts.",
       "unresolved_independent_data_and_runtime_assumptions": "Three assay-compatible observed cohorts may be difficult to source; precomputed effects must retain raw-study provenance.",
       "status": "proposed-design-only-no-coverage-credit",
-      "routing_limit": "Scientific index only; this endpoint retains its detailed standalone contract and does not become covered by another workstream question."
+      "routing_limit": "Scientific index only; this endpoint retains its detailed standalone contract and does not become covered by another workstream question.",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "Separate treatment-versus-menopause and treatment-versus-hormone-therapy concordance tables on declared measured-protein universes.",
+        "required_definition_or_evidence": "Both external comparators are required. Preserve their contrast direction, exposure timing and effect scale rather than pooling menopause and administered hormones.",
+        "ungraded_or_deferred_claims": "Missing one comparator leaves a partial workflow; narrative biological similarity cannot replace the missing evidence.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-13-6",
+            "question_sha256": "67d8c34c9503a5f373fd1bb1eaf5245b30a7e090fe1de5f42eeb63641bdb3e6f",
+            "instruction_sha256": "7f3515379870cf243d95975a21cb318eef89c47abac84af3382611d191cf0ef0",
+            "instruction_git_blob_sha1": "e8b6be479396fa0ccecfeb643276c03253fd6c59"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-11-signature-clustering",
@@ -384,7 +530,21 @@
       "negative_controls": "Submit patient IDs as tree leaves or omit an eligible signature pair; reject axis or completeness errors.",
       "unresolved_independent_data_and_runtime_assumptions": "Need enough signatures/patients and stable scores; source cohort must be independent.",
       "status": "proposed-design-only-no-coverage-credit",
-      "routing_limit": "Scientific index only; this endpoint retains its detailed standalone contract and does not become covered by another workstream question."
+      "routing_limit": "Scientific index only; this endpoint retains its detailed standalone contract and does not become covered by another workstream question.",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "The complete signature-by-signature correlation matrix across patients, declared distance/linkage and resulting cluster memberships.",
+        "required_definition_or_evidence": "Specify missingness and signature scaling. Accept equivalent branch ordering and cluster-label permutations; do not demand identical dendrogram pixels.",
+        "ungraded_or_deferred_claims": "A cluster is a result of the stated scoring/clustering procedure, not proof that signatures measure the same mechanism.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-14-1",
+            "question_sha256": "e389f5bf51e58d310cbaabe06ff30d65d7736c01727cf81dfd6c7054bfd7198c",
+            "instruction_sha256": "b3d79534f23eecce35f9b5b3685966d0ea090d5e13a9469b40677cff18aa9f27",
+            "instruction_git_blob_sha1": "29747ddf4d164521bcf0510da82b5b169ac1e964"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-12-immune-subgroup-proportions",
@@ -416,7 +576,21 @@
       "deterministic_verifier_design": "Recount unique patient IDs and verify fraction sum under exclusive labels.",
       "negative_controls": "Count visits instead of unique patients or handle an unassigned patient contrary to the fixed policy; reject the resulting count table.",
       "unresolved_independent_data_and_runtime_assumptions": "Independent subgroup labels must be available; this is separate from clustering signatures by correlation.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "Eligible unique-patient denominator, subgroup membership and counts/fractions including unassigned patients.",
+        "required_definition_or_evidence": "Supply fixed subgroup definitions or attributed assignments. State whether memberships are exclusive; repeated admissions and overlapping groups must not silently change denominators.",
+        "ungraded_or_deferred_claims": "If subgroup identity itself requires unsupported expert judgment, defer that assignment stage; count calculation alone is component coverage.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-14-3",
+            "question_sha256": "95fe2a829f198bcee6aa420ade40b4d249b35dcdeb18599f2a9c8382659e6156",
+            "instruction_sha256": "1d7a752c9647e731336e4ce8dec3ae712c330e57f00601f529f55c3aefc710c7",
+            "instruction_git_blob_sha1": "0489fdcb01aa05ca8488cb0ecd53e63439b674d5"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-13-within-gene-set-correlation",
@@ -449,7 +623,21 @@
       "deterministic_verifier_design": "Recompute complete pair matrix and exact n(n-1)/2 unique-pair count per set.",
       "negative_controls": "Add self-pairs or duplicate an unordered pair in the submitted correlation table; reject even if aggregate values happen to agree.",
       "unresolved_independent_data_and_runtime_assumptions": "Need both programs measured with enough independent patients.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "All unordered non-self gene-pair correlations within each prespecified program and a declared program-level summary.",
+        "required_definition_or_evidence": "Use patient samples as observations. Keep missing/constant-gene exclusions and do not use the many dependent gene pairs as independent patient replicates.",
+        "ungraded_or_deferred_claims": "Correlation does not establish regulation or causal protection/harm.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-14-8",
+            "question_sha256": "5560a9a436a009bf68fdd87e625269cd1f76046834d0eb1518e7aaa5d8fda338",
+            "instruction_sha256": "4263397764d7572584891bb8a5459df057aeb074f93320ee1aa04800405cf91b",
+            "instruction_git_blob_sha1": "846892160aa60c0618ac4b4d5b93170b98e2447f"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-14-als-expression-duration",
@@ -492,7 +680,27 @@
       "deterministic_verifier_design": "Recompute model design and full per-gene test tables with independent fitted reference.",
       "negative_controls": "Reverse a nonzero disease effect or join duration to the wrong patient in the submitted artifacts; reject each against its own estimand.",
       "unresolved_independent_data_and_runtime_assumptions": "Same independent cohort must contain adequate controls and measured durations; duration correlation is not validated progression prediction.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "Case/control differential-expression results and within-case expression/disease-duration associations with complete tested-gene universes.",
+        "required_definition_or_evidence": "Retain the two separate contrasts, covariate sets and rank rules. Duration is measured within cases; a control must not receive a fabricated zero disease duration.",
+        "ungraded_or_deferred_claims": "Cross-sectional duration association does not validate prospective progression prediction or identify molecular drivers.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-15-1",
+            "question_sha256": "d19d567c3d697c1ce28e34ed94104dc65a6ff734862dae396dc9941463a6ad4a",
+            "instruction_sha256": "074c229b45f9f0f1ae948ab1b2c015510d698b25aa1aab8a94040a266e066b8d",
+            "instruction_git_blob_sha1": "11ef7775598dbbf620e2ab975e82c9510f4638d3"
+          },
+          {
+            "task_id": "da-15-7",
+            "question_sha256": "690f5be507e1d05f9cba9b2e64dd65b8029806d573b58014e35714272c71269c",
+            "instruction_sha256": "f011d90b67b8b7a5130c12648c5aa4d629077b1481d5ce81c71819defe732c86",
+            "instruction_git_blob_sha1": "4185c09ebc39aa0af501b375e45e0a0db0f3c907"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-15-als-wgcna",
@@ -527,7 +735,21 @@
       "deterministic_verifier_design": "Check native WGCNA outputs plus independent adjacency/eigengene/association invariants and complete membership.",
       "negative_controls": "Change a submitted module membership or trait coefficient while leaving source inputs fixed; reject. Input row permutations must preserve label-invariant results within frozen numerical tolerances.",
       "unresolved_independent_data_and_runtime_assumptions": "WGCNA can exceed 30 minutes or memory on full transcriptomes; bounded observed subset and runtime measurement required.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "Weighted-network QC, power selection evidence, complete module membership and eigengenes; any requested module/trait statistics are separate outputs.",
+        "required_definition_or_evidence": "Pin network type, correlation, power rule, cut/merge settings and gene selection before trait inspection. Score memberships up to label equivalence and eigengenes up to the declared sign convention.",
+        "ungraded_or_deferred_claims": "Numerical modules are eligible; interpreting their biological importance or proving regulation is not judged.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-15-2",
+            "question_sha256": "fffb48c8ff9da045f0241f0779525100ad53172c2bc05fbdad1b4b506dc069f0",
+            "instruction_sha256": "b3bf168aa9de9d51f560b2dd9b78cefa0be84deda5b4305ee66c3658d39a4e9d",
+            "instruction_git_blob_sha1": "d13f171586a94bdcaff8c7deb68ec77655599ead"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-16-three-layer-als-concordance",
@@ -560,7 +782,21 @@
       "deterministic_verifier_design": "Recompute joins and sign criteria across complete eligible gene/protein universe.",
       "negative_controls": "Claim three-layer support for a feature absent from one assay or reverse a nonzero assay effect; reject incomplete or inconsistent evidence.",
       "unresolved_independent_data_and_runtime_assumptions": "Independent study must include matching tissue RNA/protein and biofluid protein; unmatched layers cannot support patient-level concordance.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "All three layer-specific disease contrasts and a joined table identifying features that satisfy the stated cross-layer direction/significance rule.",
+        "required_definition_or_evidence": "Require tissue RNA, tissue protein and biofluid protein with explicit feature mapping and measurement eligibility. Do not infer a missing layer from another layer.",
+        "ungraded_or_deferred_claims": "Concordance is prioritization evidence, not validation of a noninvasive clinical biomarker.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-15-8",
+            "question_sha256": "91ac1f33d25159f7e9231ab662d6f3db9096d7a888d7227bdf1601908e04168f",
+            "instruction_sha256": "72c3f1de9e0fadb81caea3ed2ff5b588bd9fc634f298102fca0c586dad9783da",
+            "instruction_git_blob_sha1": "9bd7271a9563adef554da5d5b29f493c384401bf"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-17-expression-subtyping",
@@ -594,7 +830,21 @@
       "deterministic_verifier_design": "Recompute normalized matrix, eigen/subspace or dendrogram invariant, full memberships and clinical contingency/tests.",
       "negative_controls": "Assign a nonexistent or duplicate patient to a cluster, or misreport a clinical contingency cell; reject. Outcome-label changes must leave outcome-independent clustering unchanged.",
       "unresolved_independent_data_and_runtime_assumptions": "Independent cohort needs sufficiently varied pathology and sample count; this is exploratory association, not a diagnosis.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "A normalized expression representation, a declared unsupervised clustering and complete cluster/pathology association tables.",
+        "required_definition_or_evidence": "Choose the clustering pipeline and rank/count rule without pathology outcomes; keep clinical covariates out of expression clustering and score partitions up to label permutation.",
+        "ungraded_or_deferred_claims": "Clinical-trial enrichment suitability is deferred; a retrospective pathology association does not prove deployment utility.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-16-1",
+            "question_sha256": "ab96fa100374884aaad6b7a7169cf64b73737b44c6776b98c4f4d879dfa7e7aa",
+            "instruction_sha256": "52bb56b3ce315b12e18c7303db813be26efb8f7c8a84401be43f53c075a1a5cf",
+            "instruction_git_blob_sha1": "79abc76d4e314f5e09788106e468c53ede7147ce"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-18-sle-cell-composition",
@@ -632,7 +882,27 @@
       "deterministic_verifier_design": "Recompute frequencies and direct interaction coefficients, not separate-significance comparisons.",
       "negative_controls": "Pool cells across patients or substitute a difference of separate significance calls for the required interaction coefficient; reject invalid replicate and contrast artifacts.",
       "unresolved_independent_data_and_runtime_assumptions": "Need all diagnosis/ancestry strata with biological replication; historical ancestry labels may not be comparable.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "Patient-level immune frequencies, disease effects and direct disease-by-ancestry interaction estimates for each eligible population.",
+        "required_definition_or_evidence": "Comparing significance in one ancestry with nonsignificance in another is not an interaction test. Freeze denominators, confounders and the direct contrast.",
+        "ungraded_or_deferred_claims": "Population associations do not establish ancestry-specific treatment effects.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-17-1",
+            "question_sha256": "2c83b895ff4008ea9376d1c11e3f787ee35c2d34d206d7052818adaeba40ec23",
+            "instruction_sha256": "fb1ca0d0bf08ba4f4ac9915e0628ebbf4838c4ba4c02ab074fa8f1949ab9b00b",
+            "instruction_git_blob_sha1": "e6d6443aa140c1f24bec9f7b129f56bc832120e2"
+          },
+          {
+            "task_id": "da-17-5",
+            "question_sha256": "da453c95235b5db2b9e84edb9bcab9b4f78e9c143d22f857ef3d2fe2da201632",
+            "instruction_sha256": "73f4c4c64693f607a8b88ef0b597fe6bc8d7c2178780bb99cf90b28e77ecc253",
+            "instruction_git_blob_sha1": "8e4d96c78aad269b25c9f126ee890e8a3216599f"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-19-sle-monocyte-pseudobulk",
@@ -666,7 +936,21 @@
       "deterministic_verifier_design": "Reaggregate counts from eligible cells and independently fit complete donor-level differential model.",
       "negative_controls": "Report cell-level rows as independent donor replicates or misaggregate one donor count; reject the submitted design and pseudobulk artifacts.",
       "unresolved_independent_data_and_runtime_assumptions": "Need enough donors and monocyte cells; raw-count fit must complete within task limit.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "Classical-monocyte donor pseudobulk counts, donor eligibility and complete disease differential-expression results.",
+        "required_definition_or_evidence": "Gate cells using declared evidence, preserve biological donors, and distinguish a missing donor/cell stratum from a measured zero gene count.",
+        "ungraded_or_deferred_claims": "A significant gene is an expression association; therapeutic-target validity is ungraded.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-17-3",
+            "question_sha256": "e3c733f6e57b730c067f6692d9abb25c0a612b3a15949ecbae6bfa26025df53f",
+            "instruction_sha256": "41401a27ad69a878cc52913cd00e537e93fed8a0cf8aa62220a73b23b147b5ed",
+            "instruction_git_blob_sha1": "18c9b52f4ec53ee6ee05a1c40a9d4a402ce74198"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-20-breast-subtype-mutation-landscape",
@@ -699,7 +983,21 @@
       "deterministic_verifier_design": "Recompute patient-gene binary events, subtype denominators and all frequency comparisons.",
       "negative_controls": "Count two mutations in one patient-gene as two altered patients or change a receptor-group denominator; reject the inflated frequencies.",
       "unresolved_independent_data_and_runtime_assumptions": "Independent cohort needs all subtype groups and consistent mutation calling; no actionability inference from frequency alone.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "Patient-level alteration counts/frequencies across all four receptor-defined subtypes with eligible assay denominators and declared comparisons.",
+        "required_definition_or_evidence": "Resolve multiple tumor samples per patient and assay coverage. Missing receptor status or an unassayed gene cannot be recoded as a negative observation.",
+        "ungraded_or_deferred_claims": "Clinical actionability of a subgroup is outside deterministic frequency scoring.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-18-1",
+            "question_sha256": "9debec0891e91c15d6eef2718ea94aae54cb2e0d2201f941279ffa13edc8b955",
+            "instruction_sha256": "4bb6bbda20df45a308004b518233548056661e825e404f3268ab25d8a2d862e8",
+            "instruction_git_blob_sha1": "0d7bdffb511faf2886aefe4535a485f549aae4b0"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-21-endocrine-resistance-events",
@@ -738,7 +1036,27 @@
       "deterministic_verifier_design": "Recompute union prevalence and complete contingency from patient-level event flags.",
       "negative_controls": "Double-count a patient with two pathway genes or omit double-negative patients from the contingency table; reject both.",
       "unresolved_independent_data_and_runtime_assumptions": "Independent cohort must have treatment timing; cooccurrence is not mechanistic endocrine resistance.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "Post-treatment eligible-patient manifest, patient union of pathway alterations, cumulative frequency and complete ESR1/pathway 2x2 association tables.",
+        "required_definition_or_evidence": "Freeze therapy timing, receptor eligibility, pathway membership and alteration classes. Count each patient once in a pathway union even with multiple events.",
+        "ungraded_or_deferred_claims": "Alteration prevalence and cooccurrence do not establish pathway activation or an endocrine-resistance mechanism.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-18-5",
+            "question_sha256": "32d2bedfc3c8c89cc886771989abc93b1cca10c5fc3fa6abf9517d8a47a6e052",
+            "instruction_sha256": "5c0ba9fdf154df4741d7e6724d2999ade6a1dd81a7698a0eaca8ebadcc92535d",
+            "instruction_git_blob_sha1": "6ea24999ecb038eebd573a60147a7d04c3eabb6e"
+          },
+          {
+            "task_id": "da-18-7",
+            "question_sha256": "f60578de329e3d6f41350eb47b8cc0e070ab0b2c9aa290abedec8bb79c4d614b",
+            "instruction_sha256": "5813b7feb9914b8dbae353ab81700d8940bbc5c1553b1e9e0dc72e07e3643afa",
+            "instruction_git_blob_sha1": "a3a49e84e4f42cee2a3a63d1690bac37f18240f4"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-22-aml-treatment-rna",
@@ -771,7 +1089,21 @@
       "deterministic_verifier_design": "Independently fit full gene-level contrast and verify complete ranked set.",
       "negative_controls": "Reverse a nonzero treatment effect or omit an eligible nonsignificant gene from the full results; reject sign or completeness errors.",
       "unresolved_independent_data_and_runtime_assumptions": "Independent perturbation study with replication required; do not infer therapeutic targets from DE alone.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "Treatment/control differential-expression results and the complete ordered set satisfying the declared downregulation rule.",
+        "required_definition_or_evidence": "Match dose, time, model context and biological replicates; freeze effect orientation and rank statistic rather than using an unspecified most-significant list.",
+        "ungraded_or_deferred_claims": "Downregulation alone does not identify a therapeutic target or establish direct regulation.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-19-1",
+            "question_sha256": "a0f027d02462fa7c1e6598d504a1c5eb06bc894d6218bf26aadeb2c30d845af3",
+            "instruction_sha256": "2e9d727150ddcf029df406cc04085851b8ed134f5951d34bf2adec09d1e1d1cb",
+            "instruction_git_blob_sha1": "821a52eaf1dd3dc99d0c568795336a147c29179d"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-23-aml-transcription-factor-occupancy",
@@ -805,7 +1137,21 @@
       "deterministic_verifier_design": "Verify interval/count joins and native differential occupancy results over complete region universe.",
       "negative_controls": "Change submitted peak coordinates or omit a required assay control from the submitted design; reject against the fixed input/assay contract.",
       "unresolved_independent_data_and_runtime_assumptions": "Independent factor-binding data with matched perturbation needed; occupancy alone does not establish regulation.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "Replicated TF-occupancy counts/signals on a common region universe, normalization/QC and complete differential-occupancy results.",
+        "required_definition_or_evidence": "Require the actual TF assay, appropriate controls and assembly-consistent regions. ATAC accessibility is not a substitute for TF occupancy.",
+        "ungraded_or_deferred_claims": "Occupancy changes do not prove which targets mediate a therapeutic effect.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-19-3",
+            "question_sha256": "6eadfffcecee3f6ebafc96fd2ce4986b26b25e446c904d3126f0def2bcc09dcf",
+            "instruction_sha256": "cb00fea4ec07ebd01028f80b96cbbf6fa093df6edacabcf5db810cc7bf59a1d1",
+            "instruction_git_blob_sha1": "9ba322e858b042a004e961d7fb290c0cbd3bb060"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-24-aml-enhancer-acetylation",
@@ -838,7 +1184,21 @@
       "deterministic_verifier_design": "Recompute region counts and full contrast including non-significant enhancers.",
       "negative_controls": "Swap signal/control identities or change enhancer boundaries in submitted artifacts; reject provenance and count inconsistencies.",
       "unresolved_independent_data_and_runtime_assumptions": "Observed matched enhancer signal with biological replicates required; chromatin signal is not enhancer function proof.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "Measured H3K27ac differential signals for declared enhancer regions, with complete region eligibility and ranked decreases.",
+        "required_definition_or_evidence": "Freeze enhancer annotation and signal/control normalization. Promoter exclusion or enhancer attribution must be explicit rather than guessed from nearby genes.",
+        "ungraded_or_deferred_claims": "Acetylation changes do not establish enhancer necessity or leukemia-maintenance causality.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-19-4",
+            "question_sha256": "2d4b1336db08e02fae17e7f90f7f4e6adaab68d5215794e5417d0c3413e51b37",
+            "instruction_sha256": "3c312be11994aa959c7e840b4ebed9b0c92bd622a64fe00a444b2f229c793adb",
+            "instruction_git_blob_sha1": "6dddc0005bf5ee87a2925428c0881e483d9e2c8f"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-25-aml-atac-global-shift",
@@ -873,7 +1233,21 @@
       "deterministic_verifier_design": "Check all region counts and normalized distribution plus differential test under pinned reference.",
       "negative_controls": "Claim an absolute shift without the required anchor, or alter a submitted normalization factor; reject the unsupported endpoint or numeric mismatch.",
       "unresolved_independent_data_and_runtime_assumptions": "Independent assay must include suitable normalization anchor; endpoint may need reframing to relative distribution changes.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "Complete region-count and distribution-change analysis, with external normalization factors if the authored endpoint is an absolute global shift.",
+        "required_definition_or_evidence": "An absolute-shift claim requires a suitable measured anchor. Without it, author a relative-distribution task and label the endpoint change rather than inventing an anchor.",
+        "ungraded_or_deferred_claims": "Defer absolute global-accessibility conclusions when only relative library-normalized counts exist. This is an evidence limitation, not an LLM-scoring problem.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-19-6",
+            "question_sha256": "10bf6d0cff1302d305b6fd2c9f75806216d9e33447116c7348dac7a40f3cca31",
+            "instruction_sha256": "55e78eb342dd506dec1b6d27297598284bb5c963415e8af985b563625ab8f997",
+            "instruction_git_blob_sha1": "61068fbcc59b549a44556accdd6f8ecc5be4569c"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-26-primary-cell-baseline-similarity",
@@ -904,7 +1278,21 @@
       "negative_controls": "Include treated samples in the submitted baseline table or duplicate a donor; reject eligibility and aggregation errors.",
       "unresolved_independent_data_and_runtime_assumptions": "Independent primary-cell study must include comparable untreated samples across types.",
       "status": "proposed-design-only-no-coverage-credit",
-      "routing_limit": "Scientific index only; this endpoint retains its detailed standalone contract and does not become covered by another workstream question."
+      "routing_limit": "Scientific index only; this endpoint retains its detailed standalone contract and does not become covered by another workstream question.",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "Baseline-only sample/centroid expression distances and a declared ranking of cell-type similarity with replicate structure retained.",
+        "required_definition_or_evidence": "Keep exposed samples out of baseline estimation; distinguish donor/sample distances from cell-type centroid distances and declare batch adjustment.",
+        "ungraded_or_deferred_claims": "Baseline separation does not by itself validate an entire screening platform.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-20-1",
+            "question_sha256": "76ccbbef39bede02e13c02304bd7426f6e0e8ba7052b4eaec0c2fc613f5879ca",
+            "instruction_sha256": "8ad04d88ee67d24fd6f158a5148d2c9f92922a580c9b3a05a4b013e6898f322f",
+            "instruction_git_blob_sha1": "d21925037a6595a66d28d0f22300c48b5f125119"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-27-primary-cell-pathway-response",
@@ -938,7 +1326,21 @@
       "deterministic_verifier_design": "Recompute contrasts and full gene-set results with native method and independent membership/arithmetic checks.",
       "negative_controls": "Reverse a nonzero signed enrichment result or omit a tested gene set; reject direction and completeness errors.",
       "unresolved_independent_data_and_runtime_assumptions": "Independent multi-cell-type perturbation data and enough replicates required; mechanism remains a hypothesis.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "Per-cell-type treatment contrasts and complete signed Hallmark enrichment results, with a stated cross-type suppression rule.",
+        "required_definition_or_evidence": "Preserve matched vehicle, dose/time and observed cell types. Fix ranked enrichment versus overrepresentation and the gene-set universe before scoring.",
+        "ungraded_or_deferred_claims": "Pathway expression evidence can be consistent with a mechanism but does not experimentally confirm it.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-20-3",
+            "question_sha256": "905cf665141f9418963b94e22679a90346794e452920d2a986ecd8657883aa19",
+            "instruction_sha256": "765f325bbe69138f08756084d8e5ad10a76a446df312e53cf90dc383cf4a4b43",
+            "instruction_git_blob_sha1": "704bf972438ac4d7471cc4b263f6fdcb7eac7fbb"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-28-primary-cell-compound-divergence",
@@ -972,7 +1374,21 @@
       "deterministic_verifier_design": "Re-read HDF5 raw counts and independently fit complete within-type and interaction tables; check model rank.",
       "negative_controls": "Collapse distinct dose/time strata in the submitted design or report a wrong cell-type interaction contrast; reject the specified model violation.",
       "unresolved_independent_data_and_runtime_assumptions": "Existing mouse developmental GLM is only a mathematical component; independent four-type compound study needed within 30 minutes.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "Every cell-type-specific compound contrast plus direct interaction/effect-pattern comparisons on the common measured feature universe.",
+        "required_definition_or_evidence": "Freeze the full-rank factorial model and divergence rule. Opposite significance calls alone do not prove different effects.",
+        "ungraded_or_deferred_claims": "Expression divergence does not establish tissue-specific safety or efficacy.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-20-4",
+            "question_sha256": "be8d4c6c7417e1dbc1c7f21ab3f3ac1243f77859eb9f7337f2e3947c86b1e2c1",
+            "instruction_sha256": "8338b41cc1328d34c938a6e4910486aa13dda299f7fa8e2fef5e65d0d221a6a0",
+            "instruction_git_blob_sha1": "6f5dfd21ca373be48ae3da59bcf827e403fcda7f"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-29-cross-trait-gwas-alternatives",
@@ -1002,7 +1418,21 @@
       "negative_controls": "Flip an effect allele without harmonizing its signed effect, or claim an LD reference with the wrong declared ancestry; reject harmonization/provenance errors. Freeze the selected statistic before numeric mutations are designed.",
       "unresolved_independent_data_and_runtime_assumptions": "Public question is underspecified; these are named alternatives, not an exact benchmark mapping. Independent GWAS/LD access and runtime unvalidated.",
       "status": "proposed-design-only-no-coverage-credit",
-      "routing_limit": "Scientific index only; this endpoint retains its detailed standalone contract and does not become covered by another workstream question."
+      "routing_limit": "Scientific index only; this endpoint retains its detailed standalone contract and does not become covered by another workstream question.",
+      "judge_free_scoring_scope": {
+        "disposition": "defer-undefined-scientific-endpoint",
+        "executable_scientific_outputs": "No exact source endpoint selected: shared genetic factors could refer to genome-wide correlation, shared associated loci or locus colocalization.",
+        "required_definition_or_evidence": "Defer this card from implementation selection until traits, statistic and required allele/LD metadata define one coherent question. Existing named alternatives remain research leads only.",
+        "ungraded_or_deferred_claims": "Do not assign an arbitrary deterministic statistic and count it as full coverage of the unspecified source question.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-24-3",
+            "question_sha256": "4f267ecefffc4531a98de73059c7280efd5f6b0f10aae4ec5ee2fb2e9e7a644d",
+            "instruction_sha256": "a58819879c2dfeb8e58bd73a9d468b605ee65df901c1fda5fc72d81fc668378d",
+            "instruction_git_blob_sha1": "e563971c361582c3acc72ca569779527f935e0cd"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-30-tumor-variant-stage",
@@ -1037,7 +1467,21 @@
       "deterministic_verifier_design": "Recompute qualifying patient-gene events, prevalence, all stage tests and plot data.",
       "negative_controls": "Inflate recurrence with duplicate patient-variant rows or alter a clinical-stage contingency cell; reject the submitted frequency/test artifacts.",
       "unresolved_independent_data_and_runtime_assumptions": "Independent cohort must include frozen annotation and reliable stage; visualization is verified from data rather than pixels.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "Clinically annotated alteration eligibility, complete gene-frequency ranking and declared gene/stage association tests; optional plot source tables.",
+        "required_definition_or_evidence": "Pin the classification source/date and keep pathogenicity distinct from molecular consequence. Clinical T stage needs explicit ordinal/categorical encoding.",
+        "ungraded_or_deferred_claims": "Plots may be inspected without grading aesthetics. If a specific visual output becomes mandatory, record its ungraded scope rather than adding a judge.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-25-1",
+            "question_sha256": "b9a89af511477cbbd9382f3c778e020dff950169a060169516f294f8634a4509",
+            "instruction_sha256": "741aa376e9a4c6b9e74ea4a4f135e47287d355b86de0279f42a9f925d8c51c41",
+            "instruction_git_blob_sha1": "43749ff7480dbb4786ea884787361a14e8bfb1fc"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-31-patient-cell-line-dependency",
@@ -1071,7 +1515,21 @@
       "deterministic_verifier_design": "Recompute model outputs from frozen weights or verify scored held-out rows, then complete associations and heterogeneity arithmetic.",
       "negative_controls": "Label inferred patient scores as measured or place a declared held-out patient in training lineage; reject provenance and fold artifacts. This tests recorded lineage, not unobservable training history.",
       "unresolved_independent_data_and_runtime_assumptions": "No observed patient DepMap truth exists from cell-line screens; task cannot claim such truth. Model/source availability and 30-minute scoring remain open.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "Patient and cell-line feature/dependency associations and a direct, scale-defined heterogeneity comparison, with inferred patient scores labeled.",
+        "required_definition_or_evidence": "Retain model lineage and training/evaluation separation. Patient significance plus cell-line nonsignificance is not sufficient evidence of different effects.",
+        "ungraded_or_deferred_claims": "Patient dependency predictions are not observed patient knockout outcomes. No such measured truth or clinical validation is claimed.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-26-2",
+            "question_sha256": "ac544713a097b57d539221de482a69f4a2e2d394599095e8e6795206fe8535e8",
+            "instruction_sha256": "f156d805c4884b72ca639fad614931045e3f45c9fedc348c0818ab41db771cbb",
+            "instruction_git_blob_sha1": "83a24fb7c27b532692306c8caf9b72d0035b55a2"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-32-synthetic-lethality-ranking",
@@ -1108,7 +1566,21 @@
       "deterministic_verifier_design": "Recompute leakage-safe folds, complete predictions, 2x2 events and weighted rank from supplied priors.",
       "negative_controls": "Overlap submitted training and held-out IDs, omit double-negative patients, or change one ranking weight; reject fold, contingency and ranking artifacts. Artifact checks alone cannot prove unseen model training avoided leakage.",
       "unresolved_independent_data_and_runtime_assumptions": "Patient score provenance may be inferred; independent assays and bounded model training needed. Ranking is prioritization, not validated synthetic lethality.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "Held-out lasso predictions, complete mutation-exclusivity tests, attributed paralog/PPI evidence and a transparent candidate-evidence table.",
+        "required_definition_or_evidence": "Freeze folds, loss-of-function eligibility, models and hypothesis families. A prespecified numerical ranking can be graded as an authored prioritization rule, with its weights exposed.",
+        "ungraded_or_deferred_claims": "Defer free-form ranking by translational relevance and claims of validated synthetic lethality. Arbitrary weights cannot replace that judgment or earn full source-endpoint coverage.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-26-4",
+            "question_sha256": "bade8bd365c8a09121ff71f82d5e1b0a3c5db637203ab493e0d382c420026b34",
+            "instruction_sha256": "e7aa1cedd5153cc5f4ed4f52ce5b11d44a634b904d1107c9828798aa46a055f2",
+            "instruction_git_blob_sha1": "e44799f9ff5287f67f11c0022de4bb223baeff31"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-33-mutation-burden-response",
@@ -1151,7 +1623,27 @@
       "deterministic_verifier_design": "Recompute per-patient burden and all response contingency tables from frozen calls.",
       "negative_controls": "Double-count a mutation or drop mutation-negative patients from a response denominator; reject burden and contingency errors.",
       "unresolved_independent_data_and_runtime_assumptions": "Both endpoints need one independent cohort and assay-comparable burden; original supplementary table is not used.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "Assay-comparable patient mutation burden/response association and complete eligible-variant responder/nonresponder contingency tests.",
+        "required_definition_or_evidence": "Keep callable territory, patient denominator and mutation-negative controls explicit. The per-variant task requires variant identities, not only gene-level burden.",
+        "ungraded_or_deferred_claims": "Associations with response do not prove treatment sensitivity mechanisms.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-3-4",
+            "question_sha256": "d6646e41a209b982d8d79c0fabd9d2b583db6bd22fb180d55fd220e56fd1ca29",
+            "instruction_sha256": "990b79a9472b7531eb825021da385fc20dadd33997cb4d507c6e5f502e324aac",
+            "instruction_git_blob_sha1": "cd9bcbe66ec33f38d31f7c537c5256beda069d74"
+          },
+          {
+            "task_id": "da-3-5",
+            "question_sha256": "1b54052756f43c9bdc7b13a98f440d62293e807c8f2aa0efb43b835ebc05d79a",
+            "instruction_sha256": "d43d5c5f79ef5fde4faed872e79302e81e8585fb12000466b5ad291e7a0c0004",
+            "instruction_git_blob_sha1": "20eb809938f93c1bdf584b9ff8a7280f1b88877f"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-34-immune-composition-nmf",
@@ -1186,7 +1678,21 @@
       "deterministic_verifier_design": "Recompute reconstruction and rank-selection statistics with pinned seeds and numerical tolerances. Accept factor permutation/scaling where the task permits it; compare full patient memberships after optimal label matching. Reconstruction error alone is insufficient to verify clinically used subtypes, and NMF factors do not define a unique subspace equivalence contract.",
       "negative_controls": "Submit negative composition values, omit a patient, or change a reconstruction beyond tolerance; reject. Verify factor permutation/scaling invariance and rank-selection evidence; artifacts alone cannot reveal hidden outcome-guided selection.",
       "unresolved_independent_data_and_runtime_assumptions": "Need sufficient independent patients; full rank sweep must fit runtime and not use benchmark data.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "A declared NMF rank search, repeated fits, stability/reconstruction results, selected rank and patient factor/partition outputs.",
+        "required_definition_or_evidence": "Define optimal within a fixed candidate grid using an outcome-independent criterion and tie rule. Preserve factor-label/scale nonidentifiability in verification.",
+        "ungraded_or_deferred_claims": "Defer claims that one partition is the uniquely correct biological patient classification.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-4-1",
+            "question_sha256": "b5ab3639ee0c5630baf085f30ff2145bdc2fd2cdf4f1f11a92d5e5f1acdba9fc",
+            "instruction_sha256": "17feac18336006facb0570f6b662d729f1ad74be91b0a8154b47cd84eb33f413",
+            "instruction_git_blob_sha1": "463b94fcd3051cbb13df818a5ec9eadbee86a9e9"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-35-cell-score-survival",
@@ -1219,7 +1725,21 @@
       "deterministic_verifier_design": "Recompute eligible numerator/denominator and survival estimates from patient rows.",
       "negative_controls": "Submit a cutoff different from the frozen value, or count a censored patient as a known event-free survivor beyond last follow-up; reject cutoff and status artifacts. Artifact verification cannot establish how the frozen cutoff was originally selected; record outcome-independent selection as an authoring/provenance requirement.",
       "unresolved_independent_data_and_runtime_assumptions": "Independent cohort needs adequate nonresponders and follow-up; association does not establish score predictiveness prospectively. Exact proportion endpoint remains ambiguous until an authored contract is selected; this design cannot yet claim exact benchmark equivalence.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "High-score nonresponder frequency and censoring-aware survival comparison under a declared time origin and score cutoff.",
+        "required_definition_or_evidence": "Specify whether the fraction means high-score/nonresponder membership or an intersection with a fixed-time survival outcome. Report its numerator and denominator; censoring does not mean survival or death.",
+        "ungraded_or_deferred_claims": "Until this proportion is defined, the exact endpoint remains unresolved. A retrospective survival association does not validate prediction.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-4-6",
+            "question_sha256": "c15f6d1578f2e144cc87e8dc7ac2790a87d178bdd0a92f0ecb30142a8ff609ac",
+            "instruction_sha256": "4c69c6c400962d1a46fe902ee51dc5dd66d83b1544d03cf17346e8a176952bae",
+            "instruction_git_blob_sha1": "3a05e0e10fe8e4686286330f8f31d4bcf6b1a56f"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-36-shared-expanded-tcr",
@@ -1252,7 +1772,21 @@
       "deterministic_verifier_design": "Rebuild clones from eligible contigs and verify all patient counts and state joins.",
       "negative_controls": "Duplicate a cell or merge distinct CDR3 identities in the submitted clone table; reject false expansion and patient sharing.",
       "unresolved_independent_data_and_runtime_assumptions": "Independent cohort needs matched repertoire and expression; sharing does not validate therapeutic TCR function.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "Expanded, exhaustion-state-associated clonotype identities, complete distinct-patient sharing counts and supporting paired-chain/cell-state evidence.",
+        "required_definition_or_evidence": "Freeze clonotype equivalence, expansion thresholds and cell-state evidence. Repeated cells and chains must not become extra patients.",
+        "ungraded_or_deferred_claims": "Defer therapeutic TCR suitability and antigen-specific function without relevant independent measurements. Shared expansion alone is component evidence for that conclusion.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-4-7",
+            "question_sha256": "3c6b8bda734ff17cfec8cba10b3e5d3b7883b46a50e430d890ca0644dae05674",
+            "instruction_sha256": "78ce0fc11d2210e2e3a7765015a1b9ad2e64c372d24af28c21c8840f1dc7d4bf",
+            "instruction_git_blob_sha1": "ec3a36b1735c23b5baf8ef508fe80d6c045f7cc4"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-37-tumor-protein-dependency-targets",
@@ -1286,7 +1820,21 @@
       "deterministic_verifier_design": "Recompute each assay-specific call and conjunction/rank over all eligible targets.",
       "negative_controls": "Claim a target with no qualifying dependency measurement or silently resolve an ambiguous protein-gene mapping; reject unsupported evidence.",
       "unresolved_independent_data_and_runtime_assumptions": "Requires independent proteomics and cancer-line screens; cell-line dependency is not patient efficacy.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "Complete tumor/normal protein effects joined to relevant measured cell-line dependencies and an attributed druggability annotation.",
+        "required_definition_or_evidence": "Freeze assay mappings, cell-line eligibility, effect/dependency thresholds and the evidence-combination rule. Missing dependency evidence is not a negative screen.",
+        "ungraded_or_deferred_claims": "Retain target prioritization under declared rules; clinical promise, drug efficacy and safety are ungraded.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-5-1",
+            "question_sha256": "0f8be1b1ead03df3195ad3ded4810c4c6fbc35cfbe98f2f8ba05e417aa483af2",
+            "instruction_sha256": "b7d180a952215866d87f58b9c865f23d67f762910e60fbfc2ebcaae4a8209ed2",
+            "instruction_git_blob_sha1": "a3e4ae8c9bad36f74d7c1fa9e160682f239f61ac"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-38-activating-phosphosite-targets",
@@ -1320,7 +1868,21 @@
       "deterministic_verifier_design": "Recompute site-level effects and joins without collapsing distinct residues to a gene-level abundance.",
       "negative_controls": "Swap residue coordinates or substitute total-protein effects for phosphosite effects in submitted artifacts; reject site identity and assay mismatch.",
       "unresolved_independent_data_and_runtime_assumptions": "Independent site-resolved assay is essential; no direct evidence of drug response follows.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "Site-level tumor effects joined to frozen activating-site annotations, host-gene dependency and declared druggability evidence.",
+        "required_definition_or_evidence": "Preserve residue/isoform identity, localization confidence and total-protein adjustment where required. Increased abundance cannot itself define an activating site.",
+        "ungraded_or_deferred_claims": "Unannotated activation or therapeutic benefit is unresolved; a host-gene effect does not validate the individual phosphosite.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-5-3",
+            "question_sha256": "48535bc348ac83d4d88751aff5d42d67ec0273551cf792d84f5f30adeb22cef3",
+            "instruction_sha256": "ad805957d4e60545df5cabeaa8866ffd7c135fa4197b0ca6c7dee4758d06dfe2",
+            "instruction_git_blob_sha1": "e7ac8fc1a8a3c14ed4c759d09f65e806ae59502d"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-39-muscle-sex-timecourse",
@@ -1354,7 +1916,21 @@
       "deterministic_verifier_design": "Independently fit complete gene model and verify clustered trajectory summaries after preserving participant pairs.",
       "negative_controls": "Assign inconsistent sex labels across visits of one participant or break submitted visit order; reject metadata and trajectory artifacts.",
       "unresolved_independent_data_and_runtime_assumptions": "Need repeated biopsies with both sexes and sufficient visits; clustering runtime must be bounded.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "Complete sex-specific time contrasts, estimable sex-by-time differences and a declared trajectory-pattern summary across measured time points.",
+        "required_definition_or_evidence": "Keep participant identity and missing visits. A participant fixed intercept absorbs the sex main effect; do not demand a nonidentifiable coefficient.",
+        "ungraded_or_deferred_claims": "Temporal expression patterns are measured associations, not proof of sex-specific causal training mechanisms.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-6-2",
+            "question_sha256": "b15e788a5b6276849a554d2d30ce59a11a9851b25b1148104775a5f8f4b7b0fe",
+            "instruction_sha256": "c582eca963f9441734df044888130addf0e37f635cc16fe19ab3e471c57960cd",
+            "instruction_git_blob_sha1": "2a4bcbb2e3992fa376473b9760e3c877ef603225"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-40-multi-organ-training-response",
@@ -1384,7 +1960,21 @@
       "negative_controls": "Substitute baseline abundance for a training-change effect or count a feature not measured in both organs; reject effect provenance and shared-universe errors.",
       "unresolved_independent_data_and_runtime_assumptions": "Requires independent multi-organ pre/post study; cannot infer coordination from baseline differences.",
       "status": "proposed-design-only-no-coverage-credit",
-      "routing_limit": "Scientific index only; this endpoint retains its detailed standalone contract and does not become covered by another workstream question."
+      "routing_limit": "Scientific index only; this endpoint retains its detailed standalone contract and does not become covered by another workstream question.",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "Within-organ training-effect estimates and complete between-organ similarity of changes on a matched measured feature universe.",
+        "required_definition_or_evidence": "Compare response effects rather than baseline tissue expression. Distinguish repeated organ measurements within an animal from independent organ cohorts.",
+        "ungraded_or_deferred_claims": "Coordinated molecular changes do not establish cross-organ causal signaling.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-6-5",
+            "question_sha256": "f6df076241c574a9dc77f477466e78e1a3d84c331b3127451fdaffa5b0635a89",
+            "instruction_sha256": "f98ea3ff34b66480bd09084dbac6f582b1c8f5e68d0bd09dfd0c0bc509a1ddf1",
+            "instruction_git_blob_sha1": "95171f5f27ad059fca1785b98d5a5f38a69416e7"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-41-bread-spiker-metabolites",
@@ -1415,7 +2005,21 @@
       "negative_controls": "Include a preload meal in the unmitigated subgroup calculation or put a negative coefficient in the positive top-10 table; reject subgroup and direction errors.",
       "unresolved_independent_data_and_runtime_assumptions": "Independent cohort needs replicated meals, metabolomics and BP; selection must precede association fitting.",
       "status": "proposed-design-only-no-coverage-credit",
-      "routing_limit": "Scientific index only; this endpoint retains its detailed standalone contract and does not become covered by another workstream question."
+      "routing_limit": "Scientific index only; this endpoint retains its detailed standalone contract and does not become covered by another workstream question.",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "Replicate-aware meal peaks, the source-defined bread-response subgroup, complete age/BMI-adjusted metabolite regressions and the eligible positive top-ten list.",
+        "required_definition_or_evidence": "Exclude preload meals before averaging, use strictly above the cohort median, and freeze peak window, significance and rank rules. If fewer than ten metabolites qualify, return fewer rather than filling with nonsignificant ones.",
+        "ungraded_or_deferred_claims": "The subgroup and associations are computable; hypertension causation or clinical utility is ungraded.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-8-1",
+            "question_sha256": "f470e6624712b81fbc1ccbd24e4456f3306aca6e827a4c5b6f490763719247ab",
+            "instruction_sha256": "2ddd2f0dfe0585268476d3d13baa835c3bf27040f1932945defa62aecbd787bb",
+            "instruction_git_blob_sha1": "82c481368c96eada213873dacee54fd5df3644d9"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-42-crossover-preload-interaction",
@@ -1445,7 +2049,21 @@
       "negative_controls": "Join challenges from different participants or reverse the declared interaction contrast; reject pairing and coefficient mismatch.",
       "unresolved_independent_data_and_runtime_assumptions": "Independent crossover data with enough paired participants per status required; measured interaction not causal mechanism.",
       "status": "proposed-design-only-no-coverage-credit",
-      "routing_limit": "Scientific index only; this endpoint retains its detailed standalone contract and does not become covered by another workstream question."
+      "routing_limit": "Scientific index only; this endpoint retains its detailed standalone contract and does not become covered by another workstream question.",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "Within-participant protein/fiber challenge effects and a direct interaction with baseline metabolic status, including uncertainty.",
+        "required_definition_or_evidence": "Define the unpreloaded comparison, glucose window, status cutoff, treatment order and missing paired-challenge policy. Declare whether the estimand is peak reduction or a difference in reductions.",
+        "ungraded_or_deferred_claims": "A measured interaction does not establish a treatment recommendation.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-8-2",
+            "question_sha256": "47e78bc1f1167e556c6c834c72ae30bc21365e39ccea272a065fff20b2b5d65d",
+            "instruction_sha256": "3f23df87616dd31ec384e68aceaf176f4ed3c4c78653e0bc8fb7d69ded190e6f",
+            "instruction_git_blob_sha1": "5ee0b485c1720f9f0d03e217bbecc2f77636d336"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-43-metabolite-mediation",
@@ -1476,7 +2094,21 @@
       "negative_controls": "Add a lipid outside the frozen eligible top-10 set to the mediation results or omit an eligible model; reject selection and completeness errors.",
       "unresolved_independent_data_and_runtime_assumptions": "Observational mediation needs temporal/confounding assumptions and cannot certify causality; independent suitable cohort required.",
       "status": "proposed-design-only-no-coverage-credit",
-      "routing_limit": "Scientific index only; this endpoint retains its detailed standalone contract and does not become covered by another workstream question."
+      "routing_limit": "Scientific index only; this endpoint retains its detailed standalone contract and does not become covered by another workstream question.",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "Complete phenotype contrast, frozen top-ten metabolite selection, lipid subset and all prespecified statistical mediation model outputs.",
+        "required_definition_or_evidence": "Declare phenotype overlap, technical-replicate handling, covariates and mediator/outcome timing. Selection and mediation on the same samples require explicit exploratory interpretation or a designed evaluation protocol.",
+        "ungraded_or_deferred_claims": "Retain model-estimated indirect effects as statistics. Defer causal mediation claims when temporal ordering/confounding assumptions are unsupported; significance cannot verify those assumptions.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-8-3",
+            "question_sha256": "61ede88367ecc2857df04f672480af34f92981a9a74221e0cf5c18d2f783a7ca",
+            "instruction_sha256": "a519daa05caa2de3bf14ecb065b8a9a2cc2b1aaaf9e32ca691f2eb021ea505bc",
+            "instruction_git_blob_sha1": "90c10853081e703266beede201ddca2a51d08ea1"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-44-baseline-tcell-survival",
@@ -1509,7 +2141,21 @@
       "deterministic_verifier_design": "Recompute patient fractions and full censoring-aware tests; verify no censored patient is called a one-year survivor without follow-up.",
       "negative_controls": "Label a patient censored before one year as a known one-year survivor or count duplicate patient visits; reject status and denominator artifacts.",
       "unresolved_independent_data_and_runtime_assumptions": "Need enough events/replicates; association cannot be marketed as validated predictive biomarker.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "Baseline immune-population associations with an explicitly defined censoring-aware one-year survival endpoint.",
+        "required_definition_or_evidence": "Choose a one-year risk estimand or a hazard association over a specified follow-up window; they are different. Do not classify patients censored before one year as known one-year survivors.",
+        "ungraded_or_deferred_claims": "Association can be graded without a judge; prospective biomarker utility requires separate validation.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-9-1",
+            "question_sha256": "2b14fcdea310d72c3e9283fccb7ae5edfbdbfe6c310652dfc74a2981ee6c098d",
+            "instruction_sha256": "f87a79332281e4b653e812a81a87e824274451dde88ee9fa49198c79703c374b",
+            "instruction_git_blob_sha1": "4cf3295f4df2cf076e77b774e37ba8157d09a9fa"
+          }
+        ]
+      }
     },
     {
       "proposed_id": "biomni-design-45-on-treatment-immune-protein",
@@ -1543,7 +2189,21 @@
       "deterministic_verifier_design": "Recompute matching and every pairwise correlation from complete common-patient set.",
       "negative_controls": "Join protein and immune samples from different patients/visits or drop tested null pairs; reject pairing and multiplicity-universe errors.",
       "unresolved_independent_data_and_runtime_assumptions": "Independent paired immune/protein measurements at a single visit required; source cohort availability unvalidated.",
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "judge_free_scoring_scope": {
+        "disposition": "retain-quantitative-workflow-proposal",
+        "executable_scientific_outputs": "Complete same-visit patient-matched immune-frequency/protein correlations with pairwise eligibility and multiplicity reporting.",
+        "required_definition_or_evidence": "Use cell-population frequencies rather than epitope median signal intensities. Match the declared on-treatment visit and preserve one observation per patient/pair.",
+        "ungraded_or_deferred_claims": "Cross-modal correlation supplies association evidence; it does not by itself validate a biomarker or establish a longitudinal treatment effect.",
+        "source_question_evidence": [
+          {
+            "task_id": "da-9-7",
+            "question_sha256": "bed4a95c44a1b80025cc0dd228e57fa21c9891b08dcc3b0222b446e2f6f85f1d",
+            "instruction_sha256": "cd7d0178b47a9ae1e3484f3d2e35da0fd0b815706123e2124aaec3d41a875c74",
+            "instruction_git_blob_sha1": "1a7a6f45a8b7d3915f3074d9e0f8aed71aee7689"
+          }
+        ]
+      }
     }
   ],
   "design_principles": [
@@ -1571,5 +2231,34 @@
     "inventory_sha256": "dff90709c7bfbc913b70d6f6fc53a1ba48e17cb4716b221ed2f4350d0d6d4b43",
     "workflow_plan_sha256": "ceb4677a88cd32dc53704a9945fe29db8982c354f1d98be7c0bb27649494cddf",
     "meaning": "Hashes identify the planning inputs before this endpoint-review update."
+  },
+  "judge_free_scope_review": {
+    "reviewed_at": "2026-09-24",
+    "reviewed_question_ids": 50,
+    "reviewed_designs": 45,
+    "retained_quantitative_workflow_proposals": 44,
+    "source_questions_linked_to_retained_proposals": 49,
+    "deferred_undefined_source_questions": [
+      "da-24-3"
+    ],
+    "protocol_evidence": {
+      "revision": "e1c8ca5e11a620087bc48d97888eb69176a1f235",
+      "metadata_tree_url": "https://huggingface.co/api/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235?recursive=true&limit=1000",
+      "metadata_tree_sha256": "5c4da0703386b9cedbfc6a827cd0c9657bd20a217eb9cc6bee6e3738f0191e59",
+      "instruction_files_matching_remote_git_blobs": 50,
+      "instruction_bytes_reviewed": 287041,
+      "finding": "All 50 instructions require an analysis trace evaluated by an expert judge. The reviewed repository protocol is not a deterministic scoring specification.",
+      "scope": "Verified cached instruction bytes through pinned remote file metadata; read questions, input descriptions and output instructions. No source answers or biological fixtures accessed."
+    },
+    "authoring_policy": [
+      "Keep Harbor as the only execution/submission protocol. Grade complete scientific artifacts with private executable oracles and deterministic verifiers; do not port the upstream expert-judge trace rubric.",
+      "Trace/report prose and plots may remain inspectable. Do not add a judge for rationale quality, narrative mechanism, aesthetics, clinical promise or translational relevance.",
+      "A source having an expert-judge protocol does not make every scientific computation unscorable. Retain its numerical workflow where a coherent endpoint can be specified, while recording every ungraded scientific conclusion separately.",
+      "Distinguish scientific-workflow coverage from reproducing the original evaluator. A completed numerical component does not cover a source scientific conclusion that still needs unsupported biological evidence or subjective ranking.",
+      "Do not reject numerical association, model-based mediation or cell-communication inference solely because causal/functional interpretation is limited. Name the estimator and keep its evidentiary limits explicit.",
+      "Defer the undefined cross-metabolite GWAS endpoint from implementation selection. Traits/statistic/evidence must resolve one of the existing alternatives before this card is eligible; it does not hold up the other proposals."
+    ],
+    "remaining_before_assignment": "Independent observed inputs, remaining method choices, executable reference/verifier, numerical tolerances and measured runtime are still required. Retained proposals are not implementation-ready or validated coverage.",
+    "validated_new_mappings": 0
   }
 }
