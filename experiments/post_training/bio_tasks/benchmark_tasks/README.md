@@ -13,6 +13,12 @@ also describe output artifacts, scientific decisions and overlap with other
 releases. A workflow-family pattern can include more stages than one question
 requires; inspect the endpoint before assigning coverage.
 
+To read a compact record, start with its file's `task_defaults`, overlay the
+entry in `patterns` selected by `workflow_family`, then overlay the task's own
+fields. The task's fields take precedence. Files with fully expanded records
+need no overlays. `workflow_patterns`, where present, is a reverse index from
+patterns to task IDs. The inspection page expands these records for browsing.
+
 Coverage progresses from `unmapped` to `component-only`, `composed-unvalidated`
 and `workflow-validated`. A reviewed prompt or a matching tool name does not
 establish workflow coverage. Validation requires an executable connected task

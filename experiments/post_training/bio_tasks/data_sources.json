@@ -1067,6 +1067,129 @@
         "policy": "Explicit descriptive cell and gene filtering; no donor, fine cell-type or mitochondrial assignments inferred. Counts are read counts, not UMIs.",
         "first_attempt": "/exedev/bio-singlecell-qc-20260924-064859"
       }
+    },
+    "UniProt:UP000000625-20260924": {
+      "landing_page": "https://www.uniprot.org/proteomes/UP000000625",
+      "lineage": "UniProt:UP000000625",
+      "license": "CC-BY-4.0",
+      "license_source": "https://www.uniprot.org/help/license",
+      "citation": "UniProt Consortium; accession, entry version and sequence version retained for every protein.",
+      "retrieved_at": "2026-09-24",
+      "release": "2026_03",
+      "release_date": "2026-09-02",
+      "data_origin": "real",
+      "organism": "Escherichia coli (strain K12)",
+      "taxon_id": 83333,
+      "proteins": 4403,
+      "all_reviewed": true,
+      "assembly": "GCA_000005845.2",
+      "assets": {
+        "ecoli-k12-proteins.fasta.gz": {
+          "url": "https://rest.uniprot.org/uniprotkb/stream?query=proteome%3AUP000000625&format=fasta&compressed=true",
+          "download_sha256": "61d3ada5950199edbb91839938fe2d2dc58af02604fe841da32dcc58150aa833",
+          "content_sha256": "a8052a607a98d2444c9d5dd685bd1370150df8c5570c3116811544bbf3d093a2",
+          "vendored_sha256": "e11df6b604362a3290f997ca3fd32af72de53b695a5263fc6cabb7be93a93aa1",
+          "content_bytes": 1891178,
+          "vendored_bytes": 958784,
+          "transformation": "Content unchanged; gzip mtime normalized to zero."
+        },
+        "ecoli-k12-metadata.tsv.gz": {
+          "url": "https://rest.uniprot.org/uniprotkb/stream?query=proteome%3AUP000000625&format=tsv&fields=accession,id,reviewed,length,organism_id,version,sequence_version&compressed=true",
+          "download_sha256": "4c3b267c15544f3b75fe27d8a4bf2703c9ba501fd13d68983c5dc45441caec1f",
+          "content_sha256": "b0ef6b7faef4b3b06cd96f844710dc193c3ab748ff3c3bdd0b5a6e0937ef1590",
+          "vendored_sha256": "9c9b9c0451677c0156f3249a2664c90182783089bd38935496f4f0005e70466e",
+          "content_bytes": 188547,
+          "vendored_bytes": 47988,
+          "transformation": "Content unchanged; gzip mtime normalized to zero."
+        },
+        "ecoli-k12-proteome.json.gz": {
+          "url": "https://rest.uniprot.org/proteomes/UP000000625.json",
+          "download_sha256": "3fc53e7dbcc0fb73fcd4d4680b7cc6317d5466e85909032d0fcb2a219d7487c6",
+          "content_sha256": "3fc53e7dbcc0fb73fcd4d4680b7cc6317d5466e85909032d0fcb2a219d7487c6",
+          "vendored_sha256": "2910920c8a9141667cb92b59fd9c9e748107166bbb0e34af6dd5bb661b5a5d38",
+          "content_bytes": 4644,
+          "vendored_bytes": 2091,
+          "transformation": "Content unchanged; gzip mtime normalized to zero."
+        }
+      },
+      "validation": "FASTA and metadata identifiers match exactly; all sequence lengths agree; downloaded proteome proteinCount agrees. All returned proteins retained without sequence modification.",
+      "intended_workflow": "Search a frozen small set of Pfam profiles against the full proteome, retain all domain boundaries and scores, extract aligned domains, and reconcile per-model and per-protein coverage.",
+      "remaining_checks": [
+        "Actual pinned HMMER execution and independent output parsing",
+        "Complete artifact contract, oracle and negative controls",
+        "Benchmark data-lineage screening",
+        "Container and runtime validation"
+      ],
+      "limits": "Three selected profiles do not annotate all protein families. A no-hit under this profile set does not establish absence of domains or biological function."
+    },
+    "Pfam:selected-models-20260924": {
+      "landing_page": "https://pfam-docs.readthedocs.io/en/latest/pfam-entry.html",
+      "license": "CC0-1.0",
+      "license_source": "https://pfam-docs.readthedocs.io/en/latest/",
+      "retrieved_at": "2026-09-24",
+      "models": {
+        "PF00042": {
+          "accession": "PF00042.29",
+          "name": "Globin",
+          "length": 117,
+          "seed_sequences": 73,
+          "gathering_thresholds": [
+            22.0,
+            22.0
+          ]
+        },
+        "PF00109": {
+          "accession": "PF00109.33",
+          "name": "ketoacyl-synt",
+          "length": 252,
+          "seed_sequences": 75,
+          "gathering_thresholds": [
+            20.8,
+            20.8
+          ]
+        },
+        "PF00115": {
+          "accession": "PF00115.26",
+          "name": "COX1",
+          "length": 436,
+          "seed_sequences": 493,
+          "gathering_thresholds": [
+            34.8,
+            34.8
+          ]
+        }
+      },
+      "assets": {
+        "pf00042.hmm.gz": {
+          "url": "https://www.ebi.ac.uk/interpro/api/entry/pfam/PF00042/?annotation=hmm",
+          "download_sha256": "e3b13407938c66f65fcb8c92ea1f3b4a08cb43a6fbc0c132a7e9dccc8672f817",
+          "content_sha256": "7b300a21130b823627b09dd11fc5a76a7ca49515504c33493d140bcdeda93db3",
+          "vendored_sha256": "cb3c0dfa7fefd070439a273e8552c84f193b7dd4506c9aea150d191839e866c2",
+          "content_bytes": 55576,
+          "vendored_bytes": 12185,
+          "transformation": "Complete HMM bytes unchanged; gzip mtime normalized to zero."
+        },
+        "pf00109.hmm.gz": {
+          "url": "https://www.ebi.ac.uk/interpro/api/entry/pfam/PF00109/?annotation=hmm",
+          "download_sha256": "8af8cc0bc60f59f60f0e0380648c9eb3439c4f512632bf0cd2bccf32166d4a69",
+          "content_sha256": "ef816075cadb22bf135f520401a0749ca8c7352bee9568f4da2289c9c2df939b",
+          "vendored_sha256": "9a0f57f498c8fac7d6894860d8f4051706af4a33fa5ea49871059d7d64dd210d",
+          "content_bytes": 118401,
+          "vendored_bytes": 25454,
+          "transformation": "Complete HMM bytes unchanged; gzip mtime normalized to zero."
+        },
+        "pf00115.hmm.gz": {
+          "url": "https://www.ebi.ac.uk/interpro/api/entry/pfam/PF00115/?annotation=hmm",
+          "download_sha256": "702380ba635033fc581c3334e037898fefbe21f569d5fc53b99df7eb16d9d1ef",
+          "content_sha256": "c182a180b0d8c9e5e88d9b5c8c802f0d6d5031ccc3dd70bc0313bab1d8fbdaea",
+          "vendored_sha256": "b1d9cba22bc9492274533da73bc90f6cbf5ccde27b5354da063ae8adef7ee756",
+          "content_bytes": 203957,
+          "vendored_bytes": 44428,
+          "transformation": "Complete HMM bytes unchanged; gzip mtime normalized to zero."
+        }
+      },
+      "execution_status": "not-yet-run",
+      "limits": "Frozen curated models; no benchmark task inputs or answers used. Selected model coverage is not a complete Pfam annotation."
     }
   }
 }
