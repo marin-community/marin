@@ -76,6 +76,46 @@ Correctness: `test_kda.py` — exact-fp32 parity pinned via `matmul_dtype=float3
 HF-validated `recurrent_gated_delta_rule`); bf16 tests at rtol 2e-2 for C=32/64/128;
 gradients and strong-decay finiteness on the bf16 default. 14 tests pass.
 
+## Phase 4 — full fwd+bwd attribution of the associative-scan kernel (KDA_ATTRIB)
+
+Cumulative-prefix wall-time attribution of the current default (parallel scan, C=128,
+bf16) at the grug shape (B=4, H=8, L=8192, d=128), H100. Staged forward verified
+identical to `chunk_kda` (rel 0.0).
+
+| stage | fwd ms (%) | fwd+bwd ms (%) |
+|---|---|---|
+| intra-chunk **prep** (cumsum/gating, a_raw, **Neumann inverse**, v_pseudo, k_cumdecay) | **2.216 (53%)** | **5.28 (48%)** |
+| M/C transition build | 0.112 (3%) | 0.80 (7%) |
+| **associative_scan** combine (dₖ³ M@M / M@C) | **0.981 (24%)** | **2.80 (25%)** |
+| output GEMMs (attn, v_prime, inter, attn@v_new) | 0.838 (20%) | 2.14 (19%) |
+| **total** | **4.148** | **11.02** |
+
+The Neumann inverse alone (from KDA_DECOMPOSE) is ~1.22ms = ~29% of fwd, at ~10% of
+bf16 peak — so **prep is the dominant cost and roughly half of it is the inverse**.
+Cost is spread across a *chain* of ~15 well-batched-but-separate GEMM/elementwise ops
+with HBM round-trips between them (C×C and C×d intermediates); no single op is a
+hotspot a small change removes — which is exactly why the whole kernel sits at ~4% MFU.
+
+**Implication for the approach.** There is no cheap pure-JAX lever left (phase 2 already
+captured the parallel-scan win). Getting to tens-of-% MFU requires **fusing the op-chain**
+to keep intermediates resident and cut HBM traffic:
+- Highest-leverage first target = **prep (53%)**: a fused intra-chunk Pallas kernel
+  (grid over (B,H,n), fully parallel) that does cumsum→a_raw→inverse→v_pseudo/k_cumdecay
+  in SMEM, **keeping the C×C matrices resident** and doing the Neumann inverse as an
+  in-kernel `for _ in range(log2 C)` loop (NOT the rejected kernel's unrolled S×S
+  sub-chunk blocks, which compile-OOM at C≥128). Leave the inter-chunk recurrence on the
+  parallel `associative_scan` (avoids the rejected kernel's fatal sequential recurrence).
+  Ceiling of this hybrid alone: if prep→~0, fwd 4.15→~2.9ms (~1.4×), MFU ~6-7%.
+- To reach *tens*-of-% also needs the scan (24%) and outputs (20%) fused — i.e. the full
+  fused kernel, with the three eval fixes (in-kernel-loop inverse, parallel recurrence,
+  smaller backward footprint).
+
+**Status/blocker.** This is a multi-iteration Pallas effort. The cw-us-east-02a cluster is
+currently heavily congested (2100+ pending; cold-node env builds 15-25 min — one usable
+H100 run took ~45 min of waiting), so iterative GPU kernel development is not feasible
+right now. `chunk_kda` (associative_scan) stays the default; the hybrid-prep Pallas kernel
+is the recommended next build when cluster capacity allows.
+
 ## Phase 2 — chunk-parallel inter-chunk recurrence (associative scan)
 
 The decomposition (KDA_DECOMPOSE) showed the Neumann inverse is only ~25% of the
