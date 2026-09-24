@@ -254,7 +254,9 @@ oracle plus artifact checks took 3.9 seconds. The
 [native record](../../experiments/post_training/bio_tasks/native_validation_runs/9d28dd15e082.json)
 pins all 26 package artifacts and retains the first launcher dependency failure.
 These heuristic similarity clusters do not establish orthology or function.
-Packaged-task and Harbor checks and benchmark-lineage screening remain open.
+The packaged task passed two positive checks and 17 negative controls in 6.1 seconds
+with 221 MiB peak RSS; its archive is preserved in regional GCS. Harbor checks and
+benchmark-lineage screening remain open.
 
 The [agentic source inventory](../../experiments/post_training/bio_tasks/benchmark_sources.json)
 records all 48 benchmark/protocol rows from the spreadsheet's Agentic (Harbor) tab:

@@ -1132,19 +1132,35 @@
       "status": "unmapped",
       "assessment": "Manual decomposition of permitted ID task description; no benchmark answers or biological fixtures used for training authoring.",
       "recipes": [],
+      "scientific_decision": "Assess whether a compound's transcriptional response is shared or differs across four primary human cell types, with implications and limits for tissue-specific safety and efficacy.",
+      "prompt_review": {
+        "scope": "Public instruction and file descriptions only; no benchmark counts, answers or analysis trace used.",
+        "endpoint_reviewed_at": "2026-09-24",
+        "cohort_structure": "Four cell types, a compound library, six concentrations, timepoint and vehicle-control metadata; raw UMI counts in HDF5 and sample metadata in CSV.",
+        "native_outputs": [
+          "Reproducible analysis trace with intermediate results and justified analysis choices",
+          "Text answer about consistency and divergence, biological interpretation and limitations"
+        ],
+        "grading_adaptation": "The source uses an expert judge. Training tasks must define verifiable quantitative artifacts and decisions; a matching interaction coefficient alone does not reproduce the full endpoint."
+      },
       "required_stages": [
-        "fit cell-type and treatment design",
+        "join HDF5 gene counts to sample metadata and assess sequencing QC",
+        "select the compound, matched vehicle controls, concentrations and timepoints within each cell type",
+        "fit a full-rank count model that distinguishes cell type, treatment and relevant dose or time effects",
         "estimate within-type contrasts",
-        "test interactions",
-        "compare shared and divergent gene effects"
+        "directly test differences in treatment response between cell types",
+        "compare shared and divergent gene effects with uncertainty and multiplicity control",
+        "report quantitative evidence and limits on tissue-specific safety or efficacy conclusions"
       ],
       "remaining_gaps": [
         "Use a treatment-by-cell-type interaction to establish differences; significance in only one group is insufficient.",
+        "A two-population developmental-stage interaction would cover a statistical component, not the four-cell-type drug-response endpoint or its dose, timepoint, vehicle-control and HDF5 handling.",
+        "A non-significant interaction does not establish equivalent responses; distinguish lack of evidence from demonstrated similarity.",
         "Validate the connected workflow and native output artifacts on independent real biological data."
       ],
       "required_formats": [
-        "count matrix",
-        "factorial sample metadata"
+        "HDF5 raw UMI count matrix",
+        "CSV factorial sample metadata"
       ],
       "required_tools": [],
       "independent_data_sources": [],

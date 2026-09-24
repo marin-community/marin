@@ -1662,6 +1662,77 @@
         ]
       },
       "snapshot_limit": "Frozen source has 1,693 ID records and predates the HMMER status-label correction. Later inventories and native-status reporting do not change these validated task bytes. Harbor checks are separate."
+    },
+    {
+      "job_id": "/exedev/bio-clustering-package-20260924-093000",
+      "source_revision": "55853d267b6290c174b3cd59acfff294ad34a8ba",
+      "scope": "One real-proteome-clustering task from the 143-recipe registry; single train instance. Not a full-corpus rebuild or training release.",
+      "archive": {
+        "archive_uri": "gs://marin-us-central2/bio-tasks/authoring/sha256/00281cfaf54f85097a76ccfcd1221fcc2656b4459dee86e0d65626f64f3e71ff/outputs.tar.zst",
+        "size_bytes": 5588956,
+        "sha256": "00281cfaf54f85097a76ccfcd1221fcc2656b4459dee86e0d65626f64f3e71ff",
+        "md5": "czPgCiweFExrRQw773/XAg==",
+        "generation": "1790242990834679",
+        "verification": "Provider size and MD5 match the locally verified archive."
+      },
+      "result": {
+        "status": "passed",
+        "source_revision": "55853d267b6290c174b3cd59acfff294ad34a8ba",
+        "model_calls": 0,
+        "manifest_sha256": "c86d41bdf16580126a7c138bdfc0dd038f4882271d307c025dd523f7c7e262e0"
+      },
+      "build_execution": {
+        "argv": [
+          "/app/bio-clustering-package-yaz3980f/python/bin/python",
+          "/app/phase.py",
+          "/iris/outputs/package-resource.json",
+          "experiments.post_training.bio_tasks.build",
+          "--output",
+          "/iris/outputs/corpus",
+          "--tool-ref",
+          "55853d267b6290c174b3cd59acfff294ad34a8ba",
+          "--base-image",
+          "python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c",
+          "--seed",
+          "20260923",
+          "--instances-per-recipe",
+          "1",
+          "--recipes",
+          "real-proteome-clustering"
+        ],
+        "exit_code": 0,
+        "seconds": 6.273273248996702
+      },
+      "resources": {
+        "module": "experiments.post_training.bio_tasks.build",
+        "status": "passed",
+        "seconds": 6.110094756993931,
+        "peak_rss_kib": 226720,
+        "finished_at": "2026-09-24T09:31:49.032863+00:00"
+      },
+      "positive_checks": 2,
+      "negative_checks": 17,
+      "input_hashes_reverified_for_tasks": 1,
+      "instances_per_recipe": 1,
+      "controller_placement": {
+        "job_id": "/exedev/bio-clustering-package-20260924-093000",
+        "state": "succeeded",
+        "worker_id": "marin-tpu-v4-reserved-256-us-central2-b-20260922-2317-8259d330-worker-28",
+        "execution_cluster_id": "local",
+        "backend_id": "default",
+        "checked_at": "2026-09-24T09:41:49.595473+00:00",
+        "worker_metadata": [
+          {
+            "worker_id": "marin-tpu-v4-reserved-256-us-central2-b-20260922-2317-8259d330-worker-28",
+            "scale_group": "tpu_v4-reserved_256-us-central2-b",
+            "backend_id": "default",
+            "tpu_name": "t1v-n-9a98788d",
+            "gce_zone": "",
+            "gce_instance_name": "t1v-n-9a98788d-w-28"
+          }
+        ]
+      },
+      "snapshot_limit": "Host package validation. Harbor and scientific validation remain separate."
     }
   ],
   "preparation_runs": [

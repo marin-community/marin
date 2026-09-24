@@ -1245,6 +1245,40 @@
         "checks_file": "native_validation_runs/9d28dd15e082.json",
         "checks_sha256": "9d28dd15e082525c9e41d5548f3ac7737f15c67be4fce95aa8fb38205f3a4906",
         "source_revision": "0d4a757989e235d4c6595c0e7c0eedd9b63d9235"
+      },
+      "clustering_packaged_validation": {
+        "job_id": "/exedev/bio-clustering-package-20260924-093000",
+        "source_revision": "55853d267b6290c174b3cd59acfff294ad34a8ba",
+        "archive_uri": "gs://marin-us-central2/bio-tasks/authoring/sha256/00281cfaf54f85097a76ccfcd1221fcc2656b4459dee86e0d65626f64f3e71ff/outputs.tar.zst",
+        "archive_sha256": "00281cfaf54f85097a76ccfcd1221fcc2656b4459dee86e0d65626f64f3e71ff",
+        "manifest_sha256": "c86d41bdf16580126a7c138bdfc0dd038f4882271d307c025dd523f7c7e262e0",
+        "task_id": "real-proteome-clustering-v1-20260923-00000",
+        "input_sha256": "ce44ff6dfd26e05f89872fd828b6ac5d396d31c1b8764a7ffc1132e6fb879411",
+        "target_sha256": "6ebbb9a6b7b2ac118538114f562ade219273b88b663f1f9520ff76bb1f996e00",
+        "task_sha256": "92a4583ef8e7c051a139de4695f0cb12bf7312fd8967940aee4de5d649b278bd",
+        "validation": {
+          "missing_artifact:representatives.fa": 0.0,
+          "changed_residue:representatives.fa": 0.0,
+          "duplicate_sequence:representatives.fa": 0.0,
+          "missing_sequence:representatives.fa": 0.0,
+          "missing_artifact:membership.tsv": 0.0,
+          "missing_table_row:membership.tsv": 0.0,
+          "duplicate_table_row:membership.tsv": 0.0,
+          "changed_table_value:membership.tsv": 0.0,
+          "missing_artifact:clusters.tsv": 0.0,
+          "missing_table_row:clusters.tsv": 0.0,
+          "duplicate_table_row:clusters.tsv": 0.0,
+          "changed_table_value:clusters.tsv": 0.0,
+          "oracle": 1.0,
+          "row_permutation": 1.0,
+          "empty": 0.0,
+          "missing_id": 0.0,
+          "duplicate_id": 0.0,
+          "omitted_singletons": 0.0,
+          "malformed": 0.0
+        },
+        "status": "passed-package-checks",
+        "limits": "Host package validation. Harbor and scientific validation remain separate."
       }
     },
     "Pfam:selected-models-20260924": {
