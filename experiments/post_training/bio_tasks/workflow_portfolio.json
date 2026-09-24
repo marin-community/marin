@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T19:31:00.353549+00:00",
+  "updated_at": "2026-09-24T19:40:35.474041+00:00",
   "scope": "Full question-proposal portfolio for the 32 currently inventoried provisional-ID agentic releases. This planning index resolves every question card and records conditional consolidation; it creates no training task or validated coverage. Nine source leads without inventories remain outside the enumerated denominator.",
   "counts": {
     "source_releases": 32,
@@ -75,7 +75,7 @@
     },
     {
       "path": "workflow_designs/bioxarena.json",
-      "sha256": "a3b9b85b3b8eda673c5bca621568504fbcf38fe156ad368b084011664b02508f"
+      "sha256": "774994aa4413e62d3131514901f2aa2ca28b9167a865304a8b36c9a04210a125"
     },
     {
       "path": "workflow_designs/cellbench.json",
@@ -658,7 +658,7 @@
         "complete_artifacts": "Structure/ligand/assay joins, units and censoring, full fit/query group map, feature/model configuration, every affinity prediction and complete ranking/regression sufficient statistics.",
         "deterministic_acceptance": "Native baseline checks feasibility; independently validate assay identity, unit conversion, grouping and frozen metrics against private measured affinity. Prediction scores do not establish mechanistic binding explanations.",
         "required_incorrect_output_checks": "Mix IC50 with Kd without a declared model; leak a scaffold/target family; expose query affinity; drop censored or poorly predicted compounds.",
-        "unresolved_before_assignment": "Independent measured structure/affinity collection, compatible assay semantics, bounded native model and metric acceptance; BioXArena full prompt pending.",
+        "unresolved_before_assignment": "Independent measured structure/affinity collection, compatible Kd/Ki/IC50 semantics, bounded native model and metric acceptance. BioXArena mirror prompt and CSV schemas are reviewed; official description parity, actual assay labels and cleaned split counts remain unresolved.",
         "status": "planning-contract-not-executed"
       }
     },
@@ -805,7 +805,7 @@
         "biox-design-imaging-skin-lesion-diagnosis"
       ],
       "consolidation": "conditional-combined-question",
-      "condition_for_one_task": "Reconcile label taxonomies and source metric/positive-class definitions, retain all subject IDs and probabilities, and use independent licensed observations. Source prompt equivalence and bounded compute remain pending.",
+      "condition_for_one_task": "Reconcile exact label taxonomies and metrics using independent images, patient/lesion groups and label provenance. The BioXArena mirror specifies seven classes and accuracy; mixed confirmation methods and dx_type as a public feature need an explicit retrospective versus prospective boundary.",
       "benchmark_record_scope": {
         "BioML-bench": 1,
         "BioXArena": 1
@@ -819,7 +819,7 @@
         "complete_artifacts": "Image/patient/lesion manifest, label dictionary, fit/query groups, full class probabilities and predictions, confusion counts and all source metrics.",
         "deterministic_acceptance": "Compute metrics against private observed diagnostic labels, including positive-class conventions and probabilities. Check label provenance, class imbalance and a frozen baseline.",
         "required_incorrect_output_checks": "Split alternate views across fit/query; invert positive label; omit rare classes; return labels when probabilities are required.",
-        "unresolved_before_assignment": "Independent licensed images and recorded diagnostic evidence; source prompt taxonomy and bounded model weights/runtime.",
+        "unresolved_before_assignment": "Independent licensed images, lesion/patient identifiers and recorded label evidence; BioXArena official description parity and the other source taxonomy; bounded model weights/runtime. Do not assume lesion grouping establishes patient grouping.",
         "status": "planning-contract-not-executed"
       }
     },
@@ -8685,7 +8685,7 @@
     },
     {
       "proposed_task_id": "biox-design-imaging-drug-moa-prediction",
-      "scientific_question": "Do measured cell images distinguish compound mechanism classes across held-out compounds and acquisition plates?",
+      "scientific_question": "How accurately do observed treated-cell images support reference mechanism labels for held-out compounds?",
       "question_card_ids": [
         "biox-design-imaging-drug-moa-prediction"
       ],
@@ -8700,7 +8700,7 @@
     },
     {
       "proposed_task_id": "biox-design-imaging-labelfree-cell-counting",
-      "scientific_question": "How well do label-free image measurements recover independently annotated cell counts across held-out fields and specimens?",
+      "scientific_question": "How well does a native image-analysis workflow estimate observed cell counts across independent wells and times?",
       "question_card_ids": [
         "biox-design-imaging-labelfree-cell-counting"
       ],
@@ -8715,7 +8715,7 @@
     },
     {
       "proposed_task_id": "biox-design-imaging-lung-nodule-malignancy",
-      "scientific_question": "Can a bounded image classifier recover observed nodule labels on held-out patients without scan or lesion leakage?",
+      "scientific_question": "How accurately do CT image crops and permitted annotations recover reference nodule suspicion ratings across held-out patients?",
       "question_card_ids": [
         "biox-design-imaging-lung-nodule-malignancy"
       ],
@@ -8730,7 +8730,7 @@
     },
     {
       "proposed_task_id": "biox-design-imaging-mitochondria-counting",
-      "scientific_question": "How well do observed microscopy measurements recover annotated mitochondrial instance counts across held-out cells and acquisition batches?",
+      "scientific_question": "How well do independently observed EM patches support mitochondrial instance-count estimates?",
       "question_card_ids": [
         "biox-design-imaging-mitochondria-counting"
       ],
@@ -8745,7 +8745,7 @@
     },
     {
       "proposed_task_id": "biox-design-imaging-nucleus-type-classification",
-      "scientific_question": "Do nuclear morphology features recover independently annotated cell classes across held-out subjects and slides?",
+      "scientific_question": "How accurately can image and tissue context recover the dominant annotated nucleus category in independent patches?",
       "question_card_ids": [
         "biox-design-imaging-nucleus-type-classification"
       ],
@@ -8760,7 +8760,7 @@
     },
     {
       "proposed_task_id": "biox-design-imaging-virtual-staining",
-      "scientific_question": "Can label-free observations predict an independently measured staining-positive fraction across held-out specimens?",
+      "scientific_question": "How accurately do H&E patches predict a declared measured IHC-positive tissue fraction across independent slides?",
       "question_card_ids": [
         "biox-design-imaging-virtual-staining"
       ],
@@ -9000,7 +9000,7 @@
     },
     {
       "proposed_task_id": "biox-design-phenotype-disease-alzheimers-disease-staging",
-      "scientific_question": "How well do baseline observations predict recorded disease-stage labels across held-out patients with explicit temporal eligibility?",
+      "scientific_question": "How accurately can donor-held-out expression profiles recover recorded neuropathology-stage labels?",
       "question_card_ids": [
         "biox-design-phenotype-disease-alzheimers-disease-staging"
       ],
@@ -9015,7 +9015,7 @@
     },
     {
       "proposed_task_id": "biox-design-phenotype-disease-autism-diagnosis",
-      "scientific_question": "Can measured study observations recover recorded diagnostic labels across held-out participants and collection sites?",
+      "scientific_question": "How well do observed imaging-QC and phenotypic features discriminate recorded cohort labels across independent sites?",
       "question_card_ids": [
         "biox-design-phenotype-disease-autism-diagnosis"
       ],
@@ -9030,7 +9030,7 @@
     },
     {
       "proposed_task_id": "biox-design-phenotype-disease-breast-cancer-subtype",
-      "scientific_question": "Which measured tumor profiles predict independently recorded subtype labels after patient-level and assay-batch separation?",
+      "scientific_question": "How accurately do measured tumor expression and declared clinical features recover reference molecular-subtype labels?",
       "question_card_ids": [
         "biox-design-phenotype-disease-breast-cancer-subtype"
       ],
@@ -9045,7 +9045,7 @@
     },
     {
       "proposed_task_id": "biox-design-phenotype-disease-covid19-severity-classification",
-      "scientific_question": "Do measured host-response profiles predict recorded severity at a specified horizon without including post-outcome observations?",
+      "scientific_question": "How accurately do independent patient expression profiles recover recorded severity categories at the measured sampling time?",
       "question_card_ids": [
         "biox-design-phenotype-disease-covid19-severity-classification"
       ],
@@ -9060,7 +9060,7 @@
     },
     {
       "proposed_task_id": "biox-design-phenotype-disease-diabetes-readmission",
-      "scientific_question": "Can baseline clinical observations predict recorded readmission classes across held-out patients under a fixed outcome window?",
+      "scientific_question": "How accurately can discharge-time encounter features predict recorded readmission categories for independent patients?",
       "question_card_ids": [
         "biox-design-phenotype-disease-diabetes-readmission"
       ],
@@ -9075,7 +9075,7 @@
     },
     {
       "proposed_task_id": "biox-design-phenotype-disease-genotype-to-phenotype",
-      "scientific_question": "Which genotype-derived predictions generalize to measured phenotypes after ancestry, relatedness and cohort leakage checks?",
+      "scientific_question": "How well do genotype PCs and permitted transcriptomic context predict measured expression for independent donors?",
       "question_card_ids": [
         "biox-design-phenotype-disease-genotype-to-phenotype"
       ],
@@ -9090,7 +9090,7 @@
     },
     {
       "proposed_task_id": "biox-design-phenotype-disease-pan-cancer-survival-prediction",
-      "scientific_question": "Does a baseline risk model retain concordance on held-out patients after explicit censoring and cohort eligibility checks?",
+      "scientific_question": "How well do time-appropriate clinical and expression features rank observed survival outcomes across independent patients?",
       "question_card_ids": [
         "biox-design-phenotype-disease-pan-cancer-survival-prediction"
       ],
@@ -9105,7 +9105,7 @@
     },
     {
       "proposed_task_id": "biox-design-phenotype-disease-spatial-immune-infiltration",
-      "scientific_question": "Can observed spatial features predict independently measured immune-marker profiles across held-out tissue sections and patients?",
+      "scientific_question": "How well do permitted spatial features predict withheld measured marker expression across independent tissue sections?",
       "question_card_ids": [
         "biox-design-phenotype-disease-spatial-immune-infiltration"
       ],
@@ -9361,7 +9361,7 @@
     },
     {
       "proposed_task_id": "biox-design-structure-complex-structure-evaluation",
-      "scientific_question": "Can structure-derived features rank independently assessed complex quality across held-out protein families under a pinned DockQ definition?",
+      "scientific_question": "How do independently sourced modeled complexes compare with observed reference structures under native DockQ scoring?",
       "question_card_ids": [
         "biox-design-structure-complex-structure-evaluation"
       ],
@@ -9376,7 +9376,7 @@
     },
     {
       "proposed_task_id": "biox-design-structure-enzyme-commission-prediction",
-      "scientific_question": "Which curated enzyme classes are predicted from observed protein structures across held-out sequence families?",
+      "scientific_question": "How well do independent protein sequences and observed structures recover a declared first-level EC annotation?",
       "question_card_ids": [
         "biox-design-structure-enzyme-commission-prediction"
       ],
@@ -9391,7 +9391,7 @@
     },
     {
       "proposed_task_id": "biox-design-structure-protein-binding-site-detection",
-      "scientific_question": "Which residue-level binding-site predictions agree with observed contacts after chain, assembly and missing-residue checks?",
+      "scientific_question": "How well do protein structures predict a declared binding-residue-density category?",
       "question_card_ids": [
         "biox-design-structure-protein-binding-site-detection"
       ],
@@ -9406,7 +9406,7 @@
     },
     {
       "proposed_task_id": "biox-design-structure-protein-fold-classification",
-      "scientific_question": "Can structure-derived features identify curated fold classes across held-out families without template leakage?",
+      "scientific_question": "How accurately do supplied domain sequences and structures recover reference fold categories under a declared grouping?",
       "question_card_ids": [
         "biox-design-structure-protein-fold-classification"
       ],
@@ -9421,7 +9421,7 @@
     },
     {
       "proposed_task_id": "biox-design-structure-protein-protein-interface",
-      "scientific_question": "Can structural features predict measured interface fractions after explicit chain pairing and contact definitions?",
+      "scientific_question": "What fraction of residues forms a declared interface in independently observed protein complexes?",
       "question_card_ids": [
         "biox-design-structure-protein-protein-interface"
       ],
@@ -9436,7 +9436,7 @@
     },
     {
       "proposed_task_id": "biox-design-structure-protein-stability-change",
-      "scientific_question": "How well do observed sequence and structure features rank measured mutation-induced stability changes with consistent sign and units?",
+      "scientific_question": "How well do sequence, scaffold and structural context predict measured single-substitution stability changes in independent proteins?",
       "question_card_ids": [
         "biox-design-structure-protein-stability-change"
       ],
@@ -9451,7 +9451,7 @@
     },
     {
       "proposed_task_id": "biox-design-structure-protein-structure-prediction",
-      "scientific_question": "How well does a bounded template-based structural prediction recover independently observed coordinates after residue mapping and alignment?",
+      "scientific_question": "How accurately can a bounded native predictor recover private observed C-alpha geometry from independent protein sequences?",
       "question_card_ids": [
         "biox-design-structure-protein-structure-prediction"
       ],
@@ -9466,7 +9466,7 @@
     },
     {
       "proposed_task_id": "biox-design-text-integrated-biomedical-figure-vqa",
-      "scientific_question": "Can quantitative claims about independent observed-study figures be resolved from checked plot data and a finite answer schema?",
+      "scientific_question": "Which fixed answer option is supported by an independently sourced biomedical figure and caption?",
       "question_card_ids": [
         "biox-design-text-integrated-biomedical-figure-vqa"
       ],
@@ -9481,7 +9481,7 @@
     },
     {
       "proposed_task_id": "biox-design-text-integrated-dna-enzyme-function",
-      "scientific_question": "Which benign sequence-function labels are supported by observed annotations after strand, frame and accession checks?",
+      "scientific_question": "How accurately do coding DNA and permitted functional context recover a declared three-field EC annotation?",
       "question_card_ids": [
         "biox-design-text-integrated-dna-enzyme-function"
       ],
@@ -9496,7 +9496,7 @@
     },
     {
       "proposed_task_id": "biox-design-text-integrated-ecg-signal-qa",
-      "scientific_question": "Which finite signal-analysis questions can be answered from observed ECG recordings and checked event measurements?",
+      "scientific_question": "Which fixed-vocabulary answers are supported by independent recorded ECG signals and declared clinical reference annotations?",
       "question_card_ids": [
         "biox-design-text-integrated-ecg-signal-qa"
       ],
@@ -9511,7 +9511,7 @@
     },
     {
       "proposed_task_id": "biox-design-text-integrated-gene-expression-classification",
-      "scientific_question": "Which recorded expression classes can be predicted after reconciling quantitative observations and frozen contextual metadata?",
+      "scientific_question": "How well do observed expression profiles match explicitly attributed annotation descriptions?",
       "question_card_ids": [
         "biox-design-text-integrated-gene-expression-classification"
       ],
@@ -9526,7 +9526,7 @@
     },
     {
       "proposed_task_id": "biox-design-text-integrated-medical-vqa",
-      "scientific_question": "Which finite observation questions can be answered from independently annotated medical images without relying on unrestricted textual judging?",
+      "scientific_question": "Which predefined short answer is supported by an independently annotated radiology image and question?",
       "question_card_ids": [
         "biox-design-text-integrated-medical-vqa"
       ],
@@ -9541,7 +9541,7 @@
     },
     {
       "proposed_task_id": "biox-design-text-integrated-molecule-qa",
-      "scientific_question": "Which finite chemical-property claims can be verified from observed molecule records with explicit stereochemistry and assay evidence?",
+      "scientific_question": "Which fixed molecular answer is supported by native structure calculations or a frozen curated evidence record?",
       "question_card_ids": [
         "biox-design-text-integrated-molecule-qa"
       ],
@@ -9556,7 +9556,7 @@
     },
     {
       "proposed_task_id": "biox-design-text-integrated-pathology-vqa",
-      "scientific_question": "Which finite morphology questions agree with independent observed slide annotations and complete image-analysis measurements?",
+      "scientific_question": "Which canonical short answer is supported by an independently sourced pathology image with a curated reference?",
       "question_card_ids": [
         "biox-design-text-integrated-pathology-vqa"
       ],
@@ -9571,7 +9571,7 @@
     },
     {
       "proposed_task_id": "biox-design-text-integrated-protein-function-matching",
-      "scientific_question": "Which recorded protein-function associations are supported by observed sequence features and frozen contextual evidence?",
+      "scientific_question": "How well do independent protein sequences match explicitly attributed curated function annotations?",
       "question_card_ids": [
         "biox-design-text-integrated-protein-function-matching"
       ],
@@ -10060,7 +10060,7 @@
     },
     {
       "proposed_task_id": "biox-design-imaging-amos-organ-segmentation",
-      "scientific_question": "How accurately does a bounded segmentation method recover measured organ masks on held-out subjects under physical-coordinate and label conventions?",
+      "scientific_question": "How accurately can a native segmentation workflow label abdominal organs in independently observed CT/MRI volumes?",
       "question_card_ids": [
         "biox-design-imaging-amos-organ-segmentation"
       ],
@@ -10834,6 +10834,15 @@
       "csv_header_lines_reviewed": 40,
       "official_scorer_hashes_reverified": 18,
       "finding": "Separate CRISPRa from knockout, unspliced counts from velocity, gene activity from peaks and enrichment from affinity. Preserve actual correlation axes, measured-mask targets and allele-specific identity; source input and label provenance gaps remain explicit.",
+      "validated_new_mappings": 0
+    },
+    {
+      "source": "BioXArena imaging, phenotype, structure and text",
+      "design_file": "workflow_designs/bioxarena.json",
+      "mirror_descriptions_reviewed": 32,
+      "csv_header_lines_reviewed": 92,
+      "official_scorer_hashes_reverified": 32,
+      "finding": "Complete the description-level planning pass. Correct metric/schema conflicts, retain actual biological output scope, distinguish reference labels from observed outcomes and keep fixed-answer QA without an LLM judge. Sixty descriptions still lack official-byte parity.",
       "validated_new_mappings": 0
     }
   ]

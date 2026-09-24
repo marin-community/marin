@@ -251,7 +251,7 @@ The expanded portfolio also includes the following source-specific plans:
 | [DrugDiscoveryBench](../../experiments/post_training/bio_tasks/workflow_designs/drugdiscoverybench.json) | 82 | 27 | Public-preview endpoint-stage review; independent evidence and inputs needed |
 | [Liu single-cell](../../experiments/post_training/bio_tasks/workflow_designs/liu-single-cell.json) | 63 | 49 | Native method requirements and shared prompt variants retained |
 | [Bio-Task Bench](../../experiments/post_training/bio_tasks/workflow_designs/bio-task-bench.json) | 34 | 10 | Related component outputs grouped into connected analyses |
-| [BioXArena](../../experiments/post_training/bio_tasks/workflow_designs/bioxarena.json) | 76 | 76 | All scorers, 16 official descriptions and 28 provisional mirror descriptions inspected; 32 prompts remain uninspected |
+| [BioXArena](../../experiments/post_training/bio_tasks/workflow_designs/bioxarena.json) | 76 | 76 | All scorers and descriptions inspected: 16 official, 60 provisional mirror; independent inputs and official parity remain unresolved |
 | [CellBench](../../experiments/post_training/bio_tasks/workflow_designs/cellbench.json) | 50 | 22 | Context-inspired executable adaptations; original open-ended planning quality is not covered |
 | [SciGym](../../experiments/post_training/bio_tasks/workflow_designs/scigym.json) | 350 | 3 | All supplied input structures audited; shared observed-dynamics adaptations, zero biological endpoint assignments |
 | [BixBench-Verified-50](../../experiments/post_training/bio_tasks/workflow_designs/bixbench-verified-50.json) | 50 | 0 new | Known aliases; 17 revised question texts retain separate protocol review |
@@ -295,6 +295,16 @@ genuinely measured values, but its evaluation mask must exclude visible inputs a
 cannot shrink when a solver returns NaNs. Variant reasoning requires explicit REF/ALT
 alleles, absent from the inspected source CSV headers. Independent input selection,
 target provenance and official-description parity remain unresolved.
+
+All 76 BioXArena descriptions now have a metadata-level planning review. The final
+32 image, phenotype, structure and text cards retain deterministic numeric or
+fixed-answer grading. Mitochondria counting uses Spearman despite an MAE description;
+AMOS expects `prediction_file` and scores reference-present organs; autism scoring
+encodes hard labels before AUC. Virtual staining predicts a scalar tissue fraction,
+binding-site detection predicts a protein-level density category, and fixed-answer
+QA needs no LLM judge. The plans preserve those boundaries and record input/label
+provenance gaps. Sixty descriptions still lack comparison with official archive bytes;
+the mirror review neither clears their biological inputs nor adds validated coverage.
 
 BioKGBench's 225 instruction identities now route to six contracts: protein names
 (55), entry presence (45), protein-pair evidence (94), cellular localization (11),
