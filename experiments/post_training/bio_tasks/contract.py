@@ -4,6 +4,7 @@
 """Trusted, record-level verification; copied into Harbor's private tests directory."""
 
 import argparse
+import csv
 import hashlib
 import json
 import math
@@ -151,6 +152,88 @@ class Column(BaseModel):
             return False
 
 
+class TableContract(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    columns: dict[str, Column]
+    expected: dict[str, dict[str, Scalar]]
+    max_bytes: int = Field(gt=0, le=128 * 1024 * 1024)
+
+    @model_validator(mode="after")
+    def validate_reference(self) -> "TableContract":
+        validate_records(self.columns, self.expected)
+        return self
+
+
+def validate_records(columns: dict[str, Column], expected: dict[str, dict[str, Scalar]]) -> None:
+    if not columns or not expected or "id" in columns:
+        raise ValueError("a contract needs columns, expected records, and a separate id field")
+    for record_id, row in expected.items():
+        if not record_id or set(row) != set(columns):
+            raise ValueError("reference IDs must be nonempty and every record must have every column")
+        for name, column in columns.items():
+            value = row[name]
+            if not column.accepts(value):
+                raise ValueError(f"invalid reference type or nonfinite value: {record_id}.{name}")
+            if column.kind == "number" and value is not None:
+                if not math.isfinite(column.atol + column.rtol * abs(float(value))):
+                    raise ValueError(f"nonfinite tolerance: {record_id}.{name}")
+
+
+def matches(column: Column, actual: object, expected: Scalar) -> bool:
+    if not column.accepts(actual):
+        return False
+    if actual is None or expected is None or column.kind != "number":
+        return actual == expected
+    return abs(actual - expected) <= column.atol + column.rtol * abs(expected)
+
+
+def check_table(path: Path, target: TableContract) -> dict:
+    """Check every TSV quantity while bounding bytes, rows and diagnostic output."""
+    identifiers = set()
+    consumed = 0
+    failures = []
+    with path.open("rb") as handle:
+        header = handle.readline(target.max_bytes + 1)
+        consumed += len(header)
+        if consumed > target.max_bytes:
+            raise ValueError("table_too_large")
+        fields = next(csv.reader([header.decode("utf-8")], delimiter="\t"))
+        if len(fields) != len(set(fields)) or set(fields) != {"id", *target.columns}:
+            raise ValueError("table_schema")
+        while line := handle.readline(target.max_bytes - consumed + 1):
+            consumed += len(line)
+            if consumed > target.max_bytes:
+                raise ValueError("table_too_large")
+            values = next(csv.reader([line.decode("utf-8")], delimiter="\t"))
+            if len(values) != len(fields):
+                raise ValueError("table_schema")
+            row = dict(zip(fields, values, strict=True))
+            key = row.pop("id")
+            if key not in target.expected or key in identifiers:
+                raise ValueError("table_identity")
+            identifiers.add(key)
+            for name, column in target.columns.items():
+                value = row[name]
+                if value == "NA" and column.nullable:
+                    actual = None
+                elif column.kind == "integer":
+                    actual = int(value)
+                elif column.kind == "number":
+                    actual = float(value)
+                else:
+                    actual = value
+                if not matches(column, actual, target.expected[key][name]) and len(failures) < 20:
+                    failures.append({"id": key, "field": name})
+    missing = sorted(set(target.expected) - identifiers)
+    return {
+        "passed": not failures and not missing,
+        "rows": len(identifiers),
+        "missing": missing[:20],
+        "failures": failures,
+    }
+
+
 class Contract(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
@@ -159,32 +242,22 @@ class Contract(BaseModel):
     expected: dict[str, dict[str, Scalar]]
     fastq: dict[str, FastqContract] = Field(default_factory=dict)
     alignments: dict[str, AlignmentContract] = Field(default_factory=dict)
+    tables: dict[str, TableContract] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_reference(self) -> "Contract":
-        if not self.columns or not self.expected or "id" in self.columns:
-            raise ValueError("a contract needs columns, expected records, and a separate id field")
+        validate_records(self.columns, self.expected)
         if any(not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name) for name in self.artifacts()):
             raise ValueError("Artifacts must use simple filenames")
-        if set(self.fastq) & set(self.alignments) or "answer.json" in self.artifacts():
+        if len(set(self.artifacts())) != len(self.artifacts()) or "answer.json" in self.artifacts():
             raise ValueError("Artifact filenames must be distinct")
-        for record_id, row in self.expected.items():
-            if not record_id or set(row) != set(self.columns):
-                raise ValueError("reference IDs must be nonempty and every record must have every column")
-            for name, column in self.columns.items():
-                value = row[name]
-                if not column.accepts(value):
-                    raise ValueError(f"invalid reference type or nonfinite value: {record_id}.{name}")
-                if column.kind == "number" and value is not None:
-                    if not math.isfinite(column.atol + column.rtol * abs(float(value))):
-                        raise ValueError(f"nonfinite tolerance: {record_id}.{name}")
         return self
 
     def answer(self) -> list[dict]:
         return [{"id": key, **value} for key, value in self.expected.items()]
 
     def artifacts(self) -> tuple[str, ...]:
-        return (*self.fastq, *self.alignments)
+        return (*self.fastq, *self.alignments, *self.tables)
 
     def instructions(self) -> str:
         lines = [
@@ -217,6 +290,19 @@ class Contract(BaseModel):
                 "Different qualifying alignments are accepted; this objective does not establish "
                 "true biological homology."
             )
+        for name, target in self.tables.items():
+            lines.append(
+                f"Also write /app/{name} as UTF-8 TSV, with an id column and exactly these columns: "
+                + ", ".join(target.columns)
+                + ". Row and column order are irrelevant; duplicate, missing and extra IDs fail. "
+                "Use NA for specified missing values. Fields must occupy one line. Every row is verified; "
+                "a correct JSON summary alone does not pass."
+            )
+            for column_name, column in target.columns.items():
+                lines.append(
+                    f"- {name}.{column_name}: {column.kind} ({column.unit}); {column.description}; "
+                    f"absolute tolerance {column.atol}, relative tolerance {column.rtol}."
+                )
         return "\n".join(lines)
 
 
@@ -256,11 +342,7 @@ def grade_answer(contract: Contract, text: str) -> Reward:
     for record_id, reference in contract.expected.items():
         for name, column in contract.columns.items():
             actual, expected = by_id[record_id][name], reference[name]
-            passed = column.accepts(actual)
-            if actual is None or expected is None or column.kind != "number":
-                passed = passed and actual == expected
-            elif passed:
-                passed = abs(actual - expected) <= column.atol + column.rtol * abs(expected)
+            passed = matches(column, actual, expected)
             reported = str(actual) if type(actual) is float and not math.isfinite(actual) else actual
             checks.append({"id": record_id, "field": name, "passed": passed, "expected": expected, "actual": reported})
     return scored(float(all(check["passed"] for check in checks)), checks=checks)
@@ -304,6 +386,14 @@ def grade_files(reference: Path, answer: Path) -> Reward:
             try:
                 checks[name] = check_alignment(path, target)
             except ValueError as error:
+                return scored(0, reason=str(error), artifact=name)
+        for name, target in contract.tables.items():
+            path = answer.parent / name
+            if path.is_symlink() or not path.is_file():
+                return scored(0, reason="missing_or_nonregular_table", artifact=name)
+            try:
+                checks[name] = check_table(path, target)
+            except (ValueError, csv.Error) as error:
                 return scored(0, reason=str(error), artifact=name)
         return scored(float(all(check["passed"] for check in checks.values())), **verdict.detail, artifact_checks=checks)
     except UnicodeDecodeError:

@@ -1,0 +1,697 @@
+{
+  "schema_version": 1,
+  "scope": "Oracle-only Harbor container checks. These do not establish complete ID workflow coverage, biological source independence, scientific review, teacher success or training readiness. Evidence applies to the recorded task and verifier hashes.",
+  "runs": [
+    {
+      "job_id": "/exedev/bio-harbor-native-oracles-20260924-002257",
+      "source_revision": "b5da07e6fea3c52e98e85122fb3c9ee333880f25",
+      "status": "setup-failed",
+      "scored_cases": 0,
+      "reason": "TRC worker apt bootstrap required unavailable setgroups/setuid capabilities; replaced with portable bootstrap.",
+      "output_archive_sha256": "1ebbcbf500325fec70c23207f0bcd445de8dc48929a1ae28840ee332c635ec2b"
+    },
+    {
+      "job_id": "/exedev/bio-harbor-native-oracles-20260924-003715",
+      "source_revision": "b5da07e6fea3c52e98e85122fb3c9ee333880f25",
+      "status": "verifier-failed",
+      "attempted_cases": 9,
+      "scored_cases": 0,
+      "reason": "Separate verifier image lacked /tests/test.sh; fixed by copying the harness, grader and reference into the image.",
+      "output_archive_sha256": "f18cabae0a3e940610e46021638de93ec512bda21c445ac00427752cbd814c8b",
+      "cleanup_remaining": 0
+    },
+    {
+      "job_id": "/exedev/bio-harbor-native-oracles-20260924-005545",
+      "source_revision": "3ce092822862e943ccbb8162824b2ef68973aa16",
+      "harbor_revision": "d072bef08e54050880b484eb81d892944d1d82fb",
+      "daytona_version": "0.203.0",
+      "status": "passed",
+      "model_calls": 0,
+      "agent": "oracle",
+      "concurrent_trials": 1,
+      "attempts_per_case": 1,
+      "positive_cases": 18,
+      "negative_cases": 5,
+      "bundle_sha256": "9e5ea3dca94e0de198cb986aa96f456aeb8963bb4e09171c055736298d68e50c",
+      "archive": {
+        "state": "uploaded",
+        "uri": "gs://marin-us-central2/tmp/ttl=7d/iris/task-outputs/exedev/bio-harbor-native-oracles-20260924-005545/0/d2b4cb18d3a183c2/outputs.tar.zst",
+        "size_bytes": 1320032,
+        "sha256": "5c35cecad52533c6a3a24fff8b9284b64a024318bd0e8e5fba034f2a18518b39",
+        "error_message": "",
+        "retention": "ttl",
+        "ttl_days": 7,
+        "skipped_count": 0,
+        "skipped_sample": []
+      },
+      "requested_controller_placement": {
+        "region": "us-central2",
+        "tpu_name": "t1v-n-9a98788d",
+        "existing_reserved_slice": "marin-tpu-v4-reserved-256-us-central2-b-20260922-2317-8259d330",
+        "accelerators_requested": 0
+      },
+      "agent_and_verifier_backend": "Daytona",
+      "cleanup": {
+        "matched_trials": 23,
+        "removed": 0,
+        "remaining": 0
+      },
+      "cases": [
+        {
+          "task_id": "real-clinical-adjusted-cox-v1-20260923-00000",
+          "recipe": "real-clinical-adjusted-cox",
+          "repository_index": null,
+          "task_sha256": "450a29382c9e6e0c60327b331dbc86fc7a270d9f5802c1f9bf87f6707633abcf",
+          "expected_reward": 1,
+          "control": "positive",
+          "reward": 1.0,
+          "passed": true,
+          "task_files_sha256": "0a0d332bd5e079648a582020db4828ef424e1356b0b25866d219cfbb4fd08f43",
+          "instruction_sha256": "db246f58a7135e73f9d6579c799f419930af45dbfb9204bbdcb74c0b275e09b2",
+          "verifier_source_sha256": "5ef76ca8da48c0eb4ee51491246522be9f09c6f5b1ec951db2f0570c0f613eab",
+          "reference_sha256": "8da1674240d997d313b4f2df63bddc7692446bcf7a158e2cadfa09fbb58d7708",
+          "oracle_script_sha256": "f57bdb3be1819ca2c8f4fc11d0f2a0fa66e337b2420a78d568b1b4afec23b3a8",
+          "artifact_sha256": {
+            "answer.json": "a9eb1f1fc7a3eb3bfb4d0b7c9b336e80d16e1c281ab5c4a5ba9054d00a0159cf"
+          },
+          "seconds": {
+            "environment_setup": 0.858101,
+            "agent_setup": 8.7e-05,
+            "agent_execution": 0.77678,
+            "verifier": 29.76313
+          },
+          "started_at": "2026-09-24T01:09:54.454204Z",
+          "finished_at": "2026-09-24T01:10:27.096893Z"
+        },
+        {
+          "task_id": "real-clinical-adjusted-cox-v1-20260923-00001",
+          "recipe": "real-clinical-adjusted-cox",
+          "repository_index": null,
+          "task_sha256": "665e2b2c1d4f6f70ecf508e501868356cd58afaa2bbc113dd8fcd6bfa18116fe",
+          "expected_reward": 1,
+          "control": "positive",
+          "reward": 1.0,
+          "passed": true,
+          "task_files_sha256": "88150ad406dc1a4f22ec9182f8b75d0528ec12c097d537551952d9b1eade5061",
+          "instruction_sha256": "db246f58a7135e73f9d6579c799f419930af45dbfb9204bbdcb74c0b275e09b2",
+          "verifier_source_sha256": "5ef76ca8da48c0eb4ee51491246522be9f09c6f5b1ec951db2f0570c0f613eab",
+          "reference_sha256": "f1cbcfafd69cf4d3ece1434e93e45e9fdf5aa56622e33a8a0af9f2582ca332bd",
+          "oracle_script_sha256": "f57bdb3be1819ca2c8f4fc11d0f2a0fa66e337b2420a78d568b1b4afec23b3a8",
+          "artifact_sha256": {
+            "answer.json": "50951355dae9a548c0b7ba3b914fff9a9679564d86245a18afe50a858221cf0e"
+          },
+          "seconds": {
+            "environment_setup": 1.216977,
+            "agent_setup": 0.000105,
+            "agent_execution": 0.775876,
+            "verifier": 24.308234
+          },
+          "started_at": "2026-09-24T01:09:26.762753Z",
+          "finished_at": "2026-09-24T01:09:54.447738Z"
+        },
+        {
+          "task_id": "real-clinical-adjusted-cox-v1-20260923-00002",
+          "recipe": "real-clinical-adjusted-cox",
+          "repository_index": null,
+          "task_sha256": "43edde2358ed8e1b3daa128b49883efdef9252d2677aad18b7b25c07b8f575f4",
+          "expected_reward": 1,
+          "control": "positive",
+          "reward": 1.0,
+          "passed": true,
+          "task_files_sha256": "af7f0033b557093ae12abbf9915c119b04e2e7285813600045d532dc129f2afc",
+          "instruction_sha256": "db246f58a7135e73f9d6579c799f419930af45dbfb9204bbdcb74c0b275e09b2",
+          "verifier_source_sha256": "5ef76ca8da48c0eb4ee51491246522be9f09c6f5b1ec951db2f0570c0f613eab",
+          "reference_sha256": "247d8eb9521275ebca42aa7afa237372460d0e959015e9ce6113a5b4b08338b6",
+          "oracle_script_sha256": "f57bdb3be1819ca2c8f4fc11d0f2a0fa66e337b2420a78d568b1b4afec23b3a8",
+          "artifact_sha256": {
+            "answer.json": "c44f4b85cfdfc8c5527cf1181979bdec369bbb42b233bc08e887908c99418076"
+          },
+          "seconds": {
+            "environment_setup": 0.815904,
+            "agent_setup": 0.000108,
+            "agent_execution": 0.802737,
+            "verifier": 38.375301
+          },
+          "started_at": "2026-09-24T01:08:45.411331Z",
+          "finished_at": "2026-09-24T01:09:26.755894Z"
+        },
+        {
+          "task_id": "real-clinical-kaplan-meier-v1-20260923-00000",
+          "recipe": "real-clinical-kaplan-meier",
+          "repository_index": null,
+          "task_sha256": "290dc8287c13ff5cebc9bfafc715488738dcc46ad58dac482747d0c335a747ff",
+          "expected_reward": 1,
+          "control": "positive",
+          "reward": 1.0,
+          "passed": true,
+          "task_files_sha256": "f6742697b8d656793c55cad3cc2155876a699f963d13b064eae1205f1f25d99d",
+          "instruction_sha256": "b0c89d5982e5823cb5f716c7d58684cae17ef128d7250114f3bb0a97cc58c8ed",
+          "verifier_source_sha256": "5ef76ca8da48c0eb4ee51491246522be9f09c6f5b1ec951db2f0570c0f613eab",
+          "reference_sha256": "1956f83d2ad4b72b5a666ed412b3ef5df87492b9c23f5d481dfd218bc0d1a69f",
+          "oracle_script_sha256": "508c14a946d3ac6b8f5105cc67c5e8959f2831fc8cefd9849f90d35f43d20bd9",
+          "artifact_sha256": {
+            "answer.json": "626cdb5d5401624fabaa9f01f98d91d35cf830e04a018730eca6c17997d81ee1"
+          },
+          "seconds": {
+            "environment_setup": 0.875407,
+            "agent_setup": 0.000104,
+            "agent_execution": 0.777506,
+            "verifier": 26.688872
+          },
+          "started_at": "2026-09-24T01:08:15.715134Z",
+          "finished_at": "2026-09-24T01:08:45.404258Z"
+        },
+        {
+          "task_id": "real-clinical-kaplan-meier-v1-20260923-00001",
+          "recipe": "real-clinical-kaplan-meier",
+          "repository_index": null,
+          "task_sha256": "386bd8d61085aa250b068de1dab805d189535e855e98b38800f443305032ab6a",
+          "expected_reward": 1,
+          "control": "positive",
+          "reward": 1.0,
+          "passed": true,
+          "task_files_sha256": "9ed48387fff1c6464852c3827fc79cf943ed13f7d2af03fe213b5fe4fa0529a1",
+          "instruction_sha256": "b0c89d5982e5823cb5f716c7d58684cae17ef128d7250114f3bb0a97cc58c8ed",
+          "verifier_source_sha256": "5ef76ca8da48c0eb4ee51491246522be9f09c6f5b1ec951db2f0570c0f613eab",
+          "reference_sha256": "bd5622bb37487352f9dcd056f76519fb04c72e49d9318de94f40f7410f7eda78",
+          "oracle_script_sha256": "508c14a946d3ac6b8f5105cc67c5e8959f2831fc8cefd9849f90d35f43d20bd9",
+          "artifact_sha256": {
+            "answer.json": "e93a49d305d0f0d9ffbf842cb2207750b7c9c6eaeb0d671a632c7702943e607d"
+          },
+          "seconds": {
+            "environment_setup": 1.073207,
+            "agent_setup": 0.000122,
+            "agent_execution": 0.762297,
+            "verifier": 24.166235
+          },
+          "started_at": "2026-09-24T01:07:48.383310Z",
+          "finished_at": "2026-09-24T01:08:15.708018Z"
+        },
+        {
+          "task_id": "real-clinical-kaplan-meier-v1-20260923-00002",
+          "recipe": "real-clinical-kaplan-meier",
+          "repository_index": null,
+          "task_sha256": "e0198c0e568cbc840fd703ecb11ea2dd9dbd06c0b077ddfb44fba19dd2d8c156",
+          "expected_reward": 1,
+          "control": "positive",
+          "reward": 1.0,
+          "passed": true,
+          "task_files_sha256": "957dc8419225b34aa06f179dd0c81977027b1cc2383ce8ae2092d517a3459c83",
+          "instruction_sha256": "b0c89d5982e5823cb5f716c7d58684cae17ef128d7250114f3bb0a97cc58c8ed",
+          "verifier_source_sha256": "5ef76ca8da48c0eb4ee51491246522be9f09c6f5b1ec951db2f0570c0f613eab",
+          "reference_sha256": "261de8a869923cabbeaf2e63852d6277a6d770be5ef6ef448c8c6d1b402e9da3",
+          "oracle_script_sha256": "508c14a946d3ac6b8f5105cc67c5e8959f2831fc8cefd9849f90d35f43d20bd9",
+          "artifact_sha256": {
+            "answer.json": "8a5edfb7ca620a32c22f822daa9a974a81aabd45b7068f57c5b60af3699605dc"
+          },
+          "seconds": {
+            "environment_setup": 1.153997,
+            "agent_setup": 9.7e-05,
+            "agent_execution": 0.798842,
+            "verifier": 29.422589
+          },
+          "started_at": "2026-09-24T01:07:15.626182Z",
+          "finished_at": "2026-09-24T01:07:48.376516Z"
+        },
+        {
+          "task_id": "real-clinical-paired-visits-v1-20260923-00000",
+          "recipe": "real-clinical-paired-visits",
+          "repository_index": null,
+          "task_sha256": "941ebf320ce370aa1381de7c6b7ef6fb0800087ad79d5a61a96074154ff6558a",
+          "expected_reward": 1,
+          "control": "positive",
+          "reward": 1.0,
+          "passed": true,
+          "task_files_sha256": "6637bd8cac9daeb14b5c54c57f645c5da4bf0b116ba33c9861f9409597e91306",
+          "instruction_sha256": "8f07d13980461b23e9721e7f0dc13e5d0dcfc5505df12526fbdb2325c1554404",
+          "verifier_source_sha256": "5ef76ca8da48c0eb4ee51491246522be9f09c6f5b1ec951db2f0570c0f613eab",
+          "reference_sha256": "cc9e277ce559515b1c0d3fb138192c94e5de22d91c867808bd7c021edfe7e503",
+          "oracle_script_sha256": "f63ecd6b29236a46cfdf942b50ec0653d51748f33bf35c0dba462954b6bf05bc",
+          "artifact_sha256": {
+            "answer.json": "3fb497f894327523d62efb28ee540be7bc5f4544673fe03c2423ee9370c76435"
+          },
+          "seconds": {
+            "environment_setup": 0.836211,
+            "agent_setup": 7.2e-05,
+            "agent_execution": 0.783805,
+            "verifier": 32.911575
+          },
+          "started_at": "2026-09-24T01:06:39.729162Z",
+          "finished_at": "2026-09-24T01:07:15.618736Z"
+        },
+        {
+          "task_id": "real-clinical-paired-visits-v1-20260923-00001",
+          "recipe": "real-clinical-paired-visits",
+          "repository_index": null,
+          "task_sha256": "f8e296577b3a092cba3f31516ebe600ec508a61fba160c6365c7751119c79208",
+          "expected_reward": 1,
+          "control": "positive",
+          "reward": 1.0,
+          "passed": true,
+          "task_files_sha256": "7300e20c61661f4ce7fa92910ab2de696eff2047932ddcfa68530c87aa465d87",
+          "instruction_sha256": "8f07d13980461b23e9721e7f0dc13e5d0dcfc5505df12526fbdb2325c1554404",
+          "verifier_source_sha256": "5ef76ca8da48c0eb4ee51491246522be9f09c6f5b1ec951db2f0570c0f613eab",
+          "reference_sha256": "cb4ba35cf230c3f7c145c098ddd49e5ffba2d35625ae72f07ef561cda7850a00",
+          "oracle_script_sha256": "f63ecd6b29236a46cfdf942b50ec0653d51748f33bf35c0dba462954b6bf05bc",
+          "artifact_sha256": {
+            "answer.json": "2bffd24cd7b6f2a986df59cdbf66002e7f27cd8eaeb67d554f028d76c2bdd129"
+          },
+          "seconds": {
+            "environment_setup": 0.906735,
+            "agent_setup": 7.2e-05,
+            "agent_execution": 0.846697,
+            "verifier": 20.145619
+          },
+          "started_at": "2026-09-24T01:06:16.410760Z",
+          "finished_at": "2026-09-24T01:06:39.722488Z"
+        },
+        {
+          "task_id": "real-clinical-paired-visits-v1-20260923-00002",
+          "recipe": "real-clinical-paired-visits",
+          "repository_index": null,
+          "task_sha256": "cebcfb06fea994214f54dcb2e6dd72051d757487aa7f5bda038c811b4c88b040",
+          "expected_reward": 1,
+          "control": "positive",
+          "reward": 1.0,
+          "passed": true,
+          "task_files_sha256": "bfde10cd6b67b7d09095b3ba61bc7805d9635db238e76e29377543e0405c1c51",
+          "instruction_sha256": "8f07d13980461b23e9721e7f0dc13e5d0dcfc5505df12526fbdb2325c1554404",
+          "verifier_source_sha256": "5ef76ca8da48c0eb4ee51491246522be9f09c6f5b1ec951db2f0570c0f613eab",
+          "reference_sha256": "8e15fd0715aceb439f5eaaca4529342cc917f7676d29e910fb49f04944b52759",
+          "oracle_script_sha256": "f63ecd6b29236a46cfdf942b50ec0653d51748f33bf35c0dba462954b6bf05bc",
+          "artifact_sha256": {
+            "answer.json": "78b313e8f56cb7801977e6ca3823a73e222b27aee05ebe76e5da5190e7f99525"
+          },
+          "seconds": {
+            "environment_setup": 10.361831,
+            "agent_setup": 9e-05,
+            "agent_execution": 0.810748,
+            "verifier": 82.029912
+          },
+          "started_at": "2026-09-24T01:04:41.884692Z",
+          "finished_at": "2026-09-24T01:06:16.403788Z"
+        },
+        {
+          "task_id": "real-fastq-pair-filter-v1-20260923-00000",
+          "recipe": "real-fastq-pair-filter",
+          "repository_index": 35,
+          "task_sha256": "ffc1f280c13d246db7424ebe229096ea9b95d2d1bcc6a5475ec598446da6f994",
+          "expected_reward": 1,
+          "control": "positive",
+          "reward": 1.0,
+          "passed": true,
+          "task_files_sha256": "55b4eb717c688645a93c7fcc2bec60ec53f149842c547805770ef55a238aa505",
+          "instruction_sha256": "34d1138dd8a926d82d9ae56d10cf0cb8c458f9f586003dfbe5fe7281b6755eec",
+          "verifier_source_sha256": "5ef76ca8da48c0eb4ee51491246522be9f09c6f5b1ec951db2f0570c0f613eab",
+          "reference_sha256": "18bd87fc26678cb7526181b32ec4a2cec6bae38c6cd3c4a18d60b9d864053252",
+          "oracle_script_sha256": "fde36e93123069435b1c0b2b802cb0ed52636e8d6d9c41293391adf7d259b92e",
+          "artifact_sha256": {
+            "answer.json": "de7483b28bca8e16c88eef94008633a98b52175a402ac64e0bc4ab2f04fb6234",
+            "filtered_R1.fastq": "ce608fc94062bcf6fec3d7603e927cbdb33e095aa1f7481a14f3f870ac29c6df",
+            "filtered_R2.fastq": "060bf046e4e19c0a8fcba5b0c8e8fc3e7ecc21f5c543825579859081c15f23e1"
+          },
+          "seconds": {
+            "environment_setup": 1.64073,
+            "agent_setup": 0.000107,
+            "agent_execution": 1.069397,
+            "verifier": 3.255992
+          },
+          "started_at": "2026-09-24T01:04:32.977691Z",
+          "finished_at": "2026-09-24T01:04:41.877813Z"
+        },
+        {
+          "task_id": "real-fastq-pair-filter-v1-20260923-00000-negative-answer",
+          "recipe": "real-fastq-pair-filter",
+          "repository_index": 35,
+          "task_sha256": "ffc1f280c13d246db7424ebe229096ea9b95d2d1bcc6a5475ec598446da6f994",
+          "expected_reward": 0,
+          "control": "answer",
+          "canonical_task_id": "real-fastq-pair-filter-v1-20260923-00000",
+          "reward": 0.0,
+          "passed": true,
+          "task_files_sha256": "470a3a684c2287a34ceaba31b3ec6448aa137c86edd4d917137cb226a267976a",
+          "instruction_sha256": "34d1138dd8a926d82d9ae56d10cf0cb8c458f9f586003dfbe5fe7281b6755eec",
+          "verifier_source_sha256": "5ef76ca8da48c0eb4ee51491246522be9f09c6f5b1ec951db2f0570c0f613eab",
+          "reference_sha256": "18bd87fc26678cb7526181b32ec4a2cec6bae38c6cd3c4a18d60b9d864053252",
+          "oracle_script_sha256": "1a6f3db5726573bbd83a513913f6baffe34cd187fad76838f895ede7b7c8b451",
+          "artifact_sha256": {
+            "answer.json": "e565e1414ce6b65c6b6382ec0f95f3ae198816c660f30f1059eed7a5f7d7d136",
+            "filtered_R1.fastq": "ce608fc94062bcf6fec3d7603e927cbdb33e095aa1f7481a14f3f870ac29c6df",
+            "filtered_R2.fastq": "060bf046e4e19c0a8fcba5b0c8e8fc3e7ecc21f5c543825579859081c15f23e1"
+          },
+          "seconds": {
+            "environment_setup": 1.713169,
+            "agent_setup": 0.000101,
+            "agent_execution": 1.103895,
+            "verifier": 3.537175
+          },
+          "started_at": "2026-09-24T01:04:23.784168Z",
+          "finished_at": "2026-09-24T01:04:32.971138Z"
+        },
+        {
+          "task_id": "real-fastq-pair-filter-v1-20260923-00000-negative-artifact",
+          "recipe": "real-fastq-pair-filter",
+          "repository_index": 35,
+          "task_sha256": "ffc1f280c13d246db7424ebe229096ea9b95d2d1bcc6a5475ec598446da6f994",
+          "expected_reward": 0,
+          "control": "artifact",
+          "canonical_task_id": "real-fastq-pair-filter-v1-20260923-00000",
+          "reward": 0.0,
+          "passed": true,
+          "task_files_sha256": "e7e0fcf875fce26340920867874c393d0c6d42543099110267ceb01a6c59e904",
+          "instruction_sha256": "34d1138dd8a926d82d9ae56d10cf0cb8c458f9f586003dfbe5fe7281b6755eec",
+          "verifier_source_sha256": "5ef76ca8da48c0eb4ee51491246522be9f09c6f5b1ec951db2f0570c0f613eab",
+          "reference_sha256": "18bd87fc26678cb7526181b32ec4a2cec6bae38c6cd3c4a18d60b9d864053252",
+          "oracle_script_sha256": "aefe40723447a83d3cd03075c423f8b64554626578e0cfface6742e8b5c532ed",
+          "artifact_sha256": {
+            "answer.json": "de7483b28bca8e16c88eef94008633a98b52175a402ac64e0bc4ab2f04fb6234",
+            "filtered_R2.fastq": "060bf046e4e19c0a8fcba5b0c8e8fc3e7ecc21f5c543825579859081c15f23e1"
+          },
+          "seconds": {
+            "environment_setup": 2.01087,
+            "agent_setup": 0.000129,
+            "agent_execution": 1.054031,
+            "verifier": 29.028416
+          },
+          "started_at": "2026-09-24T01:03:42.624112Z",
+          "finished_at": "2026-09-24T01:04:23.776821Z"
+        },
+        {
+          "task_id": "real-fastq-pair-filter-v1-20260923-00001",
+          "recipe": "real-fastq-pair-filter",
+          "repository_index": 35,
+          "task_sha256": "dfd60832730e28130be7e06401e432e23fb5f4004c2539e3e5098beb1f6587c3",
+          "expected_reward": 1,
+          "control": "positive",
+          "reward": 1.0,
+          "passed": true,
+          "task_files_sha256": "ac2bd670f08d22b9021c1f0575b03971506a18235ebfa5d359d51b61ba235389",
+          "instruction_sha256": "34d1138dd8a926d82d9ae56d10cf0cb8c458f9f586003dfbe5fe7281b6755eec",
+          "verifier_source_sha256": "5ef76ca8da48c0eb4ee51491246522be9f09c6f5b1ec951db2f0570c0f613eab",
+          "reference_sha256": "fc9cc41be30e471d151f8c43ca66923a46eff8eed784fbd9755f13408b95e794",
+          "oracle_script_sha256": "fde36e93123069435b1c0b2b802cb0ed52636e8d6d9c41293391adf7d259b92e",
+          "artifact_sha256": {
+            "answer.json": "cef0966831cf64bac0c9591104463550dfe4f66bff9c87aedbd039e2464dcc93",
+            "filtered_R1.fastq": "3229a40716903247aa2f0c93d2f578deff40a4dab9b7d8586b1470ae63989105",
+            "filtered_R2.fastq": "87716e8c8f9be476ea9e8aca5e1dd1f254e786104db20f397a456b90d673c341"
+          },
+          "seconds": {
+            "environment_setup": 2.504339,
+            "agent_setup": 0.000101,
+            "agent_execution": 1.035319,
+            "verifier": 50.18243
+          },
+          "started_at": "2026-09-24T01:02:46.026146Z",
+          "finished_at": "2026-09-24T01:03:42.617137Z"
+        },
+        {
+          "task_id": "real-fastq-pair-filter-v1-20260923-00002",
+          "recipe": "real-fastq-pair-filter",
+          "repository_index": 35,
+          "task_sha256": "4548e767d09c5b71655590c8dfa9f7fca880dcffe46e536a6ae902c8f1e92e15",
+          "expected_reward": 1,
+          "control": "positive",
+          "reward": 1.0,
+          "passed": true,
+          "task_files_sha256": "53708efcc1ad46037984d2c3660cecee9ee945397d75b3afc89d4acc6137f0f8",
+          "instruction_sha256": "34d1138dd8a926d82d9ae56d10cf0cb8c458f9f586003dfbe5fe7281b6755eec",
+          "verifier_source_sha256": "5ef76ca8da48c0eb4ee51491246522be9f09c6f5b1ec951db2f0570c0f613eab",
+          "reference_sha256": "09a6c8c1e1c5ef8f54bfe2dda41d2264aeb22f1e36c53c26d6f64f260e6d874a",
+          "oracle_script_sha256": "fde36e93123069435b1c0b2b802cb0ed52636e8d6d9c41293391adf7d259b92e",
+          "artifact_sha256": {
+            "answer.json": "4a48844da1b2a481f9eaf10a973915aabae8249f49268ee52a7981748ebedda6",
+            "filtered_R1.fastq": "043cae01a778e987c86b4b0740240f6919c6f5be17f7277aea3b4505985ca587",
+            "filtered_R2.fastq": "4eef8eab142ac6141298cad6a0c0fa8d4c54dbb728d38363d55b6c474c063f8f"
+          },
+          "seconds": {
+            "environment_setup": 1.638371,
+            "agent_setup": 0.000105,
+            "agent_execution": 1.081398,
+            "verifier": 29.192323
+          },
+          "started_at": "2026-09-24T01:02:11.178434Z",
+          "finished_at": "2026-09-24T01:02:46.018718Z"
+        },
+        {
+          "task_id": "real-fastq-quality-yield-v1-20260923-00000",
+          "recipe": "real-fastq-quality-yield",
+          "repository_index": 15,
+          "task_sha256": "dd9ddd3fea33211bbc4b98c402c8c7767cd2b590b1776c93c84d504f4d4a4c6b",
+          "expected_reward": 1,
+          "control": "positive",
+          "reward": 1.0,
+          "passed": true,
+          "task_files_sha256": "239fade5e3adc269fbe5b4552be2006222ba6ef545620e08bf9da9a0c3fdf549",
+          "instruction_sha256": "500c6421f5350ed91002767121c7e5ecbccb9dccdf7dfcbb0aadcd7b6644abd0",
+          "verifier_source_sha256": "5ef76ca8da48c0eb4ee51491246522be9f09c6f5b1ec951db2f0570c0f613eab",
+          "reference_sha256": "c2e9e4ac2339fe3e0a6b6f2bfb4a5a7307c5932dc6119866658ff0558ab87ddf",
+          "oracle_script_sha256": "cc121dec245e5372ca5d1c5a0be0e0ee2d2ef81d9152965d172c13523c80bb6d",
+          "artifact_sha256": {
+            "answer.json": "44875c9fe719a3a025ed2cfe085e7507b47341d6202b3ce8c78176b1620722eb"
+          },
+          "seconds": {
+            "environment_setup": 1.414688,
+            "agent_setup": 8e-05,
+            "agent_execution": 20.599501,
+            "verifier": 3.138894
+          },
+          "started_at": "2026-09-24T01:01:44.650731Z",
+          "finished_at": "2026-09-24T01:02:11.171122Z"
+        },
+        {
+          "task_id": "real-fastq-quality-yield-v1-20260923-00000-negative-answer",
+          "recipe": "real-fastq-quality-yield",
+          "repository_index": 15,
+          "task_sha256": "dd9ddd3fea33211bbc4b98c402c8c7767cd2b590b1776c93c84d504f4d4a4c6b",
+          "expected_reward": 0,
+          "control": "answer",
+          "canonical_task_id": "real-fastq-quality-yield-v1-20260923-00000",
+          "reward": 0.0,
+          "passed": true,
+          "task_files_sha256": "85201e0b767fd01abc39137761788e36f95b58445b24256b4204d192306f46d3",
+          "instruction_sha256": "500c6421f5350ed91002767121c7e5ecbccb9dccdf7dfcbb0aadcd7b6644abd0",
+          "verifier_source_sha256": "5ef76ca8da48c0eb4ee51491246522be9f09c6f5b1ec951db2f0570c0f613eab",
+          "reference_sha256": "c2e9e4ac2339fe3e0a6b6f2bfb4a5a7307c5932dc6119866658ff0558ab87ddf",
+          "oracle_script_sha256": "a00b9cfe91ff1c866c86444cab75e342f52a942f4b2de1fe7c8d34aba840534f",
+          "artifact_sha256": {
+            "answer.json": "fc4aa39ba01826be13e7a3c54686314eefdafda38d40b9bdb84ee148c01bec80"
+          },
+          "seconds": {
+            "environment_setup": 1.967784,
+            "agent_setup": 7.5e-05,
+            "agent_execution": 20.533329,
+            "verifier": 30.89181
+          },
+          "started_at": "2026-09-24T01:00:49.864783Z",
+          "finished_at": "2026-09-24T01:01:44.643714Z"
+        },
+        {
+          "task_id": "real-fastq-quality-yield-v1-20260923-00001",
+          "recipe": "real-fastq-quality-yield",
+          "repository_index": 15,
+          "task_sha256": "e82435b6c799e9fd21539e44be240b6a669238efc87f862904c03e8e48d07975",
+          "expected_reward": 1,
+          "control": "positive",
+          "reward": 1.0,
+          "passed": true,
+          "task_files_sha256": "ce58f6deed52489b46316784c7a66915d851c1554d3cea6c0c68b57940e05bce",
+          "instruction_sha256": "500c6421f5350ed91002767121c7e5ecbccb9dccdf7dfcbb0aadcd7b6644abd0",
+          "verifier_source_sha256": "5ef76ca8da48c0eb4ee51491246522be9f09c6f5b1ec951db2f0570c0f613eab",
+          "reference_sha256": "3d32244ce054c131a2da61f9aa626d47958528a351ab03ea1c7f79eae4337cfa",
+          "oracle_script_sha256": "cc121dec245e5372ca5d1c5a0be0e0ee2d2ef81d9152965d172c13523c80bb6d",
+          "artifact_sha256": {
+            "answer.json": "33d4d905a11b79be8669222b9f3ca977ffe4948f7e1b18657b640dc897910af2"
+          },
+          "seconds": {
+            "environment_setup": 1.384832,
+            "agent_setup": 8.4e-05,
+            "agent_execution": 16.028811,
+            "verifier": 43.567466
+          },
+          "started_at": "2026-09-24T00:59:47.539559Z",
+          "finished_at": "2026-09-24T01:00:49.857894Z"
+        },
+        {
+          "task_id": "real-fastq-quality-yield-v1-20260923-00002",
+          "recipe": "real-fastq-quality-yield",
+          "repository_index": 15,
+          "task_sha256": "7698b8d1764707c77baba8fb032f602c219b46b4a6834ce7351cc28aca6e1823",
+          "expected_reward": 1,
+          "control": "positive",
+          "reward": 1.0,
+          "passed": true,
+          "task_files_sha256": "449f5e8addd72610c56df5a990e81502725be89fc00f6497942d9c094e52e161",
+          "instruction_sha256": "500c6421f5350ed91002767121c7e5ecbccb9dccdf7dfcbb0aadcd7b6644abd0",
+          "verifier_source_sha256": "5ef76ca8da48c0eb4ee51491246522be9f09c6f5b1ec951db2f0570c0f613eab",
+          "reference_sha256": "785fe71b96e835c161e4d54d29ff9d6584ba9a560cc253b9c913764502c35bb4",
+          "oracle_script_sha256": "cc121dec245e5372ca5d1c5a0be0e0ee2d2ef81d9152965d172c13523c80bb6d",
+          "artifact_sha256": {
+            "answer.json": "9ec16a7ad10e5c4cee3f99cec021710058a66574b7eb14dec699c714dd8e827d"
+          },
+          "seconds": {
+            "environment_setup": 1.223236,
+            "agent_setup": 7.7e-05,
+            "agent_execution": 21.284756,
+            "verifier": 30.860248
+          },
+          "started_at": "2026-09-24T00:58:52.686756Z",
+          "finished_at": "2026-09-24T00:59:47.532613Z"
+        },
+        {
+          "task_id": "real-protein-alignment-v1-20260923-00000",
+          "recipe": "real-protein-alignment",
+          "repository_index": 43,
+          "task_sha256": "3359abaf534bb78016fdd04b2be59a1d5ed4fd5ef09e641409efa84ec2e9e310",
+          "expected_reward": 1,
+          "control": "positive",
+          "reward": 1.0,
+          "passed": true,
+          "task_files_sha256": "31ed3f9adbd729f645460522898570cd17f191ae383fd90b4563269549e3ae85",
+          "instruction_sha256": "df3b839c35e223a8178a39bb514d7caa3a2ccf007d41cb10ceb9eeabdde24962",
+          "verifier_source_sha256": "5ef76ca8da48c0eb4ee51491246522be9f09c6f5b1ec951db2f0570c0f613eab",
+          "reference_sha256": "1ae1c14c29b6b64e75a5144ccf1e047993b0149758f41002efe7e0c5738f1cb8",
+          "oracle_script_sha256": "6980b23d2dadfbe8f9ae9159a7704c6f5b0763cf12d85c631fe282eaf50fc7d3",
+          "artifact_sha256": {
+            "alignment.fa": "45153610347ca72c669b878c0ed28d9cfa3a65f6c19e465f73f4b53e5ed42b95",
+            "answer.json": "f80d39e5b072aec418f83406a38fde3a22408094b679ea0c4be1199453a74b78"
+          },
+          "seconds": {
+            "environment_setup": 1.281494,
+            "agent_setup": 7.2e-05,
+            "agent_execution": 0.554746,
+            "verifier": 4.795514
+          },
+          "started_at": "2026-09-24T00:58:44.758794Z",
+          "finished_at": "2026-09-24T00:58:52.680501Z"
+        },
+        {
+          "task_id": "real-protein-alignment-v1-20260923-00000-negative-answer",
+          "recipe": "real-protein-alignment",
+          "repository_index": 43,
+          "task_sha256": "3359abaf534bb78016fdd04b2be59a1d5ed4fd5ef09e641409efa84ec2e9e310",
+          "expected_reward": 0,
+          "control": "answer",
+          "canonical_task_id": "real-protein-alignment-v1-20260923-00000",
+          "reward": 0.0,
+          "passed": true,
+          "task_files_sha256": "dfd81cadb29ff2e976e8e71f539875fe8e9da9807e1ad27eeb72649fd42e603c",
+          "instruction_sha256": "df3b839c35e223a8178a39bb514d7caa3a2ccf007d41cb10ceb9eeabdde24962",
+          "verifier_source_sha256": "5ef76ca8da48c0eb4ee51491246522be9f09c6f5b1ec951db2f0570c0f613eab",
+          "reference_sha256": "1ae1c14c29b6b64e75a5144ccf1e047993b0149758f41002efe7e0c5738f1cb8",
+          "oracle_script_sha256": "484cb463acd1953e13f9392fa0814db660df983e5a6c10336587471af10279f9",
+          "artifact_sha256": {
+            "alignment.fa": "45153610347ca72c669b878c0ed28d9cfa3a65f6c19e465f73f4b53e5ed42b95",
+            "answer.json": "63233493d2f1854df22b2c8caa2433acced7583787a33a0d4fb4fd046ae44738"
+          },
+          "seconds": {
+            "environment_setup": 1.236571,
+            "agent_setup": 7e-05,
+            "agent_execution": 0.692689,
+            "verifier": 5.023185
+          },
+          "started_at": "2026-09-24T00:58:36.644581Z",
+          "finished_at": "2026-09-24T00:58:44.752345Z"
+        },
+        {
+          "task_id": "real-protein-alignment-v1-20260923-00000-negative-artifact",
+          "recipe": "real-protein-alignment",
+          "repository_index": 43,
+          "task_sha256": "3359abaf534bb78016fdd04b2be59a1d5ed4fd5ef09e641409efa84ec2e9e310",
+          "expected_reward": 0,
+          "control": "artifact",
+          "canonical_task_id": "real-protein-alignment-v1-20260923-00000",
+          "reward": 0.0,
+          "passed": true,
+          "task_files_sha256": "daf172c95723ae948a0702f80279e96d745de9903fca787a53a24582047893f9",
+          "instruction_sha256": "df3b839c35e223a8178a39bb514d7caa3a2ccf007d41cb10ceb9eeabdde24962",
+          "verifier_source_sha256": "5ef76ca8da48c0eb4ee51491246522be9f09c6f5b1ec951db2f0570c0f613eab",
+          "reference_sha256": "1ae1c14c29b6b64e75a5144ccf1e047993b0149758f41002efe7e0c5738f1cb8",
+          "oracle_script_sha256": "8151573b616d976b86d4126ccb96489a7dd399b4fa4c35147bff9817e6c4ed3c",
+          "artifact_sha256": {
+            "answer.json": "f80d39e5b072aec418f83406a38fde3a22408094b679ea0c4be1199453a74b78"
+          },
+          "seconds": {
+            "environment_setup": 1.200563,
+            "agent_setup": 8e-05,
+            "agent_execution": 0.591807,
+            "verifier": 32.120293
+          },
+          "started_at": "2026-09-24T00:57:55.347415Z",
+          "finished_at": "2026-09-24T00:58:36.638049Z"
+        },
+        {
+          "task_id": "real-protein-alignment-v1-20260923-00001",
+          "recipe": "real-protein-alignment",
+          "repository_index": 43,
+          "task_sha256": "05aa30d5b76cf0990a239ed843d528746bf418c2ad22518032f08a344fde8126",
+          "expected_reward": 1,
+          "control": "positive",
+          "reward": 1.0,
+          "passed": true,
+          "task_files_sha256": "6fe6a6706c80780722dce0e03d1fe03c6f811f3359decebddfd0d4aa820b40e7",
+          "instruction_sha256": "fb5eade03bc6b886021b92ef24c417d01fa81298f72e304d89b6edd6dd6dc51a",
+          "verifier_source_sha256": "5ef76ca8da48c0eb4ee51491246522be9f09c6f5b1ec951db2f0570c0f613eab",
+          "reference_sha256": "e038160aa7dfbf26e1e9c8e9ce8863902749c175d1a2f9cac08db3a3e43d3d7a",
+          "oracle_script_sha256": "6980b23d2dadfbe8f9ae9159a7704c6f5b0763cf12d85c631fe282eaf50fc7d3",
+          "artifact_sha256": {
+            "alignment.fa": "5b60999eb9a00d70b85efcfb115bbcb7fd38a74ba93b4c3502d54172fdebc195",
+            "answer.json": "6bdb4d2652bd90ec0520fe8d6481a82e69a35064e95cd36f519eaed690f556b7"
+          },
+          "seconds": {
+            "environment_setup": 1.129348,
+            "agent_setup": 7.5e-05,
+            "agent_execution": 0.599352,
+            "verifier": 31.227564
+          },
+          "started_at": "2026-09-24T00:57:21.201736Z",
+          "finished_at": "2026-09-24T00:57:55.340712Z"
+        },
+        {
+          "task_id": "real-protein-alignment-v1-20260923-00002",
+          "recipe": "real-protein-alignment",
+          "repository_index": 43,
+          "task_sha256": "7ae1bc9dd37d7dad9f3eec6a6862d370706d0e585dae0634ccdcde4fb7f7aebc",
+          "expected_reward": 1,
+          "control": "positive",
+          "reward": 1.0,
+          "passed": true,
+          "task_files_sha256": "0e70f25f31f472f8cae72db50c4a22df61e1a40a336feda602e8d7173345e1b3",
+          "instruction_sha256": "38f0310cb6016dd2f1a826d88c375ce6422abed3491b1fe3f10ffe11555ae832",
+          "verifier_source_sha256": "5ef76ca8da48c0eb4ee51491246522be9f09c6f5b1ec951db2f0570c0f613eab",
+          "reference_sha256": "8b606ac0b2730d030f4a48f90dd7f3a1cc2469a009d06c7c415113362aade19e",
+          "oracle_script_sha256": "6980b23d2dadfbe8f9ae9159a7704c6f5b0763cf12d85c631fe282eaf50fc7d3",
+          "artifact_sha256": {
+            "alignment.fa": "2272533c4d2c4f5782cc99d7082f0b8eb763d981ddeae03e2215bb0e282bdef2",
+            "answer.json": "d7367202652843dc5d7bb8d02919261968d8207eee344a63e53cc670af5f2946"
+          },
+          "seconds": {
+            "environment_setup": 1.469899,
+            "agent_setup": 9.3e-05,
+            "agent_execution": 0.578596,
+            "verifier": 38.187484
+          },
+          "started_at": "2026-09-24T00:56:39.556732Z",
+          "finished_at": "2026-09-24T00:57:21.194432Z"
+        }
+      ],
+      "observed_controller_placement": {
+        "job_id": "/exedev/bio-harbor-native-oracles-20260924-005545",
+        "state": "succeeded",
+        "worker_id": "marin-tpu-v4-reserved-256-us-central2-b-20260922-2317-8259d330-worker-28",
+        "execution_cluster_id": "local",
+        "backend_id": "default",
+        "checked_at": "2026-09-24T01:23:19.342042+00:00",
+        "worker_metadata": [
+          {
+            "worker_id": "marin-tpu-v4-reserved-256-us-central2-b-20260922-2317-8259d330-worker-28",
+            "scale_group": "tpu_v4-reserved_256-us-central2-b",
+            "backend_id": "default",
+            "tpu_name": "t1v-n-9a98788d",
+            "gce_zone": "",
+            "gce_instance_name": "t1v-n-9a98788d-w-28"
+          }
+        ]
+      }
+    }
+  ]
+}

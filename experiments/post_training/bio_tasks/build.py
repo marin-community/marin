@@ -170,6 +170,17 @@ def validate_instance(
             artifact.write_text(original + ">duplicate\nX\n")
             artifact_checks[f"malformed_artifact:{name}"] = grade_files(reference, answer).reward
             artifact.write_text(original)
+        for name in instance.contract.tables:
+            artifact = root / name
+            original = artifact.read_bytes()
+            artifact.unlink()
+            artifact_checks[f"missing_artifact:{name}"] = grade_files(reference, answer).reward
+            lines = original.splitlines(keepends=True)
+            artifact.write_bytes(b"".join(lines[:-1]))
+            artifact_checks[f"missing_table_row:{name}"] = grade_files(reference, answer).reward
+            artifact.write_bytes(original + lines[-1])
+            artifact_checks[f"duplicate_table_row:{name}"] = grade_files(reference, answer).reward
+            artifact.write_bytes(original)
         if any(value != 0 for value in artifact_checks.values()):
             raise ValueError(f"{recipe.id}: invalid native artifact passed: {artifact_checks}")
         if previous_outputs:
@@ -293,6 +304,15 @@ def inspection_page(root: Path, task: Identity, instance: Instance, files: TaskF
             {
                 "fastq": {name: target.model_dump() for name, target in instance.contract.fastq.items()},
                 "alignments": {name: target.model_dump() for name, target in instance.contract.alignments.items()},
+                "tables": {
+                    name: {
+                        "columns": {column: spec.model_dump() for column, spec in target.columns.items()},
+                        "rows": len(target.expected),
+                        "max_bytes": target.max_bytes,
+                        "expected_preview": dict(list(target.expected.items())[:20]),
+                    }
+                    for name, target in instance.contract.tables.items()
+                },
             },
             indent=2,
         ),
@@ -485,6 +505,7 @@ def build(output: Path, instances_per_recipe: int, seed: int, base_image: str, t
                                 "alignments": {
                                     name: target.model_dump() for name, target in instance.contract.alignments.items()
                                 },
+                                "tables": {name: target.expected for name, target in instance.contract.tables.items()},
                             },
                             sort_keys=True,
                         ).encode()

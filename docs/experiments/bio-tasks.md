@@ -106,6 +106,11 @@ scientifically wrong answers. FASTQ-producing tasks additionally check complete
 ordered read IDs, sequences and qualities in submitted native files. Missing,
 truncated and altered artifacts fail even when the JSON summary is correct. The
 trusted verifier streams files under per-artifact byte limits and rejects symlinks.
+Connected analyses can declare complete TSV intermediate artifacts, such as
+fitted gene-level results. These contracts check every ID and quantity, declared
+numeric tolerances and missingness. Row and column order may vary; wrong values,
+duplicate or missing IDs, malformed rows and nonfinite values fail. A correct
+final summary cannot compensate for an incorrect required intermediate table.
 Protein alignment tasks accept different aligned FASTA files if they preserve every
 input residue and reach 95% of the sum of independently computed optimal pairwise
 scores (twice BLOSUM62, gap opening 20, extension 1). Each admitted instance must
