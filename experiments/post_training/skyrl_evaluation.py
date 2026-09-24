@@ -36,7 +36,7 @@ def resolve_skyrl_model(ctx: StepContext, source: ArtifactStep[SkyRLRun], model:
 
 
 def skyrl_eval_step(
-    source: ArtifactStep[SkyRLModel],
+    source: ArtifactStep[SkyRLRun],
     model: ModelConfig,
     evals: str,
     *,

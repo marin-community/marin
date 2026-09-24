@@ -44,9 +44,9 @@ from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
     IrisSkyRLExecution,
-    SkyRLModel,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
+    SkyRLRun,
     SkyRLRuntime,
     SkyRLRuntimeProfile,
     SkyRLSpec,
@@ -528,7 +528,7 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
 
 @dataclass(frozen=True)
 class AsyncRun:
-    rl: ArtifactStep[SkyRLModel]
+    rl: ArtifactStep[SkyRLRun]
     evaluation: ArtifactStep[EvaluationResult]
 
 
@@ -581,6 +581,7 @@ def build_run(policy: PolicySpec, preset: AsyncPreset, version: str | None, sett
             # cannot write there.
             wandb_entity=None,
         ),
+        export_hf=True,
     )
     # The evaluation serves the rendered window, so a --set on the budget reaches the server.
     # evaluation_model_config adds max_new_tokens to request_window_tokens, so it gets the prompt share.
