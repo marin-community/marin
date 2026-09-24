@@ -54,11 +54,9 @@ from marin.experiment.namespacing import user_owned_name
 from marin.experiment.train import train_lm
 from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.rl.skyrl import (
-    SKYRL_POLICY_LOCATION,
     ArtifactDataSource,
     ArtifactHfModel,
     IrisSkyRLExecution,
-    SkyRLEvaluationModel,
     SkyRLModel,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
@@ -73,6 +71,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr.writers import write_parquet_file
 
 from experiments.evaluation.pipeline import EvaluationResult, eval_step
+from experiments.post_training.skyrl_evaluation import SKYRL_POLICY_LOCATION, skyrl_target_model_step
 from experiments.sft.launcher import DatasetSpec, LevanterCheckpointModel, SFTSpec, resources_from_accelerator, sft_step
 
 logger = logging.getLogger(__name__)
@@ -462,28 +461,33 @@ def build_workflow(*, version: str | None = None) -> IceballMicroWorkflow:
     )
 
     evaluation_name = f"evals/{ICEBALL_MODEL_NAME}/{ICEBALL_EVALS}"
-    evaluation = eval_step(
-        SkyRLEvaluationModel(
-            step=rl,
-            model=ModelConfig(
-                name=ICEBALL_MODEL_NAME,
-                location=SKYRL_POLICY_LOCATION,
-                tokenizer=QWEN_TOKENIZER,
-                apply_chat_template=True,
-                resource_hint=ResourceHint(gpu={ICEBALL_GPU_VARIANT: 1}),
-                serve=ServeConfig(
-                    tensor_parallel_size=1,
-                    # Fit the unchanged five-shot prompts beyond the short training context.
-                    auto_overrides=False,
-                    max_model_len=ICEBALL_EVAL_CONTEXT_LENGTH,
-                    hf_overrides=json.dumps({"max_position_embeddings": ICEBALL_EVAL_CONTEXT_LENGTH}),
-                    max_num_seqs=32,
-                ),
-                generation=GenerationConfig(max_gen_toks=256),
+    evaluation_version = version or resolve_version(evaluation_name, None)
+    evaluation_model = skyrl_target_model_step(
+        rl,
+        ModelConfig(
+            name=ICEBALL_MODEL_NAME,
+            location=SKYRL_POLICY_LOCATION,
+            tokenizer=QWEN_TOKENIZER,
+            apply_chat_template=True,
+            resource_hint=ResourceHint(gpu={ICEBALL_GPU_VARIANT: 1}),
+            serve=ServeConfig(
+                tensor_parallel_size=1,
+                # Fit the unchanged five-shot prompts beyond the short training context.
+                auto_overrides=False,
+                max_model_len=ICEBALL_EVAL_CONTEXT_LENGTH,
+                hf_overrides=json.dumps({"max_position_embeddings": ICEBALL_EVAL_CONTEXT_LENGTH}),
+                max_num_seqs=32,
             ),
+            generation=GenerationConfig(max_gen_toks=256),
         ),
+        name=f"models/evaluation/{ICEBALL_MODEL_NAME}",
+        version=evaluation_version,
+    )
+    evaluation = eval_step(
+        evaluation_model,
         ICEBALL_EVALS,
-        version=version or resolve_version(evaluation_name, None),
+        model_name=ICEBALL_MODEL_NAME,
+        version=evaluation_version,
         accelerator=ICEBALL_EVAL_ACCELERATOR,
         submission_cluster=ICEBALL_CLUSTER,
         federated_cluster=ICEBALL_CLUSTER,

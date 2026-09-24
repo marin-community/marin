@@ -11,21 +11,19 @@ import sys
 from collections.abc import Callable
 from dataclasses import asdict
 from pathlib import Path
-from typing import IO, cast
+from typing import IO
 
 import pytest
 from marin.evaluation.model_config import ModelConfig, ResourceHint
-from marin.execution.artifact import Artifact
-from marin.execution.lazy import ArtifactStep, StepContext
+from marin.execution.artifact import Artifact, ArtifactRecord, result_type_name, write_record
+from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity, materialized_config
 from marin.external_dependencies import MARIN_SKYRL
 from marin.rl.skyrl import (
-    SKYRL_POLICY_LOCATION,
     ArtifactDataSource,
     ArtifactHfModel,
     IrisSkyRLExecution,
     ResolvedDirectoryDataSource,
     ResolvedModelLocator,
-    SkyRLEvaluationModel,
     SkyRLLaunchRequest,
     SkyRLModel,
     SkyRLOutputPaths,
@@ -46,7 +44,7 @@ from marin.rl.skyrl import (
 from marin.rl.skyrl import _run_launcher as run_launcher_for_test
 from marin.training.training import LevanterCheckpoint
 
-from experiments.evaluation.pipeline import eval_step
+from experiments.post_training.skyrl_evaluation import SKYRL_POLICY_LOCATION, skyrl_target_model_step
 
 
 def _model_step() -> ArtifactStep[LevanterCheckpoint]:
@@ -238,26 +236,8 @@ def test_skyrl_temporary_run_path_does_not_repeat_bucket_name(monkeypatch: pytes
     )
 
 
-def test_terminal_policy_composes_into_shared_evaluation_step() -> None:
-    rl = skyrl_step(_spec(), _execution())
-    model = SkyRLEvaluationModel(
-        step=rl,
-        model=ModelConfig(
-            name="iceball-micro",
-            location=SKYRL_POLICY_LOCATION,
-            tokenizer="Qwen/Qwen3-0.6B-Base",
-            resource_hint=ResourceHint(gpu={"GB200": 1}),
-        ),
-    )
-
-    evaluation = eval_step(model, "gsm8k", version="2026.08.01", accelerator="GB200x1")
-
-    assert evaluation.deps == (rl,)
-    assert evaluation.name == "evals/iceball-micro/gsm8k"
-    assert rl.fingerprint() in evaluation.fingerprint_payload()
-
-
-def test_evaluation_uses_the_validated_training_tokenizer() -> None:
+def test_evaluation_uses_the_validated_training_tokenizer(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     rl = skyrl_step(_spec(), _execution())
     terminal = SkyRLModel(
         policy_export_uri="s3://test/iceball-rl/exports/global_step_8/policy",
@@ -269,27 +249,30 @@ def test_evaluation_uses_the_validated_training_tokenizer() -> None:
         iris_job_id="/tester/iceball-rl",
     )
 
-    class ResolvedContext:
-        is_fingerprint = False
-
-        def resolved(self, step):
-            assert step is rl
-            return terminal
-
-    source = SkyRLEvaluationModel(
-        step=rl,
-        model=ModelConfig(
+    write_record(
+        ArtifactRecord(
+            output_path=rl.path(str(tmp_path)),
+            result_type=result_type_name(SkyRLModel),
+            result=terminal.result_payload(),
+        )
+    )
+    model = skyrl_target_model_step(
+        rl,
+        ModelConfig(
             name="iceball-micro",
             location=SKYRL_POLICY_LOCATION,
             tokenizer="Qwen/Qwen3-0.6B-Base",
             resource_hint=ResourceHint(gpu={"GB200": 1}),
         ),
+        name="models/evaluation/iceball-micro",
+        version="2026.08.01",
     )
+    config = materialized_config(model, str(tmp_path))
 
-    model = source.resolve(cast(StepContext, ResolvedContext()))
-
-    assert model.location == terminal.policy_export_uri
-    assert model.tokenizer == terminal.tokenizer_uri
+    assert config.model.location == terminal.policy_export_uri
+    assert config.model.tokenizer == terminal.tokenizer_uri
+    assert config.model.tokenizer_revision == terminal.tokenizer_revision
+    assert config.model.identity == artifact_identity(rl)
 
 
 def test_run_skyrl_returns_external_terminal_model(monkeypatch: pytest.MonkeyPatch) -> None:

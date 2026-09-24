@@ -23,7 +23,6 @@ The demo pipeline below runs the smoke suite for one small model.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Protocol
 
 from iris.client.client import iris_ctx
 from iris.rpc import job_pb2
@@ -62,9 +61,17 @@ class EvalStepConfig:
     submission_cluster: str
     federated_cluster: str | None
     version: str
-    # The dependency has no value record during fingerprinting; its recipe identity still
-    # distinguishes draft policies and sources in the evaluation step's drift check.
-    speculative_artifact_identity: str | None = None
+
+
+@dataclass(frozen=True)
+class EvalStepFingerprint:
+    """Identity summary used before the target and draft value records exist."""
+
+    model: str
+    speculative: str | None
+    evals: str
+    limit: int | None
+    version: str
 
 
 class EvaluationResult(Artifact):
@@ -76,43 +83,67 @@ class EvaluationResult(Artifact):
     results_paths: tuple[str, ...]
 
 
-class EvaluationModelSource(Protocol):
-    """A static or produced HF model consumable by the shared evaluation runner."""
+class TargetModelArtifact(Artifact):
+    """Resolved serving metadata for a target model produced by a pipeline step."""
 
-    def deps(self) -> tuple[ArtifactStep, ...]: ...
-
-    def resolve(self, ctx: StepContext) -> ModelConfig: ...
-
-
-@dataclass(frozen=True)
-class CatalogEvaluationModel:
-    """A model selected from the checked-in evaluation catalog."""
-
-    name: str
-
-    def deps(self) -> tuple[ArtifactStep, ...]:
-        return ()
-
-    def resolve(self, _ctx: StepContext) -> ModelConfig:
-        return models()[self.name]
-
-
-@dataclass(frozen=True)
-class ArtifactEvaluationModel:
-    """An HF-format model artifact adapted to the shared evaluation contract."""
-
-    step: ArtifactStep
     model: ModelConfig
-    relative_path: str = ""
 
-    def deps(self) -> tuple[ArtifactStep, ...]:
-        return (self.step,)
+    def url(self) -> str:
+        return self.model.location
 
-    def resolve(self, ctx: StepContext) -> ModelConfig:
-        location = ctx.artifact_path(self.step)
-        if self.relative_path:
-            location = prefix_join(location, self.relative_path)
-        return replace(self.model, location=location, identity=artifact_identity(self.step))
+    def config(self) -> ModelConfig:
+        return self.model
+
+
+@dataclass(frozen=True)
+class TargetModelStepConfig:
+    artifact_path: str
+    model: ModelConfig
+
+
+def run_target_model_step(config: TargetModelStepConfig) -> TargetModelArtifact:
+    return TargetModelArtifact(path=config.artifact_path, model=config.model)
+
+
+def catalog_model_step(name: str, *, version: str) -> ArtifactStep[TargetModelArtifact]:
+    """Record a checked-in model configuration as a typed pipeline dependency."""
+    model = models()[name]
+    return ArtifactStep(
+        name=f"models/evaluation/{name}",
+        version=version,
+        artifact_type=TargetModelArtifact,
+        run=run_target_model_step,
+        build_config=lambda ctx: TargetModelStepConfig(artifact_path=ctx.output_path, model=model),
+    )
+
+
+def target_model_step(
+    source: ArtifactStep,
+    model: ModelConfig,
+    *,
+    name: str,
+    version: str,
+    relative_path: str = "",
+) -> ArtifactStep[TargetModelArtifact]:
+    """Record a produced or adopted HF model's resolved URI and serving metadata."""
+
+    def build_config(ctx: StepContext) -> TargetModelStepConfig:
+        location = ctx.artifact_path(source)
+        if relative_path:
+            location = prefix_join(location, relative_path)
+        return TargetModelStepConfig(
+            artifact_path=ctx.output_path,
+            model=replace(model, location=location, identity=artifact_identity(source)),
+        )
+
+    return ArtifactStep(
+        name=name,
+        version=version,
+        artifact_type=TargetModelArtifact,
+        run=run_target_model_step,
+        build_config=build_config,
+        deps=(source,),
+    )
 
 
 class DraftModelArtifact(Artifact):
@@ -213,9 +244,10 @@ def run_eval_pipeline_step(config: EvalStepConfig) -> EvaluationResult:
 
 
 def eval_step(
-    model: EvaluationModelSource,
+    model: ArtifactStep[TargetModelArtifact],
     evals: str,
     *,
+    model_name: str,
     version: str,
     speculative: ArtifactStep[DraftModelArtifact] | None = None,
     limit: int | None = None,
@@ -225,11 +257,21 @@ def eval_step(
 ) -> ArtifactStep[EvaluationResult]:
     """Evaluate a static or upstream-produced model with Evalchemy and Harbor."""
 
-    deps = tuple(dict.fromkeys((*model.deps(), *((speculative,) if speculative is not None else ()))))
+    deps = (model,) if speculative is None else (model, speculative)
 
-    def build_config(ctx: StepContext) -> EvalStepConfig:
-        resolved_model = model.resolve(ctx)
-        if speculative is not None and not ctx.is_fingerprint:
+    def build_config(ctx: StepContext) -> EvalStepConfig | EvalStepFingerprint:
+        if ctx.is_fingerprint:
+            return EvalStepFingerprint(
+                model=artifact_identity(model),
+                speculative=artifact_identity(speculative) if speculative is not None else None,
+                evals=evals,
+                limit=limit,
+                version=version,
+            )
+        resolved_model = ctx.resolved(model).config()
+        if resolved_model.name != model_name:
+            raise ValueError(f"evaluation model name {model_name!r} differs from resolved model {resolved_model.name!r}")
+        if speculative is not None:
             resolved_model = replace(
                 resolved_model,
                 serve=replace(resolved_model.serve, speculative=ctx.resolved(speculative).config()),
@@ -243,10 +285,8 @@ def eval_step(
             submission_cluster=ctx.runtime_arg(_SUBMISSION_CLUSTER_RUNTIME_ARG),
             federated_cluster=ctx.runtime_arg(_FEDERATED_CLUSTER_RUNTIME_ARG),
             version=version,
-            speculative_artifact_identity=artifact_identity(speculative) if speculative is not None else None,
         )
 
-    model_name = model.resolve(StepContext.for_fingerprint(deps=deps)).name
     return ArtifactStep(
         name=f"evals/{model_name}/{evals}",
         version=version,
@@ -263,7 +303,8 @@ def eval_step(
 
 
 def main() -> None:
-    step = eval_step(CatalogEvaluationModel("qwen3-1.7b"), "smoke", version="2026.07.19")
+    model = catalog_model_step("qwen3-1.7b", version="2026.07.19")
+    step = eval_step(model, "smoke", model_name="qwen3-1.7b", version="2026.07.19")
     StepRunner().run([step.lower()])
 
 

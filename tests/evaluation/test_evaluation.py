@@ -78,11 +78,11 @@ from experiments.evaluation.launch import (
 )
 from experiments.evaluation.models import models
 from experiments.evaluation.pipeline import (
-    ArtifactEvaluationModel,
     EvalStepConfig,
     draft_model_step,
     eval_step,
     run_eval_pipeline_step,
+    target_model_step,
 )
 
 # Stand-in agent limits the fake driver reports back. They match neither Harbor's defaults nor any
@@ -445,7 +445,7 @@ vllm:spec_decode_num_accepted_tokens_total {accepted}
 @pytest.mark.parametrize("adopted", [False, True], ids=["produced", "adopted"])
 def test_eval_step_resolves_artifacts_and_selects_speculative_gpu(tmp_path, monkeypatch, adopted):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
-    target = _artifact_step("models/target")
+    target_source = _artifact_step("models/target")
     if adopted:
         source_path = tmp_path / "adopted-draft"
         source_path.mkdir()
@@ -462,21 +462,26 @@ def test_eval_step_resolves_artifacts_and_selects_speculative_gpu(tmp_path, monk
     resolved_draft = resolve(draft)
     assert resolved_draft.url() == draft_source.path(str(tmp_path))
     assert resolved_draft.config().model.identity == f"models/draft@2026.09.23:{draft_source.fingerprint()}"
-    model = ArtifactEvaluationModel(
-        step=target,
-        model=ModelConfig(
+    model = target_model_step(
+        target_source,
+        ModelConfig(
             name="target",
             location="<artifact-model>",
             tokenizer="org/tokenizer",
             tokenizer_revision="tokenizer-revision",
             resource_hint=ResourceHint(hbm_gb=40),
         ),
+        name="models/target-serving",
+        version="2026.09.23",
         relative_path="hf",
     )
-    control = eval_step(model, "gsm8k-smoke", version="2026.09.23")
+    resolved_target = resolve(model)
+    assert resolved_target.url() == f"{tmp_path}/models/target/2026.09.23/hf"
+    control = eval_step(model, "gsm8k-smoke", model_name="target", version="2026.09.23")
     drafted = eval_step(
         model,
         "gsm8k-smoke",
+        model_name="target",
         version="2026.09.23.1",
         speculative=draft,
     )
@@ -518,7 +523,7 @@ def test_eval_step_resolves_artifacts_and_selects_speculative_gpu(tmp_path, monk
     assert submitted_batches[0].accelerator.platform is Platform.TPU
     assert submitted_batches[1].accelerator.platform is Platform.GPU
     assert submitted_batches[1].model.location == f"{tmp_path}/models/target/2026.09.23/hf"
-    assert submitted_batches[1].model.identity == f"models/target@2026.09.23:{target.fingerprint()}"
+    assert submitted_batches[1].model.identity == f"models/target@2026.09.23:{target_source.fingerprint()}"
     assert submitted_batches[1].model.serve.speculative is not None
     assert submitted_batches[1].model.serve.speculative.model.uri == draft_source.path(str(tmp_path))
     assert submitted_batches[1].model.serve.speculative.model.identity == (

@@ -11,7 +11,7 @@ import sys
 import tempfile
 import uuid
 from collections import deque
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from pathlib import PurePosixPath
 from typing import Literal, cast
@@ -22,7 +22,6 @@ from pydantic import BaseModel
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
@@ -38,7 +37,6 @@ _TEMPORARY_OUTPUT_PREFIX = "skyrl"
 _TRACE_JOBS_SUBDIR = "trace_jobs"
 _TRAJECTORIES_SUBDIR = "trajectories"
 _LAUNCHER_DIAGNOSTIC_LINES = 20
-SKYRL_POLICY_LOCATION = "<skyrl-policy>"
 SKYRL_TEMPORARY_STORAGE_TTL_DAYS = 14
 
 
@@ -398,33 +396,6 @@ class _SkyRLLaunchResponse(BaseModel):
     iris_job_id: str | None = None
     failure: str | None = None
     model: _SkyRLTerminalModel | None = None
-
-
-@dataclass(frozen=True)
-class SkyRLEvaluationModel:
-    """A terminal SkyRL policy adapted to the shared evaluation model contract."""
-
-    step: ArtifactStep[SkyRLModel]
-    model: ModelConfig
-
-    def __post_init__(self) -> None:
-        if self.model.location != SKYRL_POLICY_LOCATION:
-            raise ValueError(f"SkyRL evaluation model location must be {SKYRL_POLICY_LOCATION!r}")
-        if self.model.tokenizer is None:
-            raise ValueError("SkyRL evaluation models require an explicit Hugging Face tokenizer")
-
-    def deps(self) -> tuple[ArtifactStep, ...]:
-        return (self.step,)
-
-    def resolve(self, ctx: StepContext) -> ModelConfig:
-        if ctx.is_fingerprint:
-            location = f"{artifact_identity(self.step)}/policy"
-            tokenizer = self.model.tokenizer
-        else:
-            terminal = ctx.resolved(self.step)
-            location = terminal.policy_export_uri
-            tokenizer = terminal.tokenizer_uri
-        return replace(self.model, location=location, identity=artifact_identity(self.step), tokenizer=tokenizer)
 
 
 def _launcher_command(requirement: str, request_path: str) -> list[str]:

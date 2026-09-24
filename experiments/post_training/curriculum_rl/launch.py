@@ -37,11 +37,9 @@ from marin.execution.remote import remote
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.skyrl import (
-    SKYRL_POLICY_LOCATION,
     ArtifactDataSource,
     ArtifactHfModel,
     IrisSkyRLExecution,
-    SkyRLEvaluationModel,
     SkyRLModel,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
@@ -65,6 +63,7 @@ from experiments.post_training.curriculum_rl.pool import (
     VALIDATION_FILENAME,
     pool_step,
 )
+from experiments.post_training.skyrl_evaluation import SKYRL_POLICY_LOCATION, skyrl_target_model_step
 
 logger = logging.getLogger(__name__)
 
@@ -698,13 +697,18 @@ def build_arm(
     # than sharing one cached result (the RL step is already user-owned).
     evaluation_model_name = f"{username_segment()}-{EXPERIMENT_NAME}-{policy_prefix}{spec.name}{suffix}"
     evaluation_base_name = f"evals/{evaluation_model_name}/{preset.evals}"
+    evaluation_version = version or resolve_version(evaluation_base_name, None)
+    evaluation_model = skyrl_target_model_step(
+        rl,
+        _evaluation_serving(policy, preset, evaluation_model_name),
+        name=f"models/evaluation/{evaluation_model_name}",
+        version=evaluation_version,
+    )
     evaluation = eval_step(
-        SkyRLEvaluationModel(
-            step=rl,
-            model=_evaluation_serving(policy, preset, evaluation_model_name),
-        ),
+        evaluation_model,
         preset.evals,
-        version=version or resolve_version(evaluation_base_name, None),
+        model_name=evaluation_model_name,
+        version=evaluation_version,
         accelerator=f"{GPU_VARIANT}x{policy.serve_gpus}",
         submission_cluster=policy.cluster,
         federated_cluster=policy.cluster,

@@ -70,11 +70,11 @@ raw record.
 
 ### Speculative serving
 
-Pipeline evaluations can attach an `ArtifactSpeculativeModel` to the same `eval_step` used by a
-control run. The pipeline resolves the draft `ArtifactStep` into an immutable URI and artifact
-identity. The inference worker resolves that URI through Marin's model-preparation path before it
-starts vLLM. Evaluation and inference code do not depend on the draft artifact's concrete Python
-type.
+Pipeline evaluations depend on a `TargetModelArtifact` and can optionally depend on a
+`DraftModelArtifact`. The experiment steps resolve both artifacts into plain model configurations
+before submitting the shared Evalchemy or Harbor runner. The inference worker resolves the draft URI
+through Marin's model-preparation path before it starts vLLM. Evaluation and inference library code
+receives model URIs and serving settings, not artifact or step objects.
 
 The target `ModelConfig` records its model identity, tokenizer URI, and tokenizer revision. The
 optional `ServeConfig.speculative` records the draft URI, artifact identity, method, and proposal
