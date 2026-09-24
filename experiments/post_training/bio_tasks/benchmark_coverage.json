@@ -116,6 +116,57 @@
       "tasks_file": "benchmark_tasks/bio-task-bench.json",
       "source_inventory_name": "Bio-Task Bench \u2014 original tasks",
       "task_inventory_status": "assessed"
+    },
+    "ScienceAgentBench": {
+      "revision": "9c6e96c9e74572e979b0930ee735041cef528cb7",
+      "source_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "metadata_sha256": "c6f937863a220bd1762a00c20a0f79cc8dfca900b819bdb552150310731ae147",
+      "inventory_count": 27,
+      "public_inventory_count": 27,
+      "training_mapping_allowed": true,
+      "distribution": "ID",
+      "tasks_file": "benchmark_tasks/scienceagentbench.json",
+      "source_inventory_name": "ScienceAgentBench, bioinformatics",
+      "task_inventory_status": "assessed-biological-subset",
+      "release_total": 102,
+      "eligibility_filter": "domain == Bioinformatics"
+    },
+    "CORE-Bench": {
+      "revision": "18ac8edf2532d9edb9d13ae71f715410de6ee5a0",
+      "source_url": "https://huggingface.co/datasets/siegelz/core-bench/tree/18ac8edf2532d9edb9d13ae71f715410de6ee5a0",
+      "metadata_files": {
+        "core_train.json": {
+          "sha256": "3df47f1b3fa1cb60045018eb1a0f1ad4ecf6a53f72318c845a879ce0313b0730",
+          "decoded_sha256": "3df47f1b3fa1cb60045018eb1a0f1ad4ecf6a53f72318c845a879ce0313b0730"
+        },
+        "core_test.json.gpg": {
+          "sha256": "cebf204bc8fd0b2e1b6e65ab762b7edbf906313ff3718780492633aeb4d972f2",
+          "decoded_sha256": "b93d7fda4cba27a074c9717d89c7a0ffa5e0e197322cc27bcd1d3d8a5bedf8d4"
+        }
+      },
+      "inventory_count": 25,
+      "public_inventory_count": 25,
+      "training_mapping_allowed": true,
+      "distribution": "ID",
+      "tasks_file": "benchmark_tasks/core-bench.json",
+      "source_inventory_name": "CORE-Bench \u2014 biomedical papers",
+      "task_inventory_status": "assessed-biological-subset",
+      "release_capsules": 90,
+      "eligibility_filter": "field == Medical Sciences"
+    },
+    "DiscoveryBench": {
+      "revision": "c31fcf011e070f021a5f5b906896d0821f6880e8",
+      "source_url": "https://github.com/allenai/discoverybench/tree/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real",
+      "inventory_count": 26,
+      "public_inventory_count": 26,
+      "training_mapping_allowed": true,
+      "distribution": "ID",
+      "tasks_file": "benchmark_tasks/discoverybench.json",
+      "source_inventory_name": "DiscoveryBench \u2014 biology",
+      "task_inventory_status": "assessed-biological-subset",
+      "eligibility_filter": "real collection and domain == biology",
+      "source_claim_group_count": 10,
+      "source_study_count": 2
     }
   },
   "assessment_policy": "ID workflow prerequisites are manually inferred from permitted task descriptions. Shared family stages may exceed an individual endpoint; assess that endpoint before claiming coverage. Benchmark answers and biological fixtures are excluded from authoring."

@@ -1,0 +1,1156 @@
+{
+  "benchmark": "ScienceAgentBench",
+  "scope": "All 27 Bioinformatics-domain tasks in the pinned verified release. The other 75 scientific-domain tasks are outside the sheet row scope.",
+  "pattern_scope": "Patterns are manual inferences from permitted public metadata; inspect the scientific endpoint before claiming implemented coverage.",
+  "public_inventory_count": 27,
+  "release_total": 102,
+  "eligibility_filter": "domain == Bioinformatics",
+  "excluded_out_of_scope_count": 75,
+  "workflow_patterns": {
+    "assay-activity-classification": [
+      "5"
+    ],
+    "assay-distribution-and-similarity": [
+      "6"
+    ],
+    "activity-stratified-functional-groups": [
+      "7"
+    ],
+    "nested-molecular-feature-selection": [
+      "8"
+    ],
+    "microscopy-cell-count-prediction": [
+      "11"
+    ],
+    "drug-target-affinity-transfer": [
+      "12"
+    ],
+    "compound-antiviral-activity-prediction": [
+      "13"
+    ],
+    "compound-mutagenicity-prediction": [
+      "15"
+    ],
+    "structure-based-toxicity-classification": [
+      "18",
+      "19"
+    ],
+    "paired-model-metric-comparison": [
+      "20"
+    ],
+    "split-aware-chemical-neighborhoods": [
+      "27"
+    ],
+    "descriptor-based-toxicity-classification": [
+      "40",
+      "41"
+    ],
+    "single-cell-qc-to-embedding": [
+      "69"
+    ],
+    "latent-single-cell-marker-analysis": [
+      "70"
+    ],
+    "single-cell-topic-model": [
+      "75"
+    ],
+    "structure-indexed-mutation-effects": [
+      "78"
+    ],
+    "single-cell-detection-qc": [
+      "79"
+    ],
+    "mitochondrial-single-cell-qc": [
+      "80"
+    ],
+    "marker-and-embedding-join": [
+      "81"
+    ],
+    "cell-group-dendrogram": [
+      "82"
+    ],
+    "longitudinal-saliva-features": [
+      "85"
+    ],
+    "single-cell-neighbor-clustering": [
+      "96"
+    ],
+    "paired-receptor-chain-qc": [
+      "98"
+    ],
+    "spatial-expression-embedding-qc": [
+      "99"
+    ],
+    "tissue-coordinate-qc": [
+      "100"
+    ]
+  },
+  "tasks": [
+    {
+      "task_id": "5",
+      "source_metadata_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_metadata_sha256": "c6f937863a220bd1762a00c20a0f79cc8dfca900b819bdb552150310731ae147",
+      "source_tags": [
+        "Data Visualization"
+      ],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "assay-activity-classification",
+      "required_stages": [
+        "define activity label",
+        "prepare molecular features",
+        "fit random forest on training observations",
+        "predict held-out compounds"
+      ],
+      "scientific_decisions": [
+        "Choose the response threshold using the declared assay contract; preserve compound identity and prevent held-out-label leakage."
+      ],
+      "required_formats": [
+        "csv"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Choose the response threshold using the declared assay contract; preserve compound identity and prevent held-out-label leakage.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_repository": "psa-lab/predicting-activity-by-machine-learning",
+      "source_output_format": "csv",
+      "source_dataset_folders": [
+        "dkpes"
+      ],
+      "grading_adaptation": "Check complete numerical outputs and derived plotting tables; do not inherit a visual or language-model judge."
+    },
+    {
+      "task_id": "6",
+      "source_metadata_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_metadata_sha256": "c6f937863a220bd1762a00c20a0f79cc8dfca900b819bdb552150310731ae147",
+      "source_tags": [
+        "Data Visualization"
+      ],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "assay-distribution-and-similarity",
+      "required_stages": [
+        "inspect assay units",
+        "summarize measured activity distribution",
+        "join structural similarity",
+        "report paired association"
+      ],
+      "scientific_decisions": [
+        "A plot can be checked through its underlying numerical summaries; structural similarity does not establish mechanism."
+      ],
+      "required_formats": [
+        "csv"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "A plot can be checked through its underlying numerical summaries; structural similarity does not establish mechanism.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_repository": "psa-lab/predicting-activity-by-machine-learning",
+      "source_output_format": "png",
+      "source_dataset_folders": [
+        "dkpes"
+      ],
+      "grading_adaptation": "Check complete numerical outputs and derived plotting tables; do not inherit a visual or language-model judge."
+    },
+    {
+      "task_id": "7",
+      "source_metadata_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_metadata_sha256": "c6f937863a220bd1762a00c20a0f79cc8dfca900b819bdb552150310731ae147",
+      "source_tags": [
+        "Data Visualization"
+      ],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "activity-stratified-functional-groups",
+      "required_stages": [
+        "rank observed compound activity",
+        "resolve boundary ties",
+        "select high and low activity groups",
+        "summarize chemical groups"
+      ],
+      "scientific_decisions": [
+        "Specify group selection and tied activities; descriptive feature prevalence is not a significance test."
+      ],
+      "required_formats": [
+        "csv"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Specify group selection and tied activities; descriptive feature prevalence is not a significance test.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_repository": "psa-lab/predicting-activity-by-machine-learning",
+      "source_output_format": "png",
+      "source_dataset_folders": [
+        "dkpes"
+      ],
+      "grading_adaptation": "Check complete numerical outputs and derived plotting tables; do not inherit a visual or language-model judge."
+    },
+    {
+      "task_id": "8",
+      "source_metadata_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_metadata_sha256": "c6f937863a220bd1762a00c20a0f79cc8dfca900b819bdb552150310731ae147",
+      "source_tags": [
+        "Feature Selection",
+        "Data Visualization"
+      ],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "nested-molecular-feature-selection",
+      "required_stages": [
+        "define activity labels",
+        "fit logistic models",
+        "remove features within training folds",
+        "estimate selection performance"
+      ],
+      "scientific_decisions": [
+        "Feature selection and threshold tuning must stay inside cross-validation to avoid optimistic accuracy."
+      ],
+      "required_formats": [
+        "csv"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Feature selection and threshold tuning must stay inside cross-validation to avoid optimistic accuracy.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_repository": "psa-lab/predicting-activity-by-machine-learning",
+      "source_output_format": "png",
+      "source_dataset_folders": [
+        "dkpes"
+      ],
+      "grading_adaptation": "Check complete numerical outputs and derived plotting tables; do not inherit a visual or language-model judge."
+    },
+    {
+      "task_id": "11",
+      "source_metadata_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_metadata_sha256": "c6f937863a220bd1762a00c20a0f79cc8dfca900b819bdb552150310731ae147",
+      "source_tags": [
+        "Deep Learning"
+      ],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "microscopy-cell-count-prediction",
+      "required_stages": [
+        "join image and annotator IDs",
+        "combine reference counts under a declared rule",
+        "prepare images",
+        "fit count predictor",
+        "export per-image counts"
+      ],
+      "scientific_decisions": [
+        "Preserve independent image or experiment groups across splits; declare annotator aggregation and image scale."
+      ],
+      "required_formats": [
+        "TIF",
+        "txt"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Preserve independent image or experiment groups across splits; declare annotator aggregation and image scale.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_repository": "deepchem/deepchem",
+      "source_output_format": "csv",
+      "source_dataset_folders": [
+        "BBBC002"
+      ],
+      "grading_adaptation": "Check complete numerical outputs and derived plotting tables; do not inherit a visual or language-model judge."
+    },
+    {
+      "task_id": "12",
+      "source_metadata_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_metadata_sha256": "c6f937863a220bd1762a00c20a0f79cc8dfca900b819bdb552150310731ae147",
+      "source_tags": [
+        "Feature Engineering",
+        "Deep Learning"
+      ],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "drug-target-affinity-transfer",
+      "required_stages": [
+        "join compounds and target sequences",
+        "encode paired observations",
+        "fit affinity model",
+        "predict new compound-target pairs",
+        "rank predictions"
+      ],
+      "scientific_decisions": [
+        "Keep affinity units and score direction explicit; predictions do not establish clinical efficacy."
+      ],
+      "required_formats": [
+        "csv",
+        "json",
+        "tab",
+        "txt"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Keep affinity units and score direction explicit; predictions do not establish clinical efficacy.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_repository": "kexinhuang12345/DeepPurpose",
+      "source_output_format": "txt",
+      "source_dataset_folders": [
+        "dti"
+      ],
+      "grading_adaptation": "Check complete numerical outputs and derived plotting tables; do not inherit a visual or language-model judge."
+    },
+    {
+      "task_id": "13",
+      "source_metadata_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_metadata_sha256": "c6f937863a220bd1762a00c20a0f79cc8dfca900b819bdb552150310731ae147",
+      "source_tags": [
+        "Feature Engineering",
+        "Deep Learning"
+      ],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "compound-antiviral-activity-prediction",
+      "required_stages": [
+        "parse molecular structures",
+        "define assay activity labels",
+        "fit molecular classifier",
+        "export held-out predictions"
+      ],
+      "scientific_decisions": [
+        "Preserve scaffold/group separation and class imbalance; assay activity is distinct from patient benefit."
+      ],
+      "required_formats": [
+        "csv"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Preserve scaffold/group separation and class imbalance; assay activity is distinct from patient benefit.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_repository": "kexinhuang12345/DeepPurpose",
+      "source_output_format": "csv",
+      "source_dataset_folders": [
+        "hiv"
+      ],
+      "grading_adaptation": "Check complete numerical outputs and derived plotting tables; do not inherit a visual or language-model judge."
+    },
+    {
+      "task_id": "15",
+      "source_metadata_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_metadata_sha256": "c6f937863a220bd1762a00c20a0f79cc8dfca900b819bdb552150310731ae147",
+      "source_tags": [
+        "Deep Learning"
+      ],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "compound-mutagenicity-prediction",
+      "required_stages": [
+        "join assay labels and structures",
+        "construct or load molecular features",
+        "fit prediction model",
+        "export calibrated positive-class scores"
+      ],
+      "scientific_decisions": [
+        "State the positive class and evaluation population; a model score is not an experimental toxicity result."
+      ],
+      "required_formats": [
+        "csv",
+        "npz"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "State the positive class and evaluation population; a model score is not an experimental toxicity result.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_repository": "swansonk14/admet_ai",
+      "source_output_format": "csv",
+      "source_dataset_folders": [
+        "ames"
+      ],
+      "grading_adaptation": "Check complete numerical outputs and derived plotting tables; do not inherit a visual or language-model judge."
+    },
+    {
+      "task_id": "18",
+      "source_metadata_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_metadata_sha256": "c6f937863a220bd1762a00c20a0f79cc8dfca900b819bdb552150310731ae147",
+      "source_tags": [
+        "Feature Engineering",
+        "Machine Learning"
+      ],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "structure-based-toxicity-classification",
+      "required_stages": [
+        "construct explicit clinical-concern label groups",
+        "featurize chemical structures",
+        "tune random forest within folds",
+        "fit each cohort configuration",
+        "export compound predictions"
+      ],
+      "scientific_decisions": [
+        "Maintain the distinct label/cohort configurations and identical compound IDs; avoid mixing the held-out compounds into feature selection."
+      ],
+      "required_formats": [
+        "csv"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Maintain the distinct label/cohort configurations and identical compound IDs; avoid mixing the held-out compounds into feature selection.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_repository": "anikaliu/CAMDA-DILI",
+      "source_output_format": "csv",
+      "source_dataset_folders": [
+        "dili"
+      ],
+      "grading_adaptation": "Check complete numerical outputs and derived plotting tables; do not inherit a visual or language-model judge."
+    },
+    {
+      "task_id": "19",
+      "source_metadata_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_metadata_sha256": "c6f937863a220bd1762a00c20a0f79cc8dfca900b819bdb552150310731ae147",
+      "source_tags": [
+        "Feature Engineering",
+        "Machine Learning"
+      ],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "structure-based-toxicity-classification",
+      "required_stages": [
+        "construct explicit clinical-concern label groups",
+        "featurize chemical structures",
+        "scale within folds",
+        "tune support-vector classifier",
+        "export each cohort configuration"
+      ],
+      "scientific_decisions": [
+        "Scaling and hyperparameter selection must use training folds; retain class direction and the distinct cohort definitions."
+      ],
+      "required_formats": [
+        "csv"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Scaling and hyperparameter selection must use training folds; retain class direction and the distinct cohort definitions.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_repository": "anikaliu/CAMDA-DILI",
+      "source_output_format": "csv",
+      "source_dataset_folders": [
+        "dili"
+      ],
+      "grading_adaptation": "Check complete numerical outputs and derived plotting tables; do not inherit a visual or language-model judge."
+    },
+    {
+      "task_id": "20",
+      "source_metadata_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_metadata_sha256": "c6f937863a220bd1762a00c20a0f79cc8dfca900b819bdb552150310731ae147",
+      "source_tags": [
+        "Statistical Analysis",
+        "Data Visualization"
+      ],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "paired-model-metric-comparison",
+      "required_stages": [
+        "join task and model labels",
+        "align regression metrics",
+        "preserve repeated-run uncertainty",
+        "report paired model comparisons"
+      ],
+      "scientific_decisions": [
+        "Distinguish variance across seeds from uncertainty across independent datasets; do not average incompatible metrics."
+      ],
+      "required_formats": [
+        "csv"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Distinguish variance across seeds from uncertainty across independent datasets; do not average incompatible metrics.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_repository": "swansonk14/admet_ai",
+      "source_output_format": "png",
+      "source_dataset_folders": [
+        "TDC_ADMET"
+      ],
+      "grading_adaptation": "Check complete numerical outputs and derived plotting tables; do not inherit a visual or language-model judge."
+    },
+    {
+      "task_id": "27",
+      "source_metadata_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_metadata_sha256": "c6f937863a220bd1762a00c20a0f79cc8dfca900b819bdb552150310731ae147",
+      "source_tags": [
+        "Computational Analysis",
+        "Data Visualization"
+      ],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "split-aware-chemical-neighborhoods",
+      "required_stages": [
+        "read compound similarities and split indices",
+        "isolate each training reference set",
+        "select nearest training neighbors",
+        "aggregate similarities per held-out compound"
+      ],
+      "scientific_decisions": [
+        "Exclude held-out and self-neighbors; preserve split-specific index mapping and neighbor ties."
+      ],
+      "required_formats": [
+        "csv",
+        "pkl",
+        "txt"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Exclude held-out and self-neighbors; preserve split-specific index mapping and neighbor ties.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_repository": "anikaliu/CAMDA-DILI",
+      "source_output_format": "png",
+      "source_dataset_folders": [
+        "dili_visualization"
+      ],
+      "grading_adaptation": "Check complete numerical outputs and derived plotting tables; do not inherit a visual or language-model judge."
+    },
+    {
+      "task_id": "40",
+      "source_metadata_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_metadata_sha256": "c6f937863a220bd1762a00c20a0f79cc8dfca900b819bdb552150310731ae147",
+      "source_tags": [
+        "Feature Engineering",
+        "Machine Learning"
+      ],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "descriptor-based-toxicity-classification",
+      "required_stages": [
+        "join precomputed descriptors to compound IDs",
+        "define cohort-specific labels",
+        "tune random forest within training folds",
+        "export predictions for every cohort"
+      ],
+      "scientific_decisions": [
+        "Descriptor rows and labels require an identity join; related molecular structures should remain grouped when assessing transfer."
+      ],
+      "required_formats": [
+        "csv"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Descriptor rows and labels require an identity join; related molecular structures should remain grouped when assessing transfer.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_repository": "anikaliu/CAMDA-DILI",
+      "source_output_format": "csv",
+      "source_dataset_folders": [
+        "dili_MD"
+      ],
+      "grading_adaptation": "Check complete numerical outputs and derived plotting tables; do not inherit a visual or language-model judge."
+    },
+    {
+      "task_id": "41",
+      "source_metadata_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_metadata_sha256": "c6f937863a220bd1762a00c20a0f79cc8dfca900b819bdb552150310731ae147",
+      "source_tags": [
+        "Feature Engineering",
+        "Machine Learning"
+      ],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "descriptor-based-toxicity-classification",
+      "required_stages": [
+        "join descriptors and cohort labels",
+        "scale features inside training folds",
+        "tune neighbor count",
+        "predict each held-out cohort"
+      ],
+      "scientific_decisions": [
+        "Distance-based models require an explicit scaling policy; held-out data cannot determine preprocessing or model selection."
+      ],
+      "required_formats": [
+        "csv"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Distance-based models require an explicit scaling policy; held-out data cannot determine preprocessing or model selection.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_repository": "anikaliu/CAMDA-DILI",
+      "source_output_format": "csv",
+      "source_dataset_folders": [
+        "dili_MD"
+      ],
+      "grading_adaptation": "Check complete numerical outputs and derived plotting tables; do not inherit a visual or language-model judge."
+    },
+    {
+      "task_id": "69",
+      "source_metadata_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_metadata_sha256": "c6f937863a220bd1762a00c20a0f79cc8dfca900b819bdb552150310731ae147",
+      "source_tags": [
+        "Feature Engineering",
+        "Statistical Analysis",
+        "Data Visualization"
+      ],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "single-cell-qc-to-embedding",
+      "required_stages": [
+        "inspect native count layers",
+        "filter low-support genes",
+        "normalize and select representation",
+        "compute principal components",
+        "embed and join cell labels"
+      ],
+      "scientific_decisions": [
+        "Preserve sparse counts and cell identity; embedding orientation is arbitrary and must not be graded by pixels."
+      ],
+      "required_formats": [
+        "h5ad"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Preserve sparse counts and cell identity; embedding orientation is arbitrary and must not be graded by pixels.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_repository": "scverse/scvi-tutorials",
+      "source_output_format": "png",
+      "source_dataset_folders": [
+        "hca"
+      ],
+      "grading_adaptation": "Check complete numerical outputs and derived plotting tables; do not inherit a visual or language-model judge."
+    },
+    {
+      "task_id": "70",
+      "source_metadata_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_metadata_sha256": "c6f937863a220bd1762a00c20a0f79cc8dfca900b819bdb552150310731ae147",
+      "source_tags": [
+        "Feature Engineering",
+        "Deep Learning",
+        "Computational Analysis",
+        "Data Visualization"
+      ],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "latent-single-cell-marker-analysis",
+      "required_stages": [
+        "inspect count layer and batch labels",
+        "fit latent expression model",
+        "compare each annotated population",
+        "select markers",
+        "aggregate expression and detection fractions"
+      ],
+      "scientific_decisions": [
+        "Cell-level model evidence does not replace donor-level replication; distinguish model-specific DE probabilities from frequentist adjusted probabilities."
+      ],
+      "required_formats": [
+        "h5ad"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Cell-level model evidence does not replace donor-level replication; distinguish model-specific DE probabilities from frequentist adjusted probabilities.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_repository": "scverse/scvi-tutorials",
+      "source_output_format": "png",
+      "source_dataset_folders": [
+        "hca"
+      ],
+      "grading_adaptation": "Check complete numerical outputs and derived plotting tables; do not inherit a visual or language-model judge."
+    },
+    {
+      "task_id": "75",
+      "source_metadata_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_metadata_sha256": "c6f937863a220bd1762a00c20a0f79cc8dfca900b819bdb552150310731ae147",
+      "source_tags": [
+        "Feature Engineering",
+        "Machine Learning",
+        "Data Visualization"
+      ],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "single-cell-topic-model",
+      "required_stages": [
+        "inspect raw count representation",
+        "fit count-topic model",
+        "export cell-topic proportions",
+        "compare topic structure to an embedding"
+      ],
+      "scientific_decisions": [
+        "Topic indices are exchangeable; verify normalization and biological summaries without requiring a particular topic permutation."
+      ],
+      "required_formats": [
+        "h5ad"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Topic indices are exchangeable; verify normalization and biological summaries without requiring a particular topic permutation.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_repository": "scverse/scvi-tutorials",
+      "source_output_format": "png",
+      "source_dataset_folders": [
+        "pbmc"
+      ],
+      "grading_adaptation": "Check complete numerical outputs and derived plotting tables; do not inherit a visual or language-model judge."
+    },
+    {
+      "task_id": "78",
+      "source_metadata_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_metadata_sha256": "c6f937863a220bd1762a00c20a0f79cc8dfca900b819bdb552150310731ae147",
+      "source_tags": [
+        "Feature Engineering",
+        "Deep Learning"
+      ],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "structure-indexed-mutation-effects",
+      "required_stages": [
+        "parse protein chain and residue identifiers",
+        "reconcile observed and wild-type sequences",
+        "apply declared point substitution",
+        "encode wild-type and mutant proteins",
+        "predict stability change"
+      ],
+      "scientific_decisions": [
+        "Account for missing residues and insertion codes; preserve the sign and units of measured stability change and group related proteins across splits."
+      ],
+      "required_formats": [
+        "csv",
+        "pdb"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Account for missing residues and insertion codes; preserve the sign and units of measured stability change and group related proteins across splits.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_repository": "deepchem/deepchem",
+      "source_output_format": "csv",
+      "source_dataset_folders": [
+        "pucci"
+      ],
+      "grading_adaptation": "Check complete numerical outputs and derived plotting tables; do not inherit a visual or language-model judge."
+    },
+    {
+      "task_id": "79",
+      "source_metadata_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_metadata_sha256": "c6f937863a220bd1762a00c20a0f79cc8dfca900b819bdb552150310731ae147",
+      "source_tags": [
+        "Computational Analysis",
+        "Data Visualization"
+      ],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "single-cell-detection-qc",
+      "required_stages": [
+        "identify raw counts",
+        "count positive genes per cell",
+        "retain cell identities",
+        "summarize detection distribution"
+      ],
+      "scientific_decisions": [
+        "Raw and transformed layers can differ; declared detected-gene counts must use the intended gene universe."
+      ],
+      "required_formats": [
+        "h5ad"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Raw and transformed layers can differ; declared detected-gene counts must use the intended gene universe.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_repository": "scverse/scanpy-tutorials",
+      "source_output_format": "png",
+      "source_dataset_folders": [
+        "violin"
+      ],
+      "grading_adaptation": "Check complete numerical outputs and derived plotting tables; do not inherit a visual or language-model judge."
+    },
+    {
+      "task_id": "80",
+      "source_metadata_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_metadata_sha256": "c6f937863a220bd1762a00c20a0f79cc8dfca900b819bdb552150310731ae147",
+      "source_tags": [
+        "Computational Analysis",
+        "Data Visualization"
+      ],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "mitochondrial-single-cell-qc",
+      "required_stages": [
+        "identify raw counts and mitochondrial features",
+        "compute total counts and detected genes",
+        "calculate mitochondrial fractions",
+        "join per-cell diagnostics"
+      ],
+      "scientific_decisions": [
+        "Freeze the species-specific mitochondrial annotation and denominator; missing features must not silently become zero mitochondrial burden."
+      ],
+      "required_formats": [
+        "h5ad"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Freeze the species-specific mitochondrial annotation and denominator; missing features must not silently become zero mitochondrial burden.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_repository": "scverse/scanpy-tutorials",
+      "source_output_format": "png",
+      "source_dataset_folders": [
+        "violin"
+      ],
+      "grading_adaptation": "Check complete numerical outputs and derived plotting tables; do not inherit a visual or language-model judge."
+    },
+    {
+      "task_id": "81",
+      "source_metadata_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_metadata_sha256": "c6f937863a220bd1762a00c20a0f79cc8dfca900b819bdb552150310731ae147",
+      "source_tags": [
+        "Data Visualization"
+      ],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "marker-and-embedding-join",
+      "required_stages": [
+        "inspect existing cell embedding",
+        "resolve marker gene identifiers",
+        "extract declared expression layer",
+        "join library totals and cell labels",
+        "export panel data"
+      ],
+      "scientific_decisions": [
+        "Distinguish absent markers from observed zero expression; preserve the same cell order across every panel."
+      ],
+      "required_formats": [
+        "h5ad"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Distinguish absent markers from observed zero expression; preserve the same cell order across every panel.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_repository": "scverse/scanpy-tutorials",
+      "source_output_format": "png",
+      "source_dataset_folders": [
+        "pbmc_umap"
+      ],
+      "grading_adaptation": "Check complete numerical outputs and derived plotting tables; do not inherit a visual or language-model judge."
+    },
+    {
+      "task_id": "82",
+      "source_metadata_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_metadata_sha256": "c6f937863a220bd1762a00c20a0f79cc8dfca900b819bdb552150310731ae147",
+      "source_tags": [
+        "Data Visualization"
+      ],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "cell-group-dendrogram",
+      "required_stages": [
+        "join group labels",
+        "choose an expression representation",
+        "summarize group profiles",
+        "compute group distances",
+        "build a hierarchical tree"
+      ],
+      "scientific_decisions": [
+        "Freeze aggregation, scaling, distance and linkage; equivalent subtree rotations should be accepted."
+      ],
+      "required_formats": [
+        "h5ad"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Freeze aggregation, scaling, distance and linkage; equivalent subtree rotations should be accepted.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_repository": "scverse/scanpy-tutorials",
+      "source_output_format": "png",
+      "source_dataset_folders": [
+        "pbmc_umap"
+      ],
+      "grading_adaptation": "Check complete numerical outputs and derived plotting tables; do not inherit a visual or language-model judge."
+    },
+    {
+      "task_id": "85",
+      "source_metadata_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_metadata_sha256": "c6f937863a220bd1762a00c20a0f79cc8dfca900b819bdb552150310731ae147",
+      "source_tags": [
+        "Feature Engineering"
+      ],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "longitudinal-saliva-features",
+      "required_stages": [
+        "join subject conditions and assay time points",
+        "apply missingness policy",
+        "compute per-subject distribution and timing features",
+        "export structured features"
+      ],
+      "scientific_decisions": [
+        "Retain time units and subject identity; extrema positions are not interchangeable with extrema values."
+      ],
+      "required_formats": [
+        "pkl"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Retain time units and subject identity; extrema positions are not interchangeable with extrema values.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_repository": "mad-lab-fau/BioPsyKit",
+      "source_output_format": "json",
+      "source_dataset_folders": [
+        "saliva_data"
+      ],
+      "grading_adaptation": "Check complete numerical outputs and derived plotting tables; do not inherit a visual or language-model judge."
+    },
+    {
+      "task_id": "96",
+      "source_metadata_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_metadata_sha256": "c6f937863a220bd1762a00c20a0f79cc8dfca900b819bdb552150310731ae147",
+      "source_tags": [
+        "Data Visualization"
+      ],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "single-cell-neighbor-clustering",
+      "required_stages": [
+        "inspect prepared representation",
+        "construct or reuse the declared neighbor graph",
+        "compute communities",
+        "join embedding coordinates",
+        "export assignments"
+      ],
+      "scientific_decisions": [
+        "Cluster labels are arbitrary; freeze graph and random-state choices and grade partition semantics."
+      ],
+      "required_formats": [
+        "h5ad"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Cluster labels are arbitrary; freeze graph and random-state choices and grade partition semantics.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_repository": "scverse/scanpy-tutorials",
+      "source_output_format": "png",
+      "source_dataset_folders": [
+        "pbmc68k"
+      ],
+      "grading_adaptation": "Check complete numerical outputs and derived plotting tables; do not inherit a visual or language-model judge."
+    },
+    {
+      "task_id": "98",
+      "source_metadata_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_metadata_sha256": "c6f937863a220bd1762a00c20a0f79cc8dfca900b819bdb552150310731ae147",
+      "source_tags": [
+        "Computational Analysis",
+        "Data Visualization"
+      ],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "paired-receptor-chain-qc",
+      "required_stages": [
+        "join immune-receptor and RNA cell IDs",
+        "classify productive chains and pairing states",
+        "retain specimen source",
+        "aggregate chain-QC categories"
+      ],
+      "scientific_decisions": [
+        "Use native MuData/AIRR identities, not row order; distinguish no receptor, orphan chains, multichain cells and valid pairs."
+      ],
+      "required_formats": [
+        "h5mu"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Use native MuData/AIRR identities, not row order; distinguish no receptor, orphan chains, multichain cells and valid pairs.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_repository": "scverse/scirpy",
+      "source_output_format": "png",
+      "source_dataset_folders": [
+        "cell_3k"
+      ],
+      "grading_adaptation": "Check complete numerical outputs and derived plotting tables; do not inherit a visual or language-model judge."
+    },
+    {
+      "task_id": "99",
+      "source_metadata_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_metadata_sha256": "c6f937863a220bd1762a00c20a0f79cc8dfca900b819bdb552150310731ae147",
+      "source_tags": [
+        "Statistical Analysis",
+        "Data Visualization"
+      ],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "spatial-expression-embedding-qc",
+      "required_stages": [
+        "inspect expression representation and embedding",
+        "compute count and feature diagnostics",
+        "join cell/spot cluster labels",
+        "export matched embedding panels"
+      ],
+      "scientific_decisions": [
+        "Expression-space coordinates and physical tissue coordinates answer different questions; preserve the coordinate system and spot IDs."
+      ],
+      "required_formats": [
+        "h5ad"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Expression-space coordinates and physical tissue coordinates answer different questions; preserve the coordinate system and spot IDs.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_repository": "scverse/scanpy-tutorials",
+      "source_output_format": "png",
+      "source_dataset_folders": [
+        "lymph"
+      ],
+      "grading_adaptation": "Check complete numerical outputs and derived plotting tables; do not inherit a visual or language-model judge."
+    },
+    {
+      "task_id": "100",
+      "source_metadata_url": "https://huggingface.co/datasets/osunlp/ScienceAgentBench/blob/9c6e96c9e74572e979b0930ee735041cef528cb7/data/verified-00000-of-00001.parquet",
+      "source_metadata_sha256": "c6f937863a220bd1762a00c20a0f79cc8dfca900b819bdb552150310731ae147",
+      "source_tags": [
+        "Statistical Analysis",
+        "Data Visualization"
+      ],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "tissue-coordinate-qc",
+      "required_stages": [
+        "inspect tissue coordinates and scale",
+        "compute count and feature diagnostics",
+        "join cluster assignments",
+        "export spatially registered summaries"
+      ],
+      "scientific_decisions": [
+        "Preserve axis orientation, tissue section and spot identity; a rendered plot alone is insufficient numerical evidence."
+      ],
+      "required_formats": [
+        "h5ad"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Preserve axis orientation, tissue section and spot identity; a rendered plot alone is insufficient numerical evidence.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_repository": "scverse/scanpy-tutorials",
+      "source_output_format": "png",
+      "source_dataset_folders": [
+        "lymph"
+      ],
+      "grading_adaptation": "Check complete numerical outputs and derived plotting tables; do not inherit a visual or language-model judge."
+    }
+  ]
+}

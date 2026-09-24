@@ -224,14 +224,26 @@ benchmark answers and biological fixtures are excluded from training authoring.
 | [SpatialBench](../../experiments/post_training/bio_tasks/benchmark_tasks/spatialbench.json) | 16 | 159 |
 | [EpiBench](../../experiments/post_training/bio_tasks/benchmark_tasks/epibench.json) | 7 | 106 |
 | [Bio-Task Bench](../../experiments/post_training/bio_tasks/benchmark_tasks/bio-task-bench.json) | 34 | — |
+| [ScienceAgentBench, bioinformatics](../../experiments/post_training/bio_tasks/benchmark_tasks/scienceagentbench.json) | 27 | — |
+| [CORE-Bench, biomedical](../../experiments/post_training/bio_tasks/benchmark_tasks/core-bench.json) | 25 | — |
+| [DiscoveryBench, biology](../../experiments/post_training/bio_tasks/benchmark_tasks/discoverybench.json) | 26 | — |
 
-Of these 428 ID task records, 23 have manually assessed component mappings and
-405 are unmapped. None is marked workflow-validated. Other eligible sources
+Of these 506 ID task records, 23 have manually assessed component mappings and
+483 are unmapped. None is marked workflow-validated. Other eligible sources
 still need task-level inspection. The 90
 [BioMysteryBench identifiers](../../experiments/post_training/bio_tasks/benchmark_tasks/biomysterybench.json)
 are tracked separately as OOD, without workflow patterns or training mappings.
 
-All 428 ID records have manually assessed workflow prerequisites. For BixBench,
+ScienceAgentBench includes all 27 Bioinformatics-domain tasks from its verified
+release; 75 tasks from other disciplines are outside the selected scope. CORE-Bench
+includes all 25 Medical Sciences capsules among 90 released capsules. Its three
+reproduction protocols share capsule identity; each capsule is counted once.
+Capsule patterns use public metadata; analysis scripts and raw schemas remain
+uninspected. Source train/test partitions do not create additional splits here.
+DiscoveryBench records 26 query variants grouped into ten claims across two
+biological studies; these variants are not independent workflow coverage.
+
+All 506 ID records have manually assessed workflow prerequisites. For BixBench,
 shared workflow-family stages are distinguished from individual question endpoints;
 this inventory does not add execution coverage. The inspection browser binds mappings
 to generated examples and their local reference results. These timings are solver-check runtimes, not teacher latency measurements.

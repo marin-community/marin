@@ -1,0 +1,944 @@
+{
+  "benchmark": "CORE-Bench",
+  "scope": "All 25 Medical Sciences capsules in the pinned public metadata: 12 source-train and 13 source-test. Three reproduction protocols share capsule identity; count each capsule once. These source partitions do not create splits in our single-train task collection.",
+  "pattern_scope": "Patterns are manual inferences from permitted public metadata; inspect the scientific endpoint before claiming implemented coverage.",
+  "public_inventory_count": 25,
+  "release_capsules": 90,
+  "release_protocol_tasks": 270,
+  "eligibility_filter": "field == Medical Sciences",
+  "excluded_out_of_scope_count": 65,
+  "source_partition_counts": {
+    "train": 12,
+    "test": 13
+  },
+  "workflow_patterns": {
+    "research-cohort-sampling": [
+      "capsule-9168639"
+    ],
+    "repeated-imaging-variance-models": [
+      "capsule-0325493"
+    ],
+    "physiological-signal-classification": [
+      "capsule-1854976"
+    ],
+    "sample-to-patient-diagnostic-evaluation": [
+      "capsule-0201225"
+    ],
+    "longitudinal-drug-response": [
+      "capsule-9070543"
+    ],
+    "eeg-model-comparison": [
+      "capsule-6746514"
+    ],
+    "exercise-meta-analysis": [
+      "capsule-1683542"
+    ],
+    "multi-modal-clinical-survival": [
+      "capsule-3894632"
+    ],
+    "metabolomic-diagnosis-and-prognosis": [
+      "capsule-5496369"
+    ],
+    "iterative-tomography-reconstruction": [
+      "capsule-3497606"
+    ],
+    "tissue-light-fluence-comparison": [
+      "capsule-7156696"
+    ],
+    "clinical-team-performance-classification": [
+      "capsule-3269870"
+    ],
+    "cancer-expression-signature-comparison": [
+      "capsule-2816027"
+    ],
+    "screening-population-risk-model": [
+      "capsule-9054015"
+    ],
+    "medical-image-classification": [
+      "capsule-0851068"
+    ],
+    "epidemiological-model-comparison": [
+      "capsule-1394704"
+    ],
+    "cancer-alteration-exclusivity": [
+      "capsule-9911222"
+    ],
+    "research-power-audit": [
+      "capsule-7716865"
+    ],
+    "genomic-association-and-survival": [
+      "capsule-4933686"
+    ],
+    "clinical-imaging-group-comparison": [
+      "capsule-1175539"
+    ],
+    "metabolic-phenotype-classification": [
+      "capsule-4180912"
+    ],
+    "registration-publication-discrepancy-review": [
+      "capsule-2708693"
+    ],
+    "pharmacogenomic-response-network": [
+      "capsule-4252248"
+    ],
+    "longitudinal-laboratory-records": [
+      "capsule-7186268"
+    ],
+    "longitudinal-biomarker-meta-analysis": [
+      "capsule-3849634"
+    ]
+  },
+  "tasks": [
+    {
+      "task_id": "capsule-9168639",
+      "source_metadata_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_train.json",
+      "source_metadata_sha256": "3df47f1b3fa1cb60045018eb1a0f1ad4ecf6a53f72318c845a879ce0313b0730",
+      "source_tags": [],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "research-cohort-sampling",
+      "required_stages": [
+        "reconstruct study eligibility",
+        "deduplicate institutional units",
+        "group records by jurisdiction",
+        "reproduce sampling counts"
+      ],
+      "scientific_decisions": [
+        "Counts require an explicit denominator and inclusion ledger; capsule metadata does not expose the complete record schema."
+      ],
+      "required_formats": [],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Counts require an explicit denominator and inclusion ledger; capsule metadata does not expose the complete record schema.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_partition": "train",
+      "source_language": "R",
+      "source_paper": "https://doi.org/10.24433/CO.0124369.v1",
+      "source_output_count": 2,
+      "input_inventory_status": "Capsule title, launch prompt and requested result labels inspected; raw data schemas and analysis programs require capsule-level inspection.",
+      "grading_adaptation": "Recompute numerical result tables and diagnostics; replace figure-reading endpoints with explicit semantic artifact contracts."
+    },
+    {
+      "task_id": "capsule-0325493",
+      "source_metadata_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_train.json",
+      "source_metadata_sha256": "3df47f1b3fa1cb60045018eb1a0f1ad4ecf6a53f72318c845a879ce0313b0730",
+      "source_tags": [],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "repeated-imaging-variance-models",
+      "required_stages": [
+        "join repeated scans and participants",
+        "separate within-person variation",
+        "fit candidate predictors",
+        "compare held-out model performance"
+      ],
+      "scientific_decisions": [
+        "Keep subject-level splits and repeated-scan dependence; inspect scan preprocessing and covariate definitions before authoring."
+      ],
+      "required_formats": [],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Keep subject-level splits and repeated-scan dependence; inspect scan preprocessing and covariate definitions before authoring.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_partition": "train",
+      "source_language": "R",
+      "source_paper": "https://doi.org/10.24433/CO.3688518.v1",
+      "source_output_count": 3,
+      "input_inventory_status": "Capsule title, launch prompt and requested result labels inspected; raw data schemas and analysis programs require capsule-level inspection.",
+      "grading_adaptation": "Recompute numerical result tables and diagnostics; replace figure-reading endpoints with explicit semantic artifact contracts."
+    },
+    {
+      "task_id": "capsule-1854976",
+      "source_metadata_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_train.json",
+      "source_metadata_sha256": "3df47f1b3fa1cb60045018eb1a0f1ad4ecf6a53f72318c845a879ce0313b0730",
+      "source_tags": [],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "physiological-signal-classification",
+      "required_stages": [
+        "read physiological time series",
+        "derive signal features",
+        "fit classifier",
+        "aggregate repeated validation metrics"
+      ],
+      "scientific_decisions": [
+        "Prevent patient leakage between windows and folds; sensitivity and specificity require the declared clinical label and thresholds."
+      ],
+      "required_formats": [],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Prevent patient leakage between windows and folds; sensitivity and specificity require the declared clinical label and thresholds.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_partition": "train",
+      "source_language": "Python",
+      "source_paper": "https://doi.org/10.24433/CO.4834924.v1",
+      "source_output_count": 3,
+      "input_inventory_status": "Capsule title, launch prompt and requested result labels inspected; raw data schemas and analysis programs require capsule-level inspection.",
+      "grading_adaptation": "Recompute numerical result tables and diagnostics; replace figure-reading endpoints with explicit semantic artifact contracts."
+    },
+    {
+      "task_id": "capsule-0201225",
+      "source_metadata_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_train.json",
+      "source_metadata_sha256": "3df47f1b3fa1cb60045018eb1a0f1ad4ecf6a53f72318c845a879ce0313b0730",
+      "source_tags": [],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "sample-to-patient-diagnostic-evaluation",
+      "required_stages": [
+        "read per-segment model scores",
+        "aggregate by patient",
+        "apply declared operating points",
+        "report segment and patient metrics"
+      ],
+      "scientific_decisions": [
+        "Segment and patient denominators differ; reconstruct the aggregation and threshold policies before claiming workflow equivalence."
+      ],
+      "required_formats": [],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Segment and patient denominators differ; reconstruct the aggregation and threshold policies before claiming workflow equivalence.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_partition": "train",
+      "source_language": "Python",
+      "source_paper": "https://doi.org/10.24433/CO.8603914.v1",
+      "source_output_count": 8,
+      "input_inventory_status": "Capsule title, launch prompt and requested result labels inspected; raw data schemas and analysis programs require capsule-level inspection.",
+      "grading_adaptation": "Recompute numerical result tables and diagnostics; replace figure-reading endpoints with explicit semantic artifact contracts."
+    },
+    {
+      "task_id": "capsule-9070543",
+      "source_metadata_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_train.json",
+      "source_metadata_sha256": "3df47f1b3fa1cb60045018eb1a0f1ad4ecf6a53f72318c845a879ce0313b0730",
+      "source_tags": [],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "longitudinal-drug-response",
+      "required_stages": [
+        "join treatment histories and dose measurements",
+        "normalize cellular response",
+        "construct dose-response summaries",
+        "compare retreatment observations"
+      ],
+      "scientific_decisions": [
+        "Preserve biological replicates, time and normalization controls; descriptive response differences alone do not establish a resistance mechanism."
+      ],
+      "required_formats": [],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Preserve biological replicates, time and normalization controls; descriptive response differences alone do not establish a resistance mechanism.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_partition": "train",
+      "source_language": "R",
+      "source_paper": "https://doi.org/10.24433/CO.4dfd5a01-8d79-40ac-9d7a-10915b8b0e2e",
+      "source_output_count": 1,
+      "input_inventory_status": "Capsule title, launch prompt and requested result labels inspected; raw data schemas and analysis programs require capsule-level inspection.",
+      "grading_adaptation": "Recompute numerical result tables and diagnostics; replace figure-reading endpoints with explicit semantic artifact contracts."
+    },
+    {
+      "task_id": "capsule-6746514",
+      "source_metadata_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_train.json",
+      "source_metadata_sha256": "3df47f1b3fa1cb60045018eb1a0f1ad4ecf6a53f72318c845a879ce0313b0730",
+      "source_tags": [],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "eeg-model-comparison",
+      "required_stages": [
+        "prepare EEG segments",
+        "preserve recording and subject groups",
+        "fit or evaluate classifiers",
+        "compare confusion-derived metrics"
+      ],
+      "scientific_decisions": [
+        "Electrode preprocessing, patient leakage and class balance require explicit contracts."
+      ],
+      "required_formats": [],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Electrode preprocessing, patient leakage and class balance require explicit contracts.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_partition": "train",
+      "source_language": "Python",
+      "source_paper": "https://doi.org/10.24433/CO.3019596.v2",
+      "source_output_count": 3,
+      "input_inventory_status": "Capsule title, launch prompt and requested result labels inspected; raw data schemas and analysis programs require capsule-level inspection.",
+      "grading_adaptation": "Recompute numerical result tables and diagnostics; replace figure-reading endpoints with explicit semantic artifact contracts."
+    },
+    {
+      "task_id": "capsule-1683542",
+      "source_metadata_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_train.json",
+      "source_metadata_sha256": "3df47f1b3fa1cb60045018eb1a0f1ad4ecf6a53f72318c845a879ce0313b0730",
+      "source_tags": [],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "exercise-meta-analysis",
+      "required_stages": [
+        "identify eligible study arms",
+        "compute standardized effect sizes",
+        "preserve sampling variances",
+        "synthesize outcomes"
+      ],
+      "scientific_decisions": [
+        "Avoid double-counting shared controls; specify direction, effect-size convention and the synthesis model."
+      ],
+      "required_formats": [],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Avoid double-counting shared controls; specify direction, effect-size convention and the synthesis model.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_partition": "train",
+      "source_language": "R",
+      "source_paper": "https://doi.org/10.24433/CO.9997621.v2",
+      "source_output_count": 2,
+      "input_inventory_status": "Capsule title, launch prompt and requested result labels inspected; raw data schemas and analysis programs require capsule-level inspection.",
+      "grading_adaptation": "Recompute numerical result tables and diagnostics; replace figure-reading endpoints with explicit semantic artifact contracts."
+    },
+    {
+      "task_id": "capsule-3894632",
+      "source_metadata_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_train.json",
+      "source_metadata_sha256": "3df47f1b3fa1cb60045018eb1a0f1ad4ecf6a53f72318c845a879ce0313b0730",
+      "source_tags": [],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "multi-modal-clinical-survival",
+      "required_stages": [
+        "join imaging, microbiome and clinical participants",
+        "define follow-up and censoring",
+        "fit declared survival model",
+        "report covariate evidence"
+      ],
+      "scientific_decisions": [
+        "Complete-case selection, time origin, censoring and model covariates must be established from the capsule analysis."
+      ],
+      "required_formats": [],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Complete-case selection, time origin, censoring and model covariates must be established from the capsule analysis.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_partition": "train",
+      "source_language": "Python",
+      "source_paper": "https://doi.org/10.24433/CO.2552952.v1",
+      "source_output_count": 1,
+      "input_inventory_status": "Capsule title, launch prompt and requested result labels inspected; raw data schemas and analysis programs require capsule-level inspection.",
+      "grading_adaptation": "Recompute numerical result tables and diagnostics; replace figure-reading endpoints with explicit semantic artifact contracts."
+    },
+    {
+      "task_id": "capsule-5496369",
+      "source_metadata_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_train.json",
+      "source_metadata_sha256": "3df47f1b3fa1cb60045018eb1a0f1ad4ecf6a53f72318c845a879ce0313b0730",
+      "source_tags": [],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "metabolomic-diagnosis-and-prognosis",
+      "required_stages": [
+        "join measured metabolites and clinical endpoints",
+        "fit regularized models",
+        "produce held-out risk scores",
+        "evaluate endpoint-specific discrimination"
+      ],
+      "scientific_decisions": [
+        "Diagnosis and prognosis need separate eligibility and outcome definitions; all feature selection belongs within training data."
+      ],
+      "required_formats": [],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Diagnosis and prognosis need separate eligibility and outcome definitions; all feature selection belongs within training data.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_partition": "train",
+      "source_language": "Python",
+      "source_paper": "https://doi.org/10.24433/CO.7015846.v1",
+      "source_output_count": 2,
+      "input_inventory_status": "Capsule title, launch prompt and requested result labels inspected; raw data schemas and analysis programs require capsule-level inspection.",
+      "grading_adaptation": "Recompute numerical result tables and diagnostics; replace figure-reading endpoints with explicit semantic artifact contracts."
+    },
+    {
+      "task_id": "capsule-3497606",
+      "source_metadata_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_train.json",
+      "source_metadata_sha256": "3df47f1b3fa1cb60045018eb1a0f1ad4ecf6a53f72318c845a879ce0313b0730",
+      "source_tags": [],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "iterative-tomography-reconstruction",
+      "required_stages": [
+        "read measurement geometry",
+        "reconstruct images over iterations",
+        "compute image noise metrics",
+        "compare reconstruction variants"
+      ],
+      "scientific_decisions": [
+        "A numerical noise definition and imaging geometry are needed; visually selecting an image is not a scientific reference."
+      ],
+      "required_formats": [],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "A numerical noise definition and imaging geometry are needed; visually selecting an image is not a scientific reference.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_partition": "train",
+      "source_language": "Python",
+      "source_paper": "https://doi.org/10.24433/CO.2947710.v2",
+      "source_output_count": 1,
+      "input_inventory_status": "Capsule title, launch prompt and requested result labels inspected; raw data schemas and analysis programs require capsule-level inspection.",
+      "grading_adaptation": "Recompute numerical result tables and diagnostics; replace figure-reading endpoints with explicit semantic artifact contracts."
+    },
+    {
+      "task_id": "capsule-7156696",
+      "source_metadata_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_train.json",
+      "source_metadata_sha256": "3df47f1b3fa1cb60045018eb1a0f1ad4ecf6a53f72318c845a879ce0313b0730",
+      "source_tags": [],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "tissue-light-fluence-comparison",
+      "required_stages": [
+        "load tissue and illumination parameters",
+        "evaluate depth-dependent fluence",
+        "apply effective-dose convention",
+        "compare source profiles"
+      ],
+      "scientific_decisions": [
+        "Keep wavelength, depth and fluence units explicit; model outputs require physical assumptions and are not observed biological measurements."
+      ],
+      "required_formats": [],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Keep wavelength, depth and fluence units explicit; model outputs require physical assumptions and are not observed biological measurements.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_partition": "train",
+      "source_language": "Python",
+      "source_paper": "https://doi.org/10.24433/CO.3b5e68fc-c3a0-44fd-bebb-95d60e08ce11.v3",
+      "source_output_count": 2,
+      "input_inventory_status": "Capsule title, launch prompt and requested result labels inspected; raw data schemas and analysis programs require capsule-level inspection.",
+      "grading_adaptation": "Recompute numerical result tables and diagnostics; replace figure-reading endpoints with explicit semantic artifact contracts."
+    },
+    {
+      "task_id": "capsule-3269870",
+      "source_metadata_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_train.json",
+      "source_metadata_sha256": "3df47f1b3fa1cb60045018eb1a0f1ad4ecf6a53f72318c845a879ce0313b0730",
+      "source_tags": [],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "clinical-team-performance-classification",
+      "required_stages": [
+        "join team-level features and outcomes",
+        "fit classifier",
+        "compute held-out confusion metrics",
+        "report training diagnostics"
+      ],
+      "scientific_decisions": [
+        "Group repeated teams or simulations appropriately; distinguish a plotted label from evidence that the underlying analysis is correct."
+      ],
+      "required_formats": [],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Group repeated teams or simulations appropriately; distinguish a plotted label from evidence that the underlying analysis is correct.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_partition": "train",
+      "source_language": "Python",
+      "source_paper": "https://doi.org/10.24433/CO.e78bbbad-a26f-49ec-9eae-11d549011e17",
+      "source_output_count": 3,
+      "input_inventory_status": "Capsule title, launch prompt and requested result labels inspected; raw data schemas and analysis programs require capsule-level inspection.",
+      "grading_adaptation": "Recompute numerical result tables and diagnostics; replace figure-reading endpoints with explicit semantic artifact contracts."
+    },
+    {
+      "task_id": "capsule-2816027",
+      "source_metadata_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_test.json.gpg",
+      "source_metadata_sha256": "cebf204bc8fd0b2e1b6e65ab762b7edbf906313ff3718780492633aeb4d972f2",
+      "source_tags": [],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "cancer-expression-signature-comparison",
+      "required_stages": [
+        "join tumor metadata and expression",
+        "define gene-set scoring representation",
+        "compute sample signature scores",
+        "compare tumor groups"
+      ],
+      "scientific_decisions": [
+        "Freeze gene identifier matching and scoring conventions; group association does not establish causal pathway activation."
+      ],
+      "required_formats": [],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Freeze gene identifier matching and scoring conventions; group association does not establish causal pathway activation.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_partition": "test",
+      "source_language": "R",
+      "source_paper": "https://doi.org/10.24433/CO.0627595.v1",
+      "source_output_count": 1,
+      "input_inventory_status": "Capsule title, launch prompt and requested result labels inspected; raw data schemas and analysis programs require capsule-level inspection.",
+      "grading_adaptation": "Recompute numerical result tables and diagnostics; replace figure-reading endpoints with explicit semantic artifact contracts."
+    },
+    {
+      "task_id": "capsule-9054015",
+      "source_metadata_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_test.json.gpg",
+      "source_metadata_sha256": "cebf204bc8fd0b2e1b6e65ab762b7edbf906313ff3718780492633aeb4d972f2",
+      "source_tags": [],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "screening-population-risk-model",
+      "required_stages": [
+        "define age-specific disease prevalence",
+        "combine test operating characteristics",
+        "calculate expected detections",
+        "summarize longitudinal diagnosis risk"
+      ],
+      "scientific_decisions": [
+        "Report the modeled population and competing-risk assumptions; this is a mathematical scenario, not patient-specific medical advice."
+      ],
+      "required_formats": [],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Report the modeled population and competing-risk assumptions; this is a mathematical scenario, not patient-specific medical advice.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_partition": "test",
+      "source_language": "R",
+      "source_paper": "https://doi.org/10.24433/CO.4448554.v3",
+      "source_output_count": 2,
+      "input_inventory_status": "Capsule title, launch prompt and requested result labels inspected; raw data schemas and analysis programs require capsule-level inspection.",
+      "grading_adaptation": "Recompute numerical result tables and diagnostics; replace figure-reading endpoints with explicit semantic artifact contracts."
+    },
+    {
+      "task_id": "capsule-0851068",
+      "source_metadata_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_test.json.gpg",
+      "source_metadata_sha256": "cebf204bc8fd0b2e1b6e65ab762b7edbf906313ff3718780492633aeb4d972f2",
+      "source_tags": [],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "medical-image-classification",
+      "required_stages": [
+        "join image labels and patient groups",
+        "preprocess images",
+        "fit classification model",
+        "evaluate held-out score discrimination"
+      ],
+      "scientific_decisions": [
+        "Prevent patient or duplicate-image leakage; the capsule prompt does not establish imaging modality or external generalization."
+      ],
+      "required_formats": [],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Prevent patient or duplicate-image leakage; the capsule prompt does not establish imaging modality or external generalization.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_partition": "test",
+      "source_language": "Python",
+      "source_paper": "https://doi.org/10.24433/CO.9705378.v1",
+      "source_output_count": 1,
+      "input_inventory_status": "Capsule title, launch prompt and requested result labels inspected; raw data schemas and analysis programs require capsule-level inspection.",
+      "grading_adaptation": "Recompute numerical result tables and diagnostics; replace figure-reading endpoints with explicit semantic artifact contracts."
+    },
+    {
+      "task_id": "capsule-1394704",
+      "source_metadata_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_test.json.gpg",
+      "source_metadata_sha256": "cebf204bc8fd0b2e1b6e65ab762b7edbf906313ff3718780492633aeb4d972f2",
+      "source_tags": [],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "epidemiological-model-comparison",
+      "required_stages": [
+        "identify time-series definitions",
+        "fit or run declared population model",
+        "estimate reproduction metrics",
+        "compare estimation methods"
+      ],
+      "scientific_decisions": [
+        "Separate observed incidence from model assumptions and uncertainty; retain a bounded retrospective public-health analysis."
+      ],
+      "required_formats": [],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Separate observed incidence from model assumptions and uncertainty; retain a bounded retrospective public-health analysis.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_partition": "test",
+      "source_language": "R",
+      "source_paper": "https://doi.org/10.24433/CO.7958703.v1",
+      "source_output_count": 2,
+      "input_inventory_status": "Capsule title, launch prompt and requested result labels inspected; raw data schemas and analysis programs require capsule-level inspection.",
+      "grading_adaptation": "Recompute numerical result tables and diagnostics; replace figure-reading endpoints with explicit semantic artifact contracts."
+    },
+    {
+      "task_id": "capsule-9911222",
+      "source_metadata_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_test.json.gpg",
+      "source_metadata_sha256": "cebf204bc8fd0b2e1b6e65ab762b7edbf906313ff3718780492633aeb4d972f2",
+      "source_tags": [],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "cancer-alteration-exclusivity",
+      "required_stages": [
+        "join tumor alteration calls",
+        "define tested gene sets",
+        "compute mutual-exclusivity statistics",
+        "rank candidate models"
+      ],
+      "scientific_decisions": [
+        "Missing calls and sample inclusion affect exclusivity; inspect the null model and multiplicity correction before authoring."
+      ],
+      "required_formats": [],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Missing calls and sample inclusion affect exclusivity; inspect the null model and multiplicity correction before authoring.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_partition": "test",
+      "source_language": "R",
+      "source_paper": "https://doi.org/10.24433/CO.4357785.v1",
+      "source_output_count": 1,
+      "input_inventory_status": "Capsule title, launch prompt and requested result labels inspected; raw data schemas and analysis programs require capsule-level inspection.",
+      "grading_adaptation": "Recompute numerical result tables and diagnostics; replace figure-reading endpoints with explicit semantic artifact contracts."
+    },
+    {
+      "task_id": "capsule-7716865",
+      "source_metadata_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_test.json.gpg",
+      "source_metadata_sha256": "cebf204bc8fd0b2e1b6e65ab762b7edbf906313ff3718780492633aeb4d972f2",
+      "source_tags": [],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "research-power-audit",
+      "required_stages": [
+        "extract study sample sizes and effect conventions",
+        "recompute statistical power",
+        "compare observed and expected significance",
+        "report aggregate sensitivity"
+      ],
+      "scientific_decisions": [
+        "Observed effect sizes can be biased; freeze the power model and account for related studies."
+      ],
+      "required_formats": [],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Observed effect sizes can be biased; freeze the power model and account for related studies.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_partition": "test",
+      "source_language": "R",
+      "source_paper": "https://doi.org/10.24433/CO.7282505.v1",
+      "source_output_count": 1,
+      "input_inventory_status": "Capsule title, launch prompt and requested result labels inspected; raw data schemas and analysis programs require capsule-level inspection.",
+      "grading_adaptation": "Recompute numerical result tables and diagnostics; replace figure-reading endpoints with explicit semantic artifact contracts."
+    },
+    {
+      "task_id": "capsule-4933686",
+      "source_metadata_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_test.json.gpg",
+      "source_metadata_sha256": "cebf204bc8fd0b2e1b6e65ab762b7edbf906313ff3718780492633aeb4d972f2",
+      "source_tags": [],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "genomic-association-and-survival",
+      "required_stages": [
+        "join tumor genomic groups and follow-up",
+        "construct categorical associations",
+        "fit survival contrasts",
+        "report signed effects and evidence"
+      ],
+      "scientific_decisions": [
+        "Fisher-test and hazard-ratio endpoints have different populations and assumptions; preserve censoring and effect direction."
+      ],
+      "required_formats": [],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Fisher-test and hazard-ratio endpoints have different populations and assumptions; preserve censoring and effect direction.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_partition": "test",
+      "source_language": "R",
+      "source_paper": "https://doi.org/10.24433/CO.9777456.v4",
+      "source_output_count": 2,
+      "input_inventory_status": "Capsule title, launch prompt and requested result labels inspected; raw data schemas and analysis programs require capsule-level inspection.",
+      "grading_adaptation": "Recompute numerical result tables and diagnostics; replace figure-reading endpoints with explicit semantic artifact contracts."
+    },
+    {
+      "task_id": "capsule-1175539",
+      "source_metadata_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_test.json.gpg",
+      "source_metadata_sha256": "cebf204bc8fd0b2e1b6e65ab762b7edbf906313ff3718780492633aeb4d972f2",
+      "source_tags": [],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "clinical-imaging-group-comparison",
+      "required_stages": [
+        "join imaging measurements and clinical groups",
+        "define eligible participants",
+        "summarize cardiac measurements",
+        "compare group distributions"
+      ],
+      "scientific_decisions": [
+        "Preserve measurement units and covariate structure; a median comparison alone does not establish a disease effect."
+      ],
+      "required_formats": [],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Preserve measurement units and covariate structure; a median comparison alone does not establish a disease effect.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_partition": "test",
+      "source_language": "R",
+      "source_paper": "https://doi.org/10.24433/CO.9265392.v1",
+      "source_output_count": 1,
+      "input_inventory_status": "Capsule title, launch prompt and requested result labels inspected; raw data schemas and analysis programs require capsule-level inspection.",
+      "grading_adaptation": "Recompute numerical result tables and diagnostics; replace figure-reading endpoints with explicit semantic artifact contracts."
+    },
+    {
+      "task_id": "capsule-4180912",
+      "source_metadata_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_test.json.gpg",
+      "source_metadata_sha256": "cebf204bc8fd0b2e1b6e65ab762b7edbf906313ff3718780492633aeb4d972f2",
+      "source_tags": [],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "metabolic-phenotype-classification",
+      "required_stages": [
+        "join measured glucose and insulin",
+        "define metabolic labels",
+        "fit competing classifiers",
+        "compare accuracy and macro-averaged metrics"
+      ],
+      "scientific_decisions": [
+        "Freeze units, label rules and independent patient splits; macro-F1 is not interchangeable with accuracy."
+      ],
+      "required_formats": [],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Freeze units, label rules and independent patient splits; macro-F1 is not interchangeable with accuracy.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_partition": "test",
+      "source_language": "Python",
+      "source_paper": "https://doi.org/10.24433/CO.9665917.v1",
+      "source_output_count": 2,
+      "input_inventory_status": "Capsule title, launch prompt and requested result labels inspected; raw data schemas and analysis programs require capsule-level inspection.",
+      "grading_adaptation": "Recompute numerical result tables and diagnostics; replace figure-reading endpoints with explicit semantic artifact contracts."
+    },
+    {
+      "task_id": "capsule-2708693",
+      "source_metadata_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_test.json.gpg",
+      "source_metadata_sha256": "cebf204bc8fd0b2e1b6e65ab762b7edbf906313ff3718780492633aeb4d972f2",
+      "source_tags": [],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "registration-publication-discrepancy-review",
+      "required_stages": [
+        "join study registrations to publications",
+        "code outcome discrepancies",
+        "preserve study denominators",
+        "synthesize disclosure frequencies"
+      ],
+      "scientific_decisions": [
+        "Evidence extraction and study linkage need an auditable ledger; distinguish outcome-level and study-level denominators."
+      ],
+      "required_formats": [],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Evidence extraction and study linkage need an auditable ledger; distinguish outcome-level and study-level denominators.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_partition": "test",
+      "source_language": "R",
+      "source_paper": "https://doi.org/10.24433/CO.4753181.v1",
+      "source_output_count": 2,
+      "input_inventory_status": "Capsule title, launch prompt and requested result labels inspected; raw data schemas and analysis programs require capsule-level inspection.",
+      "grading_adaptation": "Recompute numerical result tables and diagnostics; replace figure-reading endpoints with explicit semantic artifact contracts."
+    },
+    {
+      "task_id": "capsule-4252248",
+      "source_metadata_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_test.json.gpg",
+      "source_metadata_sha256": "cebf204bc8fd0b2e1b6e65ab762b7edbf906313ff3718780492633aeb4d972f2",
+      "source_tags": [],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "pharmacogenomic-response-network",
+      "required_stages": [
+        "join compound response matrices",
+        "normalize comparable assays",
+        "construct drug relationships",
+        "match external target annotations",
+        "evaluate ranking precision and recall"
+      ],
+      "scientific_decisions": [
+        "Freeze identifier crosswalks and annotation versions; PR-area is distinct from ROC-area and requires a declared positive-label universe."
+      ],
+      "required_formats": [],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Freeze identifier crosswalks and annotation versions; PR-area is distinct from ROC-area and requires a declared positive-label universe.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_partition": "test",
+      "source_language": "R",
+      "source_paper": "https://doi.org/10.24433/CO.0012b3fb-3cf2-41fa-9b8d-6cc055b53ca2",
+      "source_output_count": 1,
+      "input_inventory_status": "Capsule title, launch prompt and requested result labels inspected; raw data schemas and analysis programs require capsule-level inspection.",
+      "grading_adaptation": "Recompute numerical result tables and diagnostics; replace figure-reading endpoints with explicit semantic artifact contracts."
+    },
+    {
+      "task_id": "capsule-7186268",
+      "source_metadata_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_test.json.gpg",
+      "source_metadata_sha256": "cebf204bc8fd0b2e1b6e65ab762b7edbf906313ff3718780492633aeb4d972f2",
+      "source_tags": [],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "longitudinal-laboratory-records",
+      "required_stages": [
+        "harmonize lab codes and units",
+        "align patient-specific time windows",
+        "apply measurement selection rules",
+        "compare missingness and summaries"
+      ],
+      "scientific_decisions": [
+        "Repeated measurements and missingness rules affect eligibility; record the window origin, inclusive boundaries and tie handling."
+      ],
+      "required_formats": [],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Repeated measurements and missingness rules affect eligibility; record the window origin, inclusive boundaries and tie handling.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_partition": "test",
+      "source_language": "R",
+      "source_paper": "https://doi.org/10.24433/CO.9692445.v1",
+      "source_output_count": 2,
+      "input_inventory_status": "Capsule title, launch prompt and requested result labels inspected; raw data schemas and analysis programs require capsule-level inspection.",
+      "grading_adaptation": "Recompute numerical result tables and diagnostics; replace figure-reading endpoints with explicit semantic artifact contracts."
+    },
+    {
+      "task_id": "capsule-3849634",
+      "source_metadata_url": "https://huggingface.co/datasets/siegelz/core-bench/blob/18ac8edf2532d9edb9d13ae71f715410de6ee5a0/core_test.json.gpg",
+      "source_metadata_sha256": "cebf204bc8fd0b2e1b6e65ab762b7edbf906313ff3718780492633aeb4d972f2",
+      "source_tags": [],
+      "status": "unmapped",
+      "assessment": "Public metadata manually assessed for transferable workflow patterns; original prompts, target answers and biological fixtures are excluded.",
+      "workflow_family": "longitudinal-biomarker-meta-analysis",
+      "required_stages": [
+        "select cohort estimates by exposure timing",
+        "separate adjustment sets",
+        "reconcile event counts and effects",
+        "synthesize risk evidence"
+      ],
+      "scientific_decisions": [
+        "Avoid mixing minimally and fully adjusted effects or overlapping cohorts; preserve exposure timing and the effect-size scale."
+      ],
+      "required_formats": [],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Avoid mixing minimally and fully adjusted effects or overlapping cohorts; preserve exposure timing and the effect-size scale.",
+        "Author the connected workflow on independent observed biological inputs and validate all numerical artifacts."
+      ],
+      "source_partition": "test",
+      "source_language": "R",
+      "source_paper": "https://doi.org/10.24433/CO.2570489.v1",
+      "source_output_count": 1,
+      "input_inventory_status": "Capsule title, launch prompt and requested result labels inspected; raw data schemas and analysis programs require capsule-level inspection.",
+      "grading_adaptation": "Recompute numerical result tables and diagnostics; replace figure-reading endpoints with explicit semantic artifact contracts."
+    }
+  ]
+}

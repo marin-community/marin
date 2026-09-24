@@ -1,0 +1,1051 @@
+{
+  "benchmark": "DiscoveryBench",
+  "scope": "All biology-domain queries in the pinned real-data metadata: 26 query variants from ten claim groups and two studies. Synthetic metadata is excluded. Published train/test partitions do not create splits in our single-train collection.",
+  "pattern_scope": "Manually inferred from public questions and metadata. Patterns may include prerequisites shared by a claim group; individual endpoints need separate coverage assessment.",
+  "eligibility_filter": "real collection and domain == biology",
+  "public_inventory_count": 26,
+  "source_claim_groups": {
+    "test/introduction_pathways_non-native_plants/metadata_0/group_0": [
+      "test/introduction_pathways_non-native_plants/metadata_0/group_0/q0",
+      "test/introduction_pathways_non-native_plants/metadata_0/group_0/q1",
+      "test/introduction_pathways_non-native_plants/metadata_0/group_0/q2"
+    ],
+    "test/introduction_pathways_non-native_plants/metadata_1/group_0": [
+      "test/introduction_pathways_non-native_plants/metadata_1/group_0/q0",
+      "test/introduction_pathways_non-native_plants/metadata_1/group_0/q1"
+    ],
+    "test/introduction_pathways_non-native_plants/metadata_2/group_0": [
+      "test/introduction_pathways_non-native_plants/metadata_2/group_0/q0",
+      "test/introduction_pathways_non-native_plants/metadata_2/group_0/q1"
+    ],
+    "test/introduction_pathways_non-native_plants/metadata_3/group_0": [
+      "test/introduction_pathways_non-native_plants/metadata_3/group_0/q0",
+      "test/introduction_pathways_non-native_plants/metadata_3/group_0/q1",
+      "test/introduction_pathways_non-native_plants/metadata_3/group_0/q2"
+    ],
+    "test/introduction_pathways_non-native_plants/metadata_4/group_0": [
+      "test/introduction_pathways_non-native_plants/metadata_4/group_0/q0",
+      "test/introduction_pathways_non-native_plants/metadata_4/group_0/q1",
+      "test/introduction_pathways_non-native_plants/metadata_4/group_0/q2"
+    ],
+    "test/introduction_pathways_non-native_plants/metadata_5/group_0": [
+      "test/introduction_pathways_non-native_plants/metadata_5/group_0/q0",
+      "test/introduction_pathways_non-native_plants/metadata_5/group_0/q1",
+      "test/introduction_pathways_non-native_plants/metadata_5/group_0/q2"
+    ],
+    "train/evolution_freshwater_fish/metadata_0/group_0": [
+      "train/evolution_freshwater_fish/metadata_0/group_0/q0",
+      "train/evolution_freshwater_fish/metadata_0/group_0/q1",
+      "train/evolution_freshwater_fish/metadata_0/group_0/q2"
+    ],
+    "train/evolution_freshwater_fish/metadata_1/group_0": [
+      "train/evolution_freshwater_fish/metadata_1/group_0/q0",
+      "train/evolution_freshwater_fish/metadata_1/group_0/q1",
+      "train/evolution_freshwater_fish/metadata_1/group_0/q2"
+    ],
+    "train/evolution_freshwater_fish/metadata_2/group_0": [
+      "train/evolution_freshwater_fish/metadata_2/group_0/q0",
+      "train/evolution_freshwater_fish/metadata_2/group_0/q1"
+    ],
+    "train/evolution_freshwater_fish/metadata_3/group_0": [
+      "train/evolution_freshwater_fish/metadata_3/group_0/q0",
+      "train/evolution_freshwater_fish/metadata_3/group_0/q1"
+    ]
+  },
+  "source_study_count": 2,
+  "inspected_real_metadata_records": 158,
+  "workflow_patterns": {
+    "temporal-introduction-pathways": [
+      "test/introduction_pathways_non-native_plants/metadata_0/group_0/q0",
+      "test/introduction_pathways_non-native_plants/metadata_0/group_0/q1",
+      "test/introduction_pathways_non-native_plants/metadata_0/group_0/q2"
+    ],
+    "land-use-introduction-association": [
+      "test/introduction_pathways_non-native_plants/metadata_1/group_0/q0",
+      "test/introduction_pathways_non-native_plants/metadata_1/group_0/q1"
+    ],
+    "habitat-introduction-comparison": [
+      "test/introduction_pathways_non-native_plants/metadata_2/group_0/q0",
+      "test/introduction_pathways_non-native_plants/metadata_2/group_0/q1"
+    ],
+    "environmental-interaction-model": [
+      "test/introduction_pathways_non-native_plants/metadata_3/group_0/q0",
+      "test/introduction_pathways_non-native_plants/metadata_3/group_0/q1",
+      "test/introduction_pathways_non-native_plants/metadata_3/group_0/q2"
+    ],
+    "residence-time-invasion-model": [
+      "test/introduction_pathways_non-native_plants/metadata_4/group_0/q0",
+      "test/introduction_pathways_non-native_plants/metadata_4/group_0/q1",
+      "test/introduction_pathways_non-native_plants/metadata_4/group_0/q2"
+    ],
+    "spatially-adjusted-invasion-model": [
+      "test/introduction_pathways_non-native_plants/metadata_5/group_0/q0",
+      "test/introduction_pathways_non-native_plants/metadata_5/group_0/q1",
+      "test/introduction_pathways_non-native_plants/metadata_5/group_0/q2"
+    ],
+    "comparative-trait-speciation-regression": [
+      "train/evolution_freshwater_fish/metadata_0/group_0/q0",
+      "train/evolution_freshwater_fish/metadata_0/group_0/q1",
+      "train/evolution_freshwater_fish/metadata_0/group_0/q2",
+      "train/evolution_freshwater_fish/metadata_1/group_0/q0",
+      "train/evolution_freshwater_fish/metadata_1/group_0/q1",
+      "train/evolution_freshwater_fish/metadata_1/group_0/q2",
+      "train/evolution_freshwater_fish/metadata_2/group_0/q0",
+      "train/evolution_freshwater_fish/metadata_2/group_0/q1"
+    ],
+    "diversity-speciation-association": [
+      "train/evolution_freshwater_fish/metadata_3/group_0/q0",
+      "train/evolution_freshwater_fish/metadata_3/group_0/q1"
+    ]
+  },
+  "tasks": [
+    {
+      "task_id": "test/introduction_pathways_non-native_plants/metadata_0/group_0/q0",
+      "source_metadata_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_0.json",
+      "source_metadata_sha256": "90890531821829d3e5b461e2762bf103465529f2e5d8caf42bab47316d278c21",
+      "source_partition": "test",
+      "source_claim_group": "test/introduction_pathways_non-native_plants/metadata_0/group_0",
+      "source_tags": [
+        "statistical tests"
+      ],
+      "source_endpoint_type": "context",
+      "status": "unmapped",
+      "assessment": "Permitted public query description manually assessed; hypotheses, target values and biological fixtures are excluded. Sibling query variants are grouped explicitly.",
+      "workflow_family": "temporal-introduction-pathways",
+      "required_stages": [
+        "join introduction records and time periods",
+        "form comparable pathway denominators",
+        "compare temporal composition"
+      ],
+      "scientific_decisions": [
+        "Keep observation effort and period coverage explicit; changes in composition do not establish causal replacement.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "required_formats": [
+        "CSV"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Keep observation effort and period coverage explicit; changes in composition do not establish causal replacement.",
+        "The original hypothesis judge is not an executable numerical contract; author and validate structured outputs on independent real observations."
+      ]
+    },
+    {
+      "task_id": "test/introduction_pathways_non-native_plants/metadata_0/group_0/q1",
+      "source_metadata_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_0.json",
+      "source_metadata_sha256": "90890531821829d3e5b461e2762bf103465529f2e5d8caf42bab47316d278c21",
+      "source_partition": "test",
+      "source_claim_group": "test/introduction_pathways_non-native_plants/metadata_0/group_0",
+      "source_tags": [
+        "statistical tests"
+      ],
+      "source_endpoint_type": "variables",
+      "status": "unmapped",
+      "assessment": "Permitted public query description manually assessed; hypotheses, target values and biological fixtures are excluded. Sibling query variants are grouped explicitly.",
+      "workflow_family": "temporal-introduction-pathways",
+      "required_stages": [
+        "join introduction records and time periods",
+        "form comparable pathway denominators",
+        "compare temporal composition"
+      ],
+      "scientific_decisions": [
+        "Keep observation effort and period coverage explicit; changes in composition do not establish causal replacement.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "required_formats": [
+        "CSV"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Keep observation effort and period coverage explicit; changes in composition do not establish causal replacement.",
+        "The original hypothesis judge is not an executable numerical contract; author and validate structured outputs on independent real observations."
+      ]
+    },
+    {
+      "task_id": "test/introduction_pathways_non-native_plants/metadata_0/group_0/q2",
+      "source_metadata_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_0.json",
+      "source_metadata_sha256": "90890531821829d3e5b461e2762bf103465529f2e5d8caf42bab47316d278c21",
+      "source_partition": "test",
+      "source_claim_group": "test/introduction_pathways_non-native_plants/metadata_0/group_0",
+      "source_tags": [
+        "statistical tests"
+      ],
+      "source_endpoint_type": "relationship",
+      "status": "unmapped",
+      "assessment": "Permitted public query description manually assessed; hypotheses, target values and biological fixtures are excluded. Sibling query variants are grouped explicitly.",
+      "workflow_family": "temporal-introduction-pathways",
+      "required_stages": [
+        "join introduction records and time periods",
+        "form comparable pathway denominators",
+        "compare temporal composition"
+      ],
+      "scientific_decisions": [
+        "Keep observation effort and period coverage explicit; changes in composition do not establish causal replacement.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "required_formats": [
+        "CSV"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Keep observation effort and period coverage explicit; changes in composition do not establish causal replacement.",
+        "The original hypothesis judge is not an executable numerical contract; author and validate structured outputs on independent real observations."
+      ]
+    },
+    {
+      "task_id": "test/introduction_pathways_non-native_plants/metadata_1/group_0/q0",
+      "source_metadata_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_1.json",
+      "source_metadata_sha256": "0c47b2c847194b856c302495c94a723abc56edad21a48d0e1cc7aa5693894949",
+      "source_partition": "test",
+      "source_claim_group": "test/introduction_pathways_non-native_plants/metadata_1/group_0",
+      "source_tags": [
+        "regression"
+      ],
+      "source_endpoint_type": "variables",
+      "status": "unmapped",
+      "assessment": "Permitted public query description manually assessed; hypotheses, target values and biological fixtures are excluded. Sibling query variants are grouped explicitly.",
+      "workflow_family": "land-use-introduction-association",
+      "required_stages": [
+        "join environmental covariates and pathway proportions",
+        "choose a model for bounded responses",
+        "fit adjusted association",
+        "inspect effect scale"
+      ],
+      "scientific_decisions": [
+        "Retain spatial dependence and the observed response denominator; coefficient magnitude depends on predictor scaling and link function.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "required_formats": [
+        "CSV"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Retain spatial dependence and the observed response denominator; coefficient magnitude depends on predictor scaling and link function.",
+        "The original hypothesis judge is not an executable numerical contract; author and validate structured outputs on independent real observations."
+      ]
+    },
+    {
+      "task_id": "test/introduction_pathways_non-native_plants/metadata_1/group_0/q1",
+      "source_metadata_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_1.json",
+      "source_metadata_sha256": "0c47b2c847194b856c302495c94a723abc56edad21a48d0e1cc7aa5693894949",
+      "source_partition": "test",
+      "source_claim_group": "test/introduction_pathways_non-native_plants/metadata_1/group_0",
+      "source_tags": [
+        "regression"
+      ],
+      "source_endpoint_type": "relationship",
+      "status": "unmapped",
+      "assessment": "Permitted public query description manually assessed; hypotheses, target values and biological fixtures are excluded. Sibling query variants are grouped explicitly.",
+      "workflow_family": "land-use-introduction-association",
+      "required_stages": [
+        "join environmental covariates and pathway proportions",
+        "choose a model for bounded responses",
+        "fit adjusted association",
+        "inspect effect scale"
+      ],
+      "scientific_decisions": [
+        "Retain spatial dependence and the observed response denominator; coefficient magnitude depends on predictor scaling and link function.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "required_formats": [
+        "CSV"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Retain spatial dependence and the observed response denominator; coefficient magnitude depends on predictor scaling and link function.",
+        "The original hypothesis judge is not an executable numerical contract; author and validate structured outputs on independent real observations."
+      ]
+    },
+    {
+      "task_id": "test/introduction_pathways_non-native_plants/metadata_2/group_0/q0",
+      "source_metadata_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_2.json",
+      "source_metadata_sha256": "843092b9425530ddbd9cb647f62522964dcda93c6c65b92aaa5f9790ea5613c6",
+      "source_partition": "test",
+      "source_claim_group": "test/introduction_pathways_non-native_plants/metadata_2/group_0",
+      "source_tags": [
+        "statistical tests",
+        "ecological modelling"
+      ],
+      "source_endpoint_type": "relationship",
+      "status": "unmapped",
+      "assessment": "Permitted public query description manually assessed; hypotheses, target values and biological fixtures are excluded. Sibling query variants are grouped explicitly.",
+      "workflow_family": "habitat-introduction-comparison",
+      "required_stages": [
+        "join species pathways to habitat records",
+        "define occurrence denominators",
+        "fit habitat comparisons",
+        "report uncertainty"
+      ],
+      "scientific_decisions": [
+        "Do not treat repeated records of the same species or site as independent replicates.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "required_formats": [
+        "CSV"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Do not treat repeated records of the same species or site as independent replicates.",
+        "The original hypothesis judge is not an executable numerical contract; author and validate structured outputs on independent real observations."
+      ]
+    },
+    {
+      "task_id": "test/introduction_pathways_non-native_plants/metadata_2/group_0/q1",
+      "source_metadata_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_2.json",
+      "source_metadata_sha256": "843092b9425530ddbd9cb647f62522964dcda93c6c65b92aaa5f9790ea5613c6",
+      "source_partition": "test",
+      "source_claim_group": "test/introduction_pathways_non-native_plants/metadata_2/group_0",
+      "source_tags": [
+        "statistical tests",
+        "ecological modelling"
+      ],
+      "source_endpoint_type": "variables",
+      "status": "unmapped",
+      "assessment": "Permitted public query description manually assessed; hypotheses, target values and biological fixtures are excluded. Sibling query variants are grouped explicitly.",
+      "workflow_family": "habitat-introduction-comparison",
+      "required_stages": [
+        "join species pathways to habitat records",
+        "define occurrence denominators",
+        "fit habitat comparisons",
+        "report uncertainty"
+      ],
+      "scientific_decisions": [
+        "Do not treat repeated records of the same species or site as independent replicates.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "required_formats": [
+        "CSV"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Do not treat repeated records of the same species or site as independent replicates.",
+        "The original hypothesis judge is not an executable numerical contract; author and validate structured outputs on independent real observations."
+      ]
+    },
+    {
+      "task_id": "test/introduction_pathways_non-native_plants/metadata_3/group_0/q0",
+      "source_metadata_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_3.json",
+      "source_metadata_sha256": "391ff7c223ac86cbd84eed1aaf2eedfd545d4db41c1a2daf204a1353bccde913",
+      "source_partition": "test",
+      "source_claim_group": "test/introduction_pathways_non-native_plants/metadata_3/group_0",
+      "source_tags": [
+        "statistical tests",
+        "interaction analysis",
+        "regression"
+      ],
+      "source_endpoint_type": "context",
+      "status": "unmapped",
+      "assessment": "Permitted public query description manually assessed; hypotheses, target values and biological fixtures are excluded. Sibling query variants are grouped explicitly.",
+      "workflow_family": "environmental-interaction-model",
+      "required_stages": [
+        "join environmental covariates",
+        "construct main and interaction effects",
+        "fit the declared response model",
+        "evaluate conditional effects"
+      ],
+      "scientific_decisions": [
+        "An interaction requires conditional interpretation; overall main-effect signs can be misleading.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "required_formats": [
+        "CSV"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "An interaction requires conditional interpretation; overall main-effect signs can be misleading.",
+        "The original hypothesis judge is not an executable numerical contract; author and validate structured outputs on independent real observations."
+      ]
+    },
+    {
+      "task_id": "test/introduction_pathways_non-native_plants/metadata_3/group_0/q1",
+      "source_metadata_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_3.json",
+      "source_metadata_sha256": "391ff7c223ac86cbd84eed1aaf2eedfd545d4db41c1a2daf204a1353bccde913",
+      "source_partition": "test",
+      "source_claim_group": "test/introduction_pathways_non-native_plants/metadata_3/group_0",
+      "source_tags": [
+        "statistical tests",
+        "interaction analysis",
+        "regression"
+      ],
+      "source_endpoint_type": "variables",
+      "status": "unmapped",
+      "assessment": "Permitted public query description manually assessed; hypotheses, target values and biological fixtures are excluded. Sibling query variants are grouped explicitly.",
+      "workflow_family": "environmental-interaction-model",
+      "required_stages": [
+        "join environmental covariates",
+        "construct main and interaction effects",
+        "fit the declared response model",
+        "evaluate conditional effects"
+      ],
+      "scientific_decisions": [
+        "An interaction requires conditional interpretation; overall main-effect signs can be misleading.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "required_formats": [
+        "CSV"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "An interaction requires conditional interpretation; overall main-effect signs can be misleading.",
+        "The original hypothesis judge is not an executable numerical contract; author and validate structured outputs on independent real observations."
+      ]
+    },
+    {
+      "task_id": "test/introduction_pathways_non-native_plants/metadata_3/group_0/q2",
+      "source_metadata_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_3.json",
+      "source_metadata_sha256": "391ff7c223ac86cbd84eed1aaf2eedfd545d4db41c1a2daf204a1353bccde913",
+      "source_partition": "test",
+      "source_claim_group": "test/introduction_pathways_non-native_plants/metadata_3/group_0",
+      "source_tags": [
+        "statistical tests",
+        "interaction analysis",
+        "regression"
+      ],
+      "source_endpoint_type": "relationship",
+      "status": "unmapped",
+      "assessment": "Permitted public query description manually assessed; hypotheses, target values and biological fixtures are excluded. Sibling query variants are grouped explicitly.",
+      "workflow_family": "environmental-interaction-model",
+      "required_stages": [
+        "join environmental covariates",
+        "construct main and interaction effects",
+        "fit the declared response model",
+        "evaluate conditional effects"
+      ],
+      "scientific_decisions": [
+        "An interaction requires conditional interpretation; overall main-effect signs can be misleading.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "required_formats": [
+        "CSV"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "An interaction requires conditional interpretation; overall main-effect signs can be misleading.",
+        "The original hypothesis judge is not an executable numerical contract; author and validate structured outputs on independent real observations."
+      ]
+    },
+    {
+      "task_id": "test/introduction_pathways_non-native_plants/metadata_4/group_0/q0",
+      "source_metadata_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_4.json",
+      "source_metadata_sha256": "1d1c9db987c7e6d8df05d75454fcd11241672daf5f7791a5fa470cf3727ec349",
+      "source_partition": "test",
+      "source_claim_group": "test/introduction_pathways_non-native_plants/metadata_4/group_0",
+      "source_tags": [
+        "interaction analysis",
+        "ecological modelling",
+        "statistical tests"
+      ],
+      "source_endpoint_type": "context",
+      "status": "unmapped",
+      "assessment": "Permitted public query description manually assessed; hypotheses, target values and biological fixtures are excluded. Sibling query variants are grouped explicitly.",
+      "workflow_family": "residence-time-invasion-model",
+      "required_stages": [
+        "join pathway, residence time and establishment outcomes",
+        "fit pathway-by-time response",
+        "compare conditional establishment patterns"
+      ],
+      "scientific_decisions": [
+        "Define time origin and establishment eligibility; uneven recording histories can confound apparent residence-time effects.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "required_formats": [
+        "CSV"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Define time origin and establishment eligibility; uneven recording histories can confound apparent residence-time effects.",
+        "The original hypothesis judge is not an executable numerical contract; author and validate structured outputs on independent real observations."
+      ]
+    },
+    {
+      "task_id": "test/introduction_pathways_non-native_plants/metadata_4/group_0/q1",
+      "source_metadata_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_4.json",
+      "source_metadata_sha256": "1d1c9db987c7e6d8df05d75454fcd11241672daf5f7791a5fa470cf3727ec349",
+      "source_partition": "test",
+      "source_claim_group": "test/introduction_pathways_non-native_plants/metadata_4/group_0",
+      "source_tags": [
+        "interaction analysis",
+        "ecological modelling",
+        "statistical tests"
+      ],
+      "source_endpoint_type": "variables",
+      "status": "unmapped",
+      "assessment": "Permitted public query description manually assessed; hypotheses, target values and biological fixtures are excluded. Sibling query variants are grouped explicitly.",
+      "workflow_family": "residence-time-invasion-model",
+      "required_stages": [
+        "join pathway, residence time and establishment outcomes",
+        "fit pathway-by-time response",
+        "compare conditional establishment patterns"
+      ],
+      "scientific_decisions": [
+        "Define time origin and establishment eligibility; uneven recording histories can confound apparent residence-time effects.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "required_formats": [
+        "CSV"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Define time origin and establishment eligibility; uneven recording histories can confound apparent residence-time effects.",
+        "The original hypothesis judge is not an executable numerical contract; author and validate structured outputs on independent real observations."
+      ]
+    },
+    {
+      "task_id": "test/introduction_pathways_non-native_plants/metadata_4/group_0/q2",
+      "source_metadata_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_4.json",
+      "source_metadata_sha256": "1d1c9db987c7e6d8df05d75454fcd11241672daf5f7791a5fa470cf3727ec349",
+      "source_partition": "test",
+      "source_claim_group": "test/introduction_pathways_non-native_plants/metadata_4/group_0",
+      "source_tags": [
+        "interaction analysis",
+        "ecological modelling",
+        "statistical tests"
+      ],
+      "source_endpoint_type": "relationship",
+      "status": "unmapped",
+      "assessment": "Permitted public query description manually assessed; hypotheses, target values and biological fixtures are excluded. Sibling query variants are grouped explicitly.",
+      "workflow_family": "residence-time-invasion-model",
+      "required_stages": [
+        "join pathway, residence time and establishment outcomes",
+        "fit pathway-by-time response",
+        "compare conditional establishment patterns"
+      ],
+      "scientific_decisions": [
+        "Define time origin and establishment eligibility; uneven recording histories can confound apparent residence-time effects.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "required_formats": [
+        "CSV"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Define time origin and establishment eligibility; uneven recording histories can confound apparent residence-time effects.",
+        "The original hypothesis judge is not an executable numerical contract; author and validate structured outputs on independent real observations."
+      ]
+    },
+    {
+      "task_id": "test/introduction_pathways_non-native_plants/metadata_5/group_0/q0",
+      "source_metadata_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_5.json",
+      "source_metadata_sha256": "6bd987ced29f925f334b710d71e111193b8f57c43388a43fee578544b9e081a9",
+      "source_partition": "test",
+      "source_claim_group": "test/introduction_pathways_non-native_plants/metadata_5/group_0",
+      "source_tags": [
+        "statistical tests",
+        "glm",
+        "spatial analysis",
+        "ecological modelling"
+      ],
+      "source_endpoint_type": "context",
+      "status": "unmapped",
+      "assessment": "Permitted public query description manually assessed; hypotheses, target values and biological fixtures are excluded. Sibling query variants are grouped explicitly.",
+      "workflow_family": "spatially-adjusted-invasion-model",
+      "required_stages": [
+        "join plant introductions to land-use observations",
+        "represent spatial structure",
+        "fit pathway-specific effects",
+        "compare conditional predictions"
+      ],
+      "scientific_decisions": [
+        "Distinguish intentional and unintentional introduction groups while accounting for site or phylogenetic dependence.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "required_formats": [
+        "CSV"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Distinguish intentional and unintentional introduction groups while accounting for site or phylogenetic dependence.",
+        "The original hypothesis judge is not an executable numerical contract; author and validate structured outputs on independent real observations."
+      ]
+    },
+    {
+      "task_id": "test/introduction_pathways_non-native_plants/metadata_5/group_0/q1",
+      "source_metadata_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_5.json",
+      "source_metadata_sha256": "6bd987ced29f925f334b710d71e111193b8f57c43388a43fee578544b9e081a9",
+      "source_partition": "test",
+      "source_claim_group": "test/introduction_pathways_non-native_plants/metadata_5/group_0",
+      "source_tags": [
+        "statistical tests",
+        "glm",
+        "spatial analysis",
+        "ecological modelling"
+      ],
+      "source_endpoint_type": "variables",
+      "status": "unmapped",
+      "assessment": "Permitted public query description manually assessed; hypotheses, target values and biological fixtures are excluded. Sibling query variants are grouped explicitly.",
+      "workflow_family": "spatially-adjusted-invasion-model",
+      "required_stages": [
+        "join plant introductions to land-use observations",
+        "represent spatial structure",
+        "fit pathway-specific effects",
+        "compare conditional predictions"
+      ],
+      "scientific_decisions": [
+        "Distinguish intentional and unintentional introduction groups while accounting for site or phylogenetic dependence.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "required_formats": [
+        "CSV"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Distinguish intentional and unintentional introduction groups while accounting for site or phylogenetic dependence.",
+        "The original hypothesis judge is not an executable numerical contract; author and validate structured outputs on independent real observations."
+      ]
+    },
+    {
+      "task_id": "test/introduction_pathways_non-native_plants/metadata_5/group_0/q2",
+      "source_metadata_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/test/introduction_pathways_non-native_plants/metadata_5.json",
+      "source_metadata_sha256": "6bd987ced29f925f334b710d71e111193b8f57c43388a43fee578544b9e081a9",
+      "source_partition": "test",
+      "source_claim_group": "test/introduction_pathways_non-native_plants/metadata_5/group_0",
+      "source_tags": [
+        "statistical tests",
+        "glm",
+        "spatial analysis",
+        "ecological modelling"
+      ],
+      "source_endpoint_type": "relationship",
+      "status": "unmapped",
+      "assessment": "Permitted public query description manually assessed; hypotheses, target values and biological fixtures are excluded. Sibling query variants are grouped explicitly.",
+      "workflow_family": "spatially-adjusted-invasion-model",
+      "required_stages": [
+        "join plant introductions to land-use observations",
+        "represent spatial structure",
+        "fit pathway-specific effects",
+        "compare conditional predictions"
+      ],
+      "scientific_decisions": [
+        "Distinguish intentional and unintentional introduction groups while accounting for site or phylogenetic dependence.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "required_formats": [
+        "CSV"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Distinguish intentional and unintentional introduction groups while accounting for site or phylogenetic dependence.",
+        "The original hypothesis judge is not an executable numerical contract; author and validate structured outputs on independent real observations."
+      ]
+    },
+    {
+      "task_id": "train/evolution_freshwater_fish/metadata_0/group_0/q0",
+      "source_metadata_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/train/evolution_freshwater_fish/metadata_0.json",
+      "source_metadata_sha256": "0debacd967a8141d91ec2e4c7262d603f9c51513ea67259b86ee7c5a96d1f7ee",
+      "source_partition": "train",
+      "source_claim_group": "train/evolution_freshwater_fish/metadata_0/group_0",
+      "source_tags": [
+        "regression"
+      ],
+      "source_endpoint_type": "variable",
+      "status": "unmapped",
+      "assessment": "Permitted public query description manually assessed; hypotheses, target values and biological fixtures are excluded. Sibling query variants are grouped explicitly.",
+      "workflow_family": "comparative-trait-speciation-regression",
+      "required_stages": [
+        "join trait-evolution and environmental summaries",
+        "inspect predictor scales and dependence",
+        "fit multivariable speciation model",
+        "compare conditional effects"
+      ],
+      "scientific_decisions": [
+        "Raw coefficient magnitude does not measure importance across differently scaled traits; preserve spatial and phylogenetic assumptions.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "required_formats": [
+        "CSV"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Raw coefficient magnitude does not measure importance across differently scaled traits; preserve spatial and phylogenetic assumptions.",
+        "The original hypothesis judge is not an executable numerical contract; author and validate structured outputs on independent real observations."
+      ]
+    },
+    {
+      "task_id": "train/evolution_freshwater_fish/metadata_0/group_0/q1",
+      "source_metadata_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/train/evolution_freshwater_fish/metadata_0.json",
+      "source_metadata_sha256": "0debacd967a8141d91ec2e4c7262d603f9c51513ea67259b86ee7c5a96d1f7ee",
+      "source_partition": "train",
+      "source_claim_group": "train/evolution_freshwater_fish/metadata_0/group_0",
+      "source_tags": [
+        "regression"
+      ],
+      "source_endpoint_type": "variable",
+      "status": "unmapped",
+      "assessment": "Permitted public query description manually assessed; hypotheses, target values and biological fixtures are excluded. Sibling query variants are grouped explicitly.",
+      "workflow_family": "comparative-trait-speciation-regression",
+      "required_stages": [
+        "join trait-evolution and environmental summaries",
+        "inspect predictor scales and dependence",
+        "fit multivariable speciation model",
+        "compare conditional effects"
+      ],
+      "scientific_decisions": [
+        "Raw coefficient magnitude does not measure importance across differently scaled traits; preserve spatial and phylogenetic assumptions.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "required_formats": [
+        "CSV"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Raw coefficient magnitude does not measure importance across differently scaled traits; preserve spatial and phylogenetic assumptions.",
+        "The original hypothesis judge is not an executable numerical contract; author and validate structured outputs on independent real observations."
+      ]
+    },
+    {
+      "task_id": "train/evolution_freshwater_fish/metadata_0/group_0/q2",
+      "source_metadata_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/train/evolution_freshwater_fish/metadata_0.json",
+      "source_metadata_sha256": "0debacd967a8141d91ec2e4c7262d603f9c51513ea67259b86ee7c5a96d1f7ee",
+      "source_partition": "train",
+      "source_claim_group": "train/evolution_freshwater_fish/metadata_0/group_0",
+      "source_tags": [
+        "regression"
+      ],
+      "source_endpoint_type": "relationhsip",
+      "status": "unmapped",
+      "assessment": "Permitted public query description manually assessed; hypotheses, target values and biological fixtures are excluded. Sibling query variants are grouped explicitly.",
+      "workflow_family": "comparative-trait-speciation-regression",
+      "required_stages": [
+        "join trait-evolution and environmental summaries",
+        "inspect predictor scales and dependence",
+        "fit multivariable speciation model",
+        "compare conditional effects"
+      ],
+      "scientific_decisions": [
+        "Raw coefficient magnitude does not measure importance across differently scaled traits; preserve spatial and phylogenetic assumptions.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "required_formats": [
+        "CSV"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Raw coefficient magnitude does not measure importance across differently scaled traits; preserve spatial and phylogenetic assumptions.",
+        "The original hypothesis judge is not an executable numerical contract; author and validate structured outputs on independent real observations."
+      ]
+    },
+    {
+      "task_id": "train/evolution_freshwater_fish/metadata_1/group_0/q0",
+      "source_metadata_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/train/evolution_freshwater_fish/metadata_1.json",
+      "source_metadata_sha256": "356dd249dba26088336bb69c7f45449cae8e1105d0ee0047ed069bf89a2e0c82",
+      "source_partition": "train",
+      "source_claim_group": "train/evolution_freshwater_fish/metadata_1/group_0",
+      "source_tags": [
+        "regression"
+      ],
+      "source_endpoint_type": "variables",
+      "status": "unmapped",
+      "assessment": "Permitted public query description manually assessed; hypotheses, target values and biological fixtures are excluded. Sibling query variants are grouped explicitly.",
+      "workflow_family": "comparative-trait-speciation-regression",
+      "required_stages": [
+        "join morphological evolution and speciation estimates",
+        "fit adjusted trait effects",
+        "report signed coefficients and uncertainty"
+      ],
+      "scientific_decisions": [
+        "Do not assume a sign from the question; derive direction and uncertainty from the independent fitted model.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "required_formats": [
+        "CSV"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Do not assume a sign from the question; derive direction and uncertainty from the independent fitted model.",
+        "The original hypothesis judge is not an executable numerical contract; author and validate structured outputs on independent real observations."
+      ]
+    },
+    {
+      "task_id": "train/evolution_freshwater_fish/metadata_1/group_0/q1",
+      "source_metadata_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/train/evolution_freshwater_fish/metadata_1.json",
+      "source_metadata_sha256": "356dd249dba26088336bb69c7f45449cae8e1105d0ee0047ed069bf89a2e0c82",
+      "source_partition": "train",
+      "source_claim_group": "train/evolution_freshwater_fish/metadata_1/group_0",
+      "source_tags": [
+        "regression"
+      ],
+      "source_endpoint_type": "variables",
+      "status": "unmapped",
+      "assessment": "Permitted public query description manually assessed; hypotheses, target values and biological fixtures are excluded. Sibling query variants are grouped explicitly.",
+      "workflow_family": "comparative-trait-speciation-regression",
+      "required_stages": [
+        "join morphological evolution and speciation estimates",
+        "fit adjusted trait effects",
+        "report signed coefficients and uncertainty"
+      ],
+      "scientific_decisions": [
+        "Do not assume a sign from the question; derive direction and uncertainty from the independent fitted model.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "required_formats": [
+        "CSV"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Do not assume a sign from the question; derive direction and uncertainty from the independent fitted model.",
+        "The original hypothesis judge is not an executable numerical contract; author and validate structured outputs on independent real observations."
+      ]
+    },
+    {
+      "task_id": "train/evolution_freshwater_fish/metadata_1/group_0/q2",
+      "source_metadata_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/train/evolution_freshwater_fish/metadata_1.json",
+      "source_metadata_sha256": "356dd249dba26088336bb69c7f45449cae8e1105d0ee0047ed069bf89a2e0c82",
+      "source_partition": "train",
+      "source_claim_group": "train/evolution_freshwater_fish/metadata_1/group_0",
+      "source_tags": [
+        "regression"
+      ],
+      "source_endpoint_type": "relationship",
+      "status": "unmapped",
+      "assessment": "Permitted public query description manually assessed; hypotheses, target values and biological fixtures are excluded. Sibling query variants are grouped explicitly.",
+      "workflow_family": "comparative-trait-speciation-regression",
+      "required_stages": [
+        "join morphological evolution and speciation estimates",
+        "fit adjusted trait effects",
+        "report signed coefficients and uncertainty"
+      ],
+      "scientific_decisions": [
+        "Do not assume a sign from the question; derive direction and uncertainty from the independent fitted model.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "required_formats": [
+        "CSV"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Do not assume a sign from the question; derive direction and uncertainty from the independent fitted model.",
+        "The original hypothesis judge is not an executable numerical contract; author and validate structured outputs on independent real observations."
+      ]
+    },
+    {
+      "task_id": "train/evolution_freshwater_fish/metadata_2/group_0/q0",
+      "source_metadata_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/train/evolution_freshwater_fish/metadata_2.json",
+      "source_metadata_sha256": "30bcd26f66ea3a62a57d0379493ecc285f94193c07341d14ca95d25217a377d9",
+      "source_partition": "train",
+      "source_claim_group": "train/evolution_freshwater_fish/metadata_2/group_0",
+      "source_tags": [
+        "regression"
+      ],
+      "source_endpoint_type": "variables",
+      "status": "unmapped",
+      "assessment": "Permitted public query description manually assessed; hypotheses, target values and biological fixtures are excluded. Sibling query variants are grouped explicitly.",
+      "workflow_family": "comparative-trait-speciation-regression",
+      "required_stages": [
+        "fit the adjusted trait model",
+        "estimate effect and uncertainty",
+        "evaluate the declared evidence threshold"
+      ],
+      "scientific_decisions": [
+        "Failure to reject is not evidence of equivalence or a zero biological effect.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "required_formats": [
+        "CSV"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Failure to reject is not evidence of equivalence or a zero biological effect.",
+        "The original hypothesis judge is not an executable numerical contract; author and validate structured outputs on independent real observations."
+      ]
+    },
+    {
+      "task_id": "train/evolution_freshwater_fish/metadata_2/group_0/q1",
+      "source_metadata_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/train/evolution_freshwater_fish/metadata_2.json",
+      "source_metadata_sha256": "30bcd26f66ea3a62a57d0379493ecc285f94193c07341d14ca95d25217a377d9",
+      "source_partition": "train",
+      "source_claim_group": "train/evolution_freshwater_fish/metadata_2/group_0",
+      "source_tags": [
+        "regression"
+      ],
+      "source_endpoint_type": "relationship",
+      "status": "unmapped",
+      "assessment": "Permitted public query description manually assessed; hypotheses, target values and biological fixtures are excluded. Sibling query variants are grouped explicitly.",
+      "workflow_family": "comparative-trait-speciation-regression",
+      "required_stages": [
+        "fit the adjusted trait model",
+        "estimate effect and uncertainty",
+        "evaluate the declared evidence threshold"
+      ],
+      "scientific_decisions": [
+        "Failure to reject is not evidence of equivalence or a zero biological effect.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "required_formats": [
+        "CSV"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Failure to reject is not evidence of equivalence or a zero biological effect.",
+        "The original hypothesis judge is not an executable numerical contract; author and validate structured outputs on independent real observations."
+      ]
+    },
+    {
+      "task_id": "train/evolution_freshwater_fish/metadata_3/group_0/q0",
+      "source_metadata_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/train/evolution_freshwater_fish/metadata_3.json",
+      "source_metadata_sha256": "7bec14fc170b825bb90b52c7e3d577182db622542f1ec640c7edcf819cc6468d",
+      "source_partition": "train",
+      "source_claim_group": "train/evolution_freshwater_fish/metadata_3/group_0",
+      "source_tags": [
+        "regression"
+      ],
+      "source_endpoint_type": "variables",
+      "status": "unmapped",
+      "assessment": "Permitted public query description manually assessed; hypotheses, target values and biological fixtures are excluded. Sibling query variants are grouped explicitly.",
+      "workflow_family": "diversity-speciation-association",
+      "required_stages": [
+        "join diversity and speciation summaries",
+        "retain environmental adjustments",
+        "fit the conditional relationship",
+        "report effect units and uncertainty"
+      ],
+      "scientific_decisions": [
+        "Small numerical coefficients can reflect measurement scale; association does not establish a causal effect of diversity.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "required_formats": [
+        "CSV"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Small numerical coefficients can reflect measurement scale; association does not establish a causal effect of diversity.",
+        "The original hypothesis judge is not an executable numerical contract; author and validate structured outputs on independent real observations."
+      ]
+    },
+    {
+      "task_id": "train/evolution_freshwater_fish/metadata_3/group_0/q1",
+      "source_metadata_url": "https://github.com/allenai/discoverybench/blob/c31fcf011e070f021a5f5b906896d0821f6880e8/discoverybench/real/train/evolution_freshwater_fish/metadata_3.json",
+      "source_metadata_sha256": "7bec14fc170b825bb90b52c7e3d577182db622542f1ec640c7edcf819cc6468d",
+      "source_partition": "train",
+      "source_claim_group": "train/evolution_freshwater_fish/metadata_3/group_0",
+      "source_tags": [
+        "regression"
+      ],
+      "source_endpoint_type": "relationship",
+      "status": "unmapped",
+      "assessment": "Permitted public query description manually assessed; hypotheses, target values and biological fixtures are excluded. Sibling query variants are grouped explicitly.",
+      "workflow_family": "diversity-speciation-association",
+      "required_stages": [
+        "join diversity and speciation summaries",
+        "retain environmental adjustments",
+        "fit the conditional relationship",
+        "report effect units and uncertainty"
+      ],
+      "scientific_decisions": [
+        "Small numerical coefficients can reflect measurement scale; association does not establish a causal effect of diversity.",
+        "Use a neutral question and derive the conclusion from data; a presupposed relationship in a source prompt is not reference evidence."
+      ],
+      "required_formats": [
+        "CSV"
+      ],
+      "required_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Small numerical coefficients can reflect measurement scale; association does not establish a causal effect of diversity.",
+        "The original hypothesis judge is not an executable numerical contract; author and validate structured outputs on independent real observations."
+      ]
+    }
+  ]
+}
