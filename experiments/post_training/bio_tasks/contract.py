@@ -16,6 +16,8 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from tasktrove_verify.grade import Reward, infra_error, invalid_task, scored, write_reward
 
+from experiments.post_training.bio_tasks.solvers.newick import newick, weighted_splits
+
 MAX_ANSWER_BYTES = 2 * 1024 * 1024
 Scalar = int | float | str | None
 
@@ -101,6 +103,42 @@ class FastqContract(BaseModel):
     records: int = Field(ge=0)
     max_bytes: int = Field(gt=0, le=128 * 1024 * 1024)
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class TreeContract(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    reference: str = Field(max_length=128 * 1024)
+    atol: float = Field(ge=0, allow_inf_nan=False)
+    rtol: float = Field(ge=0, allow_inf_nan=False)
+    max_bytes: int = Field(gt=0, le=128 * 1024)
+
+    @model_validator(mode="after")
+    def validate_reference(self) -> "TreeContract":
+        _, edges = weighted_splits(newick(self.reference))
+        if any(not math.isfinite(self.atol + self.rtol * length) for length in edges.values()):
+            raise ValueError("nonfinite tree tolerance")
+        return self
+
+
+def check_tree(path: Path, target: TreeContract) -> dict:
+    """Check all unrooted splits and edge lengths, independent of Newick layout."""
+    with path.open("rb") as handle:
+        raw = handle.read(target.max_bytes + 1)
+    if len(raw) > target.max_bytes:
+        raise ValueError("tree_too_large")
+    tips, edges = weighted_splits(newick(raw.decode("ascii")))
+    reference_tips, reference_edges = weighted_splits(newick(target.reference))
+    if tips != reference_tips:
+        raise ValueError("tree_identity")
+    if edges.keys() != reference_edges.keys():
+        return {"passed": False, "reason": "tree_topology"}
+    failures = [
+        key
+        for key, length in reference_edges.items()
+        if abs(edges[key] - length) > target.atol + target.rtol * abs(length)
+    ]
+    return {"passed": not failures, "tips": len(tips), "edges": len(edges), "changed_edges": failures[:20]}
 
 
 def fastq_digest(path: Path, max_bytes: int) -> tuple[int, str]:
@@ -243,6 +281,7 @@ class Contract(BaseModel):
     fastq: dict[str, FastqContract] = Field(default_factory=dict)
     alignments: dict[str, AlignmentContract] = Field(default_factory=dict)
     tables: dict[str, TableContract] = Field(default_factory=dict)
+    trees: dict[str, TreeContract] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_reference(self) -> "Contract":
@@ -257,7 +296,7 @@ class Contract(BaseModel):
         return [{"id": key, **value} for key, value in self.expected.items()]
 
     def artifacts(self) -> tuple[str, ...]:
-        return (*self.fastq, *self.alignments, *self.tables)
+        return (*self.fastq, *self.alignments, *self.tables, *self.trees)
 
     def instructions(self) -> str:
         lines = [
@@ -303,6 +342,16 @@ class Contract(BaseModel):
                     f"- {name}.{column_name}: {column.kind} ({column.unit}); {column.description}; "
                     f"absolute tolerance {column.atol}, relative tolerance {column.rtol}."
                 )
+        for name, target in self.trees.items():
+            lines.append(
+                f"Also write /app/{name} as one Newick tree with a terminal semicolon. Use each requested "
+                "accession exactly once as a leaf, and finite nonnegative lengths on every edge. "
+                "The complete unrooted topology and every branch length are checked against the specified "
+                f"method (absolute tolerance {target.atol}, relative tolerance {target.rtol}). "
+                "Child order, internal labels, comments and root placement are ignored; a degree-two root's "
+                "two edges are added. Do not include unary nodes or a nonzero root stem. "
+                "This verifies reproduction of the specified analysis, not a true species phylogeny."
+            )
         return "\n".join(lines)
 
 
@@ -394,6 +443,14 @@ def grade_files(reference: Path, answer: Path) -> Reward:
             try:
                 checks[name] = check_table(path, target)
             except (ValueError, csv.Error) as error:
+                return scored(0, reason=str(error), artifact=name)
+        for name, target in contract.trees.items():
+            path = answer.parent / name
+            if path.is_symlink() or not path.is_file():
+                return scored(0, reason="missing_or_nonregular_tree", artifact=name)
+            try:
+                checks[name] = check_tree(path, target)
+            except (ValueError, RecursionError) as error:
                 return scored(0, reason=str(error), artifact=name)
         return scored(float(all(check["passed"] for check in checks.values())), **verdict.detail, artifact_checks=checks)
     except UnicodeDecodeError:

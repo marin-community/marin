@@ -91,6 +91,11 @@ def oracle_archive() -> bytes:
             if path.suffix in {".py", ".R"}
         }
     )
+    return python_archive(files)
+
+
+def python_archive(files: dict[str, bytes]) -> bytes:
+    """Serialize executable Python modules with deterministic ZIP metadata."""
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for name, content in sorted(files.items()):
@@ -98,6 +103,21 @@ def oracle_archive() -> bytes:
             info.compress_type = zipfile.ZIP_DEFLATED
             archive.writestr(info, content)
     return buffer.getvalue()
+
+
+@cache
+def verifier_archive() -> bytes:
+    prefix = "experiments/post_training/bio_tasks/"
+    files = {
+        "__main__.py": b"from experiments.post_training.bio_tasks.contract import main\nmain()\n",
+        "experiments/__init__.py": b"",
+        "experiments/post_training/__init__.py": b"",
+        prefix + "__init__.py": b"",
+        prefix + "solvers/__init__.py": b"",
+        prefix + "solvers/newick.py": (SOURCE_DIR / "solvers/newick.py").read_bytes(),
+        prefix + "contract.py": (SOURCE_DIR / "contract.py").read_bytes(),
+    }
+    return python_archive(files)
 
 
 def oracle_files(recipe: Recipe) -> TaskFiles:
@@ -193,6 +213,22 @@ def validate_instance(
                 artifact_checks[f"changed_table_value:{name}"] = grade_files(reference, answer).reward
                 break
             artifact.write_bytes(original)
+        for name in instance.contract.trees:
+            artifact = root / name
+            original = artifact.read_text()
+            artifact.unlink()
+            artifact_checks[f"missing_artifact:{name}"] = grade_files(reference, answer).reward
+            artifact.write_text(original + original)
+            artifact_checks[f"multiple_trees:{name}"] = grade_files(reference, answer).reward
+            changed = re.sub(
+                r":\s*([-+0-9.eE]+)",
+                lambda match: ":" + str(float(match[1]) + max(1.0, abs(float(match[1])))),
+                original,
+                count=1,
+            )
+            artifact.write_text(changed)
+            artifact_checks[f"changed_branch:{name}"] = grade_files(reference, answer).reward
+            artifact.write_text(original)
         if any(value != 0 for value in artifact_checks.values()):
             raise ValueError(f"{recipe.id}: invalid native artifact passed: {artifact_checks}")
         if previous_outputs:
@@ -267,7 +303,7 @@ def task_files(recipe: Recipe, instance: Instance, task: Identity, base_image: s
         '"pydantic==2.12.5" "tomlkit==0.13.3" '
         f'"tasktrove-verify @ git+https://github.com/marin-community/marin@{tool_ref}'
         '#subdirectory=lib/tasktrove-verify"\n'
-        "COPY test.sh contract.py reference.json /tests/\n"
+        "COPY test.sh verifier.pyz reference.json /tests/\n"
         "RUN chmod 755 /tests/test.sh\n"
         "WORKDIR /app\n"
     )
@@ -276,8 +312,8 @@ def task_files(recipe: Recipe, instance: Instance, task: Identity, base_image: s
         "task.toml": tomlkit.dumps(config).encode(),
         **solver_environment.files,
         "tests/Dockerfile": verifier.encode(),
-        "tests/test.sh": b"#!/bin/sh\nset -eu\nexec /opt/verifier/bin/python -I /tests/contract.py\n",
-        "tests/contract.py": (SOURCE_DIR / "contract.py").read_bytes(),
+        "tests/test.sh": b"#!/bin/sh\nset -eu\nexec /opt/verifier/bin/python -I /tests/verifier.pyz\n",
+        "tests/verifier.pyz": verifier_archive(),
         "tests/reference.json": instance.contract.model_dump_json(indent=2).encode(),
     }
     files.update({f"setup_files/inputs/{name}": text.encode() for name, text in instance.inputs.items()})
@@ -315,6 +351,7 @@ def inspection_page(root: Path, task: Identity, instance: Instance, files: TaskF
             {
                 "fastq": {name: target.model_dump() for name, target in instance.contract.fastq.items()},
                 "alignments": {name: target.model_dump() for name, target in instance.contract.alignments.items()},
+                "trees": {name: target.model_dump() for name, target in instance.contract.trees.items()},
                 "tables": {
                     name: {
                         "columns": {column: spec.model_dump() for column, spec in target.columns.items()},
@@ -330,7 +367,7 @@ def inspection_page(root: Path, task: Identity, instance: Instance, files: TaskF
         "Validation controls": json.dumps(validation, indent=2),
         "Scientific negative controls": json.dumps(instance.mutations, indent=2),
         "Task metadata": files.text("task.toml"),
-        "Verifier": files.text("tests/contract.py"),
+        "Verifier": (SOURCE_DIR / "contract.py").read_text(),
     }
     content = "".join(
         f"<details><summary>{title}</summary><pre>{html.escape(text)}</pre></details>"

@@ -3,59 +3,13 @@
 
 """Small Newick parser and alignment reference calculations."""
 
-import re
 from collections import Counter, defaultdict
-from dataclasses import dataclass, field
 from functools import partial
 from itertools import combinations
 from pathlib import Path
 
 from experiments.post_training.bio_tasks.solvers.formats import fasta, table
-
-
-@dataclass
-class Node:
-    label: str
-    length: float
-    children: list["Node"] = field(default_factory=list)
-
-
-def newick(text: str) -> Node:
-    tokens = re.findall(r"[(),:;]|[^\s(),:;]+", text)
-    index = 0
-
-    def subtree() -> Node:
-        nonlocal index
-        children = []
-        if tokens[index] == "(":
-            index += 1
-            children.append(subtree())
-            while tokens[index] == ",":
-                index += 1
-                children.append(subtree())
-            assert tokens[index] == ")"
-            index += 1
-        label = ""
-        if tokens[index] not in {",", ")", ":", ";"}:
-            label = tokens[index]
-            index += 1
-        length = 0.0
-        if tokens[index] == ":":
-            length = float(tokens[index + 1])
-            index += 2
-        return Node(label, length, children)
-
-    root = subtree()
-    assert tokens[index:] == [";"]
-    return root
-
-
-def leaves(node: Node) -> set[str]:
-    return {node.label} if not node.children else set().union(*(leaves(child) for child in node.children))
-
-
-def clades(node: Node) -> list[Node]:
-    return [node] + [descendant for child in node.children for descendant in clades(child)]
+from experiments.post_training.bio_tasks.solvers.newick import Node, clades, leaves, newick
 
 
 def prune(node: Node, keep: set[str]) -> Node | None:
@@ -66,7 +20,7 @@ def prune(node: Node, keep: set[str]) -> Node | None:
         return None
     if len(children) == 1:
         child = children[0]
-        return Node(child.label, child.length + node.length, child.children)
+        return Node(child.label, (child.length or 0.0) + (node.length or 0.0), child.children)
     return Node(node.label, node.length, children)
 
 
@@ -77,7 +31,7 @@ def solve_phylogeny(inputs: Path, operation: str) -> list[dict]:
         nodes = clades(root)
         if operation == "newick-distances":
             for a, b in combinations(sorted(leaves(root)), 2):
-                distance = sum(node.length for node in nodes if (a in leaves(node)) != (b in leaves(node)))
+                distance = sum((node.length or 0.0) for node in nodes if (a in leaves(node)) != (b in leaves(node)))
                 answer.append({"id": a + ":" + b, "distance": distance})
         elif operation == "newick-monophyly":
             groups = defaultdict(set)
@@ -99,7 +53,9 @@ def solve_phylogeny(inputs: Path, operation: str) -> list[dict]:
             root = prune(root, set((inputs / "keep.txt").read_text().splitlines()))
             assert root is not None
             for node in clades(root):
-                answer.append({"id": ",".join(sorted(leaves(node))), "length": 0.0 if node is root else node.length})
+                answer.append(
+                    {"id": ",".join(sorted(leaves(node))), "length": 0.0 if node is root else (node.length or 0.0)}
+                )
         return answer
     sequences = fasta(inputs / "alignment.fa")
     columns = list(zip(*sequences.values(), strict=True))

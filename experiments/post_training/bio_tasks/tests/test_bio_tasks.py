@@ -453,7 +453,7 @@ def test_corpus_roundtrip_separates_oracles_and_grades_packaged_answers(tmp_path
         command = [
             sys.executable,
             "-I",
-            str(task_dir / "tests" / "contract.py"),
+            str(task_dir / "tests" / "verifier.pyz"),
             "--answer",
             str(answer),
             "--logs",
