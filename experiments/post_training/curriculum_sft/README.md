@@ -25,6 +25,21 @@ generation = generate_curriculum_sft(
 )
 ```
 
-The step needs an Iris client, the GLM relay, and `GLM_BULK_TOKEN` at execution time. Training and
-evaluation are separate consumers of its chat Parquet. This generation recipe has not yet been run;
-the earlier finance pilot used oracle-derived arithmetic conversations.
+The step needs an Iris client, the GLM relay, and `GLM_BULK_TOKEN` at execution time. This
+generation recipe has not yet been run; the earlier finance pilot used oracle-derived arithmetic
+conversations.
+
+`curriculum_grug_sft(...)` in `grug_pipeline.py` connects this artifact to native Grug SFT. It
+renders the Datakit chat Parquet with the Marin template, tokenizes the rendered Parquet through
+Levanter's text cache, and packs complete conversations into training sequences with attention
+blocked across conversation boundaries. Pass an adopted native Grug checkpoint, its matching
+tokenizer, optimizer, resources, and an explicit training budget. The module includes the
+September 20 checkpoint handle and tokenizer path. The native `step-158000` checkpoint metadata
+and an export directory were found under the corrected `-cpfix` GCS run prefix.
+
+The current Grug adapter supports weights-only initialization from a native checkpoint, not an HF
+export. It does not include Will's special-token learning-rate or frozen-router-bias changes, and
+it has not been trained or evaluated with this generated data. Keep the first run in `us-central2`,
+where the native checkpoint resides; copying it to another region is a separate large transfer.
+The synthetic answers remain unverified, so compare a baseline and a matched control before
+attributing any evaluation change to curriculum guidance.

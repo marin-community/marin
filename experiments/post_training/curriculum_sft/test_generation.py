@@ -3,6 +3,8 @@
 
 import json
 
+from marin.datakit.chat_render import render_chat_record
+
 from experiments.post_training.curriculum_sft.generation import GenerateCurriculumSFTConfig, parse_batch
 
 
@@ -57,3 +59,8 @@ def test_parse_batch_keeps_distinct_complete_conversations():
     assert [record["accepted"] for record in task_records] == [True, False, False]
     assert len(chat_documents) == 1
     assert chat_documents[0]["source_id"] == "conversation-00000"
+
+    rendered = render_chat_record(chat_documents[0])["text"]
+    assert task in rendered
+    assert "It sold three apples." in rendered
+    assert rendered.index(task) < rendered.index("It sold three apples.")
