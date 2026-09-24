@@ -413,9 +413,18 @@ def _pipeline_value_and_grad(
 
 
 def make_pipeline_train_step(
-    optimizer, mp_policy, sample_state, sample_batches, *, config: GrpoPipelineConfig, grpo: GrpoConfig, mpmd_mesh
+    optimizer,
+    mp_policy,
+    sample_state,
+    sample_batches: PipelineBatch,
+    *,
+    config: GrpoPipelineConfig,
+    grpo: GrpoConfig,
+    mpmd_mesh,
 ):
     """Compile 1F1B gradients and global clipping; each update consumes its state."""
+    if sample_batches.tokens.shape[0] != config.microbatches:
+        raise ValueError("Pipeline batch count must match configured microbatches")
     api = _require_jaxpp()
     metric_names = (*METRIC_NAMES, *ROUTING_METRIC_NAMES) if config.expert_axis_size > 1 else METRIC_NAMES
     metric_ops = {
