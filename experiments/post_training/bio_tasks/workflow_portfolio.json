@@ -206,8 +206,14 @@
         "complete_artifacts": "Complete gene effects before/after shrinkage; eligible universe and identifier map; GO/KEGG memberships; every ORA/GSEA result and semantic-reduction map; numeric plot data.",
         "deterministic_acceptance": "Native DESeq2 and pinned enrichment methods; independent contrast, overlap, ranking, FDR and universe checks. Freeze ontology release, tie handling, set sizes and undefined-result rules.",
         "required_incorrect_output_checks": "Use significant genes as the enrichment background; reverse rank direction; substitute ORA for GSEA; omit nonsignificant sets.",
-        "unresolved_before_assignment": "Observed replicated counts, pinned ontology snapshots and exact semantic reduction; prediction/reference set comparison is a separate check within the card.",
+        "unresolved_before_assignment": "GSE60450 supports an explicitly adapted developmental count question, not disease context or all 18 endpoints. Freeze semantic-graph/KEGG snapshots and native shrinkage/GSEA contracts. PromptBio b-10-8 needs distinct predicted/reference observations; it remains unsupported by this candidate.",
         "status": "planning-contract-not-executed"
+      },
+      "source_input_review": {
+        "collection_id": "existing-mammary-observed-counts",
+        "review_path": "workflow_designs/source_collections.json",
+        "status": "observed-counts-and-sample-join-verified; method-and-annotation-contracts-pending",
+        "validated_mappings_added": 0
       }
     },
     {
@@ -1646,7 +1652,13 @@
       },
       "workstreams": [
         "rna-seq-contrast-enrichment"
-      ]
+      ],
+      "source_input_review": {
+        "rejected_collection_id": "existing-mammary-observed-counts",
+        "review_path": "workflow_designs/source_collections.json",
+        "status": "needs-another-observed-study-with-documented-replicate-QC-and-sufficient-replication",
+        "validated_mappings_added": 0
+      }
     },
     {
       "proposed_task_id": "bix-design-paired-bacterial-variant-workflow",
@@ -8194,7 +8206,13 @@
       },
       "workstreams": [
         "rna-seq-contrast-enrichment"
-      ]
+      ],
+      "source_input_review": {
+        "collection_id": "existing-mammary-observed-counts",
+        "review_path": "workflow_designs/source_collections.json",
+        "status": "observed-counts-and-sample-join-verified; method-and-annotation-contracts-pending",
+        "validated_mappings_added": 0
+      }
     },
     {
       "proposed_task_id": "portfolio-liu-single-cell-spatial-contamination-correction",
@@ -10585,11 +10603,11 @@
   },
   "source_collection_plan": {
     "path": "workflow_designs/source_collections.json",
-    "sha256": "06e7ff4aba27ca2cb040b11d583a410aafa60caad2524ffb0101df836b62a844",
+    "sha256": "33a9be3c8821d166497fafc3aadb33031f033d48c32649b91ea7219a759e22a9",
     "candidate_collections": 6,
     "new_biological_payloads_downloaded": 1,
     "cleared_for_training": 0,
-    "inspected_payload_kind": "One cell-annotation CSV; zero RNA/ADT/HTO matrices or raw reads."
+    "inspected_payload_kind": "One new cell-annotation CSV; existing vendored mammary counts/GEO metadata cross-checked against two small provider sample sheets. Zero new expression matrices or raw reads."
   },
   "source_endpoint_review_updates": [
     {

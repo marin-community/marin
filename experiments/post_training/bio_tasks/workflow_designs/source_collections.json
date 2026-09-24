@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "reviewed_at": "2026-09-24",
-  "scope": "Observed-data source planning for related scientific questions. One checksum-verified cell-annotation CSV has been inspected; expression, antibody/hash matrices and raw reads were not downloaded. No new task is implemented or candidate cleared for training export.",
+  "scope": "Observed-data source planning for related scientific questions. Inspected one new cell-annotation CSV and existing vendored mammary counts/sample metadata; no new expression matrices or raw reads downloaded. No new task is implemented or candidate cleared for training export.",
   "policy": {
     "reuse_unit": "Share acquisition, identity reconciliation and native environment preparation across compatible questions. Each task still answers one coherent question and retains its own complete private oracle/verifier contract.",
     "realism": "Keep the biological replicate count and observation structure needed by the estimand. Bound cells, loci or genomic regions by declared outcome-independent eligibility, not by selecting observations that force a desired answer.",
     "single_split": "The corpus has one train split. Held-out subjects, cells or observations inside a predictive task are part of its scientific evaluation protocol, with evaluation labels private to the verifier.",
     "no_automatic_coverage": "A source's availability or a question's eligibility does not establish benchmark endpoint equivalence. Preserve benchmark biological-context and method departures explicitly.",
     "lineage_screen": "Check accessions, DOI, project IDs, originating cohorts and known mirrors against all permitted ID-source metadata before authoring. Absence of an identifier match is only a preliminary screen. Uninspected/gated source fixtures prevent a universal nonoverlap claim. Do not deanonymize OOD inputs.",
-    "metadata_only": "Primary landing pages, versioned manifests and one Lawlor cell-annotation CSV were inspected. The CSV provides classification and donor/condition metadata, not expression/protein count values. No matrix, raw read, image or benchmark answer was fetched for this source review."
+    "metadata_only": "Inspected primary landing pages, versioned manifests, one Lawlor cell-annotation CSV, existing vendored GSE60450 counts/GEO metadata and two small independent provider sample sheets. No new expression/protein matrix, raw read, image or benchmark answer was fetched in this source review."
   },
   "collections": [
     {
@@ -613,23 +613,154 @@
       ],
       "primary_sources": [
         "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE60450",
-        "https://zenodo.org/records/4249555"
+        "https://zenodo.org/records/4249555",
+        "https://zenodo.org/api/records/4249555"
       ],
       "existing_evidence": [
         "data_sources.json: sources.GSE60450",
         "solver_diagnostics.json"
       ],
-      "proposed_input_boundary": "Reuse the existing checksum-pinned observed gene counts and sample metadata for compatible count/statistical questions. Preserve the original biological units, population and condition design.",
+      "proposed_input_boundary": "Keep all 27,179 observed Entrez gene rows, exon lengths, twelve count columns and GEO sample metadata as input. Select one population and a declared developmental contrast for a coherent task; retain its six libraries across three stages for estimation. Derive eligibility by the declared count filter and keep excluded genes with reasons. Join sample identities by full supplementary filename, never metadata row order.",
       "scientific_limits": [
-        "Existing native/oracle/Harbor evidence covers the authored RNA task; it does not validate new pathway, semantic-reduction or PyDESeq2 endpoints.",
-        "The existing count package does not cover raw FASTQ alignment or donor-paired single-cell analysis.",
-        "Re-screen lineage against the expanded benchmark inventory before export; prior screening covered a narrower source set."
+        "Wild-type female FVB/N mouse mammary populations across virgin, pregnancy and lactation stages do not establish disease case/control or genetic-perturbation effects. Any such benchmark mapping remains a biological-context adaptation.",
+        "There are two libraries per population and developmental stage. Replicate numbers do not establish donor pairing across stages or basal/luminal populations; do not invent a donor block or treat the stages as repeated measures.",
+        "Inspected metadata provides no documented failed replicate. Removing one sample leaves only one in that stage, so this source is rejected for the proposed evidence-backed replicate-QC exclusion question.",
+        "Bulk sorted populations do not exercise single-cell preprocessing or pseudobulk aggregation. The Liu PyDESeq2 task is an explicit count-model adaptation.",
+        "Existing native/oracle/Harbor evidence covers the authored RNA task only. The R preparation uses betaPrior=FALSE and does not run apeglm, PyDESeq2, GSEA or semantic term reduction.",
+        "The existing mouse GO membership asset is BP-only. The term-label table has no ontology edges; neither supplies a complete semantic graph or a KEGG snapshot.",
+        "Count bytes match the Zenodo record declared CC BY 4.0. Retain the deposit and original study citations. This does not confer redistribution rights on additional ontology/pathway snapshots.",
+        "The Zenodo tutorial FASTQs contain 1,000 reads each and cannot substantiate a full raw-read workflow. The observed gene-count matrix retains the original count totals.",
+        "Expanded benchmark-cohort lineage review remains open. Sample-sheet agreement and a public license do not establish independence from every ID benchmark input."
       ],
-      "planning_status": "existing-observed-input-reuse-candidate; new-endpoints-and-expanded-lineage-review-pending",
+      "planning_status": "counts-and-sample-identities-verified; count-model-input-contract-specified; enrichment-annotations-native-methods-and-lineage-pending",
       "candidate_question_or_card_ids": [
         "count-contrast-enrichment",
-        "portfolio-liu-single-cell-count-model-differential-expression",
-        "bix-design-rna-replicate-sensitivity"
+        "portfolio-liu-single-cell-count-model-differential-expression"
+      ],
+      "input_inspection": {
+        "genes": 27179,
+        "libraries": 12,
+        "count_content_sha256": "128d2411f3169de0cac9963c30152bb5c9a3083ac80fd25651b97cf4b7304691",
+        "zenodo_count_content_md5": "b42f375f02c89f3a0f8f4ef0ed2bd91b",
+        "zenodo_count_bytes_identical": true,
+        "zenodo_license": "cc-by-4.0",
+        "sample_strata": [
+          {
+            "population": "basal",
+            "stage": "18.5 dP",
+            "libraries": 2
+          },
+          {
+            "population": "basal",
+            "stage": "2 dL",
+            "libraries": 2
+          },
+          {
+            "population": "basal",
+            "stage": "virgin",
+            "libraries": 2
+          },
+          {
+            "population": "luminal",
+            "stage": "18.5 dP",
+            "libraries": 2
+          },
+          {
+            "population": "luminal",
+            "stage": "2 dL",
+            "libraries": 2
+          },
+          {
+            "population": "luminal",
+            "stage": "virgin",
+            "libraries": 2
+          }
+        ],
+        "genes_passing_population_sum_ge_10": {
+          "basal": 17361,
+          "luminal": 16659
+        },
+        "library_count_totals": {
+          "MCL1-DG_BC2CTUACXX_ACTTGA_L002_R1": 23227641,
+          "MCL1-DH_BC2CTUACXX_CAGATC_L002_R1": 21777891,
+          "MCL1-DI_BC2CTUACXX_ACAGTG_L002_R1": 24100765,
+          "MCL1-DJ_BC2CTUACXX_CGATGT_L002_R1": 22665371,
+          "MCL1-DK_BC2CTUACXX_TTAGGC_L002_R1": 21529331,
+          "MCL1-DL_BC2CTUACXX_ATCACG_L002_R1": 20015386,
+          "MCL1-LA_BC2CTUACXX_GATCAG_L001_R1": 20392113,
+          "MCL1-LB_BC2CTUACXX_TGACCA_L001_R1": 21708152,
+          "MCL1-LC_BC2CTUACXX_GCCAAT_L001_R1": 22241607,
+          "MCL1-LD_BC2CTUACXX_GGCTAC_L001_R1": 21988240,
+          "MCL1-LE_BC2CTUACXX_TAGCTT_L001_R1": 24723827,
+          "MCL1-LF_BC2CTUACXX_CTTGTA_L001_R1": 24657293
+        },
+        "sample_sheet_join_rule": "Replace only the MCL1. filename prefix with MCL1-; join by full count-column name, never row order. pregnant = 18.5 dP; lactate = 2 dL.",
+        "sample_sheet_files": [
+          {
+            "name": "SampleInfo_Corrected.txt",
+            "bytes": 733,
+            "sha256": "b922958a14c20ec24c12866fad8ffe3d831bc2d6aaa88ec3d9db11bacbee3677",
+            "provider_md5": "md5:3ab5014a662985b04556c9ea41cad404",
+            "joined_samples": 12,
+            "url": "https://zenodo.org/records/4249555/files/SampleInfo_Corrected.txt?download=1"
+          },
+          {
+            "name": "targets2.txt",
+            "bytes": 972,
+            "sha256": "1e28200c2f1f728f29800517649211b0caa1797beda4e563cf2ce8838da4374a",
+            "provider_md5": "md5:69986214680497ba883c55f4c2e4318e",
+            "joined_samples": 12,
+            "url": "https://zenodo.org/records/4249555/files/targets2.txt?download=1"
+          }
+        ],
+        "new_native_fits": 0,
+        "audit_sha256": "1421e44eb2ac09c7a76e37d3b6f9ccb02045afc2e5a1de20f548e4b5e8d11080",
+        "evidence": [
+          "real_data.py: source_text and mammary_samples",
+          "sources/prepare_deseq.R",
+          "data_sources.json: sources.GSE60450.assets"
+        ]
+      },
+      "rejected_question_or_card_ids": [
+        {
+          "id": "bix-design-rna-replicate-sensitivity",
+          "reason": "No documented failed replicate in inspected metadata; two libraries per stage do not support removing a replicate while retaining replicated groups."
+        }
+      ],
+      "question_input_reviews": [
+        {
+          "question_id": "count-contrast-enrichment",
+          "proposed_question": "Which luminal expression changes between virgin and lactating mammary tissue are supported by the observed counts, and which biological processes agree between selected-gene and ranked-gene analyses?",
+          "design": "Use all six luminal libraries with ~stage, virgin as reference and the 2 dL versus virgin coefficient. Pregnancy libraries support model estimation. Keep raw inputs and use population-specific rowSum >= 10; the current data yields 16,659 eligible genes. Freeze filtering, missing estimates, outlier handling and independent filtering in the task contract.",
+          "native_contract": "Run pinned DESeq2 with an explicit coefficient for apeglm shrinkage. Report both unshrunken Wald statistics and shrunken effects without silently changing p-values. Run the specified clusterProfiler enrichment/semantic methods and a pinned GSEA method against frozen offline annotations; existing unshrunken references cannot stand in for these runs.",
+          "set_contract": "ORA background is the eligible, tested and identifier-mapped population, explicitly intersected with the declared annotation domain. Preserve excluded/unmapped IDs. GSEA uses every eligible finite signed Wald statistic, with deterministic tie ordering, duplicate-ID resolution, set-size bounds and a frozen random seed when applicable. Test all eligible sets and state each multiplicity family.",
+          "complete_artifacts": "Counts/metadata join and filter decisions; design and coefficient; all gene statistics and shrinkage results; identifier map; complete term memberships, universe, ORA and GSEA outputs including nonsignificant/undefined rows; semantic representatives with provenance; numeric plot tables and viewable plots.",
+          "source_endpoint_limits": "Bix disease context is not reproduced. GO BP cannot replace another ontology or KEGG. PromptBio b-10-8 needs independently defined predicted/reference gene sets and is unsupported by these counts alone. Raw-p and adjusted-p volcano endpoints require distinct axes/masks; a single substituted plot cannot satisfy both.",
+          "deterministic_rejection_cases": [
+            "shuffle sample labels without changing counts",
+            "reverse the contrast or ranking sign",
+            "use significant genes as the ORA background",
+            "substitute ORA output for ranked GSEA",
+            "drop nonsignificant genes or terms",
+            "change a semantic representative",
+            "substitute raw p for adjusted p in a required plot"
+          ],
+          "unresolved_inputs": "A compatible frozen ontology graph and gene mapping for semantic similarity; a licensed/versioned KEGG snapshot for KEGG-specific targets; separate observed predicted/reference inputs for the Jaccard endpoint; expanded source-cohort lineage.",
+          "runtime_requirement": "Measure the complete offline Harbor oracle and verifier within the 30-minute target. No inference from the existing unshrunken fit runtime.",
+          "status": "candidate-input-contract; full-group-coverage-unsupported",
+          "validated_mappings_added": 0
+        },
+        {
+          "question_id": "portfolio-liu-single-cell-count-model-differential-expression",
+          "proposed_question": "Which luminal developmental-stage effects remain supported under an explicit native PyDESeq2 count model and fold-change shrinkage?",
+          "input_contract": "Use the same six luminal libraries, documented three-stage design, virgin reference and observed count filter as the count-model proposal. Keep counts as integers and preserve the Entrez identifiers; do not relabel bulk libraries as cells.",
+          "native_contract": "Run pinned PyDESeq2, including its shrinkage implementation. Retain count/design axes, size factors, dispersions, complete Wald results and shrunken effects. Freeze its fitting, outlier and filtering settings explicitly. R DESeq2 is a diagnostic cross-check with method-specific numerical limits, not the acceptance oracle.",
+          "acceptance_contract": "A private PyDESeq2 script recomputes from public inputs. Independently check sample/contrast identities, count filtering, complete result universes and BH adjustment; reject shuffled metadata, reversed coefficients and omitted results. Fix tolerances from native repeatability before export.",
+          "source_endpoint_departure": "The benchmark uses synthetic examples and requests a count matrix. This proposal uses observed bulk counts and asks for full fitted statistics; preserve that adaptation in coverage records.",
+          "unresolved_before_assignment": "Pinned PyDESeq2 environment and measured runtime; complete numerical/output schema; expanded source-cohort lineage review.",
+          "status": "candidate-input-contract; native-run-pending",
+          "validated_mappings_added": 0
+        }
       ]
     },
     {

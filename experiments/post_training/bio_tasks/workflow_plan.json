@@ -13543,7 +13543,7 @@
   "authoring_phase": "question-portfolio-planning",
   "portfolio_index": {
     "path": "workflow_portfolio.json",
-    "sha256": "e50f80db9dab7840ac95b73412a252b422b7ce210a5294b12154987dd874e10b",
+    "sha256": "97beb7507013af4546860f3fc325c699373890794d44395c0e5fbe8694ae76f7",
     "counts": {
       "source_releases": 32,
       "inventory_records": 5133,

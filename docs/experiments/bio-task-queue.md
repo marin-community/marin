@@ -348,7 +348,7 @@ matrices and raw reads remain uninspected. No source gained training clearance.
 | [GSE252331](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE252331) | Alternative RNA/ADT prediction and clinical-state comparisons | Reconcile the deposited subset with the study description; myeloid enrichment complicates cell-abundance interpretation. |
 | [GSE271413](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE271413) | Receptor QC, sequence annotation and developmental-state analysis | Verify donor/visit identities and sequence availability. It does not establish cancer exhaustion or sorting-gate endpoints. |
 | [Fang 3D MERFISH](https://datadryad.org/dataset/doi:10.5061/dryad.w0vt4b922) | Native three-dimensional neighborhoods and within-volume expression analysis | Targeted panels and limited biological replication; separate regions cannot be treated as interchangeable animal replicates. |
-| Existing GSE60450 counts | Count contrasts, enrichment and native PyDESeq2 comparison | New endpoint and expanded benchmark-lineage checks remain; the count package does not exercise raw-read processing. |
+| Existing GSE60450 counts | Developmental count contrasts, enrichment and native PyDESeq2 | Verified 27,179 genes and twelve sample identities. Two libraries per population/stage; no documented failed replicate for a QC-exclusion task. Enrichment inputs and new native methods remain unresolved. |
 | Existing matched ortholog alignments/trees | Per-locus evolutionary signal | Mirror/deposit identity and full endpoint validation remain; precomputed loci do not exercise ortholog discovery. |
 
 Lawlor's 282,528 annotation rows include 16,382 labelled cells across all 30
@@ -368,6 +368,18 @@ A preliminary accession/DOI search found no explicit matches for the four new
 candidates in inspected benchmark metadata. This does not prove cohort independence
 from uninspected or gated source inputs. The source plan retains that uncertainty,
 exact manifest requirements, rights gaps and the biological limitations above.
+
+GSE60450's vendored count bytes match the [licensed public deposit](https://zenodo.org/records/4249555).
+Both provider sample sheets agree with GEO metadata after an explicit filename-prefix
+conversion. The source plan proposes a luminal developmental contrast using all six
+luminal libraries; 16,659 genes pass the declared population count filter. Disease
+context and single-cell processing remain outside this input's scope.
+
+The count/enrichment and PyDESeq2 questions now have input and acceptance contracts.
+Existing DESeq2 references do not validate shrinkage, GSEA or semantic reduction.
+The available GO memberships lack ontology edges, and no KEGG snapshot is supplied.
+The predicted/reference gene-set endpoint needs separate inputs. This review adds
+no validated benchmark coverage and rejects this source for replicate-QC exclusion.
 
 Planning priority considers exact endpoint detail, cross-benchmark reuse and
 feasibility. Predicted validated gains remain unset. When those contracts are fixed,
