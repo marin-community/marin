@@ -220,7 +220,7 @@ retains exact model/proteome hashes and the serial package build. The reference
 and validation each took under one second on a reserved TRC CPU. Only the supplied
 profiles are searched; this is not complete functional annotation. Both phases
 passed before the parent job failed during unrelated single-cell packaging due
-to a missing SciPy import dependency. That failure is preserved. Packaged task and
+to a missing SciPy import dependency. That failure is preserved. Full-corpus package checks now pass;
 Harbor checks remain pending.
 
 The full observed GSE81682 QC workflow supplies 1,920 cells and 46,170 features.

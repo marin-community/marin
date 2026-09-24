@@ -1202,6 +1202,36 @@
         "checks_file": "native_validation_runs/a619ee74f5b8.json",
         "checks_sha256": "a619ee74f5b83667286a885d8eda388904c0b94f6dea139fed16531d8dc65ab5",
         "source_revision": "22d240c8a1be1242d79f570a47c8759ca99e045d"
+      },
+      "packaged_validation": {
+        "job_id": "/exedev/bio-corpus-fullstudy-20260924-080542",
+        "source_revision": "5c5b253bde5eeec495fb6d61e63b85249572c6b2",
+        "archive_uri": "gs://marin-us-central2/bio-tasks/authoring/sha256/542ff576025ae3004a1a62f8f85816e80e31d2772e2e77d0b72cbb627a514be6/outputs.tar.zst",
+        "archive_sha256": "542ff576025ae3004a1a62f8f85816e80e31d2772e2e77d0b72cbb627a514be6",
+        "manifest_sha256": "527aeda9d5c2792f6ed3d53a393973cb190f21cbc7462803c632132dfcfb61b2",
+        "task_id": "real-proteome-domain-search-v1-20260923-00000",
+        "input_sha256": "9ba6018de999407317c7b8f17cde440b3b965a371f3e15a87ce9c65143aa7780",
+        "target_sha256": "e2e1d59ce16e0e7e28709a11c459cce0ca941cc18320a3ab7af25acfd74ad505",
+        "task_sha256": "7c08c2f49c8bd5209ba88b7cc73f952423e6ba302b7b8facfdc964af470bb1c9",
+        "validation": {
+          "missing_artifact:domains.tsv": 0.0,
+          "missing_table_row:domains.tsv": 0.0,
+          "duplicate_table_row:domains.tsv": 0.0,
+          "changed_table_value:domains.tsv": 0.0,
+          "missing_artifact:proteins.tsv": 0.0,
+          "missing_table_row:proteins.tsv": 0.0,
+          "duplicate_table_row:proteins.tsv": 0.0,
+          "changed_table_value:proteins.tsv": 0.0,
+          "oracle": 1.0,
+          "row_permutation": 1.0,
+          "empty": 0.0,
+          "missing_id": 0.0,
+          "duplicate_id": 0.0,
+          "searched_only_matches": 0.0,
+          "malformed": 0.0
+        },
+        "status": "passed-full-corpus-package-checks",
+        "limits": "Host package validation only. Harbor execution, scientific review and benchmark-lineage screening remain separate."
       }
     },
     "Pfam:selected-models-20260924": {
@@ -1280,7 +1310,37 @@
       },
       "lineage": "Pfam:PF00042.29+PF00109.33+PF00115.26",
       "citation": "Pfam/InterPro; unchanged individual models PF00042.29, PF00109.33 and PF00115.26.",
-      "data_origin": "real"
+      "data_origin": "real",
+      "packaged_validation": {
+        "job_id": "/exedev/bio-corpus-fullstudy-20260924-080542",
+        "source_revision": "5c5b253bde5eeec495fb6d61e63b85249572c6b2",
+        "archive_uri": "gs://marin-us-central2/bio-tasks/authoring/sha256/542ff576025ae3004a1a62f8f85816e80e31d2772e2e77d0b72cbb627a514be6/outputs.tar.zst",
+        "archive_sha256": "542ff576025ae3004a1a62f8f85816e80e31d2772e2e77d0b72cbb627a514be6",
+        "manifest_sha256": "527aeda9d5c2792f6ed3d53a393973cb190f21cbc7462803c632132dfcfb61b2",
+        "task_id": "real-proteome-domain-search-v1-20260923-00000",
+        "input_sha256": "9ba6018de999407317c7b8f17cde440b3b965a371f3e15a87ce9c65143aa7780",
+        "target_sha256": "e2e1d59ce16e0e7e28709a11c459cce0ca941cc18320a3ab7af25acfd74ad505",
+        "task_sha256": "7c08c2f49c8bd5209ba88b7cc73f952423e6ba302b7b8facfdc964af470bb1c9",
+        "validation": {
+          "missing_artifact:domains.tsv": 0.0,
+          "missing_table_row:domains.tsv": 0.0,
+          "duplicate_table_row:domains.tsv": 0.0,
+          "changed_table_value:domains.tsv": 0.0,
+          "missing_artifact:proteins.tsv": 0.0,
+          "missing_table_row:proteins.tsv": 0.0,
+          "duplicate_table_row:proteins.tsv": 0.0,
+          "changed_table_value:proteins.tsv": 0.0,
+          "oracle": 1.0,
+          "row_permutation": 1.0,
+          "empty": 0.0,
+          "missing_id": 0.0,
+          "duplicate_id": 0.0,
+          "searched_only_matches": 0.0,
+          "malformed": 0.0
+        },
+        "status": "passed-full-corpus-package-checks",
+        "limits": "Host package validation only. Harbor execution, scientific review and benchmark-lineage screening remain separate."
+      }
     }
   },
   "excluded_candidate_lineages": [

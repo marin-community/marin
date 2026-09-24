@@ -35,6 +35,14 @@ only when its dataset, study design, modality or scientific decision contributes
 meaningful coverage. Deterministic generators can still produce extra validation
 cases without adding them to training. The manifest marks
 `corpus_stage=authoring-candidates-and-controls` and `training_ready=false`.
+
+The full 142-task snapshot at `5c5b253bde` passed 284 positive checks and 796 negative
+controls in 28.5 minutes on one reserved TRC CPU, with 1.13 GiB peak RSS. Every
+input file was hash-checked after retrieval; the archive is preserved in regional
+GCS beyond Iris retention. The inspection snapshot retains 1,693 ID records;
+later benchmark inventories and the HMMER status-label correction have separate
+revisions. These host checks do not replace Harbor or scientific validation.
+
 The final training release targets real biological data for every task. Synthetic
 controls stay outside that release and remain available for verifier development.
 Every released task requires a private executable oracle that reads only public
@@ -92,7 +100,7 @@ reported domain sequence, alignment/envelope boundary, score and E-value, and
 all protein coverage rows including zero-hit proteins. Overlapping aligned
 positions count once. Biopython reference measurements and the independent
 parser pass; changed sequences and false no-hit coverage fail. Native evidence
-is recorded, while packaged and Harbor checks remain pending. Three profiles
+is recorded. Full-corpus package checks pass; Harbor checks remain pending. Three profiles
 do not establish complete functional annotation.
 
 The full GSE81682 candidate has 1,920 cells, 46,078 endogenous features and 92 ERCC

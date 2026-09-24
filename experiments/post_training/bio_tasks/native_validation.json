@@ -1534,6 +1534,98 @@
         }
       },
       "limits": "Harbor offline container execution and independent scientific review remain pending. HMMER validation also repeated successfully in this job; the earlier native record preserves the first passed reference."
+    },
+    {
+      "job_id": "/exedev/bio-corpus-fullstudy-20260924-080542",
+      "source_revision": "5c5b253bde5eeec495fb6d61e63b85249572c6b2",
+      "scope": "Full authoring corpus: 142 recipes, one train instance per recipe, 27 real candidates and 115 synthetic correctness controls. Not a training release.",
+      "archive": {
+        "archive_uri": "gs://marin-us-central2/bio-tasks/authoring/sha256/542ff576025ae3004a1a62f8f85816e80e31d2772e2e77d0b72cbb627a514be6/outputs.tar.zst",
+        "size_bytes": 243421549,
+        "sha256": "542ff576025ae3004a1a62f8f85816e80e31d2772e2e77d0b72cbb627a514be6",
+        "md5": "754BhcTp1fBaTtONyMjGEw==",
+        "generation": "1790239119562133",
+        "verification": "Provider size and MD5 equal the local checksum-verified archive.",
+        "source_temporary_uri": "gs://marin-us-central2/tmp/ttl=7d/iris/task-outputs/exedev/bio-corpus-fullstudy-20260924-080542/0/1a1265e2d1ebf396/outputs.tar.zst"
+      },
+      "result": {
+        "status": "passed",
+        "source_revision": "5c5b253bde5eeec495fb6d61e63b85249572c6b2",
+        "model_calls": 0,
+        "task_count": 142,
+        "data_origins": {
+          "simulated": 115,
+          "real": 27
+        },
+        "manifest_sha256": "527aeda9d5c2792f6ed3d53a393973cb190f21cbc7462803c632132dfcfb61b2"
+      },
+      "build_execution": {
+        "argv": [
+          "/app/bio-fullstudy-cp5sbl5j/python/bin/python",
+          "/app/phase.py",
+          "/iris/outputs/corpus-resource.json",
+          "experiments.post_training.bio_tasks.build",
+          "--output",
+          "/iris/outputs/corpus",
+          "--source-cache",
+          "/app/bio-fullstudy-cp5sbl5j/source-cache",
+          "--tool-ref",
+          "5c5b253bde5eeec495fb6d61e63b85249572c6b2",
+          "--base-image",
+          "python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c",
+          "--seed",
+          "20260923",
+          "--instances-per-recipe",
+          "1"
+        ],
+        "exit_code": 0,
+        "seconds": 1712.2924469410063
+      },
+      "resources": {
+        "module": "experiments.post_training.bio_tasks.build",
+        "status": "passed",
+        "seconds": 1712.1091022829933,
+        "peak_rss_kib": 1183036,
+        "finished_at": "2026-09-24T08:35:47.520577+00:00"
+      },
+      "positive_checks": 284,
+      "negative_checks": 796,
+      "input_hashes_reverified_for_tasks": 142,
+      "blas_profile": {
+        "requested_core": "HASWELL",
+        "core": "Haswell",
+        "configuration": "OpenBLAS 0.3.34 DYNAMIC_ARCH NO_AFFINITY Haswell MAX_THREADS=128",
+        "cpu_model": "AMD EPYC 7B12"
+      },
+      "benchmark_distribution_counts": {
+        "ID": 1693,
+        "OOD": 90
+      },
+      "benchmark_coverage_counts": {
+        "component-only": 46,
+        "unmapped": 1646,
+        "restricted/excluded": 91
+      },
+      "instances_per_recipe": 1,
+      "controller_placement": {
+        "job_id": "/exedev/bio-corpus-fullstudy-20260924-080542",
+        "state": "succeeded",
+        "worker_id": "marin-tpu-v4-reserved-256-us-central2-b-20260922-2317-8259d330-worker-28",
+        "execution_cluster_id": "local",
+        "backend_id": "default",
+        "checked_at": "2026-09-24T08:37:07.591209+00:00",
+        "worker_metadata": [
+          {
+            "worker_id": "marin-tpu-v4-reserved-256-us-central2-b-20260922-2317-8259d330-worker-28",
+            "scale_group": "tpu_v4-reserved_256-us-central2-b",
+            "backend_id": "default",
+            "tpu_name": "t1v-n-9a98788d",
+            "gce_zone": "",
+            "gce_instance_name": "t1v-n-9a98788d-w-28"
+          }
+        ]
+      },
+      "snapshot_limit": "Frozen source has 1,693 ID records and predates the HMMER status-label correction. Later inventories and native-status reporting do not change these validated task bytes. Harbor checks are separate."
     }
   ],
   "preparation_runs": [
