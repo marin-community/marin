@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T17:26:31.651957+00:00",
+  "updated_at": "2026-09-24T17:39:13.623789+00:00",
   "basis_revision": "952929c306",
   "scope": "Agentic provisional-ID benchmarks only; preserve all existing OOD exclusions. Plan the broad task set before further recipe implementation.",
   "authoring_unit": "One coherent observed-data task per recipe by default. Proposed questions are separate task designs, not repeated instances. They may be split or merged after endpoint and runtime checks.",
@@ -13543,7 +13543,7 @@
   "authoring_phase": "question-portfolio-planning",
   "portfolio_index": {
     "path": "workflow_portfolio.json",
-    "sha256": "ed8699b86b61048ae0360b2221599a2ff3e26366ee1bd78da0d0cf6e67eaeb27",
+    "sha256": "954ad17adc2c76dc25c6d4f933e1e6830aaffafcc772fb86b69c03bf2c928350",
     "counts": {
       "source_releases": 32,
       "inventory_records": 5133,

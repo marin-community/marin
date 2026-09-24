@@ -309,16 +309,30 @@ complete all those endpoints.
 The [shared input-source plan](../../experiments/post_training/bio_tasks/workflow_designs/source_collections.json)
 records six candidates and the questions each might support. Four new sources were
 reviewed through primary metadata; two reuse existing observed-data assessments.
-No new biological payload was downloaded, and no source gained training clearance.
+The Lawlor cell-annotation CSV was downloaded and its checksum verified; expression
+matrices and raw reads remain uninspected. No source gained training clearance.
 
 | Input collection | Potential shared work | Scientific boundary |
 |---|---|---|
-| [Lawlor paired PBMC CITE-seq](https://explore.data.humancellatlas.org/projects/efea6426-510a-4b60-9a19-277e52bfa815) | Paired-condition RNA analysis, RNA/protein prediction, cell characterization | Ten donors; exact layers and per-condition sample coverage still need verification. Healthy stimulation does not supply disease, age or genetic-perturbation outcomes. |
+| [Lawlor paired PBMC CITE-seq](https://explore.data.humancellatlas.org/projects/efea6426-510a-4b60-9a19-277e52bfa815) | Paired-condition RNA analysis, RNA/protein prediction, cell characterization | Annotation metadata confirms ten donors in all three conditions. Matrix layers and matched cell axes remain unverified; healthy stimulation does not supply disease, age or genetic-perturbation outcomes. |
 | [GSE252331](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE252331) | Alternative RNA/ADT prediction and clinical-state comparisons | Reconcile the deposited subset with the study description; myeloid enrichment complicates cell-abundance interpretation. |
 | [GSE271413](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE271413) | Receptor QC, sequence annotation and developmental-state analysis | Verify donor/visit identities and sequence availability. It does not establish cancer exhaustion or sorting-gate endpoints. |
 | [Fang 3D MERFISH](https://datadryad.org/dataset/doi:10.5061/dryad.w0vt4b922) | Native three-dimensional neighborhoods and within-volume expression analysis | Targeted panels and limited biological replication; separate regions cannot be treated as interchangeable animal replicates. |
 | Existing GSE60450 counts | Count contrasts, enrichment and native PyDESeq2 comparison | New endpoint and expanded benchmark-lineage checks remain; the count package does not exercise raw-read processing. |
 | Existing matched ortholog alignments/trees | Per-locus evolutionary signal | Mirror/deposit identity and full endpoint validation remain; precomputed loci do not exercise ortholog discovery. |
+
+Lawlor's 282,528 annotation rows include 16,382 labelled cells across all 30
+donor-condition pairs. Four T-cell populations meet a proposed minimum of 20 cells
+in every pair; four monocyte strata are empty and cannot become zero-expression
+pseudobulk samples. Donors are the biological replicates, and the conditions are
+separate ex vivo samples, not repeated measurements of the same cells.
+
+The final labels and selection used protein evidence. RNA-to-protein prediction
+therefore has a separate candidate pool: 53,707 condition/genotype singlets selected
+without a cell-type-label filter. Upstream selection dependencies still need review.
+That count differs from the paper's intermediate filtering count, so reproducing
+the original pipeline remains unresolved. The source plan pins five deposited files
+and specifies input boundaries for five question groups; it adds no validated mapping.
 
 A preliminary accession/DOI search found no explicit matches for the four new
 candidates in inspected benchmark metadata. This does not prove cohort independence

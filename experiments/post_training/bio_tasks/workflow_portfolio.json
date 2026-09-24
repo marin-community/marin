@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T17:26:31.651957+00:00",
+  "updated_at": "2026-09-24T17:39:13.623789+00:00",
   "scope": "Full question-proposal portfolio for the 32 currently inventoried provisional-ID agentic releases. This planning index resolves every question card and records conditional consolidation; it creates no training task or validated coverage. Nine source leads without inventories remain outside the enumerated denominator.",
   "counts": {
     "source_releases": 32,
@@ -236,6 +236,12 @@
         "required_incorrect_output_checks": "Read normalized values as raw counts; change mitochondrial denominator; omit excluded cells; relabel clusters without preserving membership.",
         "unresolved_before_assignment": "Count layers, mitochondrial annotation, independent reference and tissue with requested lineage; freeze feature, graph and stochastic method settings.",
         "status": "planning-contract-not-executed"
+      },
+      "source_input_review": {
+        "collection_id": "lawlor-paired-pbmc-cite-seq",
+        "review_path": "workflow_designs/source_collections.json",
+        "status": "annotation-structure-reviewed; matrix-layers-and-native-runtime-pending",
+        "validated_mappings_added": 0
       }
     },
     {
@@ -262,6 +268,12 @@
         "required_incorrect_output_checks": "Permute donor pairing; fit cells as replicates; omit zero-count genes; reverse the treatment contrast.",
         "unresolved_before_assignment": "Independent actually paired cohort, cell-type eligibility, feature filter, design, contrast and shrinkage settings.",
         "status": "planning-contract-not-executed"
+      },
+      "source_input_review": {
+        "collection_id": "lawlor-paired-pbmc-cite-seq",
+        "review_path": "workflow_designs/source_collections.json",
+        "status": "annotation-structure-reviewed; matrix-layers-and-native-runtime-pending",
+        "validated_mappings_added": 0
       }
     },
     {
@@ -292,6 +304,12 @@
         "required_incorrect_output_checks": "Leak query labels into fitting; omit unknown populations; majority-vote across unrelated sample groups; drop difficult cells.",
         "unresolved_before_assignment": "Independent reference and query annotations; source-specific unknown-label policy; BioXArena full prompts are still unavailable.",
         "status": "planning-contract-not-executed"
+      },
+      "source_input_review": {
+        "collection_id": "lawlor-paired-pbmc-cite-seq",
+        "review_path": "workflow_designs/source_collections.json",
+        "status": "annotation-structure-reviewed; matrix-layers-and-native-runtime-pending",
+        "validated_mappings_added": 0
       }
     },
     {
@@ -321,6 +339,12 @@
         "required_incorrect_output_checks": "Expose query ADT to fitting; permute antibody IDs; output constants; omit proteins with poor predictions.",
         "unresolved_before_assignment": "Paired donor data and background controls, scale-specific evaluation, frozen baseline threshold and bounded training time; BioXArena schemas pending.",
         "status": "planning-contract-not-executed"
+      },
+      "source_input_review": {
+        "collection_id": "lawlor-paired-pbmc-cite-seq",
+        "review_path": "workflow_designs/source_collections.json",
+        "status": "annotation-structure-reviewed; matrix-layers-and-native-runtime-pending",
+        "validated_mappings_added": 0
       }
     },
     {
@@ -8230,7 +8254,13 @@
       },
       "workstreams": [
         "single-cell-annotation"
-      ]
+      ],
+      "source_input_review": {
+        "collection_id": "lawlor-paired-pbmc-cite-seq",
+        "review_path": "workflow_designs/source_collections.json",
+        "status": "annotation-structure-reviewed; matrix-layers-and-native-runtime-pending",
+        "validated_mappings_added": 0
+      }
     },
     {
       "proposed_task_id": "portfolio-liu-single-cell-reference-to-spatial-label-transfer",
@@ -10555,10 +10585,11 @@
   },
   "source_collection_plan": {
     "path": "workflow_designs/source_collections.json",
-    "sha256": "7b3c225c5d086f66e2814060bc2e8d599108de075f000b3acd6e72f5b8cb5051",
+    "sha256": "06e7ff4aba27ca2cb040b11d583a410aafa60caad2524ffb0101df836b62a844",
     "candidate_collections": 6,
-    "new_biological_payloads_downloaded": 0,
-    "cleared_for_training": 0
+    "new_biological_payloads_downloaded": 1,
+    "cleared_for_training": 0,
+    "inspected_payload_kind": "One cell-annotation CSV; zero RNA/ADT/HTO matrices or raw reads."
   },
   "source_endpoint_review_updates": [
     {

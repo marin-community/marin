@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "reviewed_at": "2026-09-24",
-  "scope": "Observed-data source planning for several related scientific questions. These are metadata-reviewed candidates; no new biological payload was downloaded, no task was implemented, and no candidate is cleared for training export by this file.",
+  "scope": "Observed-data source planning for related scientific questions. One checksum-verified cell-annotation CSV has been inspected; expression, antibody/hash matrices and raw reads were not downloaded. No new task is implemented or candidate cleared for training export.",
   "policy": {
     "reuse_unit": "Share acquisition, identity reconciliation and native environment preparation across compatible questions. Each task still answers one coherent question and retains its own complete private oracle/verifier contract.",
     "realism": "Keep the biological replicate count and observation structure needed by the estimand. Bound cells, loci or genomic regions by declared outcome-independent eligibility, not by selecting observations that force a desired answer.",
     "single_split": "The corpus has one train split. Held-out subjects, cells or observations inside a predictive task are part of its scientific evaluation protocol, with evaluation labels private to the verifier.",
     "no_automatic_coverage": "A source's availability or a question's eligibility does not establish benchmark endpoint equivalence. Preserve benchmark biological-context and method departures explicitly.",
     "lineage_screen": "Check accessions, DOI, project IDs, originating cohorts and known mirrors against all permitted ID-source metadata before authoring. Absence of an identifier match is only a preliminary screen. Uninspected/gated source fixtures prevent a universal nonoverlap claim. Do not deanonymize OOD inputs.",
-    "metadata_only": "Primary landing pages and existing versioned manifests were inspected. Raw images, sequence reads, matrices and expected benchmark outputs were not fetched for this planning review."
+    "metadata_only": "Primary landing pages, versioned manifests and one Lawlor cell-annotation CSV were inspected. The CSV provides classification and donor/condition metadata, not expression/protein count values. No matrix, raw read, image or benchmark answer was fetched for this source review."
   },
   "collections": [
     {
@@ -16,15 +16,21 @@
       "accessions": [
         "HCA:efea6426-510a-4b60-9a19-277e52bfa815",
         "ERP124005",
-        "S-SUBS15"
+        "S-SUBS15",
+        "PRJEB40448",
+        "ERZ1631464",
+        "PRJEB40376"
       ],
       "primary_sources": [
         "https://explore.data.humancellatlas.org/projects/efea6426-510a-4b60-9a19-277e52bfa815",
-        "https://doi.org/10.3389/fimmu.2021.636720"
+        "https://doi.org/10.3389/fimmu.2021.636720",
+        "https://www.ebi.ac.uk/biostudies/api/v1/studies/S-SUBS15",
+        "https://data.humancellatlas.org/apis/api-documentation/data-browser-api",
+        "https://www.frontiersin.org/journals/immunology/articles/10.3389/fimmu.2021.636720/full"
       ],
-      "metadata_evidence": "HCA describes ten healthy adult donors, untreated and two observed immune-activation conditions, paired RNA/protein measurements, 39 antibody targets and an estimated 250,000 cells. The portal lists three Rds, one CSV, one XLSX and 60 compressed FASTQ files; payload schemas were not inspected. HCA explicitly lists CC BY 4.0 for downloaded/exported data.",
-      "proposed_input_boundary": "Processed observed RNA counts and measured ADT counts with source cell, donor, condition and demultiplexing identities. Preserve source R objects for provenance; any H5AD/MuData conversion must document all layers and metadata without altering observations.",
-      "proposed_sampling": "Retain all ten biological donors if sample-level condition coverage is confirmed. A declared donor/condition-stratified cell subset can bound computation; use no expression-effect or prediction-performance criterion to select cells.",
+      "metadata_evidence": "Pinned HCA dcp60 metadata lists RNA, ADT and HTO RDS matrices, one cell-annotation CSV and an ingest workbook. The downloaded CSV hash matches the provider: 282,528 unique cell IDs, ten donor labels and ten sequencing runs. It includes IgM_IgG in addition to the paper\u2019s three conditions. Exactly 16,382 rows have a non-NA cell-type label, all are HTO condition singlets and Demuxlet SNG, and all ten donors have cells in each of Baseline, CD3_CD28 and LPS. Matrix axes and count-layer semantics remain uninspected.",
+      "proposed_input_boundary": "Keep native RDS files and the complete source annotation CSV as provenance. Require exact cell-ID/feature joins and verify raw integer count layers before deriving sparse H5AD/MuData task inputs. Source RNA, ADT and HTO objects may contain different cell sets; do not infer their axes from filenames.",
+      "proposed_sampling": "For label-based characterization and paired pseudobulk, first evaluate the complete 16,382 labelled cells across all ten donors and three declared conditions. For protein prediction, separately evaluate the 53,707 HTO/Demuxlet singlets without a protein-derived label filter. Preserve all eligible biological donors; no further downsampling is justified by the portal estimate alone.",
       "exact_manifest_fields_needed": [
         "cell_id",
         "donor_id",
@@ -40,16 +46,456 @@
         "Healthy immune stimulation does not establish disease, tissue-residence, age or genotype effects.",
         "Condition response is observed; it does not provide labels for an unseen genetic perturbation and does not cover a CRISPR generalization endpoint.",
         "Cross-donor protein imputation requires private held-out measured ADT values, not an imputed reference used as truth.",
-        "Source cell labels derived from RNA do not provide an independent gold standard for all annotation claims. Freeze label evidence and report circularity; use protein evidence only when independent of the measured target."
+        "Protein-informed source cell labels are attributed reference annotations, not an independent gold standard. Freeze label evidence and report circularity; use protein evidence only when independent of the measured target.",
+        "Pairing is at donor level across separately measured condition samples; the same cell is not observed before and after treatment. RNA and ADT modalities are paired within a measured cell.",
+        "The three conditions are a matched ex vivo comparison, not a longitudinal time series. A condition called Baseline is not proof of an earlier collection time.",
+        "Non-NA donor fields also occur on DBL and AMB rows; donor presence alone cannot define a valid singlet. Run identifiers describe technical partitions, not ten additional biological replicates.",
+        "The labelled cohort was selected and annotated using protein evidence. Predicting the same protein measurements from RNA requires auditing both selection leakage and derived input labels; hiding query ADT alone is insufficient.",
+        "Four monocyte donor-condition strata are empty. Missing cells cannot be turned into zero-expression pseudobulk samples; cell-composition zeros and missing gene-expression estimates have different meanings."
       ],
-      "planning_status": "metadata-fit-for-paired-condition-and-modality-questions; exact-files-layer-semantics-lineage-and-runtime-pending",
+      "planning_status": "file-identities-and-cell-annotation-structure-verified; paired-input-boundaries-specified; matrix-layers-lineage-and-native-runtime-pending",
       "candidate_question_or_card_ids": [
         "donor-pseudobulk-expression",
         "single-cell-qc-representation",
         "reference-cell-classification",
         "paired-rna-protein-prediction",
         "portfolio-liu-single-cell-rna-protein-cell-characterization"
-      ]
+      ],
+      "release_files": [
+        {
+          "format": "xlsx",
+          "name": "CITEseqPBMCProject_metadata_18-07-2023.xlsx",
+          "sha256": "b1a20a1ac14ad788f15a2c007542c6d979d35da7d045dc2eb5dfa54258728bed",
+          "size": 42700,
+          "uuid": "68d7b6a1-1760-50be-90e7-4252dd18b86e",
+          "version": "2023-07-18T08:32:12.677000Z",
+          "drs_uri": "drs://data.terra.bio/v1_66306883-0e6c-4acb-8027-172ef9291eeb_3733cad7-efd5-4f81-9f95-33b3d47a6989",
+          "azul_url": "https://service.azul.data.humancellatlas.org/repository/files/68d7b6a1-1760-50be-90e7-4252dd18b86e?catalog=dcp60&version=2023-07-18T08%3A32%3A12.677000Z",
+          "accessible": true,
+          "payload_inspected": false,
+          "checksum_status": "provider-declared-unverified"
+        },
+        {
+          "format": "Rds",
+          "name": "CZI.PBMC.ADT.matrix.Rds",
+          "sha256": "bab0c4c2b43bb2c8c942491a370623b0685ef0dd10ce58aa45734371a8fb59e5",
+          "size": 21609958,
+          "uuid": "d3b085d0-4d42-5e0f-bf11-da491031d4b8",
+          "version": "2021-02-22T16:08:23.715288Z",
+          "drs_uri": "drs://data.terra.bio/v1_66306883-0e6c-4acb-8027-172ef9291eeb_e7684c16-4b92-4540-8058-cf71978e96e5",
+          "azul_url": "https://service.azul.data.humancellatlas.org/repository/files/d3b085d0-4d42-5e0f-bf11-da491031d4b8?catalog=dcp60&version=2021-02-22T16%3A08%3A23.715288Z",
+          "accessible": true,
+          "payload_inspected": false,
+          "checksum_status": "provider-declared-unverified"
+        },
+        {
+          "format": "Rds",
+          "name": "CZI.PBMC.HTO.matrix.Rds",
+          "sha256": "e7a4fd0fba9d9b092ca79b4e18b2d4a0763d303c10e150f2807c3e9ccb50f0dc",
+          "size": 4759210,
+          "uuid": "a0e51be5-f1e2-54bc-9b92-56b025d0601d",
+          "version": "2021-02-22T16:08:23.715288Z",
+          "drs_uri": "drs://data.terra.bio/v1_66306883-0e6c-4acb-8027-172ef9291eeb_d7fa6f11-5e7e-4a27-a13a-0f54da8d030d",
+          "azul_url": "https://service.azul.data.humancellatlas.org/repository/files/a0e51be5-f1e2-54bc-9b92-56b025d0601d?catalog=dcp60&version=2021-02-22T16%3A08%3A23.715288Z",
+          "accessible": true,
+          "payload_inspected": false,
+          "checksum_status": "provider-declared-unverified"
+        },
+        {
+          "format": "Rds",
+          "name": "CZI.PBMC.RNA.matrix.Rds",
+          "sha256": "c6c1b29e8737085d89f2af35c23fb9ce0e189369e65061f18cfe8532bd1e80c5",
+          "size": 480584213,
+          "uuid": "347257fa-4174-5741-9a9d-99ef21fa3707",
+          "version": "2021-02-22T16:08:23.715288Z",
+          "drs_uri": "drs://data.terra.bio/v1_66306883-0e6c-4acb-8027-172ef9291eeb_e39c880d-18bc-4f61-95e8-fe28fb0dd460",
+          "azul_url": "https://service.azul.data.humancellatlas.org/repository/files/347257fa-4174-5741-9a9d-99ef21fa3707?catalog=dcp60&version=2021-02-22T16%3A08%3A23.715288Z",
+          "accessible": true,
+          "payload_inspected": false,
+          "checksum_status": "provider-declared-unverified"
+        },
+        {
+          "format": "csv",
+          "name": "CZI.PBMC.cell.annotations.csv",
+          "sha256": "76a6548089867687461603ed0031ba02f9203885cd8a623b7497bdceccaf7229",
+          "size": 26242593,
+          "uuid": "773e8edd-48af-599a-8726-3f368823dc22",
+          "version": "2021-02-22T16:08:23.715288Z",
+          "drs_uri": "drs://data.terra.bio/v1_66306883-0e6c-4acb-8027-172ef9291eeb_d0db3c47-5bbf-4b33-97f1-970fde8d9976",
+          "azul_url": "https://service.azul.data.humancellatlas.org/repository/files/773e8edd-48af-599a-8726-3f368823dc22?catalog=dcp60&version=2021-02-22T16%3A08%3A23.715288Z",
+          "accessible": true,
+          "payload_inspected": true,
+          "checksum_status": "downloaded-bytes-match"
+        }
+      ],
+      "release_metadata": {
+        "catalog": "dcp60",
+        "project_id": "efea6426-510a-4b60-9a19-277e52bfa815",
+        "source_spec": "tdr:bigquery:gcp:datarepo-8eb1f82a:hca_prod_efea6426510a4b609a19277e52bfa815__20220118_dcp2_20250514_dcp49",
+        "file_query": {
+          "entity": "files",
+          "projectId": {
+            "is": [
+              "efea6426-510a-4b60-9a19-277e52bfa815"
+            ]
+          },
+          "fileFormat": {
+            "is": [
+              "Rds",
+              "csv",
+              "xlsx"
+            ]
+          }
+        },
+        "file_query_sha256": "c6f3235aa61f907abbfaeb3468c9457d944ee262843d1809c1a5a03db11055ee",
+        "biostudies_metadata_sha256": "bbd9ba53bbc60d0e8c4fd817bb95833b38209b9d7fc1f22cea8802fb4119c53f",
+        "annotation_audit_sha256": "372b5118259b9510c4c3589b758cbc701c274e405609aacd0c948d67db6b11a9",
+        "retrieved_at": "2026-09-24T17:39:13.623789+00:00",
+        "license": "HCA project page declares CC BY 4.0 for downloaded/exported data; retain project and publication attribution."
+      },
+      "annotation_inspection": {
+        "bytes": 26242593,
+        "sha256": "76a6548089867687461603ed0031ba02f9203885cd8a623b7497bdceccaf7229",
+        "rows": 282528,
+        "unique_cell_ids": 282528,
+        "duplicate_cell_ids": 0,
+        "columns": [
+          "",
+          "HTO_Barcodes",
+          "HTO_Classification",
+          "Run_Identifier",
+          "Demuxlet_Classification",
+          "Donor_of_Origin",
+          "Celltype_Annotation"
+        ],
+        "all_hto_class_counts": {
+          "Multiplet": 81080,
+          "CD3_CD28": 47678,
+          "Baseline": 43474,
+          "LPS": 44718,
+          "IgM_IgG": 57693,
+          "Empty": 7885
+        },
+        "all_demuxlet_class_counts": {
+          "DBL": 117288,
+          "AMB": 62589,
+          "SNG": 102651
+        },
+        "all_cell_type_counts": {
+          "NA": 266146,
+          "CD4T_Naive": 4778,
+          "CD14_Mono": 1653,
+          "CD4T_Mem": 3035,
+          "CD8T_Naive": 2648,
+          "CD8T_Mem": 1778,
+          "B": 1081,
+          "NK": 1409
+        },
+        "run_count": 10,
+        "donor_count": 10,
+        "donor_alias_rule": "Sort the ten exact source Donor_of_Origin strings lexicographically, then assign donor-01 through donor-10. Keep the input-derived mapping for reproducibility.",
+        "annotated_subset": {
+          "rule": "Celltype_Annotation != NA; verify HTO_Classification in the three declared conditions and Demuxlet_Classification == SNG before use.",
+          "cells": 16382,
+          "condition_counts": {
+            "Baseline": 5207,
+            "CD3_CD28": 5743,
+            "LPS": 5432
+          },
+          "donor_condition_counts": [
+            {
+              "donor": "donor-01",
+              "condition": "Baseline",
+              "cells": 387
+            },
+            {
+              "donor": "donor-01",
+              "condition": "CD3_CD28",
+              "cells": 487
+            },
+            {
+              "donor": "donor-01",
+              "condition": "LPS",
+              "cells": 531
+            },
+            {
+              "donor": "donor-02",
+              "condition": "Baseline",
+              "cells": 289
+            },
+            {
+              "donor": "donor-02",
+              "condition": "CD3_CD28",
+              "cells": 283
+            },
+            {
+              "donor": "donor-02",
+              "condition": "LPS",
+              "cells": 342
+            },
+            {
+              "donor": "donor-03",
+              "condition": "Baseline",
+              "cells": 505
+            },
+            {
+              "donor": "donor-03",
+              "condition": "CD3_CD28",
+              "cells": 573
+            },
+            {
+              "donor": "donor-03",
+              "condition": "LPS",
+              "cells": 553
+            },
+            {
+              "donor": "donor-04",
+              "condition": "Baseline",
+              "cells": 522
+            },
+            {
+              "donor": "donor-04",
+              "condition": "CD3_CD28",
+              "cells": 467
+            },
+            {
+              "donor": "donor-04",
+              "condition": "LPS",
+              "cells": 570
+            },
+            {
+              "donor": "donor-05",
+              "condition": "Baseline",
+              "cells": 577
+            },
+            {
+              "donor": "donor-05",
+              "condition": "CD3_CD28",
+              "cells": 844
+            },
+            {
+              "donor": "donor-05",
+              "condition": "LPS",
+              "cells": 429
+            },
+            {
+              "donor": "donor-06",
+              "condition": "Baseline",
+              "cells": 581
+            },
+            {
+              "donor": "donor-06",
+              "condition": "CD3_CD28",
+              "cells": 744
+            },
+            {
+              "donor": "donor-06",
+              "condition": "LPS",
+              "cells": 681
+            },
+            {
+              "donor": "donor-07",
+              "condition": "Baseline",
+              "cells": 575
+            },
+            {
+              "donor": "donor-07",
+              "condition": "CD3_CD28",
+              "cells": 517
+            },
+            {
+              "donor": "donor-07",
+              "condition": "LPS",
+              "cells": 549
+            },
+            {
+              "donor": "donor-08",
+              "condition": "Baseline",
+              "cells": 642
+            },
+            {
+              "donor": "donor-08",
+              "condition": "CD3_CD28",
+              "cells": 480
+            },
+            {
+              "donor": "donor-08",
+              "condition": "LPS",
+              "cells": 579
+            },
+            {
+              "donor": "donor-09",
+              "condition": "Baseline",
+              "cells": 524
+            },
+            {
+              "donor": "donor-09",
+              "condition": "CD3_CD28",
+              "cells": 604
+            },
+            {
+              "donor": "donor-09",
+              "condition": "LPS",
+              "cells": 513
+            },
+            {
+              "donor": "donor-10",
+              "condition": "Baseline",
+              "cells": 605
+            },
+            {
+              "donor": "donor-10",
+              "condition": "CD3_CD28",
+              "cells": 744
+            },
+            {
+              "donor": "donor-10",
+              "condition": "LPS",
+              "cells": 685
+            }
+          ],
+          "celltype_strata": [
+            {
+              "cell_type": "B",
+              "donor_condition_strata": 30,
+              "empty_strata": 0,
+              "minimum_cells": 15,
+              "maximum_cells": 86,
+              "strata_below_proposed_20_cell_threshold": 6
+            },
+            {
+              "cell_type": "CD14_Mono",
+              "donor_condition_strata": 30,
+              "empty_strata": 4,
+              "minimum_cells": 0,
+              "maximum_cells": 131,
+              "strata_below_proposed_20_cell_threshold": 10
+            },
+            {
+              "cell_type": "CD4T_Mem",
+              "donor_condition_strata": 30,
+              "empty_strata": 0,
+              "minimum_cells": 36,
+              "maximum_cells": 164,
+              "strata_below_proposed_20_cell_threshold": 0
+            },
+            {
+              "cell_type": "CD4T_Naive",
+              "donor_condition_strata": 30,
+              "empty_strata": 0,
+              "minimum_cells": 54,
+              "maximum_cells": 353,
+              "strata_below_proposed_20_cell_threshold": 0
+            },
+            {
+              "cell_type": "CD8T_Mem",
+              "donor_condition_strata": 30,
+              "empty_strata": 0,
+              "minimum_cells": 21,
+              "maximum_cells": 300,
+              "strata_below_proposed_20_cell_threshold": 0
+            },
+            {
+              "cell_type": "CD8T_Naive",
+              "donor_condition_strata": 30,
+              "empty_strata": 0,
+              "minimum_cells": 22,
+              "maximum_cells": 148,
+              "strata_below_proposed_20_cell_threshold": 0
+            },
+            {
+              "cell_type": "NK",
+              "donor_condition_strata": 30,
+              "empty_strata": 0,
+              "minimum_cells": 7,
+              "maximum_cells": 135,
+              "strata_below_proposed_20_cell_threshold": 2
+            }
+          ]
+        },
+        "pre_adt_label_selection_candidate": {
+          "rule": "HTO_Classification in Baseline/CD3_CD28/LPS and Demuxlet_Classification == SNG; no Celltype_Annotation filter.",
+          "cells": 53707,
+          "condition_counts": {
+            "Baseline": 16175,
+            "CD3_CD28": 21333,
+            "LPS": 16199
+          },
+          "qualification": "Candidate selection predicate uses no cell-type label, but source classifier dependencies and RNA/ADT matrix identities must still be audited. It is not a validated protein-prediction input."
+        }
+      },
+      "source_discrepancies": [
+        "The portal estimate is 250,000 cells; the deposited annotation CSV contains 282,528 rows and an additional IgM_IgG condition. Use explicit per-task inclusion rules, not the portal estimate as a matrix dimension.",
+        "The article reports 195,480 captured droplets and 55,353 cells at an intermediate filtering stage. The inspected CSV predicate for three-condition HTO/Demuxlet singlets yields 53,707; this does not reproduce that intermediate number. Resolve the original filtering/version difference before claiming full pipeline reproduction.",
+        "The 16,382 labelled cells match the article\u2019s final count. That equality does not prove matrix identity, per-cell label correctness or reproduction of the original pipeline."
+      ],
+      "question_input_decisions": [
+        {
+          "question_id": "donor-pseudobulk-expression",
+          "decision": "Paired design confirmed in metadata; count layers remain unresolved.",
+          "planned_boundary": "Retain all ten donors and three conditions. A proposed minimum of 20 cells per donor-condition retains CD4T_Mem, CD4T_Naive, CD8T_Mem and CD8T_Naive across all 30 strata. Keep eligibility decisions for B, NK and CD14_Mono explicit. Aggregate cells to donor/cell-type/condition counts; fit the required native paired model with donor blocking and declared condition contrasts.",
+          "invalidation": "Do not impute zero-expression samples for absent lineages or treat cells as donor replicates."
+        },
+        {
+          "question_id": "single-cell-qc-representation",
+          "decision": "Complete annotation and three matrix file identities found; raw-layer/QC feature inspection pending.",
+          "planned_boundary": "Preserve unannotated, ambiguous, empty and multiplet dispositions in the input QC ledger. Use source labels only as attributed reference annotations; native SingleR and representation requirements remain separate.",
+          "invalidation": "Starting from the final labelled subset alone cannot validate removal of all original low-quality droplets."
+        },
+        {
+          "question_id": "reference-cell-classification",
+          "decision": "Ten donor groups and seven final labels support a candidate donor-separated design.",
+          "planned_boundary": "Run the specified native classifier with reference/query donors separated before fitting and keep evaluation labels private. Report agreement with protein-informed source labels. Fix features and normalization using training donors only.",
+          "invalidation": "This is not independent gold-standard cell identity; include explicit uncertainty/unknown-label rules and avoid label-derived query features."
+        },
+        {
+          "question_id": "paired-rna-protein-prediction",
+          "decision": "Separate candidate pool identified; no data package or model validation yet.",
+          "planned_boundary": "Inspect matched counts for the 53,707 HTO/Demuxlet singlets. Audit protein-dependent filtering upstream; remove ADT-derived annotations and features from query inputs. Separate donors in training/tuning/evaluation, retain every eligible measured protein and run the required native totalVI model.",
+          "invalidation": "The 16,382-cell protein-selected cohort cannot be used as an unbiased prediction benchmark without a declared selection-conditioned estimand. RNA-only baseline methods do not substitute for required totalVI execution."
+        },
+        {
+          "question_id": "portfolio-liu-single-cell-rna-protein-cell-characterization",
+          "decision": "Final labelled cohort has 16,382 cells and seven source populations; joint matrices remain uninspected.",
+          "planned_boundary": "Use matched observed RNA/ADT and antibody/control identities, preserve modality-specific normalization, and compare complete marker/label evidence with source-derived annotations.",
+          "invalidation": "Do not claim independent label validation from the same ADT markers used to define those labels."
+        }
+      ],
+      "acquisition_and_runtime_plan": {
+        "next_payloads": [
+          "CZI.PBMC.RNA.matrix.Rds",
+          "CZI.PBMC.ADT.matrix.Rds",
+          "CZI.PBMC.HTO.matrix.Rds"
+        ],
+        "remote_only_reason": "RNA RDS is 480,584,213 compressed bytes; decoded sparse objects and conversion temporaries can exceed the 500 MiB local working-set limit. Inspect native R objects and prepare task inputs on authorized remote compute.",
+        "required_preparation_checks": [
+          "Provider hashes match downloaded bytes.",
+          "Record R classes, dimensions, feature/cell IDs, integer/nonnegative count semantics and every stored layer.",
+          "Join RNA/ADT/HTO by exact run-qualified cell IDs and report missing/duplicated axes.",
+          "Preserve the source donor/condition/label map and every selection decision.",
+          "Measure task runtime before claiming the 30-minute target, especially native totalVI."
+        ],
+        "jobs_launched": 0,
+        "matrix_payloads_downloaded": 0
+      },
+      "lineage_review": {
+        "checked_at": "2026-09-24T17:39:13.623789+00:00",
+        "metadata_files_checked": 38,
+        "screen_manifest_sha256": "321084ea6c30555741d655578841819a074eb5d0abde266d3377513723adb007",
+        "candidate_identifiers": [
+          "ERP124005",
+          "S-SUBS15",
+          "efea6426-510a-4b60-9a19-277e52bfa815",
+          "10.3389/fimmu.2021.636720",
+          "PRJEB40448",
+          "ERZ1631464",
+          "PRJEB40376",
+          "CZI.PBMC.cell.annotations.csv"
+        ],
+        "explicit_matches": [],
+        "cleared_for_training": false,
+        "limit": "Only permitted public ID metadata checked; uninspected/gated fixtures and cohorts can still overlap. No OOD contents inspected."
+      }
     },
     {
       "id": "post-sepsis-rna-adt",
