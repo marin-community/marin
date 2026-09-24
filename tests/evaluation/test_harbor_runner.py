@@ -457,6 +457,20 @@ def test_harbor_driver_terminates_when_dependency_becomes_unavailable(tmp_path, 
     assert terminated_return_codes[0] is not None
 
 
+def test_harbor_driver_environment_preserves_iris_uv_wrapper_variables(monkeypatch):
+    iris_environment = {
+        "IRIS_ATTEMPT_UID": "attempt-123",
+        "IRIS_UV_EXECUTABLE": "/usr/local/bin/uv",
+        "IRIS_WORKDIR": "/app",
+    }
+    for key, value in iris_environment.items():
+        monkeypatch.setenv(key, value)
+
+    environment = driver_config._driver_environment()
+
+    assert {key: environment[key] for key in iris_environment} == iris_environment
+
+
 def test_harbor_driver_classifies_fast_failure_from_unavailable_dependency(tmp_path, monkeypatch):
     monkeypatch.setattr(driver_config, "_driver_command", lambda *_args: ["false"])
 
