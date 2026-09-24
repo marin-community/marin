@@ -24,7 +24,7 @@ def main() -> None:
     jax_devices = jax.devices("cuda")
     assert len(jax_devices) == 1, jax_devices
     assert "H100" in jax_devices[0].device_kind, jax_devices[0]
-    assert jax.default_backend() == "cuda"
+    assert jax.devices()[0] == jax_devices[0]
     jax_result = jax.jit(lambda values: values + 2)(jnp.ones(4, dtype=jnp.float32))
     assert jax_result.device == jax_devices[0]
     assert float(jax_result.sum()) == 12
