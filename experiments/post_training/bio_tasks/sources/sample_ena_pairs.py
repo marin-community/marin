@@ -41,7 +41,8 @@ def sample_pairs(output: Path, pairs: int) -> None:
         ):
             if not host_path.startswith("ftp.sra.ebi.ac.uk/") or int(expected_bytes) > MAX_ARCHIVE_BYTES:
                 raise ValueError("Unexpected ENA host or archive size")
-            url = "https://" + host_path
+            # ENA documents HTTP access on this FTP host; verify the complete archive against its deposited checksum.
+            url = "http://" + host_path
             archive = Path(temporary) / f"mate{mate}.fastq.gz"
             md5, sha256, size = hashlib.md5(), hashlib.sha256(), 0
             with urllib.request.urlopen(url, timeout=120) as response, archive.open("wb") as handle:

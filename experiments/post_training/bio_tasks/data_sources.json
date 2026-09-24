@@ -556,7 +556,7 @@
       "retrieved_at": "2026-09-23",
       "data_origin": "real",
       "source_role": "observed paired-end sequencing reads from a reference sequencing sample",
-      "sampling_limits": "First 6000 pairs in archive order, split into three disjoint 2000-pair blocks. Preserves observed bases/qualities; not a random sample and not biological replication.",
+      "sampling_limits": "The block assets retain the first 6,000 pairs in three disjoint 2,000-pair prefixes. The spread assets retain 12,000 systematically spaced pairs across all 725,065 deposited pairs after complete archive checksum verification. Both preserve original record bytes; neither is biological replication. The prefix has poor reference breadth for assembly and is retained only for its existing read-QC tasks.",
       "benchmark_screening": "Independent candidate sequencing run; full biological-lineage screening pending.",
       "run_metadata": {
         "run_accession": "ERR266411",
@@ -645,7 +645,48 @@
           "first_record_1based": 4001,
           "last_record_1based": 6000,
           "transformation": "Consecutive original complete FASTQ records; no changes to names, sequences or qualities. The three blocks are disjoint technical subsets, not biological replicates. Gzip level 9, mtime 0."
+        },
+        "err266411-spread-r1.fastq.gz": {
+          "content_sha256": "ddb4571301316a46c799e73e6d88f88efb32bf04943b3195943620a5af76f625",
+          "content_bytes": 3088099,
+          "vendored_sha256": "b618f1d3ad4232638f2286fa38b486533c2c3e67d409c0e29adf090306e69063",
+          "vendored_bytes": 830421,
+          "url": "http://ftp.sra.ebi.ac.uk/vol1/fastq/ERR266/ERR266411/ERR266411_1.fastq.gz",
+          "download_sha256": "31d95ec5ea87a25dd2ce6b42647a36e058de75e749a789e576b67bdb2db756a1",
+          "download_md5": "ce582793f8d9546aa70b083ab01cebaa",
+          "download_bytes": 48886255,
+          "download_scope": "Complete archive; byte count and MD5 checked against deposited ENA run metadata.",
+          "transformation": "Retain 12,000 unchanged paired FASTQ records at floor(i * 725065 / 12000), i=0..11999. Preserve original headers, bases, quality strings and record order. Gzip mtime 0."
+        },
+        "err266411-spread-r2.fastq.gz": {
+          "content_sha256": "ad2792613184256e9147edd4a945f19b92d48f9d0b4058d7f3260ac8632cb801",
+          "content_bytes": 3088099,
+          "vendored_sha256": "1813922dc6f57e6060a8af64d93f6964fff1f0780e567f4cd9c74340e22038a7",
+          "vendored_bytes": 859472,
+          "url": "http://ftp.sra.ebi.ac.uk/vol1/fastq/ERR266/ERR266411/ERR266411_2.fastq.gz",
+          "download_sha256": "7612f442d5547a0b31ca5e2a51009f0385f6c7758b4872936b6bb34b58321cf6",
+          "download_md5": "32ff6b1fcdc71ab40f139399deb98d01",
+          "download_bytes": 50617870,
+          "download_scope": "Complete archive; byte count and MD5 checked against deposited ENA run metadata.",
+          "transformation": "Retain 12,000 unchanged paired FASTQ records at floor(i * 725065 / 12000), i=0..11999. Preserve original headers, bases, quality strings and record order. Gzip mtime 0."
+        },
+        "err266411-spread-sampling.json.gz": {
+          "url": "https://www.ebi.ac.uk/ena/browser/view/ERR266411",
+          "content_sha256": "a40126d66f8630a94d720259fc47ea14a402e5679f64030fa973da863e22d1db",
+          "vendored_sha256": "0b92f9dc126374b07d5b5dd0126c51d5a7176c92ab268619b3d61d53a834a78e",
+          "content_bytes": 143597,
+          "vendored_bytes": 31444,
+          "transformation": "Complete source-archive checksums, selected zero-based ordinal positions and retained FASTQ content hashes; source sampling recipe sample_ena_pairs.py."
         }
+      },
+      "systematic_sampling": {
+        "pairs": 12000,
+        "source_pairs": 725065,
+        "record_index_rule": "floor(i * total_pairs / selected_pairs), i=0..selected_pairs-1",
+        "provenance_asset": "err266411-spread-sampling.json.gz",
+        "sampler": "sources/sample_ena_pairs.py",
+        "protocol_documentation": "https://ena-docs.readthedocs.io/en/latest/retrieval/file-download.html",
+        "downloaded_at": "2026-09-24"
       }
     },
     "UniProt:globins-20260923": {

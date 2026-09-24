@@ -1,6 +1,6 @@
 # Benchmark task inventories
 
-Each JSON file records the inspected tasks from one benchmark release. Scope is
+Each JSON file inventories task IDs or protocol definitions from one benchmark release. Scope is
 the spreadsheet's **agentic** tab. See the [release index](../benchmark_coverage.json)
 for pinned revisions, source hashes, inspected counts and completeness, and the
 [catalog](../../../../docs/experiments/bio-task-catalog.md) for the readable inventory.
@@ -12,6 +12,13 @@ and tools, recipe mappings, evidence, and remaining gaps. Where available, recor
 also describe output artifacts, scientific decisions and overlap with other
 releases. A workflow-family pattern can include more stages than one question
 requires; inspect the endpoint before assigning coverage.
+
+Enumeration, prompt inspection and executable coverage are separate claims.
+An ID obtained from a registry can remain uninspected; a reviewed shared protocol
+does not mean every instance was reviewed. Release records state whether the
+inventory covers the full public release, public examples, or only identifiers.
+Unavailable and gated releases remain listed in the source inventory with the
+access gap recorded.
 
 To read a compact record, start with its file's `task_defaults`, overlay the
 entry in `patterns` selected by `workflow_family`, then overlay the task's own

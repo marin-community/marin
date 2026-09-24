@@ -2008,6 +2008,16 @@
       "output_archive_url": "gs://marin-us-central2/bio-tasks/authoring/sha256/d00c61f25974b9578d70774e712161988e3332c09f96de6bbf55275ab47b3741/outputs.tar.zst",
       "scope": "Diagnostic SPAdes assembly of the first 6,000 observed ERR266411 pairs. Two contigs, 510 assembled bases, 236 of 5,386 reference positions covered. Not counted as validated native coverage or registered as a final example.",
       "next_preparation": "Replace the archive prefix with a reproducible systematic sample across both checksum-verified full mate archives. Preserve observed record bytes."
+    },
+    {
+      "job_id": "/exedev/bio-assembly-spread-20260924-113201",
+      "status": "failed",
+      "failed_phase": "prepare-inputs",
+      "source_revision": "7a942f73f0f3beb790c2ad3dec502b98c526e7e1",
+      "error": "HTTP 403 from the public ENA FASTQ endpoint before sampling or assembly. No native validation claimed.",
+      "output_archive_sha256": "5cb38db0ee5455f410e173c7eb5bceee2d8569a1aefc82f806d3ad931a7da224",
+      "output_archive_url": "gs://marin-us-central2/bio-tasks/authoring/sha256/5cb38db0ee5455f410e173c7eb5bceee2d8569a1aefc82f806d3ad931a7da224/outputs.tar.zst",
+      "next_action": "Check documented public download access; freeze and checksum observed sampled inputs before another native validation."
     }
   ]
 }
