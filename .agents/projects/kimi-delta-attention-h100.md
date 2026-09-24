@@ -114,9 +114,54 @@ without freeing GPU memory). For very long context or large per-device batch, dr
 to C=64 or `scan_impl="sequential"` (constant-memory), or wrap the layer in the
 model's usual gradient checkpointing.
 
+## Phase 3 — evaluation of a candidate fused Pallas/Triton kernel (`kda_pallas.py`)
+
+A hand-written fused 4-kernel Pallas(Triton) KDA was supplied (`prep_fwd`, `rec_fwd`,
+`rec_bwd`, `prep_bwd` + `custom_vjp`; (B,T,H,D) layout; C split into 16-token
+sub-chunks; block-triangular inverse; hand-derived backward). Evaluated rigorously.
+
+**Correctness: PASS (thorough).** In the CPU Pallas interpreter (fp32), forward matches
+the fp32 recurrence and my `recurrent_kda` to ~2–4e-7, and the *hand-derived* VJP
+matches autodiff of the reference to ~1–6e-7 for dq,dk,dv,dg,dbeta,**ds0** and the
+final-state cotangent **dsT** — across K=V and K≠V (both directions), non-divisible T
+(padding), C=16/64, initial_state, use_qk_l2norm, and strongly-negative g. On real
+H100 Triton, bf16 forward matches the fp32 oracle to **3.1e-3** (bf16-accurate).
+(The only NaNs seen were the *reference* blowing up with unnormalized k at large K —
+expected instability KDA avoids via L2-norm, not a kernel bug.) Tests added:
+`test_pallas_kda_fwd_matches_recurrent`, `test_pallas_kda_grad_matches_reference`.
+
+**Performance: FAIL at the grug target shape (H100, d=128, L=8192).**
+
+| config | pallas | assoc (mine) | verdict |
+|---|---|---|---|
+| fwd, C=64, B=2 | 3.93ms / 33.4M tok/s | (C=128) 2.21ms / 59M | **1.78× slower** |
+| fwd, C=64, B=4 | 7.47ms / 35.1M | (C=128) 4.22ms / 62M | **1.77× slower** |
+| fwd, C=128 | Triton **compile-OOM** (6s at B=1) | 4.22ms | impractical |
+| fwd+bwd, d=128 | host-OOM in backward compile (even B=2 isolated, 80GB) | 10.35ms (B4)/5.37ms (B2) | no timing obtainable |
+
+**Root causes.** (1) `rec_fwd`/`rec_bwd` are **sequential over chunks** (`fori_loop`,
+O(L/C) depth) with S register-resident — the same depth my phase-2 `associative_scan`
+removed (O(log L/C)); on this shape the log-depth parallel scan wins. (2) The prep
+kernel **Python-unrolls the S×S sub-chunk block structure** (S=C/16), so Triton
+compile memory scales ~(C/16)² and **OOMs at C≥128** — forcing C=64, which has *more*
+sequential steps, compounding (1). (3) The backward's Triton compilation host-OOMs at
+the target shape even isolated. Perf used default tuning (num_warps/block_v/num_stages),
+but (2) and (3) are structural, not tuning-fixable.
+
+**Recommendation: REJECT as the default fast path; KEEP as a correct reference.**
+`chunk_kda` (associative-scan, phase 2) remains the default — it is faster (fwd 1.4–1.9×
+over the original) and robust. `kda_pallas.py` is committed as a validated,
+experimental reference: it may win in other regimes (small d/K/V, or shapes where
+register-residency beats log-depth) or after (a) replacing the compile-explosive
+sub-chunk unrolling with an in-kernel loop to unlock C≥128, and (b) shrinking the
+backward's saved-tensor / compile footprint. Not wired into the model.
+
 ## Remaining bottleneck & next steps (highest leverage first)
 
-1. **Fuse into one Pallas/Mosaic-GPU (Hopper) kernel** — still the ceiling-breaker.
+1. **Fuse into one Pallas/Mosaic-GPU (Hopper) kernel** — still the ceiling-breaker,
+   but the supplied candidate is not it yet (see Phase 3): a viable fused kernel must
+   parallelize the chunk recurrence (or accept its depth) *and* avoid the prep-kernel
+   compile blowup at C≥128.
    Even after the parallel scan the kernel is a chain of ~20 separate XLA ops with
    HBM round-trips between them, capping util at single-digit % on the wall-time
    optimum. A fused kernel that keeps chunk state resident and issues wgmma for the
