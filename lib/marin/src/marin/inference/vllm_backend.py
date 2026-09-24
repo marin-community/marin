@@ -76,6 +76,12 @@ def _chat_template_argument(content: str | None) -> Iterator[tuple[str, ...]]:
             os.unlink(path)
 
 
+def _resolved_chat_template(spec: ModelSpec) -> str | None:
+    if spec.chat_template_content is not None:
+        return spec.chat_template_content
+    return read_tool_chat_template(spec.tokenizer_source, spec.tokenizer_revision)
+
+
 @dataclass(frozen=True)
 class VllmServedModel:
     base_url: str
@@ -96,11 +102,7 @@ class VllmBackend:
 
     @contextlib.contextmanager
     def serve(self, spec: ModelSpec) -> Iterator[VllmServedModel]:
-        chat_template_content = (
-            spec.chat_template_content
-            if spec.chat_template_content is not None
-            else read_tool_chat_template(spec.tokenizer_source, spec.tokenizer_revision)
-        )
+        chat_template_content = _resolved_chat_template(spec)
         resolved_spec = replace(spec, chat_template_content=chat_template_content)
         with self.start(resolved_spec) as environment:
             environment.wait_until_ready()
@@ -120,11 +122,7 @@ class VllmBackend:
         subprocess_env: Mapping[str, str] | None = None,
     ) -> Iterator[VllmEnvironment]:
         """Start vLLM without imposing HTTP readiness on the caller."""
-        chat_template_content = (
-            spec.chat_template_content
-            if spec.chat_template_content is not None
-            else read_tool_chat_template(spec.tokenizer_source, spec.tokenizer_revision)
-        )
+        chat_template_content = _resolved_chat_template(spec)
         resolved_port = _reserve_localhost_port(self.host) if self.port is None else self.port
         model = self._model_config(spec)
         launcher = _with_subprocess_env(vllm_launcher(self.config), subprocess_env)
