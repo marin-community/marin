@@ -42,7 +42,7 @@ def test_chunk_kda_matches_recurrent(length, chunk_size):
     np.testing.assert_allclose(np.asarray(state_chunk), np.asarray(state_recur), rtol=1e-4, atol=1e-4)
 
 
-@pytest.mark.parametrize(("length", "chunk_size"), [(128, 64), (256, 64), (192, 32)])
+@pytest.mark.parametrize(("length", "chunk_size"), [(128, 64), (256, 64), (192, 32), (256, 128)])
 def test_chunk_kda_bf16_matmuls_match_recurrent(length, chunk_size):
     """The default bf16 intra-chunk GEMMs stay close to the fp32 recurrence.
 

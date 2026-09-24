@@ -141,7 +141,8 @@ def main():
             _try("fp32,default", kda_fp32, args, 64, _H100_FP32_PEAK, mode)
             _try("fp32,highest", kda_fp32, args, 64, _H100_FP32_PEAK, mode, precision="highest")
             if full:
-                for c in (32, 128, 256):
+                sweep = [int(x) for x in os.environ.get("KDA_SWEEP", "32,128,256").split(",")]
+                for c in sweep:
                     _try("fp32,default", kda_fp32, args, c, _H100_FP32_PEAK, mode)
                     _try("bf16-mm", kda_bf16, args, c, _H100_BF16_PEAK, mode)
 
