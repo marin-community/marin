@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T16:49:35.857151+00:00",
+  "updated_at": "2026-09-24T17:00:10.331718+00:00",
   "basis_revision": "952929c306",
   "scope": "Agentic provisional-ID benchmarks only; preserve all existing OOD exclusions. Plan the broad task set before further recipe implementation.",
   "authoring_unit": "One coherent observed-data task per recipe by default. Proposed questions are separate task designs, not repeated instances. They may be split or merged after endpoint and runtime checks.",
@@ -9,11 +9,11 @@
   "source_inventory_files": [
     {
       "path": "experiments/post_training/bio_tasks/benchmark_coverage.json",
-      "sha256": "a6efd10cee17951dbf11f36907e8a0884d188693f55c73fe2ea825ae393506ba"
+      "sha256": "48149ff976dab4156da7f0ded7b1724b1d41bdc332e1d622145ce5d44cdebb39"
     },
     {
       "path": "experiments/post_training/bio_tasks/benchmark_sources.json",
-      "sha256": "dbfab5578cdfd0c50cb90efd5e7efc062e75a863c847351be0d889656d7f7d9f"
+      "sha256": "094ed134dff641c4377ee48141ef29b72c3cd05ea60ec8a686dfe5e86e2a57d8"
     }
   ],
   "question_inspection_evidence": {
@@ -50,7 +50,7 @@
     "known_bixbench_cross_release_alias_count": 50,
     "unique_record_count_after_known_bix_aliases": 4282,
     "unique_nonexcluded_count_after_known_bix_aliases": 4281,
-    "source_rows_without_task_inventory": 11,
+    "source_rows_without_task_inventory": 10,
     "initial_group_label_count": 31,
     "planning_disposition_counts": {
       "accession-evidence-review": 225,
@@ -13149,15 +13149,6 @@
       "scoring_access": "Task-dependent access",
       "planning_boundary": "Choose the agentic retrieval/end-to-end protocol and release before enumeration. Structured retrieval/exact-answer metrics do not establish ideal-summary quality.",
       "reviewed_primary_url": "https://www.bioasq.org/"
-    },
-    {
-      "name": "BixBench \u2014 original notebook protocols",
-      "inspection": "Primary paper describes notebook-derived multi-step analysis scenarios. Existing BixBench inventory already holds 205 question IDs; original-protocol identity equality remains unverified.",
-      "source_url": "https://arxiv.org/abs/2503.00096",
-      "data_url": "https://huggingface.co/datasets/futurehouse/BixBench",
-      "scoring_access": "Public grading",
-      "planning_boundary": "Resolve protocol revisions and aliases against existing IDs before adding records; paper-level scenario counts are not additional independent tasks.",
-      "reviewed_primary_url": "https://arxiv.org/abs/2503.00096"
     }
   ],
   "implementation_sequence": [
@@ -13180,6 +13171,7 @@
   ],
   "decision_constraints": [
     "Real observed biological inputs and documented sample/taxon/assay identity; no invented observations or benchmark fixtures/answers.",
+    "Harbor is the sole execution and evaluation protocol for authored tasks: terminal-based solving, pinned task environments, private executable oracles and deterministic artifact verifiers. Notebook-based source benchmarks inform scientific endpoints only; no notebook runner, submission protocol or protocol-parity requirement.",
     "Offline solving and at most 30 minutes per task; scale realistic inputs on reserved remote CPU resources.",
     "No LLM judge. Exact computations, tolerances, graph/subspace invariants, observed labels and held-out metrics require explicit per-task acceptance rules.",
     "Do not automatically equate assay/protocol definitions, paper-level insights, or shared tool names with distinct completed workflows.",
@@ -13367,7 +13359,7 @@
   "authoring_phase": "question-portfolio-planning",
   "portfolio_index": {
     "path": "workflow_portfolio.json",
-    "sha256": "3e94d8a10e404ff1ed1f56a6c70cdaeb03f9edc9c9c4aad443d5179f4edd36ed",
+    "sha256": "2e19a3f62ee3e9dbc07b13403e2c890878bb99ae682f1f8bb36c9c99b90bdeb6",
     "counts": {
       "source_releases": 31,
       "inventory_records": 4332,

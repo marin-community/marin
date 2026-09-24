@@ -5,7 +5,7 @@ accounts for all **4,332 inventoried task, protocol or dataset-definition record
 across 31 ID releases**. It links 2,480 records to scientific question proposals,
 links 50 known BixBench-Verified aliases to their original designs, preserves 350
 SciGym systems and 1,451 ScholarQA-Bio questions as individual-endpoint review gaps,
-and retains one excluded objective. Eleven provisional-ID source leads still lack task inventories.
+and retains one excluded objective. Ten provisional-ID source leads still lack task inventories.
 
 The portfolio contains **676 question cards and 635 proposed task groups**, including
 25 conditional combinations of question cards. These are planning units, with
@@ -17,6 +17,10 @@ The [workstream plan](../../experiments/post_training/bio_tasks/workflow_plan.js
 organizes these proposals under 147 broad questions across 52 scientific workstreams.
 It records exact task IDs, required artifacts, verification approaches and unresolved
 input/endpoint requirements. Broad topic membership does not establish coverage.
+
+All authored tasks use **Harbor** for terminal-based solving and deterministic
+artifact grading. Notebook-based benchmarks supply scientific questions only;
+there is no notebook execution or submission protocol to implement.
 
 **Current phase: question planning and consolidation before further implementation.**
 The portfolio records a 20-item review order and an implementation assignment
@@ -229,9 +233,19 @@ must determine whether a complete deterministic adaptation is possible.
 The remaining source leads now retain publication-level boundaries in the source
 inventory. BioASQ requires selecting a specific agentic protocol and release; its
 retrieval/exact-answer metrics do not cover ideal-summary quality. LAB-Bench needs a
-tool-enabled subset and alias check against Biomni-Eval1. The original BixBench
-notebook protocol may overlap existing IDs. Restricted suites and model-judged
-scientific opinions remain explicit gaps, with no invented task count or coverage.
+tool-enabled subset and alias check against Biomni-Eval1. Restricted suites and
+model-judged scientific opinions remain explicit gaps, with no invented task count
+or coverage.
+
+The original BixBench notebook source now shares the existing pinned 205-question
+inventory with the Harbor source row. The upstream notebook loader and default
+configuration select the same dataset and train split; all 205 question IDs and
+hashes match. This adds no question or coverage credit. The notebook protocol is
+source provenance only; every authored task runs through Harbor. Historical paper
+release identity remains unverified. The selected metadata has
+59 capsule UUIDs and 54 short-ID groups; the README headline of 60 capsules is not
+an observed inventory count. Pinned source links and file hashes are recorded in
+[benchmark sources](../../experiments/post_training/bio_tasks/benchmark_sources.json).
 
 BioML's 283 assay-ranking definitions need distinct measured-property and
 generalization questions, rather than automatic replication of registry entries.

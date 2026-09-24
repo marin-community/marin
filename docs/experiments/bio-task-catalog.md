@@ -6,6 +6,10 @@ program decisions, collection policy, and results; this file holds the detailed
 coverage and source evidence. [Generator documentation](bio-tasks.md) lists the
 implemented recipes and how to inspect their examples.
 
+All authored tasks run through **Harbor**, using terminal-based solving, private
+executable oracles and deterministic artifact verifiers. Notebook-based benchmarks
+inform scientific endpoints; their notebook execution protocol is outside scope.
+
 Prioritize complete tasks and connected workflows from eligible ID benchmarks.
 Choose new recipes from the missing stages and scientific decisions recorded in
 the [task inventories](../../experiments/post_training/bio_tasks/benchmark_tasks/README.md).

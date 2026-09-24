@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T16:49:35.857151+00:00",
-  "scope": "Full question-proposal portfolio for the 31 currently inventoried provisional-ID agentic releases. This planning index resolves every question card and records conditional consolidation; it creates no training task or validated coverage. Eleven source leads without inventories remain outside the enumerated denominator.",
+  "updated_at": "2026-09-24T17:00:10.331718+00:00",
+  "scope": "Full question-proposal portfolio for the 31 currently inventoried provisional-ID agentic releases. This planning index resolves every question card and records conditional consolidation; it creates no training task or validated coverage. Ten source leads without inventories remain outside the enumerated denominator.",
   "counts": {
     "source_releases": 31,
     "inventory_records": 4332,
@@ -10072,7 +10072,8 @@
       "Reference solution reads inputs and passes all artifact checks; specified incorrect-artifact controls fail.",
       "Real input sizes, biological replication and measured runtime with all uncertainties reported.",
       "Exact benchmark task IDs and completed stages; parent reviews equivalence before coverage changes."
-    ]
+    ],
+    "execution_protocol": "Harbor is the sole execution and evaluation protocol for authored tasks: terminal-based solving, pinned task environments, private executable oracles and deterministic artifact verifiers. Notebook-based source benchmarks inform scientific endpoints only; no notebook runner, submission protocol or protocol-parity requirement."
   },
   "question_assignment_counts_by_release": {
     "BAISBench": 208,

@@ -19,7 +19,12 @@
       "tasks_file": "benchmark_tasks/bixbench.json",
       "source_inventory_name": "BixBench v1.5, Harbor CLI",
       "task_inventory_status": "205-question-endpoints-reviewed; 27 prospective workflow designs; source-method ambiguities and independent data remain unresolved",
-      "public_inventory_count": 205
+      "public_inventory_count": 205,
+      "shared_source_inventory_names": [
+        "BixBench v1.5, Harbor CLI",
+        "BixBench \u2014 original notebook protocols"
+      ],
+      "source_relation": "Both source rows select this pinned 205-question release; count the inventory once. Historical releases are unverified. Original notebook execution is source provenance only; all authored tasks use Harbor."
     },
     "CompBioBench": {
       "revision": "86ee0a22e036fef2a98f382f8fd528d5d390dde3",

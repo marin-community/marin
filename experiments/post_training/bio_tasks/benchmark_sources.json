@@ -4,7 +4,7 @@
   "retrieved_at": "2026-09-24",
   "scope": "Agentic (Harbor) tab only. Benchmark/protocol rows are not independent datasets or task counts. Shared questions and parent subsets must be deduplicated before coverage reporting.",
   "policy": "Preserve every OOD assignment in the agentic tab: Terminal-Bench-Science/full and lite, GeneBench/original and Pro, BioMysteryBench and SciCode. All other listed agentic sources are provisionally ID. Borrow workflow ideas; use independent biological inputs and references. Do not use OOD formulations or derived copies for authoring.",
-  "task_coverage": "benchmark_coverage.json indexes 4,332 task/protocol/definition records across 31 ID releases, with overlaps and source-specific inspection limits. One workflow mapping is validated, 47 are component-only, 4,283 remain unmapped and one is excluded. ScholarQA-Bio adds 1,451 public question identities and hashes under a shared literature-synthesis protocol; individual endpoints remain unreviewed. Counts of source definitions, protocols and related assays are not independent workflows. Eleven provisional-ID source leads still lack inventories. BioMysteryBench retains 90 OOD identifiers only. See each versioned release for exact prompt, schema, evidence and access limits.",
+  "task_coverage": "benchmark_coverage.json indexes 4,332 task/protocol/definition records across 31 ID releases, with overlaps and source-specific inspection limits. One workflow mapping is validated, 47 are component-only, 4,283 remain unmapped and one is excluded. ScholarQA-Bio adds 1,451 public question identities and hashes under a shared literature-synthesis protocol; individual endpoints remain unreviewed. Counts of source definitions, protocols and related assays are not independent workflows. Ten provisional-ID source leads still lack inventories. BioMysteryBench retains 90 OOD identifiers only. See each versioned release for exact prompt, schema, evidence and access limits.",
   "sources": [
     {
       "sheet": "Agentic (Harbor)",
@@ -1435,21 +1435,53 @@
       "sheet_distribution": "TBD",
       "distribution": "ID",
       "assignment": "2026-09-24: preserve sheet OOD; remaining sources provisionally ID",
-      "scientific_scope": "Original BixBench notebook-based data analysis; current v1.5 has 205 questions from 60 capsules.",
+      "scientific_scope": "Notebook-based biological analysis at the pinned current release: 205 questions, 59 distinct capsule UUIDs and 54 short-ID groups. These observed grouping counts differ from the README headline of 60 capsules.",
       "grading": "Open-answer model grading or exact MCQ matching; majority vote/replicas are optional protocol choices.",
       "scoring_access": "Public grading",
       "source_url": "https://arxiv.org/abs/2503.00096",
       "data_url": "https://huggingface.co/datasets/futurehouse/BixBench",
-      "inspection": "sheet metadata reviewed; source release and task-level inventory require verification",
+      "inspection": "Current-release source relation verified from the pinned agentic loader, default configuration and dataset card. All 205 question IDs, question hashes and short-ID groups match the existing BixBench inventory. No answers, notebook fixtures or biological inputs inspected for this relation review.",
       "training_mapping_allowed": true,
       "planning_source_review": {
         "reviewed_at": "2026-09-24",
-        "primary_url": "https://arxiv.org/abs/2503.00096",
-        "evidence": "Primary paper describes notebook-derived multi-step analysis scenarios. Existing BixBench inventory already holds 205 question IDs; original-protocol identity equality remains unverified.",
-        "planning_boundary": "Resolve protocol revisions and aliases against existing IDs before adding records; paper-level scenario counts are not additional independent tasks.",
-        "task_content_reviewed": false,
-        "validated_mappings_added": 0
-      }
+        "primary_url": "https://github.com/Future-House/BixBench/blob/49311180bdacb324c596f2e07596c126f2004008/bixbench/generate_trajectories.py",
+        "evidence": "The notebook harness loads paths.hf_repo_id with dataset_split, configured as futurehouse/bixbench and defaulting to train. The pinned dataset card maps default/train to BixBench.jsonl, already represented by the existing question-only inventory.",
+        "planning_boundary": "Select the pinned current question release for this source row. The unpinned upstream loader does not prove identity of historical paper runs. Original notebook and MCQ/open-answer modes are source provenance only; authored tasks use Harbor, with no notebook protocol or protocol-parity requirement. No new release, question count or validated coverage is added.",
+        "task_content_reviewed": true,
+        "validated_mappings_added": 0,
+        "shared_inventory_with": "BixBench v1.5, Harbor CLI",
+        "source_relation": "same-selected-question-release; distinct-execution-protocol",
+        "dataset_revision": "f8cc3bdcc6357c88b8c3648306522b9c422dc95a",
+        "question_only_metadata_sha256": "6d2d1ca1f642ee64a7f4cca07bc0e097674c884352a19fb085b0f72d5a9710f6",
+        "matched_question_ids": 205,
+        "matched_question_hashes": 205,
+        "short_id_groups": 54,
+        "capsule_uuids": 59,
+        "evidence_files": [
+          {
+            "url": "https://github.com/Future-House/BixBench/blob/49311180bdacb324c596f2e07596c126f2004008/bixbench/generate_trajectories.py",
+            "sha256": "443d7ecd1f5bf287570d3ced84b8ef4d5652de17981a511fc48a1ec91b002cf7",
+            "finding": "load_bixbench selects the configured HF repository and split without a revision pin."
+          },
+          {
+            "url": "https://github.com/Future-House/BixBench/blob/49311180bdacb324c596f2e07596c126f2004008/bixbench/run_configuration/generate_trajectories.yaml",
+            "sha256": "46dcb3bbe8cbd82c544b53061dc79b0e255896e325fb53923f92da3e0fda686b",
+            "finding": "Default notebook configuration selects futurehouse/bixbench."
+          },
+          {
+            "url": "https://github.com/Future-House/BixBench/blob/49311180bdacb324c596f2e07596c126f2004008/bixbench/models.py",
+            "sha256": "d080392fc619fb19335a709f45b23639b91d7ef8d1cae1c06076af667011b297",
+            "finding": "BixbenchConfig.dataset_split defaults to train."
+          },
+          {
+            "url": "https://huggingface.co/datasets/futurehouse/BixBench/raw/f8cc3bdcc6357c88b8c3648306522b9c422dc95a/README.md",
+            "sha256": "d0f593c483ec6dfbb5e17c1442be4220711c53575cd18d39beba7dc09a26e72e",
+            "finding": "The default configuration maps train to BixBench.jsonl. The card schema is descriptive; inventory identity is checked against the question-only projection."
+          }
+        ]
+      },
+      "task_inventory": "benchmark_tasks/bixbench.json"
     }
-  ]
+  ],
+  "authoring_execution_protocol": "Harbor is the sole execution and evaluation protocol for authored tasks: terminal-based solving, pinned task environments, private executable oracles and deterministic artifact verifiers. Notebook-based source benchmarks inform scientific endpoints only; no notebook runner, submission protocol or protocol-parity requirement."
 }
