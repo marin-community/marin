@@ -1278,6 +1278,84 @@
           }
         ]
       }
+    },
+    {
+      "job_id": "/exedev/bio-corpus-cox1-20260924-053532",
+      "source_revision": "4b3188238ff3436b7a97b4fd360ffcca2795b8af",
+      "scope": "Canonical authoring corpus, including correctness controls. All 140 executable oracles, row permutations and negative controls passed. This is not a training release.",
+      "archive": {
+        "uri": "gs://marin-us-central2/bio-tasks/authoring/sha256/c7e1c6a66b704c4c1ff11479a6e1ffea6a957246a5104709496224a7de2453b1/outputs.tar.zst",
+        "size_bytes": 133658805,
+        "sha256": "c7e1c6a66b704c4c1ff11479a6e1ffea6a957246a5104709496224a7de2453b1",
+        "preservation": "Durable regional GCS copy; provider size and MD5 match the locally verified archive.",
+        "source_temporary_uri": "gs://marin-us-central2/tmp/ttl=7d/iris/task-outputs/exedev/bio-corpus-cox1-20260924-053532/0/e1fb67d8ce55d27b/outputs.tar.zst"
+      },
+      "result": {
+        "status": "passed",
+        "source_revision": "4b3188238ff3436b7a97b4fd360ffcca2795b8af",
+        "model_calls": 0,
+        "task_count": 140,
+        "data_origins": {
+          "simulated": 115,
+          "real": 25
+        },
+        "manifest_sha256": "36d0cddf2f70613282b2884d498bc21832d4ed67da491976675a9153dcf97400",
+        "finished_at": "2026-09-24T05:58:51.164029+00:00"
+      },
+      "build_execution": {
+        "argv": [
+          "/app/bio-full-corpus-47595bxt/python/bin/python",
+          "-m",
+          "experiments.post_training.bio_tasks.build",
+          "--output",
+          "/iris/outputs/corpus",
+          "--tool-ref",
+          "4b3188238ff3436b7a97b4fd360ffcca2795b8af",
+          "--base-image",
+          "python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c",
+          "--seed",
+          "20260923",
+          "--instances-per-recipe",
+          "1"
+        ],
+        "exit_code": 0,
+        "seconds": 1124.7742480659945,
+        "peak_child_rss_kib": 1201416
+      },
+      "blas_profile": {
+        "requested_core": "HASWELL",
+        "core": "Haswell",
+        "configuration": "OpenBLAS 0.3.34 DYNAMIC_ARCH NO_AFFINITY Haswell MAX_THREADS=128",
+        "cpu_model": "AMD EPYC 7B12"
+      },
+      "benchmark_distribution_counts": {
+        "ID": 1241,
+        "OOD": 90
+      },
+      "benchmark_coverage_counts": {
+        "component-only": 23,
+        "unmapped": 1217,
+        "restricted/excluded": 91
+      },
+      "instances_per_recipe": 1,
+      "controller_placement": {
+        "job_id": "/exedev/bio-corpus-cox1-20260924-053532",
+        "state": "succeeded",
+        "worker_id": "marin-tpu-v4-reserved-256-us-central2-b-20260922-2317-8259d330-worker-28",
+        "execution_cluster_id": "local",
+        "backend_id": "default",
+        "checked_at": "2026-09-24T06:09:24.562435+00:00",
+        "worker_metadata": [
+          {
+            "worker_id": "marin-tpu-v4-reserved-256-us-central2-b-20260922-2317-8259d330-worker-28",
+            "scale_group": "tpu_v4-reserved_256-us-central2-b",
+            "backend_id": "default",
+            "tpu_name": "t1v-n-9a98788d",
+            "gce_zone": "",
+            "gce_instance_name": "t1v-n-9a98788d-w-28"
+          }
+        ]
+      }
     }
   ],
   "preparation_runs": [

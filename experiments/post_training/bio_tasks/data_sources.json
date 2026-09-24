@@ -864,7 +864,7 @@
   ],
   "candidate_sources": {
     "GSE81682": {
-      "status": "metadata-assessed; observations not downloaded or admitted",
+      "status": "full-original-counts-preserved-and-roundtrip-validated; task admission pending",
       "landing_page": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE81682",
       "lineage": "GSE81682:Nestorowa-mouse-HSPC",
       "observations": "Mouse hematopoietic stem/progenitor Smart-seq2 counts with index-sorting measurements and ERCC spike-ins.",
@@ -877,12 +877,12 @@
         "Clustering and marker summaries do not create biological replicates for population-level inference."
       ],
       "download_candidate": "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE81nnn/GSE81682/suppl/GSE81682_HTSeq_counts.txt.gz",
-      "advertised_compressed_bytes": "28.8 MB (GEO display; exact object size not yet verified)",
-      "benchmark_screening": "No exact GSE81682/Nestorowa mention in the committed permitted task metadata at dc72d7832c; incomplete source-lineage evidence, not certified independence.",
+      "advertised_compressed_bytes": "30,236,635 verified bytes for original counts",
+      "benchmark_screening": "No exact GSE81682/Nestorowa or source DOI suffix in the permitted versioned task metadata at 0c24c094ee. This is incomplete source-lineage evidence, not certified independence.",
       "remaining_checks": [
-        "Retrieve bounded original metadata and reconcile raw versus processed cell identities.",
-        "Verify redistribution terms, checksums, annotation versions and exact benchmark input-lineage exclusions.",
-        "Retain real counts/spike-ins/FACS values and evaluate connected offline workflows on reserved remote CPUs."
+        "Reconcile additional Rep records and donor/pool identities before any donor-aware inference; current QC may use observed cell identities only.",
+        "Verify redistribution terms, annotation versions and exact benchmark input-lineage exclusions.",
+        "Retain real counts and spike-ins in connected offline workflows; obtain and reconcile original FACS data before using fine cell annotations."
       ],
       "preparation_evidence": {
         "repository": "LTLA/scRNAseq",
@@ -914,13 +914,140 @@
         "series_matrix_bytes": 91789,
         "count_header_cells": 1920,
         "geo_sample_records": 3840,
-        "scope": "Only the first count rows and the small series metadata were retrieved; the full count matrix has not been downloaded.",
+        "scope": "Initial bounded header and series-metadata inspection; the later full count download and exact sparse conversion are recorded in sparse_preparation.",
         "scientific_decisions": [
           "The original count header has 1920 unique cell columns. GEO also includes 1920 sample titles with Rep in their cell label; their relationship to the count matrix needs explicit reconciliation before combining records.",
           "The GEO broad sorting groups are HSPC, LT-HSC and Prog. They are not the retrospectively assigned fine cell types from the author FACS tables.",
           "GEO reports mm10, GSNAP 2015-09-29 and unstranded HTSeq 0.5.3p3 counting; the exact gene-annotation release remains unverified.",
           "Cell-level counts and ERCC controls must remain distinct from HTSeq rows beginning with double underscores. Missing author FACS measurements must not be fabricated."
-        ]
+        ],
+        "donor_metadata_review": {
+          "geo_record": "All 3840 GEO sample records have the same extraction description: 20 mice aged 8-12 weeks. The retained characteristics identify cell gate, strain and age only; no donor or pool assignment is supplied.",
+          "paper_url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC5305050/",
+          "paper_methods": "The published Methods describe 10 female 12-week-old mice over two days; each day used one four-mouse pool and one individually analyzed mouse.",
+          "decision": "The deposit and paper describe different donor scopes. Neither count supports assigning donors to the 1920 count columns; reconcile provenance before any donor-aware inference. Rep sample names alone do not establish biological or technical replication."
+        }
+      },
+      "sparse_preparation": {
+        "job_id": "/exedev/bio-corpus-cox1-20260924-053532",
+        "source_revision": "4b3188238ff3436b7a97b4fd360ffcca2795b8af",
+        "status": "passed-exact-roundtrip",
+        "archive_uri": "gs://marin-us-central2/bio-tasks/authoring/sha256/c7e1c6a66b704c4c1ff11479a6e1ffea6a957246a5104709496224a7de2453b1/outputs.tar.zst",
+        "archive_sha256": "c7e1c6a66b704c4c1ff11479a6e1ffea6a957246a5104709496224a7de2453b1",
+        "preparation": {
+          "source": "GSE81682",
+          "cells": 1920,
+          "features": 46170,
+          "feature_types": {
+            "endogenous": 46078,
+            "ERCC": 92
+          },
+          "nonzero_counts": 22590142,
+          "total_counts": 3475953273,
+          "htseq_metrics": [
+            "__no_feature",
+            "__ambiguous",
+            "__too_low_aQual",
+            "__not_aligned",
+            "__alignment_not_unique"
+          ],
+          "sources": {
+            "counts": {
+              "sha256": "e12745e4087823ae868c6fe82a38510c15730e82ee74e1983def85ed3b7df68a",
+              "bytes": 30236635
+            },
+            "series_metadata": {
+              "sha256": "1ad91a9a9343c3e279c0921ba97015554dc5a283b457d84a5c1973e9719b5739",
+              "bytes": 91789
+            }
+          },
+          "artifacts": {
+            "cells.tsv": {
+              "sha256": "8f8b2176a1569accc5ed9c03f7e2ce1470f7255f8d5974b1d4d163078a280653",
+              "bytes": 97831
+            },
+            "features.tsv": {
+              "sha256": "79efe29bde9c987bf721ecdbf049897d7b8c88dcafd42317c83f8c2283c96199",
+              "bytes": 1383828
+            },
+            "matrix.mtx.gz": {
+              "sha256": "c926b3accc702c40dd871d7dbd133917f7841974db1065cb951b1b13cd5f6769",
+              "bytes": 76277182
+            }
+          },
+          "transformation": "All original count values and cell/feature order preserved; HTSeq metrics moved to cell metadata.",
+          "limits": "Broad sorting gates are not fine cell annotations or biological replicate identifiers. No FACS measurements, embeddings or gene symbols inferred."
+        },
+        "input_assets": {
+          "cells.tsv": {
+            "sha256": "8f8b2176a1569accc5ed9c03f7e2ce1470f7255f8d5974b1d4d163078a280653",
+            "bytes": 97831,
+            "uri": "gs://marin-us-central2/bio-tasks/sources/sha256/8f8b2176a1569accc5ed9c03f7e2ce1470f7255f8d5974b1d4d163078a280653"
+          },
+          "features.tsv": {
+            "sha256": "79efe29bde9c987bf721ecdbf049897d7b8c88dcafd42317c83f8c2283c96199",
+            "bytes": 1383828,
+            "uri": "gs://marin-us-central2/bio-tasks/sources/sha256/79efe29bde9c987bf721ecdbf049897d7b8c88dcafd42317c83f8c2283c96199"
+          },
+          "matrix.mtx.gz": {
+            "sha256": "c926b3accc702c40dd871d7dbd133917f7841974db1065cb951b1b13cd5f6769",
+            "bytes": 76277182,
+            "uri": "gs://marin-us-central2/bio-tasks/sources/sha256/c926b3accc702c40dd871d7dbd133917f7841974db1065cb951b1b13cd5f6769"
+          }
+        },
+        "validation": {
+          "status": "passed",
+          "all_nonzero_counts_and_order_checked": true,
+          "cells": 1920,
+          "features": 46170,
+          "nonzero_counts": 22590142,
+          "total_counts": 3475953273,
+          "fetches": {
+            "counts.txt.gz": {
+              "url": "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE81nnn/GSE81682/suppl/GSE81682_HTSeq_counts.txt.gz",
+              "bytes": 30236635,
+              "sha256": "e12745e4087823ae868c6fe82a38510c15730e82ee74e1983def85ed3b7df68a"
+            },
+            "metadata.txt.gz": {
+              "url": "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE81nnn/GSE81682/matrix/GSE81682_series_matrix.txt.gz",
+              "bytes": 91789,
+              "sha256": "1ad91a9a9343c3e279c0921ba97015554dc5a283b457d84a5c1973e9719b5739"
+            }
+          }
+        },
+        "execution_seconds": 209.14491086400812,
+        "memory_scope": "The worker reports a cumulative peak across child processes; its 1,201,416 KiB peak includes the earlier corpus build and is not an isolated preparation measurement.",
+        "storage_checks": [
+          {
+            "uri": "gs://marin-us-central2/bio-tasks/sources/sha256/8f8b2176a1569accc5ed9c03f7e2ce1470f7255f8d5974b1d4d163078a280653",
+            "bytes": 97831,
+            "md5": "TsdQj4bi1spq+XSCTR6CSg==",
+            "generation": "1790230424551474",
+            "status": "verified-provider-size-and-md5"
+          },
+          {
+            "uri": "gs://marin-us-central2/bio-tasks/sources/sha256/79efe29bde9c987bf721ecdbf049897d7b8c88dcafd42317c83f8c2283c96199",
+            "bytes": 1383828,
+            "md5": "30Bw2u6ek8wm9OX5YJM4mQ==",
+            "generation": "1790230426623848",
+            "status": "verified-provider-size-and-md5"
+          },
+          {
+            "uri": "gs://marin-us-central2/bio-tasks/sources/sha256/c926b3accc702c40dd871d7dbd133917f7841974db1065cb951b1b13cd5f6769",
+            "bytes": 76277182,
+            "md5": "N5ZkSTvfq+6bhVChq06r5Q==",
+            "generation": "1790230434519098",
+            "status": "verified-provider-size-and-md5"
+          },
+          {
+            "uri": "gs://marin-us-central2/bio-tasks/authoring/sha256/c7e1c6a66b704c4c1ff11479a6e1ffea6a957246a5104709496224a7de2453b1/outputs.tar.zst",
+            "bytes": 133658805,
+            "md5": "w+8JxYojtknGxEjQthcHXw==",
+            "generation": "1790230446506501",
+            "status": "verified-provider-size-and-md5"
+          }
+        ],
+        "limits": "This validates source preservation, not a single-cell training recipe, donor assignment, source independence or biological inference."
       }
     }
   }

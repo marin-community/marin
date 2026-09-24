@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import gzip
 import hashlib
 import json
 import re
@@ -14,7 +15,7 @@ import pytest
 import tomlkit
 from tasktrove_verify.grade import Status
 
-from experiments.post_training.bio_tasks.build import build, identity, validate_instance
+from experiments.post_training.bio_tasks.build import build, identity, task_files, validate_instance
 from experiments.post_training.bio_tasks.contract import Column, Contract, FastqContract, grade_answer, grade_files
 from experiments.post_training.bio_tasks.oracle import (
     solve_counts,
@@ -26,7 +27,7 @@ from experiments.post_training.bio_tasks.oracle import (
     solve_sites,
     solve_taxonomy,
 )
-from experiments.post_training.bio_tasks.recipe_types import OracleRuntime
+from experiments.post_training.bio_tasks.recipe_types import InputFile, OracleRuntime
 from experiments.post_training.bio_tasks.recipes import RECIPES
 from experiments.post_training.bio_tasks.solvers.formats import reverse_complement, translate
 from experiments.post_training.bio_tasks.solvers.imaging import solve_imaging
@@ -35,11 +36,37 @@ from experiments.post_training.bio_tasks.solvers.real_expression import solve_re
 from experiments.post_training.bio_tasks.solvers.real_genomes import solve_real_genome
 from experiments.post_training.bio_tasks.solvers.sequence import solve_sequence as solve_six_frames
 from experiments.post_training.bio_tasks.solvers.variants import solve_variants
-from experiments.post_training.tasktrove.taskbinary import read_task_binary
+from experiments.post_training.tasktrove.taskbinary import read_task_binary, write_task_binary
 
 BASE_IMAGE = "python:3.12-slim@sha256:" + "0" * 64
 TOOL_REF = "12bbd5d45b1b176167ab3cfe905e06004c2f02e3"
 PYTHON_RECIPES = tuple(recipe for recipe in RECIPES if recipe.oracle_runtime == OracleRuntime.PYTHON)
+
+
+def test_cached_inputs_reach_oracle_and_preserve_binary_bytes(tmp_path):
+    recipe = next(recipe for recipe in RECIPES if recipe.id == "real-fastq-fixed-trim")
+    original = recipe.generate(0)
+    inputs = dict(original.inputs)
+    name = next(name for name in inputs if name.endswith(".fastq"))
+    content = inputs.pop(name).encode()
+    compressed = gzip.compress(content, mtime=0)
+    assets = {}
+    for filename, data in {name: content, name + ".gz": compressed}.items():
+        digest = hashlib.sha256(data).hexdigest()
+        (tmp_path / digest).write_bytes(data)
+        assets[filename] = InputFile(digest, len(data))
+    instance = dataclasses.replace(original, inputs=inputs, input_files=assets)
+    checks = validate_instance(recipe, instance, source_cache=tmp_path)
+    assert checks["oracle"] == 1 and checks["missing_id"] == 0
+    files = task_files(recipe, instance, identity(recipe, 0, 0), BASE_IMAGE, TOOL_REF, tmp_path)
+    recovered = read_task_binary(write_task_binary(files))
+    assert recovered.files[f"setup_files/inputs/{name}"] == content
+    assert recovered.files[f"setup_files/inputs/{name}.gz"] == compressed
+    (tmp_path / assets[name].sha256).write_bytes(b"!" + content[1:])
+    with pytest.raises(ValueError, match="Changed input content"):
+        validate_instance(recipe, instance, source_cache=tmp_path)
+    with pytest.raises(ValueError, match="Changed input content"):
+        task_files(recipe, instance, identity(recipe, 0, 0), BASE_IMAGE, TOOL_REF, tmp_path)
 
 
 def test_native_fastq_output_requires_correct_records_even_when_summary_passes(tmp_path):

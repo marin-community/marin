@@ -6,7 +6,7 @@
 import csv
 import io
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 from experiments.post_training.bio_tasks.contract import Contract
@@ -30,6 +30,14 @@ class OracleRuntime(StrEnum):
 
 
 @dataclass(frozen=True)
+class InputFile:
+    """An unchanged file resolved by its SHA-256 in an explicit source cache."""
+
+    sha256: str
+    size_bytes: int
+
+
+@dataclass(frozen=True)
 class Instance:
     instruction: str
     inputs: dict[str, str]
@@ -39,6 +47,7 @@ class Instance:
     source_ids: tuple[str, ...] = ()
     derivation: str = "Synthetic correctness fixture."
     workflow_scope: WorkflowScope = WorkflowScope.COMPONENT
+    input_files: dict[str, InputFile] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

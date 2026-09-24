@@ -86,6 +86,14 @@ the format distinctions instead of converting every annotation to CSV.
 
 ## Build and inspect
 
+The full GSE81682 candidate has 1,920 cells, 46,078 endogenous features and 92 ERCC
+controls. Sparse conversion preserved all 22,590,142 nonzero counts and their
+identities exactly. The 76,277,182-byte compressed MatrixMarket file and its
+feature/cell tables are preserved in regional GCS; `data_sources.json` records
+SHA-256 hashes and retrieval locations. This source is not yet a registered task.
+Donor/pool reconciliation, redistribution terms and benchmark-lineage review
+remain open. The broad sorting gates do not provide fine cell labels or donors.
+
 Connected DESeq2 differential-expression and GO-enrichment candidates are defined in
 `generators/real_rnaseq.py`. Their private fits use unchanged GSE60450 observations;
 the public annotation snapshot preserves propagated biological-process membership
@@ -139,6 +147,16 @@ Use `--recipes <id> [<id> ...]` for an explicit smaller build, such as
 and the total registered count; benchmark mappings retain their full inventory,
 with example links only for the selected recipes. Omission builds every recipe
 and runs every oracle. It does not silently skip missing runtimes.
+
+Recipes can declare `InputFile(sha256, size_bytes)` entries for compressed or
+binary observations. Place each original file in a source cache under its full
+SHA-256 filename and pass `--source-cache <directory>`. Validation and packaging
+check both size and digest, preserve the bytes, and perform no downloads. Use
+the source manifest to retrieve the pinned observations before building. The
+ledger records every input's size and hash; the inspection page distinguishes
+file inputs from inline text. Large source files belong in artifact storage,
+with their provenance and hashes in Git. TaskTrove serialization still holds a
+complete task bundle in memory, so size remote build workers accordingly.
 
 Task observations live under `setup_files/inputs/`. The pinned Harbor runtime uploads
 that directory into each fresh sandbox; `/app/inputs` points to it. Biological inputs

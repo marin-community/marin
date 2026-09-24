@@ -129,17 +129,38 @@ def oracle_files(recipe: Recipe) -> TaskFiles:
     )
 
 
+def input_contents(instance: Instance, source_cache: Path | None) -> dict[str, bytes]:
+    """Resolve pinned file inputs without network access or text conversion."""
+    if instance.inputs.keys() & instance.input_files.keys():
+        raise ValueError("Inline and cached inputs must have distinct names")
+    contents = {name: text.encode() for name, text in instance.inputs.items()}
+    for name, asset in instance.input_files.items():
+        if source_cache is None:
+            raise ValueError(f"A source_cache is required for file input {name}")
+        if not re.fullmatch(r"[0-9a-f]{64}", asset.sha256) or asset.size_bytes < 0:
+            raise ValueError(f"Invalid pinned input identity: {name}")
+        path = source_cache / asset.sha256
+        if path.stat().st_size != asset.size_bytes:
+            raise ValueError(f"Changed input size: {name}")
+        content = path.read_bytes()
+        if len(content) != asset.size_bytes or hashlib.sha256(content).hexdigest() != asset.sha256:
+            raise ValueError(f"Changed input content: {name}")
+        contents[name] = content
+    return contents
+
+
 def validate_instance(
     recipe: Recipe,
     instance: Instance,
     reference_output: Path | None = None,
     previous_outputs: tuple[Path, ...] = (),
+    source_cache: Path | None = None,
 ) -> dict:
     """Require an independently executed solver and discriminating negative controls."""
     with tempfile.TemporaryDirectory(prefix="bio-reference-") as directory:
         root = Path(directory)
-        for name, text in instance.inputs.items():
-            (root / name).write_text(text)
+        for name, content in input_contents(instance, source_cache).items():
+            (root / name).write_bytes(content)
         answer = root / "answer.json"
         program = root / "oracle.pyz"
         program.write_bytes(oracle_archive())
@@ -260,7 +281,14 @@ def validate_instance(
     return checks
 
 
-def task_files(recipe: Recipe, instance: Instance, task: Identity, base_image: str, tool_ref: str) -> TaskFiles:
+def task_files(
+    recipe: Recipe,
+    instance: Instance,
+    task: Identity,
+    base_image: str,
+    tool_ref: str,
+    source_cache: Path | None = None,
+) -> TaskFiles:
     profile = PROFILES.get(recipe.id)
     solver_environment = environment_files(recipe.id, base_image)
     metadata = {
@@ -316,7 +344,9 @@ def task_files(recipe: Recipe, instance: Instance, task: Identity, base_image: s
         "tests/verifier.pyz": verifier_archive(),
         "tests/reference.json": instance.contract.model_dump_json(indent=2).encode(),
     }
-    files.update({f"setup_files/inputs/{name}": text.encode() for name, text in instance.inputs.items()})
+    files.update(
+        {f"setup_files/inputs/{name}": content for name, content in input_contents(instance, source_cache).items()}
+    )
     return TaskFiles(files)
 
 
@@ -329,6 +359,7 @@ def instance_provenance(instance: Instance) -> dict:
         "scale_profile": "small-fixture" if instance.data_origin == DataOrigin.SIMULATED else "observed-study",
         "workflow_scope": instance.workflow_scope.value,
         "training_ready": False,
+        "file_inputs": {name: asdict(asset) for name, asset in instance.input_files.items()},
     }
 
 
@@ -336,6 +367,12 @@ def inspection_page(root: Path, task: Identity, instance: Instance, files: TaskF
     inputs = "".join(
         f"<details><summary>{html.escape(name)}</summary><pre>{html.escape(text[:8000])}</pre>" "</details>"
         for name, text in instance.inputs.items()
+    )
+    inputs += "".join(
+        f"<details><summary>{html.escape(name)} ({asset.size_bytes:,} bytes)</summary>"
+        f"<p>SHA-256: <code>{asset.sha256}</code>. Original file bytes are preserved in the offline task bundle.</p>"
+        "</details>"
+        for name, asset in instance.input_files.items()
     )
     sections = {
         "Biological data provenance": json.dumps(
@@ -525,6 +562,7 @@ def build(
     base_image: str,
     tool_ref: str,
     recipe_ids: tuple[str, ...] | None = None,
+    source_cache: Path | None = None,
 ) -> dict:
     """Stream validated task binaries, manifests, oracles, and private inspection pages."""
     if instances_per_recipe < 1 or seed < 0:
@@ -658,7 +696,12 @@ def build(
                         digest = hashlib.sha256(f"{task.lineage}:distinct-input:{draw}".encode()).digest()
                         task = replace(task, seed=int.from_bytes(digest[:8], "big"))
                     instance = recipe.generate(task.seed)
-                    input_hash = hashlib.sha256(json.dumps(instance.inputs, sort_keys=True).encode()).hexdigest()
+                    input_metadata = {
+                        name: {"sha256": hashlib.sha256(text.encode()).hexdigest(), "size_bytes": len(text.encode())}
+                        for name, text in instance.inputs.items()
+                    }
+                    input_metadata.update({name: asdict(asset) for name, asset in instance.input_files.items()})
+                    input_hash = hashlib.sha256(json.dumps(input_metadata, sort_keys=True).encode()).hexdigest()
                     target_hash = hashlib.sha256(
                         json.dumps(
                             {
@@ -683,11 +726,11 @@ def build(
                 validation_start = time.monotonic()
                 reference_output = output / "reference-outputs" / task.task_id
                 validation = validate_instance(
-                    recipe, instance, reference_output, tuple(previous_outputs.get(recipe.id, ()))
+                    recipe, instance, reference_output, tuple(previous_outputs.get(recipe.id, ())), source_cache
                 )
                 validation_runtime = time.monotonic() - validation_start
                 previous_outputs.setdefault(recipe.id, []).append(reference_output)
-                files = task_files(recipe, instance, task, base_image, tool_ref)
+                files = task_files(recipe, instance, task, base_image, tool_ref, source_cache)
                 task_dir = output / "harbor" / task.split / task.task_id
                 files.write_to(task_dir)
                 solution = oracle_files(recipe)
@@ -730,7 +773,8 @@ def build(
                     "sources": recipe.sources,
                     "network": "offline",
                     "input_sha256": input_hash,
-                    "input_bytes": sum(len(text.encode("utf-8")) for text in instance.inputs.values()),
+                    "input_bytes": sum(asset["size_bytes"] for asset in input_metadata.values()),
+                    "input_files": input_metadata,
                     **instance_provenance(instance),
                     "distinct_instance_draw": draw,
                     "target_sha256": target_hash,
@@ -882,6 +926,7 @@ def main() -> None:
     parser.add_argument("--base-image", required=True, help="digest-pinned Python image with pip and venv")
     parser.add_argument("--tool-ref", required=True, help="full Marin commit for tasktrove-verify")
     parser.add_argument("--recipes", nargs="+", help="explicit recipe IDs; omitted builds every registered recipe")
+    parser.add_argument("--source-cache", type=Path, help="offline file inputs stored under their SHA-256 filenames")
     args = parser.parse_args()
     manifest = build(
         args.output,
@@ -890,6 +935,7 @@ def main() -> None:
         args.base_image,
         args.tool_ref,
         None if args.recipes is None else tuple(args.recipes),
+        args.source_cache,
     )
     print(json.dumps(manifest, indent=2))
 
