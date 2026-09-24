@@ -25,8 +25,11 @@ categories remain in the review backlog and can change this ranking.
 | 6 | Transcript structure and strand-aware reference audit | 6 | Complete matching eukaryotic reference and annotation |
 | 7 | Native BAM read-structure and eligibility audit | 2 | Overlaps the broader resequencing candidate; remove these targets if it completes first |
 
-The selected next step is source validation for the multi-locus workflow. Its
-46 targets have 13 related BixBench-Verified-50 records, which do not increase the
+New recipe implementation is paused while the candidate portfolio is expanded
+across every inventoried ID release and two existing tasks receive GLM-5.3 solver
+checks. Review both results before selecting the next implementation batch.
+The multi-locus candidate retains its conditional ranking among the original
+seven assessed candidates. Its 46 targets have 13 related BixBench-Verified-50 records, which do not increase the
 rank and still require separate protocol checks. A further endpoint requires
 naturally observed alignments with more than 70% gaps; it receives no priority
 credit until suitable data are confirmed. The existing single-gene COX1 example
@@ -35,8 +38,14 @@ does not establish multi-gene or biological-group coverage.
 Keep each task scientifically coherent, grounded in independent observations,
 offline and executable within 30 minutes. A matching package or component does
 not complete a benchmark workflow. Promote a mapping only after its required
-stages, complete artifacts, input-reading oracle and container checks pass. No
-teacher model API calls or language-model judge are used for task generation or grading.
+stages, complete artifacts, input-reading oracle and container checks pass.
+
+No language-model judge is used for task generation or grading. The two solver
+checks use the unchanged PhiX assembly and RNA-seq population-interaction tasks: one
+attempt each, high reasoning, 65,536 input tokens, 32,768 output tokens per ordinary
+request, 30 minutes per task and no automatic retries. Inspect commands, scientific
+choices, complete artifacts, verifier mismatches and request configuration before
+changing task contracts. These diagnostics do not start bulk teacher collection.
 
 Use at most one bounded worker alongside the lead. The lead owns prioritization,
 scientific workflow design, source suitability, oracle independence and coverage
@@ -44,8 +53,12 @@ decisions. Delegate factual source search, pinned installation and routine execu
 or artifact checks to GPT-6 Sol; simpler mechanical work can use GPT-6 Luna. Give
 each assignment explicit outputs, allowed actions and a stopping point. Review
 the evidence before integrating results, and avoid simultaneous heavy local work.
-The first assignment is a bounded primary-source search for independent multi-locus
-data, with no compute launches or code changes.
+The current assignment groups exact ID endpoints into candidate workflows and
+records inspection gaps, with no compute launches or implementation. A bounded
+source check has already verified 20 observed alignment/tree pairs in the pinned
+Medusozoa author repository. Sixteen meet the provisional clade-size requirement,
+but represent only seven original orthogroups; independent-locus coverage remains
+open. The queue retains this limitation and the PhyKIT metric-definition review.
 
 Completed: the observed PhiX assembly workflow validates the CompBioBench N50
 workflow adaptation. Its original Drosophila fixture and answer were not used;

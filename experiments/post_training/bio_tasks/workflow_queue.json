@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T12:13:31.340312+00:00",
+  "updated_at": "2026-09-24T12:43:12.296878+00:00",
   "basis_revision": "cda940f675d7d81252cabd76d6b11dfd6696c15e",
   "scope": "Provisional ID agentic benchmarks only. This queue selects new authoring work; it does not change benchmark coverage states.",
   "selection_policy": {
@@ -22,13 +22,13 @@
     "refresh": "After every completed or rejected candidate, recompute its remaining target set from benchmark inventories, remove newly covered shared targets from later candidates, reassess blockers and choose again. Record evidence before promoting any benchmark mapping.",
     "scope_limit": "Ranks compare the currently assessed candidate set, not all possible workflows in all releases. Source-review backlog entries remain explicit and can change the ranking."
   },
-  "selected_candidate": "multi-locus-phylogenomic-signal",
-  "selection_reason": "Largest currently assessed conditional gain: 46 distinct missing BixBench endpoint patterns, with 13 related Verified-50 protocols assessed separately. Validate independent multi-locus data first; reduce/re-rank if any required endpoint cannot be supported.",
+  "selected_candidate": null,
+  "selection_reason": "Pause new recipe implementation while completing an ID-wide candidate portfolio and two solver diagnostics on existing canonical tasks. Select the next implementation only after reviewing both evidence streams.",
   "candidates": [
     {
       "id": "multi-locus-phylogenomic-signal",
       "title": "Compare alignment quality and evolutionary signal across matched orthologs",
-      "status": "selected-for-source-validation",
+      "status": "source-partially-validated-awaiting-portfolio-review",
       "targets": [
         {
           "benchmark": "BixBench",
@@ -367,7 +367,81 @@
           "task_id": "bix-25-q4"
         }
       ],
-      "conditional_extra_reason": "The endpoint requires naturally observed alignments exceeding 70% gaps. It adds no rank credit until such data are verified; no artificial gaps will be inserted."
+      "conditional_extra_reason": "The endpoint requires naturally observed alignments exceeding 70% gaps. It adds no rank credit until such data are verified; no artificial gaps will be inserted.",
+      "source_assessments": [
+        {
+          "source": "Dryad:10.5061/dryad.6q573n6dc",
+          "url": "https://datadryad.org/dataset/doi:10.5061/dryad.6q573n6dc",
+          "status": "metadata-reviewed-download-blocked",
+          "license_reported": "CC0-1.0",
+          "independent_clades": [
+            "Medusozoa",
+            "Anthozoa"
+          ],
+          "reported_single_copy_loci": 1742,
+          "observed_access_checks": [
+            {
+              "url": "https://datadryad.org/api/v2/files/4868591/download",
+              "http_status": 401
+            },
+            {
+              "url": "https://datadryad.org/downloads/file_stream/4868591",
+              "http_status": 403
+            }
+          ],
+          "downloaded_bytes": 0,
+          "limitation": "Anonymous Dryad download remains blocked. The pinned author mirror has separately validated individual alignments and matching trees."
+        },
+        {
+          "source": "Medusozoa author mirror",
+          "url": "https://github.com/ucsb-oakley-lab/Medusozoa_project/tree/8567586becd3016ae5b49c355298a0a71b523916",
+          "source_revision": "8567586becd3016ae5b49c355298a0a71b523916",
+          "status": "bounded-files-validated",
+          "verified_git_blobs": 44,
+          "downloaded_bytes": 1625844,
+          "alignment_tree_pairs": 20,
+          "unique_tip_sets_match": true,
+          "clades": [
+            "Hydrozoa",
+            "Scyphozoa"
+          ],
+          "pairs_with_at_least_six_taxa_per_clade": 16,
+          "distinct_original_orthogroups_in_eligible_pairs": 7,
+          "symmetry_filter_reconciliation": {
+            "all_alignments": 1771,
+            "passed": 1742,
+            "failed": 29
+          },
+          "limitation": "Multiple pruned groups share an original orthogroup. Twenty independent original loci remain unverified. Four taxon spellings are unresolved. No native phylogenetic metrics or task execution yet."
+        }
+      ],
+      "definition_review": {
+        "package": "PhyKIT",
+        "source_revision": "a9af92b60111ac77c9c1c7df3e9695d2d4f62dca",
+        "source_version": "2.7.0",
+        "native_execution": "not-run",
+        "findings": [
+          {
+            "metric": "long_branch_score",
+            "source_url": "https://github.com/JLSteenwyk/PhyKIT/blob/a9af92b60111ac77c9c1c7df3e9695d2d4f62dca/phykit/services/tree/lb_score.py#L244",
+            "finding": "The implementation explicitly preserves a historical set(tip) bug, using characters from an identifier rather than a singleton taxon set. For ordinary multi-character taxon identifiers it includes the zero self-distance in the per-tip mean, unlike a mean over other taxa.",
+            "affected_targets": [
+              "bix-28-q1",
+              "bix-28-q2",
+              "bix-28-q3",
+              "bix-28-q4",
+              "bix-28-q5",
+              "bix-28-q6"
+            ],
+            "decision": "Keep all six targets conditional. The task must distinguish version-specific native output from the self-excluded scientific statistic and verify both before any coverage promotion."
+          },
+          {
+            "metric": "degree_of_violation_of_a_molecular_clock",
+            "source_url": "https://github.com/JLSteenwyk/PhyKIT/blob/a9af92b60111ac77c9c1c7df3e9695d2d4f62dca/phykit/services/tree/dvmc.py",
+            "finding": "This pinned implementation computes sample standard deviation of root-to-tip distances without dividing by their mean. Root choice and the exclusion of outgroups must therefore be explicit."
+          }
+        ]
+      }
     },
     {
       "id": "factorial-rnaseq-pathway-comparison",
@@ -1120,19 +1194,36 @@
       "Do not repeat failed installations or compute jobs without diagnosis and existing authorization."
     ],
     "current_assignment": {
-      "id": "multilocus-source-search-20260924",
-      "candidate": "multi-locus-phylogenomic-signal",
+      "id": "whole-id-workflow-planning-20260924",
       "model": "gpt-6-sol",
-      "status": "source-search-assigned",
-      "deliverable": "At most three primary-source data candidates with access method, observed sequence/orthology evidence, license, size and limitations.",
+      "status": "expanding-first-pass",
+      "deliverable": "Candidate portfolio and exact target references across every inventoried ID release, with explicit gaps for uninspected endpoints and inaccessible sources.",
       "limits": {
-        "primary_source_search_open_calls": 10,
-        "target_minutes": 10,
-        "max_download_bytes": 1048576,
+        "active_children": 1,
         "compute_jobs": 0,
-        "code_changes": 0
+        "model_api_calls": 0,
+        "repository_edits": 0
       },
-      "review_required": "Lead confirms scientific fit and data independence before download, implementation or coverage updates."
+      "review_required": "Lead reviews endpoint contracts, scientific coherence, distinct gain, independent input design and verifier feasibility before implementation."
+    },
+    "solver_diagnostics": {
+      "status": "submitted",
+      "task_ids": [
+        "real-phix-assembly-v1-20260923-00000",
+        "real-rnaseq-population-interaction-v1-20260923-00000"
+      ],
+      "model": "GLM-5.3",
+      "reasoning_effort": "high",
+      "agent": "Terminus-2",
+      "harbor_revision": "d072bef08e54050880b484eb81d892944d1d82fb",
+      "max_input_tokens": 65536,
+      "max_output_tokens": 32768,
+      "agent_timeout_seconds": 1800,
+      "attempts_per_task": 1,
+      "concurrent_trials": 1,
+      "automatic_retries": 0,
+      "llm_judge": false,
+      "purpose": "Inspect solver traces, complete artifact grades, instruction ambiguity, runtime and token use before further recipe implementation. Existing task bytes and graders are unchanged."
     }
   }
 }
