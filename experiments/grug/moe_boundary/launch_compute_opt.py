@@ -44,13 +44,14 @@ from marin.experiment.data import mixture
 from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import LevanterCheckpoint
 
-from experiments.grug.moe_boundary.heuristic import build_from_heuristic
+from experiments.grug.moe.optimizer import GrugMoeMuonHConfig
+from experiments.grug.moe_boundary.heuristic import MoeHeuristic
 from experiments.grug.moe_boundary.launch import (
     GrugMoeLaunchConfig,
     grug_moe_boundary_mix,
     run_grug_moe_trial,
 )
-from experiments.grug.moe_boundary.model import split_prelude_core_coda
+from experiments.grug.moe_boundary.model import GrugModelConfig, split_prelude_core_coda
 from experiments.grug.moe_boundary.train import GrugEvalConfig, GrugTrainerConfig
 
 _SEQ: int = 4096  # README baseline measurement condition
@@ -66,6 +67,35 @@ _BASELINE_CELLS: dict[int, tuple[float, int, int]] = {
 
 _TRAIN_RESOURCES = ResourceConfig.with_tpu("v4-32")
 
+# Recorded May Recipe baseline optimizer values (issue #6822 reference JSONs,
+# ``larry_reference_d512.json`` / ``larry_reference_d768.json``); used by
+# ``test_boundary_operator.py`` to pin the launcher's recipe construction.
+_BASELINE_OPTIMIZER_VALUES: dict[int, tuple[float, float, float]] = {
+    512: (0.002262484662398392, 0.009804100203726364, 1.013904451356241e-15),
+    768: (0.0019322207208158667, 0.008372956456868755, 1.2569492710527345e-15),
+}
+
+
+def baseline_recipe(hidden_dim: int) -> tuple[GrugModelConfig, GrugMoeMuonHConfig, tuple[float, int, int]]:
+    """(model, optimizer, (budget, batch, steps)) for a May Recipe baseline cell.
+
+    The optimizer is built from the PINNED batch and steps of the README cell
+    - not from what ``build_from_heuristic`` would derive (at d768 the derived
+    batch is 128 while the README cell pins 64, which detuned LR/epsilon/
+    beta2 by sqrt(2)). Tokens are the cell's actual trained tokens
+    (batch * steps * seq_len), and the schedule decays to zero like the
+    documented baseline (``min_lr_ratio = 0``), not to the heuristic's 5%
+    floor. This reproduces the recorded baseline recipes exactly: it matches
+    the ``larry_reference_d512/d768.json`` optimizer values to all printed
+    digits.
+    """
+    budget, batch_size, steps = _BASELINE_CELLS[hidden_dim]
+    heuristic = MoeHeuristic(min_lr_ratio=0.0)
+    model = heuristic.build_model_config(hidden_dim, seq_len=_SEQ)
+    tokens = batch_size * steps * _SEQ
+    optimizer = heuristic.build_optimizer_config(batch_size, tokens, hidden_dim, seq_len=_SEQ)
+    return model, optimizer, (budget, batch_size, steps)
+
 
 def boundary_cell(
     *, hidden_dim: int, alpha: float, lr_scale: float = 1.0, version: str | None = None
@@ -76,11 +106,12 @@ def boundary_cell(
     operator's injection weight (paper arms: 0.707 and 1.0). ``lr_scale``
     multiplies the heuristic's optimizer learning rates (debug ladder only).
     """
-    budget, batch_size, steps = _BASELINE_CELLS[hidden_dim]
-    # Model + optimizer from the heuristic at this budget, then pin the legacy
+    # Model + optimizer via ``baseline_recipe`` (pinned cell batch/steps,
+    # budget-derived model, ``min_lr_ratio = 0``), then pin the legacy
     # measurement conditions and add the boundary operator with the paper's
     # even P/C/D split.
-    model, optimizer, _, _ = build_from_heuristic(budget=budget, hidden_dim=hidden_dim, seq_len=_SEQ)
+    _, batch_size, steps = _BASELINE_CELLS[hidden_dim]
+    model, optimizer, _ = baseline_recipe(hidden_dim)
     split = split_prelude_core_coda(model.num_layers)
     prelude_len, coda_len = split.prelude, split.coda
     if lr_scale != 1.0:

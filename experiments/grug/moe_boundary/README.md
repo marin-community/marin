@@ -219,7 +219,10 @@ inference latency / KV-cache size, serving compatibility, or interaction effects
 - [`launch_compute_opt.py`](./launch_compute_opt.py) — boundary-operator
   compute-optimal cells at the four May Recipe baseline points, with the
   legacy measurement conditions pinned (seq 4096, PKO on, long RoPE on,
-  z-loss off, v4-32 EP=1).
+  z-loss off, v4-32 EP=1) and the optimizer built from the pinned README
+  cell (batch, steps, and their tokens) with `min_lr_ratio = 0` to match
+  the documented baseline schedule — this reproduces the recorded baseline
+  recipes (`larry_reference_d512/d768.json`) exactly.
 - [`test_boundary_operator.py`](./test_boundary_operator.py) — unit tests:
   boundary-off parity with the parent model, split rule, config validation,
   HF round-trip.
