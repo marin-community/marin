@@ -56,7 +56,8 @@ def test_gated_grouped_gemm_keeps_preact_and_interleaved_swiglu(use_clc):
     _assert_bfloat16_close(postact, jax.nn.silu(expected[:, 0::2]) * expected[:, 1::2])
 
 
-def test_expert_mlp_forward_and_all_gradients_match_reference():
+@pytest.mark.parametrize("tail_rows", [0, 127])
+def test_expert_mlp_forward_and_all_gradients_match_reference(tail_rows):
     _require_sm100()
     sonic = importlib.import_module("levanter.grug._moe.sonic_cute")
     rng = np.random.default_rng(7)
@@ -64,6 +65,9 @@ def test_expert_mlp_forward_and_all_gradients_match_reference():
     w13 = jnp.asarray(rng.normal(0, 0.2, (3, 64, 128)), dtype=jnp.bfloat16)
     w2 = jnp.asarray(rng.normal(0, 0.2, (3, 64, 64)), dtype=jnp.bfloat16)
     dy = jnp.asarray(rng.normal(0, 0.2, (_NUM_TOKENS, 64)), dtype=jnp.bfloat16)
+    # Unused capacity must not affect active outputs or any expert weight gradient.
+    x = jnp.pad(x, ((0, tail_rows), (0, 0)), constant_values=jnp.nan)
+    dy = jnp.pad(dy, ((0, tail_rows), (0, 0)), constant_values=jnp.nan)
     cu = jnp.asarray(_CU_SEQLENS, dtype=jnp.int32)
 
     def reference(a, b, c):
@@ -74,10 +78,16 @@ def test_expert_mlp_forward_and_all_gradients_match_reference():
             outputs.append(h @ c[expert])
         return jnp.concatenate(outputs)
 
-    actual, actual_pullback = jax.vjp(jax.jit(lambda a, b, c: sonic._expert_mlp_quack_wgrad(a, b, c, cu)), x, w13, w2)
+    expert_mlp = jax.jit(lambda a, b, c: sonic._expert_mlp_quack_wgrad(a, b, c, cu))
+    actual, actual_pullback = jax.vjp(expert_mlp, x, w13, w2)
     expected, expected_pullback = jax.vjp(jax.jit(reference), x, w13, w2)
-    _assert_bfloat16_close(actual, expected)
-    for got, want in zip(actual_pullback(dy), expected_pullback(dy), strict=True):
+    primal = expert_mlp(x, w13, w2)
+    _assert_bfloat16_close(primal[:_NUM_TOKENS], expected)
+    _assert_bfloat16_close(actual[:_NUM_TOKENS], expected)
+    actual_gradients = actual_pullback(dy)
+    expected_gradients = expected_pullback(dy[:_NUM_TOKENS])
+    _assert_bfloat16_close(actual_gradients[0][:_NUM_TOKENS], expected_gradients[0][:_NUM_TOKENS])
+    for got, want in zip(actual_gradients[1:], expected_gradients[1:], strict=True):
         _assert_bfloat16_close(got, want)
 
 

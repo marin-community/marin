@@ -40,6 +40,20 @@ system and user messages, unparsed assistant `content` and reasoning fields,
 structured tool calls, tool results, and errors. The OpenAI-compatible response
 does not include numeric token IDs, so the dashboard cannot display those.
 
+Enable **vLLM debug** beside Raw chat to record request stats on each assistant
+reply. Open **Request stats** below a reply to see server-reported time to first
+token (TTFT), queue time, generation time, mean inter-token latency (the average
+gap between generated tokens), output tokens per second, and prompt/output token
+counts. The checkbox is off by default. It works with streaming and buffered
+chat responses. The dashboard requests usage at the end of a streaming chat
+response only while the checkbox is enabled. Stats are saved with the browser's
+conversation history but are excluded from Raw chat and shared-chat links.
+
+Start the serving process with `--vllm-arg=--enable-per-request-metrics` to
+receive timings. The foldout explains when the server does not return them; token
+counts still appear when the response includes usage. A single-token response
+can have no mean inter-token latency.
+
 ## Rendered output and shared chats
 
 Assistant messages render Markdown. Unfenced HTML and XML from the model are

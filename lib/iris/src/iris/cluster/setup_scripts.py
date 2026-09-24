@@ -24,6 +24,12 @@ from collections.abc import Sequence
 
 # cloudpickle for callable entrypoints, py-spy/memray for the profiler attach paths.
 _IRIS_RUNTIME_DEPS = ("cloudpickle", "py-spy", "memray")
+# Copied files keep an installed environment usable after `uv cache clean` removes
+# its cache entries, and they keep their file modes. On CoreWeave's node-local XFS
+# the copy shares extents with the cache, so it costs little time or space. Clone
+# mode would do the same, but the task image's uv 0.10.3 drops executable bits when
+# it makes XFS reflinks, which leaves wheel binaries such as ptxas unrunnable.
+_UV_LINK_MODE_FLAG = "--link-mode copy"
 
 
 def _uv_sync_target(packages: Sequence[str] | None) -> str:
@@ -76,9 +82,6 @@ def default_setup_script(
     # --frozen when a lockfile is present skips resolution; ConfigMap-based
     # workdirs may drop uv.lock (>1MB limit), so fall back to a normal resolve.
     frozen_flag = "$([ -f uv.lock ] && echo '--frozen' || echo '')"
-    # Clone wheels from the uv cache into the venv. CoreWeave uses reflinks on
-    # node-local XFS; uv falls back to copies when clone-on-write is unavailable.
-    link_mode_flag = "--link-mode clone"
     target = _uv_sync_target(packages)
     extra_flags = _extra_flags(extras)
 
@@ -87,7 +90,7 @@ def default_setup_script(
         for part in [
             "uv sync",
             frozen_flag,
-            link_mode_flag,
+            _UV_LINK_MODE_FLAG,
             python_flag,
             target,
             "--no-dev",
@@ -113,7 +116,7 @@ def default_setup_script(
     ]
     if pip_packages:
         pip_args = " ".join(shlex.quote(p) for p in pip_packages)
-        pip_cmd = " ".join(["uv pip install", link_mode_flag, pip_args])
+        pip_cmd = " ".join(["uv pip install", _UV_LINK_MODE_FLAG, pip_args])
         lines += ["echo 'installing pip deps'", pip_cmd]
     return "\n".join(lines) + "\n"
 
@@ -137,27 +140,14 @@ def cuda_toolchain_setup_script() -> str:
     """Return a setup script that exposes the venv's CUDA toolchain to JAX/Pallas.
 
     Appended to a GPU job's setup so Mosaic GPU kernels compile and JAX sees the
-    CUDA 13 shared libraries after mixed CUDA package installs. It puts the
-    ``jax[cuda13]`` toolchain (``ptxas``/``nvlink``) on ``PATH``, stages
-    ``libdevice.10.bc`` where XLA looks, and restores CUDA 13 cuDNN and NCCL
-    precedence when those packages are installed. A no-op when the venv carries
-    no CUDA toolchain.
+    CUDA 13 shared libraries after mixed CUDA package installs. It restores CUDA 13
+    cuDNN and NCCL precedence when those packages are installed, puts the
+    ``jax[cuda13]`` toolchain (``ptxas``/``nvlink``) on ``PATH``, and stages
+    ``libdevice.10.bc`` where XLA looks. Staging is a no-op when the venv carries
+    no ``ptxas``, and the script fails when ``ptxas`` is present but not executable.
     """
     cuda_13_library_packages = " ".join(CUDA_13_LIBRARY_PACKAGES)
     return rf"""set -e
-cuda_bin=""
-for _d in "$IRIS_VENV"/lib/python*/site-packages/nvidia/cu*/bin; do
-  if [ -x "$_d/ptxas" ]; then cuda_bin="$_d"; break; fi
-done
-if [ -z "$cuda_bin" ]; then echo 'no CUDA toolchain to stage'; exit 0; fi
-echo 'staging CUDA toolchain'
-ln -sf "$cuda_bin"/* "$IRIS_VENV/bin/"
-_libdevice="$(dirname "$cuda_bin")/nvvm/libdevice/{_LIBDEVICE_FILE}"
-if [ -f "$_libdevice" ]; then
-  mkdir -p "$IRIS_WORKDIR/{_XLA_CUDA_DATA_DIR}/nvvm/libdevice"
-  cp -f "$_libdevice" "$IRIS_WORKDIR/{_XLA_CUDA_DATA_DIR}/nvvm/libdevice/{_LIBDEVICE_FILE}"
-  cp -f "$_libdevice" "$IRIS_WORKDIR/{_LIBDEVICE_FILE}"
-fi
 for _cuda13_package in {cuda_13_library_packages}; do
   _cuda13_version=""
   if [ -x "$IRIS_VENV/bin/python" ]; then
@@ -176,11 +166,28 @@ PY
   if [ -n "$_cuda13_version" ]; then
     echo "restoring CUDA 13 library precedence for $_cuda13_package"
     uv pip install --python "$IRIS_VENV/bin/python" \
-      --link-mode clone \
+      {_UV_LINK_MODE_FLAG} \
       --reinstall-package "$_cuda13_package" \
       "$_cuda13_package==$_cuda13_version"
   fi
 done
+cuda_bin=""
+for _d in "$IRIS_VENV"/lib/python*/site-packages/nvidia/cu*/bin; do
+  if [ -f "$_d/ptxas" ]; then cuda_bin="$_d"; break; fi
+done
+if [ -z "$cuda_bin" ]; then echo 'no CUDA toolchain to stage'; exit 0; fi
+if [ ! -x "$cuda_bin/ptxas" ]; then
+  echo "$cuda_bin/ptxas is not executable; the venv install lost file modes" >&2
+  exit 1
+fi
+echo 'staging CUDA toolchain'
+ln -sf "$cuda_bin"/* "$IRIS_VENV/bin/"
+_libdevice="$(dirname "$cuda_bin")/nvvm/libdevice/{_LIBDEVICE_FILE}"
+if [ -f "$_libdevice" ]; then
+  mkdir -p "$IRIS_WORKDIR/{_XLA_CUDA_DATA_DIR}/nvvm/libdevice"
+  cp -f "$_libdevice" "$IRIS_WORKDIR/{_XLA_CUDA_DATA_DIR}/nvvm/libdevice/{_LIBDEVICE_FILE}"
+  cp -f "$_libdevice" "$IRIS_WORKDIR/{_LIBDEVICE_FILE}"
+fi
 """
 
 
@@ -193,7 +200,7 @@ def iris_runtime_setup_script() -> str:
     install only warns, so it never fails the job.
     """
     pkgs = " ".join(shlex.quote(p) for p in _IRIS_RUNTIME_DEPS)
-    pip_cmd = " ".join(["uv pip install", "--link-mode clone", pkgs])
+    pip_cmd = " ".join(["uv pip install", _UV_LINK_MODE_FLAG, pkgs])
     return (
         'cd "$IRIS_WORKDIR" 2>/dev/null || true\n'
         'if [ -d "$IRIS_VENV" ]; then\n'

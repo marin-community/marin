@@ -34,8 +34,11 @@ from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
     IrisConfig,
     LevanterEngineConfig,
+    ResolvedModelLocator,
     ServedModelConfig,
     ServingGeometry,
+    SpeculativeMethod,
+    SpeculativeServingConfig,
     VllmEngineConfig,
     VllmLauncherType,
     VllmSource,
@@ -47,7 +50,7 @@ from marin.inference.dashboard_server import (
     build_dashboard_app,
     serve_app_background,
 )
-from marin.inference.iris import IrisServiceConfig, _resolved_model, run_iris_service
+from marin.inference.iris import IrisServiceConfig, _resolved_engine, _resolved_model, run_iris_service
 from marin.inference.iris_cli import (
     _checkout_free_setup_script,
     _mint_and_print_capability_url,
@@ -269,6 +272,53 @@ def test_resolved_model_keeps_requested_id_as_served_name(monkeypatch):
     assert resolved.model_id == "Qwen/Qwen3-0.6B"
 
 
+def test_speculative_model_uses_resolved_uri_in_vllm_launch(monkeypatch):
+    observed: dict[str, object] = {}
+
+    @contextmanager
+    def environment(**kwargs):
+        observed.update(kwargs)
+        yield SimpleNamespace(
+            model_id="target",
+            server_url="http://127.0.0.1:8000/v1",
+            wait_until_ready=lambda: None,
+        )
+
+    monkeypatch.setattr("marin.inference.vllm_backend.VllmEnvironment", environment)
+    monkeypatch.setattr("marin.inference.vllm_backend.vllm_launcher", lambda _config: object())
+    monkeypatch.setattr("marin.inference.vllm_backend.read_tool_chat_template", lambda *_args: None)
+    monkeypatch.setattr(
+        "marin.inference.model_preparation.resolve_model_path",
+        lambda model, _cache_ttl_days, _revision=None: f"/cache/{model.rsplit('/', 1)[-1]}",
+    )
+    iris = IrisConfig(
+        worker_resources=ResourceConfig.with_gpu("H100", count=1),
+        worker_environment=create_environment(extras=["gpu"]),
+    )
+    engine = VllmEngineConfig(
+        speculative=SpeculativeServingConfig(
+            method=SpeculativeMethod.EAGLE3,
+            model=ResolvedModelLocator(
+                uri="s3://models/eagle-draft",
+                identity="models/eagle@2026.09.23:abc123",
+            ),
+            num_speculative_tokens=3,
+        )
+    )
+
+    resolved = _resolved_engine(engine, iris)
+
+    with local_inference(ServedModelConfig(weights="org/target", api_model="target"), resolved, num_chips=1):
+        pass
+
+    extra_args = observed["extra_args"]
+    assert json.loads(extra_args[extra_args.index("--speculative-config") + 1]) == {
+        "method": "eagle3",
+        "model": "/cache/eagle-draft",
+        "num_speculative_tokens": 3,
+    }
+
+
 def test_checkout_free_setup_script_pins_marin_core_with_extras():
     # The worker install folds the requested extras and the launching CLI's exact version
     # (for cloudpickle compat) into the pip spec; vLLM stays out — it comes from uvx.
@@ -301,9 +351,11 @@ def test_isolated_cuda_vllm_marin_fork_uses_verified_wheel(monkeypatch, machine)
     assert cmd[cmd.index("--index-strategy") + 1] == "unsafe-best-match"
     assert "--torch-backend" not in cmd
     requirements = [cmd[index + 1] for index, value in enumerate(cmd) if value == "--with"]
+    assert f"torch=={VLLM_GPU_RELEASE.torch_version}" in requirements
     toolchain = {requirement.partition("==")[0]: requirement.partition("==")[2] for requirement in requirements}
-    toolchain_packages = {"nvidia-cuda-nvcc", "nvidia-cuda-crt", "nvidia-cuda-nvrtc", "nvidia-nvvm"}
+    toolchain_packages = {"nvidia-cuda-nvcc", "nvidia-cuda-crt", "nvidia-nvvm"}
     assert set(toolchain) >= toolchain_packages
+    assert "nvidia-cuda-nvrtc" not in toolchain
     assert {toolchain[package] for package in toolchain_packages} == {
         CUDA_TOOLCHAIN_VERSION_BY_BACKEND[VLLM_GPU_RELEASE.torch_backend]
     }
@@ -319,6 +371,7 @@ def test_isolated_cuda_vllm_marin_fork_uses_verified_wheel(monkeypatch, machine)
     assert "VLLM_USE_FLASHINFER_SAMPLER" not in env
     assert "addressing_style = virtual" in Path(env["AWS_CONFIG_FILE"]).read_text()
     assert requirement in launcher.cache_identity()
+    assert VLLM_GPU_RELEASE.torch_version in launcher.cache_identity()
 
 
 def test_isolated_cuda_vllm_marin_fork_rejects_unpublished_architecture(monkeypatch):
@@ -363,9 +416,9 @@ def test_isolated_cuda_vllm_bootstrap_exposes_wheel_nvcc(tmp_path):
     assert set(requirements) >= {
         "nvidia-cuda-nvcc==13.0.88",
         "nvidia-cuda-crt==13.0.88",
-        "nvidia-cuda-nvrtc==13.0.88",
         "nvidia-nvvm==13.0.88",
     }
+    assert not any(requirement.startswith("nvidia-cuda-nvrtc==") for requirement in requirements)
     assert "addressing_style = virtual" in Path(launcher.env()["AWS_CONFIG_FILE"]).read_text()
     bootstrap_index = command.index("-c")
     bootstrap = command[bootstrap_index + 1]
@@ -811,6 +864,23 @@ def test_iris_serve_no_wait_is_an_explicit_opt_out_of_minting(monkeypatch):
     assert "Submitted" in result.output
 
 
+def test_iris_serve_proxy_timeout_covers_broker_worker_and_lease(monkeypatch):
+    result, _client, services, _mint = _invoke_iris_serve(
+        monkeypatch,
+        "--instances",
+        "4",
+        "--proxy-timeout",
+        "3600",
+        "--no-wait",
+    )
+
+    assert result.exit_code == 0, result.output
+    broker = services[0].broker
+    assert broker.proxy.request_timeout_seconds == 3600
+    assert broker.worker.request_timeout_seconds == 3240
+    assert broker.request_lease_timeout_seconds == 3420
+
+
 def test_iris_serve_resolves_additive_metric_families_before_submission(monkeypatch, tmp_path):
     config = tmp_path / "metrics.toml"
     config.write_text('families = ["vllm:custom_scheduler_pressure"]\n')
@@ -913,12 +983,16 @@ def _fake_vllm_app() -> Starlette:
     async def completions(_request):
         return _sse([{"choices": [{"text": tok}]} for tok in ("123", "456")])
 
+    async def metrics(_request):
+        return PlainTextResponse("# TYPE vllm:generation_tokens_total counter\nvllm:generation_tokens_total 42\n")
+
     return Starlette(
         routes=[
             Route("/health", health),
             Route("/v1/models", models),
             Route("/v1/chat/completions", chat, methods=["POST"]),
             Route("/v1/completions", completions, methods=["POST"]),
+            Route("/metrics", metrics),
         ]
     )
 
@@ -977,6 +1051,7 @@ def test_dashboard_serves_ui_and_reverse_proxies_streaming():
             assert requests.get(f"{base}/info", timeout=10).json() == dataclasses.asdict(info)
             assert requests.get(f"{base}/health", timeout=10).json() == {"status": "ok", "model": "fake-model"}
             assert requests.get(f"{base}/v1/models", timeout=10).json()["data"][0]["id"] == "fake-model"
+            assert "vllm:generation_tokens_total 42" in requests.get(f"{base}/metrics", timeout=10).text
 
             chat = requests.post(
                 f"{base}/v1/chat/completions",

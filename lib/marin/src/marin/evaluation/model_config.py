@@ -13,7 +13,7 @@ from pathlib import Path
 import draccus
 from rigging.filesystem.storage_path import StoragePath
 
-from marin.inference.config import resolve_tokenizer_revision, validate_pipeline_args
+from marin.inference.config import SpeculativeServingConfig, resolve_tokenizer_revision, validate_pipeline_args
 
 
 class ServeBackend(StrEnum):
@@ -92,6 +92,7 @@ class ServeConfig:
     vllm_batch_invariant: bool | None = None
     vllm_use_flashinfer_sampler: bool | None = None
     vllm_extra_args: tuple[str, ...] = ()
+    speculative: SpeculativeServingConfig | None = None
     chat_template: str | None = None
     auto_overrides: bool = True
 
@@ -115,6 +116,11 @@ class ServeConfig:
                 raise ValueError("gpu_memory_utilization requires the vLLM backend")
             if has_vllm_option(self.vllm_extra_args, "--gpu-memory-utilization"):
                 raise ValueError("gpu_memory_utilization conflicts with --gpu-memory-utilization in extra args")
+        if self.speculative is not None:
+            if self.backend is not ServeBackend.VLLM:
+                raise ValueError("speculative serving requires the vLLM backend")
+            if has_vllm_option(self.vllm_extra_args, "--speculative-config"):
+                raise ValueError("speculative serving conflicts with --speculative-config in extra args")
 
 
 @dataclass(frozen=True)
@@ -141,18 +147,20 @@ class ModelConfig:
     """A model the launcher can serve and evaluate: where its weights live and how to serve/query it.
 
     ``name`` is the slash-free launch identity used in Iris job names and record paths. ``location``
-    is an HF repo id or an object-store (``gs://``/``s3://``) HF-format export directory; an
-    object-store location requires ``tokenizer`` (the eval client loads its tokenizer through HF).
-    ``revision`` pins an immutable checkpoint for a base HF model. ``tokenizer_revision`` pins the
-    tokenizer repository. When ``tokenizer`` is omitted, it defaults to ``location`` and its revision
-    defaults to ``revision``. ``apply_chat_template`` controls whether Evalchemy formats requests with
-    the tokenizer's chat template. ``resource_hint`` states where the model is compatible; ``serve``
+    is an HF repo id or an object-store (``gs://``/``s3://``) HF-format export directory, while
+    ``identity`` pins the producer of a resolved artifact. An object-store location requires
+    ``tokenizer`` because the eval client loads its tokenizer through HF. ``revision`` pins an
+    immutable checkpoint for a base HF model. ``tokenizer_revision`` pins the tokenizer repository.
+    When ``tokenizer`` is omitted, it defaults to ``location`` and its revision defaults to
+    ``revision``. ``apply_chat_template`` controls whether Evalchemy formats requests with the
+    tokenizer's chat template. ``resource_hint`` states where the model is compatible; ``serve``
     states how its inference server behaves. ``generation`` and ``agent`` are experiment-definition
     inputs and never affect inference placement.
     """
 
     name: str
     location: str
+    identity: str | None = None
     revision: str | None = None
     tokenizer: str | None = None
     tokenizer_revision: str | None = None
