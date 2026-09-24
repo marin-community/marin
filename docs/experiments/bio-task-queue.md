@@ -122,14 +122,15 @@ for every card. The two simulated/planted source constructions retain explicit
 observed-data adaptation limits. These contracts support planning; source answers
 and fixed grader literals are not used to author training inputs or rewards.
 
-## Biomni-Eval1 database-query contracts
+## Biomni-Eval1 database and sequence contracts
 
 The [Biomni-Eval1 designs](../../experiments/post_training/bio_tasks/workflow_designs/biomni-eval1.json)
-now specify complete artifacts and incorrect-output checks for all seven DBQA
-families, following review of their 50 question stems. Independent resource exports,
-redistribution rights, exact schemas and runtime remain unresolved. This review
-adds no tasks or validated mappings; the other 383 records retain their existing
-inspection limits.
+now specify complete artifacts and incorrect-output checks for all 14 DBQA/SeqQA
+families, following review of their 100 question stems. Independent inputs,
+redistribution rights, exact schemas, scientific conventions and runtime remain
+unresolved. This review adds no tasks or validated mappings; the other 333 records
+retain their existing inspection limits. SeqQA contracts assign each source ID to
+its exact query mode, so a simpler operation cannot silently cover a whole family.
 
 | Family | Source records | Required distinction |
 |---|---:|---|
@@ -140,6 +141,13 @@ inspection limits.
 | Cytoband location | 4 | Resolve parent/sub-band intervals and the declared gene-location predicate on one assembly/release. |
 | miRNA target lookup | 4 | Preserve mature-miRNA arms and prediction-resource membership; RNA folding is a different endpoint. |
 | Disease-resource difference | 3 | Compare two complete, compatible resource exports; absent records do not establish biological absence. |
+| Restriction digestion | 7 | Four length and three count queries require complete fragment multisets and cleavage geometry, including two-cut enzymes. |
+| ORF analysis | 11 | Two threshold counts, six longest-protein queries and three residue queries need explicit ORF, genetic-code and tie rules. |
+| Amplicon reconstruction | 7 | Two sequence-target, two length-target and three given-pair queries require separate sequence/length predicates and all possible products. |
+| Assembly-primer compatibility | 9 | Candidate-pair selection requires both junctions and the complete product on independent published sequence records. |
+| Restriction-cloning compatibility | 8 | Six primer-choice and two enzyme-choice queries preserve end polarity, internal cuts and complete products. |
+| GC calculation | 4 | Grade exact base counts and percent before integer rounding, with explicit ambiguity and denominator rules. |
+| Translation efficiency | 4 | Sequence-context predictions and measured translation are distinct; an amino-acid translation does not answer the source endpoint. |
 
 Protein substitutions can match multiple nucleotide variants, and classification
 depends on record level and assertion type. The contracts preserve that ambiguity
@@ -147,6 +155,13 @@ instead of inventing one genomic allele ([ClinVar query documentation](https://w
 Predicted interaction and miRNA target records are not measured outcomes. Any
 observed-data adaptation must retain the source lookup endpoint or record the
 coverage gap; adding experimental data does not itself establish equivalence.
+
+The translation-efficiency proposal retains an unresolved observed-data adaptation:
+compare prespecified sequence predictions with matched assays in a defined human-cell
+context. Ribosome occupancy per mRNA needs a declared estimand and is not automatically
+a direct protein-production rate ([primary study](https://pmc.ncbi.nlm.nih.gov/articles/PMC11326257/)).
+Feature-only scoring remains component coverage. Sequence-oracle agreement establishes
+the specified computation, not laboratory yield or measured expression.
 
 ## Broader question portfolio
 

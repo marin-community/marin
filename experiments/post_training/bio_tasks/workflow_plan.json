@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T16:29:12.401391+00:00",
+  "updated_at": "2026-09-24T16:35:25.945983+00:00",
   "basis_revision": "952929c306",
   "scope": "Agentic provisional-ID benchmarks only; preserve all existing OOD exclusions. Plan the broad task set before further recipe implementation.",
   "authoring_unit": "One coherent observed-data task per recipe by default. Proposed questions are separate task designs, not repeated instances. They may be split or merged after endpoint and runtime checks.",
@@ -13250,11 +13250,11 @@
     },
     {
       "path": "workflow_designs/biomni-eval1.json",
-      "sha256": "2f3bbfb1b2601bbdc9b58630a097c42118bf5686ff330ef821b94ef833f2dd71",
+      "sha256": "864673bb49d1935b5843bb0fbae0da0e3ce504a186dc46068c00bd27d31c7d6c",
       "benchmark_id": "Biomni-Eval1 tool-enabled",
       "inventory_records_assigned": 433,
       "proposed_question_cards": 20,
-      "inspection_basis": "All 50 DBQA question stems and clinical input modes reviewed; seven family-specific contracts. Other records retain shared-protocol review and unreviewed evidence.",
+      "inspection_basis": "All 100 DBQA/SeqQA question stems reviewed with 14 family contracts and exact SeqQA query-mode assignments. Other records retain shared-protocol review and unreviewed evidence.",
       "relationship_to_workstream_questions": "Refines existing workstreams; no independent task count or completed coverage forecast."
     },
     {
@@ -13367,7 +13367,7 @@
   "authoring_phase": "question-portfolio-planning",
   "portfolio_index": {
     "path": "workflow_portfolio.json",
-    "sha256": "2aef1384b0ca458d5040ec1bb2e5c453008be9d17d279663de56aba47365e147",
+    "sha256": "2ceac4cef82e641991911e00eccbade18722a3447068dc91da8ba38d7c519783",
     "counts": {
       "source_releases": 31,
       "inventory_records": 4332,

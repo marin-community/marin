@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T16:29:12.401391+00:00",
+  "updated_at": "2026-09-24T16:35:25.945983+00:00",
   "scope": "Full question-proposal portfolio for the 31 currently inventoried provisional-ID agentic releases. This planning index resolves every question card and records conditional consolidation; it creates no training task or validated coverage. Eleven source leads without inventories remain outside the enumerated denominator.",
   "counts": {
     "source_releases": 31,
@@ -46,7 +46,7 @@
     },
     {
       "path": "workflow_designs/biomni-eval1.json",
-      "sha256": "2f3bbfb1b2601bbdc9b58630a097c42118bf5686ff330ef821b94ef833f2dd71"
+      "sha256": "864673bb49d1935b5843bb0fbae0da0e3ce504a186dc46068c00bd27d31c7d6c"
     },
     {
       "path": "workflow_designs/biokgbench.json",
@@ -5642,7 +5642,7 @@
     },
     {
       "proposed_task_id": "portfolio-biomni-eval1-restriction-digest",
-      "scientific_question": "Which restriction fragments follow from observed annotated DNA sequences under circularity, strand and cut-site conventions?",
+      "scientific_question": "What complete restriction-fragment multiset follows from independently observed DNA records under explicit topology and cleavage conventions?",
       "question_card_ids": [
         "portfolio-biomni-eval1-restriction-digest"
       ],
@@ -5657,7 +5657,7 @@
     },
     {
       "proposed_task_id": "portfolio-biomni-eval1-orf-analysis",
-      "scientific_question": "Which ORFs and translated products are supported by observed sequence records under explicit frame and genetic-code rules?",
+      "scientific_question": "Which complete ORFs, translated products and requested residues follow from independently observed DNA under a fully specified ORF definition?",
       "question_card_ids": [
         "portfolio-biomni-eval1-orf-analysis"
       ],
@@ -5672,7 +5672,7 @@
     },
     {
       "proposed_task_id": "portfolio-biomni-eval1-amplicon-reconstruction",
-      "scientific_question": "Which sequence spans are supported by observed primer and template records after orientation, mismatch and product-boundary checks?",
+      "scientific_question": "Which published primer pairs reproduce the specified sequence or length on independently observed templates, and what other products remain possible?",
       "question_card_ids": [
         "portfolio-biomni-eval1-amplicon-reconstruction"
       ],
@@ -5687,7 +5687,7 @@
     },
     {
       "proposed_task_id": "portfolio-biomni-eval1-gibson-primer-compatibility",
-      "scientific_question": "Are published assembly-primer records consistent with observed template sequences and the stated overlap orientation?",
+      "scientific_question": "Which independently published primer pairs are sequence-consistent with their observed insert and vector records under the stated assembly orientation?",
       "question_card_ids": [
         "portfolio-biomni-eval1-gibson-primer-compatibility"
       ],
@@ -5702,7 +5702,7 @@
     },
     {
       "proposed_task_id": "portfolio-biomni-eval1-restriction-cloning-compatibility",
-      "scientific_question": "Which published vector/insert records are internally consistent after restriction-site, overhang and reading-frame reconciliation?",
+      "scientific_question": "Which published primer and enzyme records preserve the intended benign insert and vector junctions under exact cleavage and end-compatibility rules?",
       "question_card_ids": [
         "portfolio-biomni-eval1-restriction-cloning-compatibility"
       ],
@@ -5717,7 +5717,7 @@
     },
     {
       "proposed_task_id": "portfolio-biomni-eval1-sequence-gc",
-      "scientific_question": "How do GC content and eligible-base denominators differ among independently observed sequence features?",
+      "scientific_question": "What GC percentages and rounded query answers follow from independently observed sequences under an explicit eligible-base policy?",
       "question_card_ids": [
         "portfolio-biomni-eval1-sequence-gc"
       ],
@@ -5732,7 +5732,7 @@
     },
     {
       "proposed_task_id": "portfolio-biomni-eval1-translation-context",
-      "scientific_question": "Which translated products follow from observed sequence and context records after frame, start/stop and genetic-code checks?",
+      "scientific_question": "Do prespecified initiation-context predictions rank independently observed transcripts consistently with matched measurements of translation in a defined human-cell context?",
       "question_card_ids": [
         "portfolio-biomni-eval1-translation-context"
       ],
@@ -10321,6 +10321,13 @@
       "family_contracts_refined": 7,
       "design_file": "workflow_designs/biomni-eval1.json",
       "limits": "Independent resource exports, rights, exact schemas and runtime remain unresolved. Predicted memberships remain distinct from observed outcomes. Counts and validated coverage unchanged."
+    },
+    {
+      "source": "Biomni-Eval1 SeqQA",
+      "question_stems_reviewed": 50,
+      "family_contracts_refined": 7,
+      "design_file": "workflow_designs/biomni-eval1.json",
+      "limits": "Restore translation-efficiency endpoint and retain its observed-measurement adaptation gap. Preserve per-ID digest, ORF, amplicon and cloning query modes; independent inputs, conventions and runtime remain unresolved. Counts and validated coverage unchanged."
     }
   ]
 }

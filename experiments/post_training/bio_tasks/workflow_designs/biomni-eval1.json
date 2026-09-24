@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T16:29:12.401391+00:00",
-  "scope": "Question planning for 433 Biomni-Eval1 tool-enabled records in 20 families. The seven DBQA families have all 50 question stems reviewed and endpoint-specific proposed contracts; other family inspection limits remain. No implementation or validated coverage.",
+  "updated_at": "2026-09-24T16:35:25.945983+00:00",
+  "scope": "Question planning for 433 Biomni-Eval1 tool-enabled records in 20 families. All 100 DBQA/SeqQA question stems have endpoint-specific proposed contracts across 14 families; other family inspection limits remain. No implementation or validated coverage.",
   "basis_revision": "26e308ecb2",
   "counts": {
     "source_releases": 1,
@@ -9,7 +9,9 @@
     "question_cards": 20,
     "validated_new_mappings": 0,
     "dbqa_question_stems_reviewed": 50,
-    "dbqa_family_contracts_refined": 7
+    "dbqa_family_contracts_refined": 7,
+    "seqqa_question_stems_reviewed": 50,
+    "seqqa_family_contracts_refined": 7
   },
   "defaults": {
     "data": "Independent observed inputs and native data formats; preserve real biological replication and lineage. No source benchmark fixtures, expected labels or answer text used for task authoring.",
@@ -1920,7 +1922,7 @@
     {
       "proposed_id": "portfolio-biomni-eval1-restriction-digest",
       "benchmark": "Biomni-Eval1 tool-enabled",
-      "scientific_question": "Which restriction fragments follow from observed annotated DNA sequences under circularity, strand and cut-site conventions?",
+      "scientific_question": "What complete restriction-fragment multiset follows from independently observed DNA records under explicit topology and cleavage conventions?",
       "source_family": "restriction-digest",
       "benchmark_targets": [
         {
@@ -1959,40 +1961,83 @@
           "source_task_name": "lab_bench_seqqa"
         }
       ],
-      "source_inspection_tier": "question-endpoint-reviewed",
+      "source_inspection_tier": "all-family-question-stems-reviewed",
       "source_planning_disposition": "candidate-design-provisional",
       "matching_workstreams": [
         "sequence-construct"
       ],
       "required_endpoint_stages": [
-        "resolve sequence topology and enzyme definitions",
-        "locate strand-aware cuts",
-        "derive complete fragment boundaries",
-        "report fragment counts or lengths"
+        "Parse full input sequences and topology; resolve every requested enzyme to its recognition and cleavage definitions.",
+        "Enumerate oriented recognition sites and all associated cleavage events, including cuts outside recognition motifs and enzymes with two double-strand cuts.",
+        "Combine coincident events under the declared rule and derive every fragment, preserving order, lengths and repeated lengths.",
+        "Report both the fragment multiset and requested count/length summaries with source-sequence identity."
       ],
       "observed_input_requirements": [
-        "Benign observed reference sequences or published constructs with explicit feature/primer annotations and supported sequence provenance."
+        "Accessioned benign DNA in FASTA/GenBank with known topology and a pinned enzyme-definition snapshot; select independent sequences without planting recognition sites."
       ],
       "required_formats": [
-        "enzyme identifiers",
-        "sequence text"
+        "FASTA/GenBank",
+        "enzyme definition table",
+        "BED-like interbase cut coordinates with explicit schema"
       ],
       "proposed_artifact_requirements": [
-        "FASTA/GenBank records, feature/coordinate tables, translated sequences, amplicon or digest maps and sequence-consistency audit"
+        "cuts.tsv: sequence_id, enzyme, recognition_start, recognition_strand, cleavage_event_id, top_cut, bottom_cut, boundary_status",
+        "fragments.tsv: sequence_id, fragment_id, left_event, right_event, wraparound, length_convention, length",
+        "fragments.fasta: every product under the declared reference-strand representation",
+        "summary.tsv: sequence_id, enzyme_set, physical_fragment_count, sorted_lengths_with_multiplicity"
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "Topology, complete-digestion model, methylation assumption, ambiguous-base handling and sequence-end exclusions.",
+        "A cut coordinate is not a recognition-site start. Freeze top/bottom cleavage geometry and the length convention for staggered ends.",
+        "Physical fragments, distinct lengths and visible gel bands differ; the source does not supply a gel-resolution model. Do not silently grade unique lengths as fragment count.",
+        "Two-cut enzymes and circular origin-spanning sites need explicit support or an uncovered endpoint disposition."
+      ],
       "deterministic_verification_approach": [
-        "Independent sequence algebra, restriction-site/overhang accounting and native parser checks; retain ambiguous symbols; focus on analysis of supplied observed constructs."
+        "Run pinned Bio.Restriction for recognized sites and cleavage definitions; independently enumerate strand-aware interbase events and fragment lengths. Compare full event and fragment multisets, including multiplicity, and conservation under the stated length convention."
       ],
-      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "status": "endpoint-contract-planned-input-conventions-and-runtime-unresolved",
       "validated_new_mappings": 0,
-      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
-      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+      "evaluation_contract": "Require all specified input-dependent artifacts and all query modes claimed as covered. Preserve multiplicity, ambiguity and full candidate outcomes; compare native outputs with independently computed checks. No benchmark answer labels or LLM judge.",
+      "source_protocol_limits": "The source contains four length and three count questions. A motif-count shortcut misses cleavage geometry. This is a computational complete-digest model; methylation, partial digestion and observed gel migration are not established by a sequence oracle.",
+      "endpoint_contract_review": {
+        "reviewed_task_ids": [
+          "lab_bench_seqqa:563",
+          "lab_bench_seqqa:533",
+          "lab_bench_seqqa:547",
+          "lab_bench_seqqa:571",
+          "lab_bench_seqqa:524",
+          "lab_bench_seqqa:583",
+          "lab_bench_seqqa:520"
+        ],
+        "endpoint_modes": {
+          "fragment_lengths": [
+            "lab_bench_seqqa:533",
+            "lab_bench_seqqa:547",
+            "lab_bench_seqqa:524",
+            "lab_bench_seqqa:520"
+          ],
+          "fragment_count": [
+            "lab_bench_seqqa:563",
+            "lab_bench_seqqa:571",
+            "lab_bench_seqqa:583"
+          ]
+        },
+        "source_metadata_sha256": "d6c7844f32b3eef655e0f83f2357f873a4bc14c1566e4fba76a051bbc6c9bf02",
+        "review_scope": "All assigned question stems reviewed, with literal source sequences treated only as prompt structure and never copied into authoring inputs. No answer column or benchmark oracle inspected.",
+        "required_incorrect_output_checks": [
+          "Drop one of two cleavage events for a recognition site.",
+          "Count distinct lengths instead of physical fragments.",
+          "Treat circular input as linear or shift a cut to the recognition-site boundary."
+        ],
+        "next_input_decision": "Pin independent observed accessions and any published primer/assay records, resolve native schemas and scientific conventions, then verify lineage and redistribution terms.",
+        "runtime_boundary": "Bound observed input selection by scientific scope; native reference and solver runtime must be measured before claiming <=30-minute completion.",
+        "implementation_ready": false
+      }
     },
     {
       "proposed_id": "portfolio-biomni-eval1-orf-analysis",
       "benchmark": "Biomni-Eval1 tool-enabled",
-      "scientific_question": "Which ORFs and translated products are supported by observed sequence records under explicit frame and genetic-code rules?",
+      "scientific_question": "Which complete ORFs, translated products and requested residues follow from independently observed DNA under a fully specified ORF definition?",
       "source_family": "orf-analysis",
       "benchmark_targets": [
         {
@@ -2051,39 +2096,91 @@
           "source_task_name": "lab_bench_seqqa"
         }
       ],
-      "source_inspection_tier": "question-endpoint-reviewed",
+      "source_inspection_tier": "all-family-question-stems-reviewed",
       "source_planning_disposition": "candidate-design-provisional",
       "matching_workstreams": [
         "sequence-construct"
       ],
       "required_endpoint_stages": [
-        "declare strands, reading frames and genetic code",
-        "find starts and stops under explicit ORF rules",
-        "apply length or longest-ORF selection",
-        "translate and resolve the requested residue or protein"
+        "Enumerate eligible strands and reading frames using the declared start, stop, partial-ORF and nested-start rules.",
+        "Translate every eligible ORF and retain genomic coordinates, frame, completeness and protein length.",
+        "Apply the source endpoint mode: strict length threshold, longest-protein selection or an indexed amino acid in a longest ORF.",
+        "Retain tied longest ORFs and out-of-range residues under explicit answer rules."
       ],
       "observed_input_requirements": [
-        "Benign observed reference sequences or published constructs with explicit feature/primer annotations and supported sequence provenance."
+        "Independently observed genomic or transcript sequences in FASTA with species, topology and matching genetic-code metadata. Preserve native record identifiers and original lengths."
       ],
       "required_formats": [
-        "DNA sequence text"
+        "FASTA",
+        "GFF3 or explicit ORF coordinate TSV",
+        "protein FASTA"
       ],
       "proposed_artifact_requirements": [
-        "FASTA/GenBank records, feature/coordinate tables, translated sequences, amplicon or digest maps and sequence-consistency audit"
+        "orfs.tsv: sequence_id, orf_id, strand, frame, start, end, wraps_origin, start_codon, stop_codon, completeness, protein_length",
+        "proteins.fasta: all eligible ORF translations keyed by orf_id",
+        "query_results.tsv: query_id, endpoint_mode, threshold_or_residue_index, selected_orf_ids, count, protein_id, residue, status"
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "Choose start-to-stop versus stop-to-stop ORFs; allowed starts, both-strand search, partial boundaries, circular wrap and genetic code must be specified in the task.",
+        "Freeze nested start handling, whether initiator codons are translated as methionine, and whether terminal stop is excluded from amino-acid length.",
+        "The two count questions say greater than, not at least. Preserve strict inequality, one-based requested residue positions and a nonarbitrary tie policy."
+      ],
       "deterministic_verification_approach": [
-        "Independent sequence algebra, restriction-site/overhang accounting and native parser checks; retain ambiguous symbols; focus on analysis of supplied observed constructs."
+        "Run pinned EMBOSS getorf with explicit options, then independently validate start/stop coordinates and codon translation with Biopython. Compare the full ORF set and all query modes; first check that native getorf settings express the chosen nested-start/partial rules."
       ],
-      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "status": "endpoint-contract-planned-input-conventions-and-runtime-unresolved",
       "validated_new_mappings": 0,
-      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
-      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+      "evaluation_contract": "Require all specified input-dependent artifacts and all query modes claimed as covered. Preserve multiplicity, ambiguity and full candidate outcomes; compare native outputs with independently computed checks. No benchmark answer labels or LLM judge.",
+      "source_protocol_limits": "The 11 prompts do not fully specify ORF conventions. These must be explicit for an authored task; chosen conventions are not assumed to reproduce unpublished benchmark generation rules. Presence of an ORF does not establish observed expression.",
+      "endpoint_contract_review": {
+        "reviewed_task_ids": [
+          "lab_bench_seqqa:100",
+          "lab_bench_seqqa:98",
+          "lab_bench_seqqa:61",
+          "lab_bench_seqqa:47",
+          "lab_bench_seqqa:32",
+          "lab_bench_seqqa:27",
+          "lab_bench_seqqa:62",
+          "lab_bench_seqqa:64",
+          "lab_bench_seqqa:14",
+          "lab_bench_seqqa:40",
+          "lab_bench_seqqa:52"
+        ],
+        "endpoint_modes": {
+          "count_above_strict_length_threshold": [
+            "lab_bench_seqqa:100",
+            "lab_bench_seqqa:98"
+          ],
+          "longest_orf_protein": [
+            "lab_bench_seqqa:61",
+            "lab_bench_seqqa:47",
+            "lab_bench_seqqa:62",
+            "lab_bench_seqqa:64",
+            "lab_bench_seqqa:40",
+            "lab_bench_seqqa:52"
+          ],
+          "residue_in_longest_orf": [
+            "lab_bench_seqqa:32",
+            "lab_bench_seqqa:27",
+            "lab_bench_seqqa:14"
+          ]
+        },
+        "source_metadata_sha256": "d6c7844f32b3eef655e0f83f2357f873a4bc14c1566e4fba76a051bbc6c9bf02",
+        "review_scope": "All assigned question stems reviewed, with literal source sequences treated only as prompt structure and never copied into authoring inputs. No answer column or benchmark oracle inspected.",
+        "required_incorrect_output_checks": [
+          "Use nucleotide length for an amino-acid threshold or replace > with >=.",
+          "Use zero-based residue indexing or include the terminal stop as an amino acid.",
+          "Omit reverse-strand ORFs when required or silently discard a longest-ORF tie."
+        ],
+        "next_input_decision": "Pin independent observed accessions and any published primer/assay records, resolve native schemas and scientific conventions, then verify lineage and redistribution terms.",
+        "runtime_boundary": "Bound observed input selection by scientific scope; native reference and solver runtime must be measured before claiming <=30-minute completion.",
+        "implementation_ready": false
+      }
     },
     {
       "proposed_id": "portfolio-biomni-eval1-amplicon-reconstruction",
       "benchmark": "Biomni-Eval1 tool-enabled",
-      "scientific_question": "Which sequence spans are supported by observed primer and template records after orientation, mismatch and product-boundary checks?",
+      "scientific_question": "Which published primer pairs reproduce the specified sequence or length on independently observed templates, and what other products remain possible?",
       "source_family": "amplicon-reconstruction",
       "benchmark_targets": [
         {
@@ -2122,40 +2219,84 @@
           "source_task_name": "lab_bench_seqqa"
         }
       ],
-      "source_inspection_tier": "question-endpoint-reviewed",
+      "source_inspection_tier": "all-family-question-stems-reviewed",
       "source_planning_disposition": "candidate-design-provisional",
       "matching_workstreams": [
         "sequence-construct"
       ],
       "required_endpoint_stages": [
-        "align both primer-binding regions with strand orientation",
-        "resolve the intended amplicon boundaries",
-        "derive product sequence and length",
-        "reconcile the requested candidate pair or product"
+        "Resolve template version, topology and every primer orientation and binding segment.",
+        "Enumerate inward-facing binding-pair combinations under the declared matching and product-size policy.",
+        "Construct each complete product with primer-derived sequence where specified and compute its full length.",
+        "For candidate-selection modes, compare complete sequence or length as requested; for given-pair modes, retain ambiguity and all qualifying products."
       ],
       "observed_input_requirements": [
-        "Benign observed reference sequences or published constructs with explicit feature/primer annotations and supported sequence provenance."
+        "Published benign primer records with observed template accessions and annotations. Candidate pairs must retain publication provenance; use no benchmark primer strings or artificially planted binding sites."
       ],
       "required_formats": [
-        "DNA template",
-        "primer sequences"
+        "FASTA",
+        "published primer table",
+        "template GenBank when available"
       ],
       "proposed_artifact_requirements": [
-        "FASTA/GenBank records, feature/coordinate tables, translated sequences, amplicon or digest maps and sequence-consistency audit"
+        "binding_sites.tsv: primer_id, template_id, start, end, strand, binding_segment, mismatch_positions",
+        "products.fasta: all qualifying products keyed by product_id",
+        "products.tsv: product_id, pair_id, forward_site_id, reverse_site_id, template_span, tail_bases, length, target_sequence_match, target_length_match",
+        "candidate_results.tsv: query_id, pair_id, product_count, qualifying_product_ids, disposition"
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "Primer strings are conventionally written 5-prime to 3-prime; define reverse-primer mapping explicitly.",
+        "Freeze exact or mismatch-tolerant binding, tail segmentation, degenerate bases, circular wrap and maximum product span before selecting candidates.",
+        "Target sequence matching and target length matching are distinct. Equal length does not establish sequence identity, and repeated sites may prevent a unique result."
+      ],
       "deterministic_verification_approach": [
-        "Independent sequence algebra, restriction-site/overhang accounting and native parser checks; retain ambiguous symbols; focus on analysis of supplied observed constructs."
+        "Use a pinned native sequence/alignment package to locate primer binding and independently reconstruct each oriented interval and full product. Verify every candidate and all alternative products; sequence equality and length predicates are checked separately."
       ],
-      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "status": "endpoint-contract-planned-input-conventions-and-runtime-unresolved",
       "validated_new_mappings": 0,
-      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
-      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+      "evaluation_contract": "Require all specified input-dependent artifacts and all query modes claimed as covered. Preserve multiplicity, ambiguity and full candidate outcomes; compare native outputs with independently computed checks. No benchmark answer labels or LLM judge.",
+      "source_protocol_limits": "In-silico sequence compatibility is not experimental PCR yield or specificity. Seven source endpoints contain three distinct query modes; a single given-pair length task cannot cover all seven.",
+      "endpoint_contract_review": {
+        "reviewed_task_ids": [
+          "lab_bench_seqqa:448",
+          "lab_bench_seqqa:359",
+          "lab_bench_seqqa:327",
+          "lab_bench_seqqa:378",
+          "lab_bench_seqqa:391",
+          "lab_bench_seqqa:471",
+          "lab_bench_seqqa:379"
+        ],
+        "endpoint_modes": {
+          "select_pair_for_target_sequence": [
+            "lab_bench_seqqa:448",
+            "lab_bench_seqqa:471"
+          ],
+          "select_pair_for_target_length": [
+            "lab_bench_seqqa:359",
+            "lab_bench_seqqa:327"
+          ],
+          "length_from_given_pair": [
+            "lab_bench_seqqa:378",
+            "lab_bench_seqqa:391",
+            "lab_bench_seqqa:379"
+          ]
+        },
+        "source_metadata_sha256": "d6c7844f32b3eef655e0f83f2357f873a4bc14c1566e4fba76a051bbc6c9bf02",
+        "review_scope": "All assigned question stems reviewed, with literal source sequences treated only as prompt structure and never copied into authoring inputs. No answer column or benchmark oracle inspected.",
+        "required_incorrect_output_checks": [
+          "Align the reverse primer without reverse complementing.",
+          "Accept a same-length product with a different sequence.",
+          "Omit primer tails or hide a second qualifying template product."
+        ],
+        "next_input_decision": "Pin independent observed accessions and any published primer/assay records, resolve native schemas and scientific conventions, then verify lineage and redistribution terms.",
+        "runtime_boundary": "Bound observed input selection by scientific scope; native reference and solver runtime must be measured before claiming <=30-minute completion.",
+        "implementation_ready": false
+      }
     },
     {
       "proposed_id": "portfolio-biomni-eval1-gibson-primer-compatibility",
       "benchmark": "Biomni-Eval1 tool-enabled",
-      "scientific_question": "Are published assembly-primer records consistent with observed template sequences and the stated overlap orientation?",
+      "scientific_question": "Which independently published primer pairs are sequence-consistent with their observed insert and vector records under the stated assembly orientation?",
       "source_family": "gibson-primer-compatibility",
       "benchmark_targets": [
         {
@@ -2204,40 +2345,84 @@
           "source_task_name": "lab_bench_seqqa"
         }
       ],
-      "source_inspection_tier": "question-endpoint-reviewed",
+      "source_inspection_tier": "all-family-question-stems-reviewed",
       "source_planning_disposition": "candidate-design-provisional",
       "matching_workstreams": [
         "sequence-construct"
       ],
       "required_endpoint_stages": [
-        "resolve versioned insert and vector sequences",
-        "derive orientation and vector endpoints",
-        "check primer-binding and overlap constraints",
-        "reconstruct the complete proposed product"
+        "Resolve full insert, vector and linearization-site identities.",
+        "Separate each published primer into template-binding and overlap segments under a declared partition rule.",
+        "Check both primer binding segments, both intended vector-end overlaps and insert orientation.",
+        "Reconstruct the complete intended sequence and both junctions for every compatible candidate."
       ],
       "observed_input_requirements": [
-        "Benign observed reference sequences or published constructs with explicit feature/primer annotations and supported sequence provenance."
+        "Benign, published insert/vector sequence records, their matching primer annotations and a documented linearization site; require accession/record versions and observed construct provenance."
       ],
       "required_formats": [
-        "gene and plasmid identifiers",
-        "primer candidates"
+        "GenBank",
+        "FASTA",
+        "published primer table"
       ],
       "proposed_artifact_requirements": [
-        "FASTA/GenBank records, feature/coordinate tables, translated sequences, amplicon or digest maps and sequence-consistency audit"
+        "primer_segments.tsv: pair_id, primer_id, template_id, binding_start, binding_end, strand, overlap_segment, binding_segment",
+        "junctions.tsv: pair_id, junction_id, left_record, right_record, overlap_length, identity_status, orientation",
+        "products.fasta: complete compatible candidate products",
+        "candidate_results.tsv: pair_id, binding_valid, left_junction_valid, right_junction_valid, insert_retained, disposition"
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "Freeze accession/strain, vector topology and cut definition, intended orientation, primer partition and overlap acceptance.",
+        "Retain original coding boundaries and documented start/stop choices; do not require a particular reading frame for a noncoding insert.",
+        "Handle more than one cut or matching binding site explicitly rather than selecting the first."
+      ],
       "deterministic_verification_approach": [
-        "Independent sequence algebra, restriction-site/overhang accounting and native parser checks; retain ambiguous symbols; focus on analysis of supplied observed constructs."
+        "Use native sequence parsers and cleavage/assembly operations with pinned versions; independently check both overlaps, primer complements and full product reconstruction. Compare sequences modulo only declared circular rotation/orientation equivalence."
       ],
-      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "status": "endpoint-contract-planned-input-conventions-and-runtime-unresolved",
       "validated_new_mappings": 0,
-      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
-      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+      "evaluation_contract": "Require all specified input-dependent artifacts and all query modes claimed as covered. Preserve multiplicity, ambiguity and full candidate outcomes; compare native outputs with independently computed checks. No benchmark answer labels or LLM judge.",
+      "source_protocol_limits": "The nine source questions select among primer pairs for a named insert/vector. Auditing only one published pair exercises compatibility but leaves candidate-selection behavior untested. Sequence consistency does not prove laboratory assembly success.",
+      "endpoint_contract_review": {
+        "reviewed_task_ids": [
+          "lab_bench_seqqa:256",
+          "lab_bench_seqqa:226",
+          "lab_bench_seqqa:213",
+          "lab_bench_seqqa:215",
+          "lab_bench_seqqa:267",
+          "lab_bench_seqqa:200",
+          "lab_bench_seqqa:230",
+          "lab_bench_seqqa:260",
+          "lab_bench_seqqa:216"
+        ],
+        "endpoint_modes": {
+          "select_compatible_primer_pair": [
+            "lab_bench_seqqa:256",
+            "lab_bench_seqqa:226",
+            "lab_bench_seqqa:213",
+            "lab_bench_seqqa:215",
+            "lab_bench_seqqa:267",
+            "lab_bench_seqqa:200",
+            "lab_bench_seqqa:230",
+            "lab_bench_seqqa:260",
+            "lab_bench_seqqa:216"
+          ]
+        },
+        "source_metadata_sha256": "d6c7844f32b3eef655e0f83f2357f873a4bc14c1566e4fba76a051bbc6c9bf02",
+        "review_scope": "All assigned question stems reviewed, with literal source sequences treated only as prompt structure and never copied into authoring inputs. No answer column or benchmark oracle inspected.",
+        "required_incorrect_output_checks": [
+          "Validate only one assembly junction.",
+          "Reverse an overlap or omit a terminal insert base.",
+          "Use a same-named gene from a different strain or a different vector revision."
+        ],
+        "next_input_decision": "Pin independent observed accessions and any published primer/assay records, resolve native schemas and scientific conventions, then verify lineage and redistribution terms.",
+        "runtime_boundary": "Bound observed input selection by scientific scope; native reference and solver runtime must be measured before claiming <=30-minute completion.",
+        "implementation_ready": false
+      }
     },
     {
       "proposed_id": "portfolio-biomni-eval1-restriction-cloning-compatibility",
       "benchmark": "Biomni-Eval1 tool-enabled",
-      "scientific_question": "Which published vector/insert records are internally consistent after restriction-site, overhang and reading-frame reconciliation?",
+      "scientific_question": "Which published primer and enzyme records preserve the intended benign insert and vector junctions under exact cleavage and end-compatibility rules?",
       "source_family": "restriction-cloning-compatibility",
       "benchmark_targets": [
         {
@@ -2281,41 +2466,85 @@
           "source_task_name": "lab_bench_seqqa"
         }
       ],
-      "source_inspection_tier": "question-endpoint-reviewed",
+      "source_inspection_tier": "all-family-question-stems-reviewed",
       "source_planning_disposition": "candidate-design-provisional",
       "matching_workstreams": [
         "sequence-construct"
       ],
       "required_endpoint_stages": [
-        "resolve versioned sequence inputs",
-        "evaluate restriction sites and cut orientation",
-        "reconcile insert and vector ends",
-        "validate the complete intended product"
+        "Resolve full vector, insert, primer and enzyme definitions for each candidate.",
+        "Derive all restriction cuts in vector and amplified insert, including internal sites and primer-added ends.",
+        "Evaluate end polarity, overhang compatibility and intended insert orientation; distinguish recognition identity from cleavage compatibility.",
+        "Reconstruct complete permitted products and both junctions, then answer the requested primer-choice or enzyme-choice mode."
       ],
       "observed_input_requirements": [
-        "Benign observed reference sequences or published constructs with explicit feature/primer annotations and supported sequence provenance."
+        "Independent published benign vector/insert sequences with matching primer records and a pinned enzyme catalog; retain complete observed sequences and accession provenance."
       ],
       "required_formats": [
-        "gene or insert sequence",
-        "primer and enzyme candidates",
-        "vector identifier"
+        "GenBank",
+        "FASTA",
+        "published primer table",
+        "enzyme definition table"
       ],
       "proposed_artifact_requirements": [
-        "FASTA/GenBank records, feature/coordinate tables, translated sequences, amplicon or digest maps and sequence-consistency audit"
+        "candidate_cuts.tsv: candidate_id, molecule_id, enzyme, site_id, top_cut, bottom_cut, overhang_sequence, overhang_polarity",
+        "junctions.tsv: candidate_id, junction_id, left_end, right_end, compatible, insert_orientation",
+        "products.fasta: complete compatible products",
+        "candidate_results.tsv: candidate_id, endpoint_mode, insert_intact, internal_cut_count, junction_status, disposition"
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "Fix full-product identity, intended orientation and coding-frame constraints only when biologically relevant.",
+        "Define whether alternate compatible enzymes or orientations are accepted, and how to report ambiguous or zero-candidate outcomes.",
+        "Recognition-site equality does not imply identical cuts; blunt/sticky ends and overhang polarity must come from the frozen enzyme definition."
+      ],
       "deterministic_verification_approach": [
-        "Independent sequence algebra, restriction-site/overhang accounting and native parser checks; retain ambiguous symbols; focus on analysis of supplied observed constructs."
+        "Use pinned Bio.Restriction plus a native sequence/assembly package; independently recompute end compatibility, internal insert cuts and complete junction sequences. Grade both candidate-selection modes on their own predicates."
       ],
-      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "status": "endpoint-contract-planned-input-conventions-and-runtime-unresolved",
       "validated_new_mappings": 0,
-      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
-      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+      "evaluation_contract": "Require all specified input-dependent artifacts and all query modes claimed as covered. Preserve multiplicity, ambiguity and full candidate outcomes; compare native outputs with independently computed checks. No benchmark answer labels or LLM judge.",
+      "source_protocol_limits": "Six source endpoints choose primer pairs and two choose enzymes. This plan checks published sequence records, not wet-lab efficiency; complete native product checks still need independent inputs and execution.",
+      "endpoint_contract_review": {
+        "reviewed_task_ids": [
+          "lab_bench_seqqa:430",
+          "lab_bench_seqqa:171",
+          "lab_bench_seqqa:292",
+          "lab_bench_seqqa:406",
+          "lab_bench_seqqa:417",
+          "lab_bench_seqqa:288",
+          "lab_bench_seqqa:418",
+          "lab_bench_seqqa:187"
+        ],
+        "endpoint_modes": {
+          "select_primer_pair_given_enzymes": [
+            "lab_bench_seqqa:430",
+            "lab_bench_seqqa:171",
+            "lab_bench_seqqa:406",
+            "lab_bench_seqqa:417",
+            "lab_bench_seqqa:418",
+            "lab_bench_seqqa:187"
+          ],
+          "select_enzymes_given_primer_pair": [
+            "lab_bench_seqqa:292",
+            "lab_bench_seqqa:288"
+          ]
+        },
+        "source_metadata_sha256": "d6c7844f32b3eef655e0f83f2357f873a4bc14c1566e4fba76a051bbc6c9bf02",
+        "review_scope": "All assigned question stems reviewed, with literal source sequences treated only as prompt structure and never copied into authoring inputs. No answer column or benchmark oracle inspected.",
+        "required_incorrect_output_checks": [
+          "Declare enzymes interchangeable solely because they recognize the same motif.",
+          "Ignore an internal insert cut or accept one compatible junction while the other fails.",
+          "Answer primer selection when the query asks for enzyme selection."
+        ],
+        "next_input_decision": "Pin independent observed accessions and any published primer/assay records, resolve native schemas and scientific conventions, then verify lineage and redistribution terms.",
+        "runtime_boundary": "Bound observed input selection by scientific scope; native reference and solver runtime must be measured before claiming <=30-minute completion.",
+        "implementation_ready": false
+      }
     },
     {
       "proposed_id": "portfolio-biomni-eval1-sequence-gc",
       "benchmark": "Biomni-Eval1 tool-enabled",
-      "scientific_question": "How do GC content and eligible-base denominators differ among independently observed sequence features?",
+      "scientific_question": "What GC percentages and rounded query answers follow from independently observed sequences under an explicit eligible-base policy?",
       "source_family": "sequence-gc",
       "benchmark_targets": [
         {
@@ -2339,39 +2568,69 @@
           "source_task_name": "lab_bench_seqqa"
         }
       ],
-      "source_inspection_tier": "question-endpoint-reviewed",
+      "source_inspection_tier": "all-family-question-stems-reviewed",
       "source_planning_disposition": "candidate-design-provisional",
       "matching_workstreams": [
         "sequence-construct"
       ],
       "required_endpoint_stages": [
-        "resolve sequence and ambiguity policy",
-        "count GC and eligible residues",
-        "compute and round the fraction",
-        "preserve exact source sequence identity"
+        "Validate record identity and alphabet without dropping records or changing sequence content.",
+        "Count every base class and compute the exact numerator and eligible denominator under the declared ambiguity policy.",
+        "Report unrounded GC fraction, percent and nearest-integer answer with an explicit rounding rule."
       ],
       "observed_input_requirements": [
-        "Benign observed reference sequences or published constructs with explicit feature/primer annotations and supported sequence provenance."
+        "Independent observed multi-record FASTA or annotated genomic features, retaining accession versions and ambiguous bases. This calculation can accompany a connected sequence audit when its complete outputs remain explicit."
       ],
       "required_formats": [
-        "DNA sequence text"
+        "FASTA",
+        "GFF3/GTF only when extracting annotated features"
       ],
       "proposed_artifact_requirements": [
-        "FASTA/GenBank records, feature/coordinate tables, translated sequences, amplicon or digest maps and sequence-consistency audit"
+        "gc.tsv: sequence_id, source_length, a_count, c_count, g_count, t_count, ambiguous_count, eligible_count, gc_numerator, gc_fraction, gc_percent, rounded_percent, status"
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "Freeze handling of ambiguous symbols, gaps and case, including zero eligible bases; do not inherit an undocumented library default.",
+        "The four source questions request percent rounded to the nearest integer. Specify the half-tie rule and grade the unrounded calculation separately.",
+        "If features are used, explicitly freeze interval, strand and exon-concatenation rules; do not add extraction silently to a whole-sequence question."
+      ],
       "deterministic_verification_approach": [
-        "Independent sequence algebra, restriction-site/overhang accounting and native parser checks; retain ambiguous symbols; focus on analysis of supplied observed constructs."
+        "Run pinned Bio.SeqUtils.gc_fraction with the declared ambiguity policy and independently verify base counts, denominator, percent conversion and exact rounding. Check all records rather than only the rounded scalar."
       ],
-      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "status": "endpoint-contract-planned-input-conventions-and-runtime-unresolved",
       "validated_new_mappings": 0,
-      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
-      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+      "evaluation_contract": "Require all specified input-dependent artifacts and all query modes claimed as covered. Preserve multiplicity, ambiguity and full candidate outcomes; compare native outputs with independently computed checks. No benchmark answer labels or LLM judge.",
+      "source_protocol_limits": "This is a deterministic sequence statistic. It does not on its own establish a complete higher-level biological workflow, but it can be a fully verified stage in one.",
+      "endpoint_contract_review": {
+        "reviewed_task_ids": [
+          "lab_bench_seqqa:505",
+          "lab_bench_seqqa:489",
+          "lab_bench_seqqa:498",
+          "lab_bench_seqqa:492"
+        ],
+        "endpoint_modes": {
+          "integer_rounded_gc_percent": [
+            "lab_bench_seqqa:505",
+            "lab_bench_seqqa:489",
+            "lab_bench_seqqa:498",
+            "lab_bench_seqqa:492"
+          ]
+        },
+        "source_metadata_sha256": "d6c7844f32b3eef655e0f83f2357f873a4bc14c1566e4fba76a051bbc6c9bf02",
+        "review_scope": "All assigned question stems reviewed, with literal source sequences treated only as prompt structure and never copied into authoring inputs. No answer column or benchmark oracle inspected.",
+        "required_incorrect_output_checks": [
+          "Report a fraction as a percentage or truncate instead of round.",
+          "Treat every ambiguous base as an ordinary denominator base under a policy that excludes it.",
+          "Change the sequence or omit records while retaining the expected rounded number."
+        ],
+        "next_input_decision": "Pin independent observed accessions and any published primer/assay records, resolve native schemas and scientific conventions, then verify lineage and redistribution terms.",
+        "runtime_boundary": "Bound observed input selection by scientific scope; native reference and solver runtime must be measured before claiming <=30-minute completion.",
+        "implementation_ready": false
+      }
     },
     {
       "proposed_id": "portfolio-biomni-eval1-translation-context",
       "benchmark": "Biomni-Eval1 tool-enabled",
-      "scientific_question": "Which translated products follow from observed sequence and context records after frame, start/stop and genetic-code checks?",
+      "scientific_question": "Do prespecified initiation-context predictions rank independently observed transcripts consistently with matched measurements of translation in a defined human-cell context?",
       "source_family": "translation-context",
       "benchmark_targets": [
         {
@@ -2395,34 +2654,71 @@
           "source_task_name": "lab_bench_seqqa"
         }
       ],
-      "source_inspection_tier": "question-endpoint-reviewed",
+      "source_inspection_tier": "all-family-question-stems-reviewed",
       "source_planning_disposition": "candidate-design-provisional",
       "matching_workstreams": [
         "sequence-construct"
       ],
       "required_endpoint_stages": [
-        "identify candidate ORFs and starts",
-        "evaluate declared initiation-context features",
-        "compare the supplied candidates",
-        "state the limits of sequence-only prediction"
+        "Resolve transcript sequence, intended ORF and cell context; compute declared initiation-context features with a pinned rule or model.",
+        "Keep prediction scores and predicted candidate rankings separate from observed assay measurements.",
+        "If matched ribosome profiling is selected, define eligible ORFs, denominators and a sample-aware occupancy-per-mRNA estimand; retain uncertainty and exclusions.",
+        "Evaluate prespecified predicted rankings against independent measurements without treating a favorable motif or amino-acid translation as observed efficiency."
       ],
       "observed_input_requirements": [
-        "Benign observed reference sequences or published constructs with explicit feature/primer annotations and supported sequence provenance."
+        "Independent observed human transcript sequences and matched RNA/ribosome-profiling measurements with sample identities, assay units and native annotation; alternatively measured reporter outputs with explicitly recorded construct provenance. Manufactured sequences are not observed inputs."
       ],
       "required_formats": [
-        "RNA sequence candidates"
+        "transcript FASTA",
+        "GTF/GFF3",
+        "matched assay count tables or documented native processed format",
+        "sample metadata TSV"
       ],
       "proposed_artifact_requirements": [
-        "FASTA/GenBank records, feature/coordinate tables, translated sequences, amplicon or digest maps and sequence-consistency audit"
+        "sequence_features.tsv: transcript_id, orf_id, start_position, context_features, prediction_method, predicted_score",
+        "observed_measurements.tsv: transcript_id, sample_id, assay, raw_measurement, unit, normalization_denominator, qc_status",
+        "comparison.tsv: transcript_id, context, predicted_rank, observed_estimand, estimate, uncertainty, measured_rank, comparison_status",
+        "analysis_spec.json: model/release, assay definition, normalization, replication and ranking/tie rules"
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "Source questions ask for likely high translation efficiency in human cells. They do not request the amino-acid sequence of an ORF.",
+        "Freeze the exact prediction rule and measured estimand. Ribosome occupancy per mRNA is not automatically a direct protein-production rate; read density, elongation and sample context constrain interpretation.",
+        "Use independent transcripts/measurements and account for model-training overlap when relevant; no selecting only examples whose observed ranking agrees with a heuristic.",
+        "A deterministic feature-only question remains component coverage. Full endpoint equivalence stays unresolved if a scientifically defensible prediction-and-measurement contract cannot be established."
+      ],
       "deterministic_verification_approach": [
-        "Independent sequence algebra, restriction-site/overhang accounting and native parser checks; retain ambiguous symbols; focus on analysis of supplied observed constructs."
+        "Run pinned native feature/prediction and count-analysis tools; independently verify feature coordinates, sample joins, normalization, full rankings and the declared evaluation statistic. Grade calculation and evidence fidelity, not agreement with a desired biological ranking."
       ],
-      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "status": "endpoint-contract-planned-input-conventions-and-runtime-unresolved",
       "validated_new_mappings": 0,
-      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
-      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+      "evaluation_contract": "Require all specified input-dependent artifacts and all query modes claimed as covered. Preserve multiplicity, ambiguity and full candidate outcomes; compare native outputs with independently computed checks. No benchmark answer labels or LLM judge.",
+      "source_protocol_limits": "All four source endpoints remain limited by sequence-only efficiency claims. The proposed connected observed-data workflow is an adaptation, not automatic full equivalence. Ribo-seq source selection, exact estimand, possible model leakage, assay validation and <=30-minute runtime are unresolved.",
+      "endpoint_contract_review": {
+        "reviewed_task_ids": [
+          "lab_bench_seqqa:134",
+          "lab_bench_seqqa:138",
+          "lab_bench_seqqa:128",
+          "lab_bench_seqqa:156"
+        ],
+        "endpoint_modes": {
+          "compare_likely_translation_efficiency": [
+            "lab_bench_seqqa:134",
+            "lab_bench_seqqa:138",
+            "lab_bench_seqqa:128",
+            "lab_bench_seqqa:156"
+          ]
+        },
+        "source_metadata_sha256": "d6c7844f32b3eef655e0f83f2357f873a4bc14c1566e4fba76a051bbc6c9bf02",
+        "review_scope": "All assigned question stems reviewed, with literal source sequences treated only as prompt structure and never copied into authoring inputs. No answer column or benchmark oracle inspected.",
+        "required_incorrect_output_checks": [
+          "Return only translated protein sequences.",
+          "Label a motif score as measured translation efficiency.",
+          "Swap RNA and footprint denominators, mix unmatched cell contexts or drop transcripts with discordant observations."
+        ],
+        "next_input_decision": "Pin independent observed accessions and any published primer/assay records, resolve native schemas and scientific conventions, then verify lineage and redistribution terms.",
+        "runtime_boundary": "Bound observed input selection by scientific scope; native reference and solver runtime must be measured before claiming <=30-minute completion.",
+        "implementation_ready": false
+      }
     },
     {
       "proposed_id": "portfolio-biomni-eval1-gene-set-membership",
@@ -3153,6 +3449,22 @@
     {
       "url": "https://jan2024.rest.ensembl.org/documentation/info/assembly_info",
       "use": "Assembly endpoint exposes cytogenetic bands; actual release-specific export remains uninspected."
+    },
+    {
+      "url": "https://biopython.org/DIST/docs/cookbook/Restriction.html",
+      "use": "Topology, cleavage-coordinate convention and complete-digestion limitations; no sequence-only claim about actual gel behavior."
+    },
+    {
+      "url": "https://www.bioinformatics.nl/cgi-bin/emboss/help/getorf",
+      "use": "ORF conventions, genetic code and strand options must be explicit; installed-version parity remains untested."
+    },
+    {
+      "url": "https://biopython.org/docs/1.81/api/Bio.SeqUtils.html",
+      "use": "GC fraction has an explicit ambiguous-base policy; percent conversion and rounding are separate."
+    },
+    {
+      "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC11326257/",
+      "use": "Primary study metadata describes matched RNA/ribosome profiling and occupancy-per-mRNA estimands. Search-index text inspected; full-page fetch hit a browser challenge. Candidate data records and schemas remain uninspected."
     }
   ]
 }
