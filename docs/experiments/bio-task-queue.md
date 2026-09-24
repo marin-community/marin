@@ -36,7 +36,16 @@ Keep each task scientifically coherent, grounded in independent observations,
 offline and executable within 30 minutes. A matching package or component does
 not complete a benchmark workflow. Promote a mapping only after its required
 stages, complete artifacts, input-reading oracle and container checks pass. No
-model calls or language-model judge are part of this queue.
+teacher model API calls or language-model judge are used for task generation or grading.
+
+Use at most one bounded worker alongside the lead. The lead owns prioritization,
+scientific workflow design, source suitability, oracle independence and coverage
+decisions. Delegate factual source search, pinned installation and routine execution
+or artifact checks to GPT-6 Sol; simpler mechanical work can use GPT-6 Luna. Give
+each assignment explicit outputs, allowed actions and a stopping point. Review
+the evidence before integrating results, and avoid simultaneous heavy local work.
+The first assignment is a bounded primary-source search for independent multi-locus
+data, with no compute launches or code changes.
 
 Completed: the observed PhiX assembly workflow validates the CompBioBench N50
 workflow adaptation. Its original Drosophila fixture and answer were not used;

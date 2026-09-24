@@ -10,7 +10,7 @@
     "constraints": [
       "Observed independent biological inputs; no benchmark fixtures or answers.",
       "A coherent connected scientific workflow, one task per recipe by default, offline and at most 30 minutes.",
-      "Input-reading oracle and complete deterministic artifact checks; no model calls or LLM judge.",
+      "Input-reading oracle and complete deterministic artifact checks; no teacher model API calls or LLM judge for generation or grading.",
       "Preserve every OOD assignment; do not inspect OOD tasks for authoring."
     ],
     "tiebreakers": [
@@ -1107,5 +1107,32 @@
       "priority_score": null,
       "reason": "Task enumeration and endpoint inspection are required before ranking."
     }
-  ]
+  ],
+  "execution_policy": {
+    "coordination": "The lead selects candidates, designs scientifically coherent workflows, evaluates source suitability, reviews oracle independence and approves coverage-state changes.",
+    "delegation": "Use one bounded worker for factual source search, pinned installation, routine oracle execution or artifact validation. Start with gpt-6-sol; simpler mechanical work can use gpt-6-luna when scoped clearly.",
+    "max_active_child_workers": 1,
+    "worker_boundaries": [
+      "No nested delegation.",
+      "Assign exact files or outputs, allowed actions, evidence requirements and a stopping point.",
+      "No task, coverage, source or validation claims are accepted without lead review.",
+      "Do not run heavy local work in both lead and worker simultaneously; honor shared-node load, memory and locking requirements.",
+      "Do not repeat failed installations or compute jobs without diagnosis and existing authorization."
+    ],
+    "current_assignment": {
+      "id": "multilocus-source-search-20260924",
+      "candidate": "multi-locus-phylogenomic-signal",
+      "model": "gpt-6-sol",
+      "status": "source-search-assigned",
+      "deliverable": "At most three primary-source data candidates with access method, observed sequence/orthology evidence, license, size and limitations.",
+      "limits": {
+        "primary_source_search_open_calls": 10,
+        "target_minutes": 10,
+        "max_download_bytes": 1048576,
+        "compute_jobs": 0,
+        "code_changes": 0
+      },
+      "review_required": "Lead confirms scientific fit and data independence before download, implementation or coverage updates."
+    }
+  }
 }
