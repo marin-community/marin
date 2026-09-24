@@ -223,6 +223,9 @@ inference latency / KV-cache size, serving compatibility, or interaction effects
   cell (batch, steps, and their tokens) with `min_lr_ratio = 0` to match
   the documented baseline schedule — this reproduces the recorded baseline
   recipes (`larry_reference_d512/d768.json`) exactly.
+  Corrected runs use `_matched` in their artifact and W&B IDs so the earlier
+  d512 and d768 runs cannot be reused. Those earlier runs remain exploratory;
+  their losses do not establish the matched-recipe gate in #9280.
 - [`test_boundary_operator.py`](./test_boundary_operator.py) — unit tests:
   boundary-off parity with the parent model, split rule, config validation,
   HF round-trip.

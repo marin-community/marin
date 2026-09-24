@@ -128,12 +128,12 @@ def boundary_cell(
         coda_len=coda_len,
         injection_scale=alpha,
     )
-    name = f"grug/moe_boundary_compute_opt_d{hidden_dim}_ep{_EP}_alpha{alpha:g}"
+    name = f"grug/moe_boundary_compute_opt_d{hidden_dim}_ep{_EP}_alpha{alpha:g}_matched"
     if lr_scale != 1.0:
         name += f"_lr{lr_scale:g}"
     version = resolve_version(name, version)
     train, validation = grug_moe_boundary_mix()
-    run_id = f"moe_boundary_compute_opt_d{hidden_dim}_ep{_EP}_alpha{alpha:g}"
+    run_id = f"moe_boundary_compute_opt_d{hidden_dim}_ep{_EP}_alpha{alpha:g}_matched"
     if lr_scale != 1.0:
         run_id += f"_lr{lr_scale:g}"
 
