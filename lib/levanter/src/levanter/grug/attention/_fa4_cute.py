@@ -15,7 +15,13 @@ from jaxtyping import Array, Bool, Float, Int
 from levanter.cutlass_kernel_cache import gpu_compute_capability
 from levanter.grug.attention._core import AttentionMask
 from levanter.grug.attention._fa4_cute_backend import fa4_cute_attention_forward
-from levanter.grug.attention._fa4_cute_config import Flash4CuteKernelConfig, flash4_cute_kernel_config
+from levanter.grug.attention._fa4_cute_config import (
+    SM100_GQA_RATIOS,
+    SM100_HEAD_DIM,
+    Flash4CuteKernelConfig,
+    flash4_cute_kernel_config,
+    sm100_flash4_cute_kernel_config,
+)
 from levanter.sharding import partitioning_axes, partition_spec_of
 
 
@@ -249,6 +255,10 @@ def _fa4_cute_attention_forward_sharded(
                 f"FA4/CuTe requires {name} to match q's batch/head sharding with unsharded sequence/feature "
                 f"dimensions, got q={partition_spec_of(q)}, {name}={partition_spec_of(x)}."
             )
+    if q_dims[1] and kernel_config.sm90_backward is not None:
+        # Hopper's native segmented backward assumes local Q and K have equal lengths.
+        # The 64x64 segmented path handles the query offset used by context parallelism.
+        kernel_config = replace(kernel_config, sm90_backward=None)
     if not any(q_dims):
         return fa4_cute_attention_forward(
             q,
@@ -312,14 +322,6 @@ def _segmented_kernel_config(head_dim: int) -> Flash4CuteKernelConfig:
     return kernel_config
 
 
-def _wide_segmented_kernel_config(head_dim: int) -> Flash4CuteKernelConfig:
-    arch = gpu_compute_capability()
-    if arch // 10 != 10 or head_dim != 128:
-        raise ValueError(f"gpu_fa4_cute_wide requires sm100 and head_dim=128, got sm{arch} and head_dim={head_dim}.")
-    kernel_config = flash4_cute_kernel_config(head_dim, arch=arch)
-    return replace(kernel_config, forward_tile=(128, 64), backward_tile=(64, 64), num_threads=128)
-
-
 def _gpu_fa4_cute_attention(
     q: Float[Array, "B Q Hq D"],
     k: Float[Array, "B K Hkv D"],
@@ -364,16 +366,28 @@ def gpu_fa4_cute_attention(
     return _gpu_fa4_cute_attention(q, k, v, mask, kernel_config=_segmented_kernel_config(q.shape[-1]))
 
 
-def gpu_fa4_cute_wide_attention(
+def gpu_fa4_cute_sm100_attention(
     q: Float[Array, "B Q Hq D"],
     k: Float[Array, "B K Hkv D"],
     v: Float[Array, "B K Hkv D"],
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
 ) -> Float[Array, "B Q Hq D"]:
-    """Run segmented FA4/CuTe attention with the SM100 128x64 forward tile."""
+    """Run native SM100 forward and one-block backward for BF16 D128 GQA.
+
+    Select with ``implementation="gpu_fa4_cute_sm100"``. Supports GQA ratios
+    4, 6, and 8 and the same packed causal/window masks as ``gpu_fa4_cute``.
+    Use ``gpu_fa4_cute`` on Hopper or for other supported head layouts.
+    """
     if jax.default_backend() != "gpu":
-        raise RuntimeError("gpu_fa4_cute_wide_attention requires the JAX GPU backend.")
-    return _gpu_fa4_cute_attention(q, k, v, mask, kernel_config=_wide_segmented_kernel_config(q.shape[-1]))
+        raise RuntimeError("gpu_fa4_cute_sm100_attention requires the JAX GPU backend.")
+    arch = gpu_compute_capability()
+    _validate_head_layout(q, k, backend_name="gpu_fa4_cute_sm100")
+    if arch != 100 or q.dtype != jnp.bfloat16 or q.shape[-1] != SM100_HEAD_DIM or v.shape[-1] != SM100_HEAD_DIM:
+        raise ValueError(f"gpu_fa4_cute_sm100 requires SM100 with BF16 and D == Dv == {SM100_HEAD_DIM}.")
+    if q.shape[2] // k.shape[2] not in SM100_GQA_RATIOS:
+        raise ValueError(f"gpu_fa4_cute_sm100 requires a GQA ratio in {SM100_GQA_RATIOS}.")
+    config = sm100_flash4_cute_kernel_config()
+    return _gpu_fa4_cute_attention(q, k, v, mask, kernel_config=config)
 
 
 def fa4_cute_segment_bounds(
@@ -421,4 +435,5 @@ def fa4_cute_segment_bounds(
 __all__ = [
     "fa4_cute_segment_bounds",
     "gpu_fa4_cute_attention",
+    "gpu_fa4_cute_sm100_attention",
 ]

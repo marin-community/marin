@@ -140,6 +140,12 @@ and on failure, so a failed run is still accounted for -- and a failure carries 
 last 100 log lines (`log_tails`), so most failures are diagnosable straight from the record (or the
 dashboard) without cluster access.
 
+For vLLM runs, `inference_metrics` contains the cumulative counter delta for that evaluator's window
+on the shared server. It includes prompt tokens, generation tokens, elapsed time, and generation
+tokens per second. A speculative run also includes draft count, proposed and accepted token counts,
+mean acceptance length, and draft acceptance rate. The normalized model configuration in the same
+record pins the target identity, tokenizer identity, and optional draft identity.
+
 Within its FineStore archive, each evaluator writes individually scored questions to the `samples`
 table using `EvalSample`, the shared schema in `finestore.eval`. Evalchemy writes its native
 aggregate JSON and `--log_samples` JSONL directly as FineStore source artifacts. Harbor preserves
@@ -153,12 +159,22 @@ object-store prefix and upserts the `eval_runs` and `eval_metrics` tables implem
 
 ## Evals in pipelines
 
-`pipeline.py` exposes the same run as an `ArtifactStep`:
-`eval_step(CatalogEvaluationModel("qwen3-1.7b"), "smoke", version="2026.07.19")` is a lazy,
-versioned handle. The step submits the same CPU orchestrator used by the CLI and writes eval outputs
-to the launcher's shared `evals` root; its artifact path contains the pipeline cache record. The slice
-override is a runtime arg, so changing it does not change the artifact identity. Produced-model
-adapters such as `SkyRLEvaluationModel` use the same `eval_step` entry point.
+`pipeline.py` exposes the same run as an `ArtifactStep`. Pass a checked-in `ModelConfig` directly to
+`eval_step(models()["qwen3-1.7b"], "smoke", version="2026.07.19")`. The step submits the
+same CPU orchestrator used by the CLI and writes eval outputs to the launcher's shared `evals` root;
+its artifact path contains the pipeline cache record. The slice
+override is a runtime arg, so changing it does not change the artifact identity.
+
+For produced models, pass the producer handles in `deps` and resolve their locations in
+`resolve_model(ctx)`. Use `ArtifactStep.adopt` when a model already exists outside the graph.
+The resolver returns a plain `ModelConfig` with the target URI and identity; a drafted arm also
+sets `ServeConfig.speculative` with the resolved draft URI, identity, method, and proposal length.
+Control, initial-draft, and trained-draft arms use the same `eval_step` function. SkyRL experiments
+resolve terminal policy metadata in their experiment resolver. No extra model-metadata step runs.
+
+The resulting `EvaluationResult.results_paths` tuple points at the sealed FineStore archives in run
+order. Downstream offline rollout processing should depend on this typed result instead of rebuilding
+archive paths from run IDs.
 
 ## Evalchemy config files
 

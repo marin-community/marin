@@ -88,9 +88,8 @@ uv run fast-track --submit --run-id dense-d768 --size d768 --dense --version 202
 ```
 
 `--submit` wraps the launcher in `iris job run … -- python -m …launch … --run` and forwards
-`$WANDB_API_KEY` to the job. It targets `$IRIS_CLUSTER` (default `cw-rno2a`); both `cw-rno2a` and
-`cw-us-east-02a` are 8×H100 clusters, so `IRIS_CLUSTER=cw-us-east-02a uv run fast-track --submit …`
-picks the other.
+`$WANDB_API_KEY` to the job. Iris selects an H100 cluster by default.
+Add `--target-cluster cw-us-east-02a` or `--target-cluster cw-rno2a` to select a specific cluster.
 
 Pick a size and variant; the budget defaults to **data-matching** that variant's baseline (dense at
 20 TPP, MoE at 60 TPP) at the rung's baseline batch (128 for d512/d768, 256 for d1024/d1280). Steps
@@ -127,7 +126,8 @@ uv run fast-track --submit --run-id probe-d1280 --size d1280 --num-steps 20 --no
 | `--num-steps N` | set the step budget explicitly (ignores `--match`) |
 | `--no-eval` | skip eval (clean MFU probes) |
 | `--save-checkpoints` | save a permanent final checkpoint to S3 (off by default) |
-| `--submit` | submit as an Iris H100 job (`$IRIS_CLUSTER`, default `cw-rno2a`); omit to print the plan locally |
+| `--submit` | Submit as an Iris H100 job. Omit to print the plan locally. |
+| `--target-cluster` | Select a specific Iris cluster for submission. Omit to let Iris select an H100 cluster. |
 
 Results land in W&B `marin-community/marin_moe`; eval bpb keys are `eval/paloma/macro_bpb`,
 `eval/uncheatable_eval/macro_bpb` (MoE dropless eval logs under the normal `eval/` prefix).
