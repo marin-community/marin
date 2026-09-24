@@ -4,6 +4,7 @@
 """Tests for writers module."""
 
 import tempfile
+import threading
 import uuid
 from pathlib import Path
 
@@ -15,6 +16,7 @@ import pytest
 import vortex
 from pyarrow import fs as pa_fs
 from zephyr.writers import (
+    ThreadedBatchWriter,
     _pyarrow_filesystem,
     _s3_filesystem_kwargs,
     infer_arrow_schema,
@@ -372,3 +374,23 @@ def test_infer_arrow_schema_mixed_types_fails():
     ]
     with pytest.raises(pa.lib.ArrowInvalid):
         infer_arrow_schema(records)
+
+
+def test_threaded_batch_writer_close_raises_when_writer_fails_with_full_queue():
+    got_first = threading.Event()
+    may_fail = threading.Event()
+
+    def write_fn(items):
+        for _ in items:
+            got_first.set()
+            may_fail.wait()
+            raise ValueError("writer failed")
+
+    writer = ThreadedBatchWriter(write_fn, maxsize=1)
+    writer.submit(1)
+    got_first.wait()
+    writer.submit(2)  # fills the queue while the writer thread is still alive
+    may_fail.set()
+
+    with pytest.raises(ValueError, match="writer failed"):
+        writer.close()

@@ -5,158 +5,127 @@ description: "Deploy a significant code change (backend, kernel, optimizer, data
 
 # Deploy a change to the live hero run
 
-The hero is a multi-rack production run whose checkpoints, W&B history, and
-dashboards are shared state. A change lands as a new run that continues the old
-run's lineage from a named permanent checkpoint, is compared against the old run
-on the same batches for a trial window, and is rolled back by relaunching the old
-commit if the gate fails. `manage-hero-run` governs the run itself (launch record,
-babysitting cadence, DRI); this skill is the swap protocol layered on top of it.
+Use `manage-hero-run` for the run record, DRI, retention, and babysitting. This
+checklist governs a code cutover and its trial. Single-rack validation does not
+exercise cross-domain collectives or checkpoint recovery at production scale.
 
-Single-rack validation (the d768 rung, a 1-rack restore smoke) cannot reach
-failures that need more than one expert-parallel domain in one job: cross-domain
-collectives, executable alternation across domains, save/resume of the new tree at
-scale. With 11 of the 12 GB200 racks on the hero, the trial window is the first
-multi-rack exercise of the change. Plan the window and the rollback for that.
+## 1. Agree the plan
 
-## 1. Agree the plan with the user before touching anything
+Record the following with the user before changing the live run:
 
-Write down, and get agreement on:
+- A complete permanent handoff checkpoint `step-N`. Use the newest scheduled
+  permanent checkpoint (every 6000 steps, about 26 hours at the hero's pace), or
+  request one from the old run's `training-control` endpoint with the
+  `request-permanent-checkpoint` header value. Only a run whose code includes
+  that action can take the request; otherwise schedule the cutover shortly after
+  a scheduled permanent checkpoint. Do not hand off from a temporary checkpoint:
+  it expires three days after it is written.
+- A new run ID and checkpoint tree, the unchanged W&B entity/project, and the
+  verified parent history boundary. Follow the
+  [launcher procedure](../../../experiments/grug/moe_hero_ep/README.md#hero-cutovers-and-wb-lineage).
+- A matched control window, 200 steps by default. The old run must record those
+  steps after the handoff checkpoint before it is stopped.
+- Explicit gates for loss, throughput/MFU, token drops, router metrics, and the
+  intended effect of the change. Specify tolerances and expected directions;
+  require no unexpected crash, retry, watchdog, or alert.
+- Coverage gaps: evals, the child's own save/resume, and retries may fall outside
+  the trial. Include these limitations in the decision.
+- A schedule that leaves time for rollback during working hours, a submission
+  owner, and the status issue/communication thread. Report kill, launch, first
+  steps, go/no-go, and rollback transitions.
 
-- The handoff checkpoint: the newest permanent checkpoint `step-N`. The trial
-  starts there, so the old run must keep training past it long enough to produce
-  the control window (200 steps by default, at the hero's pace about 1 hour).
-- The new run id: `hero-<change>-step<N>k`, for example
-  `hero-ragged_a2a-ep-step54k`. It names the W&B run, the Iris coordinator, and
-  the checkpoint tree (`launch_scaling_ladder` derives the output path from
-  `--run-id`, so a new id is a fresh tree by construction). Keep the W&B project;
-  dashboards, the public report, and alerts key on it.
-- The gate. Common criteria: loss tracks the control step for step up to bf16
-  noise (or by the amount the change is meant to improve); MFU equal or better;
-  token-drop rate equal or better; the metric the change targets moves as
-  predicted; no unexpected movement anywhere else; no crash, restart, watchdog,
-  or new alert. Write the expected direction and size of each before launch.
-- What the window will not exercise (evals at the run's cadence, the new run's own
-  temporary save and resume, a retry). List them in the go/no-go.
-- The clock: swap early enough that a rollback lands in working hours. Report
-  times in the user's zone.
-- Communication: the Slack thread and the hero's status-log issue, which the
-  tracker bots read. Post at each transition: kill, launch, first steps,
-  go/no-go, rollback.
+## 2. Land the launch record
 
-## 2. Land the change on main first
+Land the code change and finalized `trigger_hero.sh` values on main before
+cutover. Use a pristine checkout at the verified SHA. The launcher records the
+new run, retained checkpoint, and W&B fork boundary; its commands and recovery
+semantics are documented in the linked launcher procedure.
 
-- Merge the code change and the launcher change together. `trigger_hero.sh` is
-  the launch record: it carries `RUN_ID` and `HANDOFF_CHECKPOINT`
-  (`--initialize-from-checkpoint <old>/checkpoints/step-N`). The launched command
-  must be main's script at a verified SHA, from a pristine worktree.
-- `--initialize-from-checkpoint` appends the named checkpoint directory to the
-  resume search paths and makes a checkpoint mandatory, so the first launch
-  restores the full state (params, optimizer, step, data position) from exactly
-  that step and later restarts prefer the new run's own, newer checkpoints. The
-  old run's tree is never written again.
-- Inventory downstream reporting for the run id: the public W&B report's pinned
-  run set (the Grafana bridge follows it), any tracker that hard-codes the id,
-  metric keys the change renames (those need their own PR). Grafana hero-health
-  enrols by the `hero-*-coord-*` job naming and needs nothing.
+Inventory downstream reports and trackers that pin the run ID or affected metric
+keys. Update their selection as part of accepting the child.
 
-## 3. Build and rehearse the runbook
+## 3. Rehearse preflight and rollback
 
-Keep the swap as small numbered scripts that share fail-closed helpers, and run
-every guard as a dry run against the live cluster before the day:
+Use small scripts whose queries fail closed on errors or unrecognized output.
+Dry-run every guard against the live cluster and obtain an independent review.
 
-- Every query helper returns non-zero on failure and callers stop on "unknown";
-  an empty answer is never "gone" or "clean". Iris CSV output carries a header
-  row and CRLF; `grep -c` exits 1 on zero matches; pod names are k8s-sanitized
-  (`_` becomes `-`) and truncated; `Loaded checkpoint from` is not logged when
-  the candidate is itself a search path, so key restore detection on `Loading
-  checkpoint from` and the loop entering.
-- Preflight (read-only): deploy worktree at `origin/main` and clean; rollback
-  worktree at the old run's exact SHA and clean; handoff checkpoint complete
-  (`metadata.json` present) and in the expected layout; the new run's tree empty;
-  no other live coordinator, gang, or hero pod; credentials for Iris, kubectl,
-  the object store, and W&B all work.
-- Launch guard: refuse unless the old run's coordinator is terminal, no
-  coordinator for the new run id is live, and the worktree is pristine. Capture
-  the submit output to a file and verify exactly one coordinator for the new run
-  id afterwards; a second submission would compete for the same tree.
-- Rollback: cancel the new coordinator (this also stops the Iris retry loop)
-  and confirm it is terminal; relaunch the old commit's `trigger_hero.sh` from
-  the pristine rollback worktree under the old run id.
-  The old tree resumes its own newest checkpoint; confirm that is the intended
-  anchor before launching.
-- Get an independent review of the scripts and fix or refute every finding;
-  fail-open guards are the defect class to ask the reviewer for.
+Verify:
 
-Submit as `IRIS_USER=marin` so the run is attributed to the project, not a person.
+- Deploy checkout is clean at fetched main; rollback checkout is clean at the
+  old run's recorded SHA. Preserve its original launch command.
+- Handoff `metadata.json` exists, records the expected step, and has the intended
+  retention. Confirm layout and checkpoint lineage.
+- Child checkpoint trees are empty for initial cutover. During later recovery,
+  preserve them and verify the newest complete child checkpoint instead.
+- No competing coordinator, gang, or hero pods exist apart from the old run.
+  Iris, Kubernetes, object-store, and W&B credentials work.
+- Launch refuses a live parent or child coordinator and a dirty checkout. One
+  operator owns submission; capture its output and verify exactly one child
+  coordinator afterward. Resolve an uncertain submission before retrying.
+- Rollback cancels the child coordinator, confirms it is terminal, and launches
+  the old revision and run ID as `IRIS_USER=marin`. Verify its intended resume
+  checkpoint first. Never create another W&B fork for rollback.
+- Object-storage headroom, checked again right before requesting the handoff.
+  Temporary checkpoints, which the hero writes hourly, go to `hero-checkpoints`
+  in US-EAST-08A (100 TiB quota); permanent checkpoints go to
+  `marin-us-east-02a` in US-EAST-02A, whose quota all Marin work shares. At
+  quota CoreWeave suspends writes for the whole zone, and the hero's next save
+  hangs without an error (#8506, 2026-09-23).
+  Require five checkpoints of free space in 08A (about 21 TB at 4.29 TB each):
+  the old run's newest temporary checkpoint, a restore-smoke copy, the child's
+  temporary checkpoint plus the next one being written (the older is pruned only
+  after the newer commits), and one spare. Require two checkpoints plus a day of
+  recent growth in 02A for the handoff and the child's next permanent
+  checkpoint. Read usage and quota from the Finelog `storage.usage` namespace;
+  the collector runs every few hours, so if the newest `collected_at` is more
+  than an hour old, get current values with
+  `python -m scripts.ops.storage.coreweave_usage --dry-run`.
 
-## 4. Execute
+Distinguish a successful query with no matching jobs from a failed query. Parse
+Iris CSV headers and CRLF correctly; do not interpret `grep -c` exit status as a
+query result. Match pods by task identity because Kubernetes names are sanitized
+and truncated. Confirm restore from `Loading checkpoint from` and entry into the
+training loop.
 
-1. Run the preflight checks from §3. Stop if any check fails or returns an unknown
-   result.
-2. When the old run is 200 steps past `step-N`, cancel its coordinator and
-   confirm the cancel took (coordinator terminal). The new gang can be submitted
-   at once; Kueue admits it all-or-nothing once the racks free. A cancel that did
-   not take leaves the new gang pending behind the old one indefinitely.
-3. Launch from main. Expect a cold start: restore 3 to 5 minutes, then compile
-   of every train-step executable (about 23 + 7 minutes at d6144 on 704 devices,
-   warm cache 3 to 5 minutes), while the loader's first prefetches may take
-   minutes. The startup watchdog fires at 80 minutes and the step watchdog at
-   15; do not kill a compiling run.
-4. Publish a W&B report before the first step: two run sets (old run id, new run
-   id) over the absolute step range `N` to `N+200`, panels for loss, cross
-   entropy, MFU, step time, drop fraction, routing entropy, grad norm, router
-   losses, peak memory, tokens/s, plus a wider context grid. Give the user the
-   URL; name it after the change.
-5. Monitor from finelog, not W&B: `levanter.metrics` has every step, W&B refuses
-   steps below a resumed run's counter and the public API lags. Poll job state,
-   `task_attempts.attempt_id`, the last logged step and its age, watchdog and
-   `JaxRuntimeError` lines, and the gate metrics against the control at the
-   same step: loss, load-balancing and router losses, drop fraction, peak HBM
-   against the allocator's release threshold. A corrupted restore shows within a
-   few steps as loss and router losses far above the control's; judge against
-   the paired control, or against fixed thresholds only when the user agreed
-   them for this deployment. Emit only on change.
-6. Compare per step against the control (same batches): join the two runs on
-   step and report mean and max loss delta, plus the gate metrics.
+## 4. Execute the trial
+
+1. Pass preflight. Verify the full matched control window is recorded and create
+   the W&B fork once using the launcher procedure.
+2. Cancel the old coordinator and confirm it is terminal and its training tasks
+   have stopped before launching the child from the recorded SHA as
+   `IRIS_USER=marin`.
+3. Allow for restore, compilation, and data prefetch. Read startup and step
+   watchdog limits from the resolved launch configuration; do not treat normal
+   compilation as a hang.
+4. Before the first child step, publish a comparison report for the 200 updates
+   starting at `N` (steps `N` through `N+199`), plus wider context. Include loss,
+   cross entropy, MFU, step time/tokens per second, drops, routing entropy, router
+   losses, gradient norm, and peak memory. Share the URL.
+5. Monitor fresh Finelog rows and execution identity, job state, task attempt IDs,
+   step age, watchdogs, and errors. W&B inherited history and API lag do not prove
+   new progress. Compare gate metrics against the old run at matching steps;
+   emit updates on change.
+6. Join the two runs by step and report mean/max loss deltas and all gate metrics.
+   Judge restore correctness against the paired control or thresholds agreed
+   before launch.
 
 ## 5. Decide
 
-Go: leave it running, post the numbers and the report, update the status issue.
-Anything short of the agreed gate, a hang, a retry loop, or a signature the
-change does not explain: roll back without waiting for more attempts. Each Iris
-retry re-restores the handoff and burns the full cluster for the compile plus
-the replay.
+The trial gate overrides `manage-hero-run`'s ordinary retry policy. On a failed
+gate, unexplained hang, or retry loop, cancel the child coordinator and roll back
+without waiting for further attempts. Retries may restore either the handoff or
+a newer child checkpoint; neither substitutes for a successful trial.
 
-After a rollback, verify the old run's first steps match its own earlier
-trajectory in finelog (the replay is a free determinism check), note that W&B
-shows no new rows until it passes its old counter, update the status issue, and
-file the failure as an issue with the evidence below.
+Go: leave the child running, publish the comparison and coverage gaps, update the
+status issue and downstream reporting, and resume ordinary recovery policy.
+The old run's leftover temporary checkpoints expire on their own within three
+days, or 14 if its launcher predates the three-day TTL. Delete any restore-smoke
+copy once it has served its purpose, deleting `metadata.json` first so a partial
+directory never looks complete.
 
-## Localizing a silent hang
+After rollback, compare the old run's first replayed steps with its earlier
+trajectory. This checks trajectory consistency, not bitwise determinism. Its W&B
+history may not advance until it passes the old counter, so verify progress in
+Finelog. Update the status issue and file the failure with supporting evidence.
 
-A hung collective logs nothing at any level. Use:
-
-- NCCL RAS periodic samples in `telemetry_v1.levanter` (`collective_operations`
-  per communicator, `rank_statistic` minimum and maximum). One member of every
-  cross-rack communicator behind by the same count means one whole rack never
-  entered those collectives.
-- `iris.task` per-task `cpu_millicores` over the stall window: ranks busy-polling
-  in an AllReduce burn about 2 cores each; the stuck rack's tasks sit at half
-  that. Task indices map to racks in blocks of 16 at d6144.
-- `task_attempts.node_name` for both attempts: the same rack twice on the same
-  nodes points at hardware, a different rack points at the code.
-- `iris process profile threads` shows every rank inside `train_step`; it cannot
-  see below XLA. A GPU-side stack needs the CUDA core-dump arming at launch.
-
-Record which executable alternation preceded the hang (watch step to plain step,
-eval to train step); executables that share the NCCL symmetric-memory arena are a
-known failure family (#8861, #8870).
-
-## References
-
-- `manage-hero-run` for the run record, babysitting, retention, and seal.
-- `research` for requested research programs and dense-result reporting.
-- `experiments/grug/moe_hero_ep/trigger_hero.sh`, `launch_scaling_ladder.py`
-  (`--initialize-from-checkpoint`, #8868).
-- `docs/ops/training-stall-alert-contract.md` for the RAS query.
-- The 2026-09-02 ragged all-to-all swap: #8506, #8861, #8870.
+For collective stalls, use [silent-hang diagnostics](references/silent-hangs.md).

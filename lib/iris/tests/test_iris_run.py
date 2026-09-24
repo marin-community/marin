@@ -14,7 +14,8 @@ from iris.cli.job import (
 )
 from iris.cli.job import run as run_cmd
 from iris.cluster.config import load_config
-from iris.cluster.constraints import ConstraintOp, WellKnownAttribute, availability_key
+from iris.cluster.constraints import ConstraintOp, WellKnownAttribute
+from iris.cluster.types import availability_key
 from iris.rpc import job_pb2
 
 

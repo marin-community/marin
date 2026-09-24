@@ -2,13 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import duckdb
 import pytest
+from conftest import install_finelog_dialect_macros, queried_namespace
 from dashboard_stitch import stitch_all
+from rl_observability import recent_rl_runs_dataset, rl_overview_dataset
+from rl_producers import RL_PRODUCER_NAMESPACES, collect_producers, producers_query
 
 ROOT = Path(__file__).resolve().parent.parent
 DASHBOARDS = ROOT / "dashboards"
@@ -17,6 +19,10 @@ NOW = datetime(2026, 8, 20, 12, tzinfo=UTC)
 WINDOW_START = NOW - timedelta(hours=1)
 CLUSTER = "cw-rno2a"
 RUN_ID = "snowball-e6-muonh-0"
+ASYNC_RUN_ID = "snowball-e6-muonh-0-async"
+UNSTAMPED_RUN_ID = "snowball-e5-unstamped-0"
+_NOW_MS = round(NOW.timestamp() * 1000)
+_WINDOW_START_MS = round(WINDOW_START.timestamp() * 1000)
 JOB_ID = "/atqamar/snowball-e6-muonh-0-attempt-0"
 NODES = ("gb200-node-0", "gb200-node-1")
 
@@ -51,16 +57,20 @@ def _row(
     run_id: str | None = None,
     job_id: str | None = None,
     node_name: str | None = None,
+    execution_uid: str = "iris:/atqamar/snowball-e6-muonh-0-attempt-0/0:attempt:0",
     role: str = "",
+    training_loop: str | None = "sync",
     attributes: dict[str, str] | None = None,
 ) -> tuple:
     resource = {"role": role} if role else {}
+    if training_loop is not None:
+        resource["training_loop"] = training_loop
     return (
         CLUSTER,
         service,
         run_id,
         job_id,
-        "iris:/atqamar/snowball-e6-muonh-0-attempt-0/0:attempt:0",
+        execution_uid,
         node_name,
         # Production stamps no process_index: it is NULL on every row of a real capture, so the
         # counter windows have to separate replicas without it.
@@ -127,21 +137,6 @@ def _run_rows() -> list[tuple]:
                     node_name=NODES[0],
                     role="trainer",
                     attributes={"work_kind": work_kind},
-                )
-            )
-        for name, value in (("rollout_queue_depth", 12.0), ("rollout_capacity", 32.0)):
-            rows.append(
-                _row(
-                    service="marinskyrl",
-                    name=name,
-                    value=value,
-                    moment=moment,
-                    seq=bucket,
-                    run_id=RUN_ID,
-                    job_id=JOB_ID,
-                    node_name=NODES[0],
-                    role="trainer",
-                    attributes={"queue": "rollout_buffer"},
                 )
             )
         # The Ray controller, forwarded under a different role. Forwarded snapshots always arrive
@@ -284,23 +279,6 @@ def _run_rows() -> list[tuple]:
                         attributes={"metric_source": "vllm", "engine": engine, "finished_reason": reason},
                     )
                 )
-        # Staleness as the trainer records it: one observation per admitted group, measured where
-        # the consuming step is known. A group can wait in the buffer across step boundaries.
-        for staleness in (0.0, 1.0, 1.0, 2.0, 4.0):
-            rows.append(
-                _row(
-                    service="marinskyrl",
-                    name="rollout_staleness_steps",
-                    value=staleness,
-                    moment=moment,
-                    seq=bucket,
-                    run_id=RUN_ID,
-                    job_id=JOB_ID,
-                    node_name=NODES[0],
-                    role="trainer",
-                    attributes={"step": str(bucket)},
-                )
-            )
     return rows
 
 
@@ -337,12 +315,7 @@ def store() -> duckdb.DuckDBPyConnection:
     # One table per semantic stream, seeded by routing each row on its service as the server does.
     for stream in sorted(set(_SEMANTIC_STREAM.values())):
         database.execute(f'CREATE TABLE "{stream}"{_SCHEMA}')
-    # finelog's SQL dialect, in the two spellings the dashboards use.
-    database.execute("CREATE MACRO to_timestamp_millis(value) AS to_timestamp(value / 1000.0)::TIMESTAMP")
-    database.execute("CREATE MACRO date_bin(width, moment) AS time_bucket(width, moment)")
-    database.execute("CREATE MACRO json_get(document, key) AS json_extract_string(document, '$.' || key)")
-    # finelog runs DataFusion, which has approx_percentile_cont; duckdb spells it quantile_cont.
-    database.execute("CREATE MACRO approx_percentile_cont(value, q) AS quantile_cont(value, q)")
+    install_finelog_dialect_macros(database)
     placeholders = ", ".join("?" for _ in _COLUMNS)
     service_index = _COLUMNS.index("service")
     routed: dict[str, list] = {}
@@ -355,21 +328,23 @@ def store() -> duckdb.DuckDBPyConnection:
     return database
 
 
-def _panel_sql(title: str) -> str:
-    """One panel's shipped SQL, with Grafana's macros resolved to this window."""
-    dashboard = stitch_all(DASHBOARDS, DASHBOARDS / "panels")["rl_runs.json"]
-    panels = {panel["title"]: panel for panel in dashboard["panels"]}
-    (parameter,) = [param for param in panels[title]["targets"][0]["url_options"]["params"] if param["key"] == "sql"]
-    sql = parameter["value"]
+def _in_window(sql: str) -> str:
+    """Resolve Grafana's window macros to this suite's window."""
     sql = sql.replace("{{from}}", f"TIMESTAMP '{WINDOW_START.replace(tzinfo=None)}'")
-    sql = sql.replace("{{to}}", f"TIMESTAMP '{NOW.replace(tzinfo=None)}'")
-    sql = sql.replace("${__interval_ms} milliseconds", "5 minutes")
-    # A rate panel divides by the bucket width, so the macro also appears on its own.
-    sql = sql.replace("${__interval_ms}", str(5 * 60 * 1000))
-    sql = sql.replace("${cluster:sqlstring}", f"'{CLUSTER}'")
-    sql = sql.replace("${run:sqlstring}", f"'{RUN_ID}'")
-    assert not re.search(r"\$\{|\{\{", sql), sql
-    return sql
+    return sql.replace("{{to}}", f"TIMESTAMP '{NOW.replace(tzinfo=None)}'")
+
+
+def _view_sql(view: str) -> str:
+    dataset = rl_overview_dataset((CLUSTER,), RUN_ID, _WINDOW_START_MS, _NOW_MS, 5 * 60 * 1000)
+    sources = ",\n".join(f"{source.name} AS ({source.sql})" for source in dataset.sources)
+    return f"WITH {sources}\n{dataset.views[view]}"
+
+
+def _panel_sql(title: str) -> str:
+    (panel,) = [panel for panel in _dashboard()["panels"] if panel.get("title") == title]
+    (target,) = [target for target in panel["targets"] if target.get("url") == "/v1/rl/overview"]
+    (view,) = [param["value"] for param in target["url_options"]["params"] if param["key"] == "view"]
+    return _view_sql(view)
 
 
 def test_the_run_variable_offers_a_run_the_trainer_reported(store) -> None:
@@ -379,8 +354,7 @@ def test_the_run_variable_offers_a_run_the_trainer_reported(store) -> None:
         param for param in variable["query"]["infinityQuery"]["url_options"]["params"] if param["key"] == "sql"
     ]
     sql = parameter["value"]
-    sql = sql.replace("{{from}}", f"TIMESTAMP '{WINDOW_START.replace(tzinfo=None)}'")
-    sql = sql.replace("{{to}}", f"TIMESTAMP '{NOW.replace(tzinfo=None)}'")
+    sql = _in_window(sql)
     sql = sql.replace("${cluster:sqlstring}", f"'{CLUSTER}'")
 
     assert store.execute(sql).fetchall() == [(RUN_ID,)]
@@ -398,13 +372,52 @@ def test_the_trainer_panels_render_for_that_run(store) -> None:
     work = store.execute(_panel_sql("Rollouts, samples and tokens completed")).fetchall()
     assert [row[1] for row in work] == [64.0] * 6
 
-    buffer = store.execute(_panel_sql("Rollout buffer occupancy (groups)")).fetchall()
-    assert [(row[1], row[2]) for row in buffer] == [(12.0, 32.0)] * 6
-
     # Occupancy is a ratio, so two nodes reporting 3 GB used of 4 GB still reads 0.75 rather
     # than doubling. 6e9 used over 8e9 total.
-    occupancy = store.execute(_panel_sql("Ray object store occupancy")).fetchall()
+    occupancy = store.execute(_panel_sql("Ray object store occupancy · needs the Ray collector")).fetchall()
     assert [row[1] for row in occupancy] == [pytest.approx(0.75)] * 6
+
+
+def test_percentile_panels_compute_over_all_executions_in_each_bucket(store) -> None:
+    moment = WINDOW_START
+    timestamp_ms = _millis(moment)
+    store.execute(
+        "DELETE FROM \"telemetry_v1.marinskyrl\" WHERE timestamp_ms = ? AND name = 'phase_duration_seconds'",
+        [timestamp_ms],
+    )
+    rows = []
+    grouped_values = (("attempt-a", (0.0, 100.0)), ("attempt-b", (10.0, 10.0, 10.0, 10.0, 10.0)))
+    for execution_uid, values in grouped_values:
+        for seq, value in enumerate(values):
+            rows.append(
+                _row(
+                    service="marinskyrl",
+                    name="phase_duration_seconds",
+                    value=value,
+                    moment=moment,
+                    seq=seq,
+                    run_id=RUN_ID,
+                    execution_uid=execution_uid,
+                    attributes={
+                        "phase": "rollout_or_inference_wait",
+                        "clock_domain": "critical_path",
+                        "outcome": "success",
+                    },
+                )
+            )
+    store.executemany(f'INSERT INTO "telemetry_v1.marinskyrl" VALUES ({", ".join("?" for _ in _COLUMNS)})', rows)
+    expected_p50, expected_p99 = store.execute(
+        "SELECT quantile_cont(value, 0.5), quantile_cont(value, 0.99) "
+        'FROM "telemetry_v1.marinskyrl" '
+        "WHERE timestamp_ms = ? AND name = 'phase_duration_seconds'",
+        [timestamp_ms],
+    ).fetchone()
+
+    straggler = store.execute(_panel_sql("Straggler proxy: rollout wait p99 ÷ p50")).fetchall()
+    first_bucket = min(row[0] for row in straggler)
+    first_straggler = next(row[2] for row in straggler if row[0] == first_bucket)
+
+    assert first_straggler == pytest.approx(expected_p99 / expected_p50)
 
 
 def test_the_node_agent_joins_through_node_name_without_a_run_id(store) -> None:
@@ -420,7 +433,7 @@ def test_the_node_agent_joins_through_node_name_without_a_run_id(store) -> None:
 
 def test_the_engine_panels_select_by_metric_name_alone(store) -> None:
     # No other MarinSkyRL producer emits these names, so the name identifies the engine path.
-    throughput = store.execute(_panel_sql("Engine token throughput")).fetchall()
+    throughput = store.execute(_panel_sql("vLLM token throughput")).fetchall()
     # A rate over a CUMULATIVE counter: the panel takes the delta between consecutive samples,
     # so a fixture growing by 1024 per bucket per engine yields a constant rate -- and the first
     # bucket has no predecessor to difference against, so it drops out.
@@ -428,10 +441,10 @@ def test_the_engine_panels_select_by_metric_name_alone(store) -> None:
     assert rates == [round(2 * 1024.0 / 300.0, 4)] * len(rates)
     assert len(rates) == 5
 
-    queue = store.execute(_panel_sql("Engine queue and KV-cache")).fetchall()
+    queue = store.execute(_panel_sql("vLLM queue and KV-cache usage")).fetchall()
     assert [(row[1], row[2]) for row in queue] == [(48.0, 12.0)] * 6
 
-    latency = store.execute(_panel_sql("Engine request latency (mean by stage)")).fetchall()
+    latency = store.execute(_panel_sql("vLLM request latency (mean by stage)")).fetchall()
     # Prometheus histograms arrive as `_sum` and `_count`, so the panel reports a mean per stage.
     # A p90 would need bucket interpolation.
     assert {row[1] for row in latency} == {
@@ -447,35 +460,54 @@ def test_a_trainer_that_stops_stamping_node_name_blanks_the_accelerator_panel(st
     assert store.execute(_panel_sql("GPU utilization on this run's nodes")).fetchall() == []
 
 
+def _census(database, present: frozenset[str]) -> list[dict[str, object]]:
+    """Run the census the way the route does: one query per namespace the deployment holds."""
+
+    def query(sql: str) -> list[dict[str, object]]:
+        assert queried_namespace(sql) in present, f"queried {queried_namespace(sql)}, which is absent"
+        columns = [description[0] for description in database.execute(sql).description]
+        return [dict(zip(columns, row, strict=True)) for row in database.execute(sql).fetchall()]
+
+    return collect_producers(query, present, RUN_ID, (CLUSTER,), _WINDOW_START_MS, _NOW_MS)
+
+
 def test_the_producer_census_separates_the_engine_series_from_the_trainer(store) -> None:
-    # Each engine actor publishes its own registry under `service='vllm'`, so the census unions
-    # the two streams.
-    rows = store.execute(_panel_sql("Producers reporting this run")).fetchall()
+    # Each engine actor publishes its own registry under `service='vllm'`, so the census spans
+    # both streams.
+    rows = _census(store, frozenset(RL_PRODUCER_NAMESPACES))
 
-    assert {(row[0], row[1]) for row in rows} >= {("marinskyrl", "trainer"), ("vllm", "inference")}
-
-
-def _projected_columns(sql: str) -> set[str]:
-    # Grafana reads the columns the outermost SELECT returns. The last SELECT in the text can sit
-    # inside a subquery, and a derived table's alias is not a column, so scan at parenthesis depth
-    # zero and keep only the projection list. CAST target types are spelled in caps.
-    depth = 0
-    start = end = None
-    for match in re.finditer(r"[()]|\bSELECT\b|\bFROM\b", sql):
-        token = match.group().upper()
-        if token == "(":
-            depth += 1
-        elif token == ")":
-            depth -= 1
-        elif depth == 0 and token == "SELECT":
-            start, end = match.end(), None
-        elif depth == 0 and token == "FROM" and start is not None and end is None:
-            end = match.start()
-    projection = sql[start:end]
-    return {alias for alias in re.findall(r"\bAS (\w+)", projection) if not alias.isupper()}
+    assert {(row["producer"], row["role"]) for row in rows} >= {("marinskyrl", "trainer"), ("vllm", "inference")}
 
 
-def test_every_timeseries_panel_declares_the_columns_its_sql_returns() -> None:
+def test_the_census_still_answers_on_a_deployment_that_has_no_harbor_namespace(store) -> None:
+    """A deployment without every RL namespace is the normal case, so the census leaves it out."""
+    rows = _census(store, frozenset({"telemetry_v1.marinskyrl", "telemetry_v1.vllm"}))
+
+    assert {row["producer"] for row in rows} == {"marinskyrl", "vllm"}
+
+
+def test_the_census_is_empty_rather_than_broken_on_a_deployment_holding_none_of_them() -> None:
+    assert _census(duckdb.connect(), frozenset()) == []
+
+
+def test_the_census_quotes_a_run_id_carrying_an_apostrophe() -> None:
+    database = duckdb.connect()
+    database.execute(f'CREATE TABLE "telemetry_v1.marinskyrl"{_SCHEMA}')
+    database.execute("CREATE MACRO json_get(document, key) AS json_extract_string(document, '$.' || key)")
+    run_index, service_index = _COLUMNS.index("run_id"), _COLUMNS.index("service")
+    row = next(row for row in _run_rows() if row[service_index] == "marinskyrl")
+    placeholders = ", ".join("?" for _ in _COLUMNS)
+    database.execute(
+        f'INSERT INTO "telemetry_v1.marinskyrl" VALUES ({placeholders})',
+        (*row[:run_index], "run's-id", *row[run_index + 1 :]),
+    )
+
+    sql = producers_query("telemetry_v1.marinskyrl", "run's-id", (CLUSTER,), _WINDOW_START_MS, _NOW_MS)
+
+    assert len(database.execute(sql).fetchall()) == 1
+
+
+def test_every_timeseries_panel_declares_the_columns_its_projection_returns(store) -> None:
     """A panel is read through its declared columns, so executing its SQL cannot see a mistake there."""
     dashboard = stitch_all(DASHBOARDS, DASHBOARDS / "panels")["rl_runs.json"]
 
@@ -483,9 +515,9 @@ def test_every_timeseries_panel_declares_the_columns_its_sql_returns() -> None:
         if panel.get("type") != "timeseries":
             continue
         for target in panel["targets"]:
-            (parameter,) = [param for param in target["url_options"]["params"] if param["key"] == "sql"]
-            selected = _projected_columns(parameter["value"])
             declared = {column["selector"]: column["type"] for column in target["columns"]}
+            store.execute(_panel_sql(panel["title"]))
+            selected = {column[0] for column in store.description}
 
             assert (
                 set(declared) == selected
@@ -511,7 +543,7 @@ def test_ray_panels_exclude_cumulative_snapshots_and_never_mix_states(store) -> 
     # A forwarded snapshot's `kind` column is always "gauge"; source_temporality carries the real
     # semantics. The Ray allowlist includes cumulative counters, and averaging one in is silently
     # wrong. The spill states are distinct quantities and stay distinct series.
-    rows = store.execute(_panel_sql("Ray spill manager bytes by state")).fetchall()
+    rows = store.execute(_panel_sql("Ray spill manager bytes by state · needs the Ray collector")).fetchall()
 
     by_state = {row[1]: row[2] for row in rows}
     assert by_state == {"Spilled": pytest.approx(2.0e9), "Restored": pytest.approx(5.0e8)}
@@ -540,7 +572,7 @@ def test_engine_rates_keep_two_actors_that_both_report_engine_zero_apart(store) 
             ),
         )
 
-    throughput = store.execute(_panel_sql("Engine token throughput")).fetchall()
+    throughput = store.execute(_panel_sql("vLLM token throughput")).fetchall()
     rates = [round(row[1], 4) for row in throughput]
 
     assert rates == [round(3 * 1024.0 / 300.0, 4)] * len(rates)
@@ -569,7 +601,142 @@ def test_engine_panels_read_the_embedded_stream_as_well_as_the_standalone_one(st
             ),
         )
 
-    rates = [round(row[1], 4) for row in store.execute(_panel_sql("Engine token throughput")).fetchall()]
+    rates = [round(row[1], 4) for row in store.execute(_panel_sql("vLLM token throughput")).fetchall()]
 
     assert rates == [round(3 * 1024.0 / 300.0, 4)] * len(rates)
     assert len(rates) == 5
+
+
+def _dashboard() -> dict:
+    return stitch_all(DASHBOARDS, DASHBOARDS / "panels")["rl_runs.json"]
+
+
+def test_every_labelled_series_panel_names_the_series_without_its_column() -> None:
+    for panel in _dashboard()["panels"]:
+        if panel.get("type") != "timeseries":
+            continue
+        if "series" not in {column["selector"] for target in panel.get("targets", []) for column in target["columns"]}:
+            continue
+        assert panel["fieldConfig"]["defaults"].get("displayName") == "${__field.labels.series}", panel["title"]
+
+
+def _recent_runs_sql() -> str:
+    dataset = recent_rl_runs_dataset(_WINDOW_START_MS, _NOW_MS)
+    return f"WITH recent AS ({dataset.sources[0].sql})\n{dataset.views['recent']}"
+
+
+def _recent_runs_panel() -> dict:
+    home = stitch_all(DASHBOARDS, DASHBOARDS / "panels")["home.json"]
+    (panel,) = [p for p in home["panels"] if p.get("title") == "Recent RL runs"]
+    return panel
+
+
+def test_a_listed_run_opens_the_view_framed_on_that_run() -> None:
+    (links,) = [
+        prop["value"]
+        for override in _recent_runs_panel()["fieldConfig"]["overrides"]
+        if override["matcher"]["options"] == "run"
+        for prop in override["properties"]
+        if prop["id"] == "links"
+    ]
+    (url,) = [link["url"] for link in links]
+
+    # The list spans both training loops and each has its own dashboard, so the row carries the
+    # uid of the one whose run picker can select it.
+    assert url.startswith("/d/${__data.fields.dashboard}?")
+    # Without all four the link lands on an empty dashboard: no run selected, or a window that
+    # predates the run.
+    for parameter in ("var-run=", "var-cluster=", "from=", "to="):
+        assert parameter in url, parameter
+
+
+def _run_picker_sql(uid: str) -> str:
+    """The run picker of the dashboard published under this uid, resolved to this window."""
+    (dashboard,) = [board for board in stitch_all(DASHBOARDS, DASHBOARDS / "panels").values() if board.get("uid") == uid]
+    (variable,) = [item for item in dashboard["templating"]["list"] if item["name"] == "run"]
+    (parameter,) = [
+        param for param in variable["query"]["infinityQuery"]["url_options"]["params"] if param["key"] == "sql"
+    ]
+    return _in_window(parameter["value"]).replace("${cluster:sqlstring}", f"'{CLUSTER}'")
+
+
+def test_a_listed_run_opens_the_dashboard_whose_picker_offers_it(store) -> None:
+    # Home's list is loop-blind and each dashboard's run picker takes only its own loop, so an
+    # async row routed to the sync dashboard would land on a picker that cannot select it.
+    for bucket in range(2):
+        store.execute(
+            f'INSERT INTO "telemetry_v1.marinskyrl" VALUES ({", ".join("?" for _ in _COLUMNS)})',
+            list(
+                _row(
+                    service="marinskyrl",
+                    name="policy_step",
+                    value=float(bucket),
+                    moment=WINDOW_START + timedelta(minutes=5 * bucket),
+                    seq=bucket,
+                    run_id=ASYNC_RUN_ID,
+                    job_id=JOB_ID,
+                    node_name=NODES[0],
+                    role="trainer",
+                    training_loop="async",
+                )
+            ),
+        )
+
+    # A run logged before the trainer stamped its loop carries no training_loop attribute.
+    store.execute(
+        f'INSERT INTO "telemetry_v1.marinskyrl" VALUES ({", ".join("?" for _ in _COLUMNS)})',
+        list(
+            _row(
+                service="marinskyrl",
+                name="policy_step",
+                value=0.0,
+                moment=WINDOW_START,
+                seq=0,
+                run_id=UNSTAMPED_RUN_ID,
+                job_id=JOB_ID,
+                node_name=NODES[0],
+                role="trainer",
+                training_loop=None,
+            )
+        ),
+    )
+
+    result = store.execute(_recent_runs_sql())
+    columns = [description[0] for description in result.description]
+    routed = {row["run"]: row["dashboard"] for row in (dict(zip(columns, r, strict=True)) for r in result.fetchall())}
+
+    assert routed == {RUN_ID: "marin-rl-runs", ASYNC_RUN_ID: "marin-async-rl", UNSTAMPED_RUN_ID: "marin-rl-runs"}
+    for uid in set(routed.values()):
+        offered = {run for (run,) in store.execute(_run_picker_sql(uid)).fetchall()}
+        assert offered == {run for run, target in routed.items() if target == uid}, uid
+
+
+def test_the_recent_runs_query_returns_a_row_per_run_and_cluster(store) -> None:
+    sql = _recent_runs_sql()
+
+    rows = store.execute(sql).fetchall()
+
+    assert [row[0] for row in rows] == [RUN_ID]
+    run, cluster, step, attempts = rows[0][0], rows[0][1], rows[0][2], rows[0][3]
+    assert (run, cluster) == (RUN_ID, CLUSTER)
+    assert step > 0 and attempts >= 1
+
+
+def test_a_listed_run_opens_a_window_that_contains_its_last_sample(store) -> None:
+    """The panels bound time half-open (`timestamp_ms < to`), so a link ending exactly on the last
+    sample drops it, and a one-step run opens an empty view."""
+    sql = _recent_runs_sql()
+    result = store.execute(sql)
+    columns = [description[0] for description in result.description]
+    row = dict(zip(columns, result.fetchall()[0], strict=True))
+    samples = [
+        timestamp
+        for (timestamp,) in store.execute(
+            "SELECT timestamp_ms FROM \"telemetry_v1.marinskyrl\" WHERE run_id = ? AND name = 'policy_step' "
+            "AND timestamp_ms >= ? AND timestamp_ms < ?",
+            [RUN_ID, _WINDOW_START_MS, _NOW_MS],
+        ).fetchall()
+    ]
+
+    assert samples
+    assert all(row["window_from_ms"] <= timestamp < row["window_to_ms"] for timestamp in samples)

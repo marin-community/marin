@@ -41,6 +41,7 @@ from iris.cluster.types import (
     CapacityType,
     GcpSliceMode,
     WellKnownAttribute,
+    availability_key,
     parse_memory_string,
 )
 from iris.cluster.worker.port_allocator import DEFAULT_TASK_PORT_RANGE
@@ -655,7 +656,6 @@ class KubernetesProviderConfig(_Config):
     cache_max_age: DurationField | None = None  # enables cache reclamation
     controller_address: str = ""  # injected into task pods
     kueue: KueueConfig = Field(default_factory=KueueConfig)
-    preempt_namespaces: list[str] = Field(default_factory=list)
     priority_classes: dict[str, str] = Field(default_factory=dict)  # band -> PriorityClass
 
     @field_validator("cache_max_age")
@@ -1194,22 +1194,15 @@ def _scale_group_region_attributes(scale_groups: Mapping[str, ScaleGroupConfig])
     return derived
 
 
-def _scale_group_device_attributes(scale_groups: Mapping[str, ScaleGroupConfig]) -> dict[str, set[str]]:
-    """Collect the ``device-type``/``device-variant`` a backend's scale groups offer.
-
-    Only accelerator scale groups contribute: a CPU (or unset) device type emits
-    nothing, matching a job's resource spec, whose CPU resources carry no device
-    constraint — so a CPU-only backend advertises no device attribute and stays a
-    catch-all. A blank or ``auto`` variant emits no ``device-variant``. Values are
-    lowercased so an advertised value equals the constraint literal a job matches
-    with, which is lowercased on construction. Scale groups of different variants
-    union into one set, e.g. ``device-variant: {"h100", "a100"}``.
-    """
+def _scale_group_resource_attributes(scale_groups: Mapping[str, ScaleGroupConfig]) -> dict[str, set[str]]:
+    """Collect configured routing attributes, independent of free capacity."""
     derived: dict[str, set[str]] = {}
     for sg in scale_groups.values():
         resources = sg.resources
         if resources is None:
             continue
+        preemptible = str(resources.capacity_type == CapacityType.PREEMPTIBLE).lower()
+        derived.setdefault(WellKnownAttribute.PREEMPTIBLE.value, set()).add(preemptible)
         device_type = resources.device_type
         if device_type is None or device_type == AcceleratorType.CPU:
             continue
@@ -1217,14 +1210,15 @@ def _scale_group_device_attributes(scale_groups: Mapping[str, ScaleGroupConfig])
         variant = resources.device_variant.strip().lower()
         if variant and variant != AUTO_DEVICE_VARIANT:
             derived.setdefault(WellKnownAttribute.DEVICE_VARIANT.value, set()).add(variant)
+            derived.setdefault(availability_key(variant), set()).add("true")
     return derived
 
 
 def backend_attribute_sets(config: IrisClusterConfig) -> dict[str, set[str]]:
-    """Derive the device and region attributes this cluster advertises to peers."""
+    """Derive the configured resource and region attributes for federation peers."""
     attributes: dict[str, set[str]] = {}
     for derived in (
-        _scale_group_device_attributes(config.scale_groups),
+        _scale_group_resource_attributes(config.scale_groups),
         _scale_group_region_attributes(config.scale_groups),
     ):
         for key, values in derived.items():

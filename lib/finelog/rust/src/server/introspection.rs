@@ -1,9 +1,10 @@
-//! Build + storage introspection routes (`/api/server`, `/api/segments`).
+//! Build, storage, and forwarding introspection routes under `/api/*`.
 //!
-//! These answer the two questions an operator asks of a running finelog that
-//! neither the RPC contract nor a SQL query can: *which source revision is this
-//! binary*, and *what does this namespace's storage physically look like right
-//! now*. The dashboard's System page and per-namespace Segments panel read them.
+//! These answer questions an operator asks of a running finelog that neither
+//! the RPC contract nor a SQL query can: *which source revision is this
+//! binary*, *what does this table's storage physically look like right now*,
+//! and *how far has its durable state progressed toward the hub*. The dashboard's
+//! System page and per-table operator panels read them.
 //!
 //! Plain axum JSON rather than proto: the payloads describe this process and its
 //! files, so they track the implementation rather than the wire contract, and
@@ -30,7 +31,9 @@ use crate::indices::{
 };
 use crate::query::metadata_cache_stats;
 use crate::server::diagnostics::read_proc_self_status_kb;
+use crate::server::forwarding::ForwardingConfig;
 use crate::server::ingest_health::{IngestHealth, NamespaceRegistration};
+use crate::server::log_service::LogTailCache;
 use crate::store::segment::{
     segment_id_and_row_group_rows, segment_physical, LAYOUT_VERSION, MAX_ROW_GROUP_ROWS,
     TARGET_ROW_GROUP_BYTES,
@@ -42,6 +45,8 @@ use crate::store::Store;
 struct IntrospectionState {
     store: Arc<Store>,
     health: Arc<IngestHealth>,
+    forwarding: Option<ForwardingConfig>,
+    tail_cache: Arc<LogTailCache>,
 }
 
 /// When this process started, stamped at router-build time so uptime counts
@@ -129,10 +134,30 @@ struct MetadataCacheInfo {
 struct IndexCacheInfo {
     corrupt_bundles: i64,
     corrupt_sections: i64,
+    load_attempts: i64,
+    header_load_attempts: i64,
+    section_load_attempts: i64,
+    coalesced_waits: i64,
+    entries: i64,
+    bytes: i64,
+    budget_bytes: i64,
+    evictions: i64,
     exact_aggregate_full: i64,
     exact_aggregate_partial: i64,
     exact_aggregate_declined: i64,
     exact_aggregate_fallbacks: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LogTailCacheInfo {
+    entries: i64,
+    bytes: i64,
+    budget_bytes: i64,
+    hits: i64,
+    delta_scans: i64,
+    misses: i64,
+    evictions: i64,
 }
 
 /// The on-disk format policy this binary writes. A segment whose
@@ -158,6 +183,7 @@ struct ServerInfoResponse {
     ingest: Vec<NamespaceRegistration>,
     metadata_cache: MetadataCacheInfo,
     index_cache: IndexCacheInfo,
+    log_tail_cache: LogTailCacheInfo,
     format: FormatInfo,
 }
 
@@ -249,6 +275,40 @@ struct SegmentsResponse {
     segments: Vec<SegmentInfo>,
 }
 
+/// Durable progress for one configured downstream target. The cursor records
+/// settled sequence positions, including positions skipped after a permanent
+/// rejection. A missing cursor means forwarding has not seeded this table.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ForwardingTargetInfo {
+    target: String,
+    settled_cursor: Option<i64>,
+    forwarding_lag_seq_positions: Option<i64>,
+}
+
+/// Per-table forwarding state. `configured=false` and no target is distinct
+/// from a configured target whose cursor equals the high-water mark.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ForwardingResponse {
+    namespace: String,
+    configured: bool,
+    cluster: Option<String>,
+    visible_high_water: i64,
+    published_high_water: i64,
+    publication_lag_seq_positions: i64,
+    target: Option<ForwardingTargetInfo>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ForwardingQuery {
+    namespace: String,
+}
+
+fn nonnegative_lag(high_water: i64, settled: i64) -> i64 {
+    high_water.saturating_sub(settled).max(0)
+}
+
 /// Host name from `/proc`, or an empty string off Linux.
 fn hostname() -> String {
     std::fs::read_to_string("/proc/sys/kernel/hostname")
@@ -268,7 +328,9 @@ async fn get_server(State(state): State<IntrospectionState>) -> impl IntoRespons
     let memory = store.memory_summary();
     let cache = metadata_cache_stats();
     let corruption = store.indices().cache().corruption_counts();
+    let loads = store.indices().cache().load_stats();
     let aggregate = store.indices().cache().aggregate_stats();
+    let tail_cache = state.tail_cache.stats();
     Json(ServerInfoResponse {
         build: build_info(),
         process: ProcessInfo {
@@ -299,10 +361,27 @@ async fn get_server(State(state): State<IntrospectionState>) -> impl IntoRespons
         index_cache: IndexCacheInfo {
             corrupt_bundles: corruption.bundles as i64,
             corrupt_sections: corruption.sections as i64,
+            load_attempts: loads.attempts as i64,
+            header_load_attempts: loads.header_attempts as i64,
+            section_load_attempts: loads.section_attempts as i64,
+            coalesced_waits: loads.coalesced_waits as i64,
+            entries: loads.entries as i64,
+            bytes: loads.used_bytes as i64,
+            budget_bytes: loads.budget_bytes as i64,
+            evictions: loads.evictions as i64,
             exact_aggregate_full: aggregate.full as i64,
             exact_aggregate_partial: aggregate.partial as i64,
             exact_aggregate_declined: aggregate.declined as i64,
             exact_aggregate_fallbacks: aggregate.fallbacks as i64,
+        },
+        log_tail_cache: LogTailCacheInfo {
+            entries: tail_cache.entries as i64,
+            bytes: tail_cache.bytes as i64,
+            budget_bytes: tail_cache.budget_bytes as i64,
+            hits: tail_cache.hits as i64,
+            delta_scans: tail_cache.delta_scans as i64,
+            misses: tail_cache.misses as i64,
+            evictions: tail_cache.evictions as i64,
         },
         format: FormatInfo {
             layout_version: LAYOUT_VERSION,
@@ -479,11 +558,71 @@ async fn get_segments(
     }
 }
 
+async fn get_forwarding(
+    State(state): State<IntrospectionState>,
+    Query(q): Query<ForwardingQuery>,
+) -> impl IntoResponse {
+    let namespace = q.namespace;
+    let response_namespace = namespace.clone();
+    let store = Arc::clone(&state.store);
+    let forwarding = state.forwarding.clone();
+    let loaded = tokio::task::spawn_blocking(move || {
+        let visible_high_water = store.namespace_visible_seq(&namespace)?;
+        let published_high_water = store.namespace_published_seq(&namespace)?;
+        let target = forwarding
+            .as_ref()
+            .map(|config| {
+                let cursor = store.forward_cursor(&config.target, &namespace)?;
+                Ok::<_, crate::errors::StatsError>(ForwardingTargetInfo {
+                    target: config.target.clone(),
+                    settled_cursor: cursor,
+                    forwarding_lag_seq_positions: cursor
+                        .map(|value| nonnegative_lag(published_high_water, value)),
+                })
+            })
+            .transpose()?;
+        let cluster = forwarding.as_ref().map(|config| config.cluster.clone());
+        Ok::<_, crate::errors::StatsError>(ForwardingResponse {
+            namespace: response_namespace,
+            configured: forwarding.is_some(),
+            cluster,
+            visible_high_water,
+            published_high_water,
+            publication_lag_seq_positions: nonnegative_lag(
+                visible_high_water,
+                published_high_water,
+            ),
+            target,
+        })
+    })
+    .await;
+    match loaded {
+        Ok(Ok(response)) => Json(response).into_response(),
+        Ok(Err(error)) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+        Err(join) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("forwarding task panicked: {join}"),
+        )
+            .into_response(),
+    }
+}
+
 /// The `/api/*` introspection routes, for merging into the app router.
-pub fn introspection_router(store: Arc<Store>, health: Arc<IngestHealth>) -> Router {
+pub fn introspection_router(
+    store: Arc<Store>,
+    health: Arc<IngestHealth>,
+    forwarding: Option<ForwardingConfig>,
+    tail_cache: Arc<LogTailCache>,
+) -> Router {
     process_started();
     Router::new()
         .route("/api/server", get(get_server))
         .route("/api/segments", get(get_segments))
-        .with_state(IntrospectionState { store, health })
+        .route("/api/forwarding", get(get_forwarding))
+        .with_state(IntrospectionState {
+            store,
+            health,
+            forwarding,
+            tail_cache,
+        })
 }

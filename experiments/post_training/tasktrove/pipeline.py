@@ -14,6 +14,7 @@ Stages:
 - ``templates`` extracts exemplars and checks converter coverage.
 - ``converted`` normalizes retained sources into Harbor tasks.
 - ``filtered`` deduplicates rows and removes tasks that fail verifier checks.
+- ``routed`` applies the MCQA route-mapping artifact with a fail-closed lookup.
 - ``release`` writes the task Parquet, rejection ledger, manifest, and report.
 """
 
@@ -27,14 +28,21 @@ from marin.execution.remote import remote
 from marin.experiment.data import hf_download
 from rigging.provenance import launch_provenance
 
+from experiments.post_training.tasktrove.apply_mcqa_routing import route_tasks
 from experiments.post_training.tasktrove.convert import convert_tasks
 from experiments.post_training.tasktrove.dataset import TASKS_GLOB, TASKTROVE_HF_ID, TASKTROVE_REVISION
+from experiments.post_training.tasktrove.mcqa_routing_pipeline import (
+    DEFAULT_INPUT,
+    DEFAULT_SAMPLE_SEED,
+    DEFAULT_SAMPLE_SIZE,
+    routing_step,
+)
 from experiments.post_training.tasktrove.publish import publish_release
 from experiments.post_training.tasktrove.task_templates import build_template_index, summarize_templates
 from experiments.post_training.tasktrove.verify import filter_tasks
 
-STAGES = ("raw", "summaries", "templates", "converted", "filtered", "release")
-PIPELINE_VERSION = "2026.09.10.9"
+STAGES = ("raw", "summaries", "templates", "converted", "filtered", "routing", "routed", "release")
+PIPELINE_VERSION = "2026.09.18.3"
 RAW_VERSION = "2026.09.09"
 """Pinned download version; bump only when ``TASKTROVE_REVISION`` changes, so reruns reuse the download."""
 
@@ -46,6 +54,8 @@ class TaskTroveWorkflow:
     templates: ArtifactStep
     converted: ArtifactStep
     filtered: ArtifactStep
+    routing: ArtifactStep
+    routed: ArtifactStep
     release: ArtifactStep
 
 
@@ -96,16 +106,30 @@ def build_workflow(tool_ref: str) -> TaskTroveWorkflow:
         output_path=OUT,
         max_tasks_per_source=None,
     )
+    routing = routing_step(
+        input_path=DEFAULT_INPUT,
+        git_revision=tool_ref,
+        sample_size=DEFAULT_SAMPLE_SIZE,
+        sample_seed=DEFAULT_SAMPLE_SEED,
+    )
+    routed = apply(
+        "tasktrove/routed",
+        remote(route_tasks, resources=coordinator),
+        version=PIPELINE_VERSION,
+        filtered_path=filtered,
+        routing_artifact_path=routing,
+        output_path=OUT,
+    )
     release = apply(
         "tasktrove/clean",
         remote(publish_release, resources=coordinator),
         version=PIPELINE_VERSION,
-        filtered_path=filtered,
+        routed_path=routed,
         output_path=OUT,
         tool_ref=tool_ref,
         artifact_type=Artifact,
     )
-    return TaskTroveWorkflow(raw, summaries, templates, converted, filtered, release)
+    return TaskTroveWorkflow(raw, summaries, templates, converted, filtered, routing, routed, release)
 
 
 @click.command(help=__doc__)

@@ -16,6 +16,7 @@ import jax.numpy as jnp
 import jmp
 import levanter.callbacks as callbacks
 import levanter.tracker
+import numpy as np
 import optax
 from fray.cluster import ResourceConfig
 from haliax import Axis
@@ -32,6 +33,11 @@ from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_b
 from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator, cb_tagged_evaluate
+from levanter.grug.grug_moe import (
+    MOE_DROPPED_ASSIGNMENTS_METRIC,
+    MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC,
+    MOE_VALID_ASSIGNMENTS_METRIC,
+)
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
@@ -110,8 +116,8 @@ class GrugTrainerConfig:
     offload_opt_state: bool = False
     save_checkpoints: bool = False
 
-    # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
-    # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
+    # Grug builds its own compact (replica_dcn, data, context, expert, model) mesh instead of using
+    # the Trainer's logical axis mapping; `data` absorbs whatever these leave free.
     # Defaults reproduce the historical layout: no expert parallelism and full replication
     # across slices (replica_axis_size=None -> jax.process_count()), i.e. parameters
     # replicated per slice and sharded only over the intra-slice `data` axis. For a model
@@ -192,7 +198,7 @@ def build_train_loader(
     mesh: Mesh,
 ) -> DataLoader[GrugLmExample]:
     # DataLoader uses this batch axis mapping to shard batches across the distributed mesh.
-    # `compact_grug_mesh` always carries (replica_dcn, data, expert, model); length-1 axes
+    # `compact_grug_mesh` always carries (replica_dcn, data, context, expert, model); length-1 axes
     # are kept so we can name "expert" unconditionally.
     return DataLoader(
         dataset,
@@ -222,7 +228,7 @@ def build_tagged_evaluator(
         max_examples_per_dataset = eval_cfg.max_eval_batches * eval_cfg.eval_batch_size
 
     tokenizer = data_config.the_tokenizer if eval_cfg.compute_bpb else None
-    # `compact_grug_mesh` always carries (replica_dcn, data, expert, model); length-1 axes
+    # `compact_grug_mesh` always carries (replica_dcn, data, context, expert, model); length-1 axes
     # are kept so we can name "expert" unconditionally.
     eval_axis_mapping = {"batch": BATCH_AXES}
     eval_batch = Axis("batch", eval_cfg.eval_batch_size)
@@ -377,18 +383,30 @@ def initial_state(
 
 def _drop_metrics(
     dropped_assignments: jax.Array,
+    skipped_padding_assignments: jax.Array,
+    valid_assignments: jax.Array,
     *,
     batch_size: int,
     sequence_length: int,
     top_k: int,
     num_layers: int,
 ) -> dict[str, int | float]:
-    # Global assignment totals can exceed int32; float32 would also round large drop counts.
-    dropped_assignments_host = int(dropped_assignments)
-    total_assignments = batch_size * sequence_length * top_k * num_layers
+    # Per-layer int32 counts are summed on the host so large global totals cannot overflow.
+    def _sum_int64(per_layer: jax.Array) -> int:
+        return int(np.asarray(per_layer).astype(np.int64).sum())
+
+    dropped_assignments_host = _sum_int64(dropped_assignments)
+    skipped_padding_assignments_host = _sum_int64(skipped_padding_assignments)
+    valid_assignments_host = _sum_int64(valid_assignments)
+    total_positions = batch_size * sequence_length * top_k * num_layers
+    if valid_assignments_host + skipped_padding_assignments_host != total_positions:
+        raise ValueError("valid plus skipped assignments must equal the padded batch size")
     return {
-        "moe/dropped_assignments": dropped_assignments_host,
-        "moe/drop_fraction": dropped_assignments_host / total_assignments,
+        MOE_DROPPED_ASSIGNMENTS_METRIC: dropped_assignments_host,
+        "moe/drop_fraction": dropped_assignments_host / max(valid_assignments_host, 1),
+        MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC: skipped_padding_assignments_host,
+        "moe/skipped_padding_fraction": skipped_padding_assignments_host / total_positions,
+        MOE_VALID_ASSIGNMENTS_METRIC: valid_assignments_host,
     }
 
 
@@ -678,9 +696,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                             {"train/cross_entropy_loss": metrics["train/cross_entropy_loss"]},
                             step=step,
                         )
-                    if "moe/dropped_assignments" in metrics:
+                    if MOE_DROPPED_ASSIGNMENTS_METRIC in metrics:
                         drop_metrics = _drop_metrics(
-                            metrics["moe/dropped_assignments"],
+                            metrics[MOE_DROPPED_ASSIGNMENTS_METRIC],
+                            metrics[MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC],
+                            metrics[MOE_VALID_ASSIGNMENTS_METRIC],
                             batch_size=batch.tokens.shape[0],
                             sequence_length=batch.tokens.shape[1],
                             top_k=config.model.num_experts_per_token,

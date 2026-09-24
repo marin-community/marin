@@ -13,7 +13,8 @@ These tests cover:
 
 import json
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -676,3 +677,47 @@ def test_vm_slice_advances_from_creating_to_ready() -> None:
     assert status.state == CloudSliceState.READY
     assert status.worker_count == 1
     assert status.workers[0].internal_address == gcp_service._vms[(vm_name, zone)].internal_ip
+
+
+# ========================================================================
+# Access-token cache window
+# ========================================================================
+
+
+@pytest.fixture
+def pacific_timezone(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Run the test on a host whose local clock sits well west of UTC."""
+    monkeypatch.setenv("TZ", "America/Los_Angeles")
+    time.tzset()
+    yield
+    monkeypatch.undo()
+    time.tzset()
+
+
+class _StubCredentials:
+    """Stands in for google.auth credentials, matching their expiry convention."""
+
+    token = "fresh-token"
+    expiry: datetime | None = None
+
+    def refresh(self, _request: object) -> None:
+        # google.auth stores expiry as a *naive* datetime holding UTC.
+        self.expiry = datetime.now(UTC).replace(tzinfo=None) + timedelta(seconds=3600)
+
+
+def test_token_cache_window_tracks_utc_expiry_on_a_non_utc_host(pacific_timezone: None) -> None:
+    """The cached token must expire on the credential's real lifetime, not the host's offset.
+
+    Reading the naive-UTC expiry as local time would put _expires_at hours past
+    the point GCP stops honoring the token, so _headers would keep serving a
+    dead token and every call would 401 until the skew elapsed.
+    """
+    svc = CloudGcpService(project_id="test-project")
+    svc._creds = _StubCredentials()
+
+    before = time.monotonic()
+    svc._refresh_token()
+
+    assert svc._token == "fresh-token"
+    # 3600s lifetime, refreshed _REFRESH_MARGIN (300s) early.
+    assert svc._expires_at - before == pytest.approx(3300, abs=5)

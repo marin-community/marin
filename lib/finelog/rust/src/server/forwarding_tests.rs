@@ -10,7 +10,7 @@ use arrow::array::{RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
 
 use crate::proto::finelog::logging::{FetchLogsRequest, LogEntry, MatchScope, PushLogsRequest};
-use crate::proto::finelog::stats::ColumnType;
+use crate::proto::finelog::stats::{ColumnType, ListRelayStatusRequest};
 use crate::server::auth::{AuthIdentity, AuthPolicy};
 use crate::server::telemetry::telemetry_schema;
 use crate::server::test_support::{
@@ -1165,6 +1165,26 @@ async fn a_busy_namespace_yields_before_the_next_namespace_is_forwarded() {
         Some(fx.tip("urgent")),
         "the namespace after a backlog must get a forwarding turn in the same sweep"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn relay_status_reaches_the_hub_outside_the_row_path() {
+    let fx = Fixture::new("relay-status").await;
+    let forwarder = fx.forwarder(PRIV_A);
+
+    forwarder.report_status().await.unwrap();
+
+    let response = stats_client(fx.target_addr)
+        .list_relay_status(ListRelayStatusRequest::default())
+        .await
+        .unwrap()
+        .into_owned();
+    assert_eq!(response.senders.len(), 1);
+    assert_eq!(response.senders[0].cluster.as_deref(), Some(SOURCE_CLUSTER));
+    assert!(response.senders[0]
+        .namespaces
+        .iter()
+        .any(|namespace| namespace.namespace.as_deref() == Some(LOG_NAMESPACE_NAME)));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

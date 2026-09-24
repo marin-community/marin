@@ -9,15 +9,16 @@ revision identifies the CLI, graders, and benchmark data without requiring a sep
 
 from marin.external_dependencies import EVALCHEMY
 
-EVALCHEMY_REQUIREMENT = EVALCHEMY.requirement()
+EVALCHEMY_REQUIRED_EXTRAS = ("serve-eval",)
+EVALCHEMY_REQUIREMENT = EVALCHEMY.requirement(EVALCHEMY_REQUIRED_EXTRAS)
 
 # Evalchemy's current dependency graph has Python 3.12 wheels. Letting uvx select Python 3.13 makes
 # pandas 2.2.2 build from source during a cold start.
 EVALCHEMY_PYTHON_VERSION = "3.12"
 _PYTHON_ABI = f"cp{EVALCHEMY_PYTHON_VERSION.replace('.', '')}"
 
-# The Marin client uploads both GCS and CoreWeave S3 artifacts. Evalchemy's lean endpoint core
-# includes fsspec but intentionally leaves cloud filesystem implementations to its caller.
+# FineStore writes evaluator artifacts to both GCS and CoreWeave S3. Evalchemy's lean endpoint core
+# leaves those cloud filesystem implementations to its caller.
 #
 # Keep CPU-only PyTorch as a compatibility floor for benchmark orchestration and grading code.
 # Inference stays in the separately served model process; direct wheel URLs prevent uv from

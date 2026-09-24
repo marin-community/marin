@@ -51,6 +51,10 @@ dependencies = [
     "marin-dupekit",
 ]
 
+[project.scripts]
+# Friendly entry point for the grug fast_track scaling ladder: `uv run fast-track ...`.
+fast-track = "experiments.grug.fast_track.launch:main"
+
 [project.optional-dependencies]
 # Keep this CUDA stack separate from marin-levanter[gpu] while JaxPP requires
 # JAX <=0.11.0 and Levanter GPU pins 0.11.1. Once those versions align, make
@@ -339,6 +343,7 @@ project-includes = [
     "infra/marina/src/**/*.py",
     "infra/marina/apps/**/*.py",
     "infra/deploy/src/**/*.py",
+    "experiments/grug/moe_hero_ep/ops/**/*.py",
     "scripts/ci",
     "scripts/cost_manager",
 ]
@@ -360,6 +365,7 @@ search-path = [
     "infra/deploy/src",
     "infra/marina/src",
     "infra/marina/apps",
+    ".",
 ]
 disable-search-path-heuristics = true
 
@@ -433,7 +439,6 @@ ignore-missing-imports = [
 
 # Exclude non-production code from type checking
 project-excludes = [
-    "experiments/**",
     "scripts/debug/**",
     "scripts/ferries/**",
     "scripts/gpu_eval/**",
