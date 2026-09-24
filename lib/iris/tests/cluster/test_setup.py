@@ -96,7 +96,7 @@ if [ "$UV_CACHE_DIR" != "$SHARED_UV_CACHE" ] && [ "$LOCAL_CACHE_FAILS" = "1" ]; 
 fi
 if [ "$1" = "sync" ]; then
   case " $* " in
-    *" --link-mode clone "*) ;;
+    *" --link-mode copy "*) ;;
     *) exit 3 ;;
   esac
 fi

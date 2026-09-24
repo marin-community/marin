@@ -30,6 +30,7 @@ def test_stitch_dashboard_leaves_non_ref_panels_untouched():
 @pytest.mark.parametrize(
     ("link_ref", "expected_title", "expected_url", "expected_include_vars"),
     [
+        ("async_rl", "RL Post-training (async)", "/d/marin-async-rl", True),
         ("cluster_capacity", "Cluster capacity", "/d/marin-cluster-capacity", True),
         ("fleet_accelerators_without_vars", "Fleet accelerators", "/d/marin-accel", False),
         ("fleet_health", "Fleet health", "/d/marin-clusters", True),
@@ -45,6 +46,16 @@ def test_stitch_dashboard_resolves_shared_links(
     assert link["title"] == expected_title
     assert link["url"] == expected_url
     assert link["includeVars"] is expected_include_vars
+
+
+def test_stitch_dashboard_returns_independent_shared_links():
+    source = {"links": [{"linkRef": "async_rl"}], "panels": []}
+    first = stitch_dashboard(source, {})
+    first["links"][0]["title"] = "changed"
+
+    second = stitch_dashboard(source, {})
+
+    assert second["links"][0]["title"] == "RL Post-training (async)"
 
 
 def test_stitch_dashboard_rejects_an_unknown_fragment_name():

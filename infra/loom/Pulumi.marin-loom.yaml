@@ -46,7 +46,7 @@ config:
     default:
       agent: codex
       description: Interactive Marin work with repository-owned workflow instructions
-      model: gpt-5.6-sol
+      model: &codexModel gpt-6-sol
       effort: xhigh
       protocol: acp
       mode: auto
@@ -73,7 +73,7 @@ config:
     marina:
       agent: codex
       description: Interactive questions over read-only Marina application APIs
-      model: gpt-5.6-sol
+      model: *codexModel
       effort: low
       protocol: acp
       mode: auto
@@ -90,7 +90,7 @@ config:
     github:
       agent: codex
       description: GitHub-triggered Marin issue and pull-request sessions
-      model: gpt-5.6-sol
+      model: *codexModel
       effort: xhigh
       protocol: acp
       mode: auto
@@ -103,7 +103,7 @@ config:
     fork-ferry:
       agent: codex
       description: Refresh Marin forks and validate their pinned revisions
-      model: gpt-5.6-sol
+      model: *codexModel
       effort: xhigh
       protocol: acp
       mode: auto
@@ -130,7 +130,7 @@ config:
     pr-review:
       agent: codex
       description: Review trusted Marin pull requests from immutable head commits
-      model: gpt-5.6-sol
+      model: *codexModel
       effort: xhigh
       protocol: acp
       mode: auto
@@ -152,7 +152,7 @@ config:
     codehealth-refinement:
       agent: codex
       description: Refine agentic-lint from persisted review and lint activity
-      model: gpt-5.6-sol
+      model: *codexModel
       effort: xhigh
       protocol: acp
       mode: auto
@@ -180,7 +180,7 @@ config:
     ops:
       agent: codex
       description: Coordinate Grafana alerts and delegate incident triage for Marin
-      model: gpt-5.6-sol
+      model: *codexModel
       effort: xhigh
       protocol: acp
       mode: auto
@@ -202,7 +202,7 @@ config:
     slack:
       agent: codex
       description: Slack-triggered Marin conversations and repository work
-      model: gpt-5.6-sol
+      model: *codexModel
       effort: medium
       protocol: acp
       mode: auto

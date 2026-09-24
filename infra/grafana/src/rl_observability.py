@@ -23,6 +23,8 @@ RL_MAX_GPU_ROWS = 50_000
 RL_MAX_RESULT_ROWS = 100_000
 RL_RECENT_MAX_ROWS = 20
 RL_RECENT_WINDOW_PADDING_MS = 60_000
+ASYNC_RL_DASHBOARD_UID = "marin-async-rl"
+SYNC_RL_DASHBOARD_UID = "marin-rl-runs"
 
 _CORE_NAMES = (
     "phase_duration_seconds",
@@ -30,9 +32,6 @@ _CORE_NAMES = (
     "ray_object_store_available_memory",
     "ray_object_store_used_memory",
     "ray_spill_manager_objects_bytes",
-    "rollout_capacity",
-    "rollout_queue_depth",
-    "rollout_staleness_steps",
     "work_completed",
 )
 
@@ -64,7 +63,6 @@ WITH selected AS (
            json_get(attributes_json, 'phase') AS phase,
            json_get(attributes_json, 'outcome') AS outcome,
            json_get(attributes_json, 'clock_domain') AS clock_domain,
-           json_get(attributes_json, 'queue') AS queue,
            json_get(attributes_json, 'metric_source') AS metric_source,
            json_get(attributes_json, 'source_temporality') AS source_temporality,
            json_get(attributes_json, 'state') AS state,
@@ -78,7 +76,7 @@ WITH selected AS (
 ), aggregates AS (
     SELECT 'aggregate' AS statistic,
        t, name, execution_uid, work_kind, phase, outcome, clock_domain,
-       queue, metric_source, source_temporality, state,
+       metric_source, source_temporality, state,
        MAX(weights_step) AS weights_step,
        SUM(value) AS sum_value,
        COUNT(value) AS sample_count,
@@ -86,8 +84,7 @@ WITH selected AS (
        CAST(NULL AS DOUBLE) AS p50,
        CAST(NULL AS DOUBLE) AS p99
     FROM selected
-    WHERE name <> 'rollout_staleness_steps'
-    GROUP BY 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12
+    GROUP BY 2, 3, 4, 5, 6, 7, 8, 9, 10, 11
 ), phase_percentiles AS (
     SELECT 'percentile' AS statistic,
        t, name,
@@ -96,7 +93,6 @@ WITH selected AS (
        phase,
        CAST(NULL AS VARCHAR) AS outcome,
        clock_domain,
-       CAST(NULL AS VARCHAR) AS queue,
        CAST(NULL AS VARCHAR) AS metric_source,
        CAST(NULL AS VARCHAR) AS source_temporality,
        CAST(NULL AS VARCHAR) AS state,
@@ -111,31 +107,9 @@ WITH selected AS (
       AND clock_domain = 'critical_path'
       AND phase = 'rollout_or_inference_wait'
     GROUP BY 2, 3, 6, 8
-), staleness_percentiles AS (
-    SELECT 'percentile' AS statistic,
-       t, name,
-       CAST(NULL AS VARCHAR) AS execution_uid,
-       CAST(NULL AS VARCHAR) AS work_kind,
-       CAST(NULL AS VARCHAR) AS phase,
-       CAST(NULL AS VARCHAR) AS outcome,
-       CAST(NULL AS VARCHAR) AS clock_domain,
-       CAST(NULL AS VARCHAR) AS queue,
-       CAST(NULL AS VARCHAR) AS metric_source,
-       CAST(NULL AS VARCHAR) AS source_temporality,
-       CAST(NULL AS VARCHAR) AS state,
-       CAST(NULL AS DOUBLE) AS weights_step,
-       SUM(value) AS sum_value,
-       COUNT(value) AS sample_count,
-       MAX(value) AS max_value,
-       approx_percentile_cont(value, 0.5) AS p50,
-       approx_percentile_cont(value, 0.99) AS p99
-    FROM selected
-    WHERE name = 'rollout_staleness_steps'
-    GROUP BY 2, 3
 )
 SELECT * FROM aggregates
 UNION ALL SELECT * FROM phase_percentiles
-UNION ALL SELECT * FROM staleness_percentiles
 ORDER BY t, name, execution_uid
 LIMIT {RL_MAX_CORE_ROWS + 1}
 """.strip()
@@ -240,16 +214,6 @@ WHERE statistic = 'aggregate'
 GROUP BY 1, 2 ORDER BY 1
 """.strip()
         ),
-        "buffer": (
-            """
-SELECT t,
-       SUM(CASE WHEN name = 'rollout_queue_depth' THEN sum_value END)
-           / NULLIF(SUM(CASE WHEN name = 'rollout_queue_depth' THEN sample_count END), 0) AS depth,
-       SUM(CASE WHEN name = 'rollout_capacity' THEN sum_value END)
-           / NULLIF(SUM(CASE WHEN name = 'rollout_capacity' THEN sample_count END), 0) AS capacity
-FROM core WHERE queue = 'rollout_buffer' GROUP BY 1 ORDER BY 1
-""".strip()
-        ),
         "gpu_utilization": "SELECT * FROM gpu ORDER BY t",
         "engine_tokens": (
             f"""
@@ -297,16 +261,6 @@ FROM engine WHERE delta_sum IS NOT NULL GROUP BY 1, 2 ORDER BY 1
             "WHERE statistic = 'percentile' AND name = 'phase_duration_seconds' "
             "AND clock_domain = 'critical_path' AND phase = 'rollout_or_inference_wait' ORDER BY 1"
         ),
-        "staleness": (
-            """
-SELECT t, 'p50' AS series, p50 AS value FROM core
-WHERE statistic = 'percentile' AND name = 'rollout_staleness_steps'
-UNION ALL
-SELECT t, 'p99' AS series, p99 AS value FROM core
-WHERE statistic = 'percentile' AND name = 'rollout_staleness_steps'
-ORDER BY 1
-""".strip()
-        ),
         "engine_finish": (
             "SELECT t, finished_reason AS series, SUM(delta_sum) AS value FROM engine "
             "WHERE name = 'request_success_total' AND finished_reason IS NOT NULL "
@@ -350,7 +304,9 @@ GROUP BY 1, 2 ORDER BY 1
 
 
 def recent_rl_runs_dataset(start_ms: int, end_ms: int) -> DashboardDataset:
-    """Build a bounded table of recent RL runs and their dashboard link windows."""
+    """Build a bounded table of recent RL runs, their dashboard link windows, and the dashboard
+    whose run picker offers each run: the async view for a run whose trainer stamps
+    training_loop 'async', the sync view for every other run."""
     validate_time_window(
         start_ms,
         end_ms,
@@ -364,7 +320,8 @@ SELECT run_id AS run,
        COUNT(DISTINCT execution_uid) AS attempts,
        MIN(timestamp_ms) - {RL_RECENT_WINDOW_PADDING_MS} AS window_from_ms,
        MAX(timestamp_ms) + {RL_RECENT_WINDOW_PADDING_MS} AS window_to_ms,
-       MAX(timestamp_ms) AS last_seen
+       MAX(timestamp_ms) AS last_seen,
+       MAX(CASE WHEN json_get(resource_attributes_json, 'training_loop') = 'async' THEN 1 ELSE 0 END) AS is_async
 FROM "telemetry_v1.marinskyrl"
 WHERE service = 'marinskyrl' AND name = 'policy_step' AND run_id IS NOT NULL
   AND timestamp_ms >= {start_ms} AND timestamp_ms < {end_ms}
@@ -378,9 +335,11 @@ LIMIT {RL_RECENT_MAX_ROWS}
         setup_sql=(),
         views={
             "recent": (
-                """
+                f"""
 SELECT run, origin_cluster AS cluster, step, attempts,
-       window_from_ms, window_to_ms, last_seen AS "last seen"
+       window_from_ms, window_to_ms, last_seen AS "last seen",
+       CASE WHEN is_async = 1 THEN {sql_string(ASYNC_RL_DASHBOARD_UID)}
+            ELSE {sql_string(SYNC_RL_DASHBOARD_UID)} END AS dashboard
 FROM recent ORDER BY last_seen DESC
 """.strip()
             )

@@ -9,11 +9,11 @@ import json
 import subprocess
 import sys
 from collections.abc import Callable
-from dataclasses import asdict
 from pathlib import Path
 from typing import IO
 
 import pytest
+import yaml
 from marin.evaluation.model_config import ModelConfig, ResourceHint
 from marin.execution.artifact import Artifact, ArtifactRecord, result_type_name, write_record
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity, materialized_config
@@ -22,14 +22,9 @@ from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
     IrisSkyRLExecution,
-    ResolvedDirectoryDataSource,
-    ResolvedModelLocator,
-    SkyRLLaunchRequest,
     SkyRLModel,
-    SkyRLOutputPaths,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
-    SkyRLRunConfig,
     SkyRLRuntime,
     SkyRLRuntimeProfile,
     SkyRLSpec,
@@ -93,6 +88,9 @@ def _role_plan() -> SkyRLRolePlan:
         policy_num_gpus_per_node=4,
         num_inference_engines=4,
         inference_engine_tensor_parallel_size=1,
+        inference_engine_pipeline_parallel_size=1,
+        inference_engine_data_parallel_size=1,
+        inference_engine_expert_parallel_size=1,
         train_batch_size=16,
         policy_mini_batch_size=16,
         micro_train_batch_size_per_gpu=1,
@@ -100,11 +98,24 @@ def _role_plan() -> SkyRLRolePlan:
     )
 
 
+def _config_yaml(*, strategy: str | None = None) -> str:
+    strategy_line = f"  strategy: {strategy}\n" if strategy is not None else ""
+    return f"""\
+trainer:
+{strategy_line}  max_steps: 8
+  algorithm:
+    use_kl_loss: false
+generator:
+  backend: vllm
+  run_engines_locally: true
+"""
+
+
 def _spec() -> SkyRLSpec:
     return SkyRLSpec(
         name="users/tester/tests/iceball-rl",
         version="2026.08.01",
-        config_yaml="trainer:\n  max_steps: 8\n",
+        config_yaml=_config_yaml(),
         runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.FSDP),
         model=ArtifactHfModel(
             step=_model_step(),
@@ -122,7 +133,6 @@ def _spec() -> SkyRLSpec:
         ),
         retention=SkyRLRetentionPolicy(),
         seed=17,
-        overrides=("++trainer.max_steps=8",),
     )
 
 
@@ -135,6 +145,9 @@ def _execution(cluster: str = "cw-us-east-08a") -> IrisSkyRLExecution:
         disk="4TB",
         priority="interactive",
         max_retries=3,
+        target_cluster=None,
+        parent_cluster_config=None,
+        coordinator_timeout_hours=12,
     )
 
 
@@ -144,6 +157,82 @@ def test_skyrl_retention_allows_explicit_rollback_depth_up_to_five() -> None:
     assert policy.resume_checkpoint_count == 5
     with pytest.raises(ValueError, match="between one and five"):
         SkyRLRetentionPolicy(resume_checkpoint_count=6)
+
+
+def test_skyrl_topology_rejects_unassigned_gpus() -> None:
+    plan = dataclasses.replace(
+        _role_plan(),
+        colocate_all=False,
+        policy_num_nodes=4,
+        policy_num_gpus_per_node=8,
+        num_inference_engines=4,
+        inference_engine_data_parallel_size=1,
+        inference_engine_expert_parallel_size=1,
+    )
+
+    with pytest.raises(ValueError, match=r"policy \+ rollout=36 GPUs, topology=64 GPUs"):
+        SkyRLTopology(num_nodes=8, gpus_per_node=8, gpu_variant="H100", role_plan=plan)
+
+
+def test_skyrl_topology_accepts_node_local_dp8_engines() -> None:
+    plan = dataclasses.replace(
+        _role_plan(),
+        colocate_all=False,
+        policy_num_nodes=4,
+        policy_num_gpus_per_node=8,
+        num_inference_engines=4,
+        inference_engine_data_parallel_size=8,
+        inference_engine_expert_parallel_size=8,
+    )
+
+    SkyRLTopology(num_nodes=8, gpus_per_node=8, gpu_variant="H100", role_plan=plan)
+
+
+def test_skyrl_topology_rejects_a_colocated_slice_that_does_not_tile_the_node() -> None:
+    plan = dataclasses.replace(
+        _role_plan(),
+        policy_num_gpus_per_node=8,
+        num_inference_engines=2,
+        inference_engine_tensor_parallel_size=3,
+    )
+
+    with pytest.raises(ValueError, match=r"TP\*PP slice must divide gpus_per_node"):
+        SkyRLTopology(num_nodes=1, gpus_per_node=8, gpu_variant="H100", role_plan=plan)
+
+
+def test_skyrl_topology_rejects_unequal_colocated_role_sizes() -> None:
+    plan = dataclasses.replace(
+        _role_plan(),
+        policy_num_gpus_per_node=8,
+        num_inference_engines=3,
+        inference_engine_tensor_parallel_size=2,
+    )
+
+    with pytest.raises(ValueError, match="colocated SkyRL roles must use the same GPUs: policy=8, rollout=6"):
+        SkyRLTopology(num_nodes=1, gpus_per_node=8, gpu_variant="H100", role_plan=plan)
+
+
+def test_skyrl_spec_rejects_config_that_disagrees_with_role_plan() -> None:
+    with pytest.raises(ValueError, match=r"trainer\.train_batch_size=32"):
+        dataclasses.replace(
+            _spec(),
+            config_yaml=_config_yaml().replace("  max_steps: 8", "  max_steps: 8\n  train_batch_size: 32"),
+        )
+
+
+def test_skyrl_spec_rejects_distinct_batch_sizes_for_fully_async() -> None:
+    spec = _spec()
+    plan = dataclasses.replace(_role_plan(), train_batch_size=32, policy_mini_batch_size=16)
+
+    with pytest.raises(
+        ValueError,
+        match="fully_async entrypoint requires train_batch_size == policy_mini_batch_size; got 32 and 16",
+    ):
+        dataclasses.replace(
+            spec,
+            config_yaml=f"entrypoint: fully_async\n{_config_yaml()}",
+            topology=dataclasses.replace(spec.topology, role_plan=plan),
+        )
 
 
 def test_skyrl_step_fingerprint_includes_runtime_identity_and_excludes_placement() -> None:
@@ -161,13 +250,12 @@ def test_skyrl_step_fingerprint_includes_runtime_identity_and_excludes_placement
         ),
         _execution(),
     )
+    changed_plan = dataclasses.replace(spec.topology.role_plan, train_batch_size=32)
     changed_roles = skyrl_step(
         dataclasses.replace(
             spec,
-            topology=dataclasses.replace(
-                spec.topology,
-                role_plan=dataclasses.replace(spec.topology.role_plan, train_batch_size=32),
-            ),
+            config_yaml=_config_yaml(),
+            topology=dataclasses.replace(spec.topology, role_plan=changed_plan),
         ),
         _execution(),
     )
@@ -207,21 +295,17 @@ def test_skyrl_step_routes_disposable_state_to_ttl_storage(
     )
 
     assert step.name == "users/alice/tests/iceball-rl"
-    assert config.request.output == SkyRLOutputPaths(
-        checkpoint_root="s3://temp/ttl=14d/skyrl/users/alice/run/checkpoints",
-        export_root=f"{output_path}/exports",
-        attempts_root="s3://temp/ttl=14d/skyrl/users/alice/run/attempts",
-        resolved_config_uri=f"{output_path}/resolved-skyrl.json",
-        terminal_manifest_uri=f"{output_path}/terminal.json",
-    )
-    # The path values are single-quoted because they carry a ``ttl=<n>d`` segment and Hydra's
-    # override grammar rejects a bare value containing ``=``.
-    assert config.request.overrides[-3:] == (
-        "++trainer.max_ckpts_to_keep=2",
-        "++terminal_bench_config.trials_dir=" "'s3://temp/ttl=14d/skyrl/users/alice/run/attempts/trace_jobs'",
-        "++generator.trajectory_retention.output_path="
-        "'s3://temp/ttl=14d/skyrl/users/alice/run/attempts/trajectories'",
-    )
+    assert config.output.checkpoint_root == "s3://temp/ttl=14d/skyrl/users/alice/run/checkpoints"
+    assert config.output.export_root == f"{output_path}/exports"
+    launch = yaml.safe_load(config.launch_config_yaml)
+    assert launch["artifacts"] == {
+        "checkpoint_root": "s3://temp/ttl=14d/skyrl/users/alice/run/checkpoints",
+        "export_root": f"{output_path}/exports",
+        "attempts_root": "s3://temp/ttl=14d/skyrl/users/alice/run/attempts",
+        "resolved_config_uri": f"{output_path}/resolved-launch.yaml",
+        "terminal_manifest_uri": f"{output_path}/terminal.json",
+        "resume_checkpoint_count": 2,
+    }
 
 
 def test_skyrl_temporary_run_path_does_not_repeat_bucket_name(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -276,57 +360,76 @@ def test_evaluation_uses_the_validated_training_tokenizer(tmp_path, monkeypatch)
 
 
 def test_run_skyrl_returns_external_terminal_model(monkeypatch: pytest.MonkeyPatch) -> None:
-    request = _launch_request()
-    output = request.output
+    step = skyrl_step(_spec(), _execution())
+    config = step.build_config(
+        StepContext.for_run(
+            output_path="s3://test/run",
+            prefix="s3://test",
+            runtime_args=step.runtime_args,
+            deps=step.deps,
+        )
+    )
+    output = config.output
     response = {
-        "run_id": request.run_id,
-        "attempt_id": request.attempt_id,
+        "run_id": config.run_id,
+        "attempt_id": config.attempt_id,
         "state": "succeeded",
         "iris_job_id": "01KTEST",
         "iris_job_state": "succeeded",
-        "runtime": asdict(request.runtime),
         "failure": None,
         "model": {
             "policy_export_uri": "s3://test/run/exports/global_step_8/policy",
             "global_step": 8,
-            "tokenizer_uri": request.model.tokenizer_uri,
-            "tokenizer_revision": request.model.tokenizer_revision,
+            "tokenizer_uri": config.model.tokenizer_uri,
+            "tokenizer_revision": config.model.tokenizer_revision,
             "checkpoint_root": output.checkpoint_root,
             "terminal_manifest_uri": output.terminal_manifest_uri,
         },
     }
 
-    launch_envelopes = []
+    launch_configs = []
 
     def fake_popen(command, **_kwargs) -> _FakeLauncherProcess:
-        request_path = command[command.index("--request") + 1]
-        launch_envelopes.append(json.loads(Path(request_path).read_text()))
+        config_path = command[command.index("--config") + 1]
+        launch_configs.append(yaml.safe_load(Path(config_path).read_text()))
         return _FakeLauncherProcess(response=json.dumps(response), returncode=0, stdout=_kwargs["stdout"])
 
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
     catalog_rows = []
     monkeypatch.setattr("marin.rl.skyrl.record_rollout_run", catalog_rows.append)
 
-    model = run_skyrl(
-        SkyRLRunConfig(
-            request=request,
-            execution=_execution(),
-            launcher_requirement=MARIN_SKYRL.requirement(),
-        )
-    )
+    model = run_skyrl(config)
 
     assert model.policy_export_uri.endswith("global_step_8/policy")
     assert model.global_step == 8
     assert model.iris_job_id == "01KTEST"
-    assert launch_envelopes[0]["request"]["runtime"] == {
-        "commit": MARIN_SKYRL.commit,
-        "profile": SkyRLRuntimeProfile.FSDP.value,
+    launch = launch_configs[0]
+    assert launch["schema_version"] == 1
+    assert launch["runtime"]["launcher_commit"] == MARIN_SKYRL.commit
+    assert launch["iris"]["allocation"] == {
+        "num_nodes": 1,
+        "gpus_per_node": 4,
+        "gpu_variant": "GB200",
+        "cpu": 128,
+        "memory": "800GB",
+        "disk": "4TB",
     }
-    assert launch_envelopes[0]["request"]["train_data"][0]["kind"] == "directory"
-    assert launch_envelopes[0]["execution"]["job_name"] == "checkpoints-iceball-rl-2026.08.01-attempt-1"
+    assert launch["inputs"]["train_data"][0]["kind"] == "directory"
+    assert launch["skyrl"]["trainer"]["max_steps"] == 8
+    assert launch["skyrl"]["trainer"]["train_batch_size"] == 16
+    assert launch["skyrl"]["trainer"]["placement"] == {
+        "colocate_all": True,
+        "colocate_policy_ref": True,
+        "policy_num_nodes": 1,
+        "policy_num_gpus_per_node": 4,
+        "ref_num_nodes": 1,
+        "ref_num_gpus_per_node": 4,
+    }
+    assert launch["skyrl"]["generator"]["num_inference_engines"] == 4
+    assert launch["skyrl"]["generator"]["inference_engine_data_parallel_size"] == 1
     assert len(catalog_rows) == 1
-    assert catalog_rows[0].run_id == request.run_id
-    assert catalog_rows[0].attempt_id == request.attempt_id
+    assert catalog_rows[0].run_id == config.run_id
+    assert catalog_rows[0].attempt_id == config.attempt_id
     assert catalog_rows[0].status == "succeeded"
     assert catalog_rows[0].rollout_uri == f"{output.attempts_root}/trajectories"
     assert catalog_rows[0].job_id == "01KTEST"
@@ -445,98 +548,32 @@ def test_launcher_survives_undecodable_bytes_on_stderr() -> None:
     assert completed.returncode == 4
 
 
-def _launch_request() -> SkyRLLaunchRequest:
-    """One complete launch request, as the marin launcher builds it."""
-    return SkyRLLaunchRequest(
-        run_id="checkpoints/iceball-rl-2026.08.01",
-        attempt_id="attempt-1",
-        config_yaml="trainer: {}\n",
-        runtime=_spec().runtime,
-        model=ResolvedModelLocator(
-            uri="s3://test/sft/hf",
-            identity="sft@version:fingerprint",
-            local_path="/tmp/model",
-            tokenizer_uri="Qwen/Qwen3-0.6B-Base",
-            tokenizer_revision="da87bfb",
-        ),
-        train_data=(
-            ResolvedDirectoryDataSource(
-                uri="s3://test/gsm8k",
-                identity="gsm8k@version:fingerprint",
-                local_path="/tmp/data",
-                relative_path="train.parquet",
-            ),
-        ),
-        validation_data=(),
-        topology=_spec().topology,
-        output=SkyRLOutputPaths(
-            checkpoint_root="s3://test/run/checkpoints",
-            export_root="s3://test/run/exports",
-            attempts_root="s3://test/run/attempts",
-            resolved_config_uri="s3://test/run/resolved.json",
-            terminal_manifest_uri="s3://test/run/terminal.json",
-        ),
-        seed=17,
-        overrides=(),
-    )
-
-
 def test_a_runtime_profile_that_contradicts_the_config_strategy_is_refused() -> None:
     """The mismatch is otherwise silent until the pod has its GPUs: the launcher installs one
     backend's closure, the trainer asks for the other, and the run dies on an import error naming
     neither the profile nor the strategy."""
-    request = _launch_request()
+    spec = _spec()
 
     with pytest.raises(ValueError, match="megatron"):
         dataclasses.replace(
-            request,
-            config_yaml="trainer:\n  strategy: megatron\n",
-            runtime=dataclasses.replace(request.runtime, profile=SkyRLRuntimeProfile.FSDP),
+            spec,
+            config_yaml=_config_yaml(strategy="megatron"),
+            runtime=dataclasses.replace(spec.runtime, profile=SkyRLRuntimeProfile.FSDP),
         )
 
 
 @pytest.mark.parametrize(
     "config_yaml",
     [
-        pytest.param("trainer:\n  strategy: megatron\n", id="names the matching strategy"),
-        pytest.param("trainer:\n  max_steps: 8\n", id="names no strategy"),
-        pytest.param("trainer:\n", id="empty trainer section"),
-        pytest.param("", id="empty config"),
-        pytest.param("- a list\n", id="not a mapping"),
+        pytest.param(_config_yaml(strategy="megatron"), id="names the matching strategy"),
+        pytest.param(_config_yaml(), id="names no strategy"),
     ],
 )
 def test_a_config_that_does_not_contradict_the_profile_is_accepted(config_yaml: str) -> None:
-    """Only a config that names a *different* strategy is a contradiction. Everything else leaves
-    the trainer's own default alone, including the shapes that are not a mapping at all -- the
-    guard must not turn those into a crash inside a frozen dataclass constructor."""
-    request = _launch_request()
+    spec = _spec()
 
-    accepted = dataclasses.replace(
-        request,
+    dataclasses.replace(
+        spec,
         config_yaml=config_yaml,
-        runtime=dataclasses.replace(request.runtime, profile=SkyRLRuntimeProfile.MEGATRON),
+        runtime=dataclasses.replace(spec.runtime, profile=SkyRLRuntimeProfile.MEGATRON),
     )
-
-    assert accepted.config_yaml == config_yaml
-
-
-def test_a_strategy_override_decides_which_backend_the_guard_checks() -> None:
-    """Overrides are applied after the config, so the guard judges the strategy that wins."""
-    request = _launch_request()
-    fsdp = dataclasses.replace(request.runtime, profile=SkyRLRuntimeProfile.FSDP)
-
-    accepted = dataclasses.replace(
-        request,
-        config_yaml="trainer:\n  strategy: megatron\n",
-        runtime=fsdp,
-        overrides=("trainer.strategy=fsdp2",),
-    )
-    assert accepted.runtime.profile is SkyRLRuntimeProfile.FSDP
-
-    with pytest.raises(ValueError, match="megatron"):
-        dataclasses.replace(
-            request,
-            config_yaml="trainer:\n  strategy: fsdp2\n",
-            runtime=fsdp,
-            overrides=("++trainer.strategy=megatron",),
-        )
