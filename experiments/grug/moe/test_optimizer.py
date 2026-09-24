@@ -2,8 +2,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import jax.numpy as jnp
+from levanter.optim.config import OptimizerConfig
 
-from experiments.grug.moe.optimizer import GrugMoeAdamHConfig
+from experiments.grug.moe.optimizer import GrugMoeAdamHConfig, GrugMoeMuonHConfig
+from experiments.june_tpu_67b_a2b.moe.optimizer import GrugMoeAdamHConfig as HistoricalAdamH
+from experiments.june_tpu_67b_a2b.moe.optimizer import GrugMoeMuonHConfig as HistoricalMuonH
+
+
+def test_historical_and_current_optimizer_choices_can_coexist():
+    assert OptimizerConfig.get_choice_class("grug_moe_adamh_v2") is GrugMoeAdamHConfig
+    assert OptimizerConfig.get_choice_class("grug_moe_muonh_v1") is GrugMoeMuonHConfig
+    assert OptimizerConfig.get_choice_class("june_tpu_67b_a2b_moe_adamh_v2") is HistoricalAdamH
+    assert OptimizerConfig.get_choice_class("june_tpu_67b_a2b_moe_muonh_v1") is HistoricalMuonH
 
 
 def test_grug_moe_adamh_mask_routes_expert_mlp_weights_to_expert_group():
