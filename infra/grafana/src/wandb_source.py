@@ -102,8 +102,16 @@ def _epoch_seconds(stamp: str) -> float:
     return datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
 
 
-class _SampledHistory(NamedTuple):
-    points: list[dict[str, float]]
+class _HistorySpec(NamedTuple):
+    keys: tuple[str, ...]
+    samples: int
+    min_step: int | None = None
+
+
+class _SampledHistories(NamedTuple):
+    """One point list per requested spec, and the run's fork boundary."""
+
+    points: list[list[dict[str, float]]]
     branch_step: int | None
 
 
@@ -112,20 +120,50 @@ class _HistoryBaseline(NamedTuple):
     tokens_baseline: float
 
 
-def _projected_finish_ms(
-    *, step: float, progress: float, anchor_step: float, anchor_timestamp: float, heartbeat_seconds: float
-) -> int | None:
-    """Epoch milliseconds when the run reaches `step / progress` at its recent step rate.
+def _history_baseline(points: list[dict[str, float]]) -> _HistoryBaseline | None:
+    """The reference token rate and the token count a W&B run started from.
 
-    The rate is `step` less the anchor's step, over the heartbeat less the anchor's
-    stamp. None until the run has advanced past the anchor.
+    The mean of the sampled rate is the reference speed -- a mean over history, not
+    the summary's last-step value, so a checkpoint or eval step cannot skew it (see
+    `_TPS_KEY`).
+
+    The token baseline is the cumulative token count before the run's first step,
+    which a run resumed under a fresh id from a mid-schedule checkpoint carries in
+    from the checkpoint (levanter derives `total_tokens` from the global step). It
+    is reconstructed rather than read off the earliest sample, because that sample
+    is logged *after* the first step and so already includes one batch: with a
+    constant batch, `total_tokens` is proportional to `step + 1`, so the
+    pre-first-step count is `first_tokens * first_step / (first_step + 1)` -- zero
+    for a run started from scratch, the inherited count for a resumed one.
+    None before the first logged step.
     """
-    steps_since_anchor = step - anchor_step
-    seconds_since_anchor = heartbeat_seconds - anchor_timestamp
-    if progress <= 0 or steps_since_anchor <= 0 or seconds_since_anchor <= 0:
+    if not points:
         return None
-    steps_remaining = step / progress - step
-    return round((heartbeat_seconds + steps_remaining * seconds_since_anchor / steps_since_anchor) * 1000)
+    reference_tps = sum(point[_TPS_KEY] for point in points) / len(points)
+    first = min(points, key=lambda point: point[_STEP_KEY])
+    step, tokens = first[_STEP_KEY], first[_TOTAL_TOKENS_KEY]
+    return _HistoryBaseline(reference_tps=reference_tps, tokens_baseline=tokens * step / (step + 1))
+
+
+def _projected_finish_ms(window: list[dict[str, float]]) -> int | None:
+    """Epoch milliseconds when the run reaches its stop step at the window's step rate.
+
+    The rate runs from the window's first logged point to its last, both read from
+    W&B's per-step stamps, and carries forward from the last one to the stop step
+    that point's `_step / run_progress` recovers. None until the window spans two
+    distinct steps.
+    """
+    if not window:
+        return None
+    first = min(window, key=lambda point: point[_STEP_KEY])
+    last = max(window, key=lambda point: point[_STEP_KEY])
+    steps = last[_STEP_KEY] - first[_STEP_KEY]
+    seconds = last[_TIMESTAMP_KEY] - first[_TIMESTAMP_KEY]
+    progress = last[_PROGRESS_KEY]
+    if progress <= 0 or steps <= 0 or seconds <= 0:
+        return None
+    steps_remaining = last[_STEP_KEY] / progress - last[_STEP_KEY]
+    return round((last[_TIMESTAMP_KEY] + steps_remaining * seconds / steps) * 1000)
 
 
 class WandbSource:
@@ -155,53 +193,61 @@ class WandbSource:
             raise UpstreamError("wandb", "report pins no runs", status_code=502)
         return view.get("displayName") or "W&B report", runs
 
-    def _sampled_run_history(
-        self, *, project: str, run: str, keys: tuple[str, ...], samples: int, min_step: int | None = None
-    ) -> _SampledHistory | None:
-        """Numeric history and fork boundary, or None if the run is absent.
+    def _sampled_run_histories(self, *, project: str, run: str, specs: list[_HistorySpec]) -> _SampledHistories | None:
+        """Numeric history per spec and the fork boundary, or None if the run is absent.
 
-        Each point carries every key in `keys`; a point missing any of them is dropped,
-        since W&B writes a null wherever a metric was not logged on that step. Callers
-        decide what an absent run means.
+        One request serves every spec. Each point carries every key in its spec; a
+        point missing any of them is dropped, since W&B writes a null wherever a metric
+        was not logged on that step. Callers decide what an absent run means.
         """
-        spec = json.dumps(
-            {"keys": list(keys), "samples": samples, **({"minStep": min_step} if min_step is not None else {})}
-        )
+        encoded = [
+            json.dumps(
+                {
+                    "keys": list(spec.keys),
+                    "samples": spec.samples,
+                    **({"minStep": spec.min_step} if spec.min_step is not None else {}),
+                }
+            )
+            for spec in specs
+        ]
         run_data = (
             self._graphql(
                 _HISTORY_QUERY,
-                {"entity": _ENTITY, "project": project, "run": run, "specs": [spec]},
+                {"entity": _ENTITY, "project": project, "run": run, "specs": encoded},
             ).get("project")
             or {}
         ).get("run")
         if not run_data:
             return None
         histories = run_data.get("sampledHistory") or []
-        points: list[dict[str, float]] = []
-        for point in histories[0] if histories else []:
-            values = {key: point.get(key) for key in keys}
-            if all(isinstance(value, int | float) for value in values.values()):
-                points.append(values)
+        points: list[list[dict[str, float]]] = []
+        for index, spec in enumerate(specs):
+            kept = []
+            for point in histories[index] if index < len(histories) else []:
+                values = {key: point.get(key) for key in spec.keys}
+                if all(isinstance(value, int | float) for value in values.values()):
+                    kept.append(values)
+            points.append(kept)
         branch_point = run_data.get("branchPoint")
-        return _SampledHistory(points, int(branch_point["step"]) if branch_point else None)
+        return _SampledHistories(points, int(branch_point["step"]) if branch_point else None)
 
     def _sampled_plot_points(
         self, *, project: str, run: str, keys: tuple[str, ...], samples: int
     ) -> list[dict[str, float]] | None:
         """Return step-ordered plot points, preserving detail in a fork's child segment."""
-        history = self._sampled_run_history(project=project, run=run, keys=keys, samples=samples)
+        history = self._sampled_run_histories(project=project, run=run, specs=[_HistorySpec(keys, samples)])
         if history is None:
             return None
-        points = history.points
+        (points,) = history.points
         if history.branch_step is not None:
             # Inherited history can consume almost the entire sample budget.
             # Sample the child's segment separately, retaining the parent prefix.
-            child = self._sampled_run_history(
-                project=project, run=run, keys=keys, samples=samples, min_step=history.branch_step + 1
+            child = self._sampled_run_histories(
+                project=project, run=run, specs=[_HistorySpec(keys, samples, history.branch_step + 1)]
             )
             if child is None:
                 raise UpstreamError("wandb", f"run {run!r} disappeared while reading history", status_code=502)
-            points = [point for point in points if point[_STEP_KEY] <= history.branch_step] + child.points
+            points = [point for point in points if point[_STEP_KEY] <= history.branch_step] + child.points[0]
         return sorted(points, key=lambda point: point[_STEP_KEY])
 
     def _search_projects(self, run: str, project: str | None, read: Callable[[str], list[dict] | None]) -> list[dict]:
@@ -265,63 +311,6 @@ class WandbSource:
 
         return self._search_projects(run, project, read)
 
-    def _history_baseline(self, *, project: str, run: str, min_step: int | None = None) -> _HistoryBaseline | None:
-        """The reference token rate and the token count this W&B run started from.
-
-        Forks restrict sampling to steps after the branch point, excluding inherited
-        parent history from both the token baseline and reference speed.
-
-        All from one sampled history. The mean of the rate is the reference speed
-        -- a mean over history, not the summary's last-step value, so a checkpoint or
-        eval step cannot skew it (see `_TPS_KEY`).
-
-        The token baseline is the cumulative token count before this run's first step,
-        which a run resumed under a fresh id from a mid-schedule checkpoint carries in
-        from the checkpoint (levanter derives `total_tokens` from the global step). It
-        is reconstructed rather than read off the earliest sample, because that sample
-        is logged *after* the first step and so already includes one batch: with a
-        constant batch, `total_tokens` is proportional to `step + 1`, so the
-        pre-first-step count is `first_tokens * first_step / (first_step + 1)` -- zero
-        for a run started from scratch, the inherited count for a resumed one.
-        None before the first logged step.
-        """
-        history = self._sampled_run_history(
-            project=project,
-            run=run,
-            keys=(_STEP_KEY, _TOTAL_TOKENS_KEY, _TPS_KEY),
-            samples=_TPS_SAMPLES,
-            min_step=min_step,
-        )
-        if history is None or not history.points:
-            return None
-        points = history.points
-        reference_tps = sum(point[_TPS_KEY] for point in points) / len(points)
-        first = min(points, key=lambda point: point[_STEP_KEY])
-        step, tokens = first[_STEP_KEY], first[_TOTAL_TOKENS_KEY]
-        return _HistoryBaseline(
-            reference_tps=reference_tps,
-            tokens_baseline=tokens * step / (step + 1),
-        )
-
-    def _rate_anchor(self, *, project: str, run: str, step: float, min_step: int | None) -> tuple[float, float] | None:
-        """The earliest sampled (step, stamp) within `_RATE_WINDOW_STEPS` of `step`.
-
-        The window never reaches below `min_step`, so a fork's rate never spans
-        inherited parent history. None when the window holds no logged step.
-        """
-        window_start = max(int(step) - _RATE_WINDOW_STEPS, min_step or 0)
-        history = self._sampled_run_history(
-            project=project,
-            run=run,
-            keys=(_STEP_KEY, _TIMESTAMP_KEY),
-            samples=_RATE_WINDOW_SAMPLES,
-            min_step=window_start,
-        )
-        if history is None or not history.points:
-            return None
-        first = min(history.points, key=lambda point: point[_STEP_KEY])
-        return first[_STEP_KEY], first[_TIMESTAMP_KEY]
-
     def run_activity(self, run: str, *, project: str | None = None) -> list[dict]:
         """Return one row of active time, wall-clock time, and progress efficiency for `run`.
 
@@ -341,17 +330,14 @@ class WandbSource:
         checkpoints, evals, and steps redone after a rollback. A run that has logged
         nothing yet reports nulls rather than zeros.
 
-        `projected_finish_ms` is the epoch millisecond at which the run reaches its
-        stop step at its recent step rate: the steps between the earliest sampled point
-        of the last `_RATE_WINDOW_STEPS` steps and the summary's `_step`, over the wall
-        clock between that point and the last heartbeat, carried forward over
-        `_step / run_progress - _step` steps to go. Checkpoints, evals, and restarts
-        inside the window slow the rate; an outage the run has trained past no longer
-        does. The window never reaches into a fork's inherited history. While a
-        resumed run replays steps it had already logged, W&B holds `_step` at the old
-        high point, so the date slips until the replay passes it. Null until the run
-        has advanced past the window's first sample, and for a run that does not log
-        `run_progress`.
+        `projected_finish_ms` is the epoch millisecond at which the run reaches
+        its stop step at its recent step rate (see `_projected_finish_ms`), sampled over
+        the last `_RATE_WINDOW_STEPS` steps. Checkpoints, evals, and restarts inside the
+        window slow the rate; an outage the run has trained past no longer does. The
+        window never reaches into a fork's inherited history. A stall or a replay of
+        already-logged steps logs nothing, so it moves the date only once the run logs
+        a new step. Null until the window spans two steps, and for a run that does not
+        log `run_progress`.
         """
 
         def read(candidate: str) -> list[dict] | None:
@@ -367,13 +353,24 @@ class WandbSource:
             summary = json.loads(run_data.get("summaryMetrics") or "{}")
             active = summary.get("_runtime")
             active = float(active) if isinstance(active, int | float) else None
-            heartbeat_seconds = _epoch_seconds(run_data["heartbeatAt"])
-            wall = heartbeat_seconds - _epoch_seconds(run_data["createdAt"])
+            wall = _epoch_seconds(run_data["heartbeatAt"]) - _epoch_seconds(run_data["createdAt"])
             tokens_seen = summary.get(_TOTAL_TOKENS_KEY)
             tokens_seen = float(tokens_seen) if isinstance(tokens_seen, int | float) else None
             branch_point = run_data.get("branchPoint")
+            # A fork's sampled history includes its parent's; start after the branch.
             own_min_step = int(branch_point["step"]) + 1 if branch_point else None
-            baseline = self._history_baseline(project=candidate, run=run, min_step=own_min_step)
+            specs = [_HistorySpec((_STEP_KEY, _TOTAL_TOKENS_KEY, _TPS_KEY), _TPS_SAMPLES, own_min_step)]
+            step = summary.get(_STEP_KEY)
+            projecting = isinstance(step, int | float)
+            if projecting:
+                window_start = max(int(step) - _RATE_WINDOW_STEPS, own_min_step or 0)
+                specs.append(
+                    _HistorySpec((_STEP_KEY, _TIMESTAMP_KEY, _PROGRESS_KEY), _RATE_WINDOW_SAMPLES, window_start)
+                )
+            histories = self._sampled_run_histories(project=candidate, run=run, specs=specs)
+            if histories is None:
+                raise UpstreamError("wandb", f"run {run!r} disappeared while reading history", status_code=502)
+            baseline = _history_baseline(histories.points[0])
             reference_tps = baseline.reference_tps if baseline else None
             tokens_since_start = tokens_seen - baseline.tokens_baseline if tokens_seen is not None and baseline else None
             efficiency = (
@@ -381,23 +378,7 @@ class WandbSource:
                 if tokens_since_start is not None and tokens_since_start > 0 and reference_tps and wall > 0
                 else None
             )
-            step, progress = summary.get(_STEP_KEY), summary.get(_PROGRESS_KEY)
-            anchor = (
-                self._rate_anchor(project=candidate, run=run, step=step, min_step=own_min_step)
-                if baseline and isinstance(step, int | float) and isinstance(progress, int | float)
-                else None
-            )
-            projected_finish_ms = (
-                _projected_finish_ms(
-                    step=step,
-                    progress=progress,
-                    anchor_step=anchor[0],
-                    anchor_timestamp=anchor[1],
-                    heartbeat_seconds=heartbeat_seconds,
-                )
-                if anchor
-                else None
-            )
+            projected_finish_ms = _projected_finish_ms(histories.points[1]) if projecting else None
             return [
                 {
                     "run": run,
