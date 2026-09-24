@@ -434,7 +434,6 @@ def build_h100_ladder_run(
     )
 
 
-_DEFAULT_TARGET_CLUSTER = "cw-rno2a"  # override with IRIS_CLUSTER; cw-rno2a and cw-us-east-02a are both 8xH100
 _WANDB_PROJECT = "marin_moe"
 
 
@@ -447,7 +446,8 @@ def _submit_to_cluster(run_id: str) -> None:
     wandb_key = os.environ.get("WANDB_API_KEY")
     if not wandb_key:
         raise click.ClickException("WANDB_API_KEY must be set in the environment to submit a cluster run.")
-    target_cluster = os.environ.get("IRIS_CLUSTER", _DEFAULT_TARGET_CLUSTER)
+    target_cluster = os.environ.get("IRIS_CLUSTER")
+    placement_args = ["--target-cluster", target_cluster] if target_cluster else ["--reserve", "H100"]
     cmd = [
         "uv",
         "run",
@@ -458,8 +458,7 @@ def _submit_to_cluster(run_id: str) -> None:
         "run",
         "--no-wait",
         "--enable-extra-resources",
-        "--target-cluster",
-        target_cluster,
+        *placement_args,
         "--priority",
         "interactive",
         "--job-name",

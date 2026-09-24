@@ -109,10 +109,11 @@ uv run fast-track --submit --run-id <name> --size <size> [--dense] --version <v>
 ```
 
 `--submit` wraps the launcher in `iris job run … -- python -m experiments.grug.fast_track.launch …
---run` and forwards `$WANDB_API_KEY` to the job. It targets `$IRIS_CLUSTER` (default `cw-rno2a`;
-`cw-us-east-02a` is the other 8×H100 cluster); the data cache and checkpoints are the same S3 backend
-on both, so cluster choice is just capacity. Drop `--submit` to print the plan without touching the
-cluster.
+--run` and forwards `$WANDB_API_KEY` to the job. By default, it uses `--reserve H100` to select
+an eligible H100 cluster. The CPU coordinator requests no GPU capacity. Its child jobs request
+the training GPUs on the selected cluster. This placement does not balance jobs by free GPU
+capacity. Set `IRIS_CLUSTER=cw-us-east-02a` or `IRIS_CLUSTER=cw-rno2a` to pin the job to that
+cluster. Omit `--submit` to print the plan without a job submission.
 
 `--size` (d512/d768/d1024/d1280) and `--run-id` are required; `--dense` selects
 the dense baseline. The step budget derives from the variant baseline (`--match`,
