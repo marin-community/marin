@@ -8,7 +8,7 @@ import os
 import socket
 import tempfile
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from marin.external_dependencies import TPU_INFERENCE_FORK_REQUIREMENT, VLLM_FORK_REQUIREMENT
 from marin.inference.backend import OPENAI_API_SUFFIX, ModelSpec
@@ -101,7 +101,8 @@ class VllmBackend:
             if spec.chat_template_content is not None
             else read_tool_chat_template(spec.tokenizer_source, spec.tokenizer_revision)
         )
-        with self.start(spec) as environment:
+        resolved_spec = replace(spec, chat_template_content=chat_template_content)
+        with self.start(resolved_spec) as environment:
             environment.wait_until_ready()
             yield VllmServedModel(
                 base_url=environment.server_url.removesuffix(OPENAI_API_SUFFIX),
