@@ -3,11 +3,12 @@
 
 """Turn eval run records into measurements the statistics engine can work with.
 
-This is the only place that knows the shape of a harness's output: how lm-eval names a task's stderr
-and item count, how a group task's subtask rows roll up, how evalchemy can write the same task twice,
-and where a mechanism records the items it attempted. :mod:`marin.evaluation.eval_stats` holds the
+This module and :mod:`marin.evaluation.metric_selection` are the only places that know the shape of
+a harness's output: how lm-eval and Evalchemy name a task's score and stderr, how a task reports its
+item count, how a group task's subtask rows roll up, how evalchemy can write the same task twice, and
+where a mechanism records the items it attempted. :mod:`marin.evaluation.eval_stats` holds the
 statistics and the selection rules and knows nothing about any of it, so a new harness is a change
-here alone.
+in these two modules alone.
 """
 
 from __future__ import annotations
@@ -16,17 +17,24 @@ import math
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
-from marin.evaluation.archive import base_metric, primary_metric
 from marin.evaluation.eval_stats import (
     BINARY_METRICS,
     SAMPLE_COUNT_METRIC,
     TOTAL_METRICS,
     Coverage,
     Measurement,
-    MetricKind,
     ResultFlag,
 )
-from marin.evaluation.records import EvalRunRecord
+from marin.evaluation.evaluation_config import eval_task_directory
+from marin.evaluation.metric_selection import (
+    LM_EVAL_STDERR_SUFFIX,
+    REPEAT_MEAN_SUFFIX,
+    REPEAT_STDERR_SUFFIX,
+    base_metric,
+    declared_metric,
+)
+from marin.evaluation.records import EvalRunRecord, EvalTaskRef, MetricKind
+from marin.evaluation.records import TaskCoverage as RecordTaskCoverage
 
 # A value derived from n items is integral in k to within this tolerance when it really is k/n.
 _INTEGRALITY_TOLERANCE = 1e-6
@@ -41,16 +49,24 @@ class _TaskScore:
     metric: str
     stderr: float | None
     n_scored: int | None
+    kind: MetricKind | None = None
+    declared: bool = False
+    protocol_metric: str | None = None
 
 
 def stderr_for(metrics: Mapping[str, float], metric_key: str) -> float | None:
-    """The standard error paired with ``metric_key``: its ``<base>_stderr,<filter>`` value, or None.
+    """The standard error paired with ``metric_key``, or None when the task recorded none.
 
     lm-eval names the stderr for ``acc,none`` as ``acc_stderr,none``; a filterless ``acc`` pairs with
-    ``acc_stderr``.
+    ``acc_stderr``. Evalchemy's repeated-sample tasks pair ``accuracy_avg`` with ``accuracy_std_err``.
     """
     base, _, metric_filter = metric_key.partition(",")
-    key = f"{base}_stderr,{metric_filter}" if metric_filter else f"{base}_stderr"
+    if base.endswith(REPEAT_MEAN_SUFFIX):
+        key = base.removesuffix(REPEAT_MEAN_SUFFIX) + REPEAT_STDERR_SUFFIX
+    else:
+        key = base + LM_EVAL_STDERR_SUFFIX
+    if metric_filter:
+        key = f"{key},{metric_filter}"
     value = metrics.get(key)
     return float(value) if value is not None else None
 
@@ -64,7 +80,73 @@ def _task_item_count(metrics: Mapping[str, float]) -> int | None:
     return None
 
 
-def _task_scores(record: EvalRunRecord) -> list[_TaskScore]:
+def _task_ref(record: EvalRunRecord, task_key: str) -> EvalTaskRef | None:
+    """Match a metrics row to its recorded task declaration."""
+    if len(record.evaluation.tasks) == 1:
+        return record.evaluation.tasks[0]
+    leaf = task_key.rsplit("/", 1)[-1]
+    for task in record.evaluation.tasks:
+        if task.benchmark is not None and task.benchmark.task == leaf:
+            return task
+    directory = task_key.split("/", 1)[0]
+    for task in record.evaluation.tasks:
+        if directory == eval_task_directory(task.name, task.num_fewshot, task.task_alias):
+            return task
+    return None
+
+
+def _canonical_task_scores(record: EvalRunRecord) -> tuple[list[_TaskScore], bool]:
+    """Read evaluator-canonical scores under their recorded benchmark protocols."""
+    scores: dict[str, _TaskScore] = {}
+    missing_primary = False
+    task_keys = dict.fromkeys((*record.metrics, *record.canonical_metrics))
+    for task_key in task_keys:
+        task = _task_ref(record, task_key)
+        benchmark = task.benchmark if task is not None else None
+        if benchmark is None:
+            continue
+        metrics = record.canonical_metrics.get(task_key, {})
+        value = metrics.get(benchmark.primary_metric)
+        if value is None:
+            missing_primary |= bool(metrics) or bool(record.metrics.get(task_key))
+            continue
+        leaf = task_key.rsplit("/", 1)[-1]
+        scores.setdefault(
+            leaf,
+            _TaskScore(
+                leaf=leaf,
+                value=value,
+                metric=benchmark.primary_metric,
+                stderr=metrics.get(f"{benchmark.primary_metric}_stderr"),
+                n_scored=None,
+                kind=benchmark.metric_kind,
+                declared=True,
+                protocol_metric=benchmark.primary_metric,
+            ),
+        )
+    return list(scores.values()), missing_primary
+
+
+_LEGACY_METRIC_ALIASES = {
+    "acc": "accuracy",
+    "accuracy": "accuracy",
+    "accuracy_avg": "accuracy",
+    "em": "accuracy",
+    "exact_match": "accuracy",
+    "exact-match": "accuracy",
+    "acc_norm": "normalized_accuracy",
+    "acc_norm_nospace": "normalized_accuracy",
+    "pass@1": "pass_at_1",
+    "mean_reward": "reward",
+}
+
+
+def _legacy_canonical_metric_name(name: str) -> str:
+    """Canonicalize old record metric names so they remain comparable with evaluator metadata."""
+    return _LEGACY_METRIC_ALIASES.get(name, name)
+
+
+def _legacy_task_scores(record: EvalRunRecord, *, undeclared_only: bool = False) -> tuple[list[_TaskScore], bool]:
     """Each task entry's primary metric, deduplicated by leaf task name.
 
     A record can carry the same task twice under different evalchemy task directories (a real record
@@ -74,7 +156,10 @@ def _task_scores(record: EvalRunRecord) -> list[_TaskScore]:
     """
     scores: dict[str, _TaskScore] = {}
     for task_key, metrics in (record.metrics or {}).items():
-        picked = primary_metric(metrics)
+        task = _task_ref(record, task_key)
+        if undeclared_only and task is not None and task.benchmark is not None:
+            continue
+        picked = declared_metric(metrics, None)
         if picked is None:
             continue
         name, value = picked
@@ -84,11 +169,19 @@ def _task_scores(record: EvalRunRecord) -> list[_TaskScore]:
         scores[leaf] = _TaskScore(
             leaf=leaf,
             value=value,
-            metric=name,
+            metric=_legacy_canonical_metric_name(base_metric(name)),
             stderr=stderr_for(metrics, name),
             n_scored=_task_item_count(metrics),
         )
-    return list(scores.values())
+    return list(scores.values()), False
+
+
+def _task_scores(record: EvalRunRecord) -> tuple[list[_TaskScore], bool]:
+    if any(task.benchmark is not None for task in record.evaluation.tasks):
+        canonical, missing_primary = _canonical_task_scores(record)
+        legacy, _ = _legacy_task_scores(record, undeclared_only=True)
+        return canonical + legacy, missing_primary
+    return _legacy_task_scores(record)
 
 
 def _rollup_scores(scores: list[_TaskScore]) -> list[_TaskScore]:
@@ -112,20 +205,25 @@ def _mechanism_coverage(record: EvalRunRecord, n_scored: int | None) -> Coverage
     with an unknown attempted count makes the whole benchmark's count unknown -- a partial sum would
     understate what the run set out to grade -- and the same holds for the pass count.
     """
-    reported = record.coverage or {}
+    reported_by_leaf: dict[str, RecordTaskCoverage] = {}
+    for task_key, entry in (record.coverage or {}).items():
+        reported_by_leaf.setdefault(task_key.rsplit("/", 1)[-1], entry)
+    reported = list(reported_by_leaf.values())
     if not reported:
         return Coverage(n_scored=n_scored or 0)
-    attempted = [entry.n_attempted for entry in reported.values()]
-    correct = [entry.n_correct for entry in reported.values()]
+    benchmark = [entry.n_benchmark for entry in reported]
+    attempted = [entry.n_attempted for entry in reported]
+    correct = [entry.n_correct for entry in reported]
     errors: dict[str, int] = {}
-    for entry in reported.values():
+    for entry in reported:
         for name, count in entry.errors.items():
             errors[name] = errors.get(name, 0) + count
     return Coverage(
-        n_scored=sum(entry.n_scored for entry in reported.values()),
+        n_scored=sum(entry.n_scored for entry in reported),
+        n_benchmark=None if any(c is None for c in benchmark) else sum(c for c in benchmark if c is not None),
         n_attempted=None if any(c is None for c in attempted) else sum(c for c in attempted if c is not None),
         n_correct=None if any(c is None for c in correct) else sum(c for c in correct if c is not None),
-        n_unanswered=sum(entry.n_unanswered for entry in reported.values()),
+        n_unanswered=sum(entry.n_unanswered for entry in reported),
         errors=errors,
     )
 
@@ -145,8 +243,9 @@ def measurement_from_record(record: EvalRunRecord) -> Measurement | None:
     The benchmark is the registry eval name (the leaderboard column); a record's task entries roll up
     to it exactly as the dashboard has always rolled them up, with the group-aggregate rule preserved.
     """
-    scores = _rollup_scores(_task_scores(record))
-    if not scores:
+    task_scores, missing_declared_metric = _task_scores(record)
+    scores = _rollup_scores(task_scores)
+    if not scores or missing_declared_metric:
         return None
     value = sum(score.value for score in scores) / len(scores)
     labels = {score.metric for score in scores}
@@ -155,7 +254,14 @@ def measurement_from_record(record: EvalRunRecord) -> Measurement | None:
     n_scored = sum(counts) if len(counts) == len(scores) else None
 
     coverage = _mechanism_coverage(record, n_scored)
-    kind = MetricKind.BINARY if base_metric(metric) in BINARY_METRICS else MetricKind.CONTINUOUS
+    declared = all(score.declared for score in scores)
+    declared_kinds = {score.kind for score in scores if score.kind is not None}
+    declared_metrics = {score.protocol_metric for score in scores if score.protocol_metric is not None}
+    kind = (
+        next(iter(declared_kinds))
+        if declared and len(declared_kinds) == 1
+        else MetricKind.BINARY if base_metric(metric) in BINARY_METRICS else MetricKind.CONTINUOUS
+    )
     stderr = _combined_stderr([score.stderr for score in scores])
     n_correct = _successes(value, coverage) if kind is MetricKind.BINARY else None
     if n_correct is None and kind is MetricKind.BINARY:
@@ -164,6 +270,7 @@ def measurement_from_record(record: EvalRunRecord) -> Measurement | None:
         kind = MetricKind.CONTINUOUS
 
     item_cap = _item_cap(record)
+    fewshot_values = {task.num_fewshot for task in record.evaluation.tasks}
     return Measurement(
         benchmark=record.evaluation.name,
         metric=metric,
@@ -174,6 +281,7 @@ def measurement_from_record(record: EvalRunRecord) -> Measurement | None:
         recorded_stderr=stderr,
         item_cap=item_cap,
         flags=_flags(coverage, kind, stderr, item_cap),
+        num_fewshot=next(iter(fewshot_values)) if len(fewshot_values) == 1 else None,
         run_id=record.run_id,
         created_at=record.created_at,
         version=record.version,
@@ -181,12 +289,28 @@ def measurement_from_record(record: EvalRunRecord) -> Measurement | None:
         git_sha=record.provenance.git_sha,
         eval_runtime=record.provenance.eval_runtime,
         status=record.status,
+        declared=declared,
+        protocol_metric=next(iter(declared_metrics)) if declared and len(declared_metrics) == 1 else None,
+        protocol_kind=next(iter(declared_kinds)) if declared and len(declared_kinds) == 1 else None,
     )
 
 
 def measurements_from_records(records: Iterable[EvalRunRecord]) -> list[Measurement]:
     """Every record's benchmark measurement, skipping records that produced no primary metric."""
     return [measurement for record in records if (measurement := measurement_from_record(record)) is not None]
+
+
+def declared_metric_gap(record: EvalRunRecord) -> str | None:
+    """Explain a result row that lacks its declared headline metric."""
+    for task_key, source_metrics in record.metrics.items():
+        task = _task_ref(record, task_key)
+        benchmark = task.benchmark if task is not None else None
+        if benchmark is None or not source_metrics:
+            continue
+        metrics = record.canonical_metrics.get(task_key, {})
+        if benchmark.primary_metric not in metrics:
+            return f"declared metric {benchmark.primary_metric} not in canonical results"
+    return None
 
 
 def _successes(value: float, coverage: Coverage) -> int | None:
@@ -230,6 +354,17 @@ def _flags(coverage: Coverage, kind: MetricKind, stderr: float | None, item_cap:
         flags.add(ResultFlag.ATTRITION)
     if item_cap is not None:
         flags.add(ResultFlag.CAPPED)
+    if (
+        coverage.n_scored < 0
+        or (coverage.n_attempted is not None and coverage.n_scored > coverage.n_attempted)
+        or (coverage.n_benchmark is not None and coverage.n_benchmark <= 0)
+        or (
+            coverage.n_benchmark is not None
+            and coverage.n_attempted is not None
+            and coverage.n_attempted > coverage.n_benchmark
+        )
+    ):
+        flags.add(ResultFlag.INCONSISTENT_COVERAGE)
     if coverage.n_scored > 0 and coverage.n_unanswered >= coverage.n_scored:
         flags.add(ResultFlag.NO_ANSWERS)
     if kind is MetricKind.CONTINUOUS:

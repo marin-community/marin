@@ -175,10 +175,7 @@ class NativeProxyTelemetry:
                 self.flush()
             except Exception:
                 # Native metrics remain best-effort and must not affect controller service.
-                try:
-                    logger.warning("could not read native proxy telemetry snapshot", exc_info=True)
-                except Exception:
-                    pass
+                logger.warning("could not read native proxy telemetry snapshot", exc_info=True)
             if stop.wait(self._interval):
                 return
 

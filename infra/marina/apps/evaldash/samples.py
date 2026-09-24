@@ -24,20 +24,20 @@ from typing import Generic, TypeVar
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from finestore.layout import FormatVersionError
-from finestore.migrations import LEGACY_READ_FORMAT_VERSION, LegacyReadView
-from finestore.reader import ReadView
-from fsspec.core import url_to_fs
-from marin.evaluation.archive import (
+from finestore.eval import (
     ARCHIVE_SAMPLES_TABLE,
     FILTER_COLUMN,
     SAMPLES_PREFIX,
     SAMPLES_SUFFIX,
     EvalSample,
-    primary_filter,
-    primary_metric,
     sample_from_archive_row,
 )
+from finestore.layout import FormatVersionError
+from finestore.migrations import LEGACY_READ_FORMAT_VERSION, LegacyReadView
+from finestore.reader import ReadView
+from fsspec.core import url_to_fs
+from marin.evaluation.metric_selection import declared_metric, primary_filter
+from marin.evaluation.records import EvalRunRecord
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.storage_path import StoragePath
 
@@ -325,6 +325,27 @@ def _task_table(results_path: str, task: str) -> pa.Table | None:
     return _legacy_load_table(_fs, paths) if paths else None
 
 
+def declared_primary_metric(record: EvalRunRecord, sample_task: str) -> str | None:
+    """Return the metric declaration that applies to a sample task."""
+    tasks = record.evaluation.tasks
+    if len(tasks) == 1:
+        benchmark = tasks[0].benchmark
+        if benchmark is None:
+            return None
+        return next(metric.source_name for metric in benchmark.metrics if metric.name == benchmark.primary_metric)
+    for task in tasks:
+        benchmark = task.benchmark
+        if benchmark is not None and (sample_task == benchmark.task or sample_task.startswith(f"{benchmark.task}_")):
+            return next(metric.source_name for metric in benchmark.metrics if metric.name == benchmark.primary_metric)
+    return None
+
+
+def _sample_primary_metric(metric_columns: tuple[str, ...], declared: str | None) -> str | None:
+    metrics = dict.fromkeys(metric_columns, 0.0)
+    picked = declared_metric(metrics, declared)
+    return picked[0] if picked is not None else None
+
+
 def fetch_samples(
     results_path: str | None,
     task: str,
@@ -333,6 +354,7 @@ def fetch_samples(
     limit: int,
     correct: str,
     extraction_filter: str | None = None,
+    primary_metric_name: str | None = None,
 ) -> SamplesResponse:
     """Return one typed, correctness-filtered page of samples for a task under one extraction filter."""
     if not results_path:
@@ -364,8 +386,7 @@ def fetch_samples(
         table.column("metrics").to_pylist(maps_as_pydicts="strict") if "metrics" in columns else [None] * table.num_rows
     )
     metric_columns = tuple(sorted({name for row in metric_maps if row for name in row}))
-    picked = primary_metric(dict.fromkeys(metric_columns, 0.0))
-    primary = picked[0] if picked is not None else None
+    primary = _sample_primary_metric(metric_columns, primary_metric_name)
     n_correct = sum(1 for value in correct_values if value is True)
     n_ungraded = sum(1 for value in correct_values if value is None)
     counts = SampleCounts(

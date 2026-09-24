@@ -205,13 +205,13 @@
           "source": "url",
           "format": "table",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/accelerator/overview",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1.node_agent\") SELECT SUM(value) / 1000.0 AS value FROM ( SELECT value, ROW_NUMBER() OVER (PARTITION BY \"cluster\", json_get(attributes_json, 'gpu_uuid') ORDER BY timestamp_ms DESC) AS rn FROM telemetry WHERE service = 'iris-node-agent' AND name = 'gpu_power_watts' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT)) WHERE rn = 1"
+                "key": "clusters",
+                "value": "${cluster:csv}"
               },
               {
                 "key": "from",
@@ -220,6 +220,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "power"
               }
             ]
           },
@@ -288,13 +296,13 @@
           "source": "url",
           "format": "table",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/accelerator/overview",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1.node_agent\") SELECT AVG(value) AS value FROM telemetry WHERE service = 'iris-node-agent' AND name = 'gpu_utilization_percent' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT)"
+                "key": "clusters",
+                "value": "${cluster:csv}"
               },
               {
                 "key": "from",
@@ -303,6 +311,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "mean_utilization"
               }
             ]
           },
@@ -371,13 +387,13 @@
           "source": "url",
           "format": "table",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/accelerator/overview",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1.node_agent\") SELECT AVG(value) AS value FROM telemetry WHERE service = 'iris-node-agent' AND name = 'gpu_tensor_active_ratio' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT)"
+                "key": "clusters",
+                "value": "${cluster:csv}"
               },
               {
                 "key": "from",
@@ -386,6 +402,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "mean_tensor"
               }
             ]
           },
@@ -462,13 +486,13 @@
           "source": "url",
           "format": "table",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/accelerator/overview",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1.node_agent\") SELECT MAX(value) AS value FROM telemetry WHERE service = 'iris-node-agent' AND name = 'gpu_temperature_celsius' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT)"
+                "key": "clusters",
+                "value": "${cluster:csv}"
               },
               {
                 "key": "from",
@@ -477,6 +501,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "hottest"
               }
             ]
           },
@@ -554,13 +586,13 @@
           "source": "url",
           "format": "table",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/accelerator/overview",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1.node_agent\") SELECT COUNT(DISTINCT node_name) AS value FROM telemetry WHERE service = 'iris-node-agent' AND name = 'gpu_power_watts' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT)"
+                "key": "clusters",
+                "value": "${cluster:csv}"
               },
               {
                 "key": "from",
@@ -569,6 +601,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "nodes"
               }
             ]
           },
@@ -646,13 +686,13 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/accelerator/overview",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "WITH gpu_raw AS ( SELECT COALESCE(NULLIF(\"cluster\", ''), 'marin') AS cl, date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, node_name AS node, json_get(attributes_json, 'gpu_uuid') AS gpu, value FROM \"telemetry_v1.node_agent\" WHERE service = 'iris-node-agent' AND name = 'gpu_power_watts' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT)), run_raw AS ( SELECT COALESCE(NULLIF(\"cluster\", ''), 'marin') AS cl, date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, node_name AS node, run_id AS run FROM \"levanter.metrics\" WHERE step IS NOT NULL AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT)), run_node AS ( SELECT cl, t, node, run FROM ( SELECT cl, t, node, run, ROW_NUMBER() OVER (PARTITION BY cl, t, node ORDER BY COUNT(*) DESC) AS rn FROM run_raw GROUP BY 1, 2, 3, 4) WHERE rn = 1), gpu AS ( SELECT cl, t, node, gpu, AVG(value) AS w FROM gpu_raw GROUP BY 1, 2, 3, 4) SELECT gpu.t AS t, COALESCE(run_node.run, '(idle / unattributed)') AS series, SUM(gpu.w) / 1000.0 AS value FROM gpu LEFT JOIN run_node ON gpu.cl = run_node.cl AND gpu.t = run_node.t AND gpu.node = run_node.node GROUP BY 1, 2 ORDER BY 1"
+                "key": "clusters",
+                "value": "${cluster:csv}"
               },
               {
                 "key": "from",
@@ -661,6 +701,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "run_power"
               }
             ]
           },
@@ -819,13 +867,13 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/accelerator/overview",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1.node_agent\") SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, COALESCE(NULLIF(\"cluster\", ''), 'marin') AS series, AVG(value) AS value FROM telemetry WHERE service = 'iris-node-agent' AND name = 'gpu_tensor_active_ratio' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+                "key": "clusters",
+                "value": "${cluster:csv}"
               },
               {
                 "key": "from",
@@ -834,6 +882,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "tensor"
               }
             ]
           },
@@ -982,13 +1038,13 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/accelerator/overview",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1.node_agent\") SELECT t, cl AS series, SUM(bytes) AS value FROM ( SELECT COALESCE(NULLIF(\"cluster\", ''), 'marin') AS cl, date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, json_get(attributes_json, 'gpu_uuid') AS gpu, AVG(value) AS bytes FROM telemetry WHERE service = 'iris-node-agent' AND name = 'gpu_memory_used_bytes' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3) GROUP BY 1, 2 ORDER BY 1"
+                "key": "clusters",
+                "value": "${cluster:csv}"
               },
               {
                 "key": "from",
@@ -997,6 +1053,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "hbm"
               }
             ]
           },
@@ -1147,13 +1211,13 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/accelerator/overview",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1.node_agent\") SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, COALESCE(NULLIF(\"cluster\", ''), 'marin') AS series, MAX(value) AS value FROM telemetry WHERE service = 'iris-node-agent' AND name = 'gpu_temperature_celsius' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+                "key": "clusters",
+                "value": "${cluster:csv}"
               },
               {
                 "key": "from",
@@ -1162,6 +1226,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "temperature_series"
               }
             ]
           },
@@ -1284,13 +1356,13 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/accelerator/overview",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1.node_agent\") SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, CASE name WHEN 'gpu_xid_error_code' THEN 'XID error' WHEN 'gpu_row_remap_failures' THEN 'row remap failure' ELSE 'PCIe replay' END AS series, COUNT(DISTINCT json_get(attributes_json, 'gpu_uuid')) AS value FROM telemetry WHERE service = 'iris-node-agent' AND name IN ('gpu_xid_error_code', 'gpu_row_remap_failures', 'gpu_pcie_replay_errors') AND value > 0 AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2 ORDER BY 1"
+                "key": "clusters",
+                "value": "${cluster:csv}"
               },
               {
                 "key": "from",
@@ -1299,6 +1371,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "fault_count"
               }
             ]
           },
@@ -1364,13 +1444,13 @@
           "source": "url",
           "format": "table",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/accelerator/overview",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1.node_agent\") SELECT COALESCE(NULLIF(\"cluster\", ''), 'marin') AS cluster, node_name AS node, json_get(attributes_json, 'gpu_index') AS gpu, MAX(CASE WHEN name = 'gpu_xid_error_code' THEN value END) AS xid, MAX(CASE WHEN name = 'gpu_row_remap_failures' THEN value END) AS remap_failures, MAX(CASE WHEN name = 'gpu_pcie_replay_errors' THEN value END) AS pcie_replays FROM telemetry WHERE service = 'iris-node-agent' AND name IN ('gpu_xid_error_code', 'gpu_row_remap_failures', 'gpu_pcie_replay_errors') AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3 HAVING MAX(value) > 0 ORDER BY 4 DESC, 5 DESC, 6 DESC"
+                "key": "clusters",
+                "value": "${cluster:csv}"
               },
               {
                 "key": "from",
@@ -1379,6 +1459,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "faulted"
               }
             ]
           },
@@ -1498,13 +1586,13 @@
           "source": "url",
           "format": "table",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/accelerator/overview",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1.node_agent\") SELECT COALESCE(NULLIF(\"cluster\", ''), 'marin') AS cluster, COUNT(DISTINCT json_get(attributes_json, 'gpu_uuid')) AS gpus, COUNT(DISTINCT node_name) AS nodes, (CAST(EXTRACT(EPOCH FROM now()) * 1000 AS BIGINT) - MAX(timestamp_ms)) / 1000.0 AS lag_seconds FROM telemetry WHERE service = 'iris-node-agent' AND name = 'gpu_power_watts' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1 ORDER BY 4 DESC"
+                "key": "clusters",
+                "value": "${cluster:csv}"
               },
               {
                 "key": "from",
@@ -1513,6 +1601,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "freshness"
               }
             ]
           },
@@ -1597,13 +1693,13 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/accelerator/overview",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1.node_agent\"), model AS ( SELECT json_get(attributes_json, 'gpu_uuid') AS gpu, MAX(json_get(attributes_json, 'gpu_model')) AS gpu_model FROM telemetry WHERE service = 'iris-node-agent' AND name = 'hardware_inventory' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{to}} - INTERVAL '10 minutes') * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1), power AS ( SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, json_get(attributes_json, 'gpu_uuid') AS gpu, AVG(value) AS w FROM telemetry WHERE service = 'iris-node-agent' AND name = 'gpu_power_watts' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2) SELECT power.t AS t, COALESCE(model.gpu_model, 'unknown') AS series, SUM(power.w) / 1000.0 AS value FROM power LEFT JOIN model ON power.gpu = model.gpu GROUP BY 1, 2 ORDER BY 1"
+                "key": "clusters",
+                "value": "${cluster:csv}"
               },
               {
                 "key": "from",
@@ -1612,6 +1708,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "model_power"
               }
             ]
           },
@@ -1665,13 +1769,13 @@
           "source": "url",
           "format": "table",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/accelerator/overview",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1.node_agent\") SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, COALESCE(NULLIF(\"cluster\", ''), 'marin') AS cluster, node_name AS node, json_get(attributes_json, 'gpu_index') AS gpu, AVG(value) * 100.0 AS sm_utilization FROM telemetry WHERE service = 'iris-node-agent' AND name = 'gpu_sm_active_ratio' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3, 4 ORDER BY 2, 3, 4, 1"
+                "key": "clusters",
+                "value": "${cluster:csv}"
               },
               {
                 "key": "from",
@@ -1680,6 +1784,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "sm"
               }
             ]
           },
@@ -1792,13 +1904,13 @@
           "source": "url",
           "format": "timeseries",
           "parser": "backend",
-          "url": "/query",
+          "url": "/v1/accelerator/overview",
           "url_options": {
             "method": "GET",
             "params": [
               {
-                "key": "sql",
-                "value": "WITH telemetry AS (SELECT * FROM \"telemetry_v1.node_agent\"), per_gpu AS ( SELECT date_bin(INTERVAL '${__interval_ms} milliseconds', to_timestamp_millis(timestamp_ms)) AS t, node_name AS node, json_get(attributes_json, 'gpu_index') AS gpu, AVG(value) AS sample FROM telemetry WHERE service = 'iris-node-agent' AND name = 'gpu_temperature_celsius' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3 ) SELECT t, CAST(CEIL(sample / 5.0) * 5.0 AS VARCHAR) AS series, COUNT(*) AS value FROM per_gpu GROUP BY 1, 2 ORDER BY 1, 2"
+                "key": "clusters",
+                "value": "${cluster:csv}"
               },
               {
                 "key": "from",
@@ -1807,6 +1919,14 @@
               {
                 "key": "to",
                 "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "temperature_distribution"
               }
             ]
           },

@@ -5,5 +5,6 @@ task_options:
     task_alias: humanevalplus
     generation: true
     unsafe_code: true
-max_tokens: 1024
+# No max_tokens: the generation budget comes from the served context (Evalchemy derives it for its own
+# benchmarks; Marin sizes lm-eval-native tasks) or from the model config's generation.max_gen_toks.
 runtime_extras: [humanevalplus]

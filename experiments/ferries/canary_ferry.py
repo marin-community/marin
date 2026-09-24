@@ -41,7 +41,6 @@ from levanter.tracker.wandb import WandbConfig
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.step_runner import StepRunner
 from marin.experiment.data import mixture
-from marin.processing.tokenize.data_configs import with_pack
 from marin.training.training import LevanterCheckpoint, resolve_checkpointer_output_path
 from rigging.filesystem.cluster_config import marin_prefix, marin_temp_bucket
 
@@ -87,11 +86,9 @@ CANARY_MODEL = GrugModelConfig(
 )
 
 _GPU_FA4_CUTE_ATTENTION: GrugAttentionImplementation = "gpu_fa4_cute"
-_GPU_FA4_THD_ATTENTION: GrugAttentionImplementation = "gpu_fa4_thd"
 _GPU_ATTENTION_IMPLEMENTATIONS: tuple[GrugAttentionImplementation, ...] = (
     "reference",
     _GPU_FA4_CUTE_ATTENTION,
-    _GPU_FA4_THD_ATTENTION,
 )
 
 CANARY_OUTPUT_SUBDIR = "canary"
@@ -179,11 +176,6 @@ def build() -> ArtifactStep[LevanterCheckpoint]:
         model = dataclasses.replace(
             model,
             attention_implementation=attention_implementation,
-            # The THD backend only handles full causal windows. Setting the model
-            # window to 2x seq_len makes Grug's short-window mask a full window.
-            sliding_window=(
-                model.max_seq_len * 2 if attention_implementation == _GPU_FA4_THD_ATTENTION else model.sliding_window
-            ),
         )
 
         batch_size = env_int("CANARY_BATCH_SIZE", 32)
@@ -215,9 +207,6 @@ def build() -> ArtifactStep[LevanterCheckpoint]:
 
         def build_data(ctx: StepContext):
             data = mixture(ctx, {train: 1.0})
-            if attention_implementation == _GPU_FA4_THD_ATTENTION:
-                # THD attention only handles full causal windows; pack so each example is one.
-                data = with_pack(data, 1)
             return data
 
     num_steps = env_int("CANARY_STEPS", target_tokens // (batch_size * model.max_seq_len))

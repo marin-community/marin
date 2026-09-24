@@ -491,6 +491,56 @@ message AbortTableMigrationResponse {
   uint64 active_table_spec_version = 2;
 }
 
+// One namespace in a relay's complete heartbeat snapshot. Scalar presence is
+// significant: an absent settled_cursor means this target has not seeded the
+// namespace yet, while zero is a real settled sequence position.
+message ReportRelayNamespaceStatus {
+  string namespace = 1;
+  int64 visible_high_water = 2;
+  int64 published_high_water = 3;
+  int64 settled_cursor = 4;
+}
+
+// A complete snapshot sent directly from a regional relay to its hub. The
+// authenticated JWT supplies the sender cluster; clients cannot claim it.
+message ReportRelayStatusRequest {
+  string boot_id = 1;
+  uint64 report_sequence = 2;
+  string target = 3;
+  repeated ReportRelayNamespaceStatus namespaces = 4;
+}
+
+message ReportRelayStatusResponse {
+  int64 received_at_ms = 1;
+}
+
+// Hub-clocked state for one namespace. Progress timestamps change only when
+// the corresponding high-water mark advances, which lets an observer detect a
+// live relay that is no longer publishing or settling rows.
+message RelayNamespaceStatus {
+  string namespace = 1;
+  int64 visible_high_water = 2;
+  int64 published_high_water = 3;
+  int64 settled_cursor = 4;
+  int64 publication_progress_at_ms = 5;
+  int64 cursor_progress_at_ms = 6;
+}
+
+message RelaySenderStatus {
+  string cluster = 1;
+  string boot_id = 2;
+  uint64 report_sequence = 3;
+  string target = 4;
+  int64 received_at_ms = 5;
+  repeated RelayNamespaceStatus namespaces = 6;
+}
+
+message ListRelayStatusRequest {}
+
+message ListRelayStatusResponse {
+  repeated RelaySenderStatus senders = 1;
+}
+
 service StatsService {
   rpc RegisterTable(RegisterTableRequest) returns (RegisterTableResponse);
   rpc WriteRows(WriteRowsRequest) returns (WriteRowsResponse);
@@ -500,4 +550,6 @@ service StatsService {
   rpc GetTableSchema(GetTableSchemaRequest) returns (GetTableSchemaResponse);
   rpc GetTableStatus(GetTableStatusRequest) returns (GetTableStatusResponse);
   rpc AbortTableMigration(AbortTableMigrationRequest) returns (AbortTableMigrationResponse);
+  rpc ReportRelayStatus(ReportRelayStatusRequest) returns (ReportRelayStatusResponse);
+  rpc ListRelayStatus(ListRelayStatusRequest) returns (ListRelayStatusResponse);
 }
