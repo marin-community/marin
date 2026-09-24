@@ -10,7 +10,6 @@ from iris.cluster.constraints import (
     ConstraintOp,
     WellKnownAttribute,
     availability_constraint,
-    availability_preference_tokens,
     available_key,
     peer_availability_gate,
     required_resource_amounts,
@@ -76,27 +75,16 @@ def _candidate(name: str, variant: str = "h100", count: int = 8, *, pin: str = "
     )
 
 
-def _reserve_candidate(name: str, device: job_pb2.DeviceConfig, variant: str = "h100", *, ts: int = 0, band: int = 2):
-    """A ``--reserve <variant>`` candidate: the marker in the shape, no device of its own.
-
-    ``device`` is what the job itself asks for — a plain CPU for the coordinator case
-    that motivated the preference, a GPU when the reserved token is also gated.
-    """
-    shape = [*(_gpu_shape(variant) if device.HasField("gpu") else []), availability_constraint(variant)]
-    gate = peer_availability_gate(device, replicas=1)
+def _cpu_reserve(name: str, variant: str = "h100", *, ts: int = 0):
+    """A CPU job submitted with ``--reserve <variant>``: the marker and no gate."""
     return QueuedCandidate(
         job_id=JobName.from_string(f"/u/{name}"),
         pinned_peer_id="",
-        priority_band=band,
+        priority_band=2,
         submitted_at_ms=ts,
-        shape_constraints=shape,
-        availability_gate=gate,
-        preferred_tokens=availability_preference_tokens(shape, gate),
+        shape_constraints=[availability_constraint(variant)],
+        availability_gate=[],
     )
-
-
-def _cpu_reserve(name: str, variant: str = "h100", *, ts: int = 0, band: int = 2):
-    return _reserve_candidate(name, job_pb2.DeviceConfig(cpu=job_pb2.CpuDevice()), variant, ts=ts, band=band)
 
 
 # --- translation -----------------------------------------------------------
@@ -281,8 +269,7 @@ def test_a_tracked_preempting_backend_beats_a_shape_only_one():
 
 
 def test_a_tracked_preempting_peer_beats_a_shape_only_peer():
-    # Same ordering across peers: no later tie-break can promote the legacy peer over
-    # the one whose capacity the parent can measure.
+    # Same ordering across peers, whatever the peer tie-break.
     peers = [
         _peer("cw-legacy", [_backend("b", free=0, supplies=False)]),
         _peer("cw-metric", [_backend("b", free=0, held={_BATCH: 64})]),
@@ -329,59 +316,22 @@ def test_per_peer_cap_limits_promotions_per_tick():
     assert len(promotions) == 2  # capped even though capacity remains
 
 
-# --- reservation preference (capacity without allocation) ------------------
+# --- --reserve on a CPU job -----------------------------------------------
 
 
 def test_a_cpu_reservation_prefers_the_peer_with_more_free_capacity():
-    # A CPU coordinator reserved for H100 states no numeric requirement, so the peers'
-    # reported free chips are the only thing separating two equally eligible peers.
     peers = [_peer("cw-rno2a", [_backend("b", free=7)]), _peer("cw-us-east-02a", [_backend("b", free=160)])]
-    [promotion] = assign_queued([_cpu_reserve("j")], peers, ReservationLedger(), max_per_peer_per_cycle=8)
-    assert promotion.peer_id == "cw-us-east-02a"
-    assert promotion.reserved == {}  # a preference orders peers; it allocates nothing
+    promotions = assign_queued(
+        [_cpu_reserve(f"j{i}", ts=i) for i in range(8)], peers, ReservationLedger(), max_per_peer_per_cycle=8
+    )
+    # The job takes no capacity, so every submission sees the same preference.
+    assert [(p.peer_id, p.reserved) for p in promotions] == [("cw-us-east-02a", {})] * 8
 
 
-def test_cpu_reservations_spread_over_peers_that_score_the_same():
-    # A preference spends nothing, so eight submissions read one unchanged report and
-    # score every peer identically. They must not all collect on the same peer.
-    peers = [_peer(f"cw-{i}", [_backend("b", free=8)]) for i in range(4)]
+def test_cpu_reservations_spread_over_tied_peers_even_with_no_free_capacity():
+    peers = [_peer(f"cw-{i}", [_backend("b", free=0)]) for i in range(4)]
     promotions = assign_queued(
         [_cpu_reserve(f"j{i}", ts=i) for i in range(8)], peers, ReservationLedger(), max_per_peer_per_cycle=8
     )
     assert len(promotions) == 8
     assert len({p.peer_id for p in promotions}) > 1
-    assert all(p.reserved == {} for p in promotions)
-
-
-def test_a_cpu_reservation_is_placed_when_no_eligible_peer_has_a_free_gpu():
-    # Reservation stays eligibility, not capacity: zero free everywhere ties at zero and
-    # the job is still handed to an eligible peer rather than held in the queue.
-    peers = [_peer("cw-a", [_backend("b", free=0)]), _peer("cw-b", [_backend("b", free=0)])]
-    [promotion] = assign_queued([_cpu_reserve("j")], peers, ReservationLedger(), max_per_peer_per_cycle=8)
-    assert promotion.peer_id in {"cw-a", "cw-b"}
-    assert promotion.reserved == {}
-
-
-def test_a_cpu_reservation_reads_capacity_a_gpu_job_took_earlier_in_the_pass():
-    # cw-big advertises the larger number, but the GPU job ahead of it takes all 16. The
-    # reservation preference reads the decremented figure, not the advertised one.
-    peers = [_peer("cw-big", [_backend("b", free=16)]), _peer("cw-small", [_backend("b", free=8)])]
-    promotions = assign_queued(
-        [_candidate("gpu", count=16, ts=1), _cpu_reserve("cpu", ts=2)],
-        peers,
-        ReservationLedger(),
-        max_per_peer_per_cycle=8,
-    )
-    assert [(p.job_id.to_wire(), p.peer_id) for p in promotions] == [("/u/gpu", "cw-big"), ("/u/cpu", "cw-small")]
-
-
-def test_a_reserved_token_the_job_also_requests_is_not_double_counted():
-    # --reserve H100 on an 8-GPU H100 job names a token the gate already counts, so the
-    # job carries no preference and placement stays the plain best fit: the tight peer,
-    # not the empty one.
-    peers = [_peer("cw-a", [_backend("b", free=8)]), _peer("cw-b", [_backend("b", free=64)])]
-    candidate = _reserve_candidate("j", _gpu("h100", 8))
-    assert candidate.preferred_tokens == ()
-    [promotion] = assign_queued([candidate], peers, ReservationLedger(), max_per_peer_per_cycle=8)
-    assert promotion.peer_id == "cw-a"
-    assert promotion.reserved == {"h100": 8}

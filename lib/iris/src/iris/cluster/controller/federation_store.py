@@ -17,7 +17,6 @@ from rigging.timing import Duration, Timestamp
 
 from iris.cluster.constraints import (
     Constraint,
-    availability_preference_tokens,
     peer_availability_gate,
     routing_constraints,
     strip_cluster_constraints,
@@ -51,11 +50,10 @@ FEDERATED_ENDPOINT_MIRROR_TTL = Duration.from_minutes(5)
 def build_queued_candidates(tx: Tx) -> list[QueuedCandidate]:
     """Read the queued federated jobs into candidates for the tick's federation pass.
 
-    Each candidate carries its shape (routing constraints), its
-    ``ge(available:<token>, amount)`` availability gate, and the tokens its
-    ``availability:<variant>`` markers make it prefer free capacity of, all derived from
-    the job's stored request. Ordered by priority band, then oldest submission first —
-    the order the assignment pass consumes them in.
+    Each candidate carries its shape (routing constraints) and its
+    ``ge(available:<token>, amount)`` availability gate, derived from the job's stored
+    request. Ordered by priority band, then oldest submission first — the order the
+    assignment pass consumes them in.
     """
     candidates: list[QueuedCandidate] = []
     for handle in reads.queued_handoff_handles(tx):
@@ -69,7 +67,6 @@ def build_queued_candidates(tx: Tx) -> list[QueuedCandidate]:
         request = reconstruct_launch_job_request(job, workdir_files={})
         constraints = [Constraint.from_proto(c) for c in request.constraints]
         shape = routing_constraints(strip_cluster_constraints(constraints))
-        gate = peer_availability_gate(request.resources.device, request.replicas)
         candidates.append(
             QueuedCandidate(
                 job_id=handle.job_id,
@@ -77,8 +74,7 @@ def build_queued_candidates(tx: Tx) -> list[QueuedCandidate]:
                 priority_band=job.priority_band,
                 submitted_at_ms=job.submitted_at_ms.epoch_ms() if job.submitted_at_ms is not None else 0,
                 shape_constraints=shape,
-                availability_gate=gate,
-                preferred_tokens=availability_preference_tokens(shape, gate),
+                availability_gate=peer_availability_gate(request.resources.device, request.replicas),
             )
         )
     candidates.sort(key=lambda c: (priority_band_rank(c.priority_band), c.submitted_at_ms))

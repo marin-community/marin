@@ -39,13 +39,8 @@ would preempt to admit the job.
 Placement spends idle capacity first, reclaims from the lowest-priority band upward,
 and prefers a peer that needs no preemption at all.
 
-A job may also name tokens it prefers free capacity of without requiring any — a CPU
-coordinator submitted with ``--reserve H100``, whose GPU children run later. Those
-tokens rank otherwise-equal placements by how much capacity is free and take nothing,
-so reservation stays a hard eligibility constraint with no allocation behind it. Peers
-that still tie are ordered per job (rendezvous hashing over the job id and peer id), so
-successive submissions read against one unchanged availability report spread instead of
-all selecting the same peer.
+A ``--reserve <variant>`` marker gates nothing numerically, so it ranks otherwise-equal
+placements by free capacity of that variant without taking any.
 """
 
 import hashlib
@@ -53,7 +48,14 @@ import logging
 from dataclasses import dataclass, field
 from typing import NamedTuple
 
-from iris.cluster.constraints import AVAILABLE_PREFIX, AttributeValue, Constraint, evaluate_constraint
+from iris.cluster.constraints import (
+    AVAILABILITY_PREFIX,
+    AVAILABLE_PREFIX,
+    AttributeValue,
+    Constraint,
+    evaluate_constraint,
+    is_availability_key,
+)
 from iris.cluster.federation.router import backend_satisfies
 from iris.cluster.types import JobName
 from iris.rpc.proto_display import priority_band_rank
@@ -115,12 +117,6 @@ class QueuedCandidate:
     constraints the chosen peer backend must satisfy (empty for a job with no
     gated resource, e.g. plain CPU — such a job matches any shape-compatible peer).
 
-    ``preferred_tokens`` are resource tokens the job prefers free capacity of without
-    requiring or taking any (``constraints.availability_preference_tokens``, built from
-    its ``--reserve`` markers). They only order otherwise-equal placements, so a CPU
-    coordinator reserved for H100 lands where H100s are free instead of on whichever
-    eligible peer the tie-break happens to name.
-
     ``priority_band`` decides both queue order and how much of a peer's held
     capacity the job can reclaim, so the caller resolves UNSPECIFIED to its default
     band before building the candidate (``build_queued_candidates``).
@@ -132,7 +128,6 @@ class QueuedCandidate:
     submitted_at_ms: int
     shape_constraints: list[Constraint]
     availability_gate: list[Constraint]
-    preferred_tokens: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -288,15 +283,9 @@ def assign_queued(
     backend that supplies no metric is matched on shape alone, and ranks behind every
     backend whose capacity the parent can see. Among the rest, prefer a placement that
     needs no preemption; tie-break by best fit (least remaining capacity for the gated
-    token after placement), then by most free capacity for the candidate's
-    ``preferred_tokens``, then by a per-job spread key, then peer id, then backend id.
-    Fit-aware: a candidate that fits nowhere is skipped, not head-of-line-blocking the
-    queue.
-
-    A preferred token orders placements and nothing else: it is never spent, never
-    reserved, and never blocks a placement, so a job whose only capacity signal is a
-    preference lands on some eligible peer even when every one of them reports zero
-    free.
+    token after placement), then most free capacity for the ``--reserve`` variants, then
+    a per-job hash of the peer id, then backend id. Fit-aware: a candidate that fits
+    nowhere is skipped, not head-of-line-blocking the queue.
 
     Returns the promotions; the caller applies each as a conditional CAS and charges
     the ledger only for confirmed ones. Does not mutate ``ledger``.
@@ -321,8 +310,8 @@ def assign_queued(
     promotions: list[Promotion] = []
 
     for candidate in candidates:
-        # A _Placement widened with this job's spread key and the peer id, which break
-        # ties between equally good backends on different peers.
+        # A _Placement widened with the peer, which breaks ties between equally good
+        # backends on different peers.
         best: tuple[bool, bool, float, float, str, str, str] | None = None
         for peer in reachable_peers:
             if candidate.pinned_peer_id and candidate.pinned_peer_id != peer.peer_id:
@@ -378,26 +367,22 @@ class _Placement(NamedTuple):
     one that fits only by preemption (choosing it would drop the reservation the
     tracked placement would have charged). Then ``preempts``, so an idle backend beats
     one that would have to evict work, then how much capacity is left after the job
-    lands (tighter fit first), then ``headroom`` for the tokens the job only prefers,
-    then the backend id for a stable tie-break.
-
-    The gated tokens rank ahead of the preferred ones because the job takes the first
-    and takes nothing of the second.
+    lands (tighter fit first), then ``headroom``, then the backend id for a stable
+    tie-break.
     """
 
     shape_only: bool  # True for a backend matched on shape alone: no capacity metric
     preempts: bool  # True when the job fits only by reclaiming held work
     remaining: float  # capacity left across the gated tokens after placement
-    headroom: float  # negated capacity across the preferred tokens: more free sorts first
+    headroom: float  # negated capacity of the --reserve variants: more free sorts first
     backend_id: str  # "" for a force-routed candidate (shapeless or pinned)
 
 
 def _shape_only_placement(backend_id: str) -> _Placement:
     """A shape-matched backend the parent has no capacity metric for.
 
-    ``preempts``, ``remaining`` and ``headroom`` are unknown and never consulted:
-    ``shape_only`` already ranks this behind every placement whose capacity the parent
-    can see.
+    The capacity fields are unknown and never consulted: ``shape_only`` already ranks
+    this behind every placement whose capacity the parent can see.
     """
     return _Placement(shape_only=True, preempts=False, remaining=0.0, headroom=0.0, backend_id=backend_id)
 
@@ -427,7 +412,7 @@ def _place_on_peer(
                 shape_only=False,
                 preempts=_preempts(capacity, candidate.availability_gate),
                 remaining=_remaining_after(capacity, candidate.availability_gate, candidate.priority_band),
-                headroom=_headroom(capacity, candidate.preferred_tokens, candidate.priority_band),
+                headroom=_headroom(capacity, candidate.shape_constraints, candidate.priority_band),
                 backend_id=backend.backend_id,
             )
         else:  # metric backend that cannot fit the job even by preemption
@@ -464,27 +449,16 @@ def _remaining_after(capacity: _WorkingCapacity, gate: list[Constraint], band: i
     return float(total)
 
 
-def _headroom(capacity: _WorkingCapacity, preferred_tokens: tuple[str, ...], band: int) -> float:
-    """Negated capacity across the tokens the job prefers but does not take.
+def _headroom(capacity: _WorkingCapacity, shape: list[Constraint], band: int) -> float:
+    """Negated capacity of the variants the job's ``--reserve`` markers name.
 
-    Negated so that more free capacity sorts first, the opposite of the best-fit
-    ``remaining`` key: a job that spends the resource should pack tightly, while a job
-    that only prefers it wants the emptiest peer — its later children have to find room
-    there. Capacity is read the same way the gate reads it (idle plus what the band may
-    reclaim) and is already net of this generation's reservations, so a peer the tick
-    just filled with GPU work stops looking empty. A token the backend reports no
-    amount for reads 0, which ties rather than excludes.
+    Negated so the emptiest peer sorts first: the job takes none of it, but the GPU
+    children it launches later need room there.
     """
-    return -float(sum(capacity.available(token, band) for token in preferred_tokens))
+    variants = [c.key.removeprefix(AVAILABILITY_PREFIX) for c in shape if is_availability_key(c.key)]
+    return -float(sum(capacity.available(variant, band) for variant in variants))
 
 
 def _spread_key(job_id: JobName, peer_id: str) -> str:
-    """Per-job ordering over equally good peers, so equal scores do not collect on one.
-
-    Rendezvous hashing: each job ranks the peers by a hash of the pair, so successive
-    submissions against one unchanged availability report split across the peers that
-    tie instead of all taking the alphabetically first. Deterministic, so a placement
-    stays reproducible from the job id and the peer set.
-    """
-    digest = hashlib.blake2b(f"{job_id.to_wire()}\x00{peer_id}".encode(), digest_size=8)
-    return digest.hexdigest()
+    """Rendezvous hash, so jobs split across tied peers instead of taking the first by name."""
+    return hashlib.blake2b(f"{job_id.to_wire()}\x00{peer_id}".encode(), digest_size=8).hexdigest()
