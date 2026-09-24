@@ -58,14 +58,12 @@ class OnlineEagleTraining:
 class DraftSftPlan:
     """Concrete inputs consumed by experiment-level SkyRL artifact wiring."""
 
-    target_model: StoragePath
     role_plan: SkyRLRolePlan
     num_nodes: int
     config_yaml: str
 
 
 def draft_sft_plan(
-    target_model: StoragePath,
     initial_draft: StoragePath,
     initial_draft_identity: str,
     *,
@@ -162,7 +160,6 @@ def draft_sft_plan(
     # One whole-node rollout engine and one dedicated DraftTrainer node sit
     # alongside the policy nodes.
     return DraftSftPlan(
-        target_model=target_model,
         role_plan=role_plan,
         num_nodes=policy.policy_num_nodes + 2,
         config_yaml=yaml.safe_dump(config, sort_keys=False),

@@ -113,7 +113,6 @@ TRAINING = OnlineEagleTraining(
 
 def _snowball_draft_sft_plan(preset: _OnlineEaglePreset) -> DraftSftPlan:
     return draft_sft_plan(
-        target_model=TARGET_MODEL_URI,
         initial_draft=INITIAL_DRAFT_URI,
         initial_draft_identity=INITIAL_DRAFT_REVISION,
         policy=POLICY,
