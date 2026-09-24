@@ -23,7 +23,7 @@ segment and position arrays.
 without copying their arrays. The first stage owns the embedding modules; the
 last owns the final normalization and output projection. Layer offsets preserve
 the original short/long attention schedule, including the final long layer.
-The stage interface provides `embed`, `run_blocks`, `finish`, and `get_lm_head`;
+The stage interface provides `embed`, `run_blocks_with_stats`, `finish`, and `get_lm_head`;
 an execution scheduler must place and transport these stage computations.
 This module does not provide a scheduler, optimizer, or checkpoint lifecycle.
 

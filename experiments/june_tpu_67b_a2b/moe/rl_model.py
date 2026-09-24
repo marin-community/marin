@@ -161,9 +161,6 @@ class JunePipelineStage(eqx.Module):
         hidden = jax.lax.optimization_barrier(hidden)
         return self.embed_gated_norm(self.embed_norm(hidden))
 
-    def run_blocks(self, hidden, segment_ids, position_ids):
-        return self.run_blocks_with_stats(hidden, segment_ids, position_ids)[0]
-
     def run_blocks_with_stats(self, hidden, segment_ids, position_ids):
         """Return hidden states and total routing counts, including padding assignments."""
         # Pipeline AD transports these counters through floating auxiliary values.
