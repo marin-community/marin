@@ -1,13 +1,15 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T14:55:14.334043+00:00",
-  "scope": "Shared-protocol question planning for three large provisional-ID agentic inventories. Original inspection limits remain; these cards are not reviewed individual biological cases or validated coverage.",
+  "updated_at": "2026-09-24T16:29:12.401391+00:00",
+  "scope": "Question planning for 433 Biomni-Eval1 tool-enabled records in 20 families. The seven DBQA families have all 50 question stems reviewed and endpoint-specific proposed contracts; other family inspection limits remain. No implementation or validated coverage.",
   "basis_revision": "26e308ecb2",
   "counts": {
     "source_releases": 1,
     "task_protocol_or_definition_records": 433,
     "question_cards": 20,
-    "validated_new_mappings": 0
+    "validated_new_mappings": 0,
+    "dbqa_question_stems_reviewed": 50,
+    "dbqa_family_contracts_refined": 7
   },
   "defaults": {
     "data": "Independent observed inputs and native data formats; preserve real biological replication and lineage. No source benchmark fixtures, expected labels or answer text used for task authoring.",
@@ -2425,7 +2427,7 @@
     {
       "proposed_id": "portfolio-biomni-eval1-gene-set-membership",
       "benchmark": "Biomni-Eval1 tool-enabled",
-      "scientific_question": "Which gene identities belong to a frozen independent annotation set after version, synonym and species reconciliation?",
+      "scientific_question": "Which candidate genes belong to independently selected, frozen gene sets after species, identifier and collection reconciliation?",
       "source_family": "gene-set-membership",
       "benchmark_targets": [
         {
@@ -2489,41 +2491,71 @@
           "source_task_name": "lab_bench_dbqa"
         }
       ],
-      "source_inspection_tier": "question-endpoint-reviewed",
+      "source_inspection_tier": "all-family-question-stems-and-input-modes-reviewed",
       "source_planning_disposition": "candidate-design-provisional",
       "matching_workstreams": [
         "gene-program-factorization"
       ],
       "required_endpoint_stages": [
-        "pin the annotation collection and release",
-        "normalize gene identifiers",
-        "join all candidate memberships",
-        "retain provenance and select the supported candidate"
+        "Resolve resource, collection and exact set identifier; expose conflicts between the name and descriptive collection instead of silently guessing.",
+        "Normalize every candidate within the correct species and release, retaining ambiguous and unmapped identifiers.",
+        "Join complete candidate-to-set membership and evidence, retaining duplicates and missing-data dispositions."
       ],
       "observed_input_requirements": [
-        "Observed expression or multiomic matrices with biological sample identities, condition labels and frozen annotations."
+        "An independent selection of published gene sets in native GMT or resource export, species-specific gene identifier mappings, set metadata and redistribution permission. Preserve observed-study or curated-annotation provenance."
       ],
       "required_formats": [
-        "gene alternatives",
-        "gene-set identifier",
-        "versioned membership table"
+        "GMT",
+        "gene identifier cross-reference TSV",
+        "set metadata JSON"
       ],
       "proposed_artifact_requirements": [
-        "Feature eligibility, loadings/modules, complete per-feature scores, sample-level validation, gene-set memberships and null statistics"
+        "candidate_membership.tsv: query_id, set_id, candidate_id, resolved_gene_id, species, mapping_status, membership_status, source_record_id",
+        "set_manifest.tsv: set_id, resource, release, collection, biological_context, source_accession, checksum"
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "Set identity overrides neither conflicting collection metadata nor species; resolve those conflicts before authoring.",
+        "Define exact membership versus ontology-descendant membership, synonym ambiguity, duplicate normalization and whether the supplied export is complete for each requested set."
+      ],
       "deterministic_verification_approach": [
-        "Independent feature score, correlation and enrichment arithmetic plus native model references; test subspaces and reconstructed data rather than arbitrary factor labels."
+        "Parse native GMT with the pinned reference package and independently recompute full set membership and identifier joins. Compare all candidates, not only the selected gene."
       ],
-      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "status": "endpoint-contract-planned-input-resource-and-runtime-unresolved",
       "validated_new_mappings": 0,
-      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
-      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+      "evaluation_contract": "Require every named artifact and every candidate identity, including unresolved cases. Compare the complete frozen-resource query result under the stated method; do not grade only a selected label.",
+      "source_protocol_limits": "The source asks for resource membership, not de novo differential expression, enrichment or factorization. Twelve records span curated mouse phenotype sets and study-derived signatures; one family-level card does not make their biological contexts equivalent.",
+      "endpoint_contract_review": {
+        "reviewed_task_ids": [
+          "lab_bench_dbqa:207",
+          "lab_bench_dbqa:212",
+          "lab_bench_dbqa:476",
+          "lab_bench_dbqa:477",
+          "lab_bench_dbqa:201",
+          "lab_bench_dbqa:161",
+          "lab_bench_dbqa:217",
+          "lab_bench_dbqa:190",
+          "lab_bench_dbqa:460",
+          "lab_bench_dbqa:205",
+          "lab_bench_dbqa:166",
+          "lab_bench_dbqa:134"
+        ],
+        "source_metadata_sha256": "d6c7844f32b3eef655e0f83f2357f873a4bc14c1566e4fba76a051bbc6c9bf02",
+        "review_scope": "All assigned question stems reviewed; clinical sequence versus residue-change input modes also inspected. No answer column, source data export or biological truth inspected.",
+        "data_evidence_class": "Observed-study-derived signatures and curated annotations; preserve the distinction.",
+        "required_incorrect_output_checks": [
+          "Map a mouse symbol to a human gene without an explicit orthology step.",
+          "Drop an unmapped candidate or use a similarly named set from a different collection.",
+          "Treat an absent row in an incomplete export as a confirmed nonmember."
+        ],
+        "next_input_decision": "Select independent resource records and pin access, redistribution, release, schema and lineage; retain every unresolved source-context mismatch.",
+        "runtime_boundary": "Frozen bounded exports; measure native reference and solver runtime before asserting the 30-minute limit.",
+        "implementation_ready": false
+      }
     },
     {
       "proposed_id": "portfolio-biomni-eval1-clinical-variant-evidence",
       "benchmark": "Biomni-Eval1 tool-enabled",
-      "scientific_question": "Which structured variant-evidence claims survive assembly, transcript, date and assertion-provenance reconciliation?",
+      "scientific_question": "Which independently observed protein changes have matching ClinVar assertions after sequence, accession, condition and review-status reconciliation?",
       "source_family": "clinical-variant-evidence",
       "benchmark_targets": [
         {
@@ -2602,40 +2634,80 @@
           "source_task_name": "lab_bench_dbqa"
         }
       ],
-      "source_inspection_tier": "question-endpoint-reviewed",
+      "source_inspection_tier": "all-family-question-stems-and-input-modes-reviewed",
       "source_planning_disposition": "candidate-design-provisional",
       "matching_workstreams": [
         "variant-evidence"
       ],
       "required_endpoint_stages": [
-        "resolve reference sequence and variant identity",
-        "join versioned assertions with provenance",
-        "handle conflicts and review status",
-        "compare the requested classification evidence"
+        "Identify protein accession and isoform from supplied sequence evidence and preserve nonunique matches.",
+        "For sequence inputs, align each candidate against its resolved reference and enumerate every difference; for residue-change inputs, verify reference residue and position.",
+        "Join all compatible nucleotide/variation records without inventing a unique DNA allele from a protein substitution.",
+        "Report assertion type, condition, review status, conflicts and unresolved matches before applying an explicit lookup rule."
       ],
       "observed_input_requirements": [
-        "Observed variants, matching reference/annotation, frozen consequence/frequency/clinical evidence and provenance; observed assays for functional validation."
+        "Independent observed variant records, versioned protein FASTA and transcript cross-references, plus a frozen ClinVar export retaining aggregate and submitted assertions. Do not manufacture alternate sequences and label them observed."
       ],
       "required_formats": [
-        "ClinVar-style assertions",
-        "sequence and variant candidates"
+        "protein FASTA",
+        "protein HGVS or residue-change table",
+        "ClinVar native XML or documented tabular export",
+        "accession cross-reference TSV"
       ],
       "proposed_artifact_requirements": [
-        "Normalized VCF, consequence transcript table, evidence rows with accession/date, exclusion rationale and sequence products where appropriate"
+        "sequence_identity.tsv: candidate_id, reference_accession_version, alignment_span, identity_status",
+        "protein_changes.tsv: candidate_id, reference_accession_version, position, reference_residue, alternate_residue, ambiguity_status",
+        "assertions.tsv: candidate_id, protein_change_id, variation_id, allele_id, accession_version, record_level, condition_id, classification_type, classification, review_status, evaluated_date",
+        "candidate_results.tsv: candidate_id, match_count, requested_class, supported_class, conflict_status, disposition"
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "Separate residue-change input (8 source records) from complete candidate-protein input (7); a shared task must exercise both input modes or claim only the matching subset.",
+        "Fix transcript/isoform resolution, alignment ambiguity, classification type, condition scope and aggregation policy. Do not rank review stars as probabilities of pathogenicity.",
+        "Allow unresolved and conflicting evidence; distinguish a missing assertion from benign classification."
+      ],
       "deterministic_verification_approach": [
-        "Actual annotation package plus independent coordinate/translation checks; deterministic evidence rules with unknown/conflicting outcomes; verify function only against observed assays."
+        "Use a pinned native sequence parser/alignment package and independent residue-coordinate checks. Verify every candidate-to-assertion join against the frozen input, preserving one-to-many mappings and all specified conflicts."
       ],
-      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "status": "endpoint-contract-planned-input-resource-and-runtime-unresolved",
       "validated_new_mappings": 0,
-      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
-      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+      "evaluation_contract": "Require every named artifact and every candidate identity, including unresolved cases. Compare the complete frozen-resource query result under the stated method; do not grade only a selected label.",
+      "source_protocol_limits": "This is reproducible retrieval of recorded classifications, not an independent prediction of clinical pathogenicity. Native VCF normalization alone misses the source sequence-identification endpoint. Source answer labels and protein sequences are not authoring inputs.",
+      "endpoint_contract_review": {
+        "reviewed_task_ids": [
+          "lab_bench_dbqa:295",
+          "lab_bench_dbqa:303",
+          "lab_bench_dbqa:350",
+          "lab_bench_dbqa:401",
+          "lab_bench_dbqa:309",
+          "lab_bench_dbqa:389",
+          "lab_bench_dbqa:419",
+          "lab_bench_dbqa:430",
+          "lab_bench_dbqa:427",
+          "lab_bench_dbqa:366",
+          "lab_bench_dbqa:339",
+          "lab_bench_dbqa:345",
+          "lab_bench_dbqa:315",
+          "lab_bench_dbqa:387",
+          "lab_bench_dbqa:328"
+        ],
+        "source_metadata_sha256": "d6c7844f32b3eef655e0f83f2357f873a4bc14c1566e4fba76a051bbc6c9bf02",
+        "review_scope": "All assigned question stems reviewed; clinical sequence versus residue-change input modes also inspected. No answer column, source data export or biological truth inspected.",
+        "data_evidence_class": "Observed variant records and curated assertions; reference proteins are sequence evidence, not measured clinical outcomes.",
+        "required_incorrect_output_checks": [
+          "Use the wrong isoform or shift a residue by one.",
+          "Choose one DNA allele arbitrarily among several yielding the same protein change.",
+          "Replace missing/conflicting evidence with benign, or mix somatic and germline classification.",
+          "Return the selected candidate while omitting a second sequence change."
+        ],
+        "next_input_decision": "Select independent resource records and pin access, redistribution, release, schema and lineage; retain every unresolved source-context mismatch.",
+        "runtime_boundary": "Frozen bounded exports; measure native reference and solver runtime before asserting the 30-minute limit.",
+        "implementation_ready": false
+      }
     },
     {
       "proposed_id": "portfolio-biomni-eval1-promoter-binding-query",
       "benchmark": "Biomni-Eval1 tool-enabled",
-      "scientific_question": "Which independently observed promoter-binding records match a named locus under explicit reference coordinates and assay context?",
+      "scientific_question": "Which candidate promoters overlap independently selected binding-site records under strand-aware TSS coordinates and frozen annotation rules?",
       "source_family": "promoter-binding-query",
       "benchmark_targets": [
         {
@@ -2674,41 +2746,69 @@
           "source_task_name": "lab_bench_dbqa"
         }
       ],
-      "source_inspection_tier": "question-endpoint-reviewed",
+      "source_inspection_tier": "all-family-question-stems-and-input-modes-reviewed",
       "source_planning_disposition": "candidate-design-provisional",
       "matching_workstreams": [
         "database-identity-evidence"
       ],
       "required_endpoint_stages": [
-        "pin genome, gene and binding releases",
-        "construct strand-aware TSS intervals",
-        "join binding sites to candidate promoters",
-        "return overlap evidence and candidate identity"
+        "Resolve the queried binding factor, candidate genes, assembly and annotation release.",
+        "Enumerate eligible transcript TSSs and construct the requested upstream/downstream window in strand-relative coordinates.",
+        "Intersect the specified site or cluster track, preserving each transcript, site, assay and overlap length.",
+        "Aggregate to candidate genes only under the declared any-transcript or selected-transcript rule."
       ],
       "observed_input_requirements": [
-        "Pinned public gene/protein/variant/database exports with accession versions, species, directed relations, dates and evidence identifiers."
+        "Matching assembly GTF/GFF, independently selected binding-site BED records, assay/cluster provenance and the same-version gene/protein identifier map."
       ],
       "required_formats": [
-        "TSS interval definition",
-        "gene candidates",
-        "versioned binding annotations"
+        "GTF/GFF3",
+        "BED",
+        "assay metadata TSV"
       ],
       "proposed_artifact_requirements": [
-        "Identity map, provenance manifest, directed edge/evidence tables, contradictions, structured answer and supporting accession/span references"
+        "promoters.bed: transcript-keyed windows with gene and strand",
+        "overlaps.tsv: candidate_gene_id, transcript_id, binding_factor_id, site_id, assay_id, overlap_bp",
+        "candidate_results.tsv: candidate_gene_id, eligible_transcripts, matched_sites, status"
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "The seven source questions specify -1000,+100 around TSS. Freeze whether endpoints are inclusive, BED conversion, chromosome clipping and transcript selection.",
+        "Select the GTRD release and actual track type; a motif match, individual peak and merged cluster are distinct evidence.",
+        "Do not silently substitute a new live annotation or guess a factor from an ambiguous symbol."
+      ],
       "deterministic_verification_approach": [
-        "Deterministic joins, direction/type checks and evidence-span linkage; unknown is allowed; a text citation match does not establish full scientific entailment."
+        "Run bedtools or GenomicRanges on native intervals; independently enumerate overlap arithmetic and strand-relative boundaries. Compare all promoters and site joins, not only positive genes."
       ],
-      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "status": "endpoint-contract-planned-input-resource-and-runtime-unresolved",
       "validated_new_mappings": 0,
-      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
-      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+      "evaluation_contract": "Require every named artifact and every candidate identity, including unresolved cases. Compare the complete frozen-resource query result under the stated method; do not grade only a selected label.",
+      "source_protocol_limits": "A recorded promoter overlap is not proof of regulation or a condition-specific effect. GTRD track schemas and permitted independent inputs still need inspection; current review covers all seven source question stems, not the biological records.",
+      "endpoint_contract_review": {
+        "reviewed_task_ids": [
+          "lab_bench_dbqa:251",
+          "lab_bench_dbqa:269",
+          "lab_bench_dbqa:259",
+          "lab_bench_dbqa:263",
+          "lab_bench_dbqa:264",
+          "lab_bench_dbqa:241",
+          "lab_bench_dbqa:273"
+        ],
+        "source_metadata_sha256": "d6c7844f32b3eef655e0f83f2357f873a4bc14c1566e4fba76a051bbc6c9bf02",
+        "review_scope": "All assigned question stems reviewed; clinical sequence versus residue-change input modes also inspected. No answer column, source data export or biological truth inspected.",
+        "data_evidence_class": "Observed-assay-derived binding tracks; label clustering/inference separately.",
+        "required_incorrect_output_checks": [
+          "Apply the plus-strand window to a minus-strand gene.",
+          "Use gene start for every transcript TSS or silently merge transcript windows.",
+          "Replace experimentally derived sites with motif-only predictions without changing the evidence class."
+        ],
+        "next_input_decision": "Select independent resource records and pin access, redistribution, release, schema and lineage; retain every unresolved source-context mismatch.",
+        "runtime_boundary": "Frozen bounded exports; measure native reference and solver runtime before asserting the 30-minute limit.",
+        "implementation_ready": false
+      }
     },
     {
       "proposed_id": "portfolio-biomni-eval1-interaction-database-query",
       "benchmark": "Biomni-Eval1 tool-enabled",
-      "scientific_question": "Which directed interaction claims are supported by frozen independent evidence after protein-identity and experimental-context checks?",
+      "scientific_question": "Which candidate protein pairs occur in a frozen prediction resource, and how does that evidence differ from independently measured interaction records?",
       "source_family": "interaction-database-query",
       "benchmark_targets": [
         {
@@ -2737,41 +2837,67 @@
           "source_task_name": "lab_bench_dbqa"
         }
       ],
-      "source_inspection_tier": "question-endpoint-reviewed",
+      "source_inspection_tier": "all-family-question-stems-and-input-modes-reviewed",
       "source_planning_disposition": "candidate-design-provisional",
       "matching_workstreams": [
         "database-identity-evidence"
       ],
       "required_endpoint_stages": [
-        "normalize entity identifiers",
-        "query the specified release and relation",
-        "distinguish predicted from measured support",
-        "return evidence-backed candidate matches"
+        "Resolve both protein identities, species and resource release.",
+        "Preserve pair roles, relation semantics and whether the relation is directed; do not infer causal direction from column order.",
+        "Retrieve every candidate pair and its prediction/evidence fields.",
+        "Keep prediction membership separate from measured-interaction support and explicitly report absent or unresolved records."
       ],
       "observed_input_requirements": [
-        "Pinned public gene/protein/variant/database exports with accession versions, species, directed relations, dates and evidence identifiers."
+        "An independently selected, permitted protein-pair prediction export with versioned entity mappings; a separate observed interaction export if testing prediction-versus-measurement reconciliation."
       ],
       "required_formats": [
-        "candidate identifiers",
-        "entity descriptions",
-        "versioned interaction records"
+        "versioned protein FASTA or identifier map",
+        "prediction-pair TSV",
+        "observed interaction evidence TSV when used"
       ],
       "proposed_artifact_requirements": [
-        "Identity map, provenance manifest, directed edge/evidence tables, contradictions, structured answer and supporting accession/span references"
+        "protein_identity.tsv: query_id, supplied_id, resolved_accession_version, species, mapping_status",
+        "pair_evidence.tsv: query_id, candidate_id, entity_a, entity_b, relation_type, directionality, evidence_class, score, source_record_id, release",
+        "candidate_results.tsv: query_id, candidate_id, resource_membership, observed_support, disposition"
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "The five source prompts request P-HIPSter predicted membership, not observed binding. Inspect the export schema and score/membership rule before choosing an independent adaptation.",
+        "Restrict authoring to permitted independent benign contexts; changing organism or resource retains an explicit endpoint-fidelity gap.",
+        "Specify symmetric versus directed relation handling and distinguish prediction scores from measured effect sizes."
+      ],
       "deterministic_verification_approach": [
-        "Deterministic joins, direction/type checks and evidence-span linkage; unknown is allowed; a text citation match does not establish full scientific entailment."
+        "Use the actual resource parser/API against a frozen local export and an independent relational join. Check all entity roles, candidates and evidence classes; recompute any declared score filter."
       ],
-      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "status": "endpoint-contract-planned-input-resource-and-runtime-unresolved",
       "validated_new_mappings": 0,
-      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
-      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+      "evaluation_contract": "Require every named artifact and every candidate identity, including unresolved cases. Compare the complete frozen-resource query result under the stated method; do not grade only a selected label.",
+      "source_protocol_limits": "These are prediction-resource lookup endpoints. An observed interaction task is a different endpoint; a combined question must retain both tables and separate grading. No source-specific interaction answers or pathogen-target recommendations are used for authoring.",
+      "endpoint_contract_review": {
+        "reviewed_task_ids": [
+          "lab_bench_dbqa:511",
+          "lab_bench_dbqa:505",
+          "lab_bench_dbqa:493",
+          "lab_bench_dbqa:495",
+          "lab_bench_dbqa:514"
+        ],
+        "source_metadata_sha256": "d6c7844f32b3eef655e0f83f2357f873a4bc14c1566e4fba76a051bbc6c9bf02",
+        "review_scope": "All assigned question stems reviewed; clinical sequence versus residue-change input modes also inspected. No answer column, source data export or biological truth inspected.",
+        "data_evidence_class": "Prediction-only source endpoint; it is not real observed outcome data. Require a separately justified observed-data role or record the adaptation gap.",
+        "required_incorrect_output_checks": [
+          "Treat predicted membership as experimentally confirmed binding.",
+          "Turn an absent database row into a measured negative interaction.",
+          "Force a symmetric interaction into a causal directed edge, or collapse two protein isoforms."
+        ],
+        "next_input_decision": "Select independent resource records and pin access, redistribution, release, schema and lineage; retain every unresolved source-context mismatch.",
+        "runtime_boundary": "Frozen bounded exports; measure native reference and solver runtime before asserting the 30-minute limit.",
+        "implementation_ready": false
+      }
     },
     {
       "proposed_id": "portfolio-biomni-eval1-cytoband-gene-query",
       "benchmark": "Biomni-Eval1 tool-enabled",
-      "scientific_question": "Which genes lie within a specified cytogenetic interval after assembly, coordinate and gene-model reconciliation?",
+      "scientific_question": "Which independently selected gene loci overlap a specified cytogenetic band under a fixed assembly and release?",
       "source_family": "cytoband-gene-query",
       "benchmark_targets": [
         {
@@ -2795,41 +2921,63 @@
           "source_task_name": "lab_bench_dbqa"
         }
       ],
-      "source_inspection_tier": "question-endpoint-reviewed",
+      "source_inspection_tier": "all-family-question-stems-and-input-modes-reviewed",
       "source_planning_disposition": "candidate-design-provisional",
       "matching_workstreams": [
         "transcript-reference-audit"
       ],
       "required_endpoint_stages": [
-        "pin assembly and annotation release",
-        "normalize gene identifiers",
-        "join gene coordinates to band intervals",
-        "retain coordinate and overlap evidence"
+        "Resolve assembly, annotation release and hierarchical cytoband identity.",
+        "Normalize both coordinate systems, retaining all constituent sub-bands of a requested parent band.",
+        "Intersect full gene loci with the band and report the requested location predicate for every candidate."
       ],
       "observed_input_requirements": [
-        "Matching observed reference FASTA, GFF3/GTF and release cross-references; splice evidence from real reads for transcript discovery."
+        "Same-assembly cytogenetic band coordinates, native gene annotation, gene identifier mapping and release manifests. Use independent candidate loci, not the benchmark alternatives."
       ],
       "required_formats": [
-        "cytoband identifiers",
-        "gene candidates",
-        "versioned genome annotations"
+        "cytoband BED or native assembly export",
+        "GTF/GFF3",
+        "gene mapping TSV"
       ],
       "proposed_artifact_requirements": [
-        "Native GFF/GTF/BED, extracted FASTA, transcript/exon/CDS tables, coordinate audit, junction evidence"
+        "bands.bed: requested band and resolved constituent intervals",
+        "gene_band_overlap.tsv: query_id, gene_id, chromosome, gene_start, gene_end, band_id, overlap_bp, fully_contained, status"
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "All four source questions name Ensembl release 110. Freeze a matching independent release/assembly and record any departure from that version.",
+        "Define overlap versus full containment versus TSS location. A parent cytoband is not a string-equality match to one child-band label."
+      ],
       "deterministic_verification_approach": [
-        "Independent strand-aware sequence extraction and coordinate arithmetic; verify native annotation round trips, gene/transcript identity and actual StringTie or relevant package outputs."
+        "Use bedtools or GenomicRanges plus independent interval arithmetic to compare all candidate loci and parent-band unions."
       ],
-      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "status": "endpoint-contract-planned-input-resource-and-runtime-unresolved",
       "validated_new_mappings": 0,
-      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
-      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+      "evaluation_contract": "Require every named artifact and every candidate identity, including unresolved cases. Compare the complete frozen-resource query result under the stated method; do not grade only a selected label.",
+      "source_protocol_limits": "This endpoint is a coordinate/database query. Splice-junction reconstruction, transcript assembly and extracted FASTA are not required outputs and cannot substitute for correct band membership.",
+      "endpoint_contract_review": {
+        "reviewed_task_ids": [
+          "lab_bench_dbqa:43",
+          "lab_bench_dbqa:53",
+          "lab_bench_dbqa:49",
+          "lab_bench_dbqa:52"
+        ],
+        "source_metadata_sha256": "d6c7844f32b3eef655e0f83f2357f873a4bc14c1566e4fba76a051bbc6c9bf02",
+        "review_scope": "All assigned question stems reviewed; clinical sequence versus residue-change input modes also inspected. No answer column, source data export or biological truth inspected.",
+        "data_evidence_class": "Observed genome annotation and cytogenetic mapping; no synthetic chromosome coordinates.",
+        "required_incorrect_output_checks": [
+          "Mix assemblies or coordinate conventions.",
+          "Exclude a child band because its label is not exactly the requested parent.",
+          "Substitute TSS containment for gene-span overlap without declaring the change."
+        ],
+        "next_input_decision": "Select independent resource records and pin access, redistribution, release, schema and lineage; retain every unresolved source-context mismatch.",
+        "runtime_boundary": "Frozen bounded exports; measure native reference and solver runtime before asserting the 30-minute limit.",
+        "implementation_ready": false
+      }
     },
     {
       "proposed_id": "portfolio-biomni-eval1-mirna-target-query",
       "benchmark": "Biomni-Eval1 tool-enabled",
-      "scientific_question": "Which miRNA-target associations have compatible independently observed evidence after mature-miRNA and transcript-identity checks?",
+      "scientific_question": "Which independently selected mature-miRNA and gene pairs are present in a frozen target-prediction release after identifier reconciliation?",
       "source_family": "mirna-target-query",
       "benchmark_targets": [
         {
@@ -2853,41 +3001,64 @@
           "source_task_name": "lab_bench_dbqa"
         }
       ],
-      "source_inspection_tier": "question-endpoint-reviewed",
+      "source_inspection_tier": "all-family-question-stems-and-input-modes-reviewed",
       "source_planning_disposition": "candidate-design-provisional",
       "matching_workstreams": [
         "small-rna-sequence-structure"
       ],
       "required_endpoint_stages": [
-        "resolve mature microRNA naming",
-        "pin the target-prediction release",
-        "join candidate gene identifiers",
-        "return the stated prediction with provenance"
+        "Resolve species and mature-miRNA identity including 5p/3p arm and release-specific synonyms.",
+        "Join candidate genes to the resource target namespace without silently collapsing transcripts.",
+        "Return all prediction matches and scores under the explicit resource membership rule."
       ],
       "observed_input_requirements": [
-        "Observed RNA sequences and small-RNA/mRNA measurements with matching annotation; structural measurements where comparing predictions to biology."
+        "A permitted frozen miRNA target-prediction export, same-release mature-miRNA and gene/transcript mappings, and independently selected candidate pairs. Observed measurements are separate optional evidence, not invented validation labels."
       ],
       "required_formats": [
-        "gene alternatives",
-        "microRNA identifiers",
-        "target prediction records"
+        "target-prediction native export",
+        "mature-miRNA FASTA or accession map",
+        "gene/transcript mapping TSV"
       ],
       "proposed_artifact_requirements": [
-        "FASTA/GTF joins, processed sequence and structure files, complete expression/target results, predicted-versus-observed measurements"
+        "identity_map.tsv: query_id, input_mirna, mature_accession, species, arm, candidate_gene_id, target_id, mapping_status",
+        "predicted_targets.tsv: query_id, mature_accession, candidate_gene_id, target_id, score, release, source_record_id",
+        "candidate_results.tsv: query_id, candidate_gene_id, predicted_member, disposition"
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "The four source questions name miRDB v6.0. Freeze version and membership rule; do not introduce a stricter score threshold merely because it seems preferable.",
+        "Preserve mature arms and one-to-many target mappings; document missing identifiers independently of missing predictions."
+      ],
       "deterministic_verification_approach": [
-        "Native RNA/folding reference plus independent sequence, coordinate and score checks; label predictions separately from experimentally supported structure."
+        "Use a pinned native export parser and an independently implemented complete join/score-filter check. No RNA folding or de novo target prediction is needed to reproduce a database-membership endpoint."
       ],
-      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "status": "endpoint-contract-planned-input-resource-and-runtime-unresolved",
       "validated_new_mappings": 0,
-      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
-      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+      "evaluation_contract": "Require every named artifact and every candidate identity, including unresolved cases. Compare the complete frozen-resource query result under the stated method; do not grade only a selected label.",
+      "source_protocol_limits": "Predicted membership is distinct from observed regulation. An observed perturbation/expression task cannot replace these four lookup endpoints without retaining the original prediction query and an explicit fidelity assessment.",
+      "endpoint_contract_review": {
+        "reviewed_task_ids": [
+          "lab_bench_dbqa:105",
+          "lab_bench_dbqa:80",
+          "lab_bench_dbqa:91",
+          "lab_bench_dbqa:88"
+        ],
+        "source_metadata_sha256": "d6c7844f32b3eef655e0f83f2357f873a4bc14c1566e4fba76a051bbc6c9bf02",
+        "review_scope": "All assigned question stems reviewed; clinical sequence versus residue-change input modes also inspected. No answer column, source data export or biological truth inspected.",
+        "data_evidence_class": "Prediction derived from biological sequences; not an observed target-validation measurement.",
+        "required_incorrect_output_checks": [
+          "Swap the mature 5p and 3p arm.",
+          "Relabel a predicted target as experimentally validated.",
+          "Filter away a valid resource member using an unstated score threshold."
+        ],
+        "next_input_decision": "Select independent resource records and pin access, redistribution, release, schema and lineage; retain every unresolved source-context mismatch.",
+        "runtime_boundary": "Frozen bounded exports; measure native reference and solver runtime before asserting the 30-minute limit.",
+        "implementation_ready": false
+      }
     },
     {
       "proposed_id": "portfolio-biomni-eval1-disease-database-difference",
       "benchmark": "Biomni-Eval1 tool-enabled",
-      "scientific_question": "Which gene-disease assertions differ between frozen database releases because of identity, evidence or inclusion-policy changes?",
+      "scientific_question": "Which independently selected gene-disease associations occur in one frozen resource and are absent from another complete, comparable resource export?",
       "source_family": "disease-database-difference",
       "benchmark_targets": [
         {
@@ -2906,37 +3077,82 @@
           "source_task_name": "lab_bench_dbqa"
         }
       ],
-      "source_inspection_tier": "question-endpoint-reviewed",
+      "source_inspection_tier": "all-family-question-stems-and-input-modes-reviewed",
       "source_planning_disposition": "candidate-design-provisional",
       "matching_workstreams": [
         "database-identity-evidence"
       ],
       "required_endpoint_stages": [
-        "normalize disease concepts across resources",
-        "align gene identifiers and release dates",
-        "compute the requested set difference",
-        "preserve both positive and absent-source evidence"
+        "Resolve disease concepts without merging subtypes solely by similar names.",
+        "Normalize candidate genes, species, release dates and evidence-inclusion policies.",
+        "Compute resource-A-only membership using complete relevant exports, keeping unresolvable or incomplete cases unknown.",
+        "Preserve supporting A records and the precise checked B scope for every candidate."
       ],
       "observed_input_requirements": [
-        "Pinned public gene/protein/variant/database exports with accession versions, species, directed relations, dates and evidence identifiers."
+        "Permitted dated association exports from two resources, disease-concept crosswalks, gene identifiers and export-completeness metadata. Source prompts specify DisGeNET and OMIM; access and redistribution must be established before packaging those exports."
       ],
       "required_formats": [
-        "candidate genes",
-        "disease descriptions",
-        "two versioned association resources"
+        "association TSV or native JSON exports",
+        "disease ontology/crosswalk",
+        "gene identifier map"
       ],
       "proposed_artifact_requirements": [
-        "Identity map, provenance manifest, directed edge/evidence tables, contradictions, structured answer and supporting accession/span references"
+        "disease_map.tsv: query_id, input_concept, resource_a_id, resource_b_id, mapping_status",
+        "candidate_membership.tsv: query_id, gene_id, a_member, b_member, a_evidence_ids, b_evidence_ids, b_export_scope, completeness_status, difference_status"
       ],
-      "source_specific_decisions": [],
+      "source_specific_decisions": [
+        "Define exact disease equivalence, relation types, evidence thresholds and release pair before taking a set difference.",
+        "An inaccessible resource or truncated API response cannot establish absence. Distinguish a database-membership difference from conflicting biological evidence."
+      ],
       "deterministic_verification_approach": [
-        "Deterministic joins, direction/type checks and evidence-span linkage; unknown is allowed; a text citation match does not establish full scientific entailment."
+        "Use native export parsers and independent set difference after audited identifier/concept joins. Verify both membership columns and completeness prerequisites for every candidate."
       ],
-      "status": "shared-protocol-question-plan-individual-evidence-unreviewed",
+      "status": "endpoint-contract-planned-input-resource-and-runtime-unresolved",
       "validated_new_mappings": 0,
-      "evaluation_contract": "Return complete identity/evidence tables with source, version, relation direction, context and a support/contradiction/unresolved disposition under a frozen rule. Verify joins and structured rules mechanically. Lack of an edge or retrieved document is not evidence of biological absence; inspect negative-evidence and closed-world assumptions separately.",
-      "source_protocol_limits": "A deterministic query over frozen structured records covers acquisition/reconciliation and rule-based evidence only. It does not establish full equivalence to unconstrained literature synthesis, patient diagnosis or delivery-method selection. Individual evidence and faithful acceptance criteria remain unreviewed; no full-coverage gain is predicted."
+      "evaluation_contract": "Require every named artifact and every candidate identity, including unresolved cases. Compare the complete frozen-resource query result under the stated method; do not grade only a selected label.",
+      "source_protocol_limits": "The three source questions concern membership in named resources, not longitudinal changes within one database and not absence of a biological association. If licensing prevents an independent two-resource task, keep the affected endpoint unresolved.",
+      "endpoint_contract_review": {
+        "reviewed_task_ids": [
+          "lab_bench_dbqa:1",
+          "lab_bench_dbqa:34",
+          "lab_bench_dbqa:13"
+        ],
+        "source_metadata_sha256": "d6c7844f32b3eef655e0f83f2357f873a4bc14c1566e4fba76a051bbc6c9bf02",
+        "review_scope": "All assigned question stems reviewed; clinical sequence versus residue-change input modes also inspected. No answer column, source data export or biological truth inspected.",
+        "data_evidence_class": "Curated association evidence; resource nonmembership is not an observed negative biological result.",
+        "required_incorrect_output_checks": [
+          "Interpret a failed query as absence.",
+          "Merge a disease subtype into its parent or swap difference direction.",
+          "Compare resources under unequal undeclared evidence thresholds."
+        ],
+        "next_input_decision": "Select independent resource records and pin access, redistribution, release, schema and lineage; retain every unresolved source-context mismatch.",
+        "runtime_boundary": "Frozen bounded exports; measure native reference and solver runtime before asserting the 30-minute limit.",
+        "implementation_ready": false
+      }
     }
   ],
-  "definition_discrepancies": []
+  "definition_discrepancies": [],
+  "endpoint_review_sources": [
+    {
+      "url": "https://huggingface.co/datasets/biomni/Eval1/tree/51f97feb9e377fac7384faae49046bc067283c38",
+      "metadata_sha256": "d6c7844f32b3eef655e0f83f2357f873a4bc14c1566e4fba76a051bbc6c9bf02",
+      "use": "Question-only projection: instance_id, task_instance_id, task_name, prompt, split; no answers."
+    },
+    {
+      "url": "https://www.ncbi.nlm.nih.gov/clinvar/docs/help/",
+      "use": "Protein changes may match multiple variants; accession versions, aggregate/submitted classifications and classification type require explicit handling."
+    },
+    {
+      "url": "https://www.ncbi.nlm.nih.gov/clinvar/docs/review_status/",
+      "use": "Review status applies to classifications on aggregate records; retain classification type and record level."
+    },
+    {
+      "url": "https://www.mirdb.org/faq.html",
+      "use": "Prediction resource with target scores; database membership is not experimentally measured regulation. Search-index help text inspected; direct page retrieval timed out."
+    },
+    {
+      "url": "https://jan2024.rest.ensembl.org/documentation/info/assembly_info",
+      "use": "Assembly endpoint exposes cytogenetic bands; actual release-specific export remains uninspected."
+    }
+  ]
 }

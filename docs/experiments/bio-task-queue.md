@@ -122,6 +122,32 @@ for every card. The two simulated/planted source constructions retain explicit
 observed-data adaptation limits. These contracts support planning; source answers
 and fixed grader literals are not used to author training inputs or rewards.
 
+## Biomni-Eval1 database-query contracts
+
+The [Biomni-Eval1 designs](../../experiments/post_training/bio_tasks/workflow_designs/biomni-eval1.json)
+now specify complete artifacts and incorrect-output checks for all seven DBQA
+families, following review of their 50 question stems. Independent resource exports,
+redistribution rights, exact schemas and runtime remain unresolved. This review
+adds no tasks or validated mappings; the other 383 records retain their existing
+inspection limits.
+
+| Family | Source records | Required distinction |
+|---|---:|---|
+| Gene-set membership | 12 | Resolve species, collection and exact set; membership does not require new enrichment or expression analysis. |
+| Clinical variant lookup | 15 | Eight residue-change queries and seven candidate-protein queries require sequence identity and assertion joins; genomic annotation alone is insufficient. |
+| Promoter binding | 7 | Preserve strand-relative TSS windows, transcript selection and the specific binding-site track. |
+| Interaction lookup | 5 | Source questions ask for predicted database membership; retain separate predicates for predicted and measured interactions. |
+| Cytoband location | 4 | Resolve parent/sub-band intervals and the declared gene-location predicate on one assembly/release. |
+| miRNA target lookup | 4 | Preserve mature-miRNA arms and prediction-resource membership; RNA folding is a different endpoint. |
+| Disease-resource difference | 3 | Compare two complete, compatible resource exports; absent records do not establish biological absence. |
+
+Protein substitutions can match multiple nucleotide variants, and classification
+depends on record level and assertion type. The contracts preserve that ambiguity
+instead of inventing one genomic allele ([ClinVar query documentation](https://www.ncbi.nlm.nih.gov/clinvar/docs/help/)).
+Predicted interaction and miRNA target records are not measured outcomes. Any
+observed-data adaptation must retain the source lookup endpoint or record the
+coverage gap; adding experimental data does not itself establish equivalence.
+
 ## Broader question portfolio
 
 The [additional benchmark questions](../../experiments/post_training/bio_tasks/workflow_designs/additional_benchmarks.json)

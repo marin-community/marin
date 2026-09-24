@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T16:15:30.037505+00:00",
+  "updated_at": "2026-09-24T16:29:12.401391+00:00",
   "scope": "Full question-proposal portfolio for the 31 currently inventoried provisional-ID agentic releases. This planning index resolves every question card and records conditional consolidation; it creates no training task or validated coverage. Eleven source leads without inventories remain outside the enumerated denominator.",
   "counts": {
     "source_releases": 31,
@@ -46,7 +46,7 @@
     },
     {
       "path": "workflow_designs/biomni-eval1.json",
-      "sha256": "5df501a9d192243704a943363e94fad24de11f206b91bdd2814f3691613e99fc"
+      "sha256": "2f3bbfb1b2601bbdc9b58630a097c42118bf5686ff330ef821b94ef833f2dd71"
     },
     {
       "path": "workflow_designs/biokgbench.json",
@@ -542,7 +542,7 @@
         "portfolio-biomni-eval1-interaction-database-query"
       ],
       "consolidation": "conditional-combined-question",
-      "condition_for_one_task": "Verify full typed directed edges and source evidence under a prespecified rule, including unresolved claims. Structural citation matching alone cannot satisfy literature entailment or biological absence claims.",
+      "condition_for_one_task": "Verify full typed directed edges and source evidence under a prespecified rule, including unresolved claims. Structural citation matching alone cannot satisfy literature entailment or biological absence claims. Biomni DBQA asks for prediction-resource membership. Keep a separate prediction-membership table and acceptance predicate; experimental support or graph direction cannot replace that endpoint. If one independent resource bundle cannot support both questions, split the group.",
       "benchmark_record_scope": {
         "BioKGBench KGCheck": 125,
         "Biomni-Eval1 tool-enabled": 5
@@ -556,7 +556,7 @@
         "complete_artifacts": "Complete query/entity map, every candidate directed edge, evidence/source identifiers, context, support class and unresolved/contradicted states.",
         "deterministic_acceptance": "Independently recompute directed typed joins under explicit evidence rules; citations must point to correct entries. Grade structured predicates only, with no inference from citation presence to entailment.",
         "required_incorrect_output_checks": "Reverse an edge; substitute predicted association for measured interaction; turn missing evidence into a negative experimental result.",
-        "unresolved_before_assignment": "Independent evidence exports, relation-specific rules and exact coverage limit for source literature questions.",
+        "unresolved_before_assignment": "Independent evidence exports, relation-specific rules and exact coverage limit for source literature questions. Resolve Biomni prediction-resource membership separately from BioKGBench relation evidence; do not assume prediction records are observations or interactions are causal directed edges.",
         "status": "planning-contract-not-executed"
       }
     },
@@ -5747,7 +5747,7 @@
     },
     {
       "proposed_task_id": "portfolio-biomni-eval1-gene-set-membership",
-      "scientific_question": "Which gene identities belong to a frozen independent annotation set after version, synonym and species reconciliation?",
+      "scientific_question": "Which candidate genes belong to independently selected, frozen gene sets after species, identifier and collection reconciliation?",
       "question_card_ids": [
         "portfolio-biomni-eval1-gene-set-membership"
       ],
@@ -5762,7 +5762,7 @@
     },
     {
       "proposed_task_id": "portfolio-biomni-eval1-clinical-variant-evidence",
-      "scientific_question": "Which structured variant-evidence claims survive assembly, transcript, date and assertion-provenance reconciliation?",
+      "scientific_question": "Which independently observed protein changes have matching ClinVar assertions after sequence, accession, condition and review-status reconciliation?",
       "question_card_ids": [
         "portfolio-biomni-eval1-clinical-variant-evidence"
       ],
@@ -5777,7 +5777,7 @@
     },
     {
       "proposed_task_id": "portfolio-biomni-eval1-promoter-binding-query",
-      "scientific_question": "Which independently observed promoter-binding records match a named locus under explicit reference coordinates and assay context?",
+      "scientific_question": "Which candidate promoters overlap independently selected binding-site records under strand-aware TSS coordinates and frozen annotation rules?",
       "question_card_ids": [
         "portfolio-biomni-eval1-promoter-binding-query"
       ],
@@ -5792,7 +5792,7 @@
     },
     {
       "proposed_task_id": "portfolio-biomni-eval1-cytoband-gene-query",
-      "scientific_question": "Which genes lie within a specified cytogenetic interval after assembly, coordinate and gene-model reconciliation?",
+      "scientific_question": "Which independently selected gene loci overlap a specified cytogenetic band under a fixed assembly and release?",
       "question_card_ids": [
         "portfolio-biomni-eval1-cytoband-gene-query"
       ],
@@ -5807,7 +5807,7 @@
     },
     {
       "proposed_task_id": "portfolio-biomni-eval1-mirna-target-query",
-      "scientific_question": "Which miRNA-target associations have compatible independently observed evidence after mature-miRNA and transcript-identity checks?",
+      "scientific_question": "Which independently selected mature-miRNA and gene pairs are present in a frozen target-prediction release after identifier reconciliation?",
       "question_card_ids": [
         "portfolio-biomni-eval1-mirna-target-query"
       ],
@@ -5822,7 +5822,7 @@
     },
     {
       "proposed_task_id": "portfolio-biomni-eval1-disease-database-difference",
-      "scientific_question": "Which gene-disease assertions differ between frozen database releases because of identity, evidence or inclusion-policy changes?",
+      "scientific_question": "Which independently selected gene-disease associations occur in one frozen resource and are absent from another complete, comparable resource export?",
       "question_card_ids": [
         "portfolio-biomni-eval1-disease-database-difference"
       ],
@@ -10314,6 +10314,13 @@
       "date": "2026-09-24",
       "finding": "Restore source-specific ancestor/shared-variant, functional-consensus, two-community and within-cell-type contrast endpoints; correct diploid-exome and transcript-estimation inputs. Two source constructions include simulated or planted data and need explicit observed-data adaptation limits.",
       "implementation_ready": 0
+    },
+    {
+      "source": "Biomni-Eval1 DBQA",
+      "question_stems_reviewed": 50,
+      "family_contracts_refined": 7,
+      "design_file": "workflow_designs/biomni-eval1.json",
+      "limits": "Independent resource exports, rights, exact schemas and runtime remain unresolved. Predicted memberships remain distinct from observed outcomes. Counts and validated coverage unchanged."
     }
   ]
 }
