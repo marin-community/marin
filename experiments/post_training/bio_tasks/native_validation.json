@@ -1402,6 +1402,46 @@
       "archive_bytes": 97995,
       "archive_sha256": "9934e072a7d25b03ad831c349d53bf40264be6d533d3a877f13e738bcdf22b14",
       "decision": "Retain completed IQ-TREE, FastTree and MAFFT artifacts with hashes. Complete RAxML under a 600-second cap, then rerun the complete input-reading oracle with a 1,700-second workflow cap and unchanged grading tolerances."
+    },
+    {
+      "checked_at": "2026-09-24",
+      "job_id": "/exedev/bio-singlecell-qc-20260924-064859",
+      "source_revision": "f025377e0cf77007963d867a2b9ae3d106197321",
+      "status": "failed-environment-provenance-capture",
+      "model_calls": 0,
+      "biological_reference_attempted": false,
+      "completed_setup_seconds": {
+        "install-python-execution": 15.785305579003762,
+        "install-scanpy-execution": 12.417356379999546,
+        "create-python-execution": 2.968378521996783,
+        "fetch-inputs-execution": 3.2688662000000477
+      },
+      "failure": "After the exact-URL Scanpy installation succeeded, a launcher assertion found an installed package record without a required URL and/or artifact hash. No package metadata was captured before the assertion.",
+      "archive": {
+        "uri": "gs://marin-us-central2/tmp/ttl=7d/iris/task-outputs/exedev/bio-singlecell-qc-20260924-064859/0/7944cc21a70f54b6/outputs.tar.zst",
+        "size_bytes": 34357,
+        "sha256": "98dc80d2001dc730f83c64f476bf0948f225b66b827b6595f5e0de942d085f04",
+        "ttl_days": 7
+      },
+      "controller_placement": {
+        "job_id": "/exedev/bio-singlecell-qc-20260924-064859",
+        "state": "failed",
+        "worker_id": "marin-tpu-v4-reserved-256-us-central2-b-20260922-2317-8259d330-worker-28",
+        "execution_cluster_id": "local",
+        "backend_id": "default",
+        "checked_at": "2026-09-24T06:51:32.342805+00:00",
+        "worker_metadata": [
+          {
+            "worker_id": "marin-tpu-v4-reserved-256-us-central2-b-20260922-2317-8259d330-worker-28",
+            "scale_group": "tpu_v4-reserved_256-us-central2-b",
+            "backend_id": "default",
+            "tpu_name": "t1v-n-9a98788d",
+            "gce_zone": "",
+            "gce_instance_name": "t1v-n-9a98788d-w-28"
+          }
+        ]
+      },
+      "decision": "Resolve public artifact checksums for the same exact package URLs, then use the existing checksum-verified offline installer. Preserve this failed setup independently of the corrected run."
     }
   ]
 }
