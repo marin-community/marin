@@ -42,6 +42,8 @@ _CATALOG_YAML = textwrap.dedent(
     generation:
       extra_gen_kwargs:
         skip_special_tokens: "false"
+      chat_template_kwargs:
+        enable_thinking: false
     agent:
       agent_kwargs:
         extra_body: '{"chat_template_kwargs":{"enable_thinking":true}}'
@@ -65,6 +67,7 @@ def test_load_model_config_round_trips_the_catalog_shape(tmp_path):
     assert config.resource_hint.gpu == {"H100": 2}
     assert config.serve.vllm_extra_args == ("--enable-prefix-caching",)
     assert dict(config.generation.extra_gen_kwargs) == {"skip_special_tokens": "false"}
+    assert dict(config.generation.chat_template_kwargs) == {"enable_thinking": False}
     assert "enable_thinking" in config.agent.agent_kwargs["extra_body"]
 
 

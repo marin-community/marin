@@ -204,11 +204,13 @@ tracks a CLI validation mode that can move task-catalog errors back before Iris 
 
 `tasks` selects one or more evaluator task names. Use `task_options.<task>` for `num_fewshot`,
 `task_alias`, `generation`, `unsafe_code`, and `completion_only`; the remaining portable fields include
-`apply_chat_template`, `limit`, `batch_size`, `seed`, `gen_kwargs`, `extra_model_args`, `max_length`,
-and `max_tokens`. `runtime_extras` names optional Evalchemy dependency groups required by custom task
-packages, such as `ifeval`. `apply_chat_template` defaults to the model catalog when omitted; an
-explicit file value overrides it. The model catalog supplies generation overlays, and an explicit
-launcher `--limit` overrides the file limit while `--seed` overrides the file seed. `record.json` stores the resulting task
+`apply_chat_template`, `limit`, `batch_size`, `seed`, `gen_kwargs`, `extra_model_args`,
+`chat_template_kwargs`, `max_length`, and `max_tokens`. `runtime_extras` names optional Evalchemy
+dependency groups required by custom task packages, such as `ifeval`. `apply_chat_template` defaults
+to the model catalog when omitted; an explicit file value overrides it. The model catalog supplies
+generation overlays, and a launch file's `chat_template_kwargs` override the model catalog per key. The current Evalchemy command
+boundary supports one boolean template argument. An explicit launcher `--limit` overrides the file
+limit while `--seed` overrides the file seed. `record.json` stores the resulting task
 options and normalized Evalchemy launch configuration under `eval.tasks` and `eval.evalchemy`; the
 record provenance stores the exact Evalchemy requirement, including runtime extras. FinanceBench
 also requires a `judge` block with a dedicated endpoint, model, and secret reference. Marin forwards
@@ -327,7 +329,8 @@ imply. Set `tokenizer` when `location` is an object-store export because the eva
 its tokenizer through Hugging Face. vLLM streams object-store weights through the RunAI loader.
 Every explicit `serve` value wins over what `auto_serve_overrides` derives from the model's
 `config.json`; `generation.extra_gen_kwargs` (e.g. `skip_special_tokens=false` for a thinking model)
-rides on `--gen_kwargs`.
+rides on `--gen_kwargs`, while `generation.chat_template_kwargs` controls boolean render-time
+arguments on Evalchemy chat requests.
 
 Add a same-named Evalchemy YAML file under `configs/evalchemy/` and add its name to
 `_STANDARD_EVALCHEMY_EVALS` in `evals.py`, or add a Harbor `JobConfig` YAML under `configs/harbor/`
