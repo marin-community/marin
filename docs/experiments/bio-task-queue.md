@@ -23,6 +23,23 @@ independent workflows. Workstream membership alone does not show that a proposed
 question completes a benchmark endpoint, and the proposed question count is not a
 coverage forecast or a cap on authoring.
 
+## Endpoint contracts
+
+The [BiomniBench-DA designs](../../experiments/post_training/bio_tasks/workflow_designs/biomnibench-da.json)
+refine all 50 public question endpoints into 45 proposed tasks. Each design specifies
+observed inputs, proposed artifact tables and key columns, decisions to freeze, verifier checks and
+unresolved data/runtime requirements. These refine the 147 broad questions; they
+are not 45 additional tasks or validated mappings. The question-only review found
+18 endpoints potentially matched by extending a broad question, 18 with only
+component overlap and 14 requiring a new endpoint formulation.
+
+Related endpoints share a design when one study can support the complete analysis.
+Expression contrasts, WGCNA and distinct chromatin assays remain separate. Ambiguous
+GWAS and survival-proportion questions retain their unresolved estimands. Negative
+controls specify incorrect submitted artifacts; random label permutations are not
+assumed to change significance. Independent input selection, complete schemas and
+native reference execution remain required before authoring is considered ready.
+
 ## Solver diagnostics
 
 [Inspect both GLM-5.3 traces](https://codex-main.exe.xyz:8757/solver-checks/20260924/index.html).
@@ -53,6 +70,11 @@ unscored. Original attempts and grades are unchanged.
 Native environment contexts now export `/opt/bio/bin` from `/etc/profile.d/bio.sh`
 as well as Docker `ENV`. The pinned Harbor terminal starts `bash --login`; a
 fresh container/terminal check of this change is still required before release.
+Two model-free follow-up workers failed in the validation launcher before any
+sandbox was created (missing local module, then unsupported custom-agent constructor).
+Their archives and failure records are retained in the diagnostics report. A corrected
+check is prepared; a further launch awaits approval under the Iris repeated-failure
+rule. These failures add no task grades and do not change the two GLM results.
 
 ## Proposed scientific workstreams
 

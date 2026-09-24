@@ -159,7 +159,26 @@
       "independent_data_sources": [],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "cell-composition"
+      "workflow_family": "cell-composition",
+      "endpoint_review": {
+        "question_sha256": "72c76065803f65bb0a660e9f41a1ac43e9a5233eddb812e9a23433ae9887c5cc",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [
+          "GSE236581"
+        ],
+        "decisions_to_freeze": "Tissue-specific enrichment threshold and whether the comparison is donor-paired are not stated; define the three-tissue denominator and test.",
+        "broad_plan_fit": "candidate_if_extended",
+        "broad_question_ids": [
+          "single-cell-composition-01"
+        ],
+        "proposed_artifacts": [
+          "cell-to-donor join",
+          "eligible cell counts and denominators by sample",
+          "tissue contrast with donor-level uncertainty"
+        ],
+        "scientific_gap": "The question must use tissue as the comparison and retain donor replication; annotation alone is a component.",
+        "proposed_design_id": "biomni-design-01-tumor-cell-enrichment"
+      }
     },
     {
       "task_id": "da-1-4",
@@ -188,7 +207,27 @@
       "independent_data_sources": [],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "clinical-association"
+      "workflow_family": "clinical-association",
+      "endpoint_review": {
+        "question_sha256": "59ec346f621fcd71d9133e19cbd0459e3602fa65f5201aa0db8e5efd04927277",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [
+          "GSE236581"
+        ],
+        "decisions_to_freeze": "Tumor regression ratio definition, correlation statistic, adjustment/multiplicity and baseline-cell fraction denominator are not stated.",
+        "broad_plan_fit": "candidate_if_extended",
+        "broad_question_ids": [
+          "single-cell-composition-03"
+        ],
+        "proposed_artifacts": [
+          "baseline patient eligibility",
+          "patient-level fractions",
+          "time-ordered outcome join",
+          "correlation and multiplicity table"
+        ],
+        "scientific_gap": "The question must preserve baseline selection, outcome timing and one patient per independent observation.",
+        "proposed_design_id": "biomni-design-02-baseline-fraction-response"
+      }
     },
     {
       "task_id": "da-10-1",
@@ -218,7 +257,23 @@
       "independent_data_sources": [],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "protein-predictor-evaluation"
+      "workflow_family": "protein-predictor-evaluation",
+      "endpoint_review": {
+        "question_sha256": "1e12d4df7f0d06ea39d1c2af52a10195ffe7b2c3fa7c0f4a4a46a51ff992be9a",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [],
+        "decisions_to_freeze": "The exact SaPS/PdPS/NoPS and human-proteome membership files, class balance, composition statistic, four score directions and ROC/PR uncertainty need freezing.",
+        "broad_plan_fit": "no_existing_question",
+        "broad_question_ids": [],
+        "proposed_artifacts": [
+          "protein identity/membership table",
+          "sequence composition",
+          "complete predictor scores",
+          "class-wise ROC and precision-recall"
+        ],
+        "scientific_gap": "Current sequence-model questions concern substitution effects, indels, structure and genomic tracks, not protein-class predictor evaluation.",
+        "proposed_design_id": "biomni-design-03-protein-class-predictors"
+      }
     },
     {
       "task_id": "da-10-3",
@@ -247,7 +302,23 @@
       "independent_data_sources": [],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "protein-predictor-evaluation"
+      "workflow_family": "protein-predictor-evaluation",
+      "endpoint_review": {
+        "question_sha256": "845f52c1fe363979c5e776420b74de224f45a186f301b311559f05bf1043307a",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [],
+        "decisions_to_freeze": "The fixed hNoPS-test-like negative set, overlapping positive membership, tied scores, performance metric and consistency test across MLO versus membrane-bound controls need freezing.",
+        "broad_plan_fit": "no_existing_question",
+        "broad_question_ids": [],
+        "proposed_artifacts": [
+          "dataset membership and overlap audit",
+          "fixed negative universe",
+          "tied-score ranking",
+          "per-dataset performance and uncertainty"
+        ],
+        "scientific_gap": "No proposed question fixes a common negative set across overlapping protein datasets.",
+        "proposed_design_id": "biomni-design-04-protein-participant-screening"
+      }
     },
     {
       "task_id": "da-11-1",
@@ -278,7 +349,28 @@
       "independent_data_sources": [],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "cell-communication"
+      "workflow_family": "cell-communication",
+      "endpoint_review": {
+        "question_sha256": "49a04f319ede5878c59a37ea8a33ca6ebb867845eb1369c7315fdb5024a29e01",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [
+          "GSE193442"
+        ],
+        "decisions_to_freeze": "The KIR+CD8+ and gliadin-specific CD4+ gate, ligand-receptor version, pathway scoring/background and meaning of \u201ctop\u201d beyond MHC-I need definition; in-vitro suppression is external evidence, not inferred causality.",
+        "broad_plan_fit": "component_only",
+        "broad_question_ids": [
+          "cell-communication-01"
+        ],
+        "proposed_artifacts": [
+          "selected population and layer QC",
+          "frozen ligand-receptor mapping",
+          "pair scores",
+          "pathway aggregation",
+          "ranked interactions"
+        ],
+        "scientific_gap": "Existing question asks condition changes; this endpoint may instead require population interaction ranking without a condition contrast.",
+        "proposed_design_id": "biomni-design-05-cell-communication"
+      }
     },
     {
       "task_id": "da-12-2",
@@ -308,7 +400,26 @@
       "independent_data_sources": [],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "perturbation-enrichment"
+      "workflow_family": "perturbation-enrichment",
+      "endpoint_review": {
+        "question_sha256": "d0ee9fbf2af1ef3590a639e4d8fa9892dd92c16a26e04ab3e608ec6e1c709153",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [],
+        "decisions_to_freeze": "The overexpression and knockdown DEG criteria and direction, shared-set rule, tested-gene universe and whether p<0.05 is raw or adjusted enrichment need definition.",
+        "broad_plan_fit": "component_only",
+        "broad_question_ids": [
+          "rna-seq-contrast-enrichment-02",
+          "rna-seq-contrast-enrichment-03"
+        ],
+        "proposed_artifacts": [
+          "two fitted perturbation contrast tables",
+          "shared significant-gene set",
+          "tested-gene universe",
+          "pathway enrichment table"
+        ],
+        "scientific_gap": "Questions mention directional overlap/enrichment choices but not necessarily intersection of two fitted significant-gene sets under this endpoint.",
+        "proposed_design_id": "biomni-design-06-shared-perturbation-enrichment"
+      }
     },
     {
       "task_id": "da-12-4",
@@ -347,7 +458,25 @@
         "complete-case cohort selection",
         "Cox partial-likelihood fitting",
         "hazard-ratio and Wald uncertainty reporting"
-      ]
+      ],
+      "endpoint_review": {
+        "question_sha256": "a022422f38640b24b5c69c750611220529b1602b825062c0d37f81c76e93161a",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [],
+        "decisions_to_freeze": "Question explicitly requires univariate Cox for each microbiome, HR>1 and p<0.05, then Kocuria; freeze patient eligibility, survival time/censoring, abundance preprocessing and multiplicity interpretation.",
+        "broad_plan_fit": "candidate_if_extended",
+        "broad_question_ids": [
+          "clinical-survival-01"
+        ],
+        "proposed_artifacts": [
+          "eligible patient-microbe table",
+          "time/censoring",
+          "microbial compositional transform",
+          "univariate Cox coefficients, uncertainty and multiplicity"
+        ],
+        "scientific_gap": "Microbial abundance handling and all candidate features must be specified; generic clinical survival is only the core model.",
+        "proposed_design_id": "biomni-design-07-microbe-survival"
+      }
     },
     {
       "task_id": "da-13-1",
@@ -386,7 +515,26 @@
       "mapped_stages": [
         "subject-level visit matching",
         "complete-pair measurement changes"
-      ]
+      ],
+      "endpoint_review": {
+        "question_sha256": "eab5c2a5a87ea218b16afa8ddd4e0aba3ec072e2a824cdc3e678b2fec58ceb65",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [],
+        "decisions_to_freeze": "Freeze six-month baseline/follow-up pairing, CPA/SPIRO regimen assignment, protein filtering, within-regimen contrasts and between-regimen interaction with FDR policy.",
+        "broad_plan_fit": "component_only",
+        "broad_question_ids": [
+          "proteomics-metabolomics-01"
+        ],
+        "proposed_artifacts": [
+          "patient/time/regimen join",
+          "protein QC",
+          "paired within-regimen effects",
+          "regimen-by-time interaction",
+          "multiplicity"
+        ],
+        "scientific_gap": "Existing question covers paired abundance but lacks the between-regimen interaction as an explicit endpoint.",
+        "proposed_design_id": "biomni-design-08-longitudinal-protein-body"
+      }
     },
     {
       "task_id": "da-13-3",
@@ -424,7 +572,24 @@
       "mapped_stages": [
         "subject-level visit matching",
         "complete-pair measurement changes"
-      ]
+      ],
+      "endpoint_review": {
+        "question_sha256": "7c4165f833776e5ebd0681ddfc7e68d51315718da4a30c3eb147bd6b05b4fc0e",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [],
+        "decisions_to_freeze": "Freeze fat-percentage and breast-volume change definitions, paired visits, protein change measure, correlation model and correction across proteins/outcomes.",
+        "broad_plan_fit": "component_only",
+        "broad_question_ids": [
+          "proteomics-metabolomics-03"
+        ],
+        "proposed_artifacts": [
+          "paired protein and body-measure changes per subject",
+          "matched feature table",
+          "protein-outcome correlation estimates"
+        ],
+        "scientific_gap": "Cross-omics proposal does not specify paired clinical body measurements or subject-level change correlations.",
+        "proposed_design_id": "biomni-design-08-longitudinal-protein-body"
+      }
     },
     {
       "task_id": "da-13-5",
@@ -453,7 +618,24 @@
       "independent_data_sources": [],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "multi-study-concordance"
+      "workflow_family": "multi-study-concordance",
+      "endpoint_review": {
+        "question_sha256": "3bc2aa91c10c4171fc98750e89ee46b93f8fd5ca3ce767c584ddc518d1269a62",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [],
+        "decisions_to_freeze": "Freeze sex-associated external study, matched measured-protein universe, significance rules and direction for overlap with feminizing GAHT effects.",
+        "broad_plan_fit": "no_existing_question",
+        "broad_question_ids": [],
+        "proposed_artifacts": [
+          "within-study treatment protein effects",
+          "external sex-effect table",
+          "protein ID map",
+          "measured universe",
+          "overlap and direction-concordance table"
+        ],
+        "scientific_gap": "Meta-analysis question pools effects; this endpoint compares independent treatment and sex associations, which are distinct estimands.",
+        "proposed_design_id": "biomni-design-09-gaht-external-sex-concordance"
+      }
     },
     {
       "task_id": "da-13-6",
@@ -482,7 +664,23 @@
       "independent_data_sources": [],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "multi-study-concordance"
+      "workflow_family": "multi-study-concordance",
+      "endpoint_review": {
+        "question_sha256": "67d8c34c9503a5f373fd1bb1eaf5245b30a7e090fe1de5f42eeb63641bdb3e6f",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [],
+        "decisions_to_freeze": "Menopause and menopausal hormone therapy are distinct comparison groups; freeze external effect definitions, direction/scale harmonization and concordance metric.",
+        "broad_plan_fit": "no_existing_question",
+        "broad_question_ids": [],
+        "proposed_artifacts": [
+          "longitudinal protein effects",
+          "external hormone-treatment effects",
+          "harmonized IDs",
+          "effect-direction and size concordance"
+        ],
+        "scientific_gap": "Need explicit comparison-direction reconciliation; pooled meta-analysis is not equivalent.",
+        "proposed_design_id": "biomni-design-10-gaht-menopause-concordance"
+      }
     },
     {
       "task_id": "da-14-1",
@@ -511,7 +709,23 @@
       "independent_data_sources": [],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "signature-clustering"
+      "workflow_family": "signature-clustering",
+      "endpoint_review": {
+        "question_sha256": "e389f5bf51e58d310cbaabe06ff30d65d7736c01727cf81dfd6c7054bfd7198c",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [],
+        "decisions_to_freeze": "Freeze patient signature-score matrix, correlation/missingness policy, distance transform, hierarchical linkage and cluster-count rule.",
+        "broad_plan_fit": "no_existing_question",
+        "broad_question_ids": [],
+        "proposed_artifacts": [
+          "patient-signature score join",
+          "pairwise correlation matrix",
+          "chosen distance matrix",
+          "hierarchical tree and patient memberships"
+        ],
+        "scientific_gap": "Cluster the signatures using correlations across patients; patient clustering is a different endpoint. Freeze score orientation, distance and linkage.",
+        "proposed_design_id": "biomni-design-11-signature-clustering"
+      }
     },
     {
       "task_id": "da-14-3",
@@ -540,7 +754,25 @@
       "independent_data_sources": [],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "cell-composition"
+      "workflow_family": "cell-composition",
+      "endpoint_review": {
+        "question_sha256": "95fe2a829f198bcee6aa420ade40b4d249b35dcdeb18599f2a9c8382659e6156",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [],
+        "decisions_to_freeze": "Define the critically ill eligible population, immune subgroup assignment, missing labels and whether percentages sum to all eligible patients.",
+        "broad_plan_fit": "candidate_if_extended",
+        "broad_question_ids": [
+          "data-statistics-visualization-01"
+        ],
+        "proposed_artifacts": [
+          "eligibility and subgroup joins",
+          "unique-patient denominators",
+          "subgroup counts/proportions",
+          "missing-assignment accounting"
+        ],
+        "scientific_gap": "This is patient subgroup arithmetic, not single-cell composition despite its inventory family label.",
+        "proposed_design_id": "biomni-design-12-immune-subgroup-proportions"
+      }
     },
     {
       "task_id": "da-14-8",
@@ -571,7 +803,25 @@
       "independent_data_sources": [],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "gene-correlation"
+      "workflow_family": "gene-correlation",
+      "endpoint_review": {
+        "question_sha256": "5560a9a436a009bf68fdd87e625269cd1f76046834d0eb1518e7aaa5d8fda338",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [],
+        "decisions_to_freeze": "Define the exact myeloid detrimental and lymphoid protective gene sets, patient sample universe, normalization, all unique gene-pair correlations and aggregate/significance rule.",
+        "broad_plan_fit": "component_only",
+        "broad_question_ids": [
+          "gene-program-factorization-03"
+        ],
+        "proposed_artifacts": [
+          "patient and gene-set eligibility",
+          "normalized expression",
+          "all off-diagonal gene-pair correlations",
+          "set-level aggregate"
+        ],
+        "scientific_gap": "Coexpression-module question omits exhaustive within-set pair enumeration and self-correlation exclusion.",
+        "proposed_design_id": "biomni-design-13-within-gene-set-correlation"
+      }
     },
     {
       "task_id": "da-15-1",
@@ -619,7 +869,25 @@
         "replicate-aware negative-binomial estimation",
         "directional contrast and BH multiple testing"
       ],
-      "validation_scope": "Native input-reading oracle; full QC and gene tables; positive and changed-intermediate Harbor controls passed. This evidence covers the mapped operations on GSE60450, not the original benchmark task."
+      "validation_scope": "Native input-reading oracle; full QC and gene tables; positive and changed-intermediate Harbor controls passed. This evidence covers the mapped operations on GSE60450, not the original benchmark task.",
+      "endpoint_review": {
+        "question_sha256": "d19d567c3d697c1ce28e34ed94104dc65a6ff734862dae396dc9941463a6ad4a",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [],
+        "decisions_to_freeze": "Freeze ALS/control cervical spinal-cord cohort, count versus normalized expression, covariates, ranking statistic and FDR interpretation for \u201cdifferentially expressed.\u201d",
+        "broad_plan_fit": "component_only",
+        "broad_question_ids": [
+          "rna-seq-contrast-enrichment-03"
+        ],
+        "proposed_artifacts": [
+          "count and metadata QC",
+          "disease model design",
+          "complete differential table with FDR",
+          "ranked effects"
+        ],
+        "scientific_gap": "Current question studies filter/shrinkage/enrichment sensitivity, not a primary disease contrast and endpoint-specific interpretation.",
+        "proposed_design_id": "biomni-design-14-als-expression-duration"
+      }
     },
     {
       "task_id": "da-15-2",
@@ -650,7 +918,26 @@
       "independent_data_sources": [],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "coexpression-network"
+      "workflow_family": "coexpression-network",
+      "endpoint_review": {
+        "question_sha256": "fffb48c8ff9da045f0241f0779525100ad53172c2bc05fbdad1b4b506dc069f0",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [],
+        "decisions_to_freeze": "WGCNA requires sample outlier policy, soft-threshold choice, TOM/module parameters, module stability and what qualifies as ALS dysregulation beyond coexpression.",
+        "broad_plan_fit": "candidate_if_extended",
+        "broad_question_ids": [
+          "gene-program-factorization-03"
+        ],
+        "proposed_artifacts": [
+          "sample QC/outliers",
+          "soft-threshold power diagnostics",
+          "adjacency/TOM",
+          "modules/eigengenes",
+          "trait associations"
+        ],
+        "scientific_gap": "Must implement actual WGCNA on enough independent samples; graph checks on supplied edges are insufficient.",
+        "proposed_design_id": "biomni-design-15-als-wgcna"
+      }
     },
     {
       "task_id": "da-15-7",
@@ -680,7 +967,25 @@
       "independent_data_sources": [],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "clinical-association"
+      "workflow_family": "clinical-association",
+      "endpoint_review": {
+        "question_sha256": "690f5be507e1d05f9cba9b2e64dd65b8029806d573b58014e35714272c71269c",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [],
+        "decisions_to_freeze": "Disease duration is not progression rate by itself; freeze duration definition, confounders and gene-wise correlation/FDR before calling a predictive progression biomarker.",
+        "broad_plan_fit": "component_only",
+        "broad_question_ids": [
+          "data-statistics-visualization-02"
+        ],
+        "proposed_artifacts": [
+          "disease-cohort eligibility",
+          "patient duration join",
+          "expression QC",
+          "complete gene-wise correlation and multiplicity table"
+        ],
+        "scientific_gap": "Generic association question lacks high-dimensional gene-wise duration testing and duration-unit policy.",
+        "proposed_design_id": "biomni-design-14-als-expression-duration"
+      }
     },
     {
       "task_id": "da-15-8",
@@ -710,7 +1015,25 @@
       "independent_data_sources": [],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "multi-omics-concordance"
+      "workflow_family": "multi-omics-concordance",
+      "endpoint_review": {
+        "question_sha256": "91ac1f33d25159f7e9231ab662d6f3db9096d7a888d7227bdf1601908e04168f",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [],
+        "decisions_to_freeze": "Question requires concordant dysregulation in spinal-cord RNA, spinal-cord protein and CSF protein; freeze three-layer eligibility, gene-protein mapping, differential-effect directions and all-three intersection.",
+        "broad_plan_fit": "component_only",
+        "broad_question_ids": [
+          "multimodal-clinical-discovery-01"
+        ],
+        "proposed_artifacts": [
+          "tissue RNA and two protein assay effect tables",
+          "gene-protein map",
+          "common measured-feature universe",
+          "cross-assay direction concordance"
+        ],
+        "scientific_gap": "Cross-modal association question does not require differential-effect concordance across all three measured layers.",
+        "proposed_design_id": "biomni-design-16-three-layer-als-concordance"
+      }
     },
     {
       "task_id": "da-16-1",
@@ -740,7 +1063,27 @@
       "independent_data_sources": [],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "unsupervised-clinical-subtyping"
+      "workflow_family": "unsupervised-clinical-subtyping",
+      "endpoint_review": {
+        "question_sha256": "ab96fa100374884aaad6b7a7169cf64b73737b44c6776b98c4f4d879dfa7e7aa",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [
+          "GSE135251"
+        ],
+        "decisions_to_freeze": "Question allows PCA and/or hierarchical clustering; choose one reproducible subtype procedure, number of clusters, normalization, held-out versus descriptive status, and tests across fibrosis, NAS, NASH and early/moderate labels.",
+        "broad_plan_fit": "component_only",
+        "broad_question_ids": [
+          "multimodal-clinical-discovery-02"
+        ],
+        "proposed_artifacts": [
+          "expression normalization/PCA or dendrogram",
+          "prespecified cluster choice",
+          "patient assignment",
+          "clinical trait enrichment"
+        ],
+        "scientific_gap": "Existing question requires replication in held-out patients, while this endpoint first requires unsupervised expression subtyping and trait association without outcome-guided cluster selection.",
+        "proposed_design_id": "biomni-design-17-expression-subtyping"
+      }
     },
     {
       "task_id": "da-17-1",
@@ -771,7 +1114,25 @@
       "independent_data_sources": [],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "cell-composition"
+      "workflow_family": "cell-composition",
+      "endpoint_review": {
+        "question_sha256": "2c83b895ff4008ea9376d1c11e3f787ee35c2d34d206d7052818adaeba40ec23",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [],
+        "decisions_to_freeze": "Freeze circulating immune-cell annotation, patient denominators, SLE/control replicate eligibility and correction across tested populations.",
+        "broad_plan_fit": "candidate_if_extended",
+        "broad_question_ids": [
+          "single-cell-composition-01"
+        ],
+        "proposed_artifacts": [
+          "cell QC and labels",
+          "patient denominators",
+          "disease-group fraction contrasts",
+          "multiple-testing table"
+        ],
+        "scientific_gap": "Must use biological patients as replicates and include all tested populations.",
+        "proposed_design_id": "biomni-design-18-sle-cell-composition"
+      }
     },
     {
       "task_id": "da-17-3",
@@ -800,7 +1161,25 @@
       "independent_data_sources": [],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "celltype-differential-expression"
+      "workflow_family": "celltype-differential-expression",
+      "endpoint_review": {
+        "question_sha256": "e3c733f6e57b730c067f6692d9abb25c0a612b3a15949ecbae6bfa26025df53f",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [],
+        "decisions_to_freeze": "Freeze classical-monocyte gate, donor count aggregation, SLE/control design, eligible genes and differential/FDR rule.",
+        "broad_plan_fit": "candidate_if_extended",
+        "broad_question_ids": [
+          "single-cell-pseudobulk-01"
+        ],
+        "proposed_artifacts": [
+          "monocyte selection",
+          "donor-level count aggregates",
+          "design/QC",
+          "full disease-effect and FDR table"
+        ],
+        "scientific_gap": "Must fit donor-level pseudobulk or justified repeated-measure model.",
+        "proposed_design_id": "biomni-design-19-sle-monocyte-pseudobulk"
+      }
     },
     {
       "task_id": "da-17-5",
@@ -829,7 +1208,23 @@
       "independent_data_sources": [],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "composition-interaction"
+      "workflow_family": "composition-interaction",
+      "endpoint_review": {
+        "question_sha256": "da453c95235b5db2b9e84edb9bcab9b4f78e9c143d22f857ef3d2fe2da201632",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [],
+        "decisions_to_freeze": "Asian versus European ancestry interaction requires group representation, patient-frequency denominators, ancestry coding and a direct disease-by-ancestry interaction rather than separate significance calls.",
+        "broad_plan_fit": "no_existing_question",
+        "broad_question_ids": [],
+        "proposed_artifacts": [
+          "patient-level cell-frequency table",
+          "diagnosis/ancestry design",
+          "interaction coefficients and within-group contrasts",
+          "FDR table"
+        ],
+        "scientific_gap": "Proposed composition interaction is genotype-by-treatment, not diagnosis-by-ancestry; interaction estimand and represented cells differ.",
+        "proposed_design_id": "biomni-design-18-sle-cell-composition"
+      }
     },
     {
       "task_id": "da-18-1",
@@ -859,7 +1254,25 @@
       "independent_data_sources": [],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "cohort-mutation-landscape"
+      "workflow_family": "cohort-mutation-landscape",
+      "endpoint_review": {
+        "question_sha256": "9debec0891e91c15d6eef2718ea94aae54cb2e0d2201f941279ffa13edc8b955",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [],
+        "decisions_to_freeze": "Freeze the four named HR/HER2 receptor subtypes, patient/sample duplicate rule, mutation eligibility, subtype denominators and which landscape summaries count as differences.",
+        "broad_plan_fit": "candidate_if_extended",
+        "broad_question_ids": [
+          "clinical-variant-cohort-01"
+        ],
+        "proposed_artifacts": [
+          "normalized patient-gene alteration matrix",
+          "receptor subtype and sample eligibility",
+          "subtype denominators",
+          "frequency comparisons"
+        ],
+        "scientific_gap": "Must merge multiple samples per patient and freeze mutation eligibility.",
+        "proposed_design_id": "biomni-design-20-breast-subtype-mutation-landscape"
+      }
     },
     {
       "task_id": "da-18-5",
@@ -890,7 +1303,26 @@
       "independent_data_sources": [],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "pathway-mutation-burden"
+      "workflow_family": "pathway-mutation-burden",
+      "endpoint_review": {
+        "question_sha256": "32d2bedfc3c8c89cc886771989abc93b1cca10c5fc3fa6abf9517d8a47a6e052",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [],
+        "decisions_to_freeze": "Freeze \u201cpost-hormonal therapy\u201d timing, HR+HER2- eligibility, MAPK pathway gene set, qualifying alteration types and patient-union prevalence.",
+        "broad_plan_fit": "component_only",
+        "broad_question_ids": [
+          "clinical-variant-cohort-02"
+        ],
+        "proposed_artifacts": [
+          "therapy-timed eligible patient set",
+          "pathway membership",
+          "qualifying alterations",
+          "unique affected-patient union",
+          "prevalence denominator"
+        ],
+        "scientific_gap": "Gene-burden mask question does not itself require pathway-union prevalence or treatment timing.",
+        "proposed_design_id": "biomni-design-21-endocrine-resistance-events"
+      }
     },
     {
       "task_id": "da-18-7",
@@ -920,7 +1352,23 @@
       "independent_data_sources": [],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "mutation-cooccurrence"
+      "workflow_family": "mutation-cooccurrence",
+      "endpoint_review": {
+        "question_sha256": "f60578de329e3d6f41350eb47b8cc0e070ab0b2c9aa290abedec8bb79c4d614b",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [],
+        "decisions_to_freeze": "Freeze ESR1 and MAPK event definitions, shared post-therapy HR+HER2- patient universe including double negatives, and exact exclusivity/cooccurrence test.",
+        "broad_plan_fit": "no_existing_question",
+        "broad_question_ids": [],
+        "proposed_artifacts": [
+          "eligible patient universe",
+          "binary mutation events",
+          "full 2x2 contingency including double negatives",
+          "exclusivity/cooccurrence statistic"
+        ],
+        "scientific_gap": "Current variant/cohort questions omit joint-event contingency testing.",
+        "proposed_design_id": "biomni-design-21-endocrine-resistance-events"
+      }
     },
     {
       "task_id": "da-19-1",
@@ -968,7 +1416,41 @@
         "replicate-aware negative-binomial estimation",
         "directional contrast and BH multiple testing"
       ],
-      "validation_scope": "Native input-reading oracle; full QC and gene tables; positive and changed-intermediate Harbor controls passed. This evidence covers the mapped operations on GSE60450, not the original benchmark task."
+      "validation_scope": "Native input-reading oracle; full QC and gene tables; positive and changed-intermediate Harbor controls passed. This evidence covers the mapped operations on GSE60450, not the original benchmark task.",
+      "endpoint_review": {
+        "question_sha256": "a0f027d02462fa7c1e6598d504a1c5eb06bc894d6218bf26aadeb2c30d845af3",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [
+          "GSE101788",
+          "GSM2715529",
+          "GSM2715531",
+          "GSM2715532",
+          "GSM2715534",
+          "GSM2715535",
+          "GSM2715536",
+          "GSM2715537",
+          "GSM2715538",
+          "GSM2715539",
+          "GSM2715540",
+          "GSM2715541",
+          "GSM2715542",
+          "GSM2715543",
+          "GSM2715544"
+        ],
+        "decisions_to_freeze": "Freeze AI-10-49 treated/vehicle inv(16) AML design, count normalization, downregulation direction, adjusted significance and \u201cmost\u201d ranking rule.",
+        "broad_plan_fit": "component_only",
+        "broad_question_ids": [
+          "rna-seq-contrast-enrichment-03"
+        ],
+        "proposed_artifacts": [
+          "matched treatment sample design",
+          "count QC",
+          "full differential effect/FDR table",
+          "ranked downregulated genes"
+        ],
+        "scientific_gap": "Filtering/shrinkage question is ancillary; a treatment-specific differential-contrast question is still needed.",
+        "proposed_design_id": "biomni-design-22-aml-treatment-rna"
+      }
     },
     {
       "task_id": "da-19-3",
@@ -999,7 +1481,43 @@
       "independent_data_sources": [],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "chromatin-differential-binding"
+      "workflow_family": "chromatin-differential-binding",
+      "endpoint_review": {
+        "question_sha256": "6eadfffcecee3f6ebafc96fd2ce4986b26b25e446c904d3126f0def2bcc09dcf",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [
+          "GSE101788",
+          "GSM27155",
+          "GSM2715529",
+          "GSM2715531",
+          "GSM2715532",
+          "GSM2715534",
+          "GSM2715535",
+          "GSM2715536",
+          "GSM2715537",
+          "GSM2715538",
+          "GSM2715539",
+          "GSM2715540",
+          "GSM2715541",
+          "GSM2715542",
+          "GSM2715543",
+          "GSM2715544"
+        ],
+        "decisions_to_freeze": "Freeze RUNX1 ChIP replicate/control eligibility, consensus peak universe, occupancy model and genome annotation; inferred mediation of treatment effect is not established by occupancy alone.",
+        "broad_plan_fit": "candidate_if_extended",
+        "broad_question_ids": [
+          "differential-binding-01"
+        ],
+        "proposed_artifacts": [
+          "alignment/control QC",
+          "consensus regions",
+          "fragment counts",
+          "normalized design",
+          "complete differential occupancy table"
+        ],
+        "scientific_gap": "Needs real signal/control libraries with replicates, not peak-score thresholding.",
+        "proposed_design_id": "biomni-design-23-aml-transcription-factor-occupancy"
+      }
     },
     {
       "task_id": "da-19-4",
@@ -1030,7 +1548,42 @@
       "independent_data_sources": [],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "chromatin-differential-binding"
+      "workflow_family": "chromatin-differential-binding",
+      "endpoint_review": {
+        "question_sha256": "2d4b1336db08e02fae17e7f90f7f4e6adaab68d5215794e5417d0c3413e51b37",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [
+          "GSE101788",
+          "GSM27155",
+          "GSM2715529",
+          "GSM2715531",
+          "GSM2715532",
+          "GSM2715534",
+          "GSM2715535",
+          "GSM2715536",
+          "GSM2715537",
+          "GSM2715538",
+          "GSM2715539",
+          "GSM2715540",
+          "GSM2715541",
+          "GSM2715542",
+          "GSM2715543",
+          "GSM2715544"
+        ],
+        "decisions_to_freeze": "Freeze enhancer definition, H3K27ac signal/control normalization, treatment replicates and threshold/ranking for decreased regions.",
+        "broad_plan_fit": "candidate_if_extended",
+        "broad_question_ids": [
+          "differential-binding-01"
+        ],
+        "proposed_artifacts": [
+          "enhancer definition",
+          "signal/control fragment matrix",
+          "normalized differential enrichment",
+          "ranked decreased enhancers"
+        ],
+        "scientific_gap": "Same binding core but distinct enhancer universe, control correction and direction-specific rank.",
+        "proposed_design_id": "biomni-design-24-aml-enhancer-acetylation"
+      }
     },
     {
       "task_id": "da-19-6",
@@ -1061,7 +1614,43 @@
       "independent_data_sources": [],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "chromatin-accessibility"
+      "workflow_family": "chromatin-accessibility",
+      "endpoint_review": {
+        "question_sha256": "10bf6d0cff1302d305b6fd2c9f75806216d9e33447116c7348dac7a40f3cca31",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [
+          "GSE101788",
+          "GSM27155",
+          "GSM2715529",
+          "GSM2715531",
+          "GSM2715532",
+          "GSM2715534",
+          "GSM2715535",
+          "GSM2715536",
+          "GSM2715537",
+          "GSM2715538",
+          "GSM2715539",
+          "GSM2715540",
+          "GSM2715541",
+          "GSM2715542",
+          "GSM2715543",
+          "GSM2715544"
+        ],
+        "decisions_to_freeze": "\u201cGlobal changes\u201d in ATAC accessibility needs a prespecified distributional statistic and normalization reference; relative library normalization cannot establish an absolute global shift.",
+        "broad_plan_fit": "component_only",
+        "broad_question_ids": [
+          "chromatin-regulatory-01"
+        ],
+        "proposed_artifacts": [
+          "ATAC library QC",
+          "common regions",
+          "fragment counts",
+          "normalized distributions",
+          "differential regions with uncertainty"
+        ],
+        "scientific_gap": "Accessibility question lacks a defensible global-shift estimand/reference strategy; relative normalized counts cannot prove absolute global change.",
+        "proposed_design_id": "biomni-design-25-aml-atac-global-shift"
+      }
     },
     {
       "task_id": "da-20-1",
@@ -1091,7 +1680,23 @@
       "independent_data_sources": [],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "transcriptome-similarity"
+      "workflow_family": "transcriptome-similarity",
+      "endpoint_review": {
+        "question_sha256": "76ccbbef39bede02e13c02304bd7426f6e0e8ba7052b4eaec0c2fc613f5879ca",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [],
+        "decisions_to_freeze": "Freeze untreated baseline-only samples for four primary cell types, gene universe, normalization, correlation/PCA metric and similarity ranking.",
+        "broad_plan_fit": "no_existing_question",
+        "broad_question_ids": [],
+        "proposed_artifacts": [
+          "baseline-only sample eligibility",
+          "normalized comparable-gene matrix",
+          "sample correlation/PCA",
+          "cell-type group comparison"
+        ],
+        "scientific_gap": "Gene-program factorization is not a sample-similarity endpoint; baseline/treatment selection matters.",
+        "proposed_design_id": "biomni-design-26-primary-cell-baseline-similarity"
+      }
     },
     {
       "task_id": "da-20-3",
@@ -1121,7 +1726,25 @@
       "independent_data_sources": [],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "perturbation-enrichment"
+      "workflow_family": "perturbation-enrichment",
+      "endpoint_review": {
+        "question_sha256": "905cf665141f9418963b94e22679a90346794e452920d2a986ecd8657883aa19",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [],
+        "decisions_to_freeze": "Question asks suppressed MSigDB Hallmark pathways for BFA across cell types; freeze within-type contrasts, signed ranked versus overrepresentation enrichment, Hallmark version and cross-type consistency rule.",
+        "broad_plan_fit": "component_only",
+        "broad_question_ids": [
+          "rna-seq-contrast-enrichment-02"
+        ],
+        "proposed_artifacts": [
+          "cell-type treatment contrasts",
+          "ranked gene lists",
+          "frozen gene-set universe",
+          "enrichment and across-type direction table"
+        ],
+        "scientific_gap": "Single/combined perturbation across environments differs from within-cell-type treatment enrichment; ranked versus ORA rule must be fixed.",
+        "proposed_design_id": "biomni-design-27-primary-cell-pathway-response"
+      }
     },
     {
       "task_id": "da-20-4",
@@ -1179,7 +1802,25 @@
         "fit a full-rank population-by-stage model",
         "estimate within-population contrasts and directly test a difference in response",
         "report all fitted genes, uncertainty, BH decisions, design and contrasts"
-      ]
+      ],
+      "endpoint_review": {
+        "question_sha256": "be8d4c6c7417e1dbc1c7f21ab3f3ac1243f77859eb9f7337f2e3947c86b1e2c1",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [],
+        "decisions_to_freeze": "Question asks dabrafenib consistency across four primary cell types; freeze dose/time/vehicle matching, within-type responses, interaction/divergence statistic and gene/pathway decision rule.",
+        "broad_plan_fit": "component_only",
+        "broad_question_ids": [
+          "rna-seq-contrast-enrichment-01"
+        ],
+        "proposed_artifacts": [
+          "raw HDF5 UMI count/sample ID join",
+          "four-cell-type dose-time-vehicle design",
+          "full within-type and interaction effects",
+          "endpoint outputs"
+        ],
+        "scientific_gap": "Current two-population stage GLM lacks four human cell types, compound doses, timepoints and matched vehicle controls.",
+        "proposed_design_id": "biomni-design-28-primary-cell-compound-divergence"
+      }
     },
     {
       "task_id": "da-24-3",
@@ -1209,7 +1850,23 @@
       "independent_data_sources": [],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "cross-trait-genetics"
+      "workflow_family": "cross-trait-genetics",
+      "endpoint_review": {
+        "question_sha256": "4f267ecefffc4531a98de73059c7280efd5f6b0f10aae4ec5ee2fb2e9e7a644d",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [],
+        "decisions_to_freeze": "The question only says \u201cfind share genetic factors among different metabolites\u201d from GWAS summaries; traits, harmonization, LD/ancestry, and whether overlap, genetic correlation or colocalization is intended are unspecified. Treat endpoint as insufficiently specified.",
+        "broad_plan_fit": "no_existing_question",
+        "broad_question_ids": [],
+        "proposed_artifacts": [
+          "allele-harmonized GWAS summaries",
+          "ancestry/LD/sample-overlap audit",
+          "shared loci",
+          "specified cross-trait statistic"
+        ],
+        "scientific_gap": "The question does not choose locus overlap, genetic correlation or colocalization. Select and name an authored analysis; preserve this source ambiguity and do not claim exact endpoint equivalence.",
+        "proposed_design_id": "biomni-design-29-cross-trait-gwas-alternatives"
+      }
     },
     {
       "task_id": "da-25-1",
@@ -1240,7 +1897,29 @@
       "independent_data_sources": [],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "mutation-clinical-association"
+      "workflow_family": "mutation-clinical-association",
+      "endpoint_review": {
+        "question_sha256": "b9a89af511477cbbd9382f3c778e020dff950169a060169516f294f8634a4509",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [
+          "GSE118435",
+          "GSE120741",
+          "GSE126078"
+        ],
+        "decisions_to_freeze": "Freeze TCGA cohort, pathogenic/oncogenic evidence version, patient-gene collapse, \u201ctop\u201d cutoff, clinical T-stage encoding, multiple testing and required visualization data.",
+        "broad_plan_fit": "candidate_if_extended",
+        "broad_question_ids": [
+          "clinical-variant-cohort-01"
+        ],
+        "proposed_artifacts": [
+          "frozen clinical-significance annotations",
+          "patient-gene event matrix",
+          "prevalence ranking",
+          "stage design and tests with multiplicity"
+        ],
+        "scientific_gap": "Must keep stage encoding and patient denominators; ranking alone is a component.",
+        "proposed_design_id": "biomni-design-30-tumor-variant-stage"
+      }
     },
     {
       "task_id": "da-26-2",
@@ -1271,7 +1950,25 @@
       "independent_data_sources": [],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "dependency-association"
+      "workflow_family": "dependency-association",
+      "endpoint_review": {
+        "question_sha256": "ac544713a097b57d539221de482a69f4a2e2d394599095e8e6795206fe8535e8",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [],
+        "decisions_to_freeze": "Clarify how patient-level DepMap scores are obtained or imputed, train/test separation, BRCA sample matching, significance comparison across patient and cell-line cohorts, and direct heterogeneity test.",
+        "broad_plan_fit": "candidate_if_extended",
+        "broad_question_ids": [
+          "target-evidence-02"
+        ],
+        "proposed_artifacts": [
+          "aligned expression/dependency matrices",
+          "separate patient and cell-line analyses",
+          "associations/FDR",
+          "cross-cohort heterogeneity"
+        ],
+        "scientific_gap": "Nonsignificance in one cohort is not a difference; require direct heterogeneity comparison and leakage controls.",
+        "proposed_design_id": "biomni-design-31-patient-cell-line-dependency"
+      }
     },
     {
       "task_id": "da-26-4",
@@ -1303,7 +2000,27 @@
       "independent_data_sources": [],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "synthetic-lethality-prioritization"
+      "workflow_family": "synthetic-lethality-prioritization",
+      "endpoint_review": {
+        "question_sha256": "bade8bd365c8a09121ff71f82d5e1b0a3c5db637203ab493e0d382c420026b34",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [],
+        "decisions_to_freeze": "Freeze loss-of-function eligibility, patient dependency score provenance, nested-CV lasso, exclusivity test, paralog/PPI prior versions and how translational relevance is ranked without causal overclaim.",
+        "broad_plan_fit": "component_only",
+        "broad_question_ids": [
+          "target-evidence-01",
+          "target-evidence-02"
+        ],
+        "proposed_artifacts": [
+          "aligned multiomics/dependency/mutation inputs",
+          "nested-CV lasso predictions",
+          "exclusivity tests",
+          "independent paralog/PPI priors",
+          "candidate rank"
+        ],
+        "scientific_gap": "Target evidence questions omit the connected synthetic-lethality prediction and mutation-exclusivity pipeline.",
+        "proposed_design_id": "biomni-design-32-synthetic-lethality-ranking"
+      }
     },
     {
       "task_id": "da-3-4",
@@ -1332,7 +2049,27 @@
       "independent_data_sources": [],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "clinical-association"
+      "workflow_family": "clinical-association",
+      "endpoint_review": {
+        "question_sha256": "d6646e41a209b982d8d79c0fabd9d2b583db6bd22fb180d55fd220e56fd1ca29",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [
+          "GSE78220"
+        ],
+        "decisions_to_freeze": "Freeze tumor mutational load assay/callable territory, patient response definition, one patient per observation, chosen association test and uncertainty metric.",
+        "broad_plan_fit": "component_only",
+        "broad_question_ids": [
+          "clinical-variant-cohort-01",
+          "clinical-response-model-01"
+        ],
+        "proposed_artifacts": [
+          "patient-unique mutation burden with callable territory",
+          "response join",
+          "association effect and uncertainty"
+        ],
+        "scientific_gap": "Neither generic question combines assay-comparable burden derivation with response association and patient replication.",
+        "proposed_design_id": "biomni-design-33-mutation-burden-response"
+      }
     },
     {
       "task_id": "da-3-5",
@@ -1362,7 +2099,25 @@
       "independent_data_sources": [],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "mutation-cooccurrence"
+      "workflow_family": "mutation-cooccurrence",
+      "endpoint_review": {
+        "question_sha256": "1b54052756f43c9bdc7b13a98f440d62293e807c8f2aa0efb43b835ebc05d79a",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [
+          "GSE78220"
+        ],
+        "decisions_to_freeze": "\u201cSupplementary Table 1D\u201d is a source pointer without a pinned eligible patient universe here; freeze variant identity, responder counts including mutation-negative controls, sparse test and multiplicity.",
+        "broad_plan_fit": "no_existing_question",
+        "broad_question_ids": [],
+        "proposed_artifacts": [
+          "patient mutation event matrix",
+          "response eligibility",
+          "per-mutation 2x2 enrichment",
+          "multiplicity table"
+        ],
+        "scientific_gap": "Mutation cooccurrence is not response enrichment; controls and sparse-table rule must be specified.",
+        "proposed_design_id": "biomni-design-33-mutation-burden-response"
+      }
     },
     {
       "task_id": "da-4-1",
@@ -1392,7 +2147,27 @@
       "independent_data_sources": [],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "matrix-factorization-subtyping"
+      "workflow_family": "matrix-factorization-subtyping",
+      "endpoint_review": {
+        "question_sha256": "b5ab3639ee0c5630baf085f30ff2145bdc2fd2cdf4f1f11a92d5e5f1acdba9fc",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [
+          "GSE243013"
+        ],
+        "decisions_to_freeze": "Freeze tumor immune-composition normalization, NMF rank search/restarts, reconstruction/stability criterion and patient classification uncertainty.",
+        "broad_plan_fit": "component_only",
+        "broad_question_ids": [
+          "multimodal-clinical-discovery-02"
+        ],
+        "proposed_artifacts": [
+          "patient nonnegative composition matrix",
+          "NMF rank sweep/restarts",
+          "stability/reconstruction",
+          "subtype membership"
+        ],
+        "scientific_gap": "Held-out subtype replication question is downstream; no current task specifies NMF rank/stability on cell composition.",
+        "proposed_design_id": "biomni-design-34-immune-composition-nmf"
+      }
     },
     {
       "task_id": "da-4-6",
@@ -1432,7 +2207,27 @@
       "mapped_stages": [
         "eligible patient denominator",
         "censoring-aware survival estimation"
-      ]
+      ],
+      "endpoint_review": {
+        "question_sha256": "c15f6d1578f2e144cc87e8dc7ac2790a87d178bdd0a92f0ecb30142a8ff609ac",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [
+          "GSE243013"
+        ],
+        "decisions_to_freeze": "Freeze non-MPR cohort, Texp \u201chigh\u201d cutoff chosen without survival outcomes, favorable recurrence-free-survival definition, censoring and numerator/denominator for requested proportion.",
+        "broad_plan_fit": "candidate_if_extended",
+        "broad_question_ids": [
+          "clinical-survival-01"
+        ],
+        "proposed_artifacts": [
+          "eligible response/cell-score/survival join",
+          "prespecified strata",
+          "time/censoring",
+          "recurrence comparison"
+        ],
+        "scientific_gap": "Cutoff must be fixed before outcomes; keep eligible denominator and censoring.",
+        "proposed_design_id": "biomni-design-35-cell-score-survival"
+      }
     },
     {
       "task_id": "da-4-7",
@@ -1463,7 +2258,27 @@
       "independent_data_sources": [],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "repertoire-sharing"
+      "workflow_family": "repertoire-sharing",
+      "endpoint_review": {
+        "question_sha256": "3c6b8bda734ff17cfec8cba10b3e5d3b7883b46a50e430d890ca0644dae05674",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [
+          "GSE243013"
+        ],
+        "decisions_to_freeze": "Freeze productive paired-chain/CDR3 clonotype and expansion thresholds, repeated-cell collapse and distinct-patient sharing; TCR-T therapeutic suitability remains unvalidated.",
+        "broad_plan_fit": "candidate_if_extended",
+        "broad_question_ids": [
+          "immune-repertoire-02"
+        ],
+        "proposed_artifacts": [
+          "productive chain/CDR3 QC",
+          "clonotypes and expansion calls",
+          "cell-state join",
+          "patient-sharing counts"
+        ],
+        "scientific_gap": "Need paired-chain and expansion definitions; repeated cells do not constitute distinct patients.",
+        "proposed_design_id": "biomni-design-36-shared-expanded-tcr"
+      }
     },
     {
       "task_id": "da-5-1",
@@ -1494,7 +2309,25 @@
       "independent_data_sources": [],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "multi-omics-target-prioritization"
+      "workflow_family": "multi-omics-target-prioritization",
+      "endpoint_review": {
+        "question_sha256": "0f8be1b1ead03df3195ad3ded4810c4c6fbc35cfbe98f2f8ba05e417aa483af2",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [],
+        "decisions_to_freeze": "Freeze PDAC tumor/normal protein contrast, gene/protein mapping, CRISPR dependency threshold, cell-line relevance and druggability evidence version.",
+        "broad_plan_fit": "candidate_if_extended",
+        "broad_question_ids": [
+          "target-evidence-01"
+        ],
+        "proposed_artifacts": [
+          "tumor-normal protein contrast",
+          "protein-gene mapping",
+          "independent dependency scores",
+          "druggability rank"
+        ],
+        "scientific_gap": "Must keep isoform ambiguity and explicitly define dependency and druggability thresholds.",
+        "proposed_design_id": "biomni-design-37-tumor-protein-dependency-targets"
+      }
     },
     {
       "task_id": "da-5-3",
@@ -1525,7 +2358,25 @@
       "independent_data_sources": [],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "phosphoproteomics-target-prioritization"
+      "workflow_family": "phosphoproteomics-target-prioritization",
+      "endpoint_review": {
+        "question_sha256": "48535bc348ac83d4d88751aff5d42d67ec0273551cf792d84f5f30adeb22cef3",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [],
+        "decisions_to_freeze": "Freeze activating phosphosite positions/localization, tumor/normal site-level testing, host-gene dependency in matched lines, druggability version and protein-abundance confounding.",
+        "broad_plan_fit": "component_only",
+        "broad_question_ids": [
+          "target-evidence-01"
+        ],
+        "proposed_artifacts": [
+          "phosphosite QC/normalization",
+          "site-level tumor-normal effects",
+          "localization/activating-site annotation",
+          "dependency/druggability join"
+        ],
+        "scientific_gap": "Generic target evidence omits residue-level localization and protein-abundance confounding.",
+        "proposed_design_id": "biomni-design-38-activating-phosphosite-targets"
+      }
     },
     {
       "task_id": "da-6-2",
@@ -1555,7 +2406,25 @@
       "independent_data_sources": [],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "longitudinal-expression"
+      "workflow_family": "longitudinal-expression",
+      "endpoint_review": {
+        "question_sha256": "b15e788a5b6276849a554d2d30ce59a11a9851b25b1148104775a5f8f4b7b0fe",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [],
+        "decisions_to_freeze": "Freeze 8-week timepoints, participant pairing, sex-by-time model, trajectory clustering and criterion for shared versus sex-specific temporal patterns.",
+        "broad_plan_fit": "candidate_if_extended",
+        "broad_question_ids": [
+          "rna-seq-contrast-enrichment-04"
+        ],
+        "proposed_artifacts": [
+          "sex/time/subject join",
+          "temporal design and interaction effects",
+          "trajectory clusters",
+          "FDR table"
+        ],
+        "scientific_gap": "Must establish repeated versus independent sampling and test sex-by-time, not only stratify by sex.",
+        "proposed_design_id": "biomni-design-39-muscle-sex-timecourse"
+      }
     },
     {
       "task_id": "da-6-5",
@@ -1584,7 +2453,23 @@
       "independent_data_sources": [],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "cross-tissue-response"
+      "workflow_family": "cross-tissue-response",
+      "endpoint_review": {
+        "question_sha256": "f6df076241c574a9dc77f477466e78e1a3d84c331b3127451fdaffa5b0635a89",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [],
+        "decisions_to_freeze": "Freeze organs, training time/controls, within-tissue change estimands, shared measured-feature universe and tissue-similarity metric; baseline similarities do not answer the question.",
+        "broad_plan_fit": "no_existing_question",
+        "broad_question_ids": [],
+        "proposed_artifacts": [
+          "tissue-specific training-effect models",
+          "molecular ID harmonization",
+          "measured-universe differences",
+          "tissue similarity clusters"
+        ],
+        "scientific_gap": "Baseline tissue clustering is not training-response similarity; clinical response model is a wrong scientific route.",
+        "proposed_design_id": "biomni-design-40-multi-organ-training-response"
+      }
     },
     {
       "task_id": "da-8-1",
@@ -1617,7 +2502,24 @@
       "independent_data_sources": [],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "adjusted-cohort-association"
+      "workflow_family": "adjusted-cohort-association",
+      "endpoint_review": {
+        "question_sha256": "f470e6624712b81fbc1ccbd24e4456f3306aca6e827a4c5b6f490763719247ab",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [],
+        "decisions_to_freeze": "Question fixes bread-spiker as above-median subject mean unmitigated bread-meal rise, age/BMI adjustment, positive systolic-BP association and top 10; still freeze glucose time window, replicate weighting, median ties and multiplicity/significance threshold.",
+        "broad_plan_fit": "no_existing_question",
+        "broad_question_ids": [],
+        "proposed_artifacts": [
+          "meal trace baseline/peak rises",
+          "subject aggregation",
+          "prespecified cohort threshold",
+          "metabolomics/covariate joins",
+          "adjusted regression"
+        ],
+        "scientific_gap": "Binary response question omits meal-level phenotype derivation and metabolomic association after thresholded cohort selection.",
+        "proposed_design_id": "biomni-design-41-bread-spiker-metabolites"
+      }
     },
     {
       "task_id": "da-8-2",
@@ -1646,7 +2548,23 @@
       "independent_data_sources": [],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "crossover-interaction"
+      "workflow_family": "crossover-interaction",
+      "endpoint_review": {
+        "question_sha256": "47e78bc1f1167e556c6c834c72ae30bc21365e39ccea272a065fff20b2b5d65d",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [],
+        "decisions_to_freeze": "Freeze baseline insulin-resistance classification, protein/fiber preload challenge pairing, peak glucose reduction baseline, interaction scale/model and uncertainty.",
+        "broad_plan_fit": "no_existing_question",
+        "broad_question_ids": [],
+        "proposed_artifacts": [
+          "participant-paired challenge traces",
+          "baseline-adjusted peak reductions",
+          "metabolic status",
+          "preload-by-status interaction"
+        ],
+        "scientific_gap": "Requires crossover/repeated-participant model, not ordinal clinical response or unpaired means.",
+        "proposed_design_id": "biomni-design-42-crossover-preload-interaction"
+      }
     },
     {
       "task_id": "da-8-3",
@@ -1677,7 +2595,23 @@
       "independent_data_sources": [],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "metabolomics-mediation"
+      "workflow_family": "metabolomics-mediation",
+      "endpoint_review": {
+        "question_sha256": "61ede88367ecc2857df04f672480af34f92981a9a74221e0cf5c18d2f783a7ca",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [],
+        "decisions_to_freeze": "Freeze potato/grape-spiker phenotype definitions, top-10 differential metabolite ranking, lipid identity, mediator/outcome temporal order and indirect-effect assumptions; observational mediation is not causal proof.",
+        "broad_plan_fit": "no_existing_question",
+        "broad_question_ids": [],
+        "proposed_artifacts": [
+          "participant phenotype",
+          "differential metabolites/FDR",
+          "mediator/outcome models",
+          "indirect-effect estimates and sensitivity"
+        ],
+        "scientific_gap": "Proteomics/metabolomics association question does not cover mediation assumptions or indirect effects.",
+        "proposed_design_id": "biomni-design-43-metabolite-mediation"
+      }
     },
     {
       "task_id": "da-9-1",
@@ -1718,7 +2652,25 @@
       "mapped_stages": [
         "censoring-aware survival estimation",
         "adjusted Cox model fitting"
-      ]
+      ],
+      "endpoint_review": {
+        "question_sha256": "2b14fcdea310d72c3e9283fccb7ae5edfbdbfe6c310652dfc74a2981ee6c098d",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [],
+        "decisions_to_freeze": "Freeze nivo/chemo cohort, baseline T-cell frequencies, 1-year overall-survival estimand for censored patients, biomarker cutoff/model and multiplicity.",
+        "broad_plan_fit": "candidate_if_extended",
+        "broad_question_ids": [
+          "clinical-survival-01"
+        ],
+        "proposed_artifacts": [
+          "baseline treatment cohort",
+          "patient cell frequencies",
+          "survival time/censoring",
+          "complete biomarker models/FDR"
+        ],
+        "scientific_gap": "Do not classify censored cases without one-year follow-up; threshold selection must not use outcomes.",
+        "proposed_design_id": "biomni-design-44-baseline-tcell-survival"
+      }
     },
     {
       "task_id": "da-9-7",
@@ -1749,7 +2701,47 @@
       "independent_data_sources": [],
       "validation_evidence": [],
       "runtime_seconds": null,
-      "workflow_family": "cross-omics-correlation"
+      "workflow_family": "cross-omics-correlation",
+      "endpoint_review": {
+        "question_sha256": "bed4a95c44a1b80025cc0dd228e57fa21c9891b08dcc3b0222b446e2f6f85f1d",
+        "inspection_tier": "question-endpoint-reviewed",
+        "benchmark_source_accessions": [],
+        "decisions_to_freeze": "Question fixes on-treatment C2D1; freeze matched patient/visit universe, immune/protein QC, correlation metric and full pairwise multiplicity.",
+        "broad_plan_fit": "candidate_if_extended",
+        "broad_question_ids": [
+          "proteomics-metabolomics-03"
+        ],
+        "proposed_artifacts": [
+          "same-patient same-visit immune/protein table",
+          "QC",
+          "all pairwise associations and FDR"
+        ],
+        "scientific_gap": "Preserve visit identity, patient-level independence and common eligible set.",
+        "proposed_design_id": "biomni-design-45-on-treatment-immune-protein"
+      }
     }
-  ]
+  ],
+  "question_review": {
+    "source_url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+    "revision": "e1c8ca5e11a620087bc48d97888eb69176a1f235",
+    "metadata_sha256": "dd6389d227db87982d406d278c4147a32fcfc17886e6acf6637d1d9c981dc7ab",
+    "reviewed_questions": 50,
+    "fields_read": [
+      "id",
+      "question",
+      "accessions"
+    ],
+    "answers_or_biological_fixtures_used": false,
+    "broad_plan_basis_revision": "f6bd8d0f85",
+    "broad_plan_basis_sha256": "ceb4677a88cd32dc53704a9945fe29db8982c354f1d98be7c0bb27649494cddf",
+    "broad_plan_fit_counts": {
+      "candidate_if_extended": 18,
+      "no_existing_question": 14,
+      "component_only": 18
+    },
+    "artifact_status": "Artifact names and columns are proposed authoring contracts; source questions do not specify complete output schemas or deterministic graders.",
+    "accession_policy": "Listed benchmark source accessions are exclusion/provenance evidence, not independent training-data sources.",
+    "coverage_added": 0,
+    "detailed_designs_file": "workflow_designs/biomnibench-da.json"
+  }
 }

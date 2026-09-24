@@ -1,0 +1,1542 @@
+{
+  "schema_version": 1,
+  "scope": "Proposed task designs refining the existing 147 broad questions; no new independent task count, validated endpoint mapping, fixture use or coverage credit.",
+  "question_only_source": {
+    "repository": "phylobio/BiomniBench-DA",
+    "revision": "e1c8ca5e11a620087bc48d97888eb69176a1f235",
+    "url": "https://huggingface.co/datasets/phylobio/BiomniBench-DA/tree/e1c8ca5e11a620087bc48d97888eb69176a1f235",
+    "cached_metadata_sha256": "dd6389d227db87982d406d278c4147a32fcfc17886e6acf6637d1d9c981dc7ab",
+    "fields_read": [
+      "id",
+      "question",
+      "accessions"
+    ],
+    "answers_or_fixtures_read": false
+  },
+  "counts": {
+    "benchmark_target_ids": 50,
+    "proposed_designs": 45,
+    "existing_broad_questions_refined_not_added": 147,
+    "validated_coverage": 0
+  },
+  "designs": [
+    {
+      "proposed_id": "biomni-design-01-tumor-cell-enrichment",
+      "target_ids": [
+        "da-1-3"
+      ],
+      "scientific_question_on_independent_observations": "Which cell populations are enriched in an independently collected tumor cohort relative to adjacent tissue and blood across donors?",
+      "matching_existing_question_ids": [
+        "single-cell-composition-01"
+      ],
+      "matching_existing_workstream_ids": [
+        "single-cell-composition"
+      ],
+      "existing_question_fit_by_target": {
+        "da-1-3": {
+          "question_ids": [
+            "single-cell-composition-01"
+          ],
+          "fit": "candidate_if_extended"
+        }
+      },
+      "input_design": "Observed single-cell counts, cell labels, three tissue compartments and linked donor/sample metadata with biological replication.",
+      "provenance_requirements": "Pin study accession, consent/use terms, count processing and annotation version; exclude the benchmark study and fixtures.",
+      "required_full_output_artifacts_with_key_columns": [
+        "cells.tsv: cell_id, sample_id, donor_id, tissue, cell_type, qc_pass",
+        "fractions.tsv: donor_id, tissue, cell_type, numerator, denominator, fraction",
+        "enrichment.tsv: cell_type, contrast, effect, interval, p_value, q_value, eligibility"
+      ],
+      "method_and_decision_parameters_to_freeze": "Cell QC, tissue pairing, cell-type eligibility, denominator, enrichment test, multiple-testing universe and high-enrichment threshold.",
+      "deterministic_verifier_design": "Recompute every donor denominator and contrast from cells; compare full table to independent reference within frozen tolerances.",
+      "negative_controls": "Corrupt a donor denominator or report a contrast for an ineligible cell type; both output mutations must fail.",
+      "unresolved_independent_data_and_runtime_assumptions": "Need independent cohort containing all three compartments and enough paired donors; count-model runtime must be measured.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-02-baseline-fraction-response",
+      "target_ids": [
+        "da-1-4"
+      ],
+      "scientific_question_on_independent_observations": "Are baseline immune-cell fractions associated with a later measured treatment response across independent patients?",
+      "matching_existing_question_ids": [
+        "single-cell-composition-03"
+      ],
+      "matching_existing_workstream_ids": [
+        "single-cell-composition"
+      ],
+      "existing_question_fit_by_target": {
+        "da-1-4": {
+          "question_ids": [
+            "single-cell-composition-03"
+          ],
+          "fit": "candidate_if_extended"
+        }
+      },
+      "input_design": "Observed pre-treatment single-cell samples and prospectively measured patient response, linked by patient identity and date.",
+      "provenance_requirements": "Pin cohort accession, treatment/response definitions, time ordering, rights and cell annotation provenance.",
+      "required_full_output_artifacts_with_key_columns": [
+        "patients.tsv: patient_id, baseline_date, outcome_date, response, eligibility",
+        "fractions.tsv: patient_id, cell_type, eligible_cells, total_cells, fraction",
+        "associations.tsv: cell_type, n_patients, coefficient, interval, p_value, q_value"
+      ],
+      "method_and_decision_parameters_to_freeze": "Response ratio/scale, baseline window, fraction denominator, Pearson/Spearman or regression model, covariates and multiplicity.",
+      "deterministic_verifier_design": "Independent patient join, date ordering and correlation recomputation across all eligible cell types.",
+      "negative_controls": "Duplicate a patient outcome join or use a post-outcome sample as baseline; the submitted join and associations must fail.",
+      "unresolved_independent_data_and_runtime_assumptions": "Need independent longitudinal clinical outcome plus baseline cells; no inference of treatment causality.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-03-protein-class-predictors",
+      "target_ids": [
+        "da-10-1"
+      ],
+      "scientific_question_on_independent_observations": "How do sequence composition and fixed predictor scores distinguish independently labeled protein assembly classes?",
+      "matching_existing_question_ids": [],
+      "matching_existing_workstream_ids": [],
+      "existing_question_fit_by_target": {
+        "da-10-1": {
+          "question_ids": [],
+          "fit": "no_existing_question"
+        }
+      },
+      "input_design": "Observed protein sequences with experimentally curated assembly-class labels and fixed scores from specified predictors.",
+      "provenance_requirements": "Pin FASTA, class evidence, predictor versions and negative-set construction; avoid source benchmark protein sets.",
+      "required_full_output_artifacts_with_key_columns": [
+        "proteins.tsv: protein_id, sequence_hash, class, source, split",
+        "composition.tsv: protein_id, amino_acid, fraction",
+        "scores.tsv: protein_id, predictor, score, missing",
+        "performance.tsv: class, comparator, predictor, n_positive, n_negative, auroc, auprc, interval"
+      ],
+      "method_and_decision_parameters_to_freeze": "Protein deduplication, positive/negative class universe, amino-acid metric, score direction, ties, bootstrap unit and split.",
+      "deterministic_verifier_design": "Recompute sequence fractions, membership and ROC/PR from complete score rows; verify all declared predictors and classes.",
+      "negative_controls": "Reverse a nonconstant score vector without updating its metrics, and duplicate a protein across fit/evaluation groups; reject both when the frozen design separates those groups.",
+      "unresolved_independent_data_and_runtime_assumptions": "Independent experimental class labels and predictor score availability may be limiting; fixed scores keep task within 30 minutes.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-04-protein-participant-screening",
+      "target_ids": [
+        "da-10-3"
+      ],
+      "scientific_question_on_independent_observations": "Do frozen sequence predictors distinguish observed condensate participants better than membrane-organelle controls under one negative universe?",
+      "matching_existing_question_ids": [],
+      "matching_existing_workstream_ids": [],
+      "existing_question_fit_by_target": {
+        "da-10-3": {
+          "question_ids": [],
+          "fit": "no_existing_question"
+        }
+      },
+      "input_design": "Observed protein membership in multiple condensate and organelle sets plus a single fixed nonmember background and predictor scores.",
+      "provenance_requirements": "Pin membership studies, protein ID mapping, score versions and independent negative-set provenance.",
+      "required_full_output_artifacts_with_key_columns": [
+        "membership.tsv: protein_id, dataset_id, class, evidence",
+        "scores.tsv: protein_id, predictor, score",
+        "comparisons.tsv: dataset_id, control_type, predictor, n_positive, n_fixed_negative, auroc, auprc, interval",
+        "consistency.tsv: predictor, condensate_minus_control, uncertainty"
+      ],
+      "method_and_decision_parameters_to_freeze": "Fixed negative universe, overlap policy, score orientation, metric, tie handling and aggregation across datasets.",
+      "deterministic_verifier_design": "Recompute each dataset ROC/PR against exactly the same negatives and compare complete dataset-by-predictor grid.",
+      "negative_controls": "Substitute a different negative universe or flip a membership label in the submitted artifacts; reject against the frozen inputs.",
+      "unresolved_independent_data_and_runtime_assumptions": "Need independently curated positive and organelle-control sets sharing identifiers and available frozen scores.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-05-cell-communication",
+      "target_ids": [
+        "da-11-1"
+      ],
+      "scientific_question_on_independent_observations": "Which predicted ligand-receptor pathways connect independently observed activated cytotoxic and antigen-responsive T-cell populations?",
+      "matching_existing_question_ids": [
+        "cell-communication-01"
+      ],
+      "matching_existing_workstream_ids": [
+        "cell-communication"
+      ],
+      "existing_question_fit_by_target": {
+        "da-11-1": {
+          "question_ids": [
+            "cell-communication-01"
+          ],
+          "fit": "component_only"
+        }
+      },
+      "input_design": "Observed inflamed-tissue single-cell expression with defensible gates for both populations and a frozen ligand-receptor database.",
+      "provenance_requirements": "Pin tissue study, cell-state gate evidence, count layer and database release; do not treat predictions as observed suppression.",
+      "required_full_output_artifacts_with_key_columns": [
+        "cells.tsv: cell_id, donor_id, population, gate_evidence",
+        "ligand_receptor.tsv: ligand, receptor, database_id, direction",
+        "pair_scores.tsv: donor_id, ligand, receptor, source_population, target_population, score",
+        "pathways.tsv: pathway, n_pairs, aggregate_score, rank, uncertainty"
+      ],
+      "method_and_decision_parameters_to_freeze": "Cell gates, expression threshold, ligand/receptor direction, database release, donor aggregation, pathway mapping and exclusion of a known reference pathway.",
+      "deterministic_verifier_design": "Recompute expression support and pair/pathway scores with complete pair universe and donor strata.",
+      "negative_controls": "Swap the submitted source/target identities or insert a pair absent from the frozen database; reject provenance and directional mismatches.",
+      "unresolved_independent_data_and_runtime_assumptions": "Need independent cohort with both rare cell states and adequate donors; functional suppression cannot be graded from expression alone.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-06-shared-perturbation-enrichment",
+      "target_ids": [
+        "da-12-2"
+      ],
+      "scientific_question_on_independent_observations": "Is a prespecified cell-cycle gene set enriched among genes altered by both gain- and loss-of-function perturbations in one observed model?",
+      "matching_existing_question_ids": [
+        "rna-seq-contrast-enrichment-02",
+        "rna-seq-contrast-enrichment-03"
+      ],
+      "matching_existing_workstream_ids": [
+        "rna-seq-contrast-enrichment"
+      ],
+      "existing_question_fit_by_target": {
+        "da-12-2": {
+          "question_ids": [
+            "rna-seq-contrast-enrichment-02",
+            "rna-seq-contrast-enrichment-03"
+          ],
+          "fit": "component_only"
+        }
+      },
+      "input_design": "Two independent replicated perturbation count experiments with matched controls and frozen gene-set annotations.",
+      "provenance_requirements": "Pin deposited counts, sample metadata, intervention identities, tested-gene universe and gene-set release.",
+      "required_full_output_artifacts_with_key_columns": [
+        "samples.tsv: sample_id, replicate, perturbation, control",
+        "contrasts.tsv: gene_id, perturbation, effect, p_value, q_value, testable",
+        "shared_genes.tsv: gene_id, gain_call, loss_call, shared_call",
+        "enrichment.tsv: gene_set, overlap, set_size, universe_size, p_value, q_value"
+      ],
+      "method_and_decision_parameters_to_freeze": "DE model, call FDR/effect threshold, shared-gene direction requirement, enrichment test, universe and raw versus adjusted p threshold.",
+      "deterministic_verifier_design": "Recompute both full contrasts, intersection and hypergeometric/rank test from eligible genes.",
+      "negative_controls": "Insert a gene absent from one eligible perturbation contrast into the shared set, or change the enrichment universe size; reject both.",
+      "unresolved_independent_data_and_runtime_assumptions": "Need independently observed matched gain/loss experiments with replication; two full fits must meet 30 minutes.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-07-microbe-survival",
+      "target_ids": [
+        "da-12-4"
+      ],
+      "scientific_question_on_independent_observations": "Which measured tumor-associated microbial features predict worse survival in an independent oncology cohort under a fixed univariate Cox screen?",
+      "matching_existing_question_ids": [
+        "clinical-survival-01"
+      ],
+      "matching_existing_workstream_ids": [
+        "clinical-survival"
+      ],
+      "existing_question_fit_by_target": {
+        "da-12-4": {
+          "question_ids": [
+            "clinical-survival-01"
+          ],
+          "fit": "candidate_if_extended"
+        }
+      },
+      "input_design": "Observed tumor microbiome abundance, patient survival and censoring, with one eligible tumor sample per patient.",
+      "provenance_requirements": "Pin microbiome processing, taxonomy release, patient cohort, survival follow-up and rights; no benchmark uploads.",
+      "required_full_output_artifacts_with_key_columns": [
+        "patients.tsv: patient_id, sample_id, survival_time, event, eligibility",
+        "abundance.tsv: patient_id, taxon_id, transformed_abundance, detection",
+        "cox.tsv: taxon_id, n_patients, events, log_hazard, hazard_ratio, se, p_value, q_value, direction"
+      ],
+      "method_and_decision_parameters_to_freeze": "Abundance transform/zero handling, time origin, censoring, one-feature univariate model (covariate-adjusted models are a separately specified endpoint), HR>1 decision, p<0.05 rule and multiplicity reporting. Freeze tied-event handling (Efron/Breslow/exact), coefficient convergence and whether each p-value is Wald, score or likelihood-ratio; prescribe nonconvergent and non-estimable outputs.",
+      "deterministic_verifier_design": "Re-fit or independently compute Cox partial likelihood for all eligible taxa and check named prespecified target row.",
+      "negative_controls": "Flip an event indicator in the submitted patient table or misreport a hazard ratio relative to its log-hazard; reject both.",
+      "unresolved_independent_data_and_runtime_assumptions": "Need independent cohort with both microbial data and survival; avoid interpreting association as microbial causation.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-08-longitudinal-protein-body",
+      "target_ids": [
+        "da-13-1",
+        "da-13-3"
+      ],
+      "scientific_question_on_independent_observations": "Which paired circulating-protein changes differ between treatment regimens, and which track measured body changes in an independent longitudinal cohort?",
+      "matching_existing_question_ids": [
+        "proteomics-metabolomics-01",
+        "proteomics-metabolomics-03"
+      ],
+      "matching_existing_workstream_ids": [
+        "proteomics-metabolomics"
+      ],
+      "existing_question_fit_by_target": {
+        "da-13-1": {
+          "question_ids": [
+            "proteomics-metabolomics-01"
+          ],
+          "fit": "component_only"
+        },
+        "da-13-3": {
+          "question_ids": [
+            "proteomics-metabolomics-03"
+          ],
+          "fit": "component_only"
+        }
+      },
+      "input_design": "Observed baseline/follow-up proteomics, regimen labels and body measures on the same participants.",
+      "provenance_requirements": "Pin assay platform, protein IDs, visits, regimen assignment and body-measure provenance; no benchmark source cohort.",
+      "required_full_output_artifacts_with_key_columns": [
+        "visits.tsv: participant_id, visit, date, regimen, body_measure, qc",
+        "protein_changes.tsv: participant_id, protein_id, baseline, followup, change",
+        "effects.tsv: protein_id, within_regimen_effect, regimen_interaction, se, p_value, q_value",
+        "correlations.tsv: protein_id, body_measure, n_participants, coefficient, p_value, q_value"
+      ],
+      "method_and_decision_parameters_to_freeze": "Visit windows, participant pairing, protein missingness, within-regimen effect, interaction model, body-change definition and multiplicity.",
+      "deterministic_verifier_design": "Recompute participant change, full protein effects and protein-body correlations from matched IDs.",
+      "negative_controls": "Swap follow-up patient IDs or duplicate a participant in the submitted change table; reject the invalid pairing.",
+      "unresolved_independent_data_and_runtime_assumptions": "Both endpoints require the same independently measured participants and assays; split if body measures are unmatched or fit exceeds 30 minutes.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-09-gaht-external-sex-concordance",
+      "target_ids": [
+        "da-13-5"
+      ],
+      "scientific_question_on_independent_observations": "Do treatment-associated protein effects overlap independent population sex associations after matching the measured protein universe?",
+      "matching_existing_question_ids": [],
+      "matching_existing_workstream_ids": [],
+      "existing_question_fit_by_target": {
+        "da-13-5": {
+          "question_ids": [],
+          "fit": "no_existing_question"
+        }
+      },
+      "input_design": "Observed paired treatment proteomics and separate published population proteomics effect table.",
+      "provenance_requirements": "Pin both study accessions, protein/isoform mappings, comparison direction, assay platforms and licenses.",
+      "required_full_output_artifacts_with_key_columns": [
+        "effects.tsv: study_id, protein_id, effect, se, q_value, measured",
+        "matched_universe.tsv: protein_id, treatment_measured, population_measured, eligible",
+        "concordance.tsv: protein_id, treatment_call, sex_call, directional_agreement",
+        "summary.tsv: n_universe, n_overlap, expected_overlap, p_value"
+      ],
+      "method_and_decision_parameters_to_freeze": "Protein universe, FDR thresholds, sex/treatment effect orientation, overlap statistic and treatment sample pairing.",
+      "deterministic_verifier_design": "Independent identifier join and overlap/sign arithmetic over all measured proteins, not selected hits only.",
+      "negative_controls": "Reverse a nonzero submitted effect or remove a measured null protein from the matched universe; reject orientation or eligibility mismatch.",
+      "unresolved_independent_data_and_runtime_assumptions": "Need two independent cohorts with mappable common proteins and enough complete measures.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-10-gaht-menopause-concordance",
+      "target_ids": [
+        "da-13-6"
+      ],
+      "scientific_question_on_independent_observations": "How do longitudinal treatment-protein changes compare separately with menopausal transitions and hormone-treatment effects in independent cohorts?",
+      "matching_existing_question_ids": [],
+      "matching_existing_workstream_ids": [],
+      "existing_question_fit_by_target": {
+        "da-13-6": {
+          "question_ids": [],
+          "fit": "no_existing_question"
+        }
+      },
+      "input_design": "Observed paired treatment proteomics plus external longitudinal menopause and hormone-treatment effect summaries.",
+      "provenance_requirements": "Pin all cohort identities, assay versions, visit timing and effect direction/units.",
+      "required_full_output_artifacts_with_key_columns": [
+        "effects.tsv: cohort_id, protein_id, contrast, effect, se, measured",
+        "matched_universe.tsv: protein_id, cohort_presence, eligible",
+        "concordance.tsv: comparator, protein_id, treatment_effect, external_effect, direction_match",
+        "summary.tsv: comparator, n, correlation, interval"
+      ],
+      "method_and_decision_parameters_to_freeze": "Keep menopause and exogenous hormone contrasts separate; freeze effect scale, protein mapping, missingness and concordance metric.",
+      "deterministic_verifier_design": "Recompute all matched effect pairs and comparator-specific direction/correlation summaries.",
+      "negative_controls": "Swap comparator IDs in the submitted paired-effect table or pool the two comparator summaries; reject against their distinct source contrasts.",
+      "unresolved_independent_data_and_runtime_assumptions": "Three assay-compatible observed cohorts may be difficult to source; precomputed effects must retain raw-study provenance.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-11-signature-clustering",
+      "target_ids": [
+        "da-14-1"
+      ],
+      "scientific_question_on_independent_observations": "Which prespecified immune signatures have similar score profiles across independently observed sepsis patients?",
+      "matching_existing_question_ids": [],
+      "matching_existing_workstream_ids": [],
+      "existing_question_fit_by_target": {
+        "da-14-1": {
+          "question_ids": [],
+          "fit": "no_existing_question"
+        }
+      },
+      "input_design": "Observed patient-by-signature score matrix with sample identity and a separately frozen signature definition.",
+      "provenance_requirements": "Pin cohort accession, signature calculation version and patient eligibility.",
+      "required_full_output_artifacts_with_key_columns": [
+        "scores.tsv: patient_id, signature_id, score, missing",
+        "signature_correlations.tsv: signature_a, signature_b, n_patients, correlation",
+        "signature_tree.nwk: signature_id leaves with finite branch lengths",
+        "signature_clusters.tsv: signature_id, cluster_id, cutoff"
+      ],
+      "method_and_decision_parameters_to_freeze": "Correlate signatures across patients, not patients across signatures; freeze missingness, correlation, distance, linkage and cut height.",
+      "deterministic_verifier_design": "Recompute every signature pair, distance, deterministic linkage and complete signature membership.",
+      "negative_controls": "Submit patient IDs as tree leaves or omit an eligible signature pair; reject axis or completeness errors.",
+      "unresolved_independent_data_and_runtime_assumptions": "Need enough signatures/patients and stable scores; source cohort must be independent.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-12-immune-subgroup-proportions",
+      "target_ids": [
+        "da-14-3"
+      ],
+      "scientific_question_on_independent_observations": "What fraction of eligible intensive-care patients belongs to each independently assigned immune-state subgroup?",
+      "matching_existing_question_ids": [
+        "data-statistics-visualization-01"
+      ],
+      "matching_existing_workstream_ids": [
+        "data-statistics-visualization"
+      ],
+      "existing_question_fit_by_target": {
+        "da-14-3": {
+          "question_ids": [
+            "data-statistics-visualization-01"
+          ],
+          "fit": "candidate_if_extended"
+        }
+      },
+      "input_design": "Observed patient eligibility and immune subgroup labels from a frozen classifier or measured criteria.",
+      "provenance_requirements": "Pin cohort, subgroup algorithm, missing-label policy and identity deduplication.",
+      "required_full_output_artifacts_with_key_columns": [
+        "patients.tsv: patient_id, eligible, subgroup, assignment_source",
+        "subgroup_counts.tsv: subgroup, numerator, denominator, fraction, missing_count"
+      ],
+      "method_and_decision_parameters_to_freeze": "Eligible denominator, one patient per row, exclusive versus overlapping subgroup semantics and missing assignment handling.",
+      "deterministic_verifier_design": "Recount unique patient IDs and verify fraction sum under exclusive labels.",
+      "negative_controls": "Count visits instead of unique patients or handle an unassigned patient contrary to the fixed policy; reject the resulting count table.",
+      "unresolved_independent_data_and_runtime_assumptions": "Independent subgroup labels must be available; this is separate from clustering signatures by correlation.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-13-within-gene-set-correlation",
+      "target_ids": [
+        "da-14-8"
+      ],
+      "scientific_question_on_independent_observations": "Are genes within two independently defined immune programs coexpressed across eligible patient samples?",
+      "matching_existing_question_ids": [
+        "gene-program-factorization-03"
+      ],
+      "matching_existing_workstream_ids": [
+        "gene-program-factorization"
+      ],
+      "existing_question_fit_by_target": {
+        "da-14-8": {
+          "question_ids": [
+            "gene-program-factorization-03"
+          ],
+          "fit": "component_only"
+        }
+      },
+      "input_design": "Observed expression matrix, patient metadata and two frozen gene-set memberships.",
+      "provenance_requirements": "Pin assay, normalization, gene IDs, program sources and eligible patient cohort.",
+      "required_full_output_artifacts_with_key_columns": [
+        "eligible_genes.tsv: gene_set, gene_id, measured, eligible",
+        "pairs.tsv: gene_set, gene_a, gene_b, n_patients, correlation, p_value",
+        "set_summary.tsv: gene_set, n_genes, n_unique_pairs, aggregate, interval"
+      ],
+      "method_and_decision_parameters_to_freeze": "Patient universe, normalization, duplicate gene mapping, all unordered non-self pairs, correlation type and set aggregate.",
+      "deterministic_verifier_design": "Recompute complete pair matrix and exact n(n-1)/2 unique-pair count per set.",
+      "negative_controls": "Add self-pairs or duplicate an unordered pair in the submitted correlation table; reject even if aggregate values happen to agree.",
+      "unresolved_independent_data_and_runtime_assumptions": "Need both programs measured with enough independent patients.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-14-als-expression-duration",
+      "target_ids": [
+        "da-15-1",
+        "da-15-7"
+      ],
+      "scientific_question_on_independent_observations": "Which spinal-cord expression differences between cases and controls persist after adjustment, and which genes track measured disease duration within cases?",
+      "matching_existing_question_ids": [
+        "data-statistics-visualization-02",
+        "rna-seq-contrast-enrichment-03"
+      ],
+      "matching_existing_workstream_ids": [
+        "data-statistics-visualization",
+        "rna-seq-contrast-enrichment"
+      ],
+      "existing_question_fit_by_target": {
+        "da-15-1": {
+          "question_ids": [
+            "rna-seq-contrast-enrichment-03"
+          ],
+          "fit": "component_only"
+        },
+        "da-15-7": {
+          "question_ids": [
+            "data-statistics-visualization-02"
+          ],
+          "fit": "component_only"
+        }
+      },
+      "input_design": "Independent human spinal-cord RNA counts with diagnosis, tissue segment, patient identity and disease-duration measurements.",
+      "provenance_requirements": "Pin accession, sample exclusions, anatomical region, count version and duration units; do not use benchmark cohort.",
+      "required_full_output_artifacts_with_key_columns": [
+        "samples.tsv: sample_id, patient_id, diagnosis, segment, duration, qc",
+        "design.tsv: sample_id, model_coefficient",
+        "differential.tsv: gene_id, base_mean, effect, se, p_value, q_value",
+        "duration.tsv: gene_id, n_cases, coefficient, se, p_value, q_value"
+      ],
+      "method_and_decision_parameters_to_freeze": "Disease contrast covariates, count filtering, duration definition, within-case association model, FDR universes and top-gene ranking.",
+      "deterministic_verifier_design": "Recompute model design and full per-gene test tables with independent fitted reference.",
+      "negative_controls": "Reverse a nonzero disease effect or join duration to the wrong patient in the submitted artifacts; reject each against its own estimand.",
+      "unresolved_independent_data_and_runtime_assumptions": "Same independent cohort must contain adequate controls and measured durations; duration correlation is not validated progression prediction.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-15-als-wgcna",
+      "target_ids": [
+        "da-15-2"
+      ],
+      "scientific_question_on_independent_observations": "Which coexpression modules in independent spinal-cord samples associate with disease status under a reproducible weighted-network workflow?",
+      "matching_existing_question_ids": [
+        "gene-program-factorization-03"
+      ],
+      "matching_existing_workstream_ids": [
+        "gene-program-factorization"
+      ],
+      "existing_question_fit_by_target": {
+        "da-15-2": {
+          "question_ids": [
+            "gene-program-factorization-03"
+          ],
+          "fit": "candidate_if_extended"
+        }
+      },
+      "input_design": "Observed normalized expression from adequate independent patient samples with case/control metadata.",
+      "provenance_requirements": "Pin cohort, platform, filtering, genes, samples and WGCNA package/version.",
+      "required_full_output_artifacts_with_key_columns": [
+        "qc.tsv: sample_id, outlier, inclusion",
+        "power.tsv: power, fit_index, mean_connectivity, selected",
+        "modules.tsv: gene_id, module_id, membership",
+        "eigengenes.tsv: sample_id, module_id, value",
+        "trait_tests.tsv: module_id, trait, coefficient, p_value, q_value"
+      ],
+      "method_and_decision_parameters_to_freeze": "Outlier rule, gene count, soft-threshold power, adjacency/TOM, module cut/merge and trait test.",
+      "deterministic_verifier_design": "Check native WGCNA outputs plus independent adjacency/eigengene/association invariants and complete membership.",
+      "negative_controls": "Change a submitted module membership or trait coefficient while leaving source inputs fixed; reject. Input row permutations must preserve label-invariant results within frozen numerical tolerances.",
+      "unresolved_independent_data_and_runtime_assumptions": "WGCNA can exceed 30 minutes or memory on full transcriptomes; bounded observed subset and runtime measurement required.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-16-three-layer-als-concordance",
+      "target_ids": [
+        "da-15-8"
+      ],
+      "scientific_question_on_independent_observations": "Which independently measured molecular features show the same disease-effect direction in tissue RNA, tissue protein and biofluid protein?",
+      "matching_existing_question_ids": [
+        "multimodal-clinical-discovery-01"
+      ],
+      "matching_existing_workstream_ids": [
+        "multimodal-clinical-discovery"
+      ],
+      "existing_question_fit_by_target": {
+        "da-15-8": {
+          "question_ids": [
+            "multimodal-clinical-discovery-01"
+          ],
+          "fit": "component_only"
+        }
+      },
+      "input_design": "Three observed assay layers from a coherent independent disease study, with sample and feature mapping.",
+      "provenance_requirements": "Pin each assay accession, sample relationship, protein/isoform mapping, biofluid identity and rights.",
+      "required_full_output_artifacts_with_key_columns": [
+        "layer_effects.tsv: assay, feature_id, effect, se, q_value, measured",
+        "crosswalk.tsv: gene_id, protein_id, mapping_status",
+        "concordance.tsv: gene_id, rna_effect, tissue_protein_effect, biofluid_protein_effect, all_measured, all_direction_match"
+      ],
+      "method_and_decision_parameters_to_freeze": "Within-layer disease designs, measured-feature intersection, ID ambiguity, sign convention and all-three significance rule.",
+      "deterministic_verifier_design": "Recompute joins and sign criteria across complete eligible gene/protein universe.",
+      "negative_controls": "Claim three-layer support for a feature absent from one assay or reverse a nonzero assay effect; reject incomplete or inconsistent evidence.",
+      "unresolved_independent_data_and_runtime_assumptions": "Independent study must include matching tissue RNA/protein and biofluid protein; unmatched layers cannot support patient-level concordance.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-17-expression-subtyping",
+      "target_ids": [
+        "da-16-1"
+      ],
+      "scientific_question_on_independent_observations": "Can unsupervised expression profiles from an independent liver cohort define stable patient groups associated with separately measured pathology?",
+      "matching_existing_question_ids": [
+        "multimodal-clinical-discovery-02"
+      ],
+      "matching_existing_workstream_ids": [
+        "multimodal-clinical-discovery"
+      ],
+      "existing_question_fit_by_target": {
+        "da-16-1": {
+          "question_ids": [
+            "multimodal-clinical-discovery-02"
+          ],
+          "fit": "component_only"
+        }
+      },
+      "input_design": "Observed liver expression and patient pathology stages, with clinical labels withheld during clustering.",
+      "provenance_requirements": "Pin cohort, pathology scoring version, normalization, sample identity and data rights.",
+      "required_full_output_artifacts_with_key_columns": [
+        "samples.tsv: patient_id, sample_id, eligible, pathology",
+        "embedding.tsv: patient_id, pc1, pc2, cluster_id",
+        "clusters.tsv: patient_id, cluster_id, assignment_confidence",
+        "clinical_tests.tsv: clinical_feature, cluster, n, statistic, p_value, q_value"
+      ],
+      "method_and_decision_parameters_to_freeze": "Choose PCA/hierarchical workflow, distance/linkage, cluster count without outcomes, pathology encoding and multiplicity.",
+      "deterministic_verifier_design": "Recompute normalized matrix, eigen/subspace or dendrogram invariant, full memberships and clinical contingency/tests.",
+      "negative_controls": "Assign a nonexistent or duplicate patient to a cluster, or misreport a clinical contingency cell; reject. Outcome-label changes must leave outcome-independent clustering unchanged.",
+      "unresolved_independent_data_and_runtime_assumptions": "Independent cohort needs sufficiently varied pathology and sample count; this is exploratory association, not a diagnosis.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-18-sle-cell-composition",
+      "target_ids": [
+        "da-17-1",
+        "da-17-5"
+      ],
+      "scientific_question_on_independent_observations": "Do circulating immune-population frequencies differ by disease status, and are those disease effects modified by ancestry in an independent cohort?",
+      "matching_existing_question_ids": [
+        "single-cell-composition-01"
+      ],
+      "matching_existing_workstream_ids": [
+        "single-cell-composition"
+      ],
+      "existing_question_fit_by_target": {
+        "da-17-1": {
+          "question_ids": [
+            "single-cell-composition-01"
+          ],
+          "fit": "candidate_if_extended"
+        },
+        "da-17-5": {
+          "question_ids": [],
+          "fit": "no_existing_question"
+        }
+      },
+      "input_design": "Observed blood single-cell profiles with patient diagnosis, ancestry and enough samples in every interaction cell.",
+      "provenance_requirements": "Pin cohort, ancestry ascertainment, cell annotation, counts and data rights.",
+      "required_full_output_artifacts_with_key_columns": [
+        "patients.tsv: patient_id, diagnosis, ancestry, qc",
+        "fractions.tsv: patient_id, cell_type, numerator, denominator, fraction",
+        "effects.tsv: cell_type, disease_effect, ancestry_effect, interaction_effect, se, p_value, q_value"
+      ],
+      "method_and_decision_parameters_to_freeze": "Population gates, patient denominator, ancestry categories, compositional model, disease-by-ancestry interaction and FDR.",
+      "deterministic_verifier_design": "Recompute frequencies and direct interaction coefficients, not separate-significance comparisons.",
+      "negative_controls": "Pool cells across patients or substitute a difference of separate significance calls for the required interaction coefficient; reject invalid replicate and contrast artifacts.",
+      "unresolved_independent_data_and_runtime_assumptions": "Need all diagnosis/ancestry strata with biological replication; historical ancestry labels may not be comparable.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-19-sle-monocyte-pseudobulk",
+      "target_ids": [
+        "da-17-3"
+      ],
+      "scientific_question_on_independent_observations": "Which classical-monocyte genes differ between independently observed autoimmune cases and controls at donor level?",
+      "matching_existing_question_ids": [
+        "single-cell-pseudobulk-01"
+      ],
+      "matching_existing_workstream_ids": [
+        "single-cell-pseudobulk"
+      ],
+      "existing_question_fit_by_target": {
+        "da-17-3": {
+          "question_ids": [
+            "single-cell-pseudobulk-01"
+          ],
+          "fit": "candidate_if_extended"
+        }
+      },
+      "input_design": "Observed single-cell counts with classical-monocyte labels and linked donor diagnosis.",
+      "provenance_requirements": "Pin cohort, count/annotation versions and donor identity; no benchmark cell files.",
+      "required_full_output_artifacts_with_key_columns": [
+        "cells.tsv: cell_id, donor_id, monocyte_gate, qc",
+        "pseudobulk.tsv: gene_id, donor_id, count",
+        "design.tsv: donor_id, diagnosis, covariates",
+        "results.tsv: gene_id, base_mean, effect, se, p_value, q_value"
+      ],
+      "method_and_decision_parameters_to_freeze": "Monocyte gate, minimum cells per donor, count filter, donor-level design and FDR universe.",
+      "deterministic_verifier_design": "Reaggregate counts from eligible cells and independently fit complete donor-level differential model.",
+      "negative_controls": "Report cell-level rows as independent donor replicates or misaggregate one donor count; reject the submitted design and pseudobulk artifacts.",
+      "unresolved_independent_data_and_runtime_assumptions": "Need enough donors and monocyte cells; raw-count fit must complete within task limit.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-20-breast-subtype-mutation-landscape",
+      "target_ids": [
+        "da-18-1"
+      ],
+      "scientific_question_on_independent_observations": "How do patient-level alteration frequencies differ across independently observed receptor-defined breast-cancer subgroups?",
+      "matching_existing_question_ids": [
+        "clinical-variant-cohort-01"
+      ],
+      "matching_existing_workstream_ids": [
+        "clinical-variant-cohort"
+      ],
+      "existing_question_fit_by_target": {
+        "da-18-1": {
+          "question_ids": [
+            "clinical-variant-cohort-01"
+          ],
+          "fit": "candidate_if_extended"
+        }
+      },
+      "input_design": "Observed somatic mutation calls and clinical receptor subtype metadata, one patient identity across samples.",
+      "provenance_requirements": "Pin MAF/VCF processing, reference, transcript and clinical subtype definitions.",
+      "required_full_output_artifacts_with_key_columns": [
+        "patients.tsv: patient_id, receptor_subtype, eligible",
+        "alterations.tsv: patient_id, gene_id, variant_id, consequence, qualifying",
+        "landscape.tsv: subtype, gene_id, altered_patients, eligible_patients, fraction, comparison_p"
+      ],
+      "method_and_decision_parameters_to_freeze": "Four receptor groups, qualifying alteration mask, patient/sample collapse, missing subtype policy and tested-gene universe.",
+      "deterministic_verifier_design": "Recompute patient-gene binary events, subtype denominators and all frequency comparisons.",
+      "negative_controls": "Count two mutations in one patient-gene as two altered patients or change a receptor-group denominator; reject the inflated frequencies.",
+      "unresolved_independent_data_and_runtime_assumptions": "Independent cohort needs all subtype groups and consistent mutation calling; no actionability inference from frequency alone.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-21-endocrine-resistance-events",
+      "target_ids": [
+        "da-18-5",
+        "da-18-7"
+      ],
+      "scientific_question_on_independent_observations": "Among independently observed post-treatment receptor-positive tumors, how prevalent are pathway alterations and how do they co-occur with a prespecified resistance gene?",
+      "matching_existing_question_ids": [
+        "clinical-variant-cohort-02"
+      ],
+      "matching_existing_workstream_ids": [
+        "clinical-variant-cohort"
+      ],
+      "existing_question_fit_by_target": {
+        "da-18-5": {
+          "question_ids": [
+            "clinical-variant-cohort-02"
+          ],
+          "fit": "component_only"
+        },
+        "da-18-7": {
+          "question_ids": [],
+          "fit": "no_existing_question"
+        }
+      },
+      "input_design": "Somatic calls linked to treatment timing and receptor status in one eligible patient universe.",
+      "provenance_requirements": "Pin therapy dates, receptor definitions, pathway release, mutation calls and evidence for post-treatment samples.",
+      "required_full_output_artifacts_with_key_columns": [
+        "patients.tsv: patient_id, receptor_status, therapy_date, biopsy_date, eligible",
+        "events.tsv: patient_id, pathway_altered, resistance_gene_altered, qualifying_variants",
+        "prevalence.tsv: event, numerator, denominator, fraction",
+        "contingency.tsv: both, pathway_only, gene_only, neither, odds_ratio, p_value"
+      ],
+      "method_and_decision_parameters_to_freeze": "Post-therapy eligibility, pathway genes, alteration mask, patient union, 2x2 test/sidedness and multiple samples.",
+      "deterministic_verifier_design": "Recompute union prevalence and complete contingency from patient-level event flags.",
+      "negative_controls": "Double-count a patient with two pathway genes or omit double-negative patients from the contingency table; reject both.",
+      "unresolved_independent_data_and_runtime_assumptions": "Independent cohort must have treatment timing; cooccurrence is not mechanistic endocrine resistance.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-22-aml-treatment-rna",
+      "target_ids": [
+        "da-19-1"
+      ],
+      "scientific_question_on_independent_observations": "Which genes show reproducible downregulation after an independently observed perturbation in a fusion-positive leukemia model?",
+      "matching_existing_question_ids": [
+        "rna-seq-contrast-enrichment-03"
+      ],
+      "matching_existing_workstream_ids": [
+        "rna-seq-contrast-enrichment"
+      ],
+      "existing_question_fit_by_target": {
+        "da-19-1": {
+          "question_ids": [
+            "rna-seq-contrast-enrichment-03"
+          ],
+          "fit": "component_only"
+        }
+      },
+      "input_design": "Replicated treatment and vehicle RNA counts in a relevant observed leukemia model.",
+      "provenance_requirements": "Pin cell model identity, perturbation assay, dose/time, count processing and rights.",
+      "required_full_output_artifacts_with_key_columns": [
+        "samples.tsv: sample_id, biological_replicate, condition, qc",
+        "design.tsv: sample_id, coefficients",
+        "results.tsv: gene_id, base_mean, log2_effect, se, p_value, q_value, rank"
+      ],
+      "method_and_decision_parameters_to_freeze": "Treatment/vehicle design, replicate pairing, count filter, FDR, downregulation sign and ranking.",
+      "deterministic_verifier_design": "Independently fit full gene-level contrast and verify complete ranked set.",
+      "negative_controls": "Reverse a nonzero treatment effect or omit an eligible nonsignificant gene from the full results; reject sign or completeness errors.",
+      "unresolved_independent_data_and_runtime_assumptions": "Independent perturbation study with replication required; do not infer therapeutic targets from DE alone.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-23-aml-transcription-factor-occupancy",
+      "target_ids": [
+        "da-19-3"
+      ],
+      "scientific_question_on_independent_observations": "How does experimentally measured transcription-factor occupancy change after perturbation in an independent leukemia system?",
+      "matching_existing_question_ids": [
+        "differential-binding-01"
+      ],
+      "matching_existing_workstream_ids": [
+        "differential-binding"
+      ],
+      "existing_question_fit_by_target": {
+        "da-19-3": {
+          "question_ids": [
+            "differential-binding-01"
+          ],
+          "fit": "candidate_if_extended"
+        }
+      },
+      "input_design": "Observed ChIP/CUT&Tag treatment/control reads with input/control libraries and biological replicates.",
+      "provenance_requirements": "Pin factor antibody, genome, peak universe, sequencing and control provenance.",
+      "required_full_output_artifacts_with_key_columns": [
+        "libraries.tsv: library_id, replicate, condition, assay, qc",
+        "regions.bed: chromosome, start, end, region_id",
+        "counts.tsv: region_id, library_id, fragments",
+        "occupancy.tsv: region_id, effect, se, p_value, q_value, nearest_gene"
+      ],
+      "method_and_decision_parameters_to_freeze": "Genome assembly, alignment QC, consensus peaks, background/control correction, normalization and differential model.",
+      "deterministic_verifier_design": "Verify interval/count joins and native differential occupancy results over complete region universe.",
+      "negative_controls": "Change submitted peak coordinates or omit a required assay control from the submitted design; reject against the fixed input/assay contract.",
+      "unresolved_independent_data_and_runtime_assumptions": "Independent factor-binding data with matched perturbation needed; occupancy alone does not establish regulation.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-24-aml-enhancer-acetylation",
+      "target_ids": [
+        "da-19-4"
+      ],
+      "scientific_question_on_independent_observations": "Which independently measured enhancer-associated acetylation regions decrease after a controlled perturbation?",
+      "matching_existing_question_ids": [
+        "differential-binding-01"
+      ],
+      "matching_existing_workstream_ids": [
+        "differential-binding"
+      ],
+      "existing_question_fit_by_target": {
+        "da-19-4": {
+          "question_ids": [
+            "differential-binding-01"
+          ],
+          "fit": "candidate_if_extended"
+        }
+      },
+      "input_design": "Observed histone-mark ChIP/CUT&Tag signal and input/control libraries with enhancer annotation and replicates.",
+      "provenance_requirements": "Pin histone mark, enhancer atlas, assembly, peak caller and library conditions.",
+      "required_full_output_artifacts_with_key_columns": [
+        "enhancers.bed: chromosome, start, end, enhancer_id",
+        "counts.tsv: enhancer_id, library_id, fragments",
+        "results.tsv: enhancer_id, effect, se, p_value, q_value, decreased_call"
+      ],
+      "method_and_decision_parameters_to_freeze": "Enhancer definition, overlap, signal/control correction, normalization, differential design and decreasing rank.",
+      "deterministic_verifier_design": "Recompute region counts and full contrast including non-significant enhancers.",
+      "negative_controls": "Swap signal/control identities or change enhancer boundaries in submitted artifacts; reject provenance and count inconsistencies.",
+      "unresolved_independent_data_and_runtime_assumptions": "Observed matched enhancer signal with biological replicates required; chromatin signal is not enhancer function proof.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-25-aml-atac-global-shift",
+      "target_ids": [
+        "da-19-6"
+      ],
+      "scientific_question_on_independent_observations": "Does an independently measured treatment alter the distribution of chromatin accessibility across a prespecified common region universe?",
+      "matching_existing_question_ids": [
+        "chromatin-regulatory-01"
+      ],
+      "matching_existing_workstream_ids": [
+        "chromatin-regulatory"
+      ],
+      "existing_question_fit_by_target": {
+        "da-19-6": {
+          "question_ids": [
+            "chromatin-regulatory-01"
+          ],
+          "fit": "component_only"
+        }
+      },
+      "input_design": "Observed ATAC fragment libraries from replicated treatment and control samples with an external normalization anchor if absolute shift is claimed.",
+      "provenance_requirements": "Pin sample conditions, fragments, common-region construction, spike-in/reference evidence and assembly.",
+      "required_full_output_artifacts_with_key_columns": [
+        "libraries.tsv: library_id, replicate, condition, depth, qc",
+        "regions.bed: chromosome, start, end, region_id",
+        "counts.tsv: region_id, library_id, fragments",
+        "distribution.tsv: condition, quantile, normalized_signal, interval",
+        "differential.tsv: region_id, effect, se, p_value, q_value"
+      ],
+      "method_and_decision_parameters_to_freeze": "Global-shift estimand, reference/spike-in, quantile/statistical test, peak universe and normalization; relative counts alone cannot establish absolute global change.",
+      "deterministic_verifier_design": "Check all region counts and normalized distribution plus differential test under pinned reference.",
+      "negative_controls": "Claim an absolute shift without the required anchor, or alter a submitted normalization factor; reject the unsupported endpoint or numeric mismatch.",
+      "unresolved_independent_data_and_runtime_assumptions": "Independent assay must include suitable normalization anchor; endpoint may need reframing to relative distribution changes.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-26-primary-cell-baseline-similarity",
+      "target_ids": [
+        "da-20-1"
+      ],
+      "scientific_question_on_independent_observations": "How similar are baseline transcriptional profiles of independently observed primary cell populations before any compound exposure?",
+      "matching_existing_question_ids": [],
+      "matching_existing_workstream_ids": [],
+      "existing_question_fit_by_target": {
+        "da-20-1": {
+          "question_ids": [],
+          "fit": "no_existing_question"
+        }
+      },
+      "input_design": "Observed baseline RNA counts from four primary cell populations with biological replication.",
+      "provenance_requirements": "Pin cell provenance, untreated baseline designation, count pipeline and sample identities.",
+      "required_full_output_artifacts_with_key_columns": [
+        "samples.tsv: sample_id, donor_id, cell_type, baseline, qc",
+        "normalized.tsv: gene_id, sample_id, expression",
+        "similarity.tsv: cell_type_a, cell_type_b, n_samples, correlation, interval",
+        "embedding.tsv: sample_id, pc1, pc2"
+      ],
+      "method_and_decision_parameters_to_freeze": "Baseline-only eligibility, gene universe, normalization, batch/donor adjustment, sample versus centroid similarity and PCA interpretation.",
+      "deterministic_verifier_design": "Recompute full cell-type similarity matrix and PCA subspace from eligible samples.",
+      "negative_controls": "Include treated samples in the submitted baseline table or duplicate a donor; reject eligibility and aggregation errors.",
+      "unresolved_independent_data_and_runtime_assumptions": "Independent primary-cell study must include comparable untreated samples across types.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-27-primary-cell-pathway-response",
+      "target_ids": [
+        "da-20-3"
+      ],
+      "scientific_question_on_independent_observations": "Which prespecified secretory-pathway gene sets decrease after an independently observed perturbation across primary cell populations?",
+      "matching_existing_question_ids": [
+        "rna-seq-contrast-enrichment-02"
+      ],
+      "matching_existing_workstream_ids": [
+        "rna-seq-contrast-enrichment"
+      ],
+      "existing_question_fit_by_target": {
+        "da-20-3": {
+          "question_ids": [
+            "rna-seq-contrast-enrichment-02"
+          ],
+          "fit": "component_only"
+        }
+      },
+      "input_design": "Observed treatment/vehicle RNA counts in multiple primary cell types and a frozen Hallmark-like gene-set collection.",
+      "provenance_requirements": "Pin compound identity/assay, doses, timepoints, cell cultures, gene-set release and rights.",
+      "required_full_output_artifacts_with_key_columns": [
+        "samples.tsv: sample_id, cell_type, donor_id, condition, dose, time",
+        "contrasts.tsv: cell_type, gene_id, effect, se, p_value, q_value",
+        "enrichment.tsv: cell_type, gene_set, signed_score, p_value, q_value, suppressed_call",
+        "cross_cell.tsv: gene_set, eligible_cell_types, suppressed_cell_types, consistency"
+      ],
+      "method_and_decision_parameters_to_freeze": "Matched vehicle, treatment dose/time, DE fit, signed ranked enrichment versus ORA, set universe and cross-type rule.",
+      "deterministic_verifier_design": "Recompute contrasts and full gene-set results with native method and independent membership/arithmetic checks.",
+      "negative_controls": "Reverse a nonzero signed enrichment result or omit a tested gene set; reject direction and completeness errors.",
+      "unresolved_independent_data_and_runtime_assumptions": "Independent multi-cell-type perturbation data and enough replicates required; mechanism remains a hypothesis.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-28-primary-cell-compound-divergence",
+      "target_ids": [
+        "da-20-4"
+      ],
+      "scientific_question_on_independent_observations": "Does one independently observed drug perturbation produce similar or divergent transcriptomic effects across four primary cell types?",
+      "matching_existing_question_ids": [
+        "rna-seq-contrast-enrichment-01"
+      ],
+      "matching_existing_workstream_ids": [
+        "rna-seq-contrast-enrichment"
+      ],
+      "existing_question_fit_by_target": {
+        "da-20-4": {
+          "question_ids": [
+            "rna-seq-contrast-enrichment-01"
+          ],
+          "fit": "component_only"
+        }
+      },
+      "input_design": "Observed raw UMI counts, sample metadata, matched vehicle, dose and time in four primary cell types.",
+      "provenance_requirements": "Pin study accession, human primary cell identity, dose/time, HDF5 count schema and count provenance.",
+      "required_full_output_artifacts_with_key_columns": [
+        "samples.tsv: sample_id, cell_type, donor_id, condition, dose, time, qc",
+        "design.tsv: sample_id, intercept, cell_type, treatment, interactions",
+        "within_type.tsv: cell_type, gene_id, effect, se, p_value, q_value",
+        "divergence.tsv: gene_id, interaction_statistic, p_value, q_value, decision"
+      ],
+      "method_and_decision_parameters_to_freeze": "Full-rank factorial design, within-type contrasts, interaction/divergence statistic, tested-gene universe and dose/time matching.",
+      "deterministic_verifier_design": "Re-read HDF5 raw counts and independently fit complete within-type and interaction tables; check model rank.",
+      "negative_controls": "Collapse distinct dose/time strata in the submitted design or report a wrong cell-type interaction contrast; reject the specified model violation.",
+      "unresolved_independent_data_and_runtime_assumptions": "Existing mouse developmental GLM is only a mathematical component; independent four-type compound study needed within 30 minutes.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-29-cross-trait-gwas-alternatives",
+      "target_ids": [
+        "da-24-3"
+      ],
+      "scientific_question_on_independent_observations": "For two explicitly named metabolites in an independent cohort, is their genetic association shared under a prespecified summary-statistic method?",
+      "matching_existing_question_ids": [],
+      "matching_existing_workstream_ids": [],
+      "existing_question_fit_by_target": {
+        "da-24-3": {
+          "question_ids": [],
+          "fit": "no_existing_question"
+        }
+      },
+      "input_design": "Two independently measured metabolite GWAS summaries plus ancestry-matched LD reference and allele metadata.",
+      "provenance_requirements": "Pin GWAS accessions, phenotype definitions, genome build, ancestry, effect alleles and sample overlap.",
+      "required_full_output_artifacts_with_key_columns": [
+        "harmonized.tsv: variant_id, trait_a_beta, trait_a_se, trait_b_beta, trait_b_se, effect_allele, qc",
+        "loci.tsv: locus_id, lead_variant, trait_a_signal, trait_b_signal, ld_reference",
+        "result.tsv: trait_pair, chosen_statistic, estimate, uncertainty, p_value_or_posterior"
+      ],
+      "method_and_decision_parameters_to_freeze": "Choose exactly one endpoint before authoring: genome-wide genetic correlation, locus-overlap enrichment or locus colocalization; freeze trait pair, LD, overlap and significance rule.",
+      "deterministic_verifier_design": "For a chosen alternative, independently recompute allele harmonization and the complete native statistic; reject mixing estimands.",
+      "negative_controls": "Flip an effect allele without harmonizing its signed effect, or claim an LD reference with the wrong declared ancestry; reject harmonization/provenance errors. Freeze the selected statistic before numeric mutations are designed.",
+      "unresolved_independent_data_and_runtime_assumptions": "Public question is underspecified; these are named alternatives, not an exact benchmark mapping. Independent GWAS/LD access and runtime unvalidated.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-30-tumor-variant-stage",
+      "target_ids": [
+        "da-25-1"
+      ],
+      "scientific_question_on_independent_observations": "Which recurrent clinically classified tumor alterations associate with measured clinical stage in an independent cancer cohort?",
+      "matching_existing_question_ids": [
+        "clinical-variant-cohort-01"
+      ],
+      "matching_existing_workstream_ids": [
+        "clinical-variant-cohort"
+      ],
+      "existing_question_fit_by_target": {
+        "da-25-1": {
+          "question_ids": [
+            "clinical-variant-cohort-01"
+          ],
+          "fit": "candidate_if_extended"
+        }
+      },
+      "input_design": "Observed patient-level tumor MAF/VCF, frozen pathogenic/oncogenic annotations and clinical T-stage.",
+      "provenance_requirements": "Pin reference/annotation version, clinical classification source, patient/sample mapping and rights.",
+      "required_full_output_artifacts_with_key_columns": [
+        "patients.tsv: patient_id, t_stage, eligible",
+        "variants.tsv: patient_id, gene_id, variant_id, classification, qualifying",
+        "gene_frequency.tsv: gene_id, altered_patients, eligible_patients, fraction, rank",
+        "stage_tests.tsv: gene_id, stage_encoding, statistic, p_value, q_value",
+        "plot_data.tsv: gene_id, stage, numerator, denominator"
+      ],
+      "method_and_decision_parameters_to_freeze": "Classification cutoff, multi-sample collapse, top-N rule, stage ordinal/categorical model, covariates and FDR.",
+      "deterministic_verifier_design": "Recompute qualifying patient-gene events, prevalence, all stage tests and plot data.",
+      "negative_controls": "Inflate recurrence with duplicate patient-variant rows or alter a clinical-stage contingency cell; reject the submitted frequency/test artifacts.",
+      "unresolved_independent_data_and_runtime_assumptions": "Independent cohort must include frozen annotation and reliable stage; visualization is verified from data rather than pixels.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-31-patient-cell-line-dependency",
+      "target_ids": [
+        "da-26-2"
+      ],
+      "scientific_question_on_independent_observations": "Do molecular features associate differently with inferred patient dependency scores than with measured cell-line dependency in an independent breast-cancer analysis?",
+      "matching_existing_question_ids": [
+        "target-evidence-02"
+      ],
+      "matching_existing_workstream_ids": [
+        "target-evidence"
+      ],
+      "existing_question_fit_by_target": {
+        "da-26-2": {
+          "question_ids": [
+            "target-evidence-02"
+          ],
+          "fit": "candidate_if_extended"
+        }
+      },
+      "input_design": "Observed cell-line expression/dependency plus patient expression; patient dependency predictions must be generated by a declared model and treated as inferred.",
+      "provenance_requirements": "Pin cell-line assay, patient cohort, projection model training data and versions; prohibit leakage between target patient rows and model fitting.",
+      "required_full_output_artifacts_with_key_columns": [
+        "samples.tsv: sample_id, cohort, disease, split",
+        "patient_predictions.tsv: patient_id, target_gene, inferred_score, model_version, uncertainty",
+        "associations.tsv: cohort, biomarker, target_gene, n, coefficient, se, p_value, q_value",
+        "heterogeneity.tsv: biomarker, target_gene, patient_minus_cell_line, se, p_value"
+      ],
+      "method_and_decision_parameters_to_freeze": "Patient score inference/provenance, feature matching, BRCA eligibility, train/test split, cohort-specific association and direct effect heterogeneity.",
+      "deterministic_verifier_design": "Recompute model outputs from frozen weights or verify scored held-out rows, then complete associations and heterogeneity arithmetic.",
+      "negative_controls": "Label inferred patient scores as measured or place a declared held-out patient in training lineage; reject provenance and fold artifacts. This tests recorded lineage, not unobservable training history.",
+      "unresolved_independent_data_and_runtime_assumptions": "No observed patient DepMap truth exists from cell-line screens; task cannot claim such truth. Model/source availability and 30-minute scoring remain open.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-32-synthetic-lethality-ranking",
+      "target_ids": [
+        "da-26-4"
+      ],
+      "scientific_question_on_independent_observations": "Which candidate gene dependencies for a prespecified loss-of-function event remain supported by held-out prediction, mutation exclusivity and independent interaction priors?",
+      "matching_existing_question_ids": [
+        "target-evidence-01",
+        "target-evidence-02"
+      ],
+      "matching_existing_workstream_ids": [
+        "target-evidence"
+      ],
+      "existing_question_fit_by_target": {
+        "da-26-4": {
+          "question_ids": [
+            "target-evidence-01",
+            "target-evidence-02"
+          ],
+          "fit": "component_only"
+        }
+      },
+      "input_design": "Observed multiomic features, measured cell-line dependency, mutation matrix and frozen paralog/PPI evidence; patient-level dependencies clearly labeled inferred if used.",
+      "provenance_requirements": "Pin assay cohorts, model training split, mutation/reference versions and prior provenance.",
+      "required_full_output_artifacts_with_key_columns": [
+        "features.tsv: sample_id, split, feature_id, value",
+        "dependency.tsv: sample_id, target_gene, measured_or_inferred, score",
+        "predictions.tsv: sample_id, target_gene, predicted_score, fold",
+        "exclusivity.tsv: candidate, both, event_only, candidate_only, neither, p_value",
+        "ranking.tsv: candidate, cv_metric, exclusivity_evidence, paralog_evidence, ppi_evidence, final_score"
+      ],
+      "method_and_decision_parameters_to_freeze": "Loss-of-function mask, nested-CV lasso and hyperparameter selection, held-out metric, exclusivity test, prior versions and transparent ranking weights.",
+      "deterministic_verifier_design": "Recompute leakage-safe folds, complete predictions, 2x2 events and weighted rank from supplied priors.",
+      "negative_controls": "Overlap submitted training and held-out IDs, omit double-negative patients, or change one ranking weight; reject fold, contingency and ranking artifacts. Artifact checks alone cannot prove unseen model training avoided leakage.",
+      "unresolved_independent_data_and_runtime_assumptions": "Patient score provenance may be inferred; independent assays and bounded model training needed. Ranking is prioritization, not validated synthetic lethality.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-33-mutation-burden-response",
+      "target_ids": [
+        "da-3-4",
+        "da-3-5"
+      ],
+      "scientific_question_on_independent_observations": "In an independent treated cohort, does assay-adjusted mutation burden associate with response, and which prespecified variants differ between response groups?",
+      "matching_existing_question_ids": [
+        "clinical-response-model-01",
+        "clinical-variant-cohort-01"
+      ],
+      "matching_existing_workstream_ids": [
+        "clinical-response-model",
+        "clinical-variant-cohort"
+      ],
+      "existing_question_fit_by_target": {
+        "da-3-4": {
+          "question_ids": [
+            "clinical-variant-cohort-01",
+            "clinical-response-model-01"
+          ],
+          "fit": "component_only"
+        },
+        "da-3-5": {
+          "question_ids": [],
+          "fit": "no_existing_question"
+        }
+      },
+      "input_design": "Observed tumor mutation calls, callable territories and patient response with one eligible sample per patient.",
+      "provenance_requirements": "Pin cohort, assay panel, sequencing/call pipeline, variant annotations and response definition.",
+      "required_full_output_artifacts_with_key_columns": [
+        "patients.tsv: patient_id, response, callable_bases, eligible",
+        "variants.tsv: patient_id, variant_id, gene_id, qualifying",
+        "burden.tsv: patient_id, mutations, callable_mb, mutations_per_mb",
+        "burden_test.tsv: model, coefficient, interval, p_value",
+        "variant_tests.tsv: variant_id, responder_with, responder_without, nonresponder_with, nonresponder_without, odds_ratio, p_value, q_value"
+      ],
+      "method_and_decision_parameters_to_freeze": "Callable-territory adjustment, burden model, sparse variant eligibility, mutation-negative controls, statistical test and multiplicity.",
+      "deterministic_verifier_design": "Recompute per-patient burden and all response contingency tables from frozen calls.",
+      "negative_controls": "Double-count a mutation or drop mutation-negative patients from a response denominator; reject burden and contingency errors.",
+      "unresolved_independent_data_and_runtime_assumptions": "Both endpoints need one independent cohort and assay-comparable burden; original supplementary table is not used.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-34-immune-composition-nmf",
+      "target_ids": [
+        "da-4-1"
+      ],
+      "scientific_question_on_independent_observations": "Can stable latent immune-composition patterns stratify patients in an independent tumor cohort without using clinical outcomes to choose rank?",
+      "matching_existing_question_ids": [
+        "multimodal-clinical-discovery-02"
+      ],
+      "matching_existing_workstream_ids": [
+        "multimodal-clinical-discovery"
+      ],
+      "existing_question_fit_by_target": {
+        "da-4-1": {
+          "question_ids": [
+            "multimodal-clinical-discovery-02"
+          ],
+          "fit": "component_only"
+        }
+      },
+      "input_design": "Observed patient-by-cell-population fraction matrix from validated cell annotations.",
+      "provenance_requirements": "Pin cohort, denominator, cell-state annotation and NMF implementation/version.",
+      "required_full_output_artifacts_with_key_columns": [
+        "matrix.tsv: patient_id, cell_type, fraction",
+        "rank_sweep.tsv: rank, restart, reconstruction_error, stability",
+        "factors.tsv: patient_id, factor_id, weight",
+        "loadings.tsv: factor_id, cell_type, weight",
+        "subtypes.tsv: patient_id, subtype, assignment_margin"
+      ],
+      "method_and_decision_parameters_to_freeze": "Nonnegative scaling, missing values, rank search, restart seeds, stability criterion and subtype labeling invariant.",
+      "deterministic_verifier_design": "Recompute reconstruction and rank-selection statistics with pinned seeds and numerical tolerances. Accept factor permutation/scaling where the task permits it; compare full patient memberships after optimal label matching. Reconstruction error alone is insufficient to verify clinically used subtypes, and NMF factors do not define a unique subspace equivalence contract.",
+      "negative_controls": "Submit negative composition values, omit a patient, or change a reconstruction beyond tolerance; reject. Verify factor permutation/scaling invariance and rank-selection evidence; artifacts alone cannot reveal hidden outcome-guided selection.",
+      "unresolved_independent_data_and_runtime_assumptions": "Need sufficient independent patients; full rank sweep must fit runtime and not use benchmark data.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-35-cell-score-survival",
+      "target_ids": [
+        "da-4-6"
+      ],
+      "scientific_question_on_independent_observations": "Among nonresponders in an independent cancer cohort, what proportion has a prespecified high T-cell state score, and what censoring-aware evidence links that group to favorable recurrence-free survival?",
+      "matching_existing_question_ids": [
+        "clinical-survival-01"
+      ],
+      "matching_existing_workstream_ids": [
+        "clinical-survival"
+      ],
+      "existing_question_fit_by_target": {
+        "da-4-6": {
+          "question_ids": [
+            "clinical-survival-01"
+          ],
+          "fit": "candidate_if_extended"
+        }
+      },
+      "input_design": "Observed treatment response, baseline cell-state scores and recurrence/censoring data per patient.",
+      "provenance_requirements": "Pin score assay, pathologic-response definition, survival endpoint and dates.",
+      "required_full_output_artifacts_with_key_columns": [
+        "patients.tsv: patient_id, response, score, high_call, recurrence_time, event, followup",
+        "proportion.tsv: eligible_nonresponders, high_score_nonresponders, fraction",
+        "survival.tsv: stratum, n, events, survival_estimate, interval, test_statistic"
+      ],
+      "method_and_decision_parameters_to_freeze": "High-score cutoff before outcomes, nonresponse cohort, recurrence time origin, censoring and favorable-survival criterion. Clarify whether the requested proportion concerns high-score nonresponders or the intersection with a fixed-time survival endpoint; these denominators differ and the public wording alone does not settle it.",
+      "deterministic_verifier_design": "Recompute eligible numerator/denominator and survival estimates from patient rows.",
+      "negative_controls": "Submit a cutoff different from the frozen value, or count a censored patient as a known event-free survivor beyond last follow-up; reject cutoff and status artifacts. Artifact verification cannot establish how the frozen cutoff was originally selected; record outcome-independent selection as an authoring/provenance requirement.",
+      "unresolved_independent_data_and_runtime_assumptions": "Independent cohort needs adequate nonresponders and follow-up; association does not establish score predictiveness prospectively. Exact proportion endpoint remains ambiguous until an authored contract is selected; this design cannot yet claim exact benchmark equivalence.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-36-shared-expanded-tcr",
+      "target_ids": [
+        "da-4-7"
+      ],
+      "scientific_question_on_independent_observations": "Which expanded T-cell clonotypes recur across independent patients and associate with an observed exhaustion-like transcriptional state?",
+      "matching_existing_question_ids": [
+        "immune-repertoire-02"
+      ],
+      "matching_existing_workstream_ids": [
+        "immune-repertoire"
+      ],
+      "existing_question_fit_by_target": {
+        "da-4-7": {
+          "question_ids": [
+            "immune-repertoire-02"
+          ],
+          "fit": "candidate_if_extended"
+        }
+      },
+      "input_design": "Observed paired-chain TCR contigs and same-cell expression/state labels across patients.",
+      "provenance_requirements": "Pin TCR chemistry, contig QC, state classifier, patient identity and consent/rights.",
+      "required_full_output_artifacts_with_key_columns": [
+        "contigs.tsv: cell_id, patient_id, chain, cdr3, productive, umi, qc",
+        "clonotypes.tsv: patient_id, clonotype_id, cell_count, expanded",
+        "sharing.tsv: clonotype_id, n_patients, state_fraction, evidence_cells"
+      ],
+      "method_and_decision_parameters_to_freeze": "Clonotype identity, paired-chain requirement, expansion threshold, cell-state gate and distinct-patient sharing threshold.",
+      "deterministic_verifier_design": "Rebuild clones from eligible contigs and verify all patient counts and state joins.",
+      "negative_controls": "Duplicate a cell or merge distinct CDR3 identities in the submitted clone table; reject false expansion and patient sharing.",
+      "unresolved_independent_data_and_runtime_assumptions": "Independent cohort needs matched repertoire and expression; sharing does not validate therapeutic TCR function.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-37-tumor-protein-dependency-targets",
+      "target_ids": [
+        "da-5-1"
+      ],
+      "scientific_question_on_independent_observations": "Which independently observed tumor-enriched proteins are also required by relevant cancer cell lines under frozen target-evidence rules?",
+      "matching_existing_question_ids": [
+        "target-evidence-01"
+      ],
+      "matching_existing_workstream_ids": [
+        "target-evidence"
+      ],
+      "existing_question_fit_by_target": {
+        "da-5-1": {
+          "question_ids": [
+            "target-evidence-01"
+          ],
+          "fit": "candidate_if_extended"
+        }
+      },
+      "input_design": "Observed tumor/normal proteomics plus separate measured CRISPR dependency and druggability evidence.",
+      "provenance_requirements": "Pin tumor and cell-line studies, protein-gene crosswalk and druggability catalog versions.",
+      "required_full_output_artifacts_with_key_columns": [
+        "protein_effects.tsv: protein_id, tumor_normal_effect, se, q_value, measured",
+        "dependency.tsv: cell_line_id, gene_id, dependency_score, qc",
+        "crosswalk.tsv: protein_id, gene_id, ambiguity",
+        "targets.tsv: gene_id, expression_call, dependency_call, druggable_evidence, rank"
+      ],
+      "method_and_decision_parameters_to_freeze": "Tumor contrast, dependency threshold and cell-line relevance, ID ambiguity, druggability criterion and ranking.",
+      "deterministic_verifier_design": "Recompute each assay-specific call and conjunction/rank over all eligible targets.",
+      "negative_controls": "Claim a target with no qualifying dependency measurement or silently resolve an ambiguous protein-gene mapping; reject unsupported evidence.",
+      "unresolved_independent_data_and_runtime_assumptions": "Requires independent proteomics and cancer-line screens; cell-line dependency is not patient efficacy.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-38-activating-phosphosite-targets",
+      "target_ids": [
+        "da-5-3"
+      ],
+      "scientific_question_on_independent_observations": "Which independently measured activating phosphosites rise in tumors and have host genes with separate dependency evidence?",
+      "matching_existing_question_ids": [
+        "target-evidence-01"
+      ],
+      "matching_existing_workstream_ids": [
+        "target-evidence"
+      ],
+      "existing_question_fit_by_target": {
+        "da-5-3": {
+          "question_ids": [
+            "target-evidence-01"
+          ],
+          "fit": "component_only"
+        }
+      },
+      "input_design": "Observed site-resolved tumor/normal phosphoproteomics, localization evidence and measured CRISPR dependency.",
+      "provenance_requirements": "Pin phosphosite residue/reference, localization score, paired total-protein assay if available and dependency catalog.",
+      "required_full_output_artifacts_with_key_columns": [
+        "sites.tsv: protein_id, residue, localization_score, activating_annotation",
+        "site_effects.tsv: site_id, tumor_normal_effect, se, q_value",
+        "dependency.tsv: gene_id, cell_line_id, score",
+        "targets.tsv: site_id, host_gene, site_call, dependency_call, druggable_evidence"
+      ],
+      "method_and_decision_parameters_to_freeze": "Site localization/activation definition, tumor contrast, total-protein confounding adjustment, dependency threshold and rank.",
+      "deterministic_verifier_design": "Recompute site-level effects and joins without collapsing distinct residues to a gene-level abundance.",
+      "negative_controls": "Swap residue coordinates or substitute total-protein effects for phosphosite effects in submitted artifacts; reject site identity and assay mismatch.",
+      "unresolved_independent_data_and_runtime_assumptions": "Independent site-resolved assay is essential; no direct evidence of drug response follows.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-39-muscle-sex-timecourse",
+      "target_ids": [
+        "da-6-2"
+      ],
+      "scientific_question_on_independent_observations": "How do observed skeletal-muscle transcripts change over training time in each sex, and which trajectories are shared versus divergent?",
+      "matching_existing_question_ids": [
+        "rna-seq-contrast-enrichment-04"
+      ],
+      "matching_existing_workstream_ids": [
+        "rna-seq-contrast-enrichment"
+      ],
+      "existing_question_fit_by_target": {
+        "da-6-2": {
+          "question_ids": [
+            "rna-seq-contrast-enrichment-04"
+          ],
+          "fit": "candidate_if_extended"
+        }
+      },
+      "input_design": "Independent longitudinal muscle RNA counts with participant, sex, time and repeated visits.",
+      "provenance_requirements": "Pin training protocol, biopsy site, count pipeline, visits and biological identities.",
+      "required_full_output_artifacts_with_key_columns": [
+        "samples.tsv: sample_id, participant_id, sex, week, qc",
+        "gene_effects.tsv: gene_id, time_effect, sex_time_interaction, se, p_value, q_value",
+        "trajectories.tsv: gene_id, cluster_id, profile_by_sex_time",
+        "cluster_summary.tsv: cluster_id, n_genes, shared_or_specific"
+      ],
+      "method_and_decision_parameters_to_freeze": "Time coding, participant random/fixed effects, missing visits, sex-by-time test, trajectory distance/cluster count and FDR. A participant fixed intercept absorbs time-invariant sex main effects; use estimable time and sex-by-time contrasts or a justified random-intercept model, and require a full-rank design.",
+      "deterministic_verifier_design": "Independently fit complete gene model and verify clustered trajectory summaries after preserving participant pairs.",
+      "negative_controls": "Assign inconsistent sex labels across visits of one participant or break submitted visit order; reject metadata and trajectory artifacts.",
+      "unresolved_independent_data_and_runtime_assumptions": "Need repeated biopsies with both sexes and sufficient visits; clustering runtime must be bounded.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-40-multi-organ-training-response",
+      "target_ids": [
+        "da-6-5"
+      ],
+      "scientific_question_on_independent_observations": "Which independently observed organs have similar *changes* after endurance training on a common measured molecular feature universe?",
+      "matching_existing_question_ids": [],
+      "matching_existing_workstream_ids": [],
+      "existing_question_fit_by_target": {
+        "da-6-5": {
+          "question_ids": [],
+          "fit": "no_existing_question"
+        }
+      },
+      "input_design": "Observed pre/post training multi-organ assay data with subject and tissue identities.",
+      "provenance_requirements": "Pin organ sampling, training exposure, assay layers, feature mapping and within-tissue controls.",
+      "required_full_output_artifacts_with_key_columns": [
+        "samples.tsv: subject_id, organ, time, condition, qc",
+        "tissue_effects.tsv: organ, feature_id, effect, se, q_value, measured",
+        "similarity.tsv: organ_a, organ_b, shared_features, effect_correlation, interval, rank"
+      ],
+      "method_and_decision_parameters_to_freeze": "Within-organ response model, paired versus independent design, shared feature universe, effect scale and similarity metric.",
+      "deterministic_verifier_design": "Recompute organ-specific effects and similarity only from matched measured features.",
+      "negative_controls": "Substitute baseline abundance for a training-change effect or count a feature not measured in both organs; reject effect provenance and shared-universe errors.",
+      "unresolved_independent_data_and_runtime_assumptions": "Requires independent multi-organ pre/post study; cannot infer coordination from baseline differences.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-41-bread-spiker-metabolites",
+      "target_ids": [
+        "da-8-1"
+      ],
+      "scientific_question_on_independent_observations": "Within a prospectively defined high-glucose-response subgroup in an independent meal study, which measured metabolites have positive adjusted association with systolic pressure?",
+      "matching_existing_question_ids": [],
+      "matching_existing_workstream_ids": [],
+      "existing_question_fit_by_target": {
+        "da-8-1": {
+          "question_ids": [],
+          "fit": "no_existing_question"
+        }
+      },
+      "input_design": "Observed bread-meal glucose traces, preload flags, replicate meals, metabolomics and age/BMI/BP per participant.",
+      "provenance_requirements": "Pin meal protocol, sensor calibration, metabolite platform, visit dates and participant IDs.",
+      "required_full_output_artifacts_with_key_columns": [
+        "meals.tsv: participant_id, meal_id, preload, baseline_glucose, peak_glucose, rise",
+        "phenotype.tsv: participant_id, unmitigated_mean_rise, cohort_median, subgroup",
+        "regressions.tsv: metabolite_id, n, beta_bp, se, p_value, q_value, positive, rank",
+        "top10.tsv: metabolite_id, beta_bp, p_value, rank"
+      ],
+      "method_and_decision_parameters_to_freeze": "Glucose window, exclude preload meals, replicate weighting, median ties, positive beta, age/BMI adjustment, significance/FDR and top-10 ordering.",
+      "deterministic_verifier_design": "Recompute meal rises, subject mean, cohort median/subgroup and every regression from eligible participants.",
+      "negative_controls": "Include a preload meal in the unmitigated subgroup calculation or put a negative coefficient in the positive top-10 table; reject subgroup and direction errors.",
+      "unresolved_independent_data_and_runtime_assumptions": "Independent cohort needs replicated meals, metabolomics and BP; selection must precede association fitting.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-42-crossover-preload-interaction",
+      "target_ids": [
+        "da-8-2"
+      ],
+      "scientific_question_on_independent_observations": "Does baseline metabolic status modify the within-participant difference in glucose-peak reduction between two observed preloads?",
+      "matching_existing_question_ids": [],
+      "matching_existing_workstream_ids": [],
+      "existing_question_fit_by_target": {
+        "da-8-2": {
+          "question_ids": [],
+          "fit": "no_existing_question"
+        }
+      },
+      "input_design": "Independent crossover meal challenges with matched protein/fiber preloads and untreated baseline, participant metabolic status.",
+      "provenance_requirements": "Pin protocol, washout, sequence/order, sensor window and status assay.",
+      "required_full_output_artifacts_with_key_columns": [
+        "challenges.tsv: participant_id, period, meal, preload, baseline_glucose, peak_glucose, reduction",
+        "interaction.tsv: status_group, preload_difference, n, se",
+        "model.tsv: coefficient, estimate, se, p_value, interval"
+      ],
+      "method_and_decision_parameters_to_freeze": "Peak-reduction baseline, paired challenge eligibility, status cutoff, order/carryover terms, interaction scale and missing challenge policy.",
+      "deterministic_verifier_design": "Recompute per-person reductions/differences and fitted preload-by-status interaction.",
+      "negative_controls": "Join challenges from different participants or reverse the declared interaction contrast; reject pairing and coefficient mismatch.",
+      "unresolved_independent_data_and_runtime_assumptions": "Independent crossover data with enough paired participants per status required; measured interaction not causal mechanism.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-43-metabolite-mediation",
+      "target_ids": [
+        "da-8-3"
+      ],
+      "scientific_question_on_independent_observations": "Which lipid features differ between independently measured meal-response phenotypes, and do prespecified mediator models explain any association with metabolic outcomes?",
+      "matching_existing_question_ids": [],
+      "matching_existing_workstream_ids": [],
+      "existing_question_fit_by_target": {
+        "da-8-3": {
+          "question_ids": [],
+          "fit": "no_existing_question"
+        }
+      },
+      "input_design": "Observed meal phenotype labels, metabolomics and insulin-resistance/beta-cell outcomes with collection timing.",
+      "provenance_requirements": "Pin phenotyping procedure, lipid annotation, assay batch, outcome measure and subject ID.",
+      "required_full_output_artifacts_with_key_columns": [
+        "patients.tsv: patient_id, phenotype, outcome_a, outcome_b, timing",
+        "metabolites.tsv: patient_id, metabolite_id, abundance, qc",
+        "differential.tsv: metabolite_id, effect, se, p_value, q_value, rank",
+        "mediation.tsv: lipid_id, outcome, direct_effect, indirect_effect, se, interval, assumptions"
+      ],
+      "method_and_decision_parameters_to_freeze": "Phenotype construction, abundance normalization, top-10 rule, lipid membership, mediator/outcome models, covariates and uncertainty.",
+      "deterministic_verifier_design": "Recompute complete differential table, selected top 10 and indirect-effect arithmetic under frozen models.",
+      "negative_controls": "Add a lipid outside the frozen eligible top-10 set to the mediation results or omit an eligible model; reject selection and completeness errors.",
+      "unresolved_independent_data_and_runtime_assumptions": "Observational mediation needs temporal/confounding assumptions and cannot certify causality; independent suitable cohort required.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-44-baseline-tcell-survival",
+      "target_ids": [
+        "da-9-1"
+      ],
+      "scientific_question_on_independent_observations": "Which baseline circulating T-cell populations associate with one-year overall survival under a prespecified censoring-aware model in an independent treated cohort?",
+      "matching_existing_question_ids": [
+        "clinical-survival-01"
+      ],
+      "matching_existing_workstream_ids": [
+        "clinical-survival"
+      ],
+      "existing_question_fit_by_target": {
+        "da-9-1": {
+          "question_ids": [
+            "clinical-survival-01"
+          ],
+          "fit": "candidate_if_extended"
+        }
+      },
+      "input_design": "Observed baseline immune-cell frequencies, treatment records and dated death/last-follow-up.",
+      "provenance_requirements": "Pin cohort, treatment regimen, baseline window, cell annotation and survival ascertainment.",
+      "required_full_output_artifacts_with_key_columns": [
+        "patients.tsv: patient_id, treatment, baseline_date, survival_days, event, followup_days",
+        "fractions.tsv: patient_id, cell_type, numerator, denominator, fraction",
+        "survival_tests.tsv: cell_type, n, events, hazard_ratio_or_fixed_time_effect, se, p_value, q_value"
+      ],
+      "method_and_decision_parameters_to_freeze": "One-year estimand with censoring, biomarker scale/cutoff, cohort eligibility, covariates and multiple-testing universe.",
+      "deterministic_verifier_design": "Recompute patient fractions and full censoring-aware tests; verify no censored patient is called a one-year survivor without follow-up.",
+      "negative_controls": "Label a patient censored before one year as a known one-year survivor or count duplicate patient visits; reject status and denominator artifacts.",
+      "unresolved_independent_data_and_runtime_assumptions": "Need enough events/replicates; association cannot be marketed as validated predictive biomarker.",
+      "status": "proposed-design-only-no-coverage-credit"
+    },
+    {
+      "proposed_id": "biomni-design-45-on-treatment-immune-protein",
+      "target_ids": [
+        "da-9-7"
+      ],
+      "scientific_question_on_independent_observations": "Do circulating immune-cell fractions correlate with concurrently measured serum proteins at one declared on-treatment visit in independent patients?",
+      "matching_existing_question_ids": [
+        "proteomics-metabolomics-03"
+      ],
+      "matching_existing_workstream_ids": [
+        "proteomics-metabolomics"
+      ],
+      "existing_question_fit_by_target": {
+        "da-9-7": {
+          "question_ids": [
+            "proteomics-metabolomics-03"
+          ],
+          "fit": "candidate_if_extended"
+        }
+      },
+      "input_design": "Observed same-patient immune-cell and serum-protein measures at a prespecified treatment visit.",
+      "provenance_requirements": "Pin visit label/date, assay platforms, cell annotation, protein IDs and patient linkage.",
+      "required_full_output_artifacts_with_key_columns": [
+        "samples.tsv: patient_id, visit_date, immune_sample_id, protein_sample_id, qc",
+        "fractions.tsv: patient_id, cell_type, fraction",
+        "proteins.tsv: patient_id, protein_id, abundance",
+        "associations.tsv: cell_type, protein_id, n_pairs, correlation, p_value, q_value"
+      ],
+      "method_and_decision_parameters_to_freeze": "Same-visit window, patient eligibility, cell/protein QC, correlation metric, zero/missing policy and full pairwise FDR.",
+      "deterministic_verifier_design": "Recompute matching and every pairwise correlation from complete common-patient set.",
+      "negative_controls": "Join protein and immune samples from different patients/visits or drop tested null pairs; reject pairing and multiplicity-universe errors.",
+      "unresolved_independent_data_and_runtime_assumptions": "Independent paired immune/protein measurements at a single visit required; source cohort availability unvalidated.",
+      "status": "proposed-design-only-no-coverage-credit"
+    }
+  ],
+  "design_principles": [
+    "Each row is a proposed original observed-data task design, not a runnable recipe or a claim that the benchmark endpoint is covered.",
+    "Negative controls are verifier mutations of a legitimate observed input or artifact, not generated biological observations.",
+    "Inputs, numerical decisions, complete output schemas, oracle independence and 30-minute runtime remain to be validated before authoring.",
+    "Negative controls mutate submitted artifacts against fixed, real observations. They are proposed checks; no mutation results are claimed. Input perturbations require an explicit expected invariant or a recomputed oracle, never an assumption that random permutation changes significance.",
+    "Prefer source-native biological formats for inputs (for example H5AD, count matrices, BAM/CRAM, BED, MAF/VCF, FASTA and assay-specific tables). Output tables are analysis artifacts; they do not justify replacing structured biological inputs with toy CSV files.",
+    "Package reference runs and independent invariants are both required. Sharing the oracle implementation with the solver or verifier is not evidence of independent correctness. Freeze every output schema and numerical tolerance before execution.",
+    "Public benchmark study accessions are exclusion checks for independent data selection. Document accession, release, license, checksum, biological dimensions, donor/replicate structure and any bounded subset; never use benchmark fixture bytes or answers.",
+    "Endpoint review is based on question text only. Assay details, supplementary methods, independent data availability and runtime remain unresolved; no design is implementation-ready solely because its question was reviewed."
+  ],
+  "grouping_rationale": [
+    "Combined da-13-1/13-3 because both can use one paired longitudinal protein and body-measure cohort, subject to matching actual samples.",
+    "Combined da-17-1/17-5 because both are patient-level immune-frequency tests on one diagnosis-by-ancestry design; split monocyte gene-level pseudobulk da-17-3.",
+    "Combined da-18-5/18-7 because pathway prevalence and ESR1-pathway cooccurrence share one therapy-timed patient-event matrix; receptor-subtype landscape da-18-1 needs a broader cohort.",
+    "Combined da-3-4/3-5 because burden-response and per-variant response enrichment can share a single assay-comparable mutation/response cohort.",
+    "Split the two protein-predictor questions because class-specific composition and MLO-versus-organelle screening use different positive/control universes.",
+    "Split ALS WGCNA from expression/duration models because the network method and runtime are distinct; split each AML chromatin/RNA assay and each primary-cell baseline/compound endpoint because they require different inputs and scientific decisions.",
+    "Split cross-study protein concordance by external comparator, signature clustering from subgroup prevalence, clinical survival from NMF, phosphosite from total-protein target evidence, and single-organ from multi-organ training responses.",
+    "Keep da-24-3 as alternative GWAS methods, not an exact endpoint, because the public question does not name a statistic or trait pair."
+  ],
+  "planning_basis": {
+    "revision": "f6bd8d0f85",
+    "inventory_sha256": "dff90709c7bfbc913b70d6f6fc53a1ba48e17cb4716b221ed2f4350d0d6d4b43",
+    "workflow_plan_sha256": "ceb4677a88cd32dc53704a9945fe29db8982c354f1d98be7c0bb27649494cddf",
+    "meaning": "Hashes identify the planning inputs before this endpoint-review update."
+  }
+}

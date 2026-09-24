@@ -205,7 +205,31 @@
     "summary_shape": "Generator shows a placeholder record example; RNA explicitly requires one comparison record containing all six fields. No computed IDs or values are exposed.",
     "artifact_diagnostics": "Focused regressions cover malformed JSON, wrong record shape, invalid UTF-8 and missing summaries alongside valid and malformed TSVs; reward stays zero and every TSV check is retained.",
     "cost_limit": "Artifacts are checked even after summary failure. Existing per-file limits and Harbor verifier timeout apply; no aggregate artifact-byte limit was added, and infrastructure failures remain unscored.",
-    "shell_path": "Added /etc/profile.d/bio.sh export alongside Docker ENV. The pinned Harbor tmux_session.py starts bash --login. Fresh container/terminal verification remains pending.",
+    "shell_path": "Two model-free follow-up workers failed in the validation launcher before sandbox creation: omitted module, then missing oracle constructor arguments. The named-oracle setup-hook correction is prepared; another launch awaits approval under the Iris repeated-failure rule. PATH remains unverified in a fresh terminal.",
     "original_attempts_unchanged": true
-  }
+  },
+  "followup_validation_runs": [
+    {
+      "job_id": "/exedev/bio-interface-harbor-20260924-132827",
+      "state": "failed-before-sandbox-creation",
+      "cause": "Launcher omitted terminal_oracle.py from the working directory; ModuleNotFoundError before sandbox creation.",
+      "archive_uri": "gs://marin-us-central2/bio-tasks/interface-validation/sha256/5ae613ec37ce437bc7bba8bd06f4951b6dc00355cb8830d0a44030857af07f62/outputs.tar.zst",
+      "archive_sha256": "5ae613ec37ce437bc7bba8bd06f4951b6dc00355cb8830d0a44030857af07f62",
+      "archive_bytes": 316969,
+      "model_calls": 0,
+      "scored_tasks": 0,
+      "remaining_sandboxes": []
+    },
+    {
+      "job_id": "/exedev/bio-interface-harbor-20260924-133230",
+      "state": "failed-before-sandbox-creation",
+      "cause": "Harbor custom-agent path omitted required oracle constructor arguments; TypeError before sandbox creation.",
+      "archive_uri": "gs://marin-us-central2/bio-tasks/interface-validation/sha256/a7efb8ae244b5547279acae7946aba439c1d1eb6fb89ae67591e0f658f6eb0e7/outputs.tar.zst",
+      "archive_sha256": "a7efb8ae244b5547279acae7946aba439c1d1eb6fb89ae67591e0f658f6eb0e7",
+      "archive_bytes": 317034,
+      "model_calls": 0,
+      "scored_tasks": 0,
+      "remaining_sandboxes": []
+    }
+  ]
 }

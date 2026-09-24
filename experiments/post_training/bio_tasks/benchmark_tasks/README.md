@@ -26,6 +26,10 @@ queue estimates never promote a coverage status by themselves.
 The [full design plan](../workflow_plan.json) assigns every inventoried ID record
 to endpoint review and records proposed questions, independent input requirements
 and verifier designs. These assignments do not change coverage states.
+The [BiomniBench-DA endpoint designs](../workflow_designs/biomnibench-da.json) refine
+all 50 question IDs into 45 proposed tasks, with output artifacts, numerical decisions,
+negative controls and unresolved independent-data requirements. Their IDs are linked
+from each inventory record's `endpoint_review`; they add no validated coverage.
 
 Enumeration, prompt inspection and executable coverage are separate claims.
 An ID obtained from a registry can remain uninspected; a reviewed shared protocol

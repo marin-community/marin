@@ -42,7 +42,7 @@
       "distribution": "ID",
       "tasks_file": "benchmark_tasks/biomnibench-da.json",
       "source_inventory_name": "BiomniBench-DA",
-      "task_inventory_status": "assessed",
+      "task_inventory_status": "50-question-endpoints-reviewed; authored artifact schemas and independent-data selection pending",
       "public_inventory_count": 50
     },
     "BioAgent": {
