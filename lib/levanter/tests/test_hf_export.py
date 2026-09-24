@@ -7,6 +7,7 @@ import json
 from types import SimpleNamespace
 from typing import Any, cast
 
+import fsspec
 import pytest
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
@@ -16,6 +17,8 @@ from tokenizers.processors import TemplateProcessing
 from transformers import AutoTokenizer, PreTrainedTokenizerFast
 
 from levanter.compat.hf_checkpoints import (
+    HFCheckpointConverter,
+    RepoRef,
     _save_tokenizer_pretrained,
     build_generation_config,
     save_hf_checkpoint_callback,
@@ -120,6 +123,25 @@ class TestBuildGenerationConfig:
             build_generation_config(tok, [-1])
 
 
+@pytest.mark.parametrize("with_attributes", [True, False])
+def test_save_code_from_fsspec_reference_skips_weights(tmp_path, with_attributes):
+    fs = fsspec.filesystem("memory")
+    model_path = f"bucket/model-{with_attributes}"
+    if with_attributes:
+        fs.pipe(f"{model_path}/.gitattributes", b"*.safetensors filter=lfs\n")
+    fs.pipe(f"{model_path}/configuration_model.py", b"model code")
+    fs.pipe(f"{model_path}/model.safetensors", b"weights")
+
+    converter = object.__new__(HFCheckpointConverter)
+    object.__setattr__(converter, "reference_checkpoint", RepoRef(f"memory://{model_path}"))
+
+    converter._save_code_local(str(tmp_path))
+
+    assert (tmp_path / "configuration_model.py").read_bytes() == b"model code"
+    assert (tmp_path / ".gitattributes").exists() == with_attributes
+    assert not (tmp_path / "model.safetensors").exists()
+
+
 class _CapturingConverter:
     def __init__(self):
         self.calls = []
@@ -182,7 +204,7 @@ def test_save_tokenizer_pretrained_exports_portable_generic_fast_tokenizer(tmp_p
     )
     tokenizer.add_tokens(["portable"])
     tokenizer.chat_template = (
-        "{% for message in messages %}{{ message['role'] }}: " "{{ message['content'] }}{{ eos_token }}{% endfor %}"
+        "{% for message in messages %}{{ message['role'] }}: {{ message['content'] }}{{ eos_token }}{% endfor %}"
     )
 
     text = "HELLO portable mystery"
