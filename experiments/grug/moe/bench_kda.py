@@ -17,9 +17,11 @@ Run (H100, cw-us-east-02a)::
         -- python -m experiments.grug.moe.bench_kda
 """
 
+import contextlib
 import functools
 import os
 import statistics
+import sys
 import time
 
 import jax
@@ -188,61 +190,86 @@ def _cost_flops(fn, args):
         return 0.0
 
 
-def _run_variant(name, kernel, args, chunk_size, peak, mode):
+RESULTS: list[str] = []
+
+
+def _run_variant(name, kernel, args, chunk_size, peak, mode, precision=None):
     fwd = functools.partial(kernel, chunk_size=chunk_size)
-    if mode == "fwd":
-        fn = jax.jit(lambda *a: fwd(*a)[0])
-    else:
 
-        def loss(*a):
-            out, _ = fwd(*a)
-            return jnp.sum(out.astype(jnp.float32))
+    def fwd_out(*a):
+        return fwd(*a)[0]
 
-        fn = jax.jit(jax.grad(loss, argnums=(0, 1, 2, 4)))
-    flops = _cost_flops(
-        (
-            (lambda *a: fwd(*a)[0])
-            if mode == "fwd"
-            else (lambda *a: jax.grad(lambda *b: jnp.sum(fwd(*b)[0].astype(jnp.float32)), argnums=(0, 1, 2, 4))(*a))
-        ),
-        args,
-    )
-    med, best = _time_fn(fn, args)
+    def grad_out(*a):
+        return jax.grad(lambda *b: jnp.sum(fwd(*b)[0].astype(jnp.float32)), argnums=(0, 1, 2, 4))(*a)
+
+    raw = fwd_out if mode == "fwd" else grad_out
+    with jax.default_matmul_precision(precision) if precision else _nullctx():
+        fn = jax.jit(raw)
+        flops = _cost_flops(raw, args)
+        med, _best = _time_fn(fn, args)
     b, h, length = args[0].shape[0], args[0].shape[1], args[0].shape[2]
     tokens = b * h * length
     tflops = flops / med / 1e12 if flops else 0.0
     mfu = 100.0 * tflops / peak if flops else 0.0
-    print(
-        f"  {name:26s} C={chunk_size:<4d} {mode:8s} "
-        f"med={med*1e3:8.3f}ms best={best*1e3:8.3f}ms "
-        f"tok/s={tokens/med/1e6:8.2f}M flops={flops/1e9:9.2f}G "
-        f"{tflops:7.1f}TF/s MFU={mfu:5.1f}%"
+    line = (
+        f"L={length:<6d} {name:22s} C={chunk_size:<4d} {mode:8s} "
+        f"med={med*1e3:8.3f}ms tok/s={tokens/med/1e6:8.2f}M "
+        f"flops={flops/1e9:9.2f}G {tflops:7.1f}TF/s MFU={mfu:5.1f}%(vs{peak:.0f})"
     )
+    RESULTS.append(line)
+    print(line, flush=True)
     return med, tflops, mfu
 
 
-def main():
-    print("jax", jax.__version__, "devices:", jax.devices())
-    print("default_matmul_precision:", jax.config.jax_default_matmul_precision)
+@contextlib.contextmanager
+def _nullctx():
+    yield
 
-    b = int(os.environ.get("KDA_B", "16"))
+
+def main():
+    RESULTS.append(
+        f"jax {jax.__version__} devices={jax.devices()} default_mm_prec={jax.config.jax_default_matmul_precision}"
+    )
+    print(RESULTS[-1], flush=True)
+
+    b = int(os.environ.get("KDA_B", "8"))
     h = int(os.environ.get("KDA_H", "8"))
     dk = int(os.environ.get("KDA_DK", "128"))
     dv = int(os.environ.get("KDA_DV", "128"))
-    lengths = [int(x) for x in os.environ.get("KDA_LENS", "8192,16384").split(",")]
-    chunks = [int(x) for x in os.environ.get("KDA_CHUNKS", "32,64,128,256").split(",")]
+    lengths = [int(x) for x in os.environ.get("KDA_LENS", "8192").split(",")]
+    chunks = [int(x) for x in os.environ.get("KDA_CHUNKS", "32,64,128").split(",")]
 
     for length in lengths:
-        print(f"\n===== shape B={b} H={h} L={length} dk={dk} dv={dv} " f"(tokens/iter={b*h*length/1e6:.2f}M) =====")
         args = _make_inputs(b, h, length, dk, dv)
         for mode in ("fwd", "fwd_bwd"):
-            print(f"-- {mode} --")
             for c in chunks:
-                # current fp32 kernel (Neumann inverse)
-                _run_variant("chunk_kda(fp32,neumann)", chunk_kda, args, c, _H100_FP32_PEAK, mode)
-            # bf16 prototype (only a couple chunk sizes to keep runtime bounded)
+                _try("fp32,default", chunk_kda, args, c, _H100_FP32_PEAK, mode)
+            # true fp32 (no TF32) reference at C=64 to expose whether default uses TF32
+            _try("fp32,highest", chunk_kda, args, 64, _H100_FP32_PEAK, mode, precision="highest")
+            # bf16 intra-chunk matmul prototype (fp32 state kept)
             for c in [cc for cc in chunks if cc in (64, 128)]:
-                _run_variant("chunk_kda(bf16-mm)", _chunk_kda_matmul_dtype, args, c, _H100_BF16_PEAK, mode)
+                _try("bf16-mm", _chunk_kda_matmul_dtype, args, c, _H100_BF16_PEAK, mode)
+
+    marker = "###KDA_RESULTS###"
+    print("\n" + marker, flush=True)
+    for ln in RESULTS:
+        print(ln, flush=True)
+    print(marker, flush=True)
+    # finelog cannot serve federated peer-cluster logs after termination, but iris
+    # captures the stdout tail into the job error field on abnormal exit -- so exit
+    # non-zero to make the results retrievable via `job summary --json`.
+    sys.stdout.flush()
+    sys.exit(3)
+
+
+def _try(name, kernel, args, c, peak, mode, precision=None):
+    try:
+        return _run_variant(name, kernel, args, c, peak, mode, precision=precision)
+    except Exception as e:
+        msg = f"ERR {name} C={c} {mode}: {type(e).__name__}: {str(e)[:120]}"
+        RESULTS.append(msg)
+        print(msg, flush=True)
+        return None
 
 
 if __name__ == "__main__":
