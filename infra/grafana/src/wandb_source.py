@@ -166,6 +166,58 @@ def _projected_finish_ms(window: list[dict[str, float]]) -> int | None:
     return round((last[_TIMESTAMP_KEY] + steps_remaining * seconds / steps) * 1000)
 
 
+def _activity_history_specs(run_data: dict, summary: dict) -> list[_HistorySpec]:
+    """The token-baseline spec, then the rate-window spec when a running run can project.
+
+    A fork's sampled history includes its parent's, so both start after the branch.
+    """
+    branch_point = run_data.get("branchPoint")
+    own_min_step = int(branch_point["step"]) + 1 if branch_point else None
+    specs = [_HistorySpec((_STEP_KEY, _TOTAL_TOKENS_KEY, _TPS_KEY), _TPS_SAMPLES, own_min_step)]
+    step = summary.get(_STEP_KEY)
+    if run_data.get("state") == "running" and isinstance(step, int | float):
+        window_start = max(int(step) - _RATE_WINDOW_STEPS, own_min_step or 0)
+        specs.append(_HistorySpec((_STEP_KEY, _TIMESTAMP_KEY, _PROGRESS_KEY), _RATE_WINDOW_SAMPLES, window_start))
+    return specs
+
+
+def _activity_row(
+    run: str,
+    project: str,
+    run_data: dict,
+    summary: dict,
+    baseline_points: list[dict[str, float]],
+    window: list[dict[str, float]] | None,
+) -> dict:
+    """One `run_activity` row from the run's metadata, summary, and sampled histories."""
+    active = summary.get("_runtime")
+    active = float(active) if isinstance(active, int | float) else None
+    wall = _epoch_seconds(run_data["heartbeatAt"]) - _epoch_seconds(run_data["createdAt"])
+    tokens_seen = summary.get(_TOTAL_TOKENS_KEY)
+    tokens_seen = float(tokens_seen) if isinstance(tokens_seen, int | float) else None
+    baseline = _history_baseline(baseline_points)
+    reference_tps = baseline.reference_tps if baseline else None
+    tokens_since_start = tokens_seen - baseline.tokens_baseline if tokens_seen is not None and baseline else None
+    efficiency = (
+        tokens_since_start / (reference_tps * wall)
+        if tokens_since_start is not None and tokens_since_start > 0 and reference_tps and wall > 0
+        else None
+    )
+    return {
+        "run": run,
+        "project": project,
+        "run_url": _RUN_URL.format(entity=_ENTITY, project=project, run=run),
+        "state": run_data.get("state"),
+        "active_seconds": active,
+        "wall_seconds": wall,
+        "downtime_seconds": None if active is None else wall - active,
+        "active_share": active / wall if active is not None and wall > 0 else None,
+        "reference_tps": reference_tps,
+        "progress_efficiency": efficiency,
+        "projected_finish_ms": _projected_finish_ms(window) if window is not None else None,
+    }
+
+
 class WandbSource:
     """Reads the public hero-run report's runset, and any single run's history and clocks."""
 
@@ -354,48 +406,11 @@ class WandbSource:
             if not run_data:
                 return None
             summary = json.loads(run_data.get("summaryMetrics") or "{}")
-            active = summary.get("_runtime")
-            active = float(active) if isinstance(active, int | float) else None
-            wall = _epoch_seconds(run_data["heartbeatAt"]) - _epoch_seconds(run_data["createdAt"])
-            tokens_seen = summary.get(_TOTAL_TOKENS_KEY)
-            tokens_seen = float(tokens_seen) if isinstance(tokens_seen, int | float) else None
-            branch_point = run_data.get("branchPoint")
-            # A fork's sampled history includes its parent's; start after the branch.
-            own_min_step = int(branch_point["step"]) + 1 if branch_point else None
-            specs = [_HistorySpec((_STEP_KEY, _TOTAL_TOKENS_KEY, _TPS_KEY), _TPS_SAMPLES, own_min_step)]
-            step = summary.get(_STEP_KEY)
-            projecting = run_data.get("state") == "running" and isinstance(step, int | float)
-            if projecting:
-                window_start = max(int(step) - _RATE_WINDOW_STEPS, own_min_step or 0)
-                specs.append(
-                    _HistorySpec((_STEP_KEY, _TIMESTAMP_KEY, _PROGRESS_KEY), _RATE_WINDOW_SAMPLES, window_start)
-                )
+            specs = _activity_history_specs(run_data, summary)
             histories = self._sampled_run_histories(project=candidate, run=run, specs=specs)
             if histories is None:
                 raise UpstreamError("wandb", f"run {run!r} disappeared while reading history", status_code=502)
-            baseline = _history_baseline(histories.points[0])
-            reference_tps = baseline.reference_tps if baseline else None
-            tokens_since_start = tokens_seen - baseline.tokens_baseline if tokens_seen is not None and baseline else None
-            efficiency = (
-                tokens_since_start / (reference_tps * wall)
-                if tokens_since_start is not None and tokens_since_start > 0 and reference_tps and wall > 0
-                else None
-            )
-            projected_finish_ms = _projected_finish_ms(histories.points[1]) if projecting else None
-            return [
-                {
-                    "run": run,
-                    "project": candidate,
-                    "run_url": _RUN_URL.format(entity=_ENTITY, project=candidate, run=run),
-                    "state": run_data.get("state"),
-                    "active_seconds": active,
-                    "wall_seconds": wall,
-                    "downtime_seconds": None if active is None else wall - active,
-                    "active_share": active / wall if active is not None and wall > 0 else None,
-                    "reference_tps": reference_tps,
-                    "progress_efficiency": efficiency,
-                    "projected_finish_ms": projected_finish_ms,
-                }
-            ]
+            window = histories.points[1] if len(specs) > 1 else None
+            return [_activity_row(run, candidate, run_data, summary, histories.points[0], window)]
 
         return self._search_projects(run, project, read)
