@@ -98,12 +98,8 @@ class GpuPeerConnection(InProcessPeerConnection):
         return [summary]
 
 
-class FullGpuPeerConnection(GpuPeerConnection):
-    """Reachable peer advertising an H100 backend with no free chips."""
-
-
-class BatchOccupiedGpuPeerConnection(FullGpuPeerConnection):
-    """Full GPU peer whose capacity is held by preemptible batch work."""
+class BatchOccupiedGpuPeerConnection(GpuPeerConnection):
+    """GPU peer with no free chips, its capacity held by preemptible batch work."""
 
     def list_backends(self) -> list[controller_pb2.Controller.BackendSummary]:
         summaries = super().list_backends()

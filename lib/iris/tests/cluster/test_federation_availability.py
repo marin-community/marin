@@ -332,9 +332,8 @@ def test_per_peer_cap_limits_promotions_per_tick():
 
 
 def test_a_cpu_reservation_prefers_the_peer_with_more_free_capacity():
-    # The #9396 symptom: a CPU coordinator reserved for H100 states no numeric
-    # requirement, so every eligible peer scored the same and the peer-id tie-break sent
-    # each submission to the alphabetically first one regardless of free chips.
+    # A CPU coordinator reserved for H100 states no numeric requirement, so the peers'
+    # reported free chips are the only thing separating two equally eligible peers.
     peers = [_peer("cw-rno2a", [_backend("b", free=7)]), _peer("cw-us-east-02a", [_backend("b", free=160)])]
     [promotion] = assign_queued([_cpu_reserve("j")], peers, ReservationLedger(), max_per_peer_per_cycle=8)
     assert promotion.peer_id == "cw-us-east-02a"

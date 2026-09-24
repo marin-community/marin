@@ -49,9 +49,6 @@ from iris.testing.federation import (
     BatchOccupiedGpuPeerConnection as _BatchOccupiedGpuPeerConnection,
 )
 from iris.testing.federation import (
-    FullGpuPeerConnection as _FullGpuPeerConnection,
-)
-from iris.testing.federation import (
     GpuPeerConnection as _GpuPeerConnection,
 )
 from iris.testing.federation import (
@@ -678,7 +675,7 @@ def test_a_job_the_peer_has_no_room_for_waits_in_the_queue_unassigned(tmp_path, 
     with ExitStack() as stack:
         parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
         peer_service, _ = _make_service(stack, "peer", tmp_path, log_client)
-        connection = _FullGpuPeerConnection(peer_service)
+        connection = _GpuPeerConnection(peer_service, free_h100=0)
         manager = _attach_federation(parent_service, connection)
         # No local backend can host an H100 job, so the unpinned job classifies as QUEUE
         # (a locally feasible job would just run here).
@@ -705,10 +702,10 @@ def test_a_job_the_peer_has_no_room_for_waits_in_the_queue_unassigned(tmp_path, 
 def test_a_cpu_reservation_is_handed_to_the_peer_with_more_free_gpus(tmp_path, log_client):
     """A CPU job submitted with ``--reserve H100`` goes to the peer with free H100s.
 
-    The reservation is a bare ``availability:h100`` marker, so it admits both peers and
-    states no amount. Before #9396 the pass had no number to compare and the peer-id
-    tie-break took every such job to the alphabetically first peer. The job holds no
-    GPUs: it reserves nothing, and its own GPU children are placed later.
+    The reservation is a bare ``availability:h100`` marker: it admits both peers and
+    states no amount, so the peers' reported capacity is the only thing separating them.
+    The job holds no GPUs — it reserves nothing, and its own GPU children are placed
+    later against whatever is free then.
     """
     with ExitStack() as stack:
         parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
