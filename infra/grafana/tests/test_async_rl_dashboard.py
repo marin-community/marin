@@ -185,7 +185,7 @@ def store(telemetry_table):
                 timestamp=BASE_EPOCH_MS + len(rows) if timestamp is None else timestamp,
                 seq=len(rows),
                 attributes={"role": "trainer", "step": "1", **(attributes or {})},
-                resource={"role": "trainer", "host": process, "training_loop": "async"},
+                resource={"role": "trainer", "host": process, "training_type": "async"},
                 body=body,
             )
         )
@@ -388,7 +388,7 @@ def store(telemetry_table):
     # One copy of every row per predicate the panels filter on, each copy falsifying one
     # predicate and carrying a value no assertion below expects. The other run is a sync
     # run, which the run picker has to leave out of its dropdown as well.
-    sync_resource = json.dumps({"role": "trainer", "host": "trainer", "training_loop": "sync"})
+    sync_resource = json.dumps({"role": "trainer", "host": "trainer", "training_type": "sync"})
     distractors = []
     for row in rows:
         for column, replacement in (
@@ -619,7 +619,7 @@ def test_health_sums_nonfinite_deltas_and_keeps_exporter_processes_separate(stor
                 value,
                 timestamp=BASE_EPOCH_MS + 1000,
                 seq=1000,
-                resource={"role": "trainer", "host": process, "training_loop": "async"},
+                resource={"role": "trainer", "host": process, "training_type": "async"},
             ),
         )
     rows = query(store, "Exporter and nonfinite observations")
