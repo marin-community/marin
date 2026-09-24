@@ -46,43 +46,27 @@ GPU_EXTRA_PYPROJECT = Path(__file__).resolve().parents[1] / "lib/marin/pyproject
 
 
 def test_muon_expert_stack_preserves_sharding_and_updates():
-    env = os.environ.copy()
-    env["JAX_PLATFORMS"] = "cpu"
-    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=2"
-    env.pop("JAX_NUM_CPU_DEVICES", None)
-    script = """
-        import jax
-        import jax.numpy as jnp
-        import numpy as np
-        from jax.sharding import AxisType, Mesh, NamedSharding
-        from jax.sharding import PartitionSpec as P
+    if jax.device_count() < 2:
+        pytest.skip("Requires 2 devices")
 
-        from experiments.grug.moe_hero_ep.grugmuon_hero import (
-            _newtonschulz_padded_stack_sharded,
-            _zeropower_via_newtonschulz_local,
-        )
-
-        devices = np.asarray(jax.devices())
-        mesh = Mesh(
-            devices.reshape(1, 1, -1, 1), ("replica_dcn", "data", "expert", "model"), axis_types=(AxisType.Explicit,) * 4
-        )
-        sharding = NamedSharding(mesh, P("expert", None, None))
-        values = np.random.default_rng(0).normal(size=(len(devices) * 2, 8, 4)).astype(np.float32)
-        reference = jax.jit(jax.vmap(_zeropower_via_newtonschulz_local))(jnp.asarray(values, dtype=jnp.bfloat16))
-        with jax.set_mesh(mesh):
-            matrices = jax.device_put(jnp.asarray(values, dtype=jnp.bfloat16), sharding)
-            actual = jax.jit(lambda x: _newtonschulz_padded_stack_sharded(x, target_sharding=sharding))(matrices)
-        assert actual.sharding == sharding
-        np.testing.assert_array_equal(np.asarray(actual), np.asarray(reference))
-    """
-    result = subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(script)],
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
+    devices = np.asarray(jax.devices()[:2])
+    mesh = Mesh(
+        devices.reshape(1, 1, 2, 1), ("replica_dcn", "data", "expert", "model"), axis_types=(AxisType.Explicit,) * 4
     )
-    assert result.returncode == 0, result.stderr
+    sharding = NamedSharding(mesh, P("expert", None, None))
+    values = np.random.default_rng(0).normal(size=(len(devices) * 2, 8, 4)).astype(np.float32)
+    matrices = jnp.asarray(values, dtype=jnp.bfloat16)
+    reference = jax.jit(jax.vmap(grugmuon_hero._zeropower_via_newtonschulz_local))(matrices)
+
+    def update(x):
+        return grugmuon_hero._newtonschulz_padded_stack_sharded(x, target_sharding=sharding)
+
+    with set_mesh(mesh):
+        matrices = jax.device_put(matrices, sharding)
+        actual = jax.jit(update)(matrices)
+
+    assert actual.sharding == sharding
+    np.testing.assert_array_equal(np.asarray(actual), np.asarray(reference))
 
 
 def test_diagnostic_run_without_shape_overrides_uses_the_selected_model():
