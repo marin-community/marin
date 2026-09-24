@@ -95,17 +95,44 @@ neither an independent task count nor a coverage forecast. Cross-benchmark mergi
 requires matching estimands, usable independent inputs and complete output contracts.
 Other releases retain their recorded inspection limits in the full plan.
 
+## BioAgent connected-workflow contracts
+
+The [BioAgent contracts](../../experiments/post_training/bio_tasks/workflow_designs/bioagent.json)
+retain all ten existing question IDs and proposals. Rechecking the original prompts
+restored source-specific outputs missing from broad method-family descriptions.
+Each card now specifies observed inputs, required stages, table keys/columns, native
+oracle steps, independent checks, incorrect-output checks and runtime boundaries.
+No new task or validated mapping is added.
+
+| Source question | Required endpoint | Input or interpretation limit |
+|---|---|---|
+| Cross-model expression | Three model/control contrasts, complete pathway universes and a joined three-model result | One study split into three technical subsets is not three biological models. |
+| Comparative genomics | Four-genome coding/annotation filters, conserved clusters, consensus functional annotation, alignments and trees | BUSCO alone does not identify all conserved functional clusters; gene trees alone do not establish co-evolution. |
+| Recessive pedigree | Observed family segregation, complete transcript consequences and dated evidence | The source plants a disease allele; observed segregation cannot by itself prove disease causality. |
+| RNA differential expression | Paired reads through alignment/counting to all DESeq2 effects and tests | Count-only inputs omit the source's upstream workflow. |
+| Lineage evolution | Ancestor-relative alleles shared by both descendants and passing the consequence threshold | Unknown ancestral calls cannot be treated as absent alleles. |
+| Exome calling | Diploid calls and representation-aware comparison within capture/callable/high-confidence regions | Bacterial inputs are incompatible; a region subset does not establish whole-exome performance. |
+| Community profiling | Both observed communities, complete taxonomic profiles and explicit abundance denominators | Two unreplicated samples support description, not population-level treatment inference. |
+| Single-cell response | QC, clustering, evidence-based labels and complete within-cell-type condition contrasts | Preserve actual donors and pairing; a matching cluster label omits the expression endpoint. |
+| Transcript quantification | Native estimates for all transcripts, effective lengths, units and ambiguity | Real reads do not reveal the source simulation's exact latent molecule counts. |
+| Community assembly | Reads to contigs, read-back support, every classification and complete domain/species totals | A single reference virus or one named species does not complete the community workflow. |
+
+Independent source selection, numerical settings and measured runtime remain open
+for every card. The two simulated/planted source constructions retain explicit
+observed-data adaptation limits. These contracts support planning; source answers
+and fixed grader literals are not used to author training inputs or rewards.
+
 ## Broader question portfolio
 
 The [additional benchmark questions](../../experiments/post_training/bio_tasks/workflow_designs/additional_benchmarks.json)
-assign another **493 task/protocol records from 15 releases to 172 proposed question
-cards**. Together with the three earlier design files, these four files assign
-848 records across 18 inventoried ID releases. These counts
+assign another **483 task/protocol records from 14 releases to 162 proposed question
+cards**. Together with the three earlier design files and the separate BioAgent
+contracts, these five files assign 848 records across 18 inventoried ID releases. These counts
 measure planning assignments, not task coverage or independent training questions.
 Each card preserves its source inspection tier; several rely on question stems or
 reviewed workflow stages and still need exact endpoint decisions.
 
-The expansion includes BioAgent, EpiBench, VariantBench, ScienceAgentBench,
+The additional file includes EpiBench, VariantBench, ScienceAgentBench,
 CORE-Bench, DiscoveryBench, all three TxBench releases, SpatialBench and its long
 protocol, scBench and its long protocol, sc-HeurekaBench and BAISBench. It records
 exact target IDs, observed-input requirements, required stages, artifacts,

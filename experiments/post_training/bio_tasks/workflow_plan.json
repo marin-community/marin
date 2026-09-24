@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T16:05:12.084813+00:00",
+  "updated_at": "2026-09-24T16:15:30.037505+00:00",
   "basis_revision": "952929c306",
   "scope": "Agentic provisional-ID benchmarks only; preserve all existing OOD exclusions. Plan the broad task set before further recipe implementation.",
   "authoring_unit": "One coherent observed-data task per recipe by default. Proposed questions are separate task designs, not repeated instances. They may be split or merged after endpoint and runtime checks.",
@@ -34,6 +34,13 @@
       "review_file": "benchmark_tasks/biomnibench-da.json",
       "limitation": "Source questions lack complete output/grader contracts. Endpoint review adds no executable coverage.",
       "detailed_designs_file": "workflow_designs/biomnibench-da.json"
+    },
+    "BioAgent": {
+      "task_count": 10,
+      "question_metadata_sha256": "ad51fcdde0379123adf24d980e4b0b76939c52f2dc790f5dc4d32465f3877667",
+      "detailed_designs_file": "workflow_designs/bioagent.json",
+      "inspection": "All source questions/descriptions assessed for stages and complete artifacts; no source results/data archive used.",
+      "limitation": "Independent observed input identity, method choices and numerical parameters remain unresolved; no implementation-ready assignment or new coverage."
     }
   },
   "counts": {
@@ -240,7 +247,6 @@
       "source_selection": "Use independent observed inputs; pin provenance, rights, biological identities and every subset transformation before implementation. Source leads are not validated data.",
       "target_group_ids": [
         "group-0082",
-        "group-0086",
         "group-0144",
         "group-0188",
         "group-0260",
@@ -249,7 +255,7 @@
         "group-0296"
       ],
       "target_assignment_limit": "The group references define candidate endpoint review scope. Individual planned-task assignments and complete endpoint contracts remain to be checked; counts are not predicted or validated coverage.",
-      "candidate_record_references": 16,
+      "candidate_record_references": 15,
       "expected_completed_distinct_task_gain": null
     },
     {
@@ -903,6 +909,7 @@
       "source_selection": "Use independent observed inputs; pin provenance, rights, biological identities and every subset transformation before implementation. Source leads are not validated data.",
       "target_group_ids": [
         "group-0078",
+        "group-0086",
         "group-0093",
         "group-0115",
         "group-0119",
@@ -930,7 +937,7 @@
         "group-0548"
       ],
       "target_assignment_limit": "The group references define candidate endpoint review scope. Individual planned-task assignments and complete endpoint contracts remain to be checked; counts are not predicted or validated coverage.",
-      "candidate_record_references": 325,
+      "candidate_record_references": 326,
       "expected_completed_distinct_task_gain": null
     },
     {
@@ -4068,9 +4075,9 @@
       ],
       "id": "group-0086",
       "proposed_workstreams": [
-        "bacterial-read-variant"
+        "variant-evidence"
       ],
-      "routing_basis": "previously-assessed-candidate-membership",
+      "routing_basis": "source-question-reviewed-diploid-exome-variant-calling",
       "inspection_tier": "task-description-reviewed"
     },
     {
@@ -13210,9 +13217,8 @@
     },
     {
       "path": "workflow_designs/additional_benchmarks.json",
-      "sha256": "a1c190aee0020e0f9dfedaae179e2aa58726980018428454ad327a01379aa457",
+      "sha256": "6dd9defb26b1ade7675096b667fcc0e6bf7612c9dbc67125422fce7460ad1623",
       "benchmark_ids": [
-        "BioAgent",
         "EpiBench",
         "VariantBench",
         "ScienceAgentBench",
@@ -13228,8 +13234,8 @@
         "sc-HeurekaBench",
         "BAISBench"
       ],
-      "inventory_records_assigned": 493,
-      "proposed_question_cards": 172,
+      "inventory_records_assigned": 483,
+      "proposed_question_cards": 162,
       "inspection_basis": "Existing versioned inventories and endpoint-stage reviews; per-record source inspection limits preserved. No new full-prompt inspection implied.",
       "relationship_to_workstream_questions": "These question cards refine or split the existing 147 broad questions. They overlap the three existing detailed-design files and one another across benchmarks; do not sum them into an independent task count or a coverage forecast."
     },
@@ -13348,12 +13354,20 @@
       "inventory_records_with_gap_dispositions": 1451,
       "proposed_question_cards": 0,
       "inspection_basis": "All public question identities and hashes enumerated; shared literature protocol/scorer assessed; individual question design remains unreviewed."
+    },
+    {
+      "path": "workflow_designs/bioagent.json",
+      "sha256": "fa5b2d39922401b476245038b8c50a29ffc9e59093961ed1885c010c49ac1c8f",
+      "benchmark_id": "BioAgent",
+      "inventory_records_assigned": 10,
+      "proposed_question_cards": 10,
+      "inspection_basis": "All ten original question/description endpoints and result-scorer control flow reviewed; independent input selection and numerical parameters remain unresolved."
     }
   ],
   "authoring_phase": "question-portfolio-planning",
   "portfolio_index": {
     "path": "workflow_portfolio.json",
-    "sha256": "b410d7fa3c8ed9028a03361e8295b340e35d285acf72bf690ee561abb3c21fcb",
+    "sha256": "0184adf049266fd4c58cd7da5ed3fe20172f9d88d2321f4b099d3a676c0275aa",
     "counts": {
       "source_releases": 31,
       "inventory_records": 4332,

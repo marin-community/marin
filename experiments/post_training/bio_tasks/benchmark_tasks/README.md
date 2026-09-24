@@ -39,6 +39,12 @@ The [CompBioBench endpoint designs](../workflow_designs/compbiobench.json) assig
 simulated source formulations and subjective or software-only endpoints. Metadata
 JSON and source TSV hashes are different artifacts and are labeled separately.
 
+The [BioAgent contracts](../workflow_designs/bioagent.json) specify all ten connected
+workflows, including ancestor-relative shared variants, conserved functional
+annotations, paired community profiles and complete cell-type expression contrasts.
+They distinguish real-input adaptations from the source's planted pedigree allele
+and simulated transcript counts. These are planned contracts without new coverage.
+
 Enumeration, prompt inspection and executable coverage are separate claims.
 An ID obtained from a registry can remain uninspected; a reviewed shared protocol
 does not mean every instance was reviewed. Release records state whether the

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T16:05:12.084813+00:00",
+  "updated_at": "2026-09-24T16:15:30.037505+00:00",
   "scope": "Full question-proposal portfolio for the 31 currently inventoried provisional-ID agentic releases. This planning index resolves every question card and records conditional consolidation; it creates no training task or validated coverage. Eleven source leads without inventories remain outside the enumerated denominator.",
   "counts": {
     "source_releases": 31,
@@ -38,7 +38,7 @@
     },
     {
       "path": "workflow_designs/additional_benchmarks.json",
-      "sha256": "a1c190aee0020e0f9dfedaae179e2aa58726980018428454ad327a01379aa457"
+      "sha256": "6dd9defb26b1ade7675096b667fcc0e6bf7612c9dbc67125422fce7460ad1623"
     },
     {
       "path": "workflow_designs/biomlbench.json",
@@ -91,6 +91,10 @@
     {
       "path": "workflow_designs/scholarqabench-bio.json",
       "sha256": "0f1e4c959b41b5a94a7a028e6fb90ae94597ade8fead448741a023027b43c46e"
+    },
+    {
+      "path": "workflow_designs/bioagent.json",
+      "sha256": "fa5b2d39922401b476245038b8c50a29ffc9e59093961ed1885c010c49ac1c8f"
     }
   ],
   "question_groups": [
@@ -128,7 +132,7 @@
         "promptbio-design-ortholog-phylogeny"
       ],
       "consolidation": "conditional-combined-question",
-      "condition_for_one_task": "One bounded multi-genome collection must support extraction through inference; supplied precomputed orthologs cannot satisfy the discovery endpoints. Keep all requested native methods and complete exclusion records.",
+      "condition_for_one_task": "One bounded multi-genome collection must support extraction through inference; supplied precomputed orthologs cannot satisfy the discovery endpoints. Keep all requested native methods and complete exclusion records. BioAgent additionally requires all-four-genome coding/confidence filters, consensus functional annotations and an explicit module-grouping rule; BUSCO or gene trees alone do not complete that endpoint.",
       "benchmark_record_scope": {
         "BioAgent": 1,
         "BixBench": 4,
@@ -2832,7 +2836,7 @@
     },
     {
       "proposed_task_id": "portfolio-bioagent-cross-model-rnaseq-enrichment",
-      "scientific_question": "Which expression changes and directional pathways recur across independently measured models after within-study differential-expression analysis?",
+      "scientific_question": "Which pathways recur across three independently observed biological models after model-specific expression contrasts and identifier reconciliation?",
       "question_card_ids": [
         "portfolio-bioagent-cross-model-rnaseq-enrichment"
       ],
@@ -2847,7 +2851,7 @@
     },
     {
       "proposed_task_id": "portfolio-bioagent-inherited-variant-prioritization",
-      "scientific_question": "Which variants remain consistent with a documented pedigree after genotype QC, segregation and transcript-aware annotation?",
+      "scientific_question": "Which observed variants remain consistent with an independently documented recessive pedigree after genotype QC, segregation and transcript-aware evidence reconciliation?",
       "question_card_ids": [
         "portfolio-bioagent-inherited-variant-prioritization"
       ],
@@ -2862,7 +2866,7 @@
     },
     {
       "proposed_task_id": "portfolio-bioagent-read-mapping-and-variant-comparison",
-      "scientific_question": "Which differences between observed bacterial isolates remain after read QC, alignment, probabilistic calling and representation-aware comparison?",
+      "scientific_question": "Which observed changes relative to an ancestor are shared by two independently sequenced descendant lines and meet a declared consequence threshold?",
       "question_card_ids": [
         "portfolio-bioagent-read-mapping-and-variant-comparison"
       ],
@@ -2877,7 +2881,7 @@
     },
     {
       "proposed_task_id": "portfolio-bioagent-variant-calling-and-truth-comparison",
-      "scientific_question": "Where does a diploid variant workflow disagree with independent high-confidence calls within explicitly callable territory?",
+      "scientific_question": "Which diploid germline calls from independently observed exome reads agree with a separate high-confidence reference within declared capture and callable regions?",
       "question_card_ids": [
         "portfolio-bioagent-variant-calling-and-truth-comparison"
       ],
@@ -2887,12 +2891,12 @@
         "BioAgent": 1
       },
       "workstreams": [
-        "bacterial-read-variant"
+        "variant-evidence"
       ]
     },
     {
       "proposed_task_id": "portfolio-bioagent-metagenomic-taxonomic-profile",
-      "scientific_question": "How does read eligibility and ambiguous classification affect an observed community's taxonomic profile?",
+      "scientific_question": "How do taxonomic abundance profiles differ between two independently observed community samples after paired-read QC and ambiguity-aware classification?",
       "question_card_ids": [
         "portfolio-bioagent-metagenomic-taxonomic-profile"
       ],
@@ -2907,7 +2911,7 @@
     },
     {
       "proposed_task_id": "portfolio-bioagent-single-cell-condition-comparison",
-      "scientific_question": "Which cell identities and donor-level condition differences remain after sparse-matrix QC, normalization and clustering?",
+      "scientific_question": "Which cell types show reproducible transcriptional differences between independently observed paired conditions after raw-count QC, clustering and annotation?",
       "question_card_ids": [
         "portfolio-bioagent-single-cell-condition-comparison"
       ],
@@ -2922,7 +2926,7 @@
     },
     {
       "proposed_task_id": "portfolio-bioagent-transcript-abundance",
-      "scientific_question": "Which transcript abundances and ambiguity diagnostics result from quantifying observed paired reads against a pinned transcriptome?",
+      "scientific_question": "Which transcript abundances and ambiguity estimates result from native quantification of independently observed paired RNA reads?",
       "question_card_ids": [
         "portfolio-bioagent-transcript-abundance"
       ],
@@ -2937,7 +2941,7 @@
     },
     {
       "proposed_task_id": "portfolio-bioagent-metagenomic-assembly-and-classification",
-      "scientific_question": "Which observed community contigs have consistent assembly, read-support and viral-classification evidence?",
+      "scientific_question": "Which assembled contigs from an independently observed community have supported viral assignments, and how do complete domain/species counts follow from those assignments?",
       "question_card_ids": [
         "portfolio-bioagent-metagenomic-assembly-and-classification"
       ],
@@ -10301,5 +10305,15 @@
     "candidate_collections": 6,
     "new_biological_payloads_downloaded": 0,
     "cleared_for_training": 0
-  }
+  },
+  "source_endpoint_review_updates": [
+    {
+      "benchmark": "BioAgent",
+      "file": "workflow_designs/bioagent.json",
+      "question_count": 10,
+      "date": "2026-09-24",
+      "finding": "Restore source-specific ancestor/shared-variant, functional-consensus, two-community and within-cell-type contrast endpoints; correct diploid-exome and transcript-estimation inputs. Two source constructions include simulated or planted data and need explicit observed-data adaptation limits.",
+      "implementation_ready": 0
+    }
+  ]
 }

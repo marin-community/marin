@@ -1,0 +1,765 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-09-24T16:15:30.037505+00:00",
+  "scope": "All ten BioAgent source questions reviewed for missing stages, complete output artifacts and independent observed-data adaptations. No implementation or new coverage.",
+  "source": {
+    "inventory_path": "benchmark_tasks/bioagent.json",
+    "inventory_sha256": "2915e369b49c11ee83d90c4aa7521d6155230751d7a2205b3b36a114466cdc8d",
+    "question_metadata_url": "https://github.com/bioagent-bench/bioagent-bench/blob/6d098b602b8a8fdc33a9d25e410a502be7ed9ce0/src/task_metadata.json",
+    "question_metadata_sha256": "ad51fcdde0379123adf24d980e4b0b76939c52f2dc790f5dc4d32465f3877667",
+    "scorer_url": "https://github.com/bioagent-bench/bioagent-experiments/blob/35eed91676062d98d98562556ec6cce326fd7d93/tasksets/bioagent/bioagent_taskset/scoring.py",
+    "scorer_sha256": "e8daebb41e8578a5666fba5496d14c3575c24d654a2fd51f9da7f76be9f12b64",
+    "source_boundary": "Question metadata and scorer control flow only; no benchmark data/result archive downloaded or used. Source fixed-answer literals are not adopted into task authoring."
+  },
+  "counts": {
+    "source_releases": 1,
+    "task_or_protocol_records": 10,
+    "question_cards": 10,
+    "source_questions_reviewed": 10,
+    "implementation_ready": 0,
+    "validated_new_mappings": 0
+  },
+  "shared_acceptance_rules": [
+    "One coherent task per recipe, one corpus train split; preserve the original question IDs and coverage states.",
+    "Each independent input manifest must pin accession, file hash, rights, biological units, real observation scale and benchmark-lineage exclusions.",
+    "Oracles must read the actual packaged input and run the native analysis. Keep reference outputs and benchmark truth private.",
+    "Every required output needs complete unique keys, exact categorical/identity checks, explicit missing-value semantics and prespecified numerical tolerances. Set numerical tolerances from method scale/repeatability, never from a solver answer.",
+    "Native learned/stochastic outputs may need invariant or held-out performance criteria; freeze the criterion and baseline before solver runs.",
+    "A passing weak source result scorer is not a full workflow check. Grade all requested calculations and artifacts without a model judge.",
+    "Measure the complete offline solve/reference path below 30 minutes; narrower start boundaries preserve explicit uncovered upstream stages."
+  ],
+  "questions": [
+    {
+      "proposed_id": "portfolio-bioagent-cross-model-rnaseq-enrichment",
+      "scientific_question": "Which pathways recur across three independently observed biological models after model-specific expression contrasts and identifier reconciliation?",
+      "benchmark_targets": [
+        {
+          "benchmark": "BioAgent",
+          "task_id": "alzheimer-mouse",
+          "source_task_record_sha256": "6bc949162afba2b205c9cd5fcb64330d7d71daade9a8796d8fa8bc4c37669935"
+        }
+      ],
+      "source_family": "cross-model-rnaseq-enrichment",
+      "source_inspection_tier": "task-description-reviewed",
+      "source_planning_disposition": "candidate-design-provisional",
+      "matching_workstreams": [
+        "rna-seq-contrast-enrichment"
+      ],
+      "required_endpoint_stages": [
+        "audit sample, model and gene identities",
+        "fit each replicated model/control expression contrast",
+        "define each eligible-gene background and directional selected set",
+        "run species-appropriate KEGG enrichment",
+        "join every pathway across all three models and assess shared evidence"
+      ],
+      "observed_input_requirements": [
+        "Three independently observed model/control count experiments with actual biological replication, model labels, tissue/age/sex/batch metadata and a compatible pinned pathway mapping. Study and model effects must remain distinguishable."
+      ],
+      "required_formats": [
+        "count matrix",
+        "sample metadata",
+        "pathway annotations"
+      ],
+      "native_package_leads": [
+        "DESeq2",
+        "pathway enrichment"
+      ],
+      "proposed_artifact_requirements": [
+        "samples.tsv: sample_id, study_id, model_id, condition, biological_unit, covariates, eligible, exclusion_reason",
+        "gene_effects.tsv: model_id, gene_id, eligible, base_mean, effect, standard_error, p_value, q_value, selected, direction",
+        "pathway_members.tsv: model_id, pathway_id, gene_id, in_background, selected, mapping_status",
+        "pathway_results.tsv: model_id, pathway_id, tested, background_size, set_size, selected_size, overlap, p_value, q_value",
+        "shared_pathways.tsv: pathway_id, model_a_p, model_b_p, model_c_p, model_a_q, model_b_q, model_c_q, shared_decision, missing_reason"
+      ],
+      "source_specific_decisions": [
+        "Exactly three models and their observed control groups; do not treat three technical subsets of one model as three experiments.",
+        "Gene namespace and cross-species mapping, separate background universes, count filtering, model design, shrinkage, directional criterion, enrichment test and multiplicity family.",
+        "Define shared support before seeing results; missing/untestable differs from nonsignificance. Freeze which quantity the source pvalue columns represent."
+      ],
+      "deterministic_verification_approach": [
+        "Run DESeq2 on each actual design and a pinned KEGG enrichment method on the exact mapped sets.",
+        "Independently reconstruct eligibility, gene/set counts and pathway joins; recompute enrichment and FDR from complete tables. Grade all three model columns, not one overlapping pathway name."
+      ],
+      "source_artifact_contracts": [
+        {
+          "source_task_id": "alzheimer-mouse",
+          "source_question_sha256": "85ef669a5fe341dc68247c266da2d6ccb2b1532ec832aa17fd816f2492c41441",
+          "source_description_sha256": "6427017aae5ee25e4886298d3722b8b34aac8477c1fb780dc360b8b0297a78d1",
+          "inspection": "Original question/description reviewed; illustrative answer rows and reference results are not training data."
+        }
+      ],
+      "status": "source-question-and-artifact-contract-planned-independent-input-and-numerical-freeze-pending",
+      "validated_new_mappings": 0,
+      "negative_artifact_checks": [
+        "Replace one model column with another.",
+        "Change a background membership while preserving the reported shared pathway.",
+        "Omit nonsignificant or untestable pathways."
+      ],
+      "endpoint_fidelity_limits": [
+        "The original asks for three specific disease models. An independent three-model study transfers the comparison workflow but does not validate its original disease-specific conclusion.",
+        "The existing GSE60450 mammary data does not supply three disease models. Source organism/annotation mismatches cannot be copied into the authored analysis."
+      ],
+      "independent_input_decision": "Select three observed model/control datasets with a coherent shared biological comparison and compatible annotation; identify benchmark-study exclusions before download.",
+      "bounded_runtime_design": "Use preprocessed observed counts with intact biological samples; pin local pathway snapshots. Three complete count fits and enrichment runs need a measured combined runtime below 30 minutes."
+    },
+    {
+      "proposed_id": "portfolio-bioagent-orthology-and-phylogeny",
+      "scientific_question": "Which coding ortholog clusters are conserved across four independently observed related genomes, what annotations support them, and how do their gene trees relate?",
+      "benchmark_targets": [
+        {
+          "benchmark": "BioAgent",
+          "task_id": "comparative-genomics",
+          "source_task_record_sha256": "000c3d7a12c186c7bc8871e7da25764269b3a5d22f1a1e1889d72ed0ed5cdd00"
+        }
+      ],
+      "source_family": "orthology-and-phylogeny",
+      "source_inspection_tier": "task-description-reviewed",
+      "source_planning_disposition": "candidate-design-provisional",
+      "matching_workstreams": [
+        "ortholog-tree-signal"
+      ],
+      "required_endpoint_stages": [
+        "extract phase- and strand-correct coding proteins",
+        "identify homologous clusters and resolve paralogs",
+        "filter coding clusters present in all four genomes",
+        "reconcile high-confidence functional annotations and export the consensus rule",
+        "align retained clusters and infer gene trees",
+        "report conserved functional modules with their defining evidence"
+      ],
+      "observed_input_requirements": [
+        "Four independently observed, related annotated genomes as matching FASTA and GFF3 with sequence/version correspondence; deposited coding/functional annotations plus independent local reference evidence. Supplied alignments or trees cannot replace extraction and ortholog discovery."
+      ],
+      "required_formats": [
+        "genome FASTA",
+        "GFF3",
+        "protein FASTA",
+        "functional annotation TSV",
+        "aligned FASTA",
+        "Newick"
+      ],
+      "native_package_leads": [
+        "ortholog clustering",
+        "aligner",
+        "tree inference"
+      ],
+      "proposed_artifact_requirements": [
+        "genes.tsv: genome_id, gene_id, transcript_id, seqid, strand, phase, protein_id, extraction_status",
+        "cluster_members.tsv: cluster_id, genome_id, protein_id, copy_number, coding, annotation_id, evidence_class, eligible",
+        "clusters.tsv: cluster_id, genomes_present, paralog_status, high_confidence, retained, exclusion_reason, consensus_annotation",
+        "alignments/: every retained cluster FASTA and any trimming map",
+        "trees/: every retained cluster Newick with leaf/protein map and inference parameters",
+        "modules.tsv: module_id, cluster_id, grouping_rule, evidence_id"
+      ],
+      "source_specific_decisions": [
+        "Four genomes, representative-isoform policy, homology thresholds, ortholog/paralog definition and annotation confidence hierarchy.",
+        "Do not equate BUSCO completeness with exhaustive conserved functional-cluster discovery. BUSCO may supply a separate endpoint required by another card.",
+        "Define consensus ties, missing annotations and module grouping; a gene tree alone does not prove co-evolution."
+      ],
+      "deterministic_verification_approach": [
+        "Execute extraction, native homology search/clustering, alignment and tree inference; consume the actual FASTA/GFF/annotation evidence.",
+        "Independently check translation, all-genome membership, coding/confidence filters and deterministic consensus annotations; compare cluster membership and tree splits under declared label symmetries."
+      ],
+      "source_artifact_contracts": [
+        {
+          "source_task_id": "comparative-genomics",
+          "source_question_sha256": "2bb91a557315ba2451fdff857b4f13c4974de1d8eca650b2aab4e2b24ce70193",
+          "source_description_sha256": "635fe72d775c9fc96062d918f4a7c598eeb5b23e676fa81f5b1cef63d734691a",
+          "inspection": "Original question/description reviewed; illustrative answer rows and reference results are not training data."
+        }
+      ],
+      "status": "source-question-and-artifact-contract-planned-independent-input-and-numerical-freeze-pending",
+      "validated_new_mappings": 0,
+      "negative_artifact_checks": [
+        "Return conserved clusters without consensus annotations.",
+        "Retain a cluster absent from one genome or containing only a pseudogene.",
+        "Replace orthology with all BLAST hits or use cluster numbers as exact biological identities."
+      ],
+      "endpoint_fidelity_limits": [
+        "The source functional-module wording lacks a complete co-evolution statistic. Preserve this as an unresolved endpoint until a justified explicit grouping rule is established.",
+        "Matched precomputed ortholog/tree metrics only cover downstream components; they do not complete this task."
+      ],
+      "independent_input_decision": "Choose four independently deposited compact related genomes with coherent annotation evidence; reject source genomes and unrelated phage mixtures.",
+      "bounded_runtime_design": "Package pinned homology references and indexes offline. Bound the number of complete compact genomes and supported coding loci without removing paralog or missing-annotation cases; measure the full discovery-to-tree path."
+    },
+    {
+      "proposed_id": "portfolio-bioagent-inherited-variant-prioritization",
+      "scientific_question": "Which observed variants remain consistent with an independently documented recessive pedigree after genotype QC, segregation and transcript-aware evidence reconciliation?",
+      "benchmark_targets": [
+        {
+          "benchmark": "BioAgent",
+          "task_id": "cystic-fibrosis",
+          "source_task_record_sha256": "cef086b12c954af89a88990396c3b2c8013140e8b77c3bac2ea9e89d7068e2f4"
+        }
+      ],
+      "source_family": "inherited-variant-prioritization",
+      "source_inspection_tier": "task-description-reviewed",
+      "source_planning_disposition": "candidate-design-provisional",
+      "matching_workstreams": [
+        "variant-evidence"
+      ],
+      "required_endpoint_stages": [
+        "validate family/sample identity and genotype quality",
+        "normalize allele representations and reconcile callable sites",
+        "test recessive segregation and compound-heterozygote phase where claimed",
+        "annotate all eligible alleles and transcripts",
+        "rank candidates under prespecified evidence rules and retain contradictions/unknowns"
+      ],
+      "observed_input_requirements": [
+        "Observed family VCFs, a documented multigeneration pedigree and independently recorded phenotype status, matching reference/transcripts and a frozen clinical annotation snapshot. Genotypes or phenotypes must not be planted to force a causal answer."
+      ],
+      "required_formats": [
+        "VCF",
+        "pedigree",
+        "GFF/FASTA"
+      ],
+      "native_package_leads": [
+        "variant annotation"
+      ],
+      "proposed_artifact_requirements": [
+        "samples.tsv: sample_id, pedigree_id, mother_id, father_id, phenotype, sex_or_ploidy_basis, callable, eligible",
+        "variants.vcf.gz: complete normalized calls and genotype/filter fields",
+        "segregation.tsv: variant_key, family_id, inheritance_model, affected_support, unaffected_conflict, phase_support, status",
+        "consequences.tsv: variant_key, transcript_id, gene_id, consequence, impact, hgvs_c, hgvs_p, annotation_version",
+        "evidence.tsv: variant_key, source_accession, assertion_date, condition, clinical_significance, review_status, conflict",
+        "candidates.tsv: variant_key, rank, rule_id, included, exclusion_reason, evidence_status"
+      ],
+      "source_specific_decisions": [
+        "Reference build, normalization, genotype quality/missingness, sex/ploidy, recessive/compound-heterozygote rules and phenotype uncertainty.",
+        "Transcript selection, penetrance assumptions, clinical assertion dates/conflicts and candidate ties. Keep all source-required identity/HGVS/evidence columns."
+      ],
+      "deterministic_verification_approach": [
+        "Run native variant normalization and transcript annotation on the observed inputs; apply explicit genotype/pedigree rules.",
+        "Independently reconstruct every family segregation decision, allele key, transcript consequence and evidence join; grade all candidates and exclusions."
+      ],
+      "source_artifact_contracts": [
+        {
+          "source_task_id": "cystic-fibrosis",
+          "source_question_sha256": "1d32792cd3f648acdc03a87f0e82186bf5fdb7fc19afa5bfb0bd0aae9e33feca",
+          "source_description_sha256": "4f113b97a08ed4f6de5ce84de340231b794fb994af0a85ef88e5fcabe2389986",
+          "inspection": "Original question/description reviewed; illustrative answer rows and reference results are not training data."
+        }
+      ],
+      "status": "source-question-and-artifact-contract-planned-independent-input-and-numerical-freeze-pending",
+      "validated_new_mappings": 0,
+      "negative_artifact_checks": [
+        "Treat missing genotypes as reference.",
+        "Declare two variants in trans without phasing evidence.",
+        "Return a known gene name while dropping genotype conflicts or transcript identity."
+      ],
+      "endpoint_fidelity_limits": [
+        "The source adds an artificial disease allele to real family sequence data. This synthetic causal construction cannot be carried into an all-observed task.",
+        "Segregation consistency is not proof of disease causality. An open generic reference trio lacking observed phenotype can cover QC/segregation only, not the full disease-identification endpoint."
+      ],
+      "independent_input_decision": "Find legally reusable independent observed family genotypes plus phenotype and causal evidence; otherwise retain full causal identification as an explicit coverage gap.",
+      "bounded_runtime_design": "Use a coherent observed targeted/exome region with complete pedigree genotypes and local annotation; document any reduced search space rather than presenting it as whole-genome causal discovery."
+    },
+    {
+      "proposed_id": "portfolio-bioagent-reads-to-differential-expression",
+      "scientific_question": "Which gene-level condition effects follow when independently observed replicated RNA reads are aligned, counted and fit with DESeq2?",
+      "benchmark_targets": [
+        {
+          "benchmark": "BioAgent",
+          "task_id": "deseq",
+          "source_task_record_sha256": "a96d980e18034de710ca5159a2c2c50628a2f32c5816bae26b1e8660d4f4633e"
+        }
+      ],
+      "source_family": "reads-to-differential-expression",
+      "source_inspection_tier": "task-description-reviewed",
+      "source_planning_disposition": "candidate-design-provisional",
+      "matching_workstreams": [
+        "rna-seq-contrast-enrichment"
+      ],
+      "required_endpoint_stages": [
+        "validate read pairing and library QC",
+        "align reads to the declared genome",
+        "assign reads/fragments to annotated genes",
+        "fit the explicit DESeq2 condition design",
+        "export every gene effect, raw p-value, adjusted p-value and eligibility decision"
+      ],
+      "observed_input_requirements": [
+        "Observed paired RNA FASTQ for genuinely replicated conditions, sample metadata and matching genome FASTA/GTF. Counts-only input does not exercise the source read-to-count stages."
+      ],
+      "required_formats": [
+        "FASTQ",
+        "FASTA/GTF",
+        "count matrix"
+      ],
+      "native_package_leads": [
+        "aligner",
+        "DESeq2"
+      ],
+      "proposed_artifact_requirements": [
+        "reads.tsv: sample_id, source_run, pair_count, qc_pass, strandedness, biological_unit",
+        "alignment_qc.tsv: sample_id, total, mapped, multimapped, assigned, unassigned, policy",
+        "counts.tsv: gene_id and one integer-count column per sample",
+        "design.tsv and contrasts.tsv: full model columns and coefficient weights",
+        "gene_effects.tsv: gene_id, testable, log2FoldChange, standard_error, statistic, pvalue, padj, exclusion_reason"
+      ],
+      "source_specific_decisions": [
+        "Library orientation, aligner/reference version, multimapping/overlap/paired-fragment assignment and annotation feature level.",
+        "Biological design and contrast sign, low-count filter, DESeq2 settings, shrinkage/reporting policy, independent filtering and NA policy."
+      ],
+      "deterministic_verification_approach": [
+        "Run native read QC, aligner, gene counter and DESeq2 end to end.",
+        "Independently check sample/pair counts, gene assignment totals, model rank, full result universe and multiplicity; accepting five gene IDs alone is insufficient."
+      ],
+      "source_artifact_contracts": [
+        {
+          "source_task_id": "deseq",
+          "source_question_sha256": "b8767489126844395cbb30ad35718a33e1986a394ef75422de06a49cda52ea48",
+          "source_description_sha256": "336ee39cf09fadb4aab2a52c781ddf5d51a6947682c14f685139266d6cb24c73",
+          "inspection": "Original question/description reviewed; illustrative answer rows and reference results are not training data."
+        }
+      ],
+      "status": "source-question-and-artifact-contract-planned-independent-input-and-numerical-freeze-pending",
+      "validated_new_mappings": 0,
+      "negative_artifact_checks": [
+        "Substitute input count matrices without processing FASTQ.",
+        "Swap condition labels or count mates twice.",
+        "Return the right gene IDs with corrupted fold changes or p-values."
+      ],
+      "endpoint_fidelity_limits": [
+        "The source uses a specific fungal condition comparison. An independent benign organism/condition adaptation preserves analysis stages but needs explicit biological-scope disclosure.",
+        "Subsampling reads may reduce power; preserve real biological replicates and do not guarantee a selected number of significant genes."
+      ],
+      "independent_input_decision": "Choose independent compact-genome replicated RNA libraries with documented strandedness and matching annotation, excluding source runs.",
+      "bounded_runtime_design": "Provide the offline reference index and bound whole-library read subsets by a declared reproducible policy, not by outcome. Retain all biological samples; measure alignment plus counting plus model runtime."
+    },
+    {
+      "proposed_id": "portfolio-bioagent-read-mapping-and-variant-comparison",
+      "scientific_question": "Which observed changes relative to an ancestor are shared by two independently sequenced descendant lines and meet a declared consequence threshold?",
+      "benchmark_targets": [
+        {
+          "benchmark": "BioAgent",
+          "task_id": "evolution",
+          "source_task_record_sha256": "bdb715c2f077bc841e34880c6aeeba93d0131ba7cd254386dc8ac69d9cb9f115"
+        }
+      ],
+      "source_family": "read-mapping-and-variant-comparison",
+      "source_inspection_tier": "task-description-reviewed",
+      "source_planning_disposition": "candidate-design-provisional",
+      "matching_workstreams": [
+        "bacterial-read-variant"
+      ],
+      "required_endpoint_stages": [
+        "audit lineage/read identities and existing preprocessing",
+        "align ancestor and descendant reads",
+        "perform native haploid probabilistic variant calling",
+        "normalize and filter calls within joint callable territory",
+        "subtract supported ancestral alleles and intersect the two descendants",
+        "annotate retained alleles and apply the declared consequence filter"
+      ],
+      "observed_input_requirements": [
+        "Observed paired reads from one documented ancestor and two descendants, lineage metadata and a matching annotated reference. Three unrelated isolates do not establish ancestor-relative change."
+      ],
+      "required_formats": [
+        "FASTQ",
+        "BAM",
+        "VCF"
+      ],
+      "native_package_leads": [
+        "aligner",
+        "variant caller"
+      ],
+      "proposed_artifact_requirements": [
+        "samples.tsv: sample_id, lineage_role, ancestor_id, source_run, preprocessing",
+        "alignments/: BAM/BAI per line",
+        "calls/: normalized VCF/TBI and filter evidence per line",
+        "callable.bed and callable_status.tsv: sample_id, interval, reason",
+        "lineage_variants.tsv: chrom, pos, ref, alt, ancestor_genotype, descendant_a_genotype, descendant_b_genotype, callable_in_all, shared_derived, status",
+        "consequences.tsv: chrom, pos, ref, alt, gene, transcript_id, impact, effect, threshold_pass"
+      ],
+      "source_specific_decisions": [
+        "Haploid caller, read/quality/strand filters, indel normalization, common callable territory and missing-call semantics.",
+        "Ancestor subtraction, shared-allele equality, annotation version, MODERATE-or-higher consequence ordering and multi-transcript handling."
+      ],
+      "deterministic_verification_approach": [
+        "Execute aligner, native caller, allele normalization and annotation; retain all stages.",
+        "Independently compare full allele keys (chromosome, position, reference and alternate), lineage states and filter logic; a shared coordinate without the same allele does not pass."
+      ],
+      "source_artifact_contracts": [
+        {
+          "source_task_id": "evolution",
+          "source_question_sha256": "ecbddff340edeccd96339c98373960ee5dced5bc60b042c43d02e5afcefce194",
+          "source_description_sha256": "a8580a619650632e5ee703bf2d792209ab31129e0e932be03e1fea0b1290919b",
+          "inspection": "Original question/description reviewed; illustrative answer rows and reference results are not training data."
+        }
+      ],
+      "status": "source-question-and-artifact-contract-planned-independent-input-and-numerical-freeze-pending",
+      "validated_new_mappings": 0,
+      "negative_artifact_checks": [
+        "Treat an uncallable ancestor as absence.",
+        "Intersect positions while alternate alleles differ.",
+        "Return a descendant-private or low-impact allele as shared derived."
+      ],
+      "endpoint_fidelity_limits": [
+        "Shared derived alleles do not alone establish adaptation, causality or an evolutionary rate.",
+        "Previously planned generic isolate comparison omitted the ancestor and shared-consequence endpoint; those inputs/stages are mandatory."
+      ],
+      "independent_input_decision": "Select an independent observed nonpathogenic lineage experiment with archived ancestor/descendant reads and documented descent, outside source studies.",
+      "bounded_runtime_design": "Use complete small-genome references and realistic observed coverage; avoid choosing reads or loci by known variant outcome. Measure all three alignment/calling paths and the full comparison."
+    },
+    {
+      "proposed_id": "portfolio-bioagent-variant-calling-and-truth-comparison",
+      "scientific_question": "Which diploid germline calls from independently observed exome reads agree with a separate high-confidence reference within declared capture and callable regions?",
+      "benchmark_targets": [
+        {
+          "benchmark": "BioAgent",
+          "task_id": "giab",
+          "source_task_record_sha256": "11c941dce87aabd8aefdb642151ce858f3ba930755ce48102dd49a4d19512c1c"
+        }
+      ],
+      "source_family": "variant-calling-and-truth-comparison",
+      "source_inspection_tier": "task-description-reviewed",
+      "source_planning_disposition": "candidate-design-provisional",
+      "matching_workstreams": [
+        "variant-evidence"
+      ],
+      "required_endpoint_stages": [
+        "validate sample/build/capture identity",
+        "align exome reads against an appropriately complete reference",
+        "call diploid germline variants with native tools",
+        "normalize calls and preserve genotype/filter evidence",
+        "compare to private high-confidence calls using a representation-aware evaluator within declared territory"
+      ],
+      "observed_input_requirements": [
+        "Observed diploid human exome reads from a sample distinct from the source benchmark sample, matching genome build, capture BED and independent high-confidence VCF/BED evaluation evidence. Bacterial reads cannot support this endpoint."
+      ],
+      "required_formats": [
+        "paired FASTQ",
+        "genome FASTA",
+        "capture/callable BED",
+        "BAM/BAI",
+        "VCF.gz/TBI"
+      ],
+      "native_package_leads": [
+        "aligner",
+        "variant caller"
+      ],
+      "proposed_artifact_requirements": [
+        "reads.tsv and alignment_qc.tsv: sample_id, source_run, build, pairs, mapping/duplicate/coverage measures",
+        "calls.vcf.gz and index: all required diploid genotypes, alleles and filter fields",
+        "evaluation_regions.bed: capture/callable/high-confidence intersection under an explicit boundary convention",
+        "comparison.vcf.gz: match/mismatch attribution from the pinned evaluator",
+        "metrics.tsv: variant_type, region_stratum, truth_total, query_total, TP, FP, FN, precision, recall, f1"
+      ],
+      "source_specific_decisions": [
+        "Sample, genome build, capture panel, ploidy regions, duplicate policy, caller/filter settings and variant representation normalization.",
+        "Evaluator version, haplotype/genotype matching, region-boundary behavior, filtered-call policy, type strata and zero-denominator rules."
+      ],
+      "deterministic_verification_approach": [
+        "Run native aligner and diploid caller; run pinned hap.py or an equivalent explicitly specified representation-aware evaluator.",
+        "Independently check call schema/alleles/genotypes, exact region intersection and all metric denominators; keep truth inaccessible to the solver."
+      ],
+      "source_artifact_contracts": [
+        {
+          "source_task_id": "giab",
+          "source_question_sha256": "bea46c5054b289e2bf11be8ceed9bd2ad1d4fe0f9f29dbc3de54597e7f73b7ce",
+          "source_description_sha256": "f4550749fd9eef56cb335db223a26fd70151d73d0c76fbe4125561c69fa94afb",
+          "inspection": "Original question/description reviewed; illustrative answer rows and reference results are not training data."
+        }
+      ],
+      "status": "source-question-and-artifact-contract-planned-independent-input-and-numerical-freeze-pending",
+      "validated_new_mappings": 0,
+      "negative_artifact_checks": [
+        "Swap truth sample or build.",
+        "Match only chromosome/position while genotype or allele differs.",
+        "Count calls outside evaluation territory as true positives; copy private truth into the input package."
+      ],
+      "endpoint_fidelity_limits": [
+        "A bounded observed exome subset does not establish whole-exome or whole-genome performance.",
+        "The source threshold score does not justify accepting incomplete VCFs or omitting hard regions; freeze the authored criterion before solver trials."
+      ],
+      "independent_input_decision": "Resolve an independent public exome sample and matched high-confidence/capture evidence; audit overlap with all ID/OOD source descriptions without inspecting OOD biological fixtures.",
+      "bounded_runtime_design": "Use an explicit coherent capture-region start boundary with read-pair provenance and a complete alignment reference to avoid restricted-reference mapping artifacts. Keep cohort/region scale and missing coverage visible; measure the full run."
+    },
+    {
+      "proposed_id": "portfolio-bioagent-metagenomic-taxonomic-profile",
+      "scientific_question": "How do taxonomic abundance profiles differ between two independently observed community samples after paired-read QC and ambiguity-aware classification?",
+      "benchmark_targets": [
+        {
+          "benchmark": "BioAgent",
+          "task_id": "metagenomics",
+          "source_task_record_sha256": "ee55e6c63e3443f152becd216bed086d4c32ee6c1aeaf3f13b679a86381e7e9b"
+        }
+      ],
+      "source_family": "metagenomic-taxonomic-profile",
+      "source_inspection_tier": "task-description-reviewed",
+      "source_planning_disposition": "candidate-design-provisional",
+      "matching_workstreams": [
+        "metagenomic-community"
+      ],
+      "required_endpoint_stages": [
+        "audit both paired-read libraries and controls",
+        "apply identical read eligibility/QC",
+        "classify both samples using the same native database",
+        "reconcile taxon IDs and ranks including unclassified/ambiguous reads",
+        "compute abundance under declared denominators and export the complete joined profiles"
+      ],
+      "observed_input_requirements": [
+        "Observed shotgun reads from two documented community conditions, sample metadata and an offline versioned classifier database/taxonomy. Supplied count tables do not cover native read classification."
+      ],
+      "required_formats": [
+        "FASTQ",
+        "taxonomy report"
+      ],
+      "native_package_leads": [
+        "taxonomic classifier"
+      ],
+      "proposed_artifact_requirements": [
+        "samples.tsv: sample_id, condition, source_run, biological_unit, extraction_or_batch",
+        "read_qc.tsv: sample_id, input_pairs, retained_pairs, classified_pairs, ambiguous_pairs, unclassified_pairs",
+        "classifier_outputs/: native per-read assignments and reports",
+        "taxonomy.tsv: taxon_id, parent_id, rank, scientific_name, kingdom, phylum, database_version",
+        "abundances.tsv: taxon_id, rank, sample_a_count, sample_b_count, sample_a_fraction, sample_b_fraction, denominator_a, denominator_b, eligible",
+        "comparisons.tsv: taxon_id, absolute_difference, declared_ratio, zero_policy"
+      ],
+      "source_specific_decisions": [
+        "Read versus pair counting, classification confidence, taxonomy/rank version, ancestor aggregation and ambiguous/unclassified policy.",
+        "Total-read versus classified-read denominators, abundance estimator and zero handling; retain distinct sample columns."
+      ],
+      "deterministic_verification_approach": [
+        "Run the native classifier/abundance estimator on actual reads against the exact frozen reference.",
+        "Independently reconcile read totals, taxon hierarchy, rank aggregation and both abundance columns; validate all taxa rather than a few matching taxon names."
+      ],
+      "source_artifact_contracts": [
+        {
+          "source_task_id": "metagenomics",
+          "source_question_sha256": "4cff105adda827aaf6841647c4297079527bbb4f12f157418115f30778e7134b",
+          "source_description_sha256": "8c53a2337aeaa074ed5194754c4728be246aac5fb4a69ee8d1fd185285e53fa6",
+          "inspection": "Original question/description reviewed; illustrative answer rows and reference results are not training data."
+        }
+      ],
+      "status": "source-question-and-artifact-contract-planned-independent-input-and-numerical-freeze-pending",
+      "validated_new_mappings": 0,
+      "negative_artifact_checks": [
+        "Swap the sample columns.",
+        "Drop unclassified reads from the denominator silently.",
+        "Double-count ancestor/descendant ranks or corrupt a low-abundance taxon while preserving the top taxon."
+      ],
+      "endpoint_fidelity_limits": [
+        "Two unreplicated libraries support descriptive composition comparison, not population-level inference about treatment.",
+        "Detected sequence assignments do not establish viable organisms or causal condition effects; measured composition truth is separate when unavailable."
+      ],
+      "independent_input_decision": "Select independent observed environmental or benign community samples with comparable processing and a feasible reference database; preserve biological sample roles.",
+      "bounded_runtime_design": "Provide a prebuilt offline database with exact inclusion rules. Any bounded database changes the scientific search universe and must be declared; use observed read subsets that retain realistic ambiguity and community complexity."
+    },
+    {
+      "proposed_id": "portfolio-bioagent-single-cell-condition-comparison",
+      "scientific_question": "Which cell types show reproducible transcriptional differences between independently observed paired conditions after raw-count QC, clustering and annotation?",
+      "benchmark_targets": [
+        {
+          "benchmark": "BioAgent",
+          "task_id": "single-cell",
+          "source_task_record_sha256": "875199c694bddb52823ae32c9bcc98e68d07238891276446e829ca2d0fba2d63"
+        }
+      ],
+      "source_family": "single-cell-condition-comparison",
+      "source_inspection_tier": "task-description-reviewed",
+      "source_planning_disposition": "candidate-design-provisional",
+      "matching_workstreams": [
+        "single-cell-qc-embedding"
+      ],
+      "required_endpoint_stages": [
+        "audit raw layers, feature identities and sample pairing",
+        "perform cell/gene QC and normalization",
+        "compute representation, graph and clusters",
+        "annotate clusters with declared reference/marker evidence",
+        "fit donor-aware within-cell-type condition contrasts",
+        "export full marker, annotation and gene-contrast tables"
+      ],
+      "observed_input_requirements": [
+        "Observed 10x/AnnData raw counts with documented before/after conditions, donor pairing, sample/batch IDs and independent cell-identity reference or marker evidence. A single unlabeled PBMC matrix does not supply the condition comparison."
+      ],
+      "required_formats": [
+        "10x Matrix Market",
+        "H5AD",
+        "sample metadata"
+      ],
+      "native_package_leads": [
+        "Scanpy or Seurat"
+      ],
+      "proposed_artifact_requirements": [
+        "cells.tsv: cell_id, sample_id, donor_id, condition, cluster_id, predicted_cell_type, qc_pass, annotation_evidence",
+        "features.tsv: feature_id, gene_name, mitochondrial, eligible",
+        "representation/: PCA loadings, neighbor graph and per-cell embedding coordinates",
+        "pseudobulk.tsv: cell_type, donor_id, condition, gene_id, count, contributing_cells",
+        "effects.tsv: cell_type, contrast, gene_id, gene_name, logfoldchanges, pvals, pvals_adj, direction, abs_logfc, eligible",
+        "cluster_effects.tsv: cluster_id, predicted_cell_type, gene_name, effect_reference, ambiguity_or_exclusion"
+      ],
+      "source_specific_decisions": [
+        "QC/normalization/feature rules, graph and clustering settings, annotation evidence hierarchy and ambiguous labels.",
+        "Documented donor pairing, cell-type eligibility and count aggregation, model design, contrast direction and complete tested-gene universe; never treat cells as independent donors."
+      ],
+      "deterministic_verification_approach": [
+        "Run the chosen native Scanpy/Seurat pipeline and a native donor-level count model on actual observed counts.",
+        "Independently reconstruct QC and pseudobulk counts, sample pairing and all gene/contrast results; check cluster labels by membership/evidence rather than literal numeric cluster IDs."
+      ],
+      "source_artifact_contracts": [
+        {
+          "source_task_id": "single-cell",
+          "source_question_sha256": "0004e9e2a4bf924991b25c77e40df1a6e2ee0ac257662c9efc2db17beec7e9a0",
+          "source_description_sha256": "e77f5df405a5ccaec40b91028ce2bdca0adb0e7fd3953c9a8e71c095a4b96236",
+          "inspection": "Original question/description reviewed; illustrative answer rows and reference results are not training data."
+        }
+      ],
+      "status": "source-question-and-artifact-contract-planned-independent-input-and-numerical-freeze-pending",
+      "validated_new_mappings": 0,
+      "negative_artifact_checks": [
+        "Return a matching cluster label but no expression results.",
+        "Leak condition labels into reference annotation; fabricate paired donors.",
+        "Reverse contrast direction without changing signed effects or p-value membership."
+      ],
+      "endpoint_fidelity_limits": [
+        "The source asks about exercise in skeletal muscle. A different observed tissue/condition can cover the pipeline stages but cannot establish that biological response.",
+        "Donor-level inference deliberately replaces pseudoreplicated cell tests; record methodological adaptation when the original prompt does not fix the statistical unit."
+      ],
+      "independent_input_decision": "Prefer independent observed paired skeletal-muscle/exercise data with genuine donor replication; if another condition is selected, preserve the unmatched source context as a limitation.",
+      "bounded_runtime_design": "Bound features/cells using documented sample-preserving rules; keep every biological donor and condition. Measure preprocessing, annotation and all within-cell-type models together."
+    },
+    {
+      "proposed_id": "portfolio-bioagent-transcript-abundance",
+      "scientific_question": "Which transcript abundances and ambiguity estimates result from native quantification of independently observed paired RNA reads?",
+      "benchmark_targets": [
+        {
+          "benchmark": "BioAgent",
+          "task_id": "transcript-quant",
+          "source_task_record_sha256": "a5061a2373897bbe1c035582e3dc5a8fa4e47d1e4e2b0b569adfd1c5950bfa29"
+        }
+      ],
+      "source_family": "transcript-abundance",
+      "source_inspection_tier": "task-description-reviewed",
+      "source_planning_disposition": "candidate-design-provisional",
+      "matching_workstreams": [
+        "transcript-reference-audit"
+      ],
+      "required_endpoint_stages": [
+        "audit pair/library orientation and transcript identities",
+        "quantify the reads with a pinned native transcript estimator",
+        "retain effective lengths, estimated counts and abundance units",
+        "export the complete transcript universe and ambiguity/assignment diagnostics"
+      ],
+      "observed_input_requirements": [
+        "Observed paired RNA FASTQ plus a versioned compatible transcriptome FASTA and transcript-to-gene map; include realistic isoform ambiguity. GFF extraction alone is not transcript quantification."
+      ],
+      "required_formats": [
+        "paired FASTQ.gz",
+        "transcriptome FASTA",
+        "transcript-to-gene TSV",
+        "native quantification TSV/JSON"
+      ],
+      "native_package_leads": [
+        "Salmon or kallisto"
+      ],
+      "proposed_artifact_requirements": [
+        "reads.tsv: source_run, read_pairs, orientation, qc_policy",
+        "transcripts.tsv: transcript_id, gene_id, sequence_length, reference_version",
+        "quantification.tsv: transcript_id, effective_length, estimated_count, TPM, eligible, uncertainty_when_requested",
+        "summary.tsv: input_pairs, processed_pairs, mapped_or_assigned_pairs, assigned_mass, unmapped_or_ambiguous_mass, library_type",
+        "native_quant/: complete native estimator output and parameter/index manifest"
+      ],
+      "source_specific_decisions": [
+        "Transcript reference/decoys, native tool/version, library type, bias settings, count unit (fragments versus reads), bootstrap/uncertainty policy and zero-length rules.",
+        "Do not round estimated fractional counts to invented exact observed transcript counts. Freeze numerical tolerances from native repeatability and independent accounting, before solver runs."
+      ],
+      "deterministic_verification_approach": [
+        "Run actual Salmon or kallisto with the declared library/reference settings; emit every transcript including zero estimates.",
+        "Independently check identity completeness, effective-length use, abundance normalization and assignment accounting. Native estimated counts are an algorithmic reference, not measured molecule truth."
+      ],
+      "source_artifact_contracts": [
+        {
+          "source_task_id": "transcript-quant",
+          "source_question_sha256": "511424e5a7b854ece3ccb463867b936a655a93c1bc0eba9c88a47196e3f1de6c",
+          "source_description_sha256": "e073986b0be1afdbf34f14489d9ec7939faa00a5b936a4d4395b79230910edfc",
+          "inspection": "Original question/description reviewed; illustrative answer rows and reference results are not training data."
+        }
+      ],
+      "status": "source-question-and-artifact-contract-planned-independent-input-and-numerical-freeze-pending",
+      "validated_new_mappings": 0,
+      "negative_artifact_checks": [
+        "Replace estimated counts by TPM.",
+        "Duplicate transcript IDs or drop zero-count isoforms.",
+        "Round fractional assignments to integers or count both mates as independent fragments."
+      ],
+      "endpoint_fidelity_limits": [
+        "The original source uses simulated reads and demands exact latent counts. Real observed reads generally cannot reveal exact latent isoform counts.",
+        "This task transfers native abundance estimation and artifact accounting; exact recovery of simulated molecule truth remains outside the observed-data adaptation."
+      ],
+      "independent_input_decision": "Select independent real paired RNA reads with a compact compatible transcriptome and nontrivial isoforms; resolve source-study overlap and reference naming.",
+      "bounded_runtime_design": "Package the offline native index and reference manifest. Bound observed read pairs without erasing ambiguity; record preprocessing as the task start boundary and measure native estimation plus checks."
+    },
+    {
+      "proposed_id": "portfolio-bioagent-metagenomic-assembly-and-classification",
+      "scientific_question": "Which assembled contigs from an independently observed community have supported viral assignments, and how do complete domain/species counts follow from those assignments?",
+      "benchmark_targets": [
+        {
+          "benchmark": "BioAgent",
+          "task_id": "viral-metagenomics",
+          "source_task_record_sha256": "09110107236f20fc02e03c135cfb7b228304a693846f7d07c087f95bb52fa5e1"
+        }
+      ],
+      "source_family": "metagenomic-assembly-and-classification",
+      "source_inspection_tier": "task-description-reviewed",
+      "source_planning_disposition": "candidate-design-provisional",
+      "matching_workstreams": [
+        "assembly-qc"
+      ],
+      "required_endpoint_stages": [
+        "audit read pairing and perform QC",
+        "assemble observed reads with a native assembler",
+        "map reads back to every contig for support",
+        "classify every eligible contig with native sequence evidence",
+        "reconcile ambiguous/unclassified assignments",
+        "aggregate complete contig counts by domain and species"
+      ],
+      "observed_input_requirements": [
+        "Observed community paired reads with multiple sequence origins and a pinned offline viral/general classification reference. A single PhiX control cannot supply the community-assembly endpoint."
+      ],
+      "required_formats": [
+        "FASTQ",
+        "FASTA",
+        "alignment report"
+      ],
+      "native_package_leads": [
+        "assembler",
+        "similarity search"
+      ],
+      "proposed_artifact_requirements": [
+        "read_qc.tsv: sample_id, input_pairs, retained_pairs, filters",
+        "contigs.fasta and contigs.tsv: contig_id, length, coverage, eligible, exclusion_reason",
+        "classification.tsv: contig_id, database_version, reference_hit, evidence_score, taxon_id, rank, domain, species, ambiguity_status",
+        "support.tsv: contig_id, aligned_reads, breadth, depth, discordance",
+        "species_summary.tsv: domain, species, contig_count, unclassified_policy"
+      ],
+      "source_specific_decisions": [
+        "Assembler version/parameters, minimum contig length, read-support rules, reference content, classifier score thresholds and multi-hit rank reconciliation.",
+        "One contig/one summary-count contribution under explicit ambiguity rules; retain excluded and unclassified counts separately."
+      ],
+      "deterministic_verification_approach": [
+        "Execute actual assembler, mapper and classifier; consume full observed reads and reference metadata.",
+        "Independently verify contig identity/length/support and aggregation of every classification row; a single named species is insufficient."
+      ],
+      "source_artifact_contracts": [
+        {
+          "source_task_id": "viral-metagenomics",
+          "source_question_sha256": "7a3fc3e542ca131fe88b71f0a0144da53858b8ffcdd6e0d641b0439f33544f22",
+          "source_description_sha256": "6002ab6ebfdb23ea15e5b010c211cbe324f378b3a1c609f3952f431f566b0b21",
+          "inspection": "Original question/description reviewed; illustrative answer rows and reference results are not training data."
+        }
+      ],
+      "status": "source-question-and-artifact-contract-planned-independent-input-and-numerical-freeze-pending",
+      "validated_new_mappings": 0,
+      "negative_artifact_checks": [
+        "Report a species without supporting contigs.",
+        "Count multiple hits from one contig as multiple contigs.",
+        "Drop unclassified contigs or claim a species from insufficient taxonomic resolution."
+      ],
+      "endpoint_fidelity_limits": [
+        "Taxonomic read/contig evidence cannot prove the cause of illness or infectious viability.",
+        "An independent benign community exercises assembly/classification; the original host-associated disease context remains distinct."
+      ],
+      "independent_input_decision": "Choose independent observed benign environmental/phage-community sequencing with sufficient complexity, without using source samples or known expected species as selection targets.",
+      "bounded_runtime_design": "Use a documented realistic observed read subset and prebuilt local classification reference; measure QC, assembly, read-back mapping and full classification within 30 minutes."
+    }
+  ]
+}
