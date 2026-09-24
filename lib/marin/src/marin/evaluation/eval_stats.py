@@ -3,13 +3,13 @@
 
 """Eval statistics: what a run measured, over how many items, and how uncertain the answer is.
 
-A benchmark score is a proportion over a finite item set, and a run does not always grade every item
-it set out to grade. This module carries both facts as one type -- :class:`Measurement` holds the
-sufficient statistics (scored items, correct items, recorded dispersion, and the coverage of the
-attempted panel) and the intervals are derived on read, so changing the interval rule never requires
-re-deriving stored data.
+A benchmark score is a mean over a finite item set, and a run does not always grade every item it set
+out to grade. This module carries both facts as one type -- :class:`Measurement` holds the sufficient
+statistics (scored items, binary successes or recorded dispersion, and the coverage of the attempted
+panel) and the intervals are derived on read, so changing the interval rule never requires re-deriving
+stored data.
 
-The estimand is fixed once: **theta, the success rate over the items the run set out to grade.** With
+The estimand is fixed once: **theta, the mean score over the items the run set out to grade.** With
 ``c = n_scored / n_attempted``, ``theta = c * theta_obs + (1 - c) * theta_miss``. ``theta_obs`` is
 estimated from the graded items; ``theta_miss`` is not identified -- a trial that times out is more
 likely to be a hard trial -- so it is bounded rather than imputed, and the reported interval widens by
@@ -17,20 +17,24 @@ at least ``1 - c``. Admitting a partial item set therefore costs interval width 
 was missed, which is the whole point: a complete-case rate (``k / n_scored``) rewards a run for losing
 the items it found hardest, so nothing here ranks on it.
 
+Coverage has two denominators. ``n_attempted / n_benchmark`` says how much of the benchmark the run
+set out to grade and gates admission; ``n_scored / n_attempted`` says how much of that it graded and
+widens the interval. A one-item run of a 1319-item benchmark passes the second and fails the first.
+
 Nothing here knows what a harness writes: :mod:`marin.evaluation.eval_measurements` turns records into
-measurements, and this module takes them from there. It is import-light on purpose -- the record
-status enum and nothing else, with no marin/levanter/iris imports -- so the dashboard image can vendor
-it beside ``records.py``.
+measurements, and this module takes them from there. It depends only on the evaluation record and
+archive contracts, with no training, Levanter, or Iris imports.
 """
 
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-from marin.evaluation.records import RunStatus
+from marin.evaluation.metric_selection import base_metric
+from marin.evaluation.records import MetricKind, RunStatus
 
 ALPHA = 0.05
 
@@ -38,11 +42,9 @@ ALPHA = 0.05
 # needs a far stricter floor; see :func:`difference_interval`.
 DEFAULT_MIN_COVERAGE = 0.9
 
-# Metrics whose run-level value is a mean of per-item 0/1 outcomes, so (k, n) is recoverable and the
-# Wilson interval applies. Everything else (pass@k estimators, partial-credit graders, mean rewards)
-# takes the recorded-dispersion path. ``accuracy`` is both evalchemy's chat-native key and Harbor's
-# solved-trial rate; both are per-item binary.
-BINARY_METRICS = frozenset({"acc", "acc_norm", "exact_match", "accuracy"})
+# Legacy records do not carry an evaluator-declared metric kind. These known binary names select the
+# Wilson interval for that fallback path; new records use their benchmark metadata directly.
+BINARY_METRICS = frozenset({"acc", "acc_norm", "exact_match", "accuracy", "normalized_accuracy", "pass@1", "pass_at_1"})
 
 # lm-eval records a task's graded-document count under this key, beside the metrics themselves.
 SAMPLE_COUNT_METRIC = "sample_len"
@@ -54,16 +56,6 @@ TOTAL_METRICS = ("num_total", "total")
 _Z_TWO_SIDED = 1.959963984540054
 _Z_ONE_SIDED = 1.6448536269514722
 _BISECTION_STEPS = 60
-
-
-class MetricKind(StrEnum):
-    """How a metric's uncertainty is computed."""
-
-    BINARY = "binary"
-    """A mean of per-item 0/1 outcomes: the Wilson score interval on (k, n)."""
-
-    CONTINUOUS = "continuous"
-    """A mean of per-item scores: the harness-recorded standard error."""
 
 
 class IntervalKind(StrEnum):
@@ -105,10 +97,12 @@ class ResultFlag(StrEnum):
     zero -- but a run in this state is as consistent with a broken grader or a mis-served prompt as
     with a model that cannot do the task, so it is evidence rather than a verdict."""
 
+    INCONSISTENT_COVERAGE = "inconsistent_coverage"
+
 
 # Flags a panel excludes unless a caller asks otherwise. Kept here beside the flags themselves so
 # producers and the dashboard cannot disagree on what counts as suspect.
-DEFAULT_EXCLUDE_FLAGS = frozenset({ResultFlag.NO_ANSWERS})
+DEFAULT_EXCLUDE_FLAGS = frozenset({ResultFlag.NO_ANSWERS, ResultFlag.INCONSISTENT_COVERAGE})
 
 
 @dataclass(frozen=True)
@@ -152,6 +146,7 @@ class Coverage:
     """
 
     n_scored: int
+    n_benchmark: int | None = None
     n_attempted: int | None = None
     n_correct: int | None = None
     n_unanswered: int = 0
@@ -173,6 +168,13 @@ class Coverage:
         if self.n_attempted is None:
             return None
         return max(0, self.n_attempted - self.n_scored)
+
+    @property
+    def benchmark_rate(self) -> float | None:
+        """``n_attempted / n_benchmark``, or None when either count is unreported."""
+        if self.n_benchmark is None or self.n_benchmark <= 0 or self.n_attempted is None:
+            return None
+        return min(1.0, self.n_attempted / self.n_benchmark)
 
 
 @dataclass(frozen=True)
@@ -204,6 +206,9 @@ class Measurement:
     it identity would split a benchmark's history in two whenever a cap changed."""
 
     flags: frozenset[ResultFlag] = frozenset()
+    num_fewshot: int | None = None
+    """Few-shot setting shared by the eval's tasks, or None when unspecified or mixed."""
+
     run_id: str = ""
     created_at: str = ""
     version: str | None = None
@@ -211,6 +216,9 @@ class Measurement:
     git_sha: str = ""
     eval_runtime: str = ""
     status: RunStatus = RunStatus.SUCCEEDED
+    declared: bool = False
+    protocol_metric: str | None = None
+    protocol_kind: MetricKind | None = None
 
 
 # --------------------------------------------------------------------------------------------------
@@ -322,6 +330,10 @@ def difference_interval(a: Measurement, b: Measurement, alpha: float = ALPHA) ->
     are equal -- at a 90% coverage gate the unidentified width alone is 0.2, so ordering claims need a
     much stricter coverage threshold than display does.
     """
+    metric_a = effective_protocol(a).metric
+    metric_b = effective_protocol(b).metric
+    if metric_a != metric_b:
+        raise ValueError(f"measurements use different metrics: {metric_a} and {metric_b}")
     rate_a = a.coverage.rate if a.coverage.rate is not None else 1.0
     rate_b = b.coverage.rate if b.coverage.rate is not None else 1.0
     unidentified = (1.0 - rate_a) + (1.0 - rate_b)
@@ -469,6 +481,7 @@ class SelectionRequest:
 
     statuses: frozenset[RunStatus] = frozenset({RunStatus.SUCCEEDED})
     min_coverage: float = DEFAULT_MIN_COVERAGE
+    min_benchmark_coverage: float = DEFAULT_MIN_COVERAGE
 
     exclude_flags: frozenset[ResultFlag] = DEFAULT_EXCLUDE_FLAGS
     """Flags that make a result inadmissible. A run whose grader extracted no answer from any item
@@ -504,6 +517,49 @@ class Selection:
     benchmarks: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class MetricProtocol:
+    """The headline metric and uncertainty model for a benchmark column."""
+
+    metric: str
+    kind: MetricKind
+
+
+@dataclass(frozen=True)
+class LegacyMetric:
+    """The newest inferred metric for a benchmark without a declaration."""
+
+    created_at: str
+    run_id: str
+    metric: str
+
+
+def effective_protocol(measurement: Measurement) -> MetricProtocol:
+    """Resolve a measurement's declared protocol or its legacy inferred protocol."""
+    if measurement.declared and measurement.protocol_metric is not None and measurement.protocol_kind is not None:
+        return MetricProtocol(metric=measurement.protocol_metric, kind=measurement.protocol_kind)
+    return MetricProtocol(metric=base_metric(measurement.metric), kind=measurement.kind)
+
+
+def declared_protocols(measurements: Iterable[Measurement]) -> Mapping[str, MetricProtocol]:
+    """Return each benchmark's protocol from its newest declared measurement."""
+    newest: dict[str, Measurement] = {}
+    for measurement in measurements:
+        current = newest.get(measurement.benchmark)
+        if measurement.declared and (current is None or measurement.created_at > current.created_at):
+            newest[measurement.benchmark] = measurement
+    return {
+        benchmark: MetricProtocol(metric=measurement.protocol_metric, kind=measurement.protocol_kind)
+        for benchmark, measurement in newest.items()
+        if measurement.protocol_metric is not None and measurement.protocol_kind is not None
+    }
+
+
+def matches_protocol(measurement: Measurement, protocol: MetricProtocol) -> bool:
+    """Whether a measurement uses a benchmark column's declared protocol."""
+    return effective_protocol(measurement) == protocol
+
+
 def _admission_reason(measurement: Measurement, request: SelectionRequest) -> str | None:
     """Why ``measurement`` is inadmissible under ``request``, or None when it is admissible."""
     if measurement.status not in request.statuses:
@@ -516,6 +572,11 @@ def _admission_reason(measurement: Measurement, request: SelectionRequest) -> st
     rate = measurement.coverage.rate
     if rate is not None and rate < request.min_coverage:
         return f"coverage {rate:.3f} below {request.min_coverage:.2f}"
+    benchmark_rate = measurement.coverage.benchmark_rate
+    if benchmark_rate is not None and benchmark_rate < request.min_benchmark_coverage:
+        return f"benchmark coverage {benchmark_rate:.3f} below {request.min_benchmark_coverage:.2f}"
+    if benchmark_rate is None and measurement.item_cap is not None:
+        return "capped run with unreported benchmark size"
     if request.cohort is CohortMode.SINGLE_COHORT and measurement.version != request.cohort_version:
         return f"cohort {measurement.version}"
     return None
@@ -537,19 +598,60 @@ def select(
     measurements: Iterable[Measurement],
     request: SelectionRequest,
     metadata: Mapping[str, Mapping[str, str]] | None = None,
+    protocols: Mapping[str, MetricProtocol] | None = None,
 ) -> Selection:
     """Choose one measurement per (model, benchmark) under ``request``.
 
     ``metadata`` supplies each run's filterable properties keyed by run id (accelerator, backend, user
     and so on), so metadata filtering stays a property of the request rather than of the measurement.
     """
+    measurements = list(measurements)
     metadata = metadata or {}
+    protocols = declared_protocols(measurements) if protocols is None else protocols
+    legacy_metrics: dict[str, LegacyMetric] = {}
+    for measurement in measurements:
+        if measurement.benchmark in protocols:
+            continue
+        current = legacy_metrics.get(measurement.benchmark)
+        candidate = LegacyMetric(measurement.created_at, measurement.run_id, base_metric(measurement.metric))
+        if current is None or (candidate.created_at, candidate.run_id) > (current.created_at, current.run_id):
+            legacy_metrics[measurement.benchmark] = candidate
     chosen: dict[str, dict[str, Measurement]] = {}
     rejections: list[Rejection] = []
     for measurement in measurements:
         if not matches_filters(measurement.model, metadata.get(measurement.run_id, {}), request):
             continue
         if request.panel is not None and measurement.benchmark not in request.panel:
+            continue
+        protocol = protocols.get(measurement.benchmark)
+        effective = effective_protocol(measurement)
+        metric = effective.metric
+        kind = effective.kind
+        if protocol is not None and not matches_protocol(measurement, protocol):
+            reason = (
+                f"metric {metric} differs from declared {protocol.metric}"
+                if metric != protocol.metric
+                else f"metric kind {kind.value} differs from declared {protocol.kind.value}"
+            )
+            rejections.append(
+                Rejection(
+                    model=measurement.model,
+                    benchmark=measurement.benchmark,
+                    run_id=measurement.run_id,
+                    reason=reason,
+                )
+            )
+            continue
+        legacy_metric = legacy_metrics.get(measurement.benchmark)
+        if protocol is None and legacy_metric is not None and metric != legacy_metric.metric:
+            rejections.append(
+                Rejection(
+                    model=measurement.model,
+                    benchmark=measurement.benchmark,
+                    run_id=measurement.run_id,
+                    reason=f"metric {metric} differs from current {legacy_metric.metric}",
+                )
+            )
             continue
         reason = _admission_reason(measurement, request)
         if reason is not None:
@@ -568,6 +670,10 @@ def select(
 
     benchmarks = tuple(sorted({name for cells in chosen.values() for name in cells}))
     panel = request.panel if request.panel is not None else benchmarks
-    if request.completeness is Completeness.COMPLETE_PANEL and panel:
-        chosen = {model: cells for model, cells in chosen.items() if all(name in cells for name in panel)}
+    if request.completeness is Completeness.COMPLETE_PANEL:
+        chosen = {model: cells for model, cells in chosen.items() if covers_panel(cells, panel)}
     return Selection(cells=chosen, rejections=tuple(rejections), benchmarks=benchmarks)
+
+
+def covers_panel(cells: Mapping[str, Measurement], panel: Sequence[str]) -> bool:
+    return all(name in cells for name in panel)

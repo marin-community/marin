@@ -26,6 +26,21 @@ Profiles default to a 30-day lifetime. Set
 `--trainer.profiler.upload.enabled false` for local-only capture. A
 `MARIN_PREFIX` without lifecycle-backed `ttl=Nd` storage also disables upload.
 
+### Capturing XLA compiler dumps
+
+The XLA dump uploader uses lifecycle-managed temporary storage. Configure the
+dump directory before Python starts, then enable uploads:
+
+```bash
+XLA_FLAGS='--xla_dump_to=/tmp/xla-dumps' uv run ... \
+  --trainer.xla_dump_upload.enabled true
+```
+
+Each host uploads its initial dump tree, then files that change after each
+completed training hook pass, to `ttl=30d/xla-dumps/<run-id>/process-<n>`. Set
+`--trainer.xla_dump_upload.ttl_days 3` to shorten retention. If the configured
+dump path is absent, the training run continues and logs that no upload occurred.
+
 Install local viewers with one of:
 
 - `pip install "levanter[profiling]"`

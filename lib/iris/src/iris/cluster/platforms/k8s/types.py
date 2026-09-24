@@ -38,7 +38,7 @@ IRIS_PRIORITY_CLASSES: tuple[tuple[str, int, str], ...] = (
     (IRIS_PRIORITY_CLASS_SYSTEM, 10000, "PreemptLowerPriority"),
     (IRIS_PRIORITY_CLASS_PRODUCTION, 1000, "PreemptLowerPriority"),
     (IRIS_PRIORITY_CLASS_INTERACTIVE, 10, "PreemptLowerPriority"),
-    (IRIS_PRIORITY_CLASS_BATCH, 0, "Never"),
+    (IRIS_PRIORITY_CLASS_BATCH, 0, "PreemptLowerPriority"),
 )
 
 
@@ -70,8 +70,8 @@ class KubectlError(RuntimeError):
 class K8sResource(Enum):
     """Kubernetes resource type with API metadata.
 
-    Each member carries the information needed to construct API URL paths:
-    (api_group, api_version, is_namespaced, plural, kind).
+    Each member carries the metadata the dynamic client needs to address the
+    resource: (api_group, api_version, is_namespaced, plural, kind).
 
     Use the enum members instead of freeform strings when calling K8sService
     methods like get_json, list_json, delete, etc.
@@ -135,23 +135,6 @@ class K8sResource(Enum):
         self.is_namespaced = is_namespaced
         self.plural = plural
         self.kind = kind
-
-    def api_base(self) -> str:
-        """URL prefix for this resource type (e.g. '/api/v1' or '/apis/apps/v1')."""
-        if self.api_group:
-            return f"/apis/{self.api_group}/{self.api_version}"
-        return f"/api/{self.api_version}"
-
-    def collection_path(self, namespace: str | None = None) -> str:
-        """URL path for listing/creating resources."""
-        base = self.api_base()
-        if self.is_namespaced and namespace:
-            return f"{base}/namespaces/{namespace}/{self.plural}"
-        return f"{base}/{self.plural}"
-
-    def item_path(self, name: str, namespace: str | None = None) -> str:
-        """URL path for a specific resource by name."""
-        return f"{self.collection_path(namespace)}/{name}"
 
     @classmethod
     def from_kind(cls, kind: str) -> "K8sResource":

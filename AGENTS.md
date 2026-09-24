@@ -177,7 +177,9 @@ uv run --no-project infra/ci/run_tests.py
 
 Watch for and eliminate these patterns in generated code:
 - Over-protective try/except and defensive None checks
-- Tautological tests (type exists, constant has value)
+- Tautological and guard-mirroring tests (type exists, constant has value,
+  nonpositive scalar raises without a regression or public compatibility
+  contract)
 - Verbose/redundant docstrings and `__all__` in `__init__.py`
 - Boolean dispatch instead of separate classes
 - Environment variables instead of explicit parameters

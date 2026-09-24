@@ -5,12 +5,11 @@
 
 from dataclasses import dataclass
 
-import haliax as hax
 import jax
 import jax.numpy as jnp
 import numpy as np
 
-from levanter.data.packing import SequencePacker, pack_documents
+from levanter.data.packing import pack_documents
 from levanter.grpo_model import GrpoExample
 from levanter.pipeline import reshape_batch_into_microbatches
 
@@ -96,12 +95,12 @@ def packed_pipeline_batch(
     if np.any((response_mask == 0) & ((source.policy_weights != 0) | (source.kl_weights != 0))):
         raise ValueError("Objective weights must be zero outside the response mask")
     for row, documents in enumerate(packs):
-        packer = SequencePacker(hax.Axis("position", sequence_length), max(len(documents), 1), pad_token_id)
         offset = 0
         for document in documents:
             indices = np.flatnonzero(valid[document])
             count = len(indices)
-            packer.add_example(source.tokens[document, indices].tolist(), np.zeros(count), segment_id=document)
+            tokens[row, offset : offset + count] = source.tokens[document, indices]
+            segments[row, offset : offset + count] = document
             positions[row, offset : offset + count] = source.position_ids[document, indices]
             for compact_target, target in enumerate(indices):
                 if target < response_start or compact_target == 0 or not valid[document, target - 1]:
@@ -111,9 +110,6 @@ def packed_pipeline_batch(
                 for name in response_names:
                     objective[name][row, predictor] = getattr(source, name)[document, response_index]
             offset += count
-        packed = packer.pack()
-        tokens[row] = np.asarray(packed.tokens.array)
-        segments[row] = np.asarray(packed.attn_mask.segment_ids[0].array)
     batch = PipelineBatch(
         tokens, (segments >= 0).astype(np.int32), segments, positions, *(objective[name] for name in response_names)
     )

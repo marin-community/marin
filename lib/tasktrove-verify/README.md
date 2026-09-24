@@ -38,6 +38,14 @@ process exit after a verdict has been written.
 | `judge` | reference-answer or checklist rubric through a configured model endpoint |
 | `script` | legacy `test.sh` fallback with normalized reward files and fail-closed errors |
 
+For the `math` and `numeric` grading modes, the last `\boxed{...}` occurrence determines the
+candidate when the output contains a box marker. Its braces must be balanced and its content must be
+nonempty. Otherwise, the candidate receives reward `0.0`, even when an earlier marker contains the
+expected answer. Without a box marker, `math` grades the last nonempty line and `numeric` grades the
+last number. Numeric expected values and absolute and relative tolerances must be finite. Tolerances
+must also be nonnegative. The effective tolerance,
+`max(tolerance_abs, tolerance_rel * abs(expected))`, must be finite.
+
 [`spec.py`](src/tasktrove_verify/spec.py) owns the frozen mode dataclasses plus `parse_spec` and
 `render_spec`. Spec paths are relative to the directory containing `verifier.toml`. `grade.py`
 owns dispatch, output handling, verdict writing, and the CLI. Executable graders live in
