@@ -13,6 +13,9 @@ Repository and format coverage support those workflows; they are secondary to
 benchmark-task coverage. Continue tracking actual execution of all 50 repositories.
 The issue's opening ledger records real-data task candidates, fully validated and
 partial ID mappings, and repositories with passing native execution evidence.
+The [authoring queue](bio-task-queue.md) ranks assessed candidates by the additional
+distinct missing ID tasks their connected workflow could complete. Recompute the
+remaining targets after each result; related protocol variants add no rank credit.
 
 The implementation has **145 recipes across 13 domains**, with one task per
 recipe by default and one train split. The [implemented recipe matrix](bio-task-recipes.md)

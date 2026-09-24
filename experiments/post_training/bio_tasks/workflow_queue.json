@@ -1,0 +1,1111 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-09-24T12:13:31.340312+00:00",
+  "basis_revision": "cda940f675d7d81252cabd76d6b11dfd6696c15e",
+  "scope": "Provisional ID agentic benchmarks only. This queue selects new authoring work; it does not change benchmark coverage states.",
+  "selection_policy": {
+    "primary": "At each selection, maximize the number of currently missing distinct ID task workflows the next coherent task is expected to complete.",
+    "deduplication": "Use benchmark/task identity and explicit shared-task relations. Related protocol records receive no extra priority credit and still need separate protocol validation.",
+    "counting": "A shared tool, component mapping, broad family label or uninspected identifier contributes no completed-task credit. Conditional candidate counts are upper bounds until all data and endpoint requirements pass.",
+    "constraints": [
+      "Observed independent biological inputs; no benchmark fixtures or answers.",
+      "A coherent connected scientific workflow, one task per recipe by default, offline and at most 30 minutes.",
+      "Input-reading oracle and complete deterministic artifact checks; no model calls or LLM judge.",
+      "Preserve every OOD assignment; do not inspect OOD tasks for authoring."
+    ],
+    "tiebreakers": [
+      "Likelihood of completing the target endpoints with accessible, scientifically appropriate data.",
+      "Less incremental authoring and validation effort.",
+      "New biological/workflow coverage when gains and feasibility are comparable."
+    ],
+    "secondary": "Repository and format coverage support the chosen ID workflows; adding a repo alone earns no priority credit.",
+    "refresh": "After every completed or rejected candidate, recompute its remaining target set from benchmark inventories, remove newly covered shared targets from later candidates, reassess blockers and choose again. Record evidence before promoting any benchmark mapping.",
+    "scope_limit": "Ranks compare the currently assessed candidate set, not all possible workflows in all releases. Source-review backlog entries remain explicit and can change the ranking."
+  },
+  "selected_candidate": "multi-locus-phylogenomic-signal",
+  "selection_reason": "Largest currently assessed conditional gain: 46 distinct missing BixBench endpoint patterns, with 13 related Verified-50 protocols assessed separately. Validate independent multi-locus data first; reduce/re-rank if any required endpoint cannot be supported.",
+  "candidates": [
+    {
+      "id": "multi-locus-phylogenomic-signal",
+      "title": "Compare alignment quality and evolutionary signal across matched orthologs",
+      "status": "selected-for-source-validation",
+      "targets": [
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-11-q1"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-11-q2"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-11-q3"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-11-q4"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-11-q5"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-11-q6"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-12-q2"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-12-q3"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-12-q4"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-12-q5"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-12-q6"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-21-q2"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-25-q1"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-28-q1"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-28-q2"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-28-q3"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-28-q4"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-28-q5"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-28-q6"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-34-q1"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-34-q2"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-34-q3"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-34-q4"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-34-q5"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-34-q6"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-35-q1"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-35-q2"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-35-q3"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-35-q4"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-38-q1"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-38-q2"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-38-q3"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-38-q5"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-38-q6"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-4-q1"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-4-q2"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-4-q3"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-4-q4"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-4-q5"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-4-q6"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-4-q7"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-45-q1"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-45-q2"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-45-q5"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-45-q6"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-60-q1"
+        }
+      ],
+      "missing_distinct_task_targets": 46,
+      "validated_new_task_mappings": 0,
+      "related_protocol_records": [
+        {
+          "benchmark": "BixBench-Verified-50",
+          "task_id": "bix-12-q2",
+          "canonical_benchmark": "BixBench",
+          "canonical_task_id": "bix-12-q2",
+          "relation": "identical-question",
+          "additional_rank_credit": 0,
+          "protocol_validation": "Still requires separate endpoint and artifact checks."
+        },
+        {
+          "benchmark": "BixBench-Verified-50",
+          "task_id": "bix-11-q1",
+          "canonical_benchmark": "BixBench",
+          "canonical_task_id": "bix-11-q1",
+          "relation": "revised-question",
+          "additional_rank_credit": 0,
+          "protocol_validation": "Still requires separate endpoint and artifact checks."
+        },
+        {
+          "benchmark": "BixBench-Verified-50",
+          "task_id": "bix-35-q1",
+          "canonical_benchmark": "BixBench",
+          "canonical_task_id": "bix-35-q1",
+          "relation": "identical-question",
+          "additional_rank_credit": 0,
+          "protocol_validation": "Still requires separate endpoint and artifact checks."
+        },
+        {
+          "benchmark": "BixBench-Verified-50",
+          "task_id": "bix-28-q3",
+          "canonical_benchmark": "BixBench",
+          "canonical_task_id": "bix-28-q3",
+          "relation": "revised-question",
+          "additional_rank_credit": 0,
+          "protocol_validation": "Still requires separate endpoint and artifact checks."
+        },
+        {
+          "benchmark": "BixBench-Verified-50",
+          "task_id": "bix-34-q2",
+          "canonical_benchmark": "BixBench",
+          "canonical_task_id": "bix-34-q2",
+          "relation": "identical-question",
+          "additional_rank_credit": 0,
+          "protocol_validation": "Still requires separate endpoint and artifact checks."
+        },
+        {
+          "benchmark": "BixBench-Verified-50",
+          "task_id": "bix-12-q5",
+          "canonical_benchmark": "BixBench",
+          "canonical_task_id": "bix-12-q5",
+          "relation": "identical-question",
+          "additional_rank_credit": 0,
+          "protocol_validation": "Still requires separate endpoint and artifact checks."
+        },
+        {
+          "benchmark": "BixBench-Verified-50",
+          "task_id": "bix-35-q2",
+          "canonical_benchmark": "BixBench",
+          "canonical_task_id": "bix-35-q2",
+          "relation": "identical-question",
+          "additional_rank_credit": 0,
+          "protocol_validation": "Still requires separate endpoint and artifact checks."
+        },
+        {
+          "benchmark": "BixBench-Verified-50",
+          "task_id": "bix-34-q5",
+          "canonical_benchmark": "BixBench",
+          "canonical_task_id": "bix-34-q5",
+          "relation": "identical-question",
+          "additional_rank_credit": 0,
+          "protocol_validation": "Still requires separate endpoint and artifact checks."
+        },
+        {
+          "benchmark": "BixBench-Verified-50",
+          "task_id": "bix-12-q4",
+          "canonical_benchmark": "BixBench",
+          "canonical_task_id": "bix-12-q4",
+          "relation": "identical-question",
+          "additional_rank_credit": 0,
+          "protocol_validation": "Still requires separate endpoint and artifact checks."
+        },
+        {
+          "benchmark": "BixBench-Verified-50",
+          "task_id": "bix-12-q6",
+          "canonical_benchmark": "BixBench",
+          "canonical_task_id": "bix-12-q6",
+          "relation": "identical-question",
+          "additional_rank_credit": 0,
+          "protocol_validation": "Still requires separate endpoint and artifact checks."
+        },
+        {
+          "benchmark": "BixBench-Verified-50",
+          "task_id": "bix-38-q1",
+          "canonical_benchmark": "BixBench",
+          "canonical_task_id": "bix-38-q1",
+          "relation": "identical-question",
+          "additional_rank_credit": 0,
+          "protocol_validation": "Still requires separate endpoint and artifact checks."
+        },
+        {
+          "benchmark": "BixBench-Verified-50",
+          "task_id": "bix-45-q1",
+          "canonical_benchmark": "BixBench",
+          "canonical_task_id": "bix-45-q1",
+          "relation": "identical-question",
+          "additional_rank_credit": 0,
+          "protocol_validation": "Still requires separate endpoint and artifact checks."
+        },
+        {
+          "benchmark": "BixBench-Verified-50",
+          "task_id": "bix-11-q2",
+          "canonical_benchmark": "BixBench",
+          "canonical_task_id": "bix-11-q2",
+          "relation": "identical-question",
+          "additional_rank_credit": 0,
+          "protocol_validation": "Still requires separate endpoint and artifact checks."
+        }
+      ],
+      "coverage_estimate": "Conditional target count after inspecting required stages. This is neither measured coverage nor a probability-weighted prediction; blockers can reduce the count.",
+      "required_stages": [
+        "Resolve observed single-copy ortholog groups across two biological clades and retain gene/taxon identity.",
+        "Align each group, infer or reuse provenance-pinned gene trees, and declare rooting, gaps, taxon eligibility and branch policies.",
+        "Compute PhyKIT treeness, RCV, informative sites, saturation, branch distances, evolutionary rates, tree length and root-to-tip dispersion.",
+        "Retain per-tip and per-pair measurements, then aggregate within genes before comparing gene distributions.",
+        "Join matched orthologs across clades; calculate differences, ratios, thresholds, quantiles and explicitly parameterized Mann-Whitney tests."
+      ],
+      "required_artifacts": [
+        "observed sequences and ortholog/taxon manifest",
+        "complete aligned FASTA and Newick per eligible gene",
+        "per-site, per-tip and per-pair measurements as applicable",
+        "per-gene metric table",
+        "group and paired-gene endpoint tables"
+      ],
+      "data_readiness": "The existing COX1 example supplies one gene and is insufficient. Independent multi-locus observations and supported ortholog assignments must be frozen before authoring.",
+      "blockers": [
+        "Find and check independent observed groups; do not reuse the benchmark fungal/animal fixtures or treat inference methods as biological replicates.",
+        "Inspect and execute the pinned PhyKIT functions, including rooting behavior, four-decimal outputs and undefined ratios.",
+        "Named-gene endpoints must retain a gene lookup on independently chosen orthologs; this covers their workflow pattern, not original biological answers.",
+        "Define finite coverage rules for missing taxa, zero denominators, ties and empty sets without inventing observations.",
+        "Demonstrate the complete connected task finishes within 30 minutes."
+      ],
+      "effort_tiebreak": "High: new multi-locus source preparation and package-specific metric checks; reuses existing alignment/tree execution.",
+      "validation_evidence": [],
+      "conditional_extra_targets": [
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-25-q4"
+        }
+      ],
+      "conditional_extra_reason": "The endpoint requires naturally observed alignments exceeding 70% gaps. It adds no rank credit until such data are verified; no artificial gaps will be inserted."
+    },
+    {
+      "id": "factorial-rnaseq-pathway-comparison",
+      "title": "Analyze replicated single/double perturbations across media with directional pathway overlap",
+      "status": "source-assessment",
+      "targets": [
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-13-q1"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-13-q2"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-13-q3"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-13-q4"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-13-q5"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-26-q3"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-26-q4"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-26-q5"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-32-q2"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-32-q3"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-32-q4"
+        }
+      ],
+      "missing_distinct_task_targets": 11,
+      "validated_new_task_mappings": 0,
+      "related_protocol_records": [
+        {
+          "benchmark": "BixBench-Verified-50",
+          "task_id": "bix-26-q3",
+          "canonical_benchmark": "BixBench",
+          "canonical_task_id": "bix-26-q3",
+          "relation": "identical-question",
+          "additional_rank_credit": 0,
+          "protocol_validation": "Still requires separate endpoint and artifact checks."
+        },
+        {
+          "benchmark": "BixBench-Verified-50",
+          "task_id": "bix-32-q2",
+          "canonical_benchmark": "BixBench",
+          "canonical_task_id": "bix-32-q2",
+          "relation": "revised-question",
+          "additional_rank_credit": 0,
+          "protocol_validation": "Still requires separate endpoint and artifact checks."
+        },
+        {
+          "benchmark": "BixBench-Verified-50",
+          "task_id": "bix-26-q5",
+          "canonical_benchmark": "BixBench",
+          "canonical_task_id": "bix-26-q5",
+          "relation": "revised-question",
+          "additional_rank_credit": 0,
+          "protocol_validation": "Still requires separate endpoint and artifact checks."
+        }
+      ],
+      "coverage_estimate": "Conditional target count after inspecting required stages. This is neither measured coverage nor a probability-weighted prediction; blockers can reduce the count.",
+      "required_stages": [
+        "Join biological replicate, perturbation and media metadata to observed counts.",
+        "Fit an identifiable DESeq2 design and retain unshrunken dispersions and all requested contrasts.",
+        "Apply endpoint-specific fold-change and BH rules, including intersections and exclusive single/double-perturbation effects.",
+        "Run directional pathway over-representation with a frozen independent annotation and explicit gene universe.",
+        "Compare pathway membership across media and perturbations with complete supporting gene lists."
+      ],
+      "required_artifacts": [
+        "count/QC/design tables",
+        "complete fitted-gene and dispersion tables",
+        "contrast gene sets",
+        "frozen pathway membership",
+        "all tested enrichment results and overlaps"
+      ],
+      "data_readiness": "GSE60450 lacks the required single/double perturbation and media structure; a suitable independent replicated study is needed.",
+      "blockers": [
+        "Do not substitute population/developmental-stage effects for an intervention design.",
+        "Resolve pathway license, version and offline acquisition; an original live-latest KEGG request becomes an explicitly frozen adaptation.",
+        "Term-specific endpoints require annotated biological pathways with observable eligible genes.",
+        "Preserve each endpoint's distinct adjusted-p and fold-change rules."
+      ],
+      "effort_tiebreak": "High: new intervention source and pathway reference; fitted-model and artifact infrastructure already exists.",
+      "validation_evidence": []
+    },
+    {
+      "id": "singlecell-representation-diagnostics",
+      "title": "Audit observed single-cell counts through normalization, embedding and group structure",
+      "status": "source-assessment",
+      "targets": [
+        {
+          "benchmark": "ScienceAgentBench",
+          "task_id": "69"
+        },
+        {
+          "benchmark": "ScienceAgentBench",
+          "task_id": "79"
+        },
+        {
+          "benchmark": "ScienceAgentBench",
+          "task_id": "80"
+        },
+        {
+          "benchmark": "ScienceAgentBench",
+          "task_id": "81"
+        },
+        {
+          "benchmark": "ScienceAgentBench",
+          "task_id": "82"
+        },
+        {
+          "benchmark": "ScienceAgentBench",
+          "task_id": "96"
+        },
+        {
+          "benchmark": "scBench",
+          "task_id": "dr_05_pca_preprocessing_sentinels"
+        },
+        {
+          "benchmark": "scBench",
+          "task_id": "NRM01_sparse_normalization"
+        }
+      ],
+      "missing_distinct_task_targets": 8,
+      "validated_new_task_mappings": 0,
+      "related_protocol_records": [],
+      "coverage_estimate": "Conditional target count after inspecting required stages. This is neither measured coverage nor a probability-weighted prediction; blockers can reduce the count.",
+      "required_stages": [
+        "Read native h5ad raw/count layers with stable cell and feature IDs.",
+        "Validate endogenous/mitochondrial features and count-based cell QC.",
+        "Normalize, assess depth effects, select variable genes and diagnose PCA preprocessing.",
+        "Compute the declared embedding and neighbor graph; retain marker-expression joins.",
+        "Compare community assignments and group-profile hierarchical structure under explicit representations."
+      ],
+      "required_artifacts": [
+        "native h5ad and layer/annotation provenance",
+        "complete QC and normalized-count measurements",
+        "HVG/PCA diagnostics and loading/subspace evidence",
+        "embedding/neighbor graph and cell-keyed marker panels",
+        "cluster partition and group-distance/linkage artifacts"
+      ],
+      "data_readiness": "GSE81682 observed counts and QC are already frozen. Native h5ad preparation, mitochondrial annotation and endpoint suitability remain to be checked.",
+      "blockers": [
+        "Do not interpret broad sorting gates as fine cell types or donor identities.",
+        "Audit the scBench endpoint prompts before claiming preprocessing-sentinel and depth-aware outcomes.",
+        "Validate numerical plotting data, eigenvector/subspace and partition semantics without a visual judge.",
+        "Keep the complete sparse computation within the task memory/time budget."
+      ],
+      "effort_tiebreak": "Medium: reuse observed matrix and QC; add h5ad, normalization and representation checks.",
+      "validation_evidence": []
+    },
+    {
+      "id": "observed-bacterial-resequencing",
+      "title": "Compare observed bacterial isolates from reads through filtered variants",
+      "status": "source-assessment",
+      "targets": [
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-61-q1"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-61-q2"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-61-q3"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-61-q4"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-61-q5"
+        },
+        {
+          "benchmark": "BioAgent",
+          "task_id": "evolution"
+        },
+        {
+          "benchmark": "CompBioBench",
+          "task_id": "bam-infer-read-length-q1"
+        },
+        {
+          "benchmark": "CompBioBench",
+          "task_id": "bam-ops-q1"
+        }
+      ],
+      "missing_distinct_task_targets": 8,
+      "validated_new_task_mappings": 0,
+      "related_protocol_records": [
+        {
+          "benchmark": "BixBench-Verified-50",
+          "task_id": "bix-61-q5",
+          "canonical_benchmark": "BixBench",
+          "canonical_task_id": "bix-61-q5",
+          "relation": "identical-question",
+          "additional_rank_credit": 0,
+          "protocol_validation": "Still requires separate endpoint and artifact checks."
+        },
+        {
+          "benchmark": "BixBench-Verified-50",
+          "task_id": "bix-61-q2",
+          "canonical_benchmark": "BixBench",
+          "canonical_task_id": "bix-61-q2",
+          "relation": "revised-question",
+          "additional_rank_credit": 0,
+          "protocol_validation": "Still requires separate endpoint and artifact checks."
+        }
+      ],
+      "coverage_estimate": "Conditional target count after inspecting required stages. This is neither measured coverage nor a probability-weighted prediction; blockers can reduce the count.",
+      "required_stages": [
+        "Freeze independent observed isolate reads, matching reference and sample provenance.",
+        "Run explicit paired-read QC/trimming and retain both paired and orphan/discard accounting.",
+        "Align, index native BAM and inspect flags, lengths, mapping qualities and proper-pair eligibility.",
+        "Measure coverage including zeros and run a declared probabilistic variant caller.",
+        "Normalize/filter complete VCF records and compare SNP/indel and transition/transversion outcomes between isolates."
+      ],
+      "required_artifacts": [
+        "unchanged FASTQ and reference",
+        "complete trimming manifest and retained reads",
+        "BAM/BAI with semantic alignment checks",
+        "position coverage and read eligibility tables",
+        "complete normalized VCF and isolate comparison"
+      ],
+      "data_readiness": "The PhiX read run is available but does not supply the required independent bacterial isolate comparison. New bacterial observations are needed.",
+      "blockers": [
+        "Recheck the BioAgent evolution task's sample/reference and comparison requirements.",
+        "BixBench names Trimmomatic/BWA-MEM/GATK; using other packages alone would not satisfy package-specific endpoints.",
+        "Do not equate detected variants with evolutionary mutation rates or antimicrobial resistance mechanisms.",
+        "Benchmark BAM endpoints require an explicit primary/secondary/supplementary/duplicate policy."
+      ],
+      "effort_tiebreak": "High: new reads and probabilistic caller checks; reuses native tools and format contracts.",
+      "validation_evidence": []
+    },
+    {
+      "id": "clinical-binary-response",
+      "title": "Fit and compare prespecified models for an observed binary clinical response",
+      "status": "source-assessment",
+      "targets": [
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-51-q1"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-51-q2"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-51-q3"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-51-q4"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-51-q5"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-51-q6"
+        },
+        {
+          "benchmark": "BixBench",
+          "task_id": "bix-51-q8"
+        }
+      ],
+      "missing_distinct_task_targets": 7,
+      "validated_new_task_mappings": 0,
+      "related_protocol_records": [
+        {
+          "benchmark": "BixBench-Verified-50",
+          "task_id": "bix-51-q2",
+          "canonical_benchmark": "BixBench",
+          "canonical_task_id": "bix-51-q2",
+          "relation": "identical-question",
+          "additional_rank_credit": 0,
+          "protocol_validation": "Still requires separate endpoint and artifact checks."
+        },
+        {
+          "benchmark": "BixBench-Verified-50",
+          "task_id": "bix-51-q8",
+          "canonical_benchmark": "BixBench",
+          "canonical_task_id": "bix-51-q8",
+          "relation": "identical-question",
+          "additional_rank_credit": 0,
+          "protocol_validation": "Still requires separate endpoint and artifact checks."
+        }
+      ],
+      "coverage_estimate": "Conditional target count after inspecting required stages. This is neither measured coverage nor a probability-weighted prediction; blockers can reduce the count.",
+      "required_stages": [
+        "Resolve an observed binary response, treatment context and baseline covariates.",
+        "Apply a declared missingness and cohort policy.",
+        "Fit age-only, BMI-only and combined logistic models.",
+        "Retain coefficients, uncertainty, tests, AIC and specified prediction profiles."
+      ],
+      "required_artifacts": [
+        "deidentified observed cohort and data dictionary",
+        "eligibility/complete-case table",
+        "model coefficients, likelihoods and uncertainty",
+        "prediction profiles and diagnostics"
+      ],
+      "data_readiness": "The existing censored PBC survival cohort does not establish a binary treatment-response endpoint with the required covariates.",
+      "blockers": [
+        "Acquire a documented independent response cohort with usable age/BMI/sex fields.",
+        "Do not recode censored survival as treatment response.",
+        "Check separation, sparse outcomes and categorical reference coding."
+      ],
+      "effort_tiebreak": "Medium after source validation; model summaries and independent likelihood checks required.",
+      "validation_evidence": []
+    },
+    {
+      "id": "reference-gene-model-audit",
+      "title": "Audit transcript structure and strand-aware reference intervals",
+      "status": "source-assessment",
+      "targets": [
+        {
+          "benchmark": "CompBioBench",
+          "task_id": "compute-gc-content-interval-q1"
+        },
+        {
+          "benchmark": "CompBioBench",
+          "task_id": "gtf-5-utr-median-len-q1"
+        },
+        {
+          "benchmark": "CompBioBench",
+          "task_id": "compute-nonoverlapping-exonic-length-q1"
+        },
+        {
+          "benchmark": "CompBioBench",
+          "task_id": "gene-info-grab-q1"
+        },
+        {
+          "benchmark": "CompBioBench",
+          "task_id": "promoter-sequence-retrieval-q1"
+        },
+        {
+          "benchmark": "CompBioBench",
+          "task_id": "compute-gccontent-promoter-q1"
+        }
+      ],
+      "missing_distinct_task_targets": 6,
+      "validated_new_task_mappings": 0,
+      "related_protocol_records": [],
+      "coverage_estimate": "Conditional target count after inspecting required stages. This is neither measured coverage nor a probability-weighted prediction; blockers can reduce the count.",
+      "required_stages": [
+        "Resolve consistent assembly, gene/transcript versions and strand from a complete independent annotation.",
+        "Extract oriented genomic/promoter intervals with explicit coordinate conventions.",
+        "Compute sequence composition and UTR/exon-union lengths with alternative transcripts retained.",
+        "Aggregate over the declared complete gene/transcript universe."
+      ],
+      "required_artifacts": [
+        "matched FASTA/FAI and GTF/GFF3",
+        "identifier and coordinate audit",
+        "oriented sequence FASTA",
+        "per-transcript UTR and per-gene exon-union tables"
+      ],
+      "data_readiness": "Existing phage annotations omit eukaryotic alternative transcripts and UTRs. An independent observed eukaryotic reference/annotation pair is needed.",
+      "blockers": [
+        "Inspect endpoint-specific gene/transcript selection, promoter windows and ambiguous-base denominators.",
+        "Do not replace genome-wide medians with a convenient selected locus.",
+        "Offline frozen retrieval does not establish live source-discovery coverage."
+      ],
+      "effort_tiebreak": "Medium: source preparation and coordinate checks; deterministic reference operations.",
+      "validation_evidence": []
+    },
+    {
+      "id": "native-bam-read-audit",
+      "title": "Recover read structure and eligible alignment counts from observed BAM",
+      "status": "source-assessment",
+      "targets": [
+        {
+          "benchmark": "CompBioBench",
+          "task_id": "bam-infer-read-length-q1"
+        },
+        {
+          "benchmark": "CompBioBench",
+          "task_id": "bam-ops-q1"
+        }
+      ],
+      "missing_distinct_task_targets": 2,
+      "validated_new_task_mappings": 0,
+      "related_protocol_records": [],
+      "coverage_estimate": "Conditional target count after inspecting required stages. This is neither measured coverage nor a probability-weighted prediction; blockers can reduce the count.",
+      "required_stages": [
+        "Prepare a provenance-pinned native BAM/BAI from unchanged observed reads.",
+        "Inspect pairing flags and read-length distributions.",
+        "Apply declared MAPQ, proper-pair and secondary/supplementary policies and retain eligible-read identities."
+      ],
+      "required_artifacts": [
+        "native BAM/BAI",
+        "per-alignment flag/CIGAR/length table",
+        "length distribution and pairing report",
+        "eligible alignment identities and counts"
+      ],
+      "data_readiness": "Observed PhiX pairs could supply a bounded independent BAM, but broader resequencing would cover these same endpoints plus others.",
+      "blockers": [
+        "Avoid implementing this separately if the broader resequencing workflow becomes ready.",
+        "Do not conflate read records with templates or mapping quality with base quality."
+      ],
+      "effort_tiebreak": "Low: existing observations and native aligners; only two currently missing endpoints.",
+      "validation_evidence": []
+    }
+  ],
+  "source_review_backlog": [
+    {
+      "benchmark": "BixBench",
+      "tasks_file": "benchmark_tasks/bixbench.json",
+      "unprioritized_inventory_records": 136,
+      "priority_score": null,
+      "reason": "These remaining records have no assessed queue candidate. Decompose their individual endpoints and assess independent data and deterministic grading before assigning a full-coverage gain. Raw identifiers, broad family sizes and overlapping protocols do not establish that gain."
+    },
+    {
+      "benchmark": "CompBioBench",
+      "tasks_file": "benchmark_tasks/compbiobench.json",
+      "unprioritized_inventory_records": 91,
+      "priority_score": null,
+      "reason": "These remaining records have no assessed queue candidate. Decompose their individual endpoints and assess independent data and deterministic grading before assigning a full-coverage gain. Raw identifiers, broad family sizes and overlapping protocols do not establish that gain."
+    },
+    {
+      "benchmark": "BiomniBench-DA",
+      "tasks_file": "benchmark_tasks/biomnibench-da.json",
+      "unprioritized_inventory_records": 50,
+      "priority_score": null,
+      "reason": "These remaining records have no assessed queue candidate. Decompose their individual endpoints and assess independent data and deterministic grading before assigning a full-coverage gain. Raw identifiers, broad family sizes and overlapping protocols do not establish that gain."
+    },
+    {
+      "benchmark": "BioAgent",
+      "tasks_file": "benchmark_tasks/bioagent.json",
+      "unprioritized_inventory_records": 9,
+      "priority_score": null,
+      "reason": "These remaining records have no assessed queue candidate. Decompose their individual endpoints and assess independent data and deterministic grading before assigning a full-coverage gain. Raw identifiers, broad family sizes and overlapping protocols do not establish that gain."
+    },
+    {
+      "benchmark": "scBench",
+      "tasks_file": "benchmark_tasks/scbench.json",
+      "unprioritized_inventory_records": 4,
+      "priority_score": null,
+      "reason": "These remaining records have no assessed queue candidate. Decompose their individual endpoints and assess independent data and deterministic grading before assigning a full-coverage gain. Raw identifiers, broad family sizes and overlapping protocols do not establish that gain."
+    },
+    {
+      "benchmark": "SpatialBench",
+      "tasks_file": "benchmark_tasks/spatialbench.json",
+      "unprioritized_inventory_records": 16,
+      "priority_score": null,
+      "reason": "These remaining records have no assessed queue candidate. Decompose their individual endpoints and assess independent data and deterministic grading before assigning a full-coverage gain. Raw identifiers, broad family sizes and overlapping protocols do not establish that gain."
+    },
+    {
+      "benchmark": "EpiBench",
+      "tasks_file": "benchmark_tasks/epibench.json",
+      "unprioritized_inventory_records": 7,
+      "priority_score": null,
+      "reason": "These remaining records have no assessed queue candidate. Decompose their individual endpoints and assess independent data and deterministic grading before assigning a full-coverage gain. Raw identifiers, broad family sizes and overlapping protocols do not establish that gain."
+    },
+    {
+      "benchmark": "Bio-Task Bench",
+      "tasks_file": "benchmark_tasks/bio-task-bench.json",
+      "unprioritized_inventory_records": 34,
+      "priority_score": null,
+      "reason": "These remaining records have no assessed queue candidate. Decompose their individual endpoints and assess independent data and deterministic grading before assigning a full-coverage gain. Raw identifiers, broad family sizes and overlapping protocols do not establish that gain."
+    },
+    {
+      "benchmark": "ScienceAgentBench",
+      "tasks_file": "benchmark_tasks/scienceagentbench.json",
+      "unprioritized_inventory_records": 21,
+      "priority_score": null,
+      "reason": "These remaining records have no assessed queue candidate. Decompose their individual endpoints and assess independent data and deterministic grading before assigning a full-coverage gain. Raw identifiers, broad family sizes and overlapping protocols do not establish that gain."
+    },
+    {
+      "benchmark": "CORE-Bench",
+      "tasks_file": "benchmark_tasks/core-bench.json",
+      "unprioritized_inventory_records": 25,
+      "priority_score": null,
+      "reason": "These remaining records have no assessed queue candidate. Decompose their individual endpoints and assess independent data and deterministic grading before assigning a full-coverage gain. Raw identifiers, broad family sizes and overlapping protocols do not establish that gain."
+    },
+    {
+      "benchmark": "DiscoveryBench",
+      "tasks_file": "benchmark_tasks/discoverybench.json",
+      "unprioritized_inventory_records": 26,
+      "priority_score": null,
+      "reason": "These remaining records have no assessed queue candidate. Decompose their individual endpoints and assess independent data and deterministic grading before assigning a full-coverage gain. Raw identifiers, broad family sizes and overlapping protocols do not establish that gain."
+    },
+    {
+      "benchmark": "VariantBench",
+      "tasks_file": "benchmark_tasks/variantbench.json",
+      "unprioritized_inventory_records": 8,
+      "priority_score": null,
+      "reason": "These remaining records have no assessed queue candidate. Decompose their individual endpoints and assess independent data and deterministic grading before assigning a full-coverage gain. Raw identifiers, broad family sizes and overlapping protocols do not establish that gain."
+    },
+    {
+      "benchmark": "Liu-single-cell",
+      "tasks_file": "benchmark_tasks/liu-single-cell.json",
+      "unprioritized_inventory_records": 63,
+      "priority_score": null,
+      "reason": "These remaining records have no assessed queue candidate. Decompose their individual endpoints and assess independent data and deterministic grading before assigning a full-coverage gain. Raw identifiers, broad family sizes and overlapping protocols do not establish that gain."
+    },
+    {
+      "benchmark": "sc-HeurekaBench",
+      "tasks_file": "benchmark_tasks/sc-heurekabench.json",
+      "unprioritized_inventory_records": 130,
+      "priority_score": null,
+      "reason": "These remaining records have no assessed queue candidate. Decompose their individual endpoints and assess independent data and deterministic grading before assigning a full-coverage gain. Raw identifiers, broad family sizes and overlapping protocols do not establish that gain."
+    },
+    {
+      "benchmark": "scBench-Long",
+      "tasks_file": "benchmark_tasks/scbench-long.json",
+      "unprioritized_inventory_records": 4,
+      "priority_score": null,
+      "reason": "These remaining records have no assessed queue candidate. Decompose their individual endpoints and assess independent data and deterministic grading before assigning a full-coverage gain. Raw identifiers, broad family sizes and overlapping protocols do not establish that gain."
+    },
+    {
+      "benchmark": "SpatialBench-Long",
+      "tasks_file": "benchmark_tasks/spatialbench-long.json",
+      "unprioritized_inventory_records": 4,
+      "priority_score": null,
+      "reason": "These remaining records have no assessed queue candidate. Decompose their individual endpoints and assess independent data and deterministic grading before assigning a full-coverage gain. Raw identifiers, broad family sizes and overlapping protocols do not establish that gain."
+    },
+    {
+      "benchmark": "BixBench-Verified-50",
+      "tasks_file": "benchmark_tasks/bixbench-verified-50.json",
+      "unprioritized_inventory_records": 30,
+      "priority_score": null,
+      "reason": "These remaining records have no assessed queue candidate. Decompose their individual endpoints and assess independent data and deterministic grading before assigning a full-coverage gain. Raw identifiers, broad family sizes and overlapping protocols do not establish that gain."
+    },
+    {
+      "benchmark": "CellBench",
+      "tasks_file": "benchmark_tasks/cellbench.json",
+      "unprioritized_inventory_records": 50,
+      "priority_score": null,
+      "reason": "These remaining records have no assessed queue candidate. Decompose their individual endpoints and assess independent data and deterministic grading before assigning a full-coverage gain. Raw identifiers, broad family sizes and overlapping protocols do not establish that gain."
+    },
+    {
+      "benchmark": "BioML-bench",
+      "tasks_file": "benchmark_tasks/biomlbench.json",
+      "unprioritized_inventory_records": 406,
+      "priority_score": null,
+      "reason": "These remaining records have no assessed queue candidate. Decompose their individual endpoints and assess independent data and deterministic grading before assigning a full-coverage gain. Raw identifiers, broad family sizes and overlapping protocols do not establish that gain."
+    },
+    {
+      "benchmark": "BixBench3",
+      "tasks_file": "benchmark_tasks/bixbench3.json",
+      "unprioritized_inventory_records": 19,
+      "priority_score": null,
+      "reason": "These remaining records have no assessed queue candidate. Decompose their individual endpoints and assess independent data and deterministic grading before assigning a full-coverage gain. Raw identifiers, broad family sizes and overlapping protocols do not establish that gain."
+    },
+    {
+      "benchmark": "BAISBench",
+      "tasks_file": "benchmark_tasks/baisbench.json",
+      "unprioritized_inventory_records": 208,
+      "priority_score": null,
+      "reason": "These remaining records have no assessed queue candidate. Decompose their individual endpoints and assess independent data and deterministic grading before assigning a full-coverage gain. Raw identifiers, broad family sizes and overlapping protocols do not establish that gain."
+    },
+    {
+      "benchmark": "PromptBio-Bench",
+      "tasks_file": "benchmark_tasks/promptbio-bench.json",
+      "unprioritized_inventory_records": 244,
+      "priority_score": null,
+      "reason": "These remaining records have no assessed queue candidate. Decompose their individual endpoints and assess independent data and deterministic grading before assigning a full-coverage gain. Raw identifiers, broad family sizes and overlapping protocols do not establish that gain."
+    },
+    {
+      "benchmark": "BioXArena",
+      "tasks_file": "benchmark_tasks/bioxarena.json",
+      "unprioritized_inventory_records": 76,
+      "priority_score": null,
+      "reason": "These remaining records have no assessed queue candidate. Decompose their individual endpoints and assess independent data and deterministic grading before assigning a full-coverage gain. Raw identifiers, broad family sizes and overlapping protocols do not establish that gain."
+    },
+    {
+      "benchmark": "TxBench-PP",
+      "tasks_file": "benchmark_tasks/txbench-pp.json",
+      "unprioritized_inventory_records": 12,
+      "priority_score": null,
+      "reason": "These remaining records have no assessed queue candidate. Decompose their individual endpoints and assess independent data and deterministic grading before assigning a full-coverage gain. Raw identifiers, broad family sizes and overlapping protocols do not establish that gain."
+    },
+    {
+      "benchmark": "TxBench-Ab",
+      "tasks_file": "benchmark_tasks/txbench-ab.json",
+      "unprioritized_inventory_records": 6,
+      "priority_score": null,
+      "reason": "These remaining records have no assessed queue candidate. Decompose their individual endpoints and assess independent data and deterministic grading before assigning a full-coverage gain. Raw identifiers, broad family sizes and overlapping protocols do not establish that gain."
+    },
+    {
+      "benchmark": "TxBench-OD",
+      "tasks_file": "benchmark_tasks/txbench-od.json",
+      "unprioritized_inventory_records": 4,
+      "priority_score": null,
+      "reason": "These remaining records have no assessed queue candidate. Decompose their individual endpoints and assess independent data and deterministic grading before assigning a full-coverage gain. Raw identifiers, broad family sizes and overlapping protocols do not establish that gain."
+    },
+    {
+      "benchmark": "Biomni-Eval1 tool-enabled",
+      "tasks_file": "benchmark_tasks/biomni-eval1.json",
+      "unprioritized_inventory_records": 433,
+      "priority_score": null,
+      "reason": "These remaining records have no assessed queue candidate. Decompose their individual endpoints and assess independent data and deterministic grading before assigning a full-coverage gain. Raw identifiers, broad family sizes and overlapping protocols do not establish that gain."
+    },
+    {
+      "benchmark": "DrugDiscoveryBench public preview",
+      "tasks_file": "benchmark_tasks/drugdiscoverybench.json",
+      "unprioritized_inventory_records": 82,
+      "priority_score": null,
+      "reason": "These remaining records have no assessed queue candidate. Decompose their individual endpoints and assess independent data and deterministic grading before assigning a full-coverage gain. Raw identifiers, broad family sizes and overlapping protocols do not establish that gain."
+    },
+    {
+      "benchmark": "SciGym",
+      "tasks_file": "benchmark_tasks/scigym.json",
+      "unprioritized_inventory_records": 350,
+      "priority_score": null,
+      "reason": "These remaining records have no assessed queue candidate. Decompose their individual endpoints and assess independent data and deterministic grading before assigning a full-coverage gain. Raw identifiers, broad family sizes and overlapping protocols do not establish that gain."
+    },
+    {
+      "benchmark": "BioKGBench KGCheck",
+      "tasks_file": "benchmark_tasks/biokgbench.json",
+      "unprioritized_inventory_records": 225,
+      "priority_score": null,
+      "reason": "These remaining records have no assessed queue candidate. Decompose their individual endpoints and assess independent data and deterministic grading before assigning a full-coverage gain. Raw identifiers, broad family sizes and overlapping protocols do not establish that gain."
+    }
+  ],
+  "completed": [
+    {
+      "id": "observed-phix-assembly",
+      "recipe": "real-phix-assembly",
+      "validated_targets": [
+        {
+          "benchmark": "CompBioBench",
+          "task_id": "genome-assembly-contiguity-q1"
+        }
+      ],
+      "evidence": [
+        "native_validation_runs/cd4c5520958b.json",
+        "data_sources.json: ENA:ERR266411.assembly_package_validation",
+        "container_validation.json: /exedev/bio-harbor-assembly-20260924-115342"
+      ]
+    }
+  ],
+  "inventory_file_sha256": {
+    "benchmark_tasks/bioagent.json": "2915e369b49c11ee83d90c4aa7521d6155230751d7a2205b3b36a114466cdc8d",
+    "benchmark_tasks/bixbench.json": "95b687d8f3cb30c0aa126a0136624551974f0151779fff6d57a9fa60d4b13795",
+    "benchmark_tasks/bixbench-verified-50.json": "2521fbbc67d7fa8e57e3c3f20820d71c92c0cb2477a4f541bb8a465cd473682f",
+    "benchmark_tasks/compbiobench.json": "7b5888c59de481791e8988907dcf6b840d531563c1aa5f78b8bdc53758a745b4",
+    "benchmark_tasks/scienceagentbench.json": "6f85405ff563ada594d6ea9744d4f71c0497f77bcdb197e99e3dd5843e7ac12a",
+    "benchmark_tasks/scbench.json": "b379b4d840d43afd612f6bd260e2b9312dc2658d8bf61d790b52e02b81b5a76d"
+  },
+  "sources_without_task_inventory": [
+    {
+      "name": "LABBench2",
+      "source_url": "https://github.com/EdisonScientific/labbench2",
+      "priority_score": null,
+      "reason": "Task enumeration and endpoint inspection are required before ranking."
+    },
+    {
+      "name": "BioSecBench-Surveillance",
+      "source_url": "https://github.com/latchbio/biosecbench-surveillance",
+      "priority_score": null,
+      "reason": "Task enumeration and endpoint inspection are required before ranking."
+    },
+    {
+      "name": "BioSecBench-Function",
+      "source_url": "https://github.com/latchbio/biosecbench-function",
+      "priority_score": null,
+      "reason": "Task enumeration and endpoint inspection are required before ranking."
+    },
+    {
+      "name": "BioSecBench-Refusal \u2014 direct framing",
+      "source_url": "https://github.com/latchbio/biosecbench-refusal",
+      "priority_score": null,
+      "reason": "Task enumeration and endpoint inspection are required before ranking."
+    },
+    {
+      "name": "LifeSciBench",
+      "source_url": "https://openai.com/index/introducing-life-sci-bench/",
+      "priority_score": null,
+      "reason": "Task enumeration and endpoint inspection are required before ranking."
+    },
+    {
+      "name": "TargetVal (Popper)",
+      "source_url": "https://arxiv.org/abs/2502.09858",
+      "priority_score": null,
+      "reason": "Task enumeration and endpoint inspection are required before ranking."
+    },
+    {
+      "name": "ScholarQABench \u2014 biomedicine",
+      "source_url": "https://allenai.org/blog/openscilm",
+      "priority_score": null,
+      "reason": "Task enumeration and endpoint inspection are required before ranking."
+    },
+    {
+      "name": "ABC-Bench (SecureBio)",
+      "source_url": "https://arxiv.org/abs/2606.11150",
+      "priority_score": null,
+      "reason": "Task enumeration and endpoint inspection are required before ranking."
+    },
+    {
+      "name": "ABLE \u2014 agentic biological AI tool use",
+      "source_url": "https://arxiv.org/abs/2609.05818",
+      "priority_score": null,
+      "reason": "Task enumeration and endpoint inspection are required before ranking."
+    },
+    {
+      "name": "LAB-Bench \u2014 tool-enabled literature / database",
+      "source_url": "https://arxiv.org/abs/2407.10362",
+      "priority_score": null,
+      "reason": "Task enumeration and endpoint inspection are required before ranking."
+    },
+    {
+      "name": "BioASQ \u2014 retrieval / end-to-end QA",
+      "source_url": "https://www.bioasq.org/",
+      "priority_score": null,
+      "reason": "Task enumeration and endpoint inspection are required before ranking."
+    },
+    {
+      "name": "BixBench \u2014 original notebook protocols",
+      "source_url": "https://arxiv.org/abs/2503.00096",
+      "priority_score": null,
+      "reason": "Task enumeration and endpoint inspection are required before ranking."
+    }
+  ]
+}

@@ -19,6 +19,10 @@ Record the native packages and formats required by each workflow as supporting
 coverage, and retain the separate all-50-repository execution objective. Update
 the issue's opening ledger when task, validated mapping or native execution
 counts change.
+The [versioned queue](../workflow_queue.json) records exact proposed target IDs,
+conditional coverage gains, overlapping protocols, source gaps and the next
+selection. Recompute remaining targets after each completed or rejected candidate;
+queue estimates never promote a coverage status by themselves.
 
 Enumeration, prompt inspection and executable coverage are separate claims.
 An ID obtained from a registry can remain uninspected; a reviewed shared protocol
