@@ -45,6 +45,12 @@ annotations, paired community profiles and complete cell-type expression contras
 They distinguish real-input adaptations from the source's planted pedigree allele
 and simulated transcript counts. These are planned contracts without new coverage.
 
+The [SciGym input review](../workflow_designs/scigym.json) retains structural counts
+and hashes for all 350 supplied partial SBML models. All omit reactions and use
+anonymized species. Truth-model columns were excluded; no raw benchmark model is
+vendored. Input-structure inspection leaves biological endpoints and independent
+observed-data adaptations unresolved, with no per-system coverage assignments.
+
 Enumeration, prompt inspection and executable coverage are separate claims.
 An ID obtained from a registry can remain uninspected; a reviewed shared protocol
 does not mean every instance was reviewed. Release records state whether the

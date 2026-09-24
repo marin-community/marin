@@ -319,7 +319,7 @@ benchmark answers and biological fixtures are excluded from training authoring.
 | [TxBench-Ab](../../experiments/post_training/bio_tasks/benchmark_tasks/txbench-ab.json) | All six public prompts; inputs, ground truth and graders withheld | 100 |
 | [TxBench-OD](../../experiments/post_training/bio_tasks/benchmark_tasks/txbench-od.json) | All four public prompts; inputs, ground truth and graders withheld | 113 |
 | [DrugDiscoveryBench](../../experiments/post_training/bio_tasks/benchmark_tasks/drugdiscoverybench.json) | All 82 complete public prompts and endpoints assessed | 82; full-release ID equality unverified |
-| [SciGym](../../experiments/post_training/bio_tasks/benchmark_tasks/scigym.json) | All 350 system IDs; shared protocol and scorer reviewed, individual systems uninspected | — |
+| [SciGym](../../experiments/post_training/bio_tasks/benchmark_tasks/scigym.json) | All 350 supplied model structures audited; biological endpoints and observed-data adaptations unresolved | — |
 | [BioKGBench KGCheck](../../experiments/post_training/bio_tasks/benchmark_tasks/biokgbench.json) | All 225 agentic rows; shared instructions and final scorer reviewed, individual evidence uninspected | — |
 | [ScholarQA-Bio](../../experiments/post_training/bio_tasks/benchmark_tasks/scholarqabench-bio.json) | All 1,451 public question IDs/hashes; shared literature protocol and citation scorer inspected, individual endpoints unreviewed | — |
 
@@ -362,9 +362,18 @@ contracts. No mappings are assigned from category or tool-name similarity.
 
 SciGym contains 350 system IDs under one shared mechanism-recovery protocol.
 Its 2,466 public evaluation rows are repeated runs over 137 systems. The inventory
-records SBML/SED-ML formats, intervention design and trajectory validation;
-individual system inputs remain uninspected. Source measurements are simulated,
-so a training adaptation needs independent observed time courses. Static scorer
+records SBML/SED-ML formats, intervention design and trajectory validation.
+A structural audit of all 350 supplied partial models found anonymized species
+and no reactions, kinetic laws, parameters or rules. They span 2–786 species and
+1–9 compartments; 295 use concentration initialization, 50 use amounts, and five
+use both across different species. The audit projected only IDs and partial XML,
+retaining counts and hashes in the [design file](../../experiments/post_training/bio_tasks/workflow_designs/scigym.json).
+Truth-model and simulation-definition columns were not inspected, and XML parsing
+does not establish SBML semantic validity. Source measurements are simulated,
+so a training adaptation needs independent observed time courses. Its endpoint is
+mechanism reconstruction; comparing two supplied models or fitting fixed parameters
+is only a component. A finite catalog of measured interventions also differs from
+the source's simulated perturbation interface. Static scorer
 review found an unperturbed reference used in perturbation scoring, zero-error
 summaries when every simulation fails, and incomplete species alignment. These
 findings are recorded with source revisions; they have not been reproduced by execution.

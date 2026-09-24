@@ -407,7 +407,7 @@
       "distribution": "ID",
       "tasks_file": "benchmark_tasks/scigym.json",
       "source_inventory_name": "SciGym",
-      "task_inventory_status": "all identifiers; shared protocol and source scorer reviewed; individual system inputs uninspected"
+      "task_inventory_status": "all 350 supplied partial-model structures parsed; shared protocol/scorer reviewed; individual biological endpoints and observed-data adaptations unresolved"
     },
     "BioKGBench KGCheck": {
       "revision": "4d992e7e735d81cb84d02f86f6489c82479c290e",

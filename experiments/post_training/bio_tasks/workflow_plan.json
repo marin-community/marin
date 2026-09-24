@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T16:41:59.435199+00:00",
+  "updated_at": "2026-09-24T16:49:35.857151+00:00",
   "basis_revision": "952929c306",
   "scope": "Agentic provisional-ID benchmarks only; preserve all existing OOD exclusions. Plan the broad task set before further recipe implementation.",
   "authoring_unit": "One coherent observed-data task per recipe by default. Proposed questions are separate task designs, not repeated instances. They may be split or merged after endpoint and runtime checks.",
@@ -9,11 +9,11 @@
   "source_inventory_files": [
     {
       "path": "experiments/post_training/bio_tasks/benchmark_coverage.json",
-      "sha256": "adad25ce33031cdcde0cd31f967dceb7bb0ee7c641f94ece0b39bbe5a1bc0049"
+      "sha256": "a6efd10cee17951dbf11f36907e8a0884d188693f55c73fe2ea825ae393506ba"
     },
     {
       "path": "experiments/post_training/bio_tasks/benchmark_sources.json",
-      "sha256": "b8290ba034d6d0014c4fe057c60f4bdfd97f3d5651714ee382551bac8059969f"
+      "sha256": "dbfab5578cdfd0c50cb90efd5e7efc062e75a863c847351be0d889656d7f7d9f"
     }
   ],
   "question_inspection_evidence": {
@@ -12078,7 +12078,7 @@
         "observed-dynamics"
       ],
       "routing_basis": "workflow-family-review-routing",
-      "inspection_tier": "shared-pattern-only"
+      "inspection_tier": "input-structure-reviewed-biological-endpoint-unreviewed"
     },
     {
       "planning_disposition": "plan-artifact-and-verifier-review",
@@ -12911,9 +12911,9 @@
     },
     "SciGym": {
       "source_inventory_path": "experiments/post_training/bio_tasks/benchmark_tasks/scigym.json",
-      "source_inventory_sha256": "55f7ad165b748ca2422aeb57ebe52f27c3e349da78c201fe1d7544a3a1f50cef",
+      "source_inventory_sha256": "f353b16ec45af36bbdb0c4a45229dedaa462bac5d12be033e7b7324ed70e2a03",
       "source_revision": "dbb10c12a33427e8e05ebbac66de690c65b6acae",
-      "task_inventory_status": "all identifiers; shared protocol and source scorer reviewed; individual system inputs uninspected",
+      "task_inventory_status": "all 350 supplied partial-model structures parsed; shared protocol/scorer reviewed; individual biological endpoints and observed-data adaptations unresolved",
       "record_count": 350,
       "unique_count_after_known_bix_aliases": 350,
       "provisional_design_record_count": 0,
@@ -12923,7 +12923,7 @@
         "observed-data-and-system-endpoint-review": 350
       },
       "reconciled_inspection_tier_counts": {
-        "shared-pattern-only": 350
+        "input-structure-reviewed-biological-endpoint-unreviewed": 350
       },
       "initial_group_referenced_record_count": 0,
       "new_expansion_card_record_count": 350
@@ -13333,11 +13333,11 @@
     },
     {
       "path": "workflow_designs/scigym.json",
-      "sha256": "36e3567222d8fbd1ab5c1a66201006e720dd0dad33a2c82bae38e24502673818",
+      "sha256": "a1e439d43cecc7211ccd22f5ef859c7116331dce9252b5459ea012ebf7802632",
       "benchmark_id": "SciGym",
       "inventory_records_with_gap_dispositions": 350,
       "proposed_shared_protocol_questions": 3,
-      "inspection_basis": "System identities and shared protocol only. No individual endpoint assignments or coverage prediction."
+      "inspection_basis": "All 350 supplied partial XML structures audited without truth columns. Full mechanism reconstruction and observed-intervention adaptation specified; biological identities and per-system endpoints unresolved."
     },
     {
       "path": "workflow_designs/bixbench-verified-50.json",
@@ -13367,7 +13367,7 @@
   "authoring_phase": "question-portfolio-planning",
   "portfolio_index": {
     "path": "workflow_portfolio.json",
-    "sha256": "679cb6e6e351435f0a13d35420183627a599877896850af7dea6425833657fee",
+    "sha256": "3e94d8a10e404ff1ed1f56a6c70cdaeb03f9edc9c9c4aad443d5179f4edd36ed",
     "counts": {
       "source_releases": 31,
       "inventory_records": 4332,
@@ -13376,10 +13376,10 @@
       "conditional_consolidations": 25,
       "non_alias_records_linked_to_questions": 2480,
       "known_cross_release_alias_records": 50,
-      "identity_only_records_with_gap_dispositions": 350,
       "excluded_records": 1,
       "validated_new_mappings": 0,
-      "question_records_with_gap_dispositions": 1451
+      "question_records_with_gap_dispositions": 1451,
+      "system_records_with_endpoint_gap_dispositions": 350
     },
     "status": "question-portfolio-with-conditional-consolidation-input-and-acceptance-designs-pending"
   }

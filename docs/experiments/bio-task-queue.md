@@ -214,7 +214,7 @@ The expanded portfolio also includes the following source-specific plans:
 | [Bio-Task Bench](../../experiments/post_training/bio_tasks/workflow_designs/bio-task-bench.json) | 34 | 10 | Related component outputs grouped into connected analyses |
 | [BioXArena](../../experiments/post_training/bio_tasks/workflow_designs/bioxarena.json) | 76 | 76 | Catalog/scorers inspected; full prompts and schemas remain inside uninspected data archives |
 | [CellBench](../../experiments/post_training/bio_tasks/workflow_designs/cellbench.json) | 50 | 22 | Context-inspired executable adaptations; original open-ended planning quality is not covered |
-| [SciGym](../../experiments/post_training/bio_tasks/workflow_designs/scigym.json) | 350 | 3 | Shared observed-dynamics adaptations; zero individual system endpoint assignments |
+| [SciGym](../../experiments/post_training/bio_tasks/workflow_designs/scigym.json) | 350 | 3 | All supplied input structures audited; shared observed-dynamics adaptations, zero biological endpoint assignments |
 | [BixBench-Verified-50](../../experiments/post_training/bio_tasks/workflow_designs/bixbench-verified-50.json) | 50 | 0 new | Known aliases; 17 revised question texts retain separate protocol review |
 | [ScholarQA-Bio](../../experiments/post_training/bio_tasks/workflow_designs/scholarqabench-bio.json) | 1,451 | 0 | All public question identities/hashes; individual scientific endpoints and deterministic adaptations unreviewed |
 
@@ -393,9 +393,13 @@ oracles are ready. Examples below are proposals, not benchmark answers.
 
 ## Endpoint review and selection
 
-Keep every unresolved source category in the denominator. In particular, the 350
-SciGym system records require an observed-data suitability review; their current
-simulations do not supply real biological observations. BioML assay and cross-validation
+Keep every unresolved source category in the denominator. All 350 supplied SciGym
+model structures are now audited: anonymized species with no reactions, kinetic
+laws or parameters. The connected proposal requires reconstructing an executable
+model and predicting private observed responses. A two-model comparison is a
+supporting component. Species counts range from 2 to 786, and biological identities,
+independent measured interventions and per-system equivalence remain unresolved.
+The source simulations do not supply real biological observations. BioML assay and cross-validation
 definitions need assay-specific label, leakage and equivalence checks. Database-query
 IDs need exact resource and evidence contracts. Open-ended scientific plans need
 an executable acceptance rule that preserves their meaning; a generic JSON template

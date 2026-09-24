@@ -1074,7 +1074,7 @@
       "scoring_access": "Public grading",
       "source_url": "https://arxiv.org/abs/2507.02083",
       "data_url": "https://huggingface.co/datasets/h4duan/scigym-eval",
-      "inspection": "All 350 task-release system IDs enumerated. Shared prompts, experiment interface and evaluator reviewed; individual system inputs uninspected. No evaluator execution or model calls.",
+      "inspection": "All 350 IDs and supplied partial SBML structures parsed; all are reaction-free and anonymized. Shared prompts, experiment interface and evaluator reviewed. Biological endpoint identity and independent observed inputs remain unresolved. No simulation, evaluator execution or model calls.",
       "training_mapping_allowed": true,
       "task_release_url": "https://huggingface.co/datasets/h4duan/scigym-sbml",
       "release_evidence": {
@@ -1091,9 +1091,10 @@
         "task_file_hashes": {
           "data/small-00000-of-00001.parquet": "7e7e33afd953a6eedb8a43548c4a41ab1b9077b5c7f729484aae6a9aa41e5b76",
           "data/large-00000-of-00001.parquet": "ef4a0f53a23d40579f4b23308f8def7164ae6a20ea05acb80fad4afdc8673fe9"
-        }
+        },
+        "partial_model_structures_parsed": 350
       },
-      "authoring_assessment": "Borrow experiment-design, SBML and held-out prediction patterns. Simulated source observations do not meet the final real-data requirement. Independent observed inputs, license review and a corrected deterministic artifact verifier remain required.",
+      "authoring_assessment": "Borrow adaptive mechanism reconstruction, SBML semantics and held-out response prediction. Parameter fitting or choosing two supplied models is narrower than the source. Real observed time courses can support an adaptation, but a finite recorded intervention catalog differs from arbitrary simulated perturbations. Preserve structural-recovery and identifiability gaps.",
       "task_inventory": "benchmark_tasks/scigym.json"
     },
     {

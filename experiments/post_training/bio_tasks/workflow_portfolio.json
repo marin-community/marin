@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T16:41:59.435199+00:00",
+  "updated_at": "2026-09-24T16:49:35.857151+00:00",
   "scope": "Full question-proposal portfolio for the 31 currently inventoried provisional-ID agentic releases. This planning index resolves every question card and records conditional consolidation; it creates no training task or validated coverage. Eleven source leads without inventories remain outside the enumerated denominator.",
   "counts": {
     "source_releases": 31,
@@ -10,10 +10,10 @@
     "conditional_consolidations": 25,
     "non_alias_records_linked_to_questions": 2480,
     "known_cross_release_alias_records": 50,
-    "identity_only_records_with_gap_dispositions": 350,
     "excluded_records": 1,
     "validated_new_mappings": 0,
-    "question_records_with_gap_dispositions": 1451
+    "question_records_with_gap_dispositions": 1451,
+    "system_records_with_endpoint_gap_dispositions": 350
   },
   "interpretation": [
     "Question cards, proposed task groups, benchmark records and implemented tasks are different units. The proposed task count is neither a cap nor a target to instantiate mechanically.",
@@ -82,7 +82,7 @@
     },
     {
       "path": "workflow_designs/scigym.json",
-      "sha256": "36e3567222d8fbd1ab5c1a66201006e720dd0dad33a2c82bae38e24502673818"
+      "sha256": "a1e439d43cecc7211ccd22f5ef859c7116331dce9252b5459ea012ebf7802632"
     },
     {
       "path": "workflow_designs/bixbench-verified-50.json",
@@ -9754,7 +9754,7 @@
     },
     {
       "proposed_task_id": "scigym-adaptation-trajectory-prediction",
-      "scientific_question": "Which of two explicitly specified mechanistic models predicts independently held-out observed biological trajectories after unit and initial-condition reconciliation?",
+      "scientific_question": "Which reconstructed dynamical models explain independent observed responses and predict unqueried measured interventions while preserving uncertainty about nonidentifiable mechanisms?",
       "question_card_ids": [
         "scigym-adaptation-trajectory-prediction"
       ],
@@ -10335,6 +10335,13 @@
       "family_contracts_refined": 6,
       "design_file": "workflow_designs/biomni-eval1.json",
       "limits": "Per-instance biological evidence remains unreviewed. Ten groups of identical prompts remain separately inventoried without independent-context credit. Causal, disease and delivery conclusions are not proved by deterministic ranking alone. Counts and validated coverage unchanged."
+    },
+    {
+      "source": "SciGym",
+      "partial_model_structures_parsed": 350,
+      "design_file": "workflow_designs/scigym.json",
+      "finding": "Every supplied model has anonymized species and no reactions, kinetic laws or parameters. Replace two-model comparison with full model reconstruction as the connected adaptation; biological endpoints and observed interventions remain unresolved.",
+      "validated_new_mappings": 0
     }
   ]
 }

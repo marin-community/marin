@@ -2,7 +2,7 @@
   "benchmark": "SciGym",
   "source_revision": "dbb10c12a33427e8e05ebbac66de690c65b6acae",
   "source_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/",
-  "scope": "All 350 system identifiers from the agentic task release. One shared protocol assessed; individual biological systems and missing mechanisms are uninspected. Source subset names are retained as metadata, not training difficulty labels.",
+  "scope": "All 350 system identifiers and supplied partial-model structures inspected. Shared mechanism-recovery protocol reviewed; individual biological identities, hidden mechanisms and observed-data adaptations remain unresolved. Source subset names are metadata, not training difficulty labels.",
   "inventory_completeness": {
     "system_ids": 350,
     "source_subsets": {
@@ -10,9 +10,10 @@
       "large": 213
     },
     "shared_protocol_patterns": 1,
-    "individual_system_inputs_reviewed": 0
+    "individual_system_inputs_reviewed": 350,
+    "individual_biological_endpoints_reviewed": 0
   },
-  "enumeration": "The two Parquet files were downloaded, but only folder_name was projected into Python. truth_sedml, partial and truth_xml columns were not loaded or used for authoring. Evaluation-run traces were not downloaded.",
+  "enumeration": "Initial ID inventory projected folder_name only. A subsequent bounded structural audit projected folder_name and partial, parsed every supplied XML model and retained counts/hashes only. truth_sedml and truth_xml columns were not projected, inspected or used for authoring. No evaluation-run traces or raw source models are vendored.",
   "source_files": [
     {
       "path": "data/small-00000-of-00001.parquet",
@@ -22,11 +23,11 @@
       "records": 137,
       "schema": "folder_name: string\ntruth_sedml: string\npartial: string\ntruth_xml: string\n-- schema metadata --\nhuggingface: '{\"info\": {\"features\": {\"folder_name\": {\"dtype\": \"string\", \"' + 175",
       "loaded_columns": [
-        "folder_name"
+        "folder_name",
+        "partial"
       ],
       "excluded_columns": [
         "truth_sedml",
-        "partial",
         "truth_xml"
       ]
     },
@@ -38,11 +39,11 @@
       "records": 213,
       "schema": "folder_name: string\ntruth_sedml: string\npartial: string\ntruth_xml: string\n-- schema metadata --\nhuggingface: '{\"info\": {\"features\": {\"folder_name\": {\"dtype\": \"string\", \"' + 175",
       "loaded_columns": [
-        "folder_name"
+        "folder_name",
+        "partial"
       ],
       "excluded_columns": [
         "truth_sedml",
-        "partial",
         "truth_xml"
       ]
     }
@@ -2666,5 +2667,26 @@
       "workflow_family": "iterative-mechanism-recovery",
       "source_metadata_url": "https://huggingface.co/datasets/h4duan/scigym-sbml/blob/dbb10c12a33427e8e05ebbac66de690c65b6acae/data/large-00000-of-00001.parquet"
     }
-  ]
+  ],
+  "input_structure_review": {
+    "date": "2026-09-24",
+    "method": "Streaming PyArrow batches of 8, columns folder_name and partial, then standard-library XML element/attribute counts. This is not libSBML semantic validation or simulation.",
+    "all_models_have_anonymized_species": true,
+    "models_without_reactions_kinetic_laws_parameters_or_rules": 350,
+    "species_count_range": [
+      2,
+      786
+    ],
+    "compartment_count_range": [
+      1,
+      9
+    ],
+    "initialization_modes": {
+      "concentration_only": 295,
+      "amount_only": 50,
+      "both": 5
+    },
+    "evidence": "../workflow_designs/scigym.json: record_dispositions[].input_structure",
+    "limitation": "Partial models have no biological names, annotations or notes. Their structural metadata cannot identify missing reactions or prove that one observed-data adaptation covers a source system."
+  }
 }
