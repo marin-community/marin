@@ -25,7 +25,9 @@ from haliax import Axis
 from haliax.state_dict import from_torch_compatible_state_dict, to_torch_compatible_state_dict
 
 from levanter.grug.sharding import compact_grug_mesh
-from levanter.models.lm_model import LmConfig
+from levanter.layers.attention import AttentionMask
+from levanter.models.lm_model import LmConfig, LmExample
+from levanter.models.loss import next_token_loss
 from levanter.models.snowball import (
     GRUG_MOE_ARCHITECTURE,
     GRUG_MOE_MODEL_TYPE,
@@ -247,6 +249,29 @@ def test_snowball_forward_shapes_and_finite():
         logits = hax.named_jit(lambda m, x: m(x))(model, ids)
     assert logits.axes[-1].name == "vocab" and logits.axes[-1].size == cfg.vocab_size
     assert bool(jnp.all(jnp.isfinite(logits.array)))
+
+
+def test_snowball_packed_documents_do_not_attend_to_previous_document():
+    cfg = _tiny_config()
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(7))
+        ids = _device_batched_ids(cfg.vocab_size, 10)
+        segments = hax.named(jnp.broadcast_to(jnp.arange(10) // 5, ids.array.shape), ids.axes)
+        mask = AttentionMask.causal().with_segment_ids(segments)
+        changed_ids = hax.named(ids.array.at[:, :5].set(11), ids.axes)
+        weights = hax.named(jnp.broadcast_to(jnp.arange(10) >= 5, ids.array.shape), ids.axes)
+        run_logits = hax.named_jit(lambda m, x, a: m(x, a))
+        original = run_logits(model, ids, mask)
+        changed = run_logits(model, changed_ids, mask)
+        np.testing.assert_allclose(
+            np.asarray(original.array[:, 5:]), np.asarray(changed.array[:, 5:]), rtol=1e-5, atol=1e-5
+        )
+        run_loss = hax.named_jit(lambda m, e: m.compute_next_token_loss(e))
+        loss = run_loss(model, LmExample(tokens=ids, loss_weight=weights, attn_mask=mask))
+        changed_loss = run_loss(model, LmExample(tokens=changed_ids, loss_weight=weights, attn_mask=mask))
+        expected = next_token_loss(model.Pos, model.Vocab, original, ids, loss_weight=weights)
+    np.testing.assert_allclose(np.asarray(loss.array), np.asarray(changed_loss.array), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(loss.array), np.asarray(expected.array), rtol=1e-5, atol=1e-5)
 
 
 @pytest.mark.parametrize(
