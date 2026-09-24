@@ -112,7 +112,7 @@ uv run fast-track --submit --run-id <name> --size <size> [--dense] --version <v>
 --run` and forwards `$WANDB_API_KEY` to the job. By default, it uses `--reserve H100` to select
 an eligible H100 cluster. The CPU coordinator requests no GPU capacity. Its child jobs request
 the training GPUs on the selected cluster. This placement does not balance jobs by free GPU
-capacity. Set `IRIS_CLUSTER=cw-us-east-02a` or `IRIS_CLUSTER=cw-rno2a` to pin the job to that
+capacity. Add `--target-cluster cw-us-east-02a` or `--target-cluster cw-rno2a` to pin the job to that
 cluster. Omit `--submit` to print the plan without a job submission.
 
 `--size` (d512/d768/d1024/d1280) and `--run-id` are required; `--dense` selects

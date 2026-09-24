@@ -437,7 +437,7 @@ def build_h100_ladder_run(
 _WANDB_PROJECT = "marin_moe"
 
 
-def _submit_to_cluster(run_id: str) -> None:
+def _submit_to_cluster(run_id: str, target_cluster: str | None) -> None:
     """Re-exec this launcher as an Iris H100 job: wrap the same launcher args in ``iris job run ... --
     python -m ...launch <args> --run``. Replaces the old ``irun`` shell wrapper. Never returns."""
     launch_args = [a for a in sys.argv[1:] if a != "--submit"]
@@ -446,7 +446,6 @@ def _submit_to_cluster(run_id: str) -> None:
     wandb_key = os.environ.get("WANDB_API_KEY")
     if not wandb_key:
         raise click.ClickException("WANDB_API_KEY must be set in the environment to submit a cluster run.")
-    target_cluster = os.environ.get("IRIS_CLUSTER")
     placement_args = ["--target-cluster", target_cluster] if target_cluster else ["--reserve", "H100"]
     cmd = [
         "uv",
@@ -516,6 +515,11 @@ def _submit_to_cluster(run_id: str) -> None:
     help="Submit as an Iris H100 job (wraps this launcher in `iris job run`); without it the "
     "launcher builds/prints the plan locally.",
 )
+@click.option(
+    "--target-cluster",
+    default=None,
+    help="Pin the submitted job to this Iris cluster. Omit to let Iris select an H100 cluster.",
+)
 @build_options
 def main(
     run_id: str,
@@ -527,9 +531,10 @@ def main(
     dense: bool,
     save_checkpoints: bool,
     submit: bool,
+    target_cluster: str | None,
 ) -> ArtifactStep[ThroughputResult]:
     if submit:
-        _submit_to_cluster(run_id)  # re-execs iris; never returns
+        _submit_to_cluster(run_id, target_cluster)  # re-execs iris; never returns
     return build_h100_ladder_run(
         run_id=run_id,
         size=size,
