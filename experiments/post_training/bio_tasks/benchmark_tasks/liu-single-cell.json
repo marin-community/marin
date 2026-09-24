@@ -1,0 +1,2828 @@
+{
+  "benchmark": "Liu-single-cell",
+  "source_revision": "1605e6e38bd69307e2f7b68a4367de21043c89b6",
+  "scope": "Fifty main workflow tasks plus thirteen additional dataset cases. The thirteen data1 prompts duplicate main prompts exactly and are aliases. Prompt-detail variants do not add task counts. Source biological inputs and reference outputs remain excluded.",
+  "tasks": [
+    {
+      "task_id": "celltypist",
+      "source_task_id": "celltypist",
+      "source_partition": "main",
+      "shared_workflow_group": "celltypist",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "reference-based-cell-annotation",
+      "required_stages": [
+        "align gene features",
+        "train a reference classifier",
+        "predict query labels",
+        "reconcile majority votes"
+      ],
+      "scientific_decisions": [
+        "Check reference/query separation, per-cell identities and label evidence."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "required_tools": [
+        "celltypist"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Check reference/query separation, per-cell identities and label evidence.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "decoupler",
+      "source_task_id": "decoupler",
+      "source_partition": "main",
+      "shared_workflow_group": "decoupler",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "marker-enrichment-cell-annotation",
+      "required_stages": [
+        "QC and normalize cells",
+        "cluster the neighbor graph",
+        "score marker-set enrichment",
+        "assign supported cell labels"
+      ],
+      "scientific_decisions": [
+        "Check marker/background membership and ambiguous assignments; clustered-cell labels require measured support."
+      ],
+      "required_formats": [
+        "H5AD",
+        "CSV-marker-table"
+      ],
+      "required_tools": [
+        "decoupler"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Check marker/background membership and ambiguous assignments; clustered-cell labels require measured support.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ],
+      "identical_source_aliases": [
+        "prompt/prompt_data1.json:decoupler"
+      ]
+    },
+    {
+      "task_id": "paga",
+      "source_task_id": "paga",
+      "source_partition": "main",
+      "shared_workflow_group": "paga",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "partition-graph-trajectory",
+      "required_stages": [
+        "preprocess counts",
+        "build a neighbor graph",
+        "partition cells",
+        "compute inter-partition connectivity"
+      ],
+      "scientific_decisions": [
+        "Check graph topology and label-permutation equivalence; graph position alone does not establish developmental direction."
+      ],
+      "required_formats": [
+        "AnnData"
+      ],
+      "required_tools": [
+        "paga"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Check graph topology and label-permutation equivalence; graph position alone does not establish developmental direction.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ],
+      "identical_source_aliases": [
+        "prompt/prompt_data1.json:paga"
+      ]
+    },
+    {
+      "task_id": "scvelo",
+      "source_task_id": "scvelo",
+      "source_partition": "main",
+      "shared_workflow_group": "scvelo",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "splicing-dynamics-velocity",
+      "required_stages": [
+        "retain spliced and unspliced layers",
+        "compute neighborhood moments",
+        "fit dynamical splicing models",
+        "assemble cell transitions"
+      ],
+      "scientific_decisions": [
+        "Check fitted dynamics and transition rows; velocity-derived time is not direct longitudinal measurement."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "required_tools": [
+        "scvelo"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Check fitted dynamics and transition rows; velocity-derived time is not direct longitudinal measurement.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "scgen",
+      "source_task_id": "scgen",
+      "source_partition": "main",
+      "shared_workflow_group": "scgen",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "perturbation-response-prediction",
+      "required_stages": [
+        "exclude the held-out cell-condition combination",
+        "fit the perturbation model",
+        "infer latent responses",
+        "evaluate held-out expression"
+      ],
+      "scientific_decisions": [
+        "The requested UMAP endpoint does not test counterfactual expression accuracy; exclude held-out observations from fitting."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "required_tools": [
+        "scgen"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "The requested UMAP endpoint does not test counterfactual expression accuracy; exclude held-out observations from fitting.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "destvi",
+      "source_task_id": "destvi",
+      "source_partition": "main",
+      "shared_workflow_group": "destvi",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "reference-to-spatial-deconvolution",
+      "required_stages": [
+        "align reference and spatial genes",
+        "fit reference expression states",
+        "fit spatial mixtures",
+        "export cell-type proportions"
+      ],
+      "scientific_decisions": [
+        "Use the declared count layer and preserve spot IDs; quantify mixture uncertainty and held-out expression fit."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "required_tools": [
+        "destvi"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Use the declared count layer and preserve spot IDs; quantify mixture uncertainty and held-out expression fit.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ],
+      "identical_source_aliases": [
+        "prompt/prompt_data1.json:destvi"
+      ]
+    },
+    {
+      "task_id": "stereoscope",
+      "source_task_id": "stereoscope",
+      "source_partition": "main",
+      "shared_workflow_group": "stereoscope",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "reference-to-spatial-deconvolution",
+      "required_stages": [
+        "QC reference and spatial counts",
+        "intersect measured genes",
+        "fit reference signatures",
+        "infer spatial mixture weights"
+      ],
+      "scientific_decisions": [
+        "Retain donor and cell-state identity; proportions must not be confused with absolute cell abundance."
+      ],
+      "required_formats": [
+        "H5AD",
+        "Visium"
+      ],
+      "required_tools": [
+        "stereoscope"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Retain donor and cell-state identity; proportions must not be confused with absolute cell abundance.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "cell2location",
+      "source_task_id": "cell2location",
+      "source_partition": "main",
+      "shared_workflow_group": "cell2location",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "spatial-cell-abundance",
+      "required_stages": [
+        "fit cell-type signatures with reference covariates",
+        "match spatial features",
+        "fit a count mixture",
+        "report posterior abundance quantiles"
+      ],
+      "scientific_decisions": [
+        "Preserve abundance units and posterior quantiles; measure whether the specified training budget fits 30 minutes."
+      ],
+      "required_formats": [
+        "H5AD",
+        "Visium"
+      ],
+      "required_tools": [
+        "cell2location"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Preserve abundance units and posterior quantiles; measure whether the specified training budget fits 30 minutes.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "squidpy",
+      "source_task_id": "squidpy",
+      "source_partition": "main",
+      "shared_workflow_group": "squidpy",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "three-dimensional-neighborhood-counts",
+      "required_stages": [
+        "validate cell coordinates and slice identity",
+        "construct a 3D neighbor graph",
+        "tabulate cell-class edge counts",
+        "assess enrichment under a declared null"
+      ],
+      "scientific_decisions": [
+        "Separate adjacency counts from null-adjusted enrichment and prevent cross-slice edges when biologically invalid."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "required_tools": [
+        "squidpy"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Separate adjacency counts from null-adjusted enrichment and prevent cross-slice edges when biologically invalid.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "leiden",
+      "source_task_id": "leiden",
+      "source_partition": "main",
+      "shared_workflow_group": "leiden",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "multi-sample-clustering",
+      "required_stages": [
+        "join sample-local cell barcodes",
+        "apply QC and doublet screening",
+        "preserve raw counts",
+        "select features and neighbors",
+        "cluster cells"
+      ],
+      "scientific_decisions": [
+        "A UMAP array alone does not verify clustering; check cell membership and label-permutation equivalence."
+      ],
+      "required_formats": [
+        "10x-HDF5"
+      ],
+      "required_tools": [
+        "leiden"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "A UMAP array alone does not verify clustering; check cell membership and label-permutation equivalence.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ],
+      "identical_source_aliases": [
+        "prompt/prompt_data1.json:leiden"
+      ]
+    },
+    {
+      "task_id": "doucling",
+      "source_task_id": "doucling",
+      "source_partition": "main",
+      "shared_workflow_group": "doucling",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "cluster-assisted-doublet-detection",
+      "required_stages": [
+        "QC cells while retaining original counts",
+        "cluster and annotate cell populations",
+        "subcluster populations",
+        "detect doublet-enriched groups"
+      ],
+      "scientific_decisions": [
+        "Keep counts before normalization instead of reconstructing them; separate putative doublets from rare biological populations."
+      ],
+      "required_formats": [
+        "10x-Matrix-Market"
+      ],
+      "required_tools": [
+        "doucling"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Keep counts before normalization instead of reconstructing them; separate putative doublets from rare biological populations.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "mira",
+      "source_task_id": "mira",
+      "source_partition": "main",
+      "shared_workflow_group": "mira",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "chromatin-topic-modeling",
+      "required_stages": [
+        "select measured peaks and named barcodes",
+        "filter cells",
+        "fit accessibility topics",
+        "assess topic contributions on withheld cells"
+      ],
+      "scientific_decisions": [
+        "Randomly marking encoder peaks is a source procedure, not biological annotation; preserve peak identity and validate topic stability."
+      ],
+      "required_formats": [
+        "AnnData",
+        "CSV-barcodes"
+      ],
+      "required_tools": [
+        "mira"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Randomly marking encoder peaks is a source procedure, not biological annotation; preserve peak identity and validate topic stability.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "mofa",
+      "source_task_id": "mofa",
+      "source_partition": "main",
+      "shared_workflow_group": "mofa",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "paired-multiomic-factorization",
+      "required_stages": [
+        "align cells across modalities",
+        "preserve assay-specific features",
+        "fit shared latent factors",
+        "assess modality contributions"
+      ],
+      "scientific_decisions": [
+        "Account for latent sign and rotation ambiguity; require cross-modal reconstruction or biological endpoints beyond coordinates."
+      ],
+      "required_formats": [
+        "H5MU"
+      ],
+      "required_tools": [
+        "mofa"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Account for latent sign and rotation ambiguity; require cross-modal reconstruction or biological endpoints beyond coordinates.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ],
+      "identical_source_aliases": [
+        "prompt/prompt_data1.json:mofa"
+      ]
+    },
+    {
+      "task_id": "scmomat",
+      "source_task_id": "scmomat",
+      "source_partition": "main",
+      "shared_workflow_group": "scmomat",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "partially-paired-multiomic-integration",
+      "required_stages": [
+        "load batch-specific RNA and ATAC matrices",
+        "align gene-region links",
+        "represent missing assays explicitly",
+        "infer shared factors",
+        "construct integration graph"
+      ],
+      "scientific_decisions": [
+        "Distinguish inferred pseudo-counts from observations and prevent cross-batch identifier collisions."
+      ],
+      "required_formats": [
+        "NPZ",
+        "TSV-feature-identifiers"
+      ],
+      "required_tools": [
+        "scmomat"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Distinguish inferred pseudo-counts from observations and prevent cross-batch identifier collisions.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "scpoli",
+      "source_task_id": "scpoli",
+      "source_partition": "main",
+      "shared_workflow_group": "scpoli",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "conditional-atac-representation",
+      "required_stages": [
+        "select ATAC features",
+        "apply detection filters",
+        "convert reads to fragments under stated conventions",
+        "fit a conditional latent model"
+      ],
+      "scientific_decisions": [
+        "Preserve sample labels, sparse storage and read/fragment units; latent coordinates alone do not establish retained biology."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "required_tools": [
+        "scpoli"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Preserve sample labels, sparse storage and read/fragment units; latent coordinates alone do not establish retained biology.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "cellrank",
+      "source_task_id": "cellrank",
+      "source_partition": "main",
+      "shared_workflow_group": "cellrank",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "velocity-connectivity-fate-kernels",
+      "required_stages": [
+        "fit splicing dynamics",
+        "construct velocity and connectivity kernels",
+        "combine transition matrices",
+        "evaluate directional cell-state transitions"
+      ],
+      "scientific_decisions": [
+        "A projected transition vector and a cell-to-cell probability matrix have different shapes and meanings; declare the required artifact."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "required_tools": [
+        "cellrank"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "A projected transition vector and a cell-to-cell probability matrix have different shapes and meanings; declare the required artifact.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "scgen-integration",
+      "source_task_id": "scgen-integration",
+      "source_partition": "main",
+      "shared_workflow_group": "scgen-integration",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "condition-aware-batch-removal",
+      "required_stages": [
+        "join batch and cell-type labels",
+        "fit latent representation",
+        "estimate batch correction",
+        "assess retained cell-state structure"
+      ],
+      "scientific_decisions": [
+        "Batch mixing can erase biological effects; check biological conservation alongside removal of technical variation."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "required_tools": [
+        "scgen"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Batch mixing can erase biological effects; check biological conservation alongside removal of technical variation.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "triku",
+      "source_task_id": "triku",
+      "source_partition": "main",
+      "shared_workflow_group": "triku",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "neighborhood-based-feature-selection",
+      "required_stages": [
+        "QC and transform counts",
+        "construct cell neighborhoods",
+        "select locally variable genes",
+        "evaluate downstream representation"
+      ],
+      "scientific_decisions": [
+        "Saving sparse values alone discards coordinates and shape; require feature IDs, selection scores and matrix structure."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "required_tools": [
+        "triku"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Saving sparse values alone discards coordinates and shape; require feature IDs, selection scores and matrix structure.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ],
+      "identical_source_aliases": [
+        "prompt/prompt_data1.json:triku"
+      ]
+    },
+    {
+      "task_id": "hotspot",
+      "source_task_id": "hotspot",
+      "source_partition": "main",
+      "shared_workflow_group": "hotspot",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "spatial-coexpression-modules",
+      "required_stages": [
+        "retain spatial coordinates and count depth",
+        "construct local neighborhoods",
+        "test gene autocorrelation",
+        "correct multiple tests",
+        "infer gene modules and scores"
+      ],
+      "scientific_decisions": [
+        "Separate spatial signal from depth and sampling density; preserve module-label equivalence and donor/slice structure."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "required_tools": [
+        "hotspot"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Separate spatial signal from depth and sampling density; preserve module-label equivalence and donor/slice structure.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ],
+      "identical_source_aliases": [
+        "prompt/prompt_data1.json:hotspot"
+      ]
+    },
+    {
+      "task_id": "scvi",
+      "source_task_id": "scvi",
+      "source_partition": "main",
+      "shared_workflow_group": "scvi",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "count-model-atlas-integration",
+      "required_stages": [
+        "preserve raw count layer",
+        "select batch-aware variable genes",
+        "fit a latent count model",
+        "evaluate batch integration and biological retention"
+      ],
+      "scientific_decisions": [
+        "Do not scale counts fed to the likelihood; frozen training and held-out checks are needed for a reproducible numerical contract."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "required_tools": [
+        "scvi"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Do not scale counts fed to the likelihood; frozen training and held-out checks are needed for a reproducible numerical contract.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "scanvi",
+      "source_task_id": "scanvi",
+      "source_partition": "main",
+      "shared_workflow_group": "scanvi",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "semi-supervised-atlas-integration",
+      "required_stages": [
+        "prepare labeled and unlabeled cells",
+        "fit an unsupervised count model",
+        "refine with partial labels",
+        "assess transfer and latent structure"
+      ],
+      "scientific_decisions": [
+        "Keep annotation supervision separate from query labels and test unsupported cell types."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "required_tools": [
+        "scanvi"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Keep annotation supervision separate from query labels and test unsupported cell types.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ],
+      "identical_source_aliases": [
+        "prompt/prompt_data1.json:scanvi"
+      ]
+    },
+    {
+      "task_id": "scanorama",
+      "source_task_id": "scanorama",
+      "source_partition": "main",
+      "shared_workflow_group": "scanorama",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "spatial-section-integration",
+      "required_stages": [
+        "QC spatial sections",
+        "match gene features",
+        "integrate section representations",
+        "map clusters back to tissue coordinates"
+      ],
+      "scientific_decisions": [
+        "Maintain section identity and cell correspondence; apparent batch mixing is not sufficient biological validation."
+      ],
+      "required_formats": [
+        "Visium"
+      ],
+      "required_tools": [
+        "scanorama"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Maintain section identity and cell correspondence; apparent batch mixing is not sufficient biological validation.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "harmony",
+      "source_task_id": "harmony",
+      "source_partition": "main",
+      "shared_workflow_group": "harmony",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "covariate-adjusted-latent-integration",
+      "required_stages": [
+        "select variable genes",
+        "normalize and compute components",
+        "correct components for batch covariates",
+        "assess retained populations"
+      ],
+      "scientific_decisions": [
+        "Preserve known biological covariates and quantify overcorrection; coordinates may vary under equivalent bases."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "required_tools": [
+        "harmony"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Preserve known biological covariates and quantify overcorrection; coordinates may vary under equivalent bases.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "cellassign",
+      "source_task_id": "cellassign",
+      "source_partition": "main",
+      "shared_workflow_group": "cellassign",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "probabilistic-marker-annotation",
+      "required_stages": [
+        "join marker genes to measured features",
+        "preserve library-size factors",
+        "fit marker-driven label probabilities",
+        "export cell assignments"
+      ],
+      "scientific_decisions": [
+        "Check gene alignment, label uncertainty and out-of-reference cells instead of only an annotation column."
+      ],
+      "required_formats": [
+        "H5AD",
+        "CSV-marker-table"
+      ],
+      "required_tools": [
+        "cellassign"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Check gene alignment, label uncertainty and out-of-reference cells instead of only an annotation column.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "contrastivevi",
+      "source_task_id": "contrastivevi",
+      "source_partition": "main",
+      "shared_workflow_group": "contrastivevi",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "perturbation-specific-latent-variation",
+      "required_stages": [
+        "identify measured control and perturbation groups",
+        "account for cell-cycle covariates",
+        "fit shared and salient latent structure",
+        "evaluate perturbation signal"
+      ],
+      "scientific_decisions": [
+        "Declare the control label per dataset and prevent confounded biological states from masquerading as perturbation effects."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "required_tools": [
+        "contrastivevi"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Declare the control label per dataset and prevent confounded biological states from masquerading as perturbation effects.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ],
+      "identical_source_aliases": [
+        "prompt/prompt_data1.json:contrastivevi"
+      ]
+    },
+    {
+      "task_id": "peakvi",
+      "source_task_id": "peakvi",
+      "source_partition": "main",
+      "shared_workflow_group": "peakvi",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "binary-accessibility-modeling",
+      "required_stages": [
+        "filter rarely detected peaks",
+        "preserve accessibility layer",
+        "fit a latent model",
+        "compare declared populations for accessibility"
+      ],
+      "scientific_decisions": [
+        "The requested embedding does not verify differential accessibility; check peak IDs, effects and uncertainty."
+      ],
+      "required_formats": [
+        "10x-peak-matrix"
+      ],
+      "required_tools": [
+        "peakvi"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "The requested embedding does not verify differential accessibility; check peak IDs, effects and uncertainty.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ],
+      "identical_source_aliases": [
+        "prompt/prompt_data1.json:peakvi"
+      ]
+    },
+    {
+      "task_id": "poissonvi",
+      "source_task_id": "poissonvi",
+      "source_partition": "main",
+      "shared_workflow_group": "poissonvi",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "fragment-count-accessibility-modeling",
+      "required_stages": [
+        "retain read counts",
+        "convert reads to fragment counts",
+        "filter peaks",
+        "fit a count-based accessibility model",
+        "test population contrasts"
+      ],
+      "scientific_decisions": [
+        "Read-to-fragment conversion and differential accessibility require explicit outputs beyond a latent embedding."
+      ],
+      "required_formats": [
+        "10x-peak-matrix"
+      ],
+      "required_tools": [
+        "poissonvi"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Read-to-fragment conversion and differential accessibility require explicit outputs beyond a latent embedding.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "totalvi",
+      "source_task_id": "totalvi",
+      "source_partition": "main",
+      "shared_workflow_group": "totalvi",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "held-out-protein-imputation",
+      "required_stages": [
+        "align RNA and protein cell identities",
+        "mask query proteins while retaining evaluation values",
+        "fit a joint count model",
+        "predict masked proteins under a declared batch"
+      ],
+      "scientific_decisions": [
+        "An embedding alone does not validate protein imputation; hold-outs must remain inaccessible during model fitting."
+      ],
+      "required_formats": [
+        "CITE-seq-AnnData"
+      ],
+      "required_tools": [
+        "totalvi"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "An embedding alone does not validate protein imputation; hold-outs must remain inaccessible during model fitting.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "multivi",
+      "source_task_id": "multivi",
+      "source_partition": "main",
+      "shared_workflow_group": "multivi",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "partially-paired-modality-imputation",
+      "required_stages": [
+        "separate paired and unpaired cells",
+        "preserve assay feature types",
+        "fit a joint RNA-accessibility model",
+        "impute missing modalities"
+      ],
+      "scientific_decisions": [
+        "Check imputed features and paired-cell consistency; missing assays must not be treated as measured zeros."
+      ],
+      "required_formats": [
+        "10x-multiome-matrix"
+      ],
+      "required_tools": [
+        "multivi"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Check imputed features and paired-cell consistency; missing assays must not be treated as measured zeros.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "tangram",
+      "source_task_id": "tangram",
+      "source_partition": "main",
+      "shared_workflow_group": "tangram",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "reference-cell-to-tissue-mapping",
+      "required_stages": [
+        "align reference and spatial gene panels",
+        "incorporate segmentation constraints",
+        "fit a spatial mapping",
+        "aggregate specified cell-type signals"
+      ],
+      "scientific_decisions": [
+        "Resolve source descriptions that conflate spatial RNA and accessibility; check spatial mapping mass and held-out genes."
+      ],
+      "required_formats": [
+        "H5AD",
+        "spatial-image"
+      ],
+      "required_tools": [
+        "tangram"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Resolve source descriptions that conflate spatial RNA and accessibility; check spatial mapping mass and held-out genes.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "spage",
+      "source_task_id": "spage",
+      "source_partition": "main",
+      "shared_workflow_group": "spage",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "cross-platform-spatial-gene-imputation",
+      "required_stages": [
+        "select anatomically matched populations",
+        "align measured genes",
+        "fit shared components",
+        "evaluate withheld measured genes",
+        "predict unmeasured spatial genes"
+      ],
+      "scientific_decisions": [
+        "Hold each target gene out of alignment and fitting; calculate correlations over matched spatial units."
+      ],
+      "required_formats": [
+        "CSV-count-matrix",
+        "loom"
+      ],
+      "required_tools": [
+        "spage"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Hold each target gene out of alignment and fitting; calculate correlations over matched spatial units.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "graphst",
+      "source_task_id": "graphst",
+      "source_partition": "main",
+      "shared_workflow_group": "graphst",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "multi-section-spatial-domains",
+      "required_stages": [
+        "validate section and spot identities",
+        "fit graph representations across sections",
+        "cluster spatial domains",
+        "assess tissue correspondence"
+      ],
+      "scientific_decisions": [
+        "Account for domain-label permutations; tissue continuity and section boundaries constrain valid results."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "required_tools": [
+        "graphst"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Account for domain-label permutations; tissue continuity and section boundaries constrain valid results.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "gimvi",
+      "source_task_id": "gimvi",
+      "source_partition": "main",
+      "shared_workflow_group": "gimvi",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "joint-spatial-expression-imputation",
+      "required_stages": [
+        "match genes across sequencing and spatial assays",
+        "withhold target genes",
+        "fit a joint latent model",
+        "reconstruct held-out spatial expression"
+      ],
+      "scientific_decisions": [
+        "An embedding alone does not verify gene imputation; retain explicit withheld-gene scores and spatial identities."
+      ],
+      "required_formats": [
+        "AnnData"
+      ],
+      "required_tools": [
+        "gimvi"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "An embedding alone does not verify gene imputation; retain explicit withheld-gene scores and spatial identities.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ],
+      "identical_source_aliases": [
+        "prompt/prompt_data1.json:gimvi"
+      ],
+      "benchmark_data_lineages": [
+        {
+          "name": "Zeisel-2015-cortex-3005",
+          "loader": "scvi.data.cortex",
+          "evidence_url": "https://scvi-tools.org/blog/autotune/",
+          "training_input_policy": "exclude this biological lineage from generated training inputs; source prompt misspells the cortex loader as corted"
+        }
+      ]
+    },
+    {
+      "task_id": "sedr",
+      "source_task_id": "sedr",
+      "source_partition": "main",
+      "shared_workflow_group": "sedr",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "spatial-expression-denoising",
+      "required_stages": [
+        "QC spatial counts",
+        "build spatial neighborhoods",
+        "fit denoising model",
+        "assess observed-gene reconstruction and tissue structure"
+      ],
+      "scientific_decisions": [
+        "Increased correlation among selected markers is not independent accuracy evidence; use held-out measured observations."
+      ],
+      "required_formats": [
+        "Visium"
+      ],
+      "required_tools": [
+        "sedr"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Increased correlation among selected markers is not independent accuracy evidence; use held-out measured observations.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "spagcn",
+      "source_task_id": "spagcn",
+      "source_partition": "main",
+      "shared_workflow_group": "spagcn",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "histology-informed-spatial-domains",
+      "required_stages": [
+        "align expression, array coordinates and image pixels",
+        "construct a weighted tissue graph",
+        "infer domains",
+        "test spatially variable genes"
+      ],
+      "scientific_decisions": [
+        "Do not interchange array and pixel coordinates; check domains and gene-level results independently of rendered figures."
+      ],
+      "required_formats": [
+        "H5AD",
+        "TIFF"
+      ],
+      "required_tools": [
+        "spagcn"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Do not interchange array and pixel coordinates; check domains and gene-level results independently of rendered figures.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "cellphonedb",
+      "source_task_id": "cellphonedb",
+      "source_partition": "main",
+      "shared_workflow_group": "cellphonedb",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "microenvironment-conditioned-communication",
+      "required_stages": [
+        "join barcodes and cell labels",
+        "load frozen interaction priors",
+        "restrict permitted microenvironments",
+        "test group-level interactions",
+        "export deconvolved results"
+      ],
+      "scientific_decisions": [
+        "Distinguish expression-supported interaction hypotheses from observed signaling; pin database and permutation rules."
+      ],
+      "required_formats": [
+        "H5AD",
+        "TSV",
+        "interaction-database"
+      ],
+      "required_tools": [
+        "cellphonedb"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Distinguish expression-supported interaction hypotheses from observed signaling; pin database and permutation rules.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "deeptree",
+      "source_task_id": "deeptree",
+      "source_partition": "main",
+      "shared_workflow_group": "deeptree",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "correlation-based-gene-selection",
+      "required_stages": [
+        "retain original gene identifiers",
+        "QC and normalize",
+        "estimate gene structure",
+        "select informative genes",
+        "evaluate downstream grouping"
+      ],
+      "scientific_decisions": [
+        "Preserve feature identity and selection scores; correlated technical variation is not automatically biological signal."
+      ],
+      "required_formats": [
+        "10x-Matrix-Market"
+      ],
+      "required_tools": [
+        "deeptree"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Preserve feature identity and selection scores; correlated technical variation is not automatically biological signal.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "scdemon",
+      "source_task_id": "scdemon",
+      "source_partition": "main",
+      "shared_workflow_group": "scdemon",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "single-cell-coexpression-modules",
+      "required_stages": [
+        "normalize observed counts",
+        "construct gene association graph",
+        "partition gene modules",
+        "score modules across cells"
+      ],
+      "scientific_decisions": [
+        "Declare graph threshold and module equivalence; inspect library-size confounding and preserve cell/gene identities."
+      ],
+      "required_formats": [
+        "AnnData"
+      ],
+      "required_tools": [
+        "scdemon"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Declare graph threshold and module equivalence; inspect library-size confounding and preserve cell/gene identities.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "deseq2",
+      "source_task_id": "deseq2",
+      "source_partition": "main",
+      "shared_workflow_group": "deseq2",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "count-model-differential-expression",
+      "required_stages": [
+        "join counts to sample metadata",
+        "filter low-count genes",
+        "fit negative-binomial contrasts",
+        "perform Wald tests and fold-change shrinkage"
+      ],
+      "scientific_decisions": [
+        "Source uses PyDESeq2 synthetic examples and requests the count matrix as output; use independent real data and require full fitted statistics instead."
+      ],
+      "required_formats": [
+        "count-matrix",
+        "metadata-table"
+      ],
+      "required_tools": [
+        "PyDESeq2"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Source uses PyDESeq2 synthetic examples and requests the count matrix as output; use independent real data and require full fitted statistics instead.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "resolvi",
+      "source_task_id": "resolvi",
+      "source_partition": "main",
+      "shared_workflow_group": "resolvi",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "spatial-contamination-correction",
+      "required_stages": [
+        "partition reference and query tissue",
+        "fit unsupervised and label-informed models",
+        "transfer annotations",
+        "estimate corrected counts and contrasts"
+      ],
+      "scientific_decisions": [
+        "Corrected counts and spatial assignment uncertainty need verification; predicted labels alone do not validate decontamination."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "required_tools": [
+        "resolvi"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Corrected counts and spatial assignment uncertainty need verification; predicted labels alone do not validate decontamination.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "novosparc",
+      "source_task_id": "novosparc",
+      "source_partition": "main",
+      "shared_workflow_group": "novosparc",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "atlas-constrained-spatial-reconstruction",
+      "required_stages": [
+        "align expression with an independent spatial atlas",
+        "choose gene representation",
+        "construct a target geometry",
+        "fit cell-to-position transport"
+      ],
+      "scientific_decisions": [
+        "Spatial reconstruction is underdetermined; verify transport constraints and held-out spatial markers."
+      ],
+      "required_formats": [
+        "TSV-expression",
+        "TSV-coordinates"
+      ],
+      "required_tools": [
+        "novosparc"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Spatial reconstruction is underdetermined; verify transport constraints and held-out spatial markers.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "cellchat",
+      "source_task_id": "cellchat",
+      "source_partition": "main",
+      "shared_workflow_group": "cellchat",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "R"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "ligand-receptor-network-inference",
+      "required_stages": [
+        "join expression and cell groups",
+        "restrict signaling genes to a frozen prior",
+        "infer group-level interactions",
+        "aggregate pathway networks"
+      ],
+      "scientific_decisions": [
+        "Group size, expression eligibility and species-specific priors affect the network; inferred edges are hypotheses."
+      ],
+      "required_formats": [
+        "RData"
+      ],
+      "required_tools": [
+        "cellchat"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Group size, expression eligibility and species-specific priors affect the network; inferred edges are hypotheses.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ],
+      "identical_source_aliases": [
+        "prompt/prompt_data1.json:cellchat"
+      ]
+    },
+    {
+      "task_id": "seurat-1",
+      "source_task_id": "seurat-1",
+      "source_partition": "main",
+      "shared_workflow_group": "seurat-1",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "R"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "rna-protein-cell-characterization",
+      "required_stages": [
+        "join RNA and antibody counts by cell",
+        "normalize assays separately",
+        "cluster transcriptomes",
+        "identify protein markers per population"
+      ],
+      "scientific_decisions": [
+        "Preserve feature modalities and antibody background; a visualization is not a numerical endpoint."
+      ],
+      "required_formats": [
+        "CSV-gzip-RNA",
+        "CSV-gzip-ADT"
+      ],
+      "required_tools": [
+        "seurat"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Preserve feature modalities and antibody background; a visualization is not a numerical endpoint.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "seurat-2",
+      "source_task_id": "seurat-2",
+      "source_partition": "main",
+      "shared_workflow_group": "seurat-2",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "R"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "reference-to-spatial-label-transfer",
+      "required_stages": [
+        "prepare spatial and reference objects",
+        "compare unintegrated populations",
+        "transfer or integrate reference information",
+        "assess conserved markers and condition contrasts"
+      ],
+      "scientific_decisions": [
+        "Spatial spots and reference cells are different sampling units; preserve transfer uncertainty and biological replication."
+      ],
+      "required_formats": [
+        "Seurat-RDS",
+        "Slide-seq"
+      ],
+      "required_tools": [
+        "seurat"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Spatial spots and reference cells are different sampling units; preserve transfer uncertainty and biological replication.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "sctransform",
+      "source_task_id": "sctransform",
+      "source_partition": "main",
+      "shared_workflow_group": "sctransform",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "R"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "count-variance-stabilization",
+      "required_stages": [
+        "retain UMI counts and technical covariates",
+        "fit regularized count models",
+        "obtain residuals",
+        "select features and representations"
+      ],
+      "scientific_decisions": [
+        "Residual normalization and UMAP are distinct endpoints; check gene/cell indexing and mean-variance behavior."
+      ],
+      "required_formats": [
+        "10x-Matrix-Market"
+      ],
+      "required_tools": [
+        "sctransform"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Residual normalization and UMAP are distinct endpoints; check gene/cell indexing and mean-variance behavior.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ],
+      "identical_source_aliases": [
+        "prompt/prompt_data1.json:sctransform"
+      ]
+    },
+    {
+      "task_id": "singlecellhaystack",
+      "source_task_id": "singlecellhaystack",
+      "source_partition": "main",
+      "shared_workflow_group": "singlecellhaystack",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "R"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "distribution-aware-gene-selection",
+      "required_stages": [
+        "prepare expression and low-dimensional coordinates",
+        "test nonuniform expression distributions",
+        "control false discovery",
+        "cluster gene patterns"
+      ],
+      "scientific_decisions": [
+        "Declare coordinate construction and gene universe; high dispersion alone is not the spatial-distribution test."
+      ],
+      "required_formats": [
+        "RData"
+      ],
+      "required_tools": [
+        "singlecellhaystack"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Declare coordinate construction and gene universe; high dispersion alone is not the spatial-distribution test.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "scpnmf",
+      "source_task_id": "scpnmf",
+      "source_partition": "main",
+      "shared_workflow_group": "scpnmf",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "R"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "projective-factor-gene-selection",
+      "required_stages": [
+        "prepare expression counts",
+        "fit nonnegative projective factors",
+        "remove depth-associated factors",
+        "select informative gene loadings"
+      ],
+      "scientific_decisions": [
+        "Use stable factor equivalence and preserve gene IDs; factor rotations/order cannot be graded as exact array identities."
+      ],
+      "required_formats": [
+        "R-SingleCellExperiment"
+      ],
+      "required_tools": [
+        "scpnmf"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Use stable factor equivalence and preserve gene IDs; factor rotations/order cannot be graded as exact array identities.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "scry",
+      "source_task_id": "scry",
+      "source_partition": "main",
+      "shared_workflow_group": "scry",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "R"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "deviance-based-feature-selection",
+      "required_stages": [
+        "retain observed counts",
+        "compute multinomial deviance",
+        "rank features",
+        "fit count-aware components or null residuals"
+      ],
+      "scientific_decisions": [
+        "Declare likelihood and library-size offsets; do not substitute transformed variance for count deviance."
+      ],
+      "required_formats": [
+        "R-SingleCellExperiment"
+      ],
+      "required_tools": [
+        "scry"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Declare likelihood and library-size offsets; do not substitute transformed variance for count deviance.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "scorpius",
+      "source_task_id": "scorpius",
+      "source_partition": "main",
+      "shared_workflow_group": "scorpius",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "R"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "trajectory-associated-gene-selection",
+      "required_stages": [
+        "use the provided processed layer",
+        "infer a low-dimensional trajectory",
+        "rank trajectory-associated genes",
+        "export selected features"
+      ],
+      "scientific_decisions": [
+        "Avoid reprocessing an already transformed layer; account for trajectory reversal and cell identity."
+      ],
+      "required_formats": [
+        "R-expression-object"
+      ],
+      "required_tools": [
+        "scorpius"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Avoid reprocessing an already transformed layer; account for trajectory reversal and cell identity.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "nichenet",
+      "source_task_id": "nichenet",
+      "source_partition": "main",
+      "shared_workflow_group": "nichenet",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+      "source_metadata_sha256": "e96319a428dff9c04d9e58e3961f1ba33df399103b1a50b122d2ee1f6d28f417",
+      "source_tags": [
+        "single-cell-omics",
+        "R"
+      ],
+      "source_prompt_variants": [
+        "basic",
+        "intermediate",
+        "advanced"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "ligand-to-target-prioritization",
+      "required_stages": [
+        "define sender and receiver populations",
+        "derive condition-associated receiver genes",
+        "freeze expressed-gene background",
+        "score ligand activity",
+        "link ligand, receptor and target evidence"
+      ],
+      "scientific_decisions": [
+        "Preserve receiver-specific gene universe and contrast identity; prior-supported ligand activity does not prove signaling causality."
+      ],
+      "required_formats": [
+        "Seurat-RDS",
+        "network-RDS"
+      ],
+      "required_tools": [
+        "nichenet"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Preserve receiver-specific gene universe and contrast identity; prior-supported ligand activity does not prove signaling causality.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "decoupler--data2",
+      "source_task_id": "decoupler",
+      "source_partition": "data2",
+      "shared_workflow_group": "decoupler",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_data2.json",
+      "source_metadata_sha256": "b13de7501f18bb05671997609fec82671dbedef462d8562a9e7daa0114cbe078",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "marker-enrichment-cell-annotation",
+      "required_stages": [
+        "QC and normalize cells",
+        "cluster the neighbor graph",
+        "score marker-set enrichment",
+        "assign supported cell labels"
+      ],
+      "scientific_decisions": [
+        "Check marker/background membership and ambiguous assignments; clustered-cell labels require measured support."
+      ],
+      "required_formats": [
+        "H5AD",
+        "CSV-marker-table"
+      ],
+      "required_tools": [
+        "decoupler"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Check marker/background membership and ambiguous assignments; clustered-cell labels require measured support.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "paga--data2",
+      "source_task_id": "paga",
+      "source_partition": "data2",
+      "shared_workflow_group": "paga",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_data2.json",
+      "source_metadata_sha256": "b13de7501f18bb05671997609fec82671dbedef462d8562a9e7daa0114cbe078",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "partition-graph-trajectory",
+      "required_stages": [
+        "preprocess counts",
+        "build a neighbor graph",
+        "partition cells",
+        "compute inter-partition connectivity"
+      ],
+      "scientific_decisions": [
+        "Check graph topology and label-permutation equivalence; graph position alone does not establish developmental direction."
+      ],
+      "required_formats": [
+        "AnnData"
+      ],
+      "required_tools": [
+        "paga"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Check graph topology and label-permutation equivalence; graph position alone does not establish developmental direction.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "destvi--data2",
+      "source_task_id": "destvi",
+      "source_partition": "data2",
+      "shared_workflow_group": "destvi",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_data2.json",
+      "source_metadata_sha256": "b13de7501f18bb05671997609fec82671dbedef462d8562a9e7daa0114cbe078",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "reference-to-spatial-deconvolution",
+      "required_stages": [
+        "align reference and spatial genes",
+        "fit reference expression states",
+        "fit spatial mixtures",
+        "export cell-type proportions"
+      ],
+      "scientific_decisions": [
+        "Use the declared count layer and preserve spot IDs; quantify mixture uncertainty and held-out expression fit."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "required_tools": [
+        "destvi"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Use the declared count layer and preserve spot IDs; quantify mixture uncertainty and held-out expression fit.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "leiden--data2",
+      "source_task_id": "leiden",
+      "source_partition": "data2",
+      "shared_workflow_group": "leiden",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_data2.json",
+      "source_metadata_sha256": "b13de7501f18bb05671997609fec82671dbedef462d8562a9e7daa0114cbe078",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "multi-sample-clustering",
+      "required_stages": [
+        "join sample-local cell barcodes",
+        "apply QC and doublet screening",
+        "preserve raw counts",
+        "select features and neighbors",
+        "cluster cells"
+      ],
+      "scientific_decisions": [
+        "A UMAP array alone does not verify clustering; check cell membership and label-permutation equivalence."
+      ],
+      "required_formats": [
+        "10x-Matrix-Market"
+      ],
+      "required_tools": [
+        "leiden"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "A UMAP array alone does not verify clustering; check cell membership and label-permutation equivalence.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "mofa--data2",
+      "source_task_id": "mofa",
+      "source_partition": "data2",
+      "shared_workflow_group": "mofa",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_data2.json",
+      "source_metadata_sha256": "b13de7501f18bb05671997609fec82671dbedef462d8562a9e7daa0114cbe078",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "paired-multiomic-factorization",
+      "required_stages": [
+        "align cells across modalities",
+        "preserve assay-specific features",
+        "fit shared latent factors",
+        "assess modality contributions"
+      ],
+      "scientific_decisions": [
+        "Account for latent sign and rotation ambiguity; require cross-modal reconstruction or biological endpoints beyond coordinates."
+      ],
+      "required_formats": [
+        "H5MU"
+      ],
+      "required_tools": [
+        "mofa"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Account for latent sign and rotation ambiguity; require cross-modal reconstruction or biological endpoints beyond coordinates.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "triku--data2",
+      "source_task_id": "triku",
+      "source_partition": "data2",
+      "shared_workflow_group": "triku",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_data2.json",
+      "source_metadata_sha256": "b13de7501f18bb05671997609fec82671dbedef462d8562a9e7daa0114cbe078",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "neighborhood-based-feature-selection",
+      "required_stages": [
+        "QC and transform counts",
+        "construct cell neighborhoods",
+        "select locally variable genes",
+        "evaluate downstream representation"
+      ],
+      "scientific_decisions": [
+        "Saving sparse values alone discards coordinates and shape; require feature IDs, selection scores and matrix structure."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "required_tools": [
+        "triku"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Saving sparse values alone discards coordinates and shape; require feature IDs, selection scores and matrix structure.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "hotspot--data2",
+      "source_task_id": "hotspot",
+      "source_partition": "data2",
+      "shared_workflow_group": "hotspot",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_data2.json",
+      "source_metadata_sha256": "b13de7501f18bb05671997609fec82671dbedef462d8562a9e7daa0114cbe078",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "spatial-coexpression-modules",
+      "required_stages": [
+        "retain spatial coordinates and count depth",
+        "construct local neighborhoods",
+        "test gene autocorrelation",
+        "correct multiple tests",
+        "infer gene modules and scores"
+      ],
+      "scientific_decisions": [
+        "Separate spatial signal from depth and sampling density; preserve module-label equivalence and donor/slice structure."
+      ],
+      "required_formats": [
+        "10x-HDF5"
+      ],
+      "required_tools": [
+        "hotspot"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Separate spatial signal from depth and sampling density; preserve module-label equivalence and donor/slice structure.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "scanvi--data2",
+      "source_task_id": "scanvi",
+      "source_partition": "data2",
+      "shared_workflow_group": "scanvi",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_data2.json",
+      "source_metadata_sha256": "b13de7501f18bb05671997609fec82671dbedef462d8562a9e7daa0114cbe078",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "semi-supervised-atlas-integration",
+      "required_stages": [
+        "prepare labeled and unlabeled cells",
+        "fit an unsupervised count model",
+        "refine with partial labels",
+        "assess transfer and latent structure"
+      ],
+      "scientific_decisions": [
+        "Keep annotation supervision separate from query labels and test unsupported cell types."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "required_tools": [
+        "scanvi"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Keep annotation supervision separate from query labels and test unsupported cell types.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "contrastivevi--data2",
+      "source_task_id": "contrastivevi",
+      "source_partition": "data2",
+      "shared_workflow_group": "contrastivevi",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_data2.json",
+      "source_metadata_sha256": "b13de7501f18bb05671997609fec82671dbedef462d8562a9e7daa0114cbe078",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "perturbation-specific-latent-variation",
+      "required_stages": [
+        "identify measured control and perturbation groups",
+        "account for cell-cycle covariates",
+        "fit shared and salient latent structure",
+        "evaluate perturbation signal"
+      ],
+      "scientific_decisions": [
+        "Declare the control label per dataset and prevent confounded biological states from masquerading as perturbation effects."
+      ],
+      "required_formats": [
+        "H5AD"
+      ],
+      "required_tools": [
+        "contrastivevi"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Declare the control label per dataset and prevent confounded biological states from masquerading as perturbation effects.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "peakvi--data2",
+      "source_task_id": "peakvi",
+      "source_partition": "data2",
+      "shared_workflow_group": "peakvi",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_data2.json",
+      "source_metadata_sha256": "b13de7501f18bb05671997609fec82671dbedef462d8562a9e7daa0114cbe078",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "binary-accessibility-modeling",
+      "required_stages": [
+        "filter rarely detected peaks",
+        "preserve accessibility layer",
+        "fit a latent model",
+        "compare declared populations for accessibility"
+      ],
+      "scientific_decisions": [
+        "The requested embedding does not verify differential accessibility; check peak IDs, effects and uncertainty."
+      ],
+      "required_formats": [
+        "10x-peak-matrix"
+      ],
+      "required_tools": [
+        "peakvi"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "The requested embedding does not verify differential accessibility; check peak IDs, effects and uncertainty.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "gimvi--data2",
+      "source_task_id": "gimvi",
+      "source_partition": "data2",
+      "shared_workflow_group": "gimvi",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_data2.json",
+      "source_metadata_sha256": "b13de7501f18bb05671997609fec82671dbedef462d8562a9e7daa0114cbe078",
+      "source_tags": [
+        "single-cell-omics",
+        "python"
+      ],
+      "source_prompt_variants": [
+        "basic"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "joint-spatial-expression-imputation",
+      "required_stages": [
+        "match genes across sequencing and spatial assays",
+        "withhold target genes",
+        "fit a joint latent model",
+        "reconstruct held-out spatial expression"
+      ],
+      "scientific_decisions": [
+        "An embedding alone does not verify gene imputation; retain explicit withheld-gene scores and spatial identities."
+      ],
+      "required_formats": [
+        "CSV-expression-matrices"
+      ],
+      "required_tools": [
+        "gimvi"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "An embedding alone does not verify gene imputation; retain explicit withheld-gene scores and spatial identities.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "cellchat--data2",
+      "source_task_id": "cellchat",
+      "source_partition": "data2",
+      "shared_workflow_group": "cellchat",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_data2.json",
+      "source_metadata_sha256": "b13de7501f18bb05671997609fec82671dbedef462d8562a9e7daa0114cbe078",
+      "source_tags": [
+        "single-cell-omics",
+        "R"
+      ],
+      "source_prompt_variants": [
+        "basic"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "ligand-receptor-network-inference",
+      "required_stages": [
+        "join expression and cell groups",
+        "restrict signaling genes to a frozen prior",
+        "infer group-level interactions",
+        "aggregate pathway networks"
+      ],
+      "scientific_decisions": [
+        "Group size, expression eligibility and species-specific priors affect the network; inferred edges are hypotheses."
+      ],
+      "required_formats": [
+        "RData",
+        "JSON-spatial-scale-factors"
+      ],
+      "required_tools": [
+        "cellchat"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "Group size, expression eligibility and species-specific priors affect the network; inferred edges are hypotheses.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    },
+    {
+      "task_id": "sctransform--data2",
+      "source_task_id": "sctransform",
+      "source_partition": "data2",
+      "shared_workflow_group": "sctransform",
+      "source_metadata_url": "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_data2.json",
+      "source_metadata_sha256": "b13de7501f18bb05671997609fec82671dbedef462d8562a9e7daa0114cbe078",
+      "source_tags": [
+        "single-cell-omics",
+        "R"
+      ],
+      "source_prompt_variants": [
+        "basic"
+      ],
+      "status": "unmapped",
+      "assessment": "Basic task descriptions and supplied analysis-stage guidance assessed; raw biological fixtures, human reference scripts, model traces and expected arrays were not used for training authoring.",
+      "workflow_family": "count-variance-stabilization",
+      "required_stages": [
+        "retain UMI counts and technical covariates",
+        "fit regularized count models",
+        "obtain residuals",
+        "select features and representations"
+      ],
+      "scientific_decisions": [
+        "This additional dataset case requests the normalized residual matrix; the main case requests dimensionality reduction. Preserve that endpoint difference."
+      ],
+      "required_formats": [
+        "10x-Matrix-Market"
+      ],
+      "required_tools": [
+        "sctransform"
+      ],
+      "source_suggested_tools": [],
+      "recipes": [],
+      "independent_data_sources": [],
+      "validation_evidence": [],
+      "runtime_seconds": null,
+      "remaining_gaps": [
+        "This additional dataset case requests the normalized residual matrix; the main case requests dimensionality reduction. Preserve that endpoint difference.",
+        "Author an independent real-data task with measured resources, complete biological artifacts, explicit stochastic or representation equivalences, and a deterministic acceptance rule."
+      ]
+    }
+  ]
+}

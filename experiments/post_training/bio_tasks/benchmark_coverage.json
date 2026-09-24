@@ -181,6 +181,19 @@
       "tasks_file": "benchmark_tasks/variantbench.json",
       "source_inventory_name": "VariantBench",
       "task_inventory_status": "public-examples-assessed"
+    },
+    "Liu-single-cell": {
+      "revision": "1605e6e38bd69307e2f7b68a4367de21043c89b6",
+      "source_url": "https://github.com/lyyang01/bioagent-benchmark/tree/1605e6e38bd69307e2f7b68a4367de21043c89b6",
+      "inventory_count": 63,
+      "public_inventory_count": 63,
+      "main_workflow_count": 50,
+      "additional_dataset_case_count": 13,
+      "training_mapping_allowed": true,
+      "distribution": "ID",
+      "tasks_file": "benchmark_tasks/liu-single-cell.json",
+      "source_inventory_name": "Liu et al., single-cell agent benchmark",
+      "task_inventory_status": "public-task-metadata-assessed"
     }
   },
   "assessment_policy": "ID workflow prerequisites are manually inferred from permitted task descriptions. Shared family stages may exceed an individual endpoint; assess that endpoint before claiming coverage. Benchmark answers and biological fixtures are excluded from authoring."

@@ -685,5 +685,23 @@
         }
       }
     }
-  }
+  },
+  "excluded_candidate_lineages": [
+    {
+      "lineage": "Zeisel-2015-cortex-3005",
+      "status": "excluded-benchmark-input",
+      "benchmark": "Liu-single-cell",
+      "task_ids": [
+        "gimvi"
+      ],
+      "reason": "The public benchmark prompt uses the scvi cortex loader. The official scVI dataset description identifies its 3005-cell cortex data as Zeisel et al. (2015). A separately downloaded copy or subset would retain this biological lineage.",
+      "evidence_urls": [
+        "https://github.com/lyyang01/bioagent-benchmark/blob/1605e6e38bd69307e2f7b68a4367de21043c89b6/prompt/prompt_gradient.json",
+        "https://docs.scvi-tools.org/en/1.1.4/api/reference/scvi.data.cortex.html",
+        "https://scvi-tools.org/blog/autotune/"
+      ],
+      "candidate_download_status": "not downloaded or used in task inputs",
+      "screened_at": "2026-09-24"
+    }
+  ]
 }

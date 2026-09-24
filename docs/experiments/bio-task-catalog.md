@@ -228,9 +228,10 @@ benchmark answers and biological fixtures are excluded from training authoring.
 | [CORE-Bench, biomedical](../../experiments/post_training/bio_tasks/benchmark_tasks/core-bench.json) | 25 | — |
 | [DiscoveryBench, biology](../../experiments/post_training/bio_tasks/benchmark_tasks/discoverybench.json) | 26 | — |
 | [VariantBench](../../experiments/post_training/bio_tasks/benchmark_tasks/variantbench.json) | 8 (6 main, 2 supplemental) | 118 main |
+| [Liu et al., single-cell](../../experiments/post_training/bio_tasks/benchmark_tasks/liu-single-cell.json) | 63 (50 main, 13 additional datasets) | — |
 
-Of these 514 ID task records, 23 have manually assessed component mappings and
-491 are unmapped. None is marked workflow-validated. Other eligible sources
+Of these 577 ID task records, 23 have manually assessed component mappings and
+554 are unmapped. None is marked workflow-validated. Other eligible sources
 still need task-level inspection. The 90
 [BioMysteryBench identifiers](../../experiments/post_training/bio_tasks/benchmark_tasks/biomysterybench.json)
 are tracked separately as OOD, without workflow patterns or training mappings.
@@ -245,8 +246,16 @@ DiscoveryBench records 26 query variants grouped into ten claims across two
 biological studies; these variants are not independent workflow coverage.
 VariantBench exposes six main-suite examples and two supplemental neoantigen
 examples. Keep the supplemental examples outside the main-suite denominator.
+The Liu single-cell inventory has 50 main tasks and 13 additional dataset cases.
+Its 13 `data1` prompts exactly duplicate main prompts and remain aliases. Prompt
+hint variants do not add tasks; several saved embeddings do not establish the
+biological endpoint described by their task.
+Its gimVI task also identifies an excluded candidate input lineage: the 3,005-cell
+Zeisel cortex data used by `scvi.data.cortex`. The source manifest records this
+exclusion and primary evidence; downloading another copy would not make the
+biological observations independent.
 
-All 514 ID records have manually assessed workflow prerequisites. For BixBench,
+All 577 ID records have manually assessed workflow prerequisites. For BixBench,
 shared workflow-family stages are distinguished from individual question endpoints;
 this inventory does not add execution coverage. The inspection browser binds mappings
 to generated examples and their local reference results. These timings are solver-check runtimes, not teacher latency measurements.
