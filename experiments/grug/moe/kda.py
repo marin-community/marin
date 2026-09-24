@@ -189,6 +189,7 @@ def chunk_kda(
     use_qk_l2norm: bool = True,
     matmul_dtype: jnp.dtype | None = jnp.bfloat16,
     scan_unroll: int = 1,
+    scan_impl: str = "parallel",
 ) -> tuple[Float[Array, "... L Dv"], jax.Array]:
     """Chunkwise-parallel per-channel gated delta rule (KDA train/prefill kernel).
 
@@ -278,22 +279,36 @@ def chunk_kda(
 
     strict_upper = jnp.triu(jnp.ones((c, c), dtype=bool), k=1)
 
-    # Scan over chunks (chunks on the leading axis).
+    if scan_impl == "sequential":
+        out, state = _sequential_chunk_recurrence(
+            q_inflate, k_deflate, kc, g_cum, v_pseudo, k_cumdecay, state, strict_upper, mm, scan_unroll
+        )
+    elif scan_impl == "parallel":
+        out, state = _parallel_chunk_recurrence(
+            q_inflate, k_deflate, kc, g_cum, v_pseudo, k_cumdecay, state, strict_upper, mm, lead, dk, dv
+        )
+    else:
+        raise ValueError(f"scan_impl must be 'sequential' or 'parallel', got {scan_impl!r}")
+
+    out = out.reshape(*lead, n_chunks * c, dv)
+    if pad:
+        out = out[..., :orig_len, :]
+    return out, state
+
+
+def _sequential_chunk_recurrence(
+    q_inflate, k_deflate, kc, g_cum, v_pseudo, k_cumdecay, state, strict_upper, mm, scan_unroll
+):
+    """Original serial ``lax.scan`` over chunks. Correct, but its depth is L/C
+    sequential steps -- latency-bound on GPU (see ``_parallel_chunk_recurrence``)."""
+
     def move_chunk_front(x: jax.Array) -> jax.Array:
         return jnp.moveaxis(x, -3, 0)
 
-    scan_inputs = (
-        move_chunk_front(q_inflate),
-        move_chunk_front(k_deflate),
-        move_chunk_front(kc),
-        move_chunk_front(g_cum),
-        move_chunk_front(v_pseudo),
-        move_chunk_front(k_cumdecay),
-    )
+    scan_inputs = tuple(move_chunk_front(x) for x in (q_inflate, k_deflate, kc, g_cum, v_pseudo, k_cumdecay))
 
     def chunk_step(s_prev: jax.Array, inp):
         q_inf, k_def, k_i, gcum_i, v_ps, k_cd = inp
-        # Intra-chunk attention over corrected values (strictly-lower + diagonal).
         attn = mm("...rd,...jd->...rj", q_inf, k_def)
         attn = jnp.where(strict_upper, 0.0, attn)
         # State-touching GEMMs stay fp32 (S carries the whole prefix -- precision matters).
@@ -301,17 +316,65 @@ def chunk_kda(
         v_new = v_ps - v_prime
         inter = jnp.einsum("...rd,...dm->...rm", q_inf, s_prev)
         out_i = inter + mm("...rj,...jm->...rm", attn, v_new)
-        # Carry state to the chunk boundary and write the innovations.
-        g_tail = gcum_i[..., -1, :]  # (..., d_k)
+        g_tail = gcum_i[..., -1, :]
         decay_tail = jnp.exp(g_tail)
-        decay_weights = jnp.exp(g_tail[..., None, :] - gcum_i)  # (..., C, d_k)
+        decay_weights = jnp.exp(g_tail[..., None, :] - gcum_i)
         add = jnp.einsum("...rd,...rm->...dm", k_i * decay_weights, v_new)
         s_new = s_prev * decay_tail[..., :, None] + add
         return s_new, out_i
 
     state, out_chunks = lax.scan(chunk_step, state, scan_inputs, unroll=scan_unroll)
-    out = jnp.moveaxis(out_chunks, 0, -3)  # (..., n, C, d_v)
-    out = out.reshape(*lead, n_chunks * c, dv)
-    if pad:
-        out = out[..., :orig_len, :]
-    return out, state
+    return jnp.moveaxis(out_chunks, 0, -3), state
+
+
+def _parallel_chunk_recurrence(
+    q_inflate, k_deflate, kc, g_cum, v_pseudo, k_cumdecay, state, strict_upper, mm, lead, dk, dv
+):
+    """Chunk-parallel inter-chunk recurrence via a log-depth associative scan.
+
+    The cross-chunk state update is *linear* in ``S``:
+
+        S_n = Diag(decay_tail_n) S_{n-1} + Kw_n^T (v_pseudo_n - k_cumdecay_n S_{n-1})
+            = M_n S_{n-1} + C_n,   M_n = Diag(decay_tail_n) - Kw_n^T k_cumdecay_n,
+
+    so instead of the L/C serial ``lax.scan`` we run ``lax.associative_scan`` over the
+    affine transforms ``(M_n, C_n)`` (composition ``(M_r M_l, M_r C_l + C_r)``): depth
+    drops from L/C to log2(L/C), and the per-chunk outputs then compute in one parallel
+    batched pass. All state math is fp32 (stability); only the two intra-chunk attention
+    GEMMs use ``mm`` (bf16). This is the arXiv 2406.06484 chunk-parallel delta rule.
+    """
+    g_tail = g_cum[..., -1, :]  # (..., n, d_k)
+    decay_tail = jnp.exp(g_tail)  # (..., n, d_k)
+    decay_weights = jnp.exp(g_tail[..., None, :] - g_cum)  # (..., n, C, d_k)
+    kw = kc * decay_weights  # (..., n, C, d_k)
+
+    eye_dk = jnp.eye(dk, dtype=jnp.float32)
+    m_mat = decay_tail[..., :, None] * eye_dk - jnp.einsum("...rd,...re->...de", kw, k_cumdecay)
+    c_mat = jnp.einsum("...rd,...rm->...dm", kw, v_pseudo)  # (..., n, d_k, d_v)
+
+    # Fold the initial state into chunk 0: S_0 = M_0 S_init + C_0 (a no-op when S_init=0).
+    c0 = c_mat[..., 0, :, :] + jnp.einsum("...de,...ef->...df", m_mat[..., 0, :, :], state)
+    c_mat = c_mat.at[..., 0, :, :].set(c0)
+
+    def combine(left, right):
+        m_l, c_l = left
+        m_r, c_r = right
+        m = jnp.einsum("...ij,...jk->...ik", m_r, m_l)
+        c = jnp.einsum("...ij,...jm->...im", m_r, c_l) + c_r
+        return m, c
+
+    _, s_incl = lax.associative_scan(combine, (m_mat, c_mat), axis=-3)  # S_0..S_{n-1}
+
+    # State entering each chunk: [S_init, S_0, ..., S_{n-2}].
+    s_init = jnp.broadcast_to(state[..., None, :, :], (*lead, 1, dk, dv))
+    s_prev = jnp.concatenate([s_init, s_incl[..., :-1, :, :]], axis=-3)
+    final_state = s_incl[..., -1, :, :]
+
+    # Per-chunk outputs, all parallel: o = q_inflate S_prev + tril(attn)(v_pseudo - k_cumdecay S_prev).
+    attn = mm("...rd,...jd->...rj", q_inflate, k_deflate)
+    attn = jnp.where(strict_upper, 0.0, attn)
+    v_prime = jnp.einsum("...rd,...dm->...rm", k_cumdecay, s_prev)
+    v_new = v_pseudo - v_prime
+    inter = jnp.einsum("...rd,...dm->...rm", q_inflate, s_prev)
+    out = inter + mm("...rj,...jm->...rm", attn, v_new)
+    return out, final_state

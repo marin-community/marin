@@ -189,8 +189,23 @@ def main():
         sys.stdout.flush()
         sys.exit(3)
 
-    kda_bf16 = functools.partial(chunk_kda, matmul_dtype=jnp.bfloat16)
-    kda_fp32 = functools.partial(chunk_kda, matmul_dtype=jnp.float32)
+    kda_bf16 = functools.partial(chunk_kda, matmul_dtype=jnp.bfloat16, scan_impl="parallel")
+    kda_fp32 = functools.partial(chunk_kda, matmul_dtype=jnp.float32, scan_impl="parallel")
+    kda_seq = functools.partial(chunk_kda, matmul_dtype=jnp.bfloat16, scan_impl="sequential")
+
+    if os.environ.get("KDA_SCANIMPL") == "1":
+        args = _make_inputs(b, h, lengths[0], dk, dv)
+        for mode in ("fwd", "fwd_bwd"):
+            for c in (int(x) for x in os.environ.get("KDA_SWEEP", "64,128,256").split(",")):
+                _try("bf16 seq", kda_seq, args, c, _H100_BF16_PEAK, mode)
+                _try("bf16 parallel", kda_bf16, args, c, _H100_BF16_PEAK, mode)
+        marker = "###KDA_RESULTS###"
+        print("\n" + marker, flush=True)
+        for ln in RESULTS:
+            print(ln, flush=True)
+        print(marker, flush=True)
+        sys.stdout.flush()
+        sys.exit(3)
 
     # Correctness: default (bf16) kernel vs the sequential fp32 oracle on a small slice.
     cq, ck, cv, cg, cb = _make_inputs(2, 2, 512, dk, dv, seed=1)
