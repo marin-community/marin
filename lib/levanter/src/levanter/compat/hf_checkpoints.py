@@ -1316,26 +1316,18 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 "*.msgpack",
                 "model.safetensors",
             ]
-        elif remote_fs is not None:
-            with remote_fs.open(attributes_path) as f:
-                attributes = f.read().decode()
-            ignore_files = [".git"]
-            for line in attributes.split("\n"):
-                line = line.strip()
-                if line.startswith("#") or line == "":
-                    continue
-                if "filter=lfs" in line:
-                    ignore_files.append(line.split()[0])
         else:
-            # read the attributes file and get the globs
-            with open(attributes_path) as f:
-                attributes = f.read()
+            if remote_fs is not None:
+                with remote_fs.open(attributes_path) as f:
+                    attributes = f.read().decode()
+            else:
+                with open(attributes_path) as f:
+                    attributes = f.read()
             ignore_files = [".git"]
             for line in attributes.split("\n"):
                 line = line.strip()
                 if line.startswith("#") or line == "":
                     continue
-                # NB: this is not a full implementation of .gitattributes, but it's good enough for our purposes
                 if "filter=lfs" in line:
                     ignore_files.append(line.split()[0])
 
