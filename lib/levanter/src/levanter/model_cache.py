@@ -31,7 +31,8 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 
 import fsspec
-from huggingface_hub import hf_hub_download, list_repo_files, model_info
+from huggingface_hub import hf_hub_download, model_info
+from huggingface_hub.hf_api import RepoSibling
 from rigging.filesystem.distributed_lock import create_lock, lease_refresh
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.factory import url_to_fs
@@ -234,14 +235,43 @@ def _stream_hf_snapshot(fs: fsspec.AbstractFileSystem, dest: str, model_id: str,
     before the next download, so peak local disk is one file rather than the full
     repo.
     """
-    filenames = list_repo_files(model_id, revision=revision)
-    logger.info("streaming %d files from HF repo %s into %s", len(filenames), model_id, dest)
+    files = model_info(model_id, revision=revision, files_metadata=True).siblings
+    if files is None:
+        raise ValueError(f"Hugging Face did not return file metadata for {model_id}")
+    logger.info("streaming %d files from HF repo %s into %s", len(files), model_id, dest)
     with tempfile.TemporaryDirectory(prefix="hf_stream_") as scratch:
-        for filename in filenames:
-            local_path = hf_hub_download(model_id, filename, revision=revision, local_dir=scratch)
-            remote_path = f"{dest}/{filename}"
+        for file in files:
+            remote_path = f"{dest}/{file.rfilename}"
+            if _matches_hf_file(fs, remote_path, file):
+                continue
+            local_path = hf_hub_download(model_id, file.rfilename, revision=revision, local_dir=scratch)
+            local_fs = fsspec.filesystem("file")
+            if not _matches_hf_file(local_fs, local_path, file):
+                raise ValueError(f"Hugging Face file does not match pinned metadata: {file.rfilename}")
             # Local/posix-backed fsspec filesystems don't auto-create parents; object
             # stores treat this as a no-op since they have no real directories.
             fs.makedirs(remote_path.rsplit("/", 1)[0], exist_ok=True)
             fs.put_file(local_path, remote_path)
+            if not _matches_hf_file(fs, remote_path, file):
+                raise ValueError(f"Cached file does not match pinned metadata: {file.rfilename}")
             os.remove(local_path)
+
+
+def _matches_hf_file(fs: fsspec.AbstractFileSystem, path: str, file: RepoSibling) -> bool:
+    """Check size and content identity without relying on object-store ETags."""
+    if file.size is None or not fs.exists(path) or fs.size(path) != file.size:
+        return False
+
+    if file.lfs is not None:
+        digest = hashlib.sha256()
+        expected = file.lfs.sha256
+    elif file.blob_id is not None:
+        digest = hashlib.sha1(f"blob {file.size}\0".encode())
+        expected = file.blob_id
+    else:
+        return False
+
+    with fs.open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(8 * 1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest() == expected
