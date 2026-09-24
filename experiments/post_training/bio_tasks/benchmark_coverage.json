@@ -435,6 +435,17 @@
       "tasks_file": "benchmark_tasks/scholarqabench-bio.json",
       "source_inventory_name": "ScholarQABench \u2014 biomedicine",
       "task_inventory_status": "all public IDs and question hashes; shared protocol/scorer reviewed; individual endpoints unreviewed"
+    },
+    "LAB-Bench tool-enabled literature/database": {
+      "revision": "5c77cec648430f30611808808861eb86f81d5eaa",
+      "source_url": "https://huggingface.co/datasets/futurehouse/lab-bench/tree/5c77cec648430f30611808808861eb86f81d5eaa",
+      "inventory_count": 801,
+      "public_inventory_count": 801,
+      "training_mapping_allowed": true,
+      "distribution": "ID",
+      "tasks_file": "benchmark_tasks/labbench-literature-database.json",
+      "source_inventory_name": "LAB-Bench \u2014 tool-enabled literature / database",
+      "task_inventory_status": "all scoped public IDs and question hashes; family schemas and stem relations reviewed; individual endpoints unreviewed"
     }
   },
   "assessment_policy": "ID workflow prerequisites are manually inferred from permitted task descriptions. Shared family stages may exceed an individual endpoint; assess that endpoint before claiming coverage. Benchmark answers and biological fixtures are excluded from authoring."

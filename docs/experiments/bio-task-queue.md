@@ -1,11 +1,12 @@
 # Biology workflow authoring queue
 
 The [question portfolio](../../experiments/post_training/bio_tasks/workflow_portfolio.json)
-accounts for all **4,332 inventoried task, protocol or dataset-definition records
-across 31 ID releases**. It links 2,480 records to scientific question proposals,
+accounts for all **5,133 inventoried task, protocol or dataset-definition records
+across 32 ID releases**. It links 2,480 records to scientific question proposals,
 links 50 known BixBench-Verified aliases to their original designs, preserves 350
-SciGym systems and 1,451 ScholarQA-Bio questions as individual-endpoint review gaps,
-and retains one excluded objective. Ten provisional-ID source leads still lack task inventories.
+SciGym systems, 1,451 ScholarQA-Bio questions and 801 LAB-Bench questions as
+individual-endpoint review gaps, and retains one excluded objective. Nine provisional-ID
+source leads still lack task inventories.
 
 The portfolio contains **676 question cards and 635 proposed task groups**, including
 25 conditional combinations of question cards. These are planning units, with
@@ -36,8 +37,8 @@ retains assessed target IDs, conditional gains and overlap; the
 [coverage inventories](../../experiments/post_training/bio_tasks/benchmark_tasks/README.md)
 remain authoritative for validated mappings.
 
-The plan groups 552 benchmark/family combinations for review. Fifty known
-BixBench-Verified aliases reduce the record count to 4,282, or 4,281 after the one
+The plan groups 561 benchmark/family combinations for review. Fifty known
+BixBench-Verified aliases reduce the record count to 5,083, or 5,082 after the one
 excluded objective. Other shared studies, assays and protocols are not automatically
 independent workflows. Workstream membership alone does not show that a proposed
 question completes a benchmark endpoint, and the proposed question count is not a
@@ -221,6 +222,7 @@ The expanded portfolio also includes the following source-specific plans:
 | [SciGym](../../experiments/post_training/bio_tasks/workflow_designs/scigym.json) | 350 | 3 | All supplied input structures audited; shared observed-dynamics adaptations, zero biological endpoint assignments |
 | [BixBench-Verified-50](../../experiments/post_training/bio_tasks/workflow_designs/bixbench-verified-50.json) | 50 | 0 new | Known aliases; 17 revised question texts retain separate protocol review |
 | [ScholarQA-Bio](../../experiments/post_training/bio_tasks/workflow_designs/scholarqabench-bio.json) | 1,451 | 0 | All public question identities/hashes; individual scientific endpoints and deterministic adaptations unreviewed |
+| [LAB-Bench literature/database](../../experiments/post_training/bio_tasks/workflow_designs/labbench-literature-database.json) | 801 | 0 | Nine shared family contracts; individual candidate sets and literature evidence unreviewed |
 
 [ScholarQA-Bio's public file](../../experiments/post_training/bio_tasks/benchmark_tasks/scholarqabench-bio.json)
 contains 1,451 distinct question IDs. Its source protocol produces long-form literature
@@ -232,10 +234,19 @@ must determine whether a complete deterministic adaptation is possible.
 
 The remaining source leads now retain publication-level boundaries in the source
 inventory. BioASQ requires selecting a specific agentic protocol and release; its
-retrieval/exact-answer metrics do not cover ideal-summary quality. LAB-Bench needs a
-tool-enabled subset and alias check against Biomni-Eval1. Restricted suites and
+retrieval/exact-answer metrics do not cover ideal-summary quality. Restricted suites and
 model-judged scientific opinions remain explicit gaps, with no invented task count
 or coverage.
+
+The LAB-Bench source is scoped to public DbQA (520), LitQA2 (199) and SuppQA (82)
+questions. All IDs, question hashes and twelve source subtask labels are inventoried;
+other categories and private questions are outside this source row. Nine family
+contracts identify candidate Harbor questions, including complete versioned database
+queries and bounded literature/supplement evidence extraction. No individual question
+is assigned yet. Ideal answers, distractors and key-passage columns were not read.
+All fifty Biomni-Eval1 DbQA stems occur in this release; twenty match multiple source
+IDs. DbQA has 328 distinct trimmed stems across 520 records. Candidate choices can
+change the task even when the stem matches, so these relations add no alias credit.
 
 The original BixBench notebook source now shares the existing pinned 205-question
 inventory with the Harbor source row. The upstream notebook loader and default

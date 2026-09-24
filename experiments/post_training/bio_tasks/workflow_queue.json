@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T17:00:10.331718+00:00",
+  "updated_at": "2026-09-24T17:07:21.920743+00:00",
   "basis_revision": "c3a42fa5cf",
   "scope": "Provisional ID agentic benchmarks only. This queue selects new authoring work; it does not change benchmark coverage states.",
   "selection_policy": {
@@ -23,7 +23,7 @@
     "scope_limit": "Ranks compare the currently assessed candidate set, not all possible workflows in all releases. Source-review backlog entries remain explicit and can change the ranking."
   },
   "selected_candidate": null,
-  "selection_reason": "Question portfolio now accounts for all 4,332 inventoried records. Review its conditional consolidations, source inspection limits and input/acceptance contracts before selecting implementation work. The eight earlier assessed gains remain conditional and are not a global ranking.",
+  "selection_reason": "Question portfolio now accounts for all 5,133 inventoried records. Review its conditional consolidations, source inspection limits and input/acceptance contracts before selecting implementation work. The eight earlier assessed gains remain conditional and are not a global ranking.",
   "candidates": [
     {
       "id": "multi-locus-phylogenomic-signal",
@@ -1167,12 +1167,6 @@
       "reason": "Primary abstract describes structure retrieval, sequence generation and design validation using biological AI tools; no task-level manifest inspected. Observed-structure retrieval and artifact validation may inform limited components; generated designs are not observed biological outcomes and do not establish full source coverage."
     },
     {
-      "name": "LAB-Bench \u2014 tool-enabled literature / database",
-      "source_url": "https://arxiv.org/abs/2407.10362",
-      "priority_score": null,
-      "reason": "Raw card inspected: DbQA has 520 public rows and LitQA2 199; eight categories overall. No agentic-only selection or exact overlap with Biomni-Eval1 has been established. Inventory only the sheet-scoped tool-enabled literature/database protocol after selection and alias review. Exclude answer/distractor columns and source biological fixtures."
-    },
-    {
       "name": "BioASQ \u2014 retrieval / end-to-end QA",
       "source_url": "https://www.bioasq.org/",
       "priority_score": null,
@@ -1227,8 +1221,8 @@
   "portfolio_plan": "workflow_plan.json",
   "authoring_phase": "question-portfolio-planning",
   "portfolio_review_progress": {
-    "source_releases": 31,
-    "inventory_records": 4332,
+    "source_releases": 32,
+    "inventory_records": 5133,
     "question_cards": 676,
     "proposed_task_groups": 635,
     "conditional_consolidations": 25,
@@ -1237,9 +1231,9 @@
     "excluded_records": 1,
     "validated_new_mappings": 0,
     "portfolio_file": "workflow_portfolio.json",
-    "portfolio_sha256": "2e19a3f62ee3e9dbc07b13403e2c890878bb99ae682f1f8bb36c9c99b90bdeb6",
+    "portfolio_sha256": "d5284d0801a638455d30c55d5a75ad309831eb7c505b9be4f464e715b46bb361",
     "limit": "All 30 original cross-card combinations have scientific planning dispositions; 25 remain conditional. Complete input and acceptance contracts, individual-card review and inaccessible-source dispositions are still required. No implementation is selected and validated coverage is unchanged.",
-    "question_records_with_gap_dispositions": 1451,
+    "question_records_with_gap_dispositions": 2252,
     "system_records_with_endpoint_gap_dispositions": 350
   }
 }

@@ -83,3 +83,11 @@ IDs and text hashes without copying prompts or inspiring papers. Shared literatu
 retrieval/synthesis stages are inspected; individual endpoints remain unreviewed.
 Its model-based citation attribution is not used as a reward. A deterministic
 extraction or retrieval component cannot claim full open-ended synthesis coverage.
+
+The [LAB-Bench literature/database inventory](labbench-literature-database.json)
+contains 801 public IDs and question hashes from DbQA, LitQA2 and SuppQA. Its
+[family contracts and overlap review](../workflow_designs/labbench-literature-database.json)
+retain all fifty Biomni DbQA stem matches without assigning alias credit: twenty
+have multiple source matches, and candidate sets were not inspected. The original
+multiple-choice answers, distractors and supporting passages are excluded from
+inspection; individual endpoint/evidence review remains open. Authored tasks use Harbor.

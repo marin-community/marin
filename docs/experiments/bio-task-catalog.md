@@ -326,9 +326,10 @@ benchmark answers and biological fixtures are excluded from training authoring.
 | [SciGym](../../experiments/post_training/bio_tasks/benchmark_tasks/scigym.json) | All 350 supplied model structures audited; biological endpoints and observed-data adaptations unresolved | — |
 | [BioKGBench KGCheck](../../experiments/post_training/bio_tasks/benchmark_tasks/biokgbench.json) | All 225 agentic rows; shared instructions and final scorer reviewed, individual evidence uninspected | — |
 | [ScholarQA-Bio](../../experiments/post_training/bio_tasks/benchmark_tasks/scholarqabench-bio.json) | All 1,451 public question IDs/hashes; shared literature protocol and citation scorer inspected, individual endpoints unreviewed | — |
+| [LAB-Bench literature/database](../../experiments/post_training/bio_tasks/benchmark_tasks/labbench-literature-database.json) | 801 public IDs/hashes across DbQA, LitQA2 and SuppQA; family schemas and stem relations assessed, individual endpoints unreviewed | Private subset not enumerated |
 
-Of these 4,332 ID task/protocol/definition records, 47 have manually assessed component mappings,
-4,283 are unmapped, one assembly-contiguity workflow is validated on independent
+Of these 5,133 ID task/protocol/definition records, 47 have manually assessed component mappings,
+5,084 are unmapped, one assembly-contiguity workflow is validated on independent
 observed PhiX reads, and one is excluded from authoring. Other eligible sources
 still need task-level inspection. The 90
 [BioMysteryBench identifiers](../../experiments/post_training/bio_tasks/benchmark_tasks/biomysterybench.json)

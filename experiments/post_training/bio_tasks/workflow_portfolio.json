@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T17:00:10.331718+00:00",
-  "scope": "Full question-proposal portfolio for the 31 currently inventoried provisional-ID agentic releases. This planning index resolves every question card and records conditional consolidation; it creates no training task or validated coverage. Ten source leads without inventories remain outside the enumerated denominator.",
+  "updated_at": "2026-09-24T17:07:21.920743+00:00",
+  "scope": "Full question-proposal portfolio for the 32 currently inventoried provisional-ID agentic releases. This planning index resolves every question card and records conditional consolidation; it creates no training task or validated coverage. Nine source leads without inventories remain outside the enumerated denominator.",
   "counts": {
-    "source_releases": 31,
-    "inventory_records": 4332,
+    "source_releases": 32,
+    "inventory_records": 5133,
     "question_cards": 676,
     "proposed_task_groups": 635,
     "conditional_consolidations": 25,
@@ -12,7 +12,7 @@
     "known_cross_release_alias_records": 50,
     "excluded_records": 1,
     "validated_new_mappings": 0,
-    "question_records_with_gap_dispositions": 1451,
+    "question_records_with_gap_dispositions": 2252,
     "system_records_with_endpoint_gap_dispositions": 350
   },
   "interpretation": [
@@ -21,7 +21,8 @@
     "Conditional consolidation is a proposed scientific task, not a proved equivalence. If compatible independent inputs, methods and <=30-minute runtime do not exist, split it back into coherent questions and preserve uncovered source IDs.",
     "Do not turn registry configurations, repeated assays, source protocol variants or known aliases into automatic independent workflow credit.",
     "Scientific realism governs task boundaries. One task may use several native tools and produce many intermediate artifacts when they answer one question; unrelated estimands stay separate.",
-    "ScholarQA-Bio contributes 1,451 enumerated question identities with unreviewed endpoint dispositions. These have no question-card assignments; source citation attribution uses a learned model, and deterministic numerical extraction does not cover unrestricted synthesis."
+    "ScholarQA-Bio contributes 1,451 enumerated question identities with unreviewed endpoint dispositions. These have no question-card assignments; source citation attribution uses a learned model, and deterministic numerical extraction does not cover unrestricted synthesis.",
+    "LAB-Bench contributes 801 scoped literature/database identities and nine shared family contracts. All retain individual endpoint gaps. Fifty Biomni DbQA stems overlap, with twenty ambiguous source matches; no additional aliases are credited."
   ],
   "source_question_files": [
     {
@@ -95,6 +96,10 @@
     {
       "path": "workflow_designs/bioagent.json",
       "sha256": "fa5b2d39922401b476245038b8c50a29ffc9e59093961ed1885c010c49ac1c8f"
+    },
+    {
+      "path": "workflow_designs/labbench-literature-database.json",
+      "sha256": "8e2ed877ebd16f095655769d008d25a753b51106cbb11e01258f0cf84c391418"
     }
   ],
   "question_groups": [
