@@ -27,9 +27,9 @@ from marin.rl.skyrl import (
     IRIS_HUB_CLUSTER_CONFIG,
     ArtifactHfModel,
     IrisSkyRLExecution,
-    SkyRLModel,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
+    SkyRLRun,
     SkyRLRuntime,
     SkyRLRuntimeProfile,
     SkyRLSpec,
@@ -195,7 +195,7 @@ trajectory_runner:
 """
 
 
-def smoke_step(release: ArtifactStep) -> ArtifactStep[SkyRLModel]:
+def smoke_step(release: ArtifactStep) -> ArtifactStep[SkyRLRun]:
     name = user_owned_name(RL_ARTIFACT_NAME)
     return skyrl_step(
         SkyRLSpec(
