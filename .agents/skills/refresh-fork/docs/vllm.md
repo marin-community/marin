@@ -115,11 +115,15 @@ gh workflow run marin-gpu-release.yaml \
   -f qualification_only=true
 ```
 
-The first workflow publishes exact staged wheel bytes outside the scheduled
-candidate pool. The second validates those bytes on the configured GPU hardware
-without publishing a final release. Download the staged candidate manifest and
-temporarily re-pin Marin before Snowball so the parity job resolves the same
-x86_64 wheel instead of the old stable release:
+The first workflow runs from `main-next` and publishes wheels containing that
+exact source outside the scheduled candidate pool. The second runs the trusted
+qualification harness from `main`, downloads those staged wheels, and validates
+them on the configured GPU hardware without publishing a final release. Its
+`--ref main` selects the harness; it does not change the code inside the wheels.
+
+Download the staged candidate manifest and temporarily re-pin Marin before
+Snowball so the parity job resolves the same x86_64 wheel instead of the old
+stable release:
 
 ```sh
 gh release download <exact-staged-candidate-tag> \
@@ -132,10 +136,11 @@ uv run pytest tests/cluster/vllm/test_snowball_backend_parity.py \
 ```
 
 Record the candidate tag, source SHA, x86_64 URL, digest, and Snowball run with
-the qualification evidence. Promote `main-next` to protected `main` only after
-the GPU gates and review, using the rollback tags and lease in
-`promotion-protocol.md`. Then reuse the successful qualification run from the
-trusted `main` workflow to publish the final release without another GPU wave:
+the qualification evidence. The fork's GPU qualification and Marin's Snowball
+end-to-end must both pass before promotion. Then promote `main-next` to protected
+`main` using the rollback tags and lease in `promotion-protocol.md`, and reuse
+the successful qualification run to publish the final release without another
+GPU wave:
 
 ```sh
 gh workflow run marin-gpu-release.yaml \
