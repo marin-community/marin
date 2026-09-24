@@ -2,13 +2,13 @@
 
 The [question portfolio](../../experiments/post_training/bio_tasks/workflow_portfolio.json)
 accounts for all **5,133 inventoried task, protocol or dataset-definition records
-across 32 ID releases**. It links 2,480 records to scientific question proposals,
+across 32 ID releases**. It links 2,538 records to scientific question proposals,
 links 50 known BixBench-Verified aliases to their original designs, preserves 350
-SciGym systems, 1,451 ScholarQA-Bio questions and 801 LAB-Bench questions as
+SciGym systems, 1,451 ScholarQA-Bio questions and 743 LAB-Bench questions as
 individual-endpoint review gaps, and retains one excluded objective. Nine provisional-ID
 source leads still lack task inventories.
 
-The portfolio contains **676 question cards and 635 proposed task groups**, including
+The portfolio contains **692 question cards and 651 proposed task groups**, including
 25 conditional combinations of question cards. These are planning units, with
 substantial differences in source inspection depth. They add zero validated mappings
 and do not set a target dataset size. Each combined question retains all member
@@ -222,7 +222,7 @@ The expanded portfolio also includes the following source-specific plans:
 | [SciGym](../../experiments/post_training/bio_tasks/workflow_designs/scigym.json) | 350 | 3 | All supplied input structures audited; shared observed-dynamics adaptations, zero biological endpoint assignments |
 | [BixBench-Verified-50](../../experiments/post_training/bio_tasks/workflow_designs/bixbench-verified-50.json) | 50 | 0 new | Known aliases; 17 revised question texts retain separate protocol review |
 | [ScholarQA-Bio](../../experiments/post_training/bio_tasks/workflow_designs/scholarqabench-bio.json) | 1,451 | 0 | All public question identities/hashes; individual scientific endpoints and deterministic adaptations unreviewed |
-| [LAB-Bench literature/database](../../experiments/post_training/bio_tasks/workflow_designs/labbench-literature-database.json) | 801 | 0 | Nine shared family contracts; individual candidate sets and literature evidence unreviewed |
+| [LAB-Bench literature/database](../../experiments/post_training/bio_tasks/workflow_designs/labbench-literature-database.json) | 801 | 16 | All 82 supplementary stems/citations reviewed: 58 provisional targets and 24 explicit gaps; source evidence remains uninspected |
 
 [ScholarQA-Bio's public file](../../experiments/post_training/bio_tasks/benchmark_tasks/scholarqabench-bio.json)
 contains 1,451 distinct question IDs. Its source protocol produces long-form literature
@@ -240,10 +240,17 @@ or coverage.
 
 The LAB-Bench source is scoped to public DbQA (520), LitQA2 (199) and SuppQA (82)
 questions. All IDs, question hashes and twelve source subtask labels are inventoried;
-other categories and private questions are outside this source row. Nine family
-contracts identify candidate Harbor questions, including complete versioned database
-queries and bounded literature/supplement evidence extraction. No individual question
-is assigned yet. Ideal answers, distractors and key-passage columns were not read.
+other categories and private questions are outside this source row. All 82 supplementary
+question stems and citation records have now been reviewed: 58 route to sixteen
+provisional Harbor study-audit questions, while 24 retain explicit interpretation,
+context or domain-scope gaps. The questions cover cohort/QC reconciliation, model
+results, proteomic evidence, assay measurements, structure/imaging metadata and
+reported reagent/sequence provenance. They preserve original units, sample hierarchy,
+reported-versus-recomputed values and exact evidence locations. Inputs must retain
+complete relevant observed study records; answer-only tables are insufficient.
+The 719 database/literature questions still need individual review. Source supplements,
+ideal answers, distractors and key passages were not read; independent input packages
+and complete acceptance contracts remain open, with no validated coverage added.
 All fifty Biomni-Eval1 DbQA stems occur in this release; twenty match multiple source
 IDs. DbQA has 328 distinct trimmed stems across 520 records. Candidate choices can
 change the task even when the stem matches, so these relations add no alias credit.

@@ -13,7 +13,8 @@
     "subtasks": 12,
     "workflow_families": 9,
     "individual_endpoint_reviews": 0,
-    "inspection": "All question identifiers, text hashes and source subtask labels enumerated. Shared schemas and database-stem relations assessed; individual candidate sets and literature evidence unreviewed."
+    "inspection": "All scoped identifiers, text hashes and subtask labels enumerated. All 82 SuppQA stems and citation metadata reviewed: 58 routed to provisional questions, 24 explicit gaps. Source supplements, choices and expected answers uninspected.",
+    "individual_question_stems_reviewed": 82
   },
   "source_files": [
     {
@@ -72,12 +73,19 @@
       "excluded_columns": [
         "ideal",
         "distractors",
-        "canary",
-        "source",
-        "sources",
-        "key-passage",
-        "paper-title"
-      ]
+        "canary"
+      ],
+      "additional_projection": {
+        "columns": [
+          "id",
+          "question",
+          "paper-title",
+          "source",
+          "subtask"
+        ],
+        "question_source_metadata_sha256": "d67fa60f5561083b0a0b99cef5ba9c100f76e0c90a2d04fb2567bcc546428749",
+        "scope": "Citation identifiers and paper titles only; no supplementary materials retrieved."
+      }
     }
   ],
   "question_only_metadata_sha256": "ead3b9ebe5bfbad5a8c98d87c60a98ae53d8756d9147f0a0d5b2e456aa226641",
@@ -6675,7 +6683,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "e372ee37ec3d8e9bbcfb7a050f4ca6d357ad68b794103efc2d6620186a14a35c"
+      "source_question_sha256": "e372ee37ec3d8e9bbcfb7a050f4ca6d357ad68b794103efc2d6620186a14a35c",
+      "source_citation_url": "https://doi.org/10.1038/nature20098",
+      "source_title_sha256": "3e7c5f39e772e822675986b26c0b8646626ae654c77e3b64a0b42d304f2dd360",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": null,
+        "remaining_gap": "The reported allosome gap-spanning criterion needs its full definition and logical conditions before a deterministic acceptance rule can be chosen."
+      }
     },
     {
       "task_id": "SuppQA:a49b9aa0-8b29-47ba-a757-9f247b37b47a",
@@ -6683,7 +6699,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "9e52739757a239ab4df1f61aaa67a2aaff60d7b23bddd88d0d883012bd832027"
+      "source_question_sha256": "9e52739757a239ab4df1f61aaa67a2aaff60d7b23bddd88d0d883012bd832027",
+      "source_citation_url": "https://doi.org/10.1016/j.cub.2024.02.040",
+      "source_title_sha256": "0cd1a1886fd0914989553aa6988ab5f12880e9f8c2b04d4ea90a5b16dec30288",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-sequencing-qc",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:b6b4077d-a0db-4d26-9b3c-57fc469ad431",
@@ -6691,7 +6715,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "aaefb2b2d44b87774805bf1d3ba77ad07aa354c6fe4832bfcc5fc4893f7e58c6"
+      "source_question_sha256": "aaefb2b2d44b87774805bf1d3ba77ad07aa354c6fe4832bfcc5fc4893f7e58c6",
+      "source_citation_url": "https://doi.org/10.1038/s44320-024-00018-9",
+      "source_title_sha256": "5f9377ad012fb311962b22c51dd7ac594758affb8d39d5d0dc56c68d18d50d32",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": null,
+        "remaining_gap": "The question requests a conclusion about UTR effects; choices, measured effect context and inferential target are missing from the inspected metadata."
+      }
     },
     {
       "task_id": "SuppQA:58c7753e-549d-4fea-86b2-54fbdbf7ada9",
@@ -6699,7 +6731,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "8a9201d8768b63ef9d35425e2be6d6b087234b5f895b558ca6f1e886f10ece0e"
+      "source_question_sha256": "8a9201d8768b63ef9d35425e2be6d6b087234b5f895b558ca6f1e886f10ece0e",
+      "source_citation_url": "https://doi.org/10.1038/nmeth.4154",
+      "source_title_sha256": "9f5a7dd40f94bc0a177760e9825440644bcb236b658bd9006f977b6fdebb3897",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-reported-conditions",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:7faf65d7-55c9-4586-9e1e-9d4e39e93601",
@@ -6707,7 +6747,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "b627f3b7571a8b70f78300bf3d6ee89aaf6324c47e4038b573b9390149530dc5"
+      "source_question_sha256": "b627f3b7571a8b70f78300bf3d6ee89aaf6324c47e4038b573b9390149530dc5",
+      "source_citation_url": "https://doi.org/10.1016/j.cell.2024.03.022",
+      "source_title_sha256": "8222deb3ef4ef6e0158c602d6441c13b405a0e9ecc12e2547281667aebe5f4b4",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-structure-ligands",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:70be3149-5beb-443f-bfe8-cf14da0dd59c",
@@ -6715,7 +6763,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "0ce827da65fe91a201b6a32013369b2d72d65ac425b4b5d5d2b23c5554d03035"
+      "source_question_sha256": "0ce827da65fe91a201b6a32013369b2d72d65ac425b4b5d5d2b23c5554d03035",
+      "source_citation_url": "https://doi.org/10.1038/s41467-023-44271-2",
+      "source_title_sha256": "4fbcb2df84f64150a85638cfcc959bbbdd2c906281ada57829ae437eb5f7ede7",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-computational-provenance",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:b5dbe6b5-95e5-4c1a-810f-8877c6d46c72",
@@ -6723,7 +6779,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "a08e6b70179e8126f7552ed4503e7c1d23fcded81a3e8269f2ad43db9b8fcb00"
+      "source_question_sha256": "a08e6b70179e8126f7552ed4503e7c1d23fcded81a3e8269f2ad43db9b8fcb00",
+      "source_citation_url": "https://doi.org/10.1016/j.cub.2024.02.036",
+      "source_title_sha256": "9592cc14122c07ce7ba532f0248b6b83532a6ca0f0d4e97f8acd8ad3c9ab6867",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-oligo-catalog",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:ea25f382-3885-4294-875e-10fccf6f4b3c",
@@ -6731,7 +6795,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "77e0fef135a833cc4d063c8b0a858299b9f5a9479f707a3f36f4515681b65a92"
+      "source_question_sha256": "77e0fef135a833cc4d063c8b0a858299b9f5a9479f707a3f36f4515681b65a92",
+      "source_citation_url": "https://doi.org/10.1038/s41592-021-01358-2",
+      "source_title_sha256": "2a3767ab4cc2b0ab12a8bdf2c2752cc7b57124438ff2423102f2d6c6f4ecef6e",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-computational-provenance",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:2af1880c-a4dc-4da2-b4d5-131ef96c6350",
@@ -6739,7 +6811,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "64f4682aed629cb3406c769d6fe849181a6424ce24d52d47bc4cb9e97583b6c7"
+      "source_question_sha256": "64f4682aed629cb3406c769d6fe849181a6424ce24d52d47bc4cb9e97583b6c7",
+      "source_citation_url": "https://doi.org/10.1038/s41586-021-03775-x",
+      "source_title_sha256": "0d46928a1885ed00b73fbd1970079c734441a5a32378cc1c23dd72763ba11e6b",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": null,
+        "remaining_gap": "Sample-size determination may require interpreting study-design rationale; inspect the reported method and question choices before assigning an exact-output adaptation."
+      }
     },
     {
       "task_id": "SuppQA:2a34cefb-d28e-426e-a925-829bda3435d8",
@@ -6747,7 +6827,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "c282fc09ce8b3b011ffe362e73df20935b2feb5dbad0679013c21a18979eb34c"
+      "source_question_sha256": "c282fc09ce8b3b011ffe362e73df20935b2feb5dbad0679013c21a18979eb34c",
+      "source_citation_url": "https://doi.org/10.1038/nmeth.4341",
+      "source_title_sha256": "6d7991e0babe48aa748571f1b515966d3c67b31416b21b1e2720d7facb58a096",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-cohort-accounting",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:72434cfd-5cda-48e3-942f-12c99104b8a1",
@@ -6755,7 +6843,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "49920213d55faa73f89ea4802e8ed14418b36a7b732e47c73afd0c921749e66c"
+      "source_question_sha256": "49920213d55faa73f89ea4802e8ed14418b36a7b732e47c73afd0c921749e66c",
+      "source_citation_url": "https://doi.org/10.1038/s42256-023-00726-1",
+      "source_title_sha256": "e4aff03bae52aa43c874a2873b44dd68206638ba1aad427ec67b6add7e61b91e",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": null,
+        "remaining_gap": "The inspected citation/Sphere question is non-biological; retain as a domain-scope gap rather than credit it through a generic retrieval task."
+      }
     },
     {
       "task_id": "SuppQA:a140f0c0-8b5c-4670-8716-22c93ad45c06",
@@ -6763,7 +6859,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "3b800d8f7550791965b887afad74ba361280d1228b8bb30e1688e9d1ca584bd3"
+      "source_question_sha256": "3b800d8f7550791965b887afad74ba361280d1228b8bb30e1688e9d1ca584bd3",
+      "source_citation_url": "https://doi.org/10.1038/s44320-024-00034-9",
+      "source_title_sha256": "6aaae4afdf25918f20f974da6fc216fbd3b93ac9fe379ce0a4b0debfe3cc7c81",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-sequencing-qc",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:823bc7ee-a275-46a2-8143-7aaf057fe331",
@@ -6771,7 +6875,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "c835f2ca371814ac57e87c9cd27dfb95b83f67880d4957a11a1fdeac66ce150a"
+      "source_question_sha256": "c835f2ca371814ac57e87c9cd27dfb95b83f67880d4957a11a1fdeac66ce150a",
+      "source_citation_url": "https://doi.org/10.1038/s41589-023-01349-8",
+      "source_title_sha256": "f2d8690dd1cb5871aaab5747d66874a921a57b858c5c31dcf4255cf2ff228687",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": null,
+        "remaining_gap": "A chemical-synthesis reagent count needs source scope and constituent/mixture counting conventions; biological adaptation is not yet established."
+      }
     },
     {
       "task_id": "SuppQA:05e60207-57a7-4b6b-b294-354893a3d246",
@@ -6779,7 +6891,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "0a4d8fddd7bfe12851af335f469344a2317e7b24202b3cf70321d31b04005fdb"
+      "source_question_sha256": "0a4d8fddd7bfe12851af335f469344a2317e7b24202b3cf70321d31b04005fdb",
+      "source_citation_url": "https://doi.org/10.1038/s41586-021-04249-w",
+      "source_title_sha256": "d4e423742b5043daf3bc22a0acc074742d629fb475bd8a28b1fc1112842f6a96",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-predictive-performance",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:37730e76-f5dc-42be-91c1-3f69147b465a",
@@ -6787,7 +6907,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "125987985e0842b094ebba805cf81a072f841ad75d7ee9b5bf176cec23c0661b"
+      "source_question_sha256": "125987985e0842b094ebba805cf81a072f841ad75d7ee9b5bf176cec23c0661b",
+      "source_citation_url": "https://doi.org/10.1016/j.cell.2024.02.025",
+      "source_title_sha256": "d19a30a314d2a67bc7dc65d91f79ccf0c38f63527b1b36bfeb4f32b844f7f149",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-cohort-accounting",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:3041bea7-5161-44e8-abcd-ebfb404a1553",
@@ -6795,7 +6923,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "b4f3b0acb21eaf507936fc497be43b4e3a89ca4b9ff4c25f8bb17934a7def535"
+      "source_question_sha256": "b4f3b0acb21eaf507936fc497be43b4e3a89ca4b9ff4c25f8bb17934a7def535",
+      "source_citation_url": "https://doi.org/10.1186/s12915-024-01866-5",
+      "source_title_sha256": "fdbc4de30a7f2942597ba62ccfb2fce71e22fcd2b9dfb9f92474bf79d9f1c615",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-cohort-accounting",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:d454257b-b65f-4ed8-9873-07d0d685fb40",
@@ -6803,7 +6939,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "de45a78ae203aca43866a2e38c2454cc87d3e94dd28e40f519ba99e04ff20112"
+      "source_question_sha256": "de45a78ae203aca43866a2e38c2454cc87d3e94dd28e40f519ba99e04ff20112",
+      "source_citation_url": "https://doi.org/10.1038/nature13400",
+      "source_title_sha256": "b154984dde7ded1b10627340e98fd0b6b46c9aa9c912dd5c81a65b58ccc7e430",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-sequencing-qc",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:de9956c2-4b42-4529-8926-48848c8237f6",
@@ -6811,7 +6955,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "bb66cc8345c2c32c8d1c962eafd97d011769426dd0f5f9bc6980a09db6bc41fb"
+      "source_question_sha256": "bb66cc8345c2c32c8d1c962eafd97d011769426dd0f5f9bc6980a09db6bc41fb",
+      "source_citation_url": "https://doi.org/10.1038/s41551-022-00912-3",
+      "source_title_sha256": "1d96a87d81db92e22a6be48c080ecc351ea8ac91744768c6fa1f9d5e6cf83b96",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-cohort-accounting",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:311df379-df7a-4410-a32a-8bbb79376304",
@@ -6819,7 +6971,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "9777a4668a620dd2f59b8fa3ae9de8d64ef6ff1f66ea8365c601e34ea3ead734"
+      "source_question_sha256": "9777a4668a620dd2f59b8fa3ae9de8d64ef6ff1f66ea8365c601e34ea3ead734",
+      "source_citation_url": "https://doi.org/10.1093/nar/gkae093",
+      "source_title_sha256": "fc3c4fc7381157b1deac5229c573479ca0b8121f645a415229f5ebaa5d9a0088",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-proteomic-evidence",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:5a974da2-cca9-49e1-a421-e6d3ad9c17ee",
@@ -6827,7 +6987,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "c8cdfadcc1578bcc4cbc94515393cbee1a996909c319d21f0ff7ee545fe4f4f7"
+      "source_question_sha256": "c8cdfadcc1578bcc4cbc94515393cbee1a996909c319d21f0ff7ee545fe4f4f7",
+      "source_citation_url": "https://doi.org/10.7554/eLife.86933.3",
+      "source_title_sha256": "789776ec34e5f269184bfc4a2b7316e3f0c9087c0142094ed7eb28f650cee306",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-cohort-accounting",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:b3d8ddd1-4829-405c-b72b-f5dcf114636f",
@@ -6835,7 +7003,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "8debc1df69846e1739849fed7c0c7812268c00a335c31116fdaaa5faabacae74"
+      "source_question_sha256": "8debc1df69846e1739849fed7c0c7812268c00a335c31116fdaaa5faabacae74",
+      "source_citation_url": "https://doi.org/10.1038/nmeth.3441",
+      "source_title_sha256": "bb2c384137bd84e3535bbaa52e27278e37b6b88438e14f75e727c13247dce275",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": null,
+        "remaining_gap": "The conditions under which a statistical prior is discouraged require exact method assumptions; literal citation matching cannot establish the recommendation."
+      }
     },
     {
       "task_id": "SuppQA:74884486-15bc-45de-9174-2efe35a2c8fc",
@@ -6843,7 +7019,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "29370ec9c89aaf69a5357ac40d057887c496cc8860e48afdee6743189e843c82"
+      "source_question_sha256": "29370ec9c89aaf69a5357ac40d057887c496cc8860e48afdee6743189e843c82",
+      "source_citation_url": "https://doi.org/10.1093/nar/gkae039",
+      "source_title_sha256": "50013b9ae5bdde326b9232fdfcbe385262924c5523877687fabcc65015de6c28",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-predictive-performance",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:27685d85-ec01-4ba0-a690-35a89b609105",
@@ -6851,7 +7035,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "351dac913ff2e8dc9006d268bd3abd462653589da73fe77e79ccd63d9b315f4e"
+      "source_question_sha256": "351dac913ff2e8dc9006d268bd3abd462653589da73fe77e79ccd63d9b315f4e",
+      "source_citation_url": "https://doi.org/10.1038/nmeth999",
+      "source_title_sha256": "774b5930b15c4e3f2389793a3fd9471dd91ee9a0ac0db9991a866c5d5c608e17",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": null,
+        "remaining_gap": "Only a question stem and article citation about a viral tracing study were reviewed; independent benign context and complete reagent evidence remain unresolved."
+      }
     },
     {
       "task_id": "SuppQA:0348e600-f5cc-4fa8-89eb-d2cb3ae18752",
@@ -6859,7 +7051,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "eeda577b8ad84d4fce901e4b89693d11f61cd5cb42588e83e7327fdbe703bdb2"
+      "source_question_sha256": "eeda577b8ad84d4fce901e4b89693d11f61cd5cb42588e83e7327fdbe703bdb2",
+      "source_citation_url": "https://doi.org/10.1038/s41592-022-01569-1",
+      "source_title_sha256": "b296f39ffab2cf1e6c135396888a337cb776caa4ec7fc9cbce8ad5f168de4ceb",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-staining-reagents",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:e77c9e8d-087c-4be1-90b5-987f36cbc27a",
@@ -6867,7 +7067,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "97d2805aa38f6b6e4dc7a5f73403c2ab63e222a0fbc6477bbe971c92b55ada96"
+      "source_question_sha256": "97d2805aa38f6b6e4dc7a5f73403c2ab63e222a0fbc6477bbe971c92b55ada96",
+      "source_citation_url": "https://doi.org/10.1371/journal.pbio.3002453",
+      "source_title_sha256": "567758182f5460e5ffab7261c8473eb83b90b0b1d227b1ed8082f9a186ea2c13",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": null,
+        "remaining_gap": "A cell-growth model assumption needs the actual equation and applicability conditions; a numeric simulation alone would not preserve this endpoint."
+      }
     },
     {
       "task_id": "SuppQA:aa904a36-3656-45a8-a0d2-912c04dd2558",
@@ -6875,7 +7083,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "5f53fdee5f4cd634f9114af16f7f79ec002a3ce326f6f2df50e0b718cab1823d"
+      "source_question_sha256": "5f53fdee5f4cd634f9114af16f7f79ec002a3ce326f6f2df50e0b718cab1823d",
+      "source_citation_url": "https://doi.org/10.1038/s41586-021-04358-6",
+      "source_title_sha256": "7a3f6cdf5d04e427cd2caeff63b50a62a41ffdf3358650d24ff928a75630d585",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-expression-evidence",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:966e60e1-6b15-4105-b2a4-b1859e1963fc",
@@ -6883,7 +7099,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "8e04ccf5d488d9d85f376082f236643e2ba83d548c367f60c03295af74962092"
+      "source_question_sha256": "8e04ccf5d488d9d85f376082f236643e2ba83d548c367f60c03295af74962092",
+      "source_citation_url": "https://doi.org/10.1016/j.cell.2021.04.029",
+      "source_title_sha256": "2a2d3c7f96ab64bd730c3aace9be82eab7cbe4027003092480ca345227711ed2",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-imaging-metadata",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:c81b515b-c24d-4937-b972-67d89fc7a09f",
@@ -6891,7 +7115,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "01c8b41ff906cd5c3d0f6c10cdef5c60bc1af896df350401aa1413223a6c493c"
+      "source_question_sha256": "01c8b41ff906cd5c3d0f6c10cdef5c60bc1af896df350401aa1413223a6c493c",
+      "source_citation_url": "https://doi.org/10.1038/nature26155",
+      "source_title_sha256": "9119237f513a0efdf4b53c033ba096058311e7b96332a15c678dcf55f99913dc",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": null,
+        "remaining_gap": "Guide-target sequence retrieval in an evolution context needs independent benign source selection and source-purpose review; no source sequence or protocol is reused."
+      }
     },
     {
       "task_id": "SuppQA:0284e566-0c84-4333-a44d-12bd6c4c9a9c",
@@ -6899,7 +7131,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "c833fff163edc512839b7e62b3b6a03c8127a793466a14681dbba0114a4ae866"
+      "source_question_sha256": "c833fff163edc512839b7e62b3b6a03c8127a793466a14681dbba0114a4ae866",
+      "source_citation_url": "https://doi.org/10.1038/nmeth.2589",
+      "source_title_sha256": "c64c256565f7dc35ac01ba010eedee254d730b7b891601d8c6a864e930a21428",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": null,
+        "remaining_gap": "The expected maternal/paternal detection-probability difference lacks its model, unit and conditioning information."
+      }
     },
     {
       "task_id": "SuppQA:11c0a95f-70e6-4e5b-9ace-0cf6b97ad83b",
@@ -6907,7 +7147,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "52c9c35ce9e837157d7515b46a2d88fac22988ac7af5e1ba0cebb23c1896b2c2"
+      "source_question_sha256": "52c9c35ce9e837157d7515b46a2d88fac22988ac7af5e1ba0cebb23c1896b2c2",
+      "source_citation_url": "https://doi.org/10.1038/s41586-022-05280-1",
+      "source_title_sha256": "feb332c85a7fbb674815a21b1b269f86ec5f23ee91d2e077fd65507ce3b98db5",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-expression-evidence",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:8ba7a888-70c6-404e-949d-60e4145b8eb6",
@@ -6915,7 +7163,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "cc6424d2ece17b71cc4f76d6d64bf79ea551faee67effc78559c7c9204ee20ae"
+      "source_question_sha256": "cc6424d2ece17b71cc4f76d6d64bf79ea551faee67effc78559c7c9204ee20ae",
+      "source_citation_url": "https://doi.org/10.1126/science.1248882",
+      "source_title_sha256": "48e7230b7aaf7c3ee11b4d0e497697d835f9db0775d5618c692956247ab83bb2",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-oligo-catalog",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:d540a38e-6247-4a19-8752-873b792ff3d4",
@@ -6923,7 +7179,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "66710180c0753506f315a052c6d76b2753c07b29e6c50fbcbddb03c347f31182"
+      "source_question_sha256": "66710180c0753506f315a052c6d76b2753c07b29e6c50fbcbddb03c347f31182",
+      "source_citation_url": "https://doi.org/10.1038/s41592-022-01660-7",
+      "source_title_sha256": "6c8f36d36b447214f367ee68521c4e55ecd0e9714e89bd60b098d52ce16e74e5",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-denaturation-curve",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:38217b58-50a4-4376-b35a-78b8c5c1a980",
@@ -6931,7 +7195,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "f8d52dc355e518a7232edc2dbe6d44ed2ae590c3478bc89a253d050112d692d1"
+      "source_question_sha256": "f8d52dc355e518a7232edc2dbe6d44ed2ae590c3478bc89a253d050112d692d1",
+      "source_citation_url": "https://doi.org/10.1093/nar/gkae130",
+      "source_title_sha256": "92592908e1aa9b4f075715a8f02ec13a8a977f03ced32a9a363bba8a0f6afecc",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-oligo-catalog",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:3bee1e75-3b9c-4270-bb9e-e65b1a941b48",
@@ -6939,7 +7211,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "b256ef576761fdcdb83179e10b5bdc084b665a1604c739684b6a166e237adc8f"
+      "source_question_sha256": "b256ef576761fdcdb83179e10b5bdc084b665a1604c739684b6a166e237adc8f",
+      "source_citation_url": "https://doi.org/10.1038/s41551-021-00815-9",
+      "source_title_sha256": "57402238744f94cfd5d6bead11389f889ac40e682f10264b4896767646b5b144",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-cytometry-intensity",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:02af18a7-aa18-4f4a-bc40-a8e81b4258dc",
@@ -6947,7 +7227,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "9b63e4d4b5227a2c55c8fcdfc28f52b2892a81272059fcd8a13c8c88bedcb1c6"
+      "source_question_sha256": "9b63e4d4b5227a2c55c8fcdfc28f52b2892a81272059fcd8a13c8c88bedcb1c6",
+      "source_citation_url": "https://doi.org/10.1038/nature05498",
+      "source_title_sha256": "847a687a6ba3d7d1af69d23f5711d2bb8883e616f5b25dd5cde70270e2132cdd",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": null,
+        "remaining_gap": "The lower attainable pH requires definition of the solution set and experimental context; do not infer a universal chemical limit."
+      }
     },
     {
       "task_id": "SuppQA:d57031ac-e7d7-4274-876b-36449ecdd640",
@@ -6955,7 +7243,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "cba389e2dec6c8b6eba699f98468f60e9dbf41730556991322065f823b8ee1d6"
+      "source_question_sha256": "cba389e2dec6c8b6eba699f98468f60e9dbf41730556991322065f823b8ee1d6",
+      "source_citation_url": "https://doi.org/10.1038/s41589-023-01539-4",
+      "source_title_sha256": "bf23a4b8fb27d8030a36d2fb61b1e0c6c61433244ae51bd07eb73b71ea0618d7",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-oligo-catalog",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:5dd6b784-487d-48bd-ac36-9653fc11c0ad",
@@ -6963,7 +7259,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "00429aba0335cd715155c11ff9654c4d503eb0d54d49bf250a26339037168816"
+      "source_question_sha256": "00429aba0335cd715155c11ff9654c4d503eb0d54d49bf250a26339037168816",
+      "source_citation_url": "https://doi.org/10.1038/nature16956",
+      "source_title_sha256": "232bc950abfb779ac9ef0478fa9af5878e6cf2e569dbc3052169a4e99e268c57",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": null,
+        "remaining_gap": "The surface-bump geometry question is not itself a biological workflow; retain a domain-scope gap."
+      }
     },
     {
       "task_id": "SuppQA:9379deb7-21f2-4263-86f8-2d15d1a82160",
@@ -6971,7 +7275,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "b10255e9764fa4d02ca3afb19371aae0eb0595988110d6e386112efde1102a1f"
+      "source_question_sha256": "b10255e9764fa4d02ca3afb19371aae0eb0595988110d6e386112efde1102a1f",
+      "source_citation_url": "https://doi.org/10.1093/nar/gkae069",
+      "source_title_sha256": "3d1f44224649fd6e17cfdbde9ebb75516be0e820db15cc8069f4c0b500991394",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-oligo-catalog",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:41478c97-f6f8-47f5-818b-1db407be9075",
@@ -6979,7 +7291,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "8501ad6c89f9c0836085e99aab7dd77e9cc568ef44a1c67196f3fa33a047a0a3"
+      "source_question_sha256": "8501ad6c89f9c0836085e99aab7dd77e9cc568ef44a1c67196f3fa33a047a0a3",
+      "source_citation_url": "https://doi.org/10.1093/nar/gkt1101",
+      "source_title_sha256": "276fb9fd41e831b163ae74ac413bd760234d8d900659fd5ec97bc69162cd1793",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-oligo-catalog",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:a5eff44a-ec71-44a8-bdb6-173fd9ea92ce",
@@ -6987,7 +7307,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "17a83a7e68bb57cec175cfc9585741ce106b83786fc8ad02f05de8022ae50b36"
+      "source_question_sha256": "17a83a7e68bb57cec175cfc9585741ce106b83786fc8ad02f05de8022ae50b36",
+      "source_citation_url": "https://doi.org/10.1016/j.cub.2024.04.002",
+      "source_title_sha256": "ce1eac1c1c71b71dc54022a24841a00504a9b572d86953ac73f5dbb8c84da143",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-oligo-catalog",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:e3857371-2a36-4019-b23e-177b4b5a4be5",
@@ -6995,7 +7323,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "edc365e9ad195ea6d8b801173f53c4a870bf448facf5886e3fc1df47d3f6ea26"
+      "source_question_sha256": "edc365e9ad195ea6d8b801173f53c4a870bf448facf5886e3fc1df47d3f6ea26",
+      "source_citation_url": "https://doi.org/10.1038/s41586-022-05278-9",
+      "source_title_sha256": "0a12bd522059b1c7486986dfb83986db1465b94b9fc94f64cadd7db03ecc1b1b",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-spectral-peak",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:6b6dda99-3651-4bce-86c9-4fc2032479db",
@@ -7003,7 +7339,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "c5bd7d82f587c54bd0588e2e46ff48e33acbfcb029808eec8bfdc08da88fbeda"
+      "source_question_sha256": "c5bd7d82f587c54bd0588e2e46ff48e33acbfcb029808eec8bfdc08da88fbeda",
+      "source_citation_url": "https://doi.org/10.1016/j.cell.2020.09.001",
+      "source_title_sha256": "d42797a63f55571dbe8e30850d9945b1e81423a0fa8a6821151426dc13feddc3",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-cohort-accounting",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:3417bcfa-c37a-4e25-8a0c-1fd963741eea",
@@ -7011,7 +7355,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "c907cc4eb4aa023a30cd38d8f744dc4d0f2ae6b37826ca9d24a75ab63cb5382f"
+      "source_question_sha256": "c907cc4eb4aa023a30cd38d8f744dc4d0f2ae6b37826ca9d24a75ab63cb5382f",
+      "source_citation_url": "https://doi.org/10.1016/j.cell.2022.10.021",
+      "source_title_sha256": "c1c6644c11682c34ace2c832f0e0c64b33702f6a9436d7c42fd80f85e4804a99",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-imaging-metadata",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:f13fbc77-553f-4a4c-b29b-ca178262eeef",
@@ -7019,7 +7371,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "cee66ec6c869a9b1598e411c4fa5eca853955b2572dfd5549d6f89e0c3bb68b8"
+      "source_question_sha256": "cee66ec6c869a9b1598e411c4fa5eca853955b2572dfd5549d6f89e0c3bb68b8",
+      "source_citation_url": "https://doi.org/10.1073/pnas.2311854121",
+      "source_title_sha256": "41fd1c824ea6802287f5d4a574607c57d4c52fd4a7bf34ca49b5fc249ef3a5df",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-computational-provenance",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:93566dc3-5f5c-491e-b723-60712cca625d",
@@ -7027,7 +7387,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "edf672b64bfd3ef61be36733be646e0e810e5258fb2f619b5c9cedb30c4ae1ca"
+      "source_question_sha256": "edf672b64bfd3ef61be36733be646e0e810e5258fb2f619b5c9cedb30c4ae1ca",
+      "source_citation_url": "https://doi.org/10.1038/nature20792",
+      "source_title_sha256": "9be4ceb13f720e3a925ef48e9377f0e659c14c9b6ad356bc3455596fd9e6fbb9",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-proteomic-evidence",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:e5ed958b-1cc9-4848-8e37-a895beb835e2",
@@ -7035,7 +7403,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "6516eebdb804c6ae5fb9a5bf947a697b0732841016404f7ccb6da163234e15d5"
+      "source_question_sha256": "6516eebdb804c6ae5fb9a5bf947a697b0732841016404f7ccb6da163234e15d5",
+      "source_citation_url": "https://doi.org/10.1038/s41586-023-06985-7",
+      "source_title_sha256": "06a5b6c9622de5abb34c731698ffcce10f123dafd93e6a4ee24b60305b9b345b",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-proteomic-evidence",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:ebb6a0ef-5421-4392-8717-f574c9600842",
@@ -7043,7 +7419,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "fd348ceb9dd4e58054fd411ec4004c3d43e540fb9a733b1beac1c39a7a18c3ee"
+      "source_question_sha256": "fd348ceb9dd4e58054fd411ec4004c3d43e540fb9a733b1beac1c39a7a18c3ee",
+      "source_citation_url": "https://doi.org/10.1038/nchem.2307",
+      "source_title_sha256": "d4b9fdce686904d97b7a847f5fbc9457264a47b1b8b0614c9ce24f12952ebb4d",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-oligo-catalog",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:59bf5188-9844-459c-94cf-89ed8cd3287f",
@@ -7051,7 +7435,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "56b21cc3ed109142c6a9c3b57967c7fbb0302444f4d041f553cfbf87ba86e9ff"
+      "source_question_sha256": "56b21cc3ed109142c6a9c3b57967c7fbb0302444f4d041f553cfbf87ba86e9ff",
+      "source_citation_url": "https://doi.org/10.1073/pnas.2405123121",
+      "source_title_sha256": "f9b88d3cb7121660f13e869b2c78075b1d05e4b9fb222f07b1db986f1c26f106",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-reported-conditions",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:c8e4f3d2-2fb3-428f-bb02-8593513efc54",
@@ -7059,7 +7451,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "f5ac9793e8c4fcbc5320cffa6232d4b9d099b9d226ff9427f87e11e999830204"
+      "source_question_sha256": "f5ac9793e8c4fcbc5320cffa6232d4b9d099b9d226ff9427f87e11e999830204",
+      "source_citation_url": "https://doi.org/10.1038/s41592-022-01540-0",
+      "source_title_sha256": "f9147e7dd1cd052edbddf25dd4ad0d7dcaf3df525f7da56cdc88e069508272fa",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-computational-provenance",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:ceeac89d-59c1-48a7-93db-46b045391906",
@@ -7067,7 +7467,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "4c5cf72a8949fa79971db0ef02959741aa0b094f3f5f8da391c6392360c0d958"
+      "source_question_sha256": "4c5cf72a8949fa79971db0ef02959741aa0b094f3f5f8da391c6392360c0d958",
+      "source_citation_url": "https://doi.org/10.1038/nature05453",
+      "source_title_sha256": "abf0ac252ea27e6965b41c40d2bea1f52dfb3d7c7168000866cd943b7bfbecb7",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-reported-conditions",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:8c2e99ce-7af0-4e73-a058-151135647076",
@@ -7075,7 +7483,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "76d777149652ca8cfa43a2ccb3f7c069c68cd4e96bf86d46b9cc0089dcad18f6"
+      "source_question_sha256": "76d777149652ca8cfa43a2ccb3f7c069c68cd4e96bf86d46b9cc0089dcad18f6",
+      "source_citation_url": "https://doi.org/10.1038/s41586-024-07067-y",
+      "source_title_sha256": "ddfcc913b91fc4fa2285c48f31f208ca14b77d206af675e046234a14591160b2",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-staining-reagents",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:1026513d-a087-427b-ab16-8a7c199e039e",
@@ -7083,7 +7499,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "a3eae55e8d8535b488047a498dd611a8c3fed11e49e4a2ffb26614626921f43f"
+      "source_question_sha256": "a3eae55e8d8535b488047a498dd611a8c3fed11e49e4a2ffb26614626921f43f",
+      "source_citation_url": "https://doi.org/10.1038/nature14272",
+      "source_title_sha256": "7c9f8506d61f36d80ff7dcb3c9752bea4339f55b432779d1a26732451302c1a0",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": null,
+        "remaining_gap": "The droplet-treatment question needs a biological-use rationale and independent observed context before inclusion."
+      }
     },
     {
       "task_id": "SuppQA:a8b1cd02-4bd9-43ad-927e-c2c4eb7c528b",
@@ -7091,7 +7515,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "3e61b71844c9ad72d836d54ff8068881b01338adf1ae023f1e15a88bd77305c3"
+      "source_question_sha256": "3e61b71844c9ad72d836d54ff8068881b01338adf1ae023f1e15a88bd77305c3",
+      "source_citation_url": "https://doi.org/10.1038/s41586-024-07445-6",
+      "source_title_sha256": "4371912fee863d44483f51a26abefd533fc44f45eea42158c5c4c17855d251db",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-oligo-catalog",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:97e98c7d-105b-4af5-99be-6e1fe4a2cce6",
@@ -7099,7 +7531,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "28914dbe5cafd650bd6f2338520d65b3111a5542bda50b56bedbeeb6d829ef90"
+      "source_question_sha256": "28914dbe5cafd650bd6f2338520d65b3111a5542bda50b56bedbeeb6d829ef90",
+      "source_citation_url": "https://doi.org/10.1016/j.celrep.2024.113827",
+      "source_title_sha256": "42667154d5cd720f9214bc1e42343951afeff10636d3439931e0f7ad738929cb",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-oligo-catalog",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:19b4836a-0635-4aad-9817-8934cbb7ca73",
@@ -7107,7 +7547,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "8d6e2b39ec916ad03e362219ded70b39a670fe3c4175a91e3a3816ebac13f0f1"
+      "source_question_sha256": "8d6e2b39ec916ad03e362219ded70b39a670fe3c4175a91e3a3816ebac13f0f1",
+      "source_citation_url": "https://doi.org/10.1038/nbt.4103",
+      "source_title_sha256": "401e99e2423d3746a20e6bf1bf5360e0fe028c7d90e1e34162caf0d7041596aa",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-oligo-catalog",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:9b972351-d2f8-4491-8a7c-3fb5a3e429a9",
@@ -7115,7 +7563,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "cf2dd7ca8c7d2a0393f0bd6f5ceb5045b409be6bc9a0745222519cbe841d7d81"
+      "source_question_sha256": "cf2dd7ca8c7d2a0393f0bd6f5ceb5045b409be6bc9a0745222519cbe841d7d81",
+      "source_citation_url": "https://doi.org/10.1038/s41586-022-05258-z",
+      "source_title_sha256": "ea3fd6a70d43fa21a0ecb3bd1645b45604b0aa918193c21a0750038c036b39de",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": null,
+        "remaining_gap": "A glovebox-condition report requires chemical-study scope and independent input suitability review; no complete biological adaptation is selected."
+      }
     },
     {
       "task_id": "SuppQA:dce3628e-905d-4b90-a6d0-877a2ccbbc33",
@@ -7123,7 +7579,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "dd8df07a2c2e72766a1adbc5ee75128191dc316ff00e554902251323c0db7b77"
+      "source_question_sha256": "dd8df07a2c2e72766a1adbc5ee75128191dc316ff00e554902251323c0db7b77",
+      "source_citation_url": "https://doi.org/10.1038/nature21065",
+      "source_title_sha256": "8ed3b71517bffd1abeca9d4198d4ccac7f2588452e9d0d5c3b30a870f0621eb0",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-sequencing-qc",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:befeb56e-6f04-4be7-9304-4ede1bdd25bc",
@@ -7131,7 +7595,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "18199909bcd05de85b027cb9256f42feb614f6fcc1fe25ec79db90b009a2c087"
+      "source_question_sha256": "18199909bcd05de85b027cb9256f42feb614f6fcc1fe25ec79db90b009a2c087",
+      "source_citation_url": "https://doi.org/10.1073/pnas.2400226121",
+      "source_title_sha256": "b51a077084f738892fab2e779d6013d3df719321a61b378716c38c3c245e0b6b",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": null,
+        "remaining_gap": "A control label from an enteric-pathogen study requires independent benign source/context selection; no experimental adaptation is assigned."
+      }
     },
     {
       "task_id": "SuppQA:bd08e5ba-e26b-4258-b3a2-543c842d028a",
@@ -7139,7 +7611,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "ab7446e1c8ac72fa4113638b4f7cc80525dc5a08d5652a42902c352bcc74b3ef"
+      "source_question_sha256": "ab7446e1c8ac72fa4113638b4f7cc80525dc5a08d5652a42902c352bcc74b3ef",
+      "source_citation_url": "https://doi.org/10.1186/s12915-024-01916-y",
+      "source_title_sha256": "24a6fa582fff67d6a32fd1fd5a69dc796d4e72d955f8cafb9299580458fa31d7",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-oligo-catalog",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:c04cc31d-9aee-46bf-9628-e153c72a44e3",
@@ -7147,7 +7627,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "f7683497cccf9885607889f0e9562a2033f391e5057aff702db0ad9bd6367f85"
+      "source_question_sha256": "f7683497cccf9885607889f0e9562a2033f391e5057aff702db0ad9bd6367f85",
+      "source_citation_url": "https://doi.org/10.1016/j.celrep.2024.113805",
+      "source_title_sha256": "b8679910c811e417e73e4a2c66ccc8e540d46a1bf51ef564de6b62c1fe651bad",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-oligo-catalog",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:4f3bd821-52d6-4875-b8ec-d92ca0fe644f",
@@ -7155,7 +7643,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "715b4266b636f429438c8af7c401bd9736234dc9194ba1309b97cd9d32b70dd0"
+      "source_question_sha256": "715b4266b636f429438c8af7c401bd9736234dc9194ba1309b97cd9d32b70dd0",
+      "source_citation_url": "https://doi.org/10.1038/s41587-022-01648-w",
+      "source_title_sha256": "a2113ed0cfc688f48f4055959801f638d2671ebccf04941729c45f549ff0bce3",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": null,
+        "remaining_gap": "The viral-vector oligo question requires independent benign context, sequence-purpose and source-lineage review before assigning a task."
+      }
     },
     {
       "task_id": "SuppQA:8719a6b8-76e9-44ae-b26b-65821de0ac99",
@@ -7163,7 +7659,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "87422d99c28131f4d1a3d65e4e5778d8b633bac96d5e563b945ff3eadd4a6289"
+      "source_question_sha256": "87422d99c28131f4d1a3d65e4e5778d8b633bac96d5e563b945ff3eadd4a6289",
+      "source_citation_url": "https://doi.org/10.1038/nature25164",
+      "source_title_sha256": "8e04b6edf0f00214fcaa66e2057e351a22e9b52d7c56d245d122014efd0ecb1c",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-reported-conditions",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:93099819-56be-40bf-b54d-427b663a2381",
@@ -7171,7 +7675,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "c9da5e9f6b128735c92133f8147684b1e580097b324a60baca0b7457a34c2469"
+      "source_question_sha256": "c9da5e9f6b128735c92133f8147684b1e580097b324a60baca0b7457a34c2469",
+      "source_citation_url": "https://doi.org/10.1073/pnas.2314884121",
+      "source_title_sha256": "305a9cd47b6b33a2149d37c62857af961d73fdfd0f205992167444038f610774",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-mechanical-uncertainty",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:df1365b0-4731-4f40-8dd7-64f4793a1729",
@@ -7179,7 +7691,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "46c981b79d821429357b87b20f6db6e24cada98381a8944d31af28a52ae751dd"
+      "source_question_sha256": "46c981b79d821429357b87b20f6db6e24cada98381a8944d31af28a52ae751dd",
+      "source_citation_url": "https://doi.org/10.1038/nature25021",
+      "source_title_sha256": "a24bde9f08cdc8e5d964c139682c4714bd4ad2c04f06af5500abc744ad7dd41e",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": null,
+        "remaining_gap": "The microbial reporter induction question has no selected independent benign observed context; retain a context-review gap and no experimental recommendation."
+      }
     },
     {
       "task_id": "SuppQA:bbc4ff4f-89f6-4f27-99e1-f03482feeffb",
@@ -7187,7 +7707,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "a050863e56c362f9c5c1c89f9ae46f85b225c25b562e71717294fdad84c85a1f"
+      "source_question_sha256": "a050863e56c362f9c5c1c89f9ae46f85b225c25b562e71717294fdad84c85a1f",
+      "source_citation_url": "https://doi.org/10.1038/nchem.2850",
+      "source_title_sha256": "f8859c9fbd17838efdc1079845031f12574b9c2f79f72d163abacd40a2c8b9c7",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-imaging-metadata",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:459ee10b-aa46-47ad-af55-8c0e5a0015ef",
@@ -7195,7 +7723,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "896c99b632632798c63deeb2443968ada024059140ce504034648a534befb17c"
+      "source_question_sha256": "896c99b632632798c63deeb2443968ada024059140ce504034648a534befb17c",
+      "source_citation_url": "https://doi.org/10.1038/s41586-020-2352-3",
+      "source_title_sha256": "bce65a7517680c4ff1f15b7b0a796715565b76ec167df7aac4ffb0d6161ef148",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": null,
+        "remaining_gap": "Reasons for changing culture medium require causal/interpretive evidence; exact reagent names do not establish the rationale."
+      }
     },
     {
       "task_id": "SuppQA:03f5a91c-f167-475e-8ccb-4c7561c767a9",
@@ -7203,7 +7739,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "9b96b4326cc40f1b27a107ed16bf57fc7ddd6c0697acbf76a79e70489d98e6f0"
+      "source_question_sha256": "9b96b4326cc40f1b27a107ed16bf57fc7ddd6c0697acbf76a79e70489d98e6f0",
+      "source_citation_url": "https://doi.org/10.1371/journal.pbio.3002468",
+      "source_title_sha256": "b3abdfa86f8d63545b153e52987880114687904e41e1cef45b39fef5b2d519a9",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-staining-reagents",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:4b3bbf7d-e352-4ff9-b79a-65d15566de13",
@@ -7211,7 +7755,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "813d2d636ad1f3706ad2e5220630eb1cf520d35e2826c5f691a921ee2861d9bf"
+      "source_question_sha256": "813d2d636ad1f3706ad2e5220630eb1cf520d35e2826c5f691a921ee2861d9bf",
+      "source_citation_url": "https://doi.org/10.1038/s41587-021-01001-7",
+      "source_title_sha256": "6aeb01d4f5dd99c051f4c7ac71b6d12ea8af64798dcbd82bd62cd816ef7d9453",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-computational-provenance",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:cdab2021-feed-497f-992a-a8f73df33957",
@@ -7219,7 +7771,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "99b9ece061711e3d2ef9f530b918aaed7439338ca3571dc7817c5bb68594e0bd"
+      "source_question_sha256": "99b9ece061711e3d2ef9f530b918aaed7439338ca3571dc7817c5bb68594e0bd",
+      "source_citation_url": "https://doi.org/10.1016/j.cell.2019.05.006",
+      "source_title_sha256": "029d89b88e9ed9c3de621f0c4d19cd244617a6129fb32b048b4e82d1455d6a83",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": null,
+        "remaining_gap": "Highest resolution is underspecified across modalities; define spatial, molecular or cell-type resolution and the comparison set before ranking."
+      }
     },
     {
       "task_id": "SuppQA:bc806521-164f-4f66-90e7-9d28f5fc319e",
@@ -7227,7 +7787,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "3060352122ffbc86798049f0438d7533eb28b4e95808b6dd3ef957ee1b6fb30a"
+      "source_question_sha256": "3060352122ffbc86798049f0438d7533eb28b4e95808b6dd3ef957ee1b6fb30a",
+      "source_citation_url": "https://doi.org/10.1038/s41592-022-01672-3",
+      "source_title_sha256": "c7b2c4d2efcce2ceaa00c0a4e810f7f1dafda38ae8b03bcad30c5ba7559013f3",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": null,
+        "remaining_gap": "The viral-particle tracking buffer question needs independent benign context and a source-evidence boundary; no source operational conditions are reused."
+      }
     },
     {
       "task_id": "SuppQA:404f6ac4-0605-406b-b32e-0fc14d1600f4",
@@ -7235,7 +7803,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "cbcb1feb5c8cb218adc92a3c89278bb25aa447af2196dae6700311210047fc7b"
+      "source_question_sha256": "cbcb1feb5c8cb218adc92a3c89278bb25aa447af2196dae6700311210047fc7b",
+      "source_citation_url": "https://doi.org/10.1038/s41586-021-03251-6",
+      "source_title_sha256": "e980e5e62d202d94ac63111e70c3dd1a720b252b033756f81631183525b1091e",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": null,
+        "remaining_gap": "The chemical-density question lacks its component set, units and connection to a biological decision."
+      }
     },
     {
       "task_id": "SuppQA:cf4608f5-2241-4c3b-a85a-7d2cda3733ee",
@@ -7243,7 +7819,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "ec006951f9ce52ec7ac5132a50849db2e5dae3da23dbe9a5b12852404aedff67"
+      "source_question_sha256": "ec006951f9ce52ec7ac5132a50849db2e5dae3da23dbe9a5b12852404aedff67",
+      "source_citation_url": "https://doi.org/10.1038/s41467-024-44796-0",
+      "source_title_sha256": "edd7e55ae85b0edf605d263f43de3d0979a8a9378e7f20da8db73ea27da87cce",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-cohort-accounting",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:20c5295d-7cce-4a70-b950-640ea6e69806",
@@ -7251,7 +7835,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "21b8d41a379deed4917c74a5d383f18381e7635b9c935d385da01d18d425e0b8"
+      "source_question_sha256": "21b8d41a379deed4917c74a5d383f18381e7635b9c935d385da01d18d425e0b8",
+      "source_citation_url": "https://doi.org/10.1186/s12915-024-01816-1",
+      "source_title_sha256": "e5042ce072cab10b164bef45b8e7ba2a090caf614a29ac301cc2b25b8885e718",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-cohort-accounting",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:181019ef-1151-4668-9178-13641d24bd85",
@@ -7259,7 +7851,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "f60faad9e13783b0aec305120f6b08d67b5f0e19f0ee19356e1745015ecfac39"
+      "source_question_sha256": "f60faad9e13783b0aec305120f6b08d67b5f0e19f0ee19356e1745015ecfac39",
+      "source_citation_url": "https://doi.org/10.1038/nature22051",
+      "source_title_sha256": "98df4759a6e17a47a5905f6440d013490359637a0f10293329d4b41e3900e4fa",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": null,
+        "remaining_gap": "The reported synthesis-purification method needs a defined biological workflow and independent source suitability review."
+      }
     },
     {
       "task_id": "SuppQA:9dbf4365-801d-42f9-80a9-357b4d93c793",
@@ -7267,7 +7867,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "bc0a7bf69d835cedeee140e7f78c5309473c6777996c3f73440d0749df25a4fa"
+      "source_question_sha256": "bc0a7bf69d835cedeee140e7f78c5309473c6777996c3f73440d0749df25a4fa",
+      "source_citation_url": "https://doi.org/10.1038/nature18930",
+      "source_title_sha256": "ad22c0976c9fd3468c445fad66c5e8b81122395e2c51b999cad27bfc670db9ab",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": null,
+        "remaining_gap": "The bacterial viability question needs independent benign context and exact candidate/evidence review before adaptation."
+      }
     },
     {
       "task_id": "SuppQA:ed0ad27f-c1ed-4796-a8f6-dd49c66b2515",
@@ -7275,7 +7883,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "e3444bc950a83fe22da7b1206ae7167ea60475f54b45bc3b775b7b37d37be70d"
+      "source_question_sha256": "e3444bc950a83fe22da7b1206ae7167ea60475f54b45bc3b775b7b37d37be70d",
+      "source_citation_url": "https://doi.org/10.1038/s41467-023-44647-4",
+      "source_title_sha256": "e8d6521820b9644309605325db43cdc8f0e976d0bf89be99836e686a7e3c46d8",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": null,
+        "remaining_gap": "Year multiplied by Warming could denote an interaction term or a table-derived quantity; the metric, candidates and model must be inspected before defining arithmetic."
+      }
     },
     {
       "task_id": "SuppQA:a1cf5586-4afc-48e6-a0d2-9554f9413983",
@@ -7283,7 +7899,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "e1454416a4e2b1768a43530b63a1e7182d79bd76832bae2665a88992b2f1c0f6"
+      "source_question_sha256": "e1454416a4e2b1768a43530b63a1e7182d79bd76832bae2665a88992b2f1c0f6",
+      "source_citation_url": "https://doi.org/10.1093/nar/gkae111",
+      "source_title_sha256": "dd60ef7100696cb7939ea03418fbc491ecbdf02d202f2515f2612c6e9fbab7fa",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-construct-provenance",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:b226af16-8f63-4e2d-bf3c-c94a1cc2e32e",
@@ -7291,7 +7915,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "88edaf0bf5818a1da3b54b6c9a47fd71fb3474ef40f8ecaabc91721eb8d5fee2"
+      "source_question_sha256": "88edaf0bf5818a1da3b54b6c9a47fd71fb3474ef40f8ecaabc91721eb8d5fee2",
+      "source_citation_url": "https://doi.org/10.1186/s12915-024-01917-x",
+      "source_title_sha256": "902fa18eb299404685bd9ca040f27731aa78d8e9d73cd872b5456f55816c7a98",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-proteomic-evidence",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:30fce0db-9bb8-4a89-ae5c-78f665da41f6",
@@ -7299,7 +7931,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "5eba8893aaa7ff7a2b0d404970c4589b3e829ffd7894d0c32e5a35db6fb22685"
+      "source_question_sha256": "5eba8893aaa7ff7a2b0d404970c4589b3e829ffd7894d0c32e5a35db6fb22685",
+      "source_citation_url": "https://doi.org/10.1038/s41586-023-05696-3",
+      "source_title_sha256": "ed4c271fe907c571dd1d79ae6ae6c5f497bd12ff582e6986f68879bcd0464f01",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-construct-provenance",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:5d457a9d-4f9b-4ad9-aac3-dd15e60f00cd",
@@ -7307,7 +7947,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "507d6ae2ffbf373882e8ac8d17004608b116995e94573259c0991eb54d393044"
+      "source_question_sha256": "507d6ae2ffbf373882e8ac8d17004608b116995e94573259c0991eb54d393044",
+      "source_citation_url": "https://doi.org/10.1016/j.cell.2024.03.025",
+      "source_title_sha256": "e518657af24a01e027d3e6f2a412fd43aee9a44736b5df5a13bc3ad4739c7470",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-staining-reagents",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:10512e71-a619-42ab-8e1a-3b5b4decda5d",
@@ -7315,7 +7963,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "a8c3f7ad7b8e56e81e6cece4d46df393a0527fc29cfffa1281f9cbcb7238fbef"
+      "source_question_sha256": "a8c3f7ad7b8e56e81e6cece4d46df393a0527fc29cfffa1281f9cbcb7238fbef",
+      "source_citation_url": "https://doi.org/10.1038/cr.2016.3",
+      "source_title_sha256": "10cdc072047a77b803fe24660ef529678dec740b39ca1997efda9bdca54e9212",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-staining-reagents",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     },
     {
       "task_id": "SuppQA:bbb9143b-6f7c-4960-bd44-ab8972a1da27",
@@ -7323,7 +7979,15 @@
       "source_configuration": "SuppQA",
       "source_subtask": "suppqa-v1-public",
       "workflow_family": "supplement-specific-evidence",
-      "source_question_sha256": "52376cdccd0bb566a01f70e8971ce49aab59f340d4fce25517be3cc159820983"
+      "source_question_sha256": "52376cdccd0bb566a01f70e8971ce49aab59f340d4fce25517be3cc159820983",
+      "source_citation_url": "https://doi.org/10.1038/s44320-024-00017-w",
+      "source_title_sha256": "c9a56f9abd119a6ddfdba987690ac279e3d21eb293da1b722e5b35d2824f372b",
+      "endpoint_review": {
+        "inspection_tier": "question-stem-and-source-citation-reviewed",
+        "source_evidence_and_choices_inspected": false,
+        "proposed_design_id": "labbench-supp-predictive-performance",
+        "remaining_gap": "Independent input selection and full evidence/acceptance review remain open."
+      }
     }
   ]
 }

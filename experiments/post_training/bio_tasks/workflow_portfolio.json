@@ -1,18 +1,18 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T17:07:21.920743+00:00",
+  "updated_at": "2026-09-24T17:18:27.216670+00:00",
   "scope": "Full question-proposal portfolio for the 32 currently inventoried provisional-ID agentic releases. This planning index resolves every question card and records conditional consolidation; it creates no training task or validated coverage. Nine source leads without inventories remain outside the enumerated denominator.",
   "counts": {
     "source_releases": 32,
     "inventory_records": 5133,
-    "question_cards": 676,
-    "proposed_task_groups": 635,
+    "question_cards": 692,
+    "proposed_task_groups": 651,
     "conditional_consolidations": 25,
-    "non_alias_records_linked_to_questions": 2480,
+    "non_alias_records_linked_to_questions": 2538,
     "known_cross_release_alias_records": 50,
     "excluded_records": 1,
     "validated_new_mappings": 0,
-    "question_records_with_gap_dispositions": 2252,
+    "question_records_with_gap_dispositions": 2194,
     "system_records_with_endpoint_gap_dispositions": 350
   },
   "interpretation": [
@@ -22,7 +22,7 @@
     "Do not turn registry configurations, repeated assays, source protocol variants or known aliases into automatic independent workflow credit.",
     "Scientific realism governs task boundaries. One task may use several native tools and produce many intermediate artifacts when they answer one question; unrelated estimands stay separate.",
     "ScholarQA-Bio contributes 1,451 enumerated question identities with unreviewed endpoint dispositions. These have no question-card assignments; source citation attribution uses a learned model, and deterministic numerical extraction does not cover unrestricted synthesis.",
-    "LAB-Bench contributes 801 scoped literature/database identities and nine shared family contracts. All retain individual endpoint gaps. Fifty Biomni DbQA stems overlap, with twenty ambiguous source matches; no additional aliases are credited."
+    "LAB-Bench contributes 801 scoped literature/database identities and nine shared family contracts. Supplementary questions have 58 provisional design assignments and 24 explicit gaps; 719 other questions retain endpoint-review gaps. Fifty Biomni DbQA stems overlap, with twenty ambiguous source matches; no additional aliases are credited."
   ],
   "source_question_files": [
     {
@@ -99,7 +99,7 @@
     },
     {
       "path": "workflow_designs/labbench-literature-database.json",
-      "sha256": "8e2ed877ebd16f095655769d008d25a753b51106cbb11e01258f0cf84c391418"
+      "sha256": "1f4fe0840080e9fbb4c403db1ba3759c0ef0fdc951c978b69ae1f8c05e82bef0"
     }
   ],
   "question_groups": [
@@ -9930,6 +9930,246 @@
       "workstreams": [
         "single-cell-integration"
       ]
+    },
+    {
+      "proposed_task_id": "labbench-supp-sequencing-qc",
+      "scientific_question": "Which sequencing samples, input files and QC filters account for the retained data in an independently selected study?",
+      "question_card_ids": [
+        "labbench-supp-sequencing-qc"
+      ],
+      "consolidation": "retain-distinct-question",
+      "scope_record_count": 4,
+      "benchmark_record_scope": {
+        "LAB-Bench tool-enabled literature/database": 4
+      },
+      "workstreams": [
+        "evidence-meta-analysis"
+      ]
+    },
+    {
+      "proposed_task_id": "labbench-supp-cohort-accounting",
+      "scientific_question": "Do the cohort, specimen and acquisition records reconcile across the main report and supplements of an independent biological study?",
+      "question_card_ids": [
+        "labbench-supp-cohort-accounting"
+      ],
+      "consolidation": "retain-distinct-question",
+      "scope_record_count": 8,
+      "benchmark_record_scope": {
+        "LAB-Bench tool-enabled literature/database": 8
+      },
+      "workstreams": [
+        "evidence-meta-analysis"
+      ]
+    },
+    {
+      "proposed_task_id": "labbench-supp-computational-provenance",
+      "scientific_question": "Can the reported analysis inputs and computational settings be traced to accessible, versioned records?",
+      "question_card_ids": [
+        "labbench-supp-computational-provenance"
+      ],
+      "consolidation": "retain-distinct-question",
+      "scope_record_count": 5,
+      "benchmark_record_scope": {
+        "LAB-Bench tool-enabled literature/database": 5
+      },
+      "workstreams": [
+        "evidence-meta-analysis"
+      ]
+    },
+    {
+      "proposed_task_id": "labbench-supp-predictive-performance",
+      "scientific_question": "Which reported model settings and feature sets explain the performance differences in an independent biological prediction study?",
+      "question_card_ids": [
+        "labbench-supp-predictive-performance"
+      ],
+      "consolidation": "retain-distinct-question",
+      "scope_record_count": 3,
+      "benchmark_record_scope": {
+        "LAB-Bench tool-enabled literature/database": 3
+      },
+      "workstreams": [
+        "evidence-meta-analysis"
+      ]
+    },
+    {
+      "proposed_task_id": "labbench-supp-proteomic-evidence",
+      "scientific_question": "Which reported protein detections, interaction associations and annotations are supported by an independent study\u2019s supplementary evidence?",
+      "question_card_ids": [
+        "labbench-supp-proteomic-evidence"
+      ],
+      "consolidation": "retain-distinct-question",
+      "scope_record_count": 4,
+      "benchmark_record_scope": {
+        "LAB-Bench tool-enabled literature/database": 4
+      },
+      "workstreams": [
+        "evidence-meta-analysis"
+      ]
+    },
+    {
+      "proposed_task_id": "labbench-supp-denaturation-curve",
+      "scientific_question": "At what reported concentration does an observed protein reach the study-defined half-denatured state, and does its curve support that value?",
+      "question_card_ids": [
+        "labbench-supp-denaturation-curve"
+      ],
+      "consolidation": "retain-distinct-question",
+      "scope_record_count": 1,
+      "benchmark_record_scope": {
+        "LAB-Bench tool-enabled literature/database": 1
+      },
+      "workstreams": [
+        "evidence-meta-analysis"
+      ]
+    },
+    {
+      "proposed_task_id": "labbench-supp-cytometry-intensity",
+      "scientific_question": "Which observed clone or sample has the reported fluorescence intensity under a specified staining and acquisition condition?",
+      "question_card_ids": [
+        "labbench-supp-cytometry-intensity"
+      ],
+      "consolidation": "retain-distinct-question",
+      "scope_record_count": 1,
+      "benchmark_record_scope": {
+        "LAB-Bench tool-enabled literature/database": 1
+      },
+      "workstreams": [
+        "evidence-meta-analysis"
+      ]
+    },
+    {
+      "proposed_task_id": "labbench-supp-spectral-peak",
+      "scientific_question": "Which observed spectral peak is reported for each protein variant and biochemical state in an independent characterization study?",
+      "question_card_ids": [
+        "labbench-supp-spectral-peak"
+      ],
+      "consolidation": "retain-distinct-question",
+      "scope_record_count": 1,
+      "benchmark_record_scope": {
+        "LAB-Bench tool-enabled literature/database": 1
+      },
+      "workstreams": [
+        "evidence-meta-analysis"
+      ]
+    },
+    {
+      "proposed_task_id": "labbench-supp-mechanical-uncertainty",
+      "scientific_question": "What measurement error was reported for a tissue-mechanics method, and how does it relate to the observed calibration data?",
+      "question_card_ids": [
+        "labbench-supp-mechanical-uncertainty"
+      ],
+      "consolidation": "retain-distinct-question",
+      "scope_record_count": 1,
+      "benchmark_record_scope": {
+        "LAB-Bench tool-enabled literature/database": 1
+      },
+      "workstreams": [
+        "evidence-meta-analysis"
+      ]
+    },
+    {
+      "proposed_task_id": "labbench-supp-structure-ligands",
+      "scientific_question": "Do the reported ligand counts in an independent structure determination agree with the deposited structure and its stated counting convention?",
+      "question_card_ids": [
+        "labbench-supp-structure-ligands"
+      ],
+      "consolidation": "retain-distinct-question",
+      "scope_record_count": 1,
+      "benchmark_record_scope": {
+        "LAB-Bench tool-enabled literature/database": 1
+      },
+      "workstreams": [
+        "evidence-meta-analysis"
+      ]
+    },
+    {
+      "proposed_task_id": "labbench-supp-imaging-metadata",
+      "scientific_question": "Do imaging acquisition settings and reported spatial coverage reconcile with the independent study\u2019s measurement records?",
+      "question_card_ids": [
+        "labbench-supp-imaging-metadata"
+      ],
+      "consolidation": "retain-distinct-question",
+      "scope_record_count": 3,
+      "benchmark_record_scope": {
+        "LAB-Bench tool-enabled literature/database": 3
+      },
+      "workstreams": [
+        "evidence-meta-analysis"
+      ]
+    },
+    {
+      "proposed_task_id": "labbench-supp-oligo-catalog",
+      "scientific_question": "Can the reported oligonucleotide catalog be reconciled with the named assays, observed reference sequences and expected amplicons in an independent benign study?",
+      "question_card_ids": [
+        "labbench-supp-oligo-catalog"
+      ],
+      "consolidation": "retain-distinct-question",
+      "scope_record_count": 13,
+      "benchmark_record_scope": {
+        "LAB-Bench tool-enabled literature/database": 13
+      },
+      "workstreams": [
+        "evidence-meta-analysis"
+      ]
+    },
+    {
+      "proposed_task_id": "labbench-supp-staining-reagents",
+      "scientific_question": "Which reported staining reagents and detection relationships account for the measured channels in an independent imaging study?",
+      "question_card_ids": [
+        "labbench-supp-staining-reagents"
+      ],
+      "consolidation": "retain-distinct-question",
+      "scope_record_count": 5,
+      "benchmark_record_scope": {
+        "LAB-Bench tool-enabled literature/database": 5
+      },
+      "workstreams": [
+        "evidence-meta-analysis"
+      ]
+    },
+    {
+      "proposed_task_id": "labbench-supp-reported-conditions",
+      "scientific_question": "Are the reported sample conditions and treatment durations internally consistent across an independent observed-study record?",
+      "question_card_ids": [
+        "labbench-supp-reported-conditions"
+      ],
+      "consolidation": "retain-distinct-question",
+      "scope_record_count": 4,
+      "benchmark_record_scope": {
+        "LAB-Bench tool-enabled literature/database": 4
+      },
+      "workstreams": [
+        "evidence-meta-analysis"
+      ]
+    },
+    {
+      "proposed_task_id": "labbench-supp-construct-provenance",
+      "scientific_question": "Which reported constructs carry measured labels, and how do source organizations contribute to the independent study\u2019s reagent inventory?",
+      "question_card_ids": [
+        "labbench-supp-construct-provenance"
+      ],
+      "consolidation": "retain-distinct-question",
+      "scope_record_count": 2,
+      "benchmark_record_scope": {
+        "LAB-Bench tool-enabled literature/database": 2
+      },
+      "workstreams": [
+        "evidence-meta-analysis"
+      ]
+    },
+    {
+      "proposed_task_id": "labbench-supp-expression-evidence",
+      "scientific_question": "Which reported cell-type signatures and gene-expression contrasts are supported by complete tables from an independent study?",
+      "question_card_ids": [
+        "labbench-supp-expression-evidence"
+      ],
+      "consolidation": "retain-distinct-question",
+      "scope_record_count": 2,
+      "benchmark_record_scope": {
+        "LAB-Bench tool-enabled literature/database": 2
+      },
+      "workstreams": [
+        "evidence-meta-analysis"
+      ]
     }
   ],
   "planning_review_order": [
@@ -10108,7 +10348,8 @@
     "VariantBench": 8,
     "sc-HeurekaBench": 130,
     "scBench": 6,
-    "scBench-Long": 4
+    "scBench-Long": 4,
+    "LAB-Bench tool-enabled literature/database": 58
   },
   "consolidation_review": {
     "reviewed_at": "2026-09-24",

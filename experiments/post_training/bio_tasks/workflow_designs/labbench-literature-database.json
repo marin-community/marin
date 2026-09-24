@@ -1,18 +1,908 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T17:07:21.920743+00:00",
-  "scope": "Harbor planning for public literature/database LAB-Bench questions; shared family contracts only. Every source record retains an individual endpoint-review disposition and no full-coverage assignment.",
+  "updated_at": "2026-09-24T17:18:27.216670+00:00",
+  "scope": "Harbor planning for public literature/database LAB-Bench questions. SuppQA question stems and citation metadata reviewed; provisional observed-study audit designs preserve extraction/recomputation boundaries. Other source evidence and individual endpoints remain open.",
   "source": {
     "inventory_path": "benchmark_tasks/labbench-literature-database.json",
-    "inventory_sha256": "e28972baea7abc0323393fa8e265555d1a5f36aa48b055cfb1465bdffead880c"
+    "inventory_sha256": "80cad6c63d1739ea95800035fb79eb41b431526f7d7f0aad1847d3e0610cd731"
   },
   "counts": {
     "inventory_records": 801,
     "individual_endpoint_reviews": 0,
-    "question_cards": 0,
-    "validated_new_mappings": 0
+    "question_cards": 16,
+    "validated_new_mappings": 0,
+    "individual_question_stems_reviewed": 82,
+    "records_linked_to_questions": 58,
+    "records_with_gap_dispositions": 743
   },
-  "questions": [],
+  "questions": [
+    {
+      "proposed_id": "labbench-supp-sequencing-qc",
+      "benchmark": "LAB-Bench tool-enabled literature/database",
+      "scientific_question": "Which sequencing samples, input files and QC filters account for the retained data in an independently selected study?",
+      "benchmark_targets": [
+        {
+          "task_id": "SuppQA:a49b9aa0-8b29-47ba-a757-9f247b37b47a",
+          "source_task_record_sha256": "3b34d599aa60b145db0298345dfbfd6dd617700017b8de90851aebfc620a51a2",
+          "source_citation_url": "https://doi.org/10.1016/j.cub.2024.02.040",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        },
+        {
+          "task_id": "SuppQA:a140f0c0-8b5c-4670-8716-22c93ad45c06",
+          "source_task_record_sha256": "1be45753ad9cde63f208bbe0e72e328fac63c89e183f7e5825372e16c335eefd",
+          "source_citation_url": "https://doi.org/10.1038/s44320-024-00034-9",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        },
+        {
+          "task_id": "SuppQA:d454257b-b65f-4ed8-9873-07d0d685fb40",
+          "source_task_record_sha256": "f567c55101656897efebf58928dbb956e3a8de4d70134e8bf6f55a2de35a9606",
+          "source_citation_url": "https://doi.org/10.1038/nature13400",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        },
+        {
+          "task_id": "SuppQA:dce3628e-905d-4b90-a6d0-877a2ccbbc33",
+          "source_task_record_sha256": "c8293ee0ffe7ab7081062bbbc40e48d98c1ae2210a399f24b68cd063324e9d88",
+          "source_citation_url": "https://doi.org/10.1038/nature21065",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        }
+      ],
+      "required_stages": [
+        "Reconcile library/file identifiers and distinguish files, reads, read pairs and inferred transcripts.",
+        "Extract the complete depth-by-time table, locate its minimum with explicit ties, and preserve the study-specific filtering order."
+      ],
+      "output_artifacts": [
+        "input_manifest.tsv",
+        "depth_by_time.tsv",
+        "qc_accounting.tsv",
+        "evidence_locations.tsv"
+      ],
+      "independent_input_contract": "Native sequencing/count exports plus a methods supplement and sample manifest from one independent study.",
+      "oracle_contract": "Read the independently selected input files with pinned native parsers. Derive complete tables and requested calculations from source locations and declared rules; keep the field-location manifest private. Do not copy a precomputed answer table or substitute benchmark answers.",
+      "verifier_contract": "Check complete expected rows, identifiers, values and calculations with declared units/tolerances; validate evidence file hashes, page/table/row locations and source context. Exact literal field extraction may be graded; unrestricted scientific entailment is not assumed.",
+      "incorrect_output_controls": [
+        "Missing or duplicated evidence rows must fail.",
+        "A numerically correct value with a wrong sample/condition/source location must fail.",
+        "Changed units, denominator, sign, orientation or tie handling must fail when applicable.",
+        "Reordered equivalent source rows should preserve results; changed input values should change the corresponding oracle outputs."
+      ],
+      "source_adaptation_limit": "Do not equate a file count with biological replication or a read count with a read-pair count.",
+      "runtime_design": "Offline, rights-cleared and bounded study package; target at most 30 minutes. Measure native extraction/recomputation before assignment.",
+      "remaining_decisions": [
+        "Pin independent accession/article identity, license, lineage and input checksums.",
+        "Inspect full source endpoint context and resolve every inherited target requirement before crediting any mapping.",
+        "Select concrete parsers, numerical conventions, tolerances and biological sample scope; split the question if one coherent study cannot supply all required artifacts."
+      ],
+      "implementation_ready": false
+    },
+    {
+      "proposed_id": "labbench-supp-cohort-accounting",
+      "benchmark": "LAB-Bench tool-enabled literature/database",
+      "scientific_question": "Do the cohort, specimen and acquisition records reconcile across the main report and supplements of an independent biological study?",
+      "benchmark_targets": [
+        {
+          "task_id": "SuppQA:2a34cefb-d28e-426e-a925-829bda3435d8",
+          "source_task_record_sha256": "1cc614780894ae8a55613fb6d5bde2328209dec106f4e230354b1c3681a50c89",
+          "source_citation_url": "https://doi.org/10.1038/nmeth.4341",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        },
+        {
+          "task_id": "SuppQA:37730e76-f5dc-42be-91c1-3f69147b465a",
+          "source_task_record_sha256": "5c7be7a7173ef601f3a3b6e524bc91a3187940fec2f90bad0c268dd259c5b5d8",
+          "source_citation_url": "https://doi.org/10.1016/j.cell.2024.02.025",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        },
+        {
+          "task_id": "SuppQA:3041bea7-5161-44e8-abcd-ebfb404a1553",
+          "source_task_record_sha256": "e659a6a19b5b0e7d6104329bd0c5e074e62b4c172f67d6c0b829f7b57096c9f2",
+          "source_citation_url": "https://doi.org/10.1186/s12915-024-01866-5",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        },
+        {
+          "task_id": "SuppQA:de9956c2-4b42-4529-8926-48848c8237f6",
+          "source_task_record_sha256": "b8b825ceeb0a156350bd619529cdba95bc7fa2d9e5de5f37c2d50ed3f64ee701",
+          "source_citation_url": "https://doi.org/10.1038/s41551-022-00912-3",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        },
+        {
+          "task_id": "SuppQA:5a974da2-cca9-49e1-a421-e6d3ad9c17ee",
+          "source_task_record_sha256": "f2d0ca182c17b0d8bc1d65979b55ec5401bd5e76e23b3f5101a15d7777201a46",
+          "source_citation_url": "https://doi.org/10.7554/eLife.86933.3",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        },
+        {
+          "task_id": "SuppQA:6b6dda99-3651-4bce-86c9-4fc2032479db",
+          "source_task_record_sha256": "86a869d947f5ddca9614c4e5aafc21d4605de542a226d034f916a29348ae9ea0",
+          "source_citation_url": "https://doi.org/10.1016/j.cell.2020.09.001",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        },
+        {
+          "task_id": "SuppQA:cf4608f5-2241-4c3b-a85a-7d2cda3733ee",
+          "source_task_record_sha256": "f3d4aacce1f287891c9315c08f6b4c788fd3b5943eb3b48e4e5cf0aef17e9ead",
+          "source_citation_url": "https://doi.org/10.1038/s41467-024-44796-0",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        },
+        {
+          "task_id": "SuppQA:20c5295d-7cce-4a70-b950-640ea6e69806",
+          "source_task_record_sha256": "156b8cdddb4e5e035881080c7926ef61eb7d5c8e073f989eeaec88b0a4294e37",
+          "source_citation_url": "https://doi.org/10.1186/s12915-024-01816-1",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        }
+      ],
+      "required_stages": [
+        "Retain person/animal/specimen/image/synapse hierarchy and repeated observations.",
+        "Compute totals, differences, percentages and source-country frequencies from complete records with declared denominators and tie rules."
+      ],
+      "output_artifacts": [
+        "cohort_manifest.tsv",
+        "stratum_counts.tsv",
+        "reconciliation.tsv",
+        "evidence_locations.tsv"
+      ],
+      "independent_input_contract": "Observed sample metadata and cohort tables with recorded sex, group, acquisition unit and geographic source where relevant.",
+      "oracle_contract": "Read the independently selected input files with pinned native parsers. Derive complete tables and requested calculations from source locations and declared rules; keep the field-location manifest private. Do not copy a precomputed answer table or substitute benchmark answers.",
+      "verifier_contract": "Check complete expected rows, identifiers, values and calculations with declared units/tolerances; validate evidence file hashes, page/table/row locations and source context. Exact literal field extraction may be graded; unrestricted scientific entailment is not assumed.",
+      "incorrect_output_controls": [
+        "Missing or duplicated evidence rows must fail.",
+        "A numerically correct value with a wrong sample/condition/source location must fail.",
+        "Changed units, denominator, sign, orientation or tie handling must fail when applicable.",
+        "Reordered equivalent source rows should preserve results; changed input values should change the corresponding oracle outputs."
+      ],
+      "source_adaptation_limit": "Do not silently repair the source question that calls ABIDE cases AD patients; the independent task must define its own group labels unambiguously.",
+      "runtime_design": "Offline, rights-cleared and bounded study package; target at most 30 minutes. Measure native extraction/recomputation before assignment.",
+      "remaining_decisions": [
+        "Pin independent accession/article identity, license, lineage and input checksums.",
+        "Inspect full source endpoint context and resolve every inherited target requirement before crediting any mapping.",
+        "Select concrete parsers, numerical conventions, tolerances and biological sample scope; split the question if one coherent study cannot supply all required artifacts."
+      ],
+      "implementation_ready": false
+    },
+    {
+      "proposed_id": "labbench-supp-computational-provenance",
+      "benchmark": "LAB-Bench tool-enabled literature/database",
+      "scientific_question": "Can the reported analysis inputs and computational settings be traced to accessible, versioned records?",
+      "benchmark_targets": [
+        {
+          "task_id": "SuppQA:70be3149-5beb-443f-bfe8-cf14da0dd59c",
+          "source_task_record_sha256": "21fc2461d6430681a0ae2f559bb5788f0dcba580d438d17f1b8da4836a4d4b87",
+          "source_citation_url": "https://doi.org/10.1038/s41467-023-44271-2",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        },
+        {
+          "task_id": "SuppQA:ea25f382-3885-4294-875e-10fccf6f4b3c",
+          "source_task_record_sha256": "1003d75309a69b4a68ccc6c2b13a0e8ba578af52c3f7c1b8d58c4c0ce96b9b3f",
+          "source_citation_url": "https://doi.org/10.1038/s41592-021-01358-2",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        },
+        {
+          "task_id": "SuppQA:f13fbc77-553f-4a4c-b29b-ca178262eeef",
+          "source_task_record_sha256": "94f265fa93a19bcfbabff8d1f8836a844c962845cf5c438f3839dbbe17794fb6",
+          "source_citation_url": "https://doi.org/10.1073/pnas.2311854121",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        },
+        {
+          "task_id": "SuppQA:c8e4f3d2-2fb3-428f-bb02-8593513efc54",
+          "source_task_record_sha256": "9515b5445880181661d3c4ba41bc7e947deea1fae6ffdafab91c3ea2da6fea98",
+          "source_citation_url": "https://doi.org/10.1038/s41592-022-01540-0",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        },
+        {
+          "task_id": "SuppQA:4b3bbf7d-e352-4ff9-b79a-65d15566de13",
+          "source_task_record_sha256": "ec682a214a51f4b0c893e6bcae4292e4c4fba446c4c391e758abbc31e192eba1",
+          "source_citation_url": "https://doi.org/10.1038/s41587-021-01001-7",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        }
+      ],
+      "required_stages": [
+        "Resolve data-access identifiers and training-data provenance without treating a working URL as permission to redistribute.",
+        "Extract the named hyperparameter, software language/version compatibility and configuration evidence from methods and environment records."
+      ],
+      "output_artifacts": [
+        "data_access.tsv",
+        "analysis_settings.tsv",
+        "software_compatibility.tsv",
+        "evidence_locations.tsv"
+      ],
+      "independent_input_contract": "An independent observed-data analysis with methods, public accessions, configuration files and environment metadata.",
+      "oracle_contract": "Read the independently selected input files with pinned native parsers. Derive complete tables and requested calculations from source locations and declared rules; keep the field-location manifest private. Do not copy a precomputed answer table or substitute benchmark answers.",
+      "verifier_contract": "Check complete expected rows, identifiers, values and calculations with declared units/tolerances; validate evidence file hashes, page/table/row locations and source context. Exact literal field extraction may be graded; unrestricted scientific entailment is not assumed.",
+      "incorrect_output_controls": [
+        "Missing or duplicated evidence rows must fail.",
+        "A numerically correct value with a wrong sample/condition/source location must fail.",
+        "Changed units, denominator, sign, orientation or tie handling must fail when applicable.",
+        "Reordered equivalent source rows should preserve results; changed input values should change the corresponding oracle outputs."
+      ],
+      "source_adaptation_limit": "Reported settings and compatibility claims require source evidence; this task does not establish reproduction of the scientific result.",
+      "runtime_design": "Offline, rights-cleared and bounded study package; target at most 30 minutes. Measure native extraction/recomputation before assignment.",
+      "remaining_decisions": [
+        "Pin independent accession/article identity, license, lineage and input checksums.",
+        "Inspect full source endpoint context and resolve every inherited target requirement before crediting any mapping.",
+        "Select concrete parsers, numerical conventions, tolerances and biological sample scope; split the question if one coherent study cannot supply all required artifacts."
+      ],
+      "implementation_ready": false
+    },
+    {
+      "proposed_id": "labbench-supp-predictive-performance",
+      "benchmark": "LAB-Bench tool-enabled literature/database",
+      "scientific_question": "Which reported model settings and feature sets explain the performance differences in an independent biological prediction study?",
+      "benchmark_targets": [
+        {
+          "task_id": "SuppQA:05e60207-57a7-4b6b-b294-354893a3d246",
+          "source_task_record_sha256": "99144adb4253d021acd0a73909a5efa7deaf2e13b80e84639e154fd5bc2af7e2",
+          "source_citation_url": "https://doi.org/10.1038/s41586-021-04249-w",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        },
+        {
+          "task_id": "SuppQA:74884486-15bc-45de-9174-2efe35a2c8fc",
+          "source_task_record_sha256": "4f743fee05c9ae642ff952a29be78a568a5315bb38a61516e736e97c70b96e5f",
+          "source_citation_url": "https://doi.org/10.1093/nar/gkae039",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        },
+        {
+          "task_id": "SuppQA:bbb9143b-6f7c-4960-bd44-ab8972a1da27",
+          "source_task_record_sha256": "c6bede718442e27c4c5828aa4775b1c24267e2e0b6bc5d16c847f03c6cf29c7a",
+          "source_citation_url": "https://doi.org/10.1038/s44320-024-00017-w",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        }
+      ],
+      "required_stages": [
+        "Join feature counts, hyperparameter settings, model labels, conditions and held-out metric definitions.",
+        "Reconcile the full comparison table and compute the requested difference using percentage points or relative change as explicitly requested."
+      ],
+      "output_artifacts": [
+        "model_comparisons.tsv",
+        "feature_settings.tsv",
+        "performance_differences.tsv",
+        "evidence_locations.tsv"
+      ],
+      "independent_input_contract": "Observed biological prediction results with complete methods and machine-readable result tables, independently selected from benchmark studies.",
+      "oracle_contract": "Read the independently selected input files with pinned native parsers. Derive complete tables and requested calculations from source locations and declared rules; keep the field-location manifest private. Do not copy a precomputed answer table or substitute benchmark answers.",
+      "verifier_contract": "Check complete expected rows, identifiers, values and calculations with declared units/tolerances; validate evidence file hashes, page/table/row locations and source context. Exact literal field extraction may be graded; unrestricted scientific entailment is not assumed.",
+      "incorrect_output_controls": [
+        "Missing or duplicated evidence rows must fail.",
+        "A numerically correct value with a wrong sample/condition/source location must fail.",
+        "Changed units, denominator, sign, orientation or tie handling must fail when applicable.",
+        "Reordered equivalent source rows should preserve results; changed input values should change the corresponding oracle outputs."
+      ],
+      "source_adaptation_limit": "Keep reported AUC/accuracy distinct from recomputed metrics; do not conflate a classifier with a feature-selection method or compare incompatible evaluation splits.",
+      "runtime_design": "Offline, rights-cleared and bounded study package; target at most 30 minutes. Measure native extraction/recomputation before assignment.",
+      "remaining_decisions": [
+        "Pin independent accession/article identity, license, lineage and input checksums.",
+        "Inspect full source endpoint context and resolve every inherited target requirement before crediting any mapping.",
+        "Select concrete parsers, numerical conventions, tolerances and biological sample scope; split the question if one coherent study cannot supply all required artifacts."
+      ],
+      "implementation_ready": false
+    },
+    {
+      "proposed_id": "labbench-supp-proteomic-evidence",
+      "benchmark": "LAB-Bench tool-enabled literature/database",
+      "scientific_question": "Which reported protein detections, interaction associations and annotations are supported by an independent study\u2019s supplementary evidence?",
+      "benchmark_targets": [
+        {
+          "task_id": "SuppQA:311df379-df7a-4410-a32a-8bbb79376304",
+          "source_task_record_sha256": "b666833f7f147b65ebb0cb1458e513802f9db7c0585889dd023469175ad5ae8d",
+          "source_citation_url": "https://doi.org/10.1093/nar/gkae093",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        },
+        {
+          "task_id": "SuppQA:93566dc3-5f5c-491e-b723-60712cca625d",
+          "source_task_record_sha256": "7b068863b00c44223f135ad16ba0f204ee9b4b789f475630887e198ac7cbf5fe",
+          "source_citation_url": "https://doi.org/10.1038/nature20792",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        },
+        {
+          "task_id": "SuppQA:e5ed958b-1cc9-4848-8e37-a895beb835e2",
+          "source_task_record_sha256": "b03770393cf21895c9d5c84eb6b8b70a5d364b45b87637445cac8dbf8e6354bb",
+          "source_citation_url": "https://doi.org/10.1038/s41586-023-06985-7",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        },
+        {
+          "task_id": "SuppQA:b226af16-8f63-4e2d-bf3c-c94a1cc2e32e",
+          "source_task_record_sha256": "d1ee6a6552cd4e26d4bc06f23c0b6bea81d83818ce3929cf038bcc06eef9b77b",
+          "source_citation_url": "https://doi.org/10.1186/s12915-024-01917-x",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        }
+      ],
+      "required_stages": [
+        "Join protein/accession identities across assay rounds, interaction tables and annotations.",
+        "Count detection rounds, retain all signed scores and tied minima, and report association and functional evidence with their stated evidence type."
+      ],
+      "output_artifacts": [
+        "protein_evidence.tsv",
+        "assay_rounds.tsv",
+        "association_scores.tsv",
+        "evidence_locations.tsv"
+      ],
+      "independent_input_contract": "Independent observed proteomic/interaction tables plus versioned protein annotations and their accompanying study documentation.",
+      "oracle_contract": "Read the independently selected input files with pinned native parsers. Derive complete tables and requested calculations from source locations and declared rules; keep the field-location manifest private. Do not copy a precomputed answer table or substitute benchmark answers.",
+      "verifier_contract": "Check complete expected rows, identifiers, values and calculations with declared units/tolerances; validate evidence file hashes, page/table/row locations and source context. Exact literal field extraction may be graded; unrestricted scientific entailment is not assumed.",
+      "incorrect_output_controls": [
+        "Missing or duplicated evidence rows must fail.",
+        "A numerically correct value with a wrong sample/condition/source location must fail.",
+        "Changed units, denominator, sign, orientation or tie handling must fail when applicable.",
+        "Reordered equivalent source rows should preserve results; changed input values should change the corresponding oracle outputs."
+      ],
+      "source_adaptation_limit": "Observed association, computational annotation and direct physical interaction must remain separate; no causal or direct-binding claim follows from a shared table row.",
+      "runtime_design": "Offline, rights-cleared and bounded study package; target at most 30 minutes. Measure native extraction/recomputation before assignment.",
+      "remaining_decisions": [
+        "Pin independent accession/article identity, license, lineage and input checksums.",
+        "Inspect full source endpoint context and resolve every inherited target requirement before crediting any mapping.",
+        "Select concrete parsers, numerical conventions, tolerances and biological sample scope; split the question if one coherent study cannot supply all required artifacts."
+      ],
+      "implementation_ready": false
+    },
+    {
+      "proposed_id": "labbench-supp-denaturation-curve",
+      "benchmark": "LAB-Bench tool-enabled literature/database",
+      "scientific_question": "At what reported concentration does an observed protein reach the study-defined half-denatured state, and does its curve support that value?",
+      "benchmark_targets": [
+        {
+          "task_id": "SuppQA:d540a38e-6247-4a19-8752-873b792ff3d4",
+          "source_task_record_sha256": "f747ffc8c2433052d4f7a713645382e9e3c59e6d7ed180c1503908f810c960ea",
+          "source_citation_url": "https://doi.org/10.1038/s41592-022-01660-7",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        }
+      ],
+      "required_stages": [
+        "Extract all available concentration/response points and the reported midpoint with units.",
+        "Distinguish reported, fitted and interpolated midpoints, including replicate/error information and the definition of zero and complete denaturation."
+      ],
+      "output_artifacts": [
+        "denaturation_curve.tsv",
+        "midpoint_evidence.json",
+        "evidence_locations.tsv"
+      ],
+      "independent_input_contract": "An independently measured protein denaturation study with a numerical curve table and methods.",
+      "oracle_contract": "Read the independently selected input files with pinned native parsers. Derive complete tables and requested calculations from source locations and declared rules; keep the field-location manifest private. Do not copy a precomputed answer table or substitute benchmark answers.",
+      "verifier_contract": "Check complete expected rows, identifiers, values and calculations with declared units/tolerances; validate evidence file hashes, page/table/row locations and source context. Exact literal field extraction may be graded; unrestricted scientific entailment is not assumed.",
+      "incorrect_output_controls": [
+        "Missing or duplicated evidence rows must fail.",
+        "A numerically correct value with a wrong sample/condition/source location must fail.",
+        "Changed units, denominator, sign, orientation or tie handling must fail when applicable.",
+        "Reordered equivalent source rows should preserve results; changed input values should change the corresponding oracle outputs."
+      ],
+      "source_adaptation_limit": "The source asks for the reported concentration; a fresh fit is a cross-check and cannot silently replace it.",
+      "runtime_design": "Offline, rights-cleared and bounded study package; target at most 30 minutes. Measure native extraction/recomputation before assignment.",
+      "remaining_decisions": [
+        "Pin independent accession/article identity, license, lineage and input checksums.",
+        "Inspect full source endpoint context and resolve every inherited target requirement before crediting any mapping.",
+        "Select concrete parsers, numerical conventions, tolerances and biological sample scope; split the question if one coherent study cannot supply all required artifacts."
+      ],
+      "implementation_ready": false
+    },
+    {
+      "proposed_id": "labbench-supp-cytometry-intensity",
+      "benchmark": "LAB-Bench tool-enabled literature/database",
+      "scientific_question": "Which observed clone or sample has the reported fluorescence intensity under a specified staining and acquisition condition?",
+      "benchmark_targets": [
+        {
+          "task_id": "SuppQA:3bee1e75-3b9c-4270-bb9e-e65b1a941b48",
+          "source_task_record_sha256": "41cf0f107b8a6d12e14ad34ff43470251953d49de4bc2cd760879991cfda0b16",
+          "source_citation_url": "https://doi.org/10.1038/s41551-021-00815-9",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        }
+      ],
+      "required_stages": [
+        "Join clone, marker, fluorophore, acquisition setting and reported summary statistic.",
+        "Return the complete requested comparison table and distinguish mean intensity, median intensity, background correction and normalization."
+      ],
+      "output_artifacts": [
+        "fluorescence_measurements.tsv",
+        "staining_context.tsv",
+        "evidence_locations.tsv"
+      ],
+      "independent_input_contract": "Independent observed flow-cytometry summary tables, gating/assay metadata and source documentation.",
+      "oracle_contract": "Read the independently selected input files with pinned native parsers. Derive complete tables and requested calculations from source locations and declared rules; keep the field-location manifest private. Do not copy a precomputed answer table or substitute benchmark answers.",
+      "verifier_contract": "Check complete expected rows, identifiers, values and calculations with declared units/tolerances; validate evidence file hashes, page/table/row locations and source context. Exact literal field extraction may be graded; unrestricted scientific entailment is not assumed.",
+      "incorrect_output_controls": [
+        "Missing or duplicated evidence rows must fail.",
+        "A numerically correct value with a wrong sample/condition/source location must fail.",
+        "Changed units, denominator, sign, orientation or tie handling must fail when applicable.",
+        "Reordered equivalent source rows should preserve results; changed input values should change the corresponding oracle outputs."
+      ],
+      "source_adaptation_limit": "Do not treat an arbitrary fluorescence unit as an absolute molecule count or substitute a median for a reported mean.",
+      "runtime_design": "Offline, rights-cleared and bounded study package; target at most 30 minutes. Measure native extraction/recomputation before assignment.",
+      "remaining_decisions": [
+        "Pin independent accession/article identity, license, lineage and input checksums.",
+        "Inspect full source endpoint context and resolve every inherited target requirement before crediting any mapping.",
+        "Select concrete parsers, numerical conventions, tolerances and biological sample scope; split the question if one coherent study cannot supply all required artifacts."
+      ],
+      "implementation_ready": false
+    },
+    {
+      "proposed_id": "labbench-supp-spectral-peak",
+      "benchmark": "LAB-Bench tool-enabled literature/database",
+      "scientific_question": "Which observed spectral peak is reported for each protein variant and biochemical state in an independent characterization study?",
+      "benchmark_targets": [
+        {
+          "task_id": "SuppQA:e3857371-2a36-4019-b23e-177b4b5a4be5",
+          "source_task_record_sha256": "6b1cd53c8c0c80f4f29579a66cbe5801987af8a0ecc925822bb1ee2289adcc2a",
+          "source_citation_url": "https://doi.org/10.1038/s41586-022-05278-9",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        }
+      ],
+      "required_stages": [
+        "Reconcile variant/state identifiers, wavelength units and the stated peak type.",
+        "Return the reported peak table with numerical spectra where available and distinguish reported maxima from any independently recomputed maxima."
+      ],
+      "output_artifacts": [
+        "spectral_peaks.tsv",
+        "spectral_context.tsv",
+        "evidence_locations.tsv"
+      ],
+      "independent_input_contract": "Independent measured protein spectra with reported variant/state tables and instrument metadata.",
+      "oracle_contract": "Read the independently selected input files with pinned native parsers. Derive complete tables and requested calculations from source locations and declared rules; keep the field-location manifest private. Do not copy a precomputed answer table or substitute benchmark answers.",
+      "verifier_contract": "Check complete expected rows, identifiers, values and calculations with declared units/tolerances; validate evidence file hashes, page/table/row locations and source context. Exact literal field extraction may be graded; unrestricted scientific entailment is not assumed.",
+      "incorrect_output_controls": [
+        "Missing or duplicated evidence rows must fail.",
+        "A numerically correct value with a wrong sample/condition/source location must fail.",
+        "Changed units, denominator, sign, orientation or tie handling must fail when applicable.",
+        "Reordered equivalent source rows should preserve results; changed input values should change the corresponding oracle outputs."
+      ],
+      "source_adaptation_limit": "Oxidation state and peak designation are part of the query; do not select the global maximum from an unrelated spectral band.",
+      "runtime_design": "Offline, rights-cleared and bounded study package; target at most 30 minutes. Measure native extraction/recomputation before assignment.",
+      "remaining_decisions": [
+        "Pin independent accession/article identity, license, lineage and input checksums.",
+        "Inspect full source endpoint context and resolve every inherited target requirement before crediting any mapping.",
+        "Select concrete parsers, numerical conventions, tolerances and biological sample scope; split the question if one coherent study cannot supply all required artifacts."
+      ],
+      "implementation_ready": false
+    },
+    {
+      "proposed_id": "labbench-supp-mechanical-uncertainty",
+      "benchmark": "LAB-Bench tool-enabled literature/database",
+      "scientific_question": "What measurement error was reported for a tissue-mechanics method, and how does it relate to the observed calibration data?",
+      "benchmark_targets": [
+        {
+          "task_id": "SuppQA:93099819-56be-40bf-b54d-427b663a2381",
+          "source_task_record_sha256": "685ce5bd7a82c76ae66ae3c327363a2840b988def71d191af446f9dbbf8f4b33",
+          "source_citation_url": "https://doi.org/10.1073/pnas.2314884121",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        }
+      ],
+      "required_stages": [
+        "Extract the error quantity, units, aggregation, calibration conditions and replicate count.",
+        "Preserve the distinction between typical error, standard deviation, confidence interval and resolution; return a traceable calibration comparison."
+      ],
+      "output_artifacts": [
+        "calibration_results.tsv",
+        "uncertainty_definition.json",
+        "evidence_locations.tsv"
+      ],
+      "independent_input_contract": "Independent observed tissue-mechanics calibration records and the method\u2019s accompanying report.",
+      "oracle_contract": "Read the independently selected input files with pinned native parsers. Derive complete tables and requested calculations from source locations and declared rules; keep the field-location manifest private. Do not copy a precomputed answer table or substitute benchmark answers.",
+      "verifier_contract": "Check complete expected rows, identifiers, values and calculations with declared units/tolerances; validate evidence file hashes, page/table/row locations and source context. Exact literal field extraction may be graded; unrestricted scientific entailment is not assumed.",
+      "incorrect_output_controls": [
+        "Missing or duplicated evidence rows must fail.",
+        "A numerically correct value with a wrong sample/condition/source location must fail.",
+        "Changed units, denominator, sign, orientation or tie handling must fail when applicable.",
+        "Reordered equivalent source rows should preserve results; changed input values should change the corresponding oracle outputs."
+      ],
+      "source_adaptation_limit": "A numerical match with a different uncertainty definition fails; raw residual recomputation is only comparable under the same definition.",
+      "runtime_design": "Offline, rights-cleared and bounded study package; target at most 30 minutes. Measure native extraction/recomputation before assignment.",
+      "remaining_decisions": [
+        "Pin independent accession/article identity, license, lineage and input checksums.",
+        "Inspect full source endpoint context and resolve every inherited target requirement before crediting any mapping.",
+        "Select concrete parsers, numerical conventions, tolerances and biological sample scope; split the question if one coherent study cannot supply all required artifacts."
+      ],
+      "implementation_ready": false
+    },
+    {
+      "proposed_id": "labbench-supp-structure-ligands",
+      "benchmark": "LAB-Bench tool-enabled literature/database",
+      "scientific_question": "Do the reported ligand counts in an independent structure determination agree with the deposited structure and its stated counting convention?",
+      "benchmark_targets": [
+        {
+          "task_id": "SuppQA:7faf65d7-55c9-4586-9e1e-9d4e39e93601",
+          "source_task_record_sha256": "0cb8c544348480ef01b11da79330be5ecbf3c86738f16d0a73dda8b1a6de7e32",
+          "source_citation_url": "https://doi.org/10.1016/j.cell.2024.03.022",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        }
+      ],
+      "required_stages": [
+        "Extract reported model/data-collection counts and resolve the deposited structure accession.",
+        "Enumerate mmCIF chemical components and occupancies while distinguishing unique ligand types, modeled copies and solvent/ions."
+      ],
+      "output_artifacts": [
+        "structure_components.tsv",
+        "reported_model_counts.tsv",
+        "count_reconciliation.json",
+        "evidence_locations.tsv"
+      ],
+      "independent_input_contract": "An independent experimental structure, deposition metadata and open methods/model tables.",
+      "oracle_contract": "Read the independently selected input files with pinned native parsers. Derive complete tables and requested calculations from source locations and declared rules; keep the field-location manifest private. Do not copy a precomputed answer table or substitute benchmark answers.",
+      "verifier_contract": "Check complete expected rows, identifiers, values and calculations with declared units/tolerances; validate evidence file hashes, page/table/row locations and source context. Exact literal field extraction may be graded; unrestricted scientific entailment is not assumed.",
+      "incorrect_output_controls": [
+        "Missing or duplicated evidence rows must fail.",
+        "A numerically correct value with a wrong sample/condition/source location must fail.",
+        "Changed units, denominator, sign, orientation or tie handling must fail when applicable.",
+        "Reordered equivalent source rows should preserve results; changed input values should change the corresponding oracle outputs."
+      ],
+      "source_adaptation_limit": "The reference must preserve the meaning of the reported ligand count; a generic count of non-protein residues is insufficient.",
+      "runtime_design": "Offline, rights-cleared and bounded study package; target at most 30 minutes. Measure native extraction/recomputation before assignment.",
+      "remaining_decisions": [
+        "Pin independent accession/article identity, license, lineage and input checksums.",
+        "Inspect full source endpoint context and resolve every inherited target requirement before crediting any mapping.",
+        "Select concrete parsers, numerical conventions, tolerances and biological sample scope; split the question if one coherent study cannot supply all required artifacts."
+      ],
+      "implementation_ready": false
+    },
+    {
+      "proposed_id": "labbench-supp-imaging-metadata",
+      "benchmark": "LAB-Bench tool-enabled literature/database",
+      "scientific_question": "Do imaging acquisition settings and reported spatial coverage reconcile with the independent study\u2019s measurement records?",
+      "benchmark_targets": [
+        {
+          "task_id": "SuppQA:966e60e1-6b15-4105-b2a4-b1859e1963fc",
+          "source_task_record_sha256": "e8030c4d56132f27d327dff119c456f1a87e2cd8e6106ef1467f2d6aba2f28c2",
+          "source_citation_url": "https://doi.org/10.1016/j.cell.2021.04.029",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        },
+        {
+          "task_id": "SuppQA:3417bcfa-c37a-4e25-8a0c-1fd963741eea",
+          "source_task_record_sha256": "8a765300289843b87fee0bc5ded0bffcffd56bfc91eccacf71e8f7ce7e1b858b",
+          "source_citation_url": "https://doi.org/10.1016/j.cell.2022.10.021",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        },
+        {
+          "task_id": "SuppQA:bbc4ff4f-89f6-4f27-99e1-f03482feeffb",
+          "source_task_record_sha256": "46353efd139ba95830df79a5a015f7b9ee9eb5ec808091dee4ba4d5091a34580",
+          "source_citation_url": "https://doi.org/10.1038/nchem.2850",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        }
+      ],
+      "required_stages": [
+        "Extract exposure time, excitation wavelength and spatial coverage with original and normalized units.",
+        "Retain sample/imaging mode and define feature-covered area versus full array area before computing a percentage."
+      ],
+      "output_artifacts": [
+        "acquisition_settings.tsv",
+        "spatial_coverage.tsv",
+        "evidence_locations.tsv"
+      ],
+      "independent_input_contract": "Independent biological imaging or spatial profiling data with acquisition metadata, array geometry and methods.",
+      "oracle_contract": "Read the independently selected input files with pinned native parsers. Derive complete tables and requested calculations from source locations and declared rules; keep the field-location manifest private. Do not copy a precomputed answer table or substitute benchmark answers.",
+      "verifier_contract": "Check complete expected rows, identifiers, values and calculations with declared units/tolerances; validate evidence file hashes, page/table/row locations and source context. Exact literal field extraction may be graded; unrestricted scientific entailment is not assumed.",
+      "incorrect_output_controls": [
+        "Missing or duplicated evidence rows must fail.",
+        "A numerically correct value with a wrong sample/condition/source location must fail.",
+        "Changed units, denominator, sign, orientation or tie handling must fail when applicable.",
+        "Reordered equivalent source rows should preserve results; changed input values should change the corresponding oracle outputs."
+      ],
+      "source_adaptation_limit": "Sample-specific exposure and excitation are not interchangeable with frame rate or emission wavelength; geometric coverage does not establish capture efficiency.",
+      "runtime_design": "Offline, rights-cleared and bounded study package; target at most 30 minutes. Measure native extraction/recomputation before assignment.",
+      "remaining_decisions": [
+        "Pin independent accession/article identity, license, lineage and input checksums.",
+        "Inspect full source endpoint context and resolve every inherited target requirement before crediting any mapping.",
+        "Select concrete parsers, numerical conventions, tolerances and biological sample scope; split the question if one coherent study cannot supply all required artifacts."
+      ],
+      "implementation_ready": false
+    },
+    {
+      "proposed_id": "labbench-supp-oligo-catalog",
+      "benchmark": "LAB-Bench tool-enabled literature/database",
+      "scientific_question": "Can the reported oligonucleotide catalog be reconciled with the named assays, observed reference sequences and expected amplicons in an independent benign study?",
+      "benchmark_targets": [
+        {
+          "task_id": "SuppQA:b5dbe6b5-95e5-4c1a-810f-8877c6d46c72",
+          "source_task_record_sha256": "be2ee06929ecb397ee2d3593d74737fb045130ad9e6f796348d7f493c8919f2b",
+          "source_citation_url": "https://doi.org/10.1016/j.cub.2024.02.036",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        },
+        {
+          "task_id": "SuppQA:8ba7a888-70c6-404e-949d-60e4145b8eb6",
+          "source_task_record_sha256": "07575c187dff822b6283c4a110a36eea30f12f69c78b8dbda03434c201533493",
+          "source_citation_url": "https://doi.org/10.1126/science.1248882",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        },
+        {
+          "task_id": "SuppQA:38217b58-50a4-4376-b35a-78b8c5c1a980",
+          "source_task_record_sha256": "62718eca5118d3bf5972acc3c7ced8530068e03f836610955d05e7233fc7b31f",
+          "source_citation_url": "https://doi.org/10.1093/nar/gkae130",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        },
+        {
+          "task_id": "SuppQA:d57031ac-e7d7-4274-876b-36449ecdd640",
+          "source_task_record_sha256": "486ce41eee23e52b0dab8bd26d69bef852bdeeb981719833c9fecbb4a1c1006d",
+          "source_citation_url": "https://doi.org/10.1038/s41589-023-01539-4",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        },
+        {
+          "task_id": "SuppQA:9379deb7-21f2-4263-86f8-2d15d1a82160",
+          "source_task_record_sha256": "c5008be462a7c3daa4b718512dcf43c31dd7318d282536b174338616bc073a94",
+          "source_citation_url": "https://doi.org/10.1093/nar/gkae069",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        },
+        {
+          "task_id": "SuppQA:41478c97-f6f8-47f5-818b-1db407be9075",
+          "source_task_record_sha256": "8e8ac0603eae157fb3ccbbd4f4a84dcd2d045d0c4a6dc286a144afc9f0545154",
+          "source_citation_url": "https://doi.org/10.1093/nar/gkt1101",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        },
+        {
+          "task_id": "SuppQA:a5eff44a-ec71-44a8-bdb6-173fd9ea92ce",
+          "source_task_record_sha256": "f4832c7a656ed1b3cf1995cca9d3eabf29c72866ed2cf8b94fdf92f9244b70e6",
+          "source_citation_url": "https://doi.org/10.1016/j.cub.2024.04.002",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        },
+        {
+          "task_id": "SuppQA:ebb6a0ef-5421-4392-8717-f574c9600842",
+          "source_task_record_sha256": "17d44a07a7c67ba4fe2a1fbaffc7fe78307889bca056b47a6590cd37b6fb3e5b",
+          "source_citation_url": "https://doi.org/10.1038/nchem.2307",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        },
+        {
+          "task_id": "SuppQA:a8b1cd02-4bd9-43ad-927e-c2c4eb7c528b",
+          "source_task_record_sha256": "d20b5964785d4db9f5939e2aafd68c0f5ae3940672228e03f5d6ceea02a032e0",
+          "source_citation_url": "https://doi.org/10.1038/s41586-024-07445-6",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        },
+        {
+          "task_id": "SuppQA:97e98c7d-105b-4af5-99be-6e1fe4a2cce6",
+          "source_task_record_sha256": "014600c2755d5257e98668559704e7165809d06a0fdd3dd7a03d0f681cf1d3a4",
+          "source_citation_url": "https://doi.org/10.1016/j.celrep.2024.113827",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        },
+        {
+          "task_id": "SuppQA:19b4836a-0635-4aad-9817-8934cbb7ca73",
+          "source_task_record_sha256": "df1ea95c540fefe4730131a1c597b76ca4dfc5b3b1fa8ada2373da296749ba75",
+          "source_citation_url": "https://doi.org/10.1038/nbt.4103",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        },
+        {
+          "task_id": "SuppQA:bd08e5ba-e26b-4258-b3a2-543c842d028a",
+          "source_task_record_sha256": "0f6fcf60a42e533ae68c25d4803385e918720636c9498e2af50b25f5652d7d82",
+          "source_citation_url": "https://doi.org/10.1186/s12915-024-01916-y",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        },
+        {
+          "task_id": "SuppQA:c04cc31d-9aee-46bf-9628-e153c72a44e3",
+          "source_task_record_sha256": "7077c221d67ce3175bbe1522bd4fb4ec3e1fb95c1d66ee9942f2f787de209fb8",
+          "source_citation_url": "https://doi.org/10.1016/j.celrep.2024.113805",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        }
+      ],
+      "required_stages": [
+        "Extract the complete selected oligo/assay catalog, preserving 5-prime/3-prime orientation, modifications, case/color annotations and stated purpose.",
+        "Join assay/construct identifiers, audit forward/reverse labels and, where reference context permits, compute the declared amplicon rather than substituting a primer length."
+      ],
+      "output_artifacts": [
+        "oligos.fasta",
+        "oligo_assay_links.tsv",
+        "amplicon_checks.tsv",
+        "evidence_locations.tsv"
+      ],
+      "independent_input_contract": "An independent benign organism/study with published primer or guide tables, reference FASTA/annotation and original legends.",
+      "oracle_contract": "Read the independently selected input files with pinned native parsers. Derive complete tables and requested calculations from source locations and declared rules; keep the field-location manifest private. Do not copy a precomputed answer table or substitute benchmark answers.",
+      "verifier_contract": "Check complete expected rows, identifiers, values and calculations with declared units/tolerances; validate evidence file hashes, page/table/row locations and source context. Exact literal field extraction may be graded; unrestricted scientific entailment is not assumed.",
+      "incorrect_output_controls": [
+        "Missing or duplicated evidence rows must fail.",
+        "A numerically correct value with a wrong sample/condition/source location must fail.",
+        "Changed units, denominator, sign, orientation or tie handling must fail when applicable.",
+        "Reordered equivalent source rows should preserve results; changed input values should change the corresponding oracle outputs."
+      ],
+      "source_adaptation_limit": "Purpose and colored-sequence selection need exact source location/legend evidence; sequence similarity alone does not identify intended use. No new sequence design or optimization is requested.",
+      "runtime_design": "Offline, rights-cleared and bounded study package; target at most 30 minutes. Measure native extraction/recomputation before assignment.",
+      "remaining_decisions": [
+        "Pin independent accession/article identity, license, lineage and input checksums.",
+        "Inspect full source endpoint context and resolve every inherited target requirement before crediting any mapping.",
+        "Select concrete parsers, numerical conventions, tolerances and biological sample scope; split the question if one coherent study cannot supply all required artifacts."
+      ],
+      "implementation_ready": false
+    },
+    {
+      "proposed_id": "labbench-supp-staining-reagents",
+      "benchmark": "LAB-Bench tool-enabled literature/database",
+      "scientific_question": "Which reported staining reagents and detection relationships account for the measured channels in an independent imaging study?",
+      "benchmark_targets": [
+        {
+          "task_id": "SuppQA:0348e600-f5cc-4fa8-89eb-d2cb3ae18752",
+          "source_task_record_sha256": "e1dcab3e3825d37ae51b35b71cd66fb0f91e8bd0a210b7feee3686bad7ce2319",
+          "source_citation_url": "https://doi.org/10.1038/s41592-022-01569-1",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        },
+        {
+          "task_id": "SuppQA:8c2e99ce-7af0-4e73-a058-151135647076",
+          "source_task_record_sha256": "afebf8867392a23d812b1f92b0804a84cae47f1f2fcddcbd6e719cd8839b4146",
+          "source_citation_url": "https://doi.org/10.1038/s41586-024-07067-y",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        },
+        {
+          "task_id": "SuppQA:03f5a91c-f167-475e-8ccb-4c7561c767a9",
+          "source_task_record_sha256": "0abc1cb420d60207ef22d2850378ff6310f294d0a26509d8d070e8f0673bcde3",
+          "source_citation_url": "https://doi.org/10.1371/journal.pbio.3002468",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        },
+        {
+          "task_id": "SuppQA:5d457a9d-4f9b-4ad9-aac3-dd15e60f00cd",
+          "source_task_record_sha256": "48f985a507676774dd456c73c938ac6850cf2998707f758d4c0178f3e8803c4f",
+          "source_citation_url": "https://doi.org/10.1016/j.cell.2024.03.025",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        },
+        {
+          "task_id": "SuppQA:10512e71-a619-42ab-8e1a-3b5b4decda5d",
+          "source_task_record_sha256": "1fa559db9684a3cd00d7126ecbb9ab788dd3dfc1792e7a4ff6d6399236ed02f4",
+          "source_citation_url": "https://doi.org/10.1038/cr.2016.3",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        }
+      ],
+      "required_stages": [
+        "Resolve reagent names, supplier/catalog IDs, dilution or concentration and the reported target region.",
+        "Join primary/secondary detection relationships and channels; preserve original units and verify conversions only when stock concentration is supplied."
+      ],
+      "output_artifacts": [
+        "reagent_catalog.tsv",
+        "detection_relationships.tsv",
+        "concentration_checks.tsv",
+        "evidence_locations.tsv"
+      ],
+      "independent_input_contract": "Independent benign imaging-study reagent tables, acquisition metadata and methods.",
+      "oracle_contract": "Read the independently selected input files with pinned native parsers. Derive complete tables and requested calculations from source locations and declared rules; keep the field-location manifest private. Do not copy a precomputed answer table or substitute benchmark answers.",
+      "verifier_contract": "Check complete expected rows, identifiers, values and calculations with declared units/tolerances; validate evidence file hashes, page/table/row locations and source context. Exact literal field extraction may be graded; unrestricted scientific entailment is not assumed.",
+      "incorrect_output_controls": [
+        "Missing or duplicated evidence rows must fail.",
+        "A numerically correct value with a wrong sample/condition/source location must fail.",
+        "Changed units, denominator, sign, orientation or tie handling must fail when applicable.",
+        "Reordered equivalent source rows should preserve results; changed input values should change the corresponding oracle outputs."
+      ],
+      "source_adaptation_limit": "A dilution ratio cannot be converted to mg/ml without a stock concentration; a vendor name or antibody label alone does not establish specificity.",
+      "runtime_design": "Offline, rights-cleared and bounded study package; target at most 30 minutes. Measure native extraction/recomputation before assignment.",
+      "remaining_decisions": [
+        "Pin independent accession/article identity, license, lineage and input checksums.",
+        "Inspect full source endpoint context and resolve every inherited target requirement before crediting any mapping.",
+        "Select concrete parsers, numerical conventions, tolerances and biological sample scope; split the question if one coherent study cannot supply all required artifacts."
+      ],
+      "implementation_ready": false
+    },
+    {
+      "proposed_id": "labbench-supp-reported-conditions",
+      "benchmark": "LAB-Bench tool-enabled literature/database",
+      "scientific_question": "Are the reported sample conditions and treatment durations internally consistent across an independent observed-study record?",
+      "benchmark_targets": [
+        {
+          "task_id": "SuppQA:58c7753e-549d-4fea-86b2-54fbdbf7ada9",
+          "source_task_record_sha256": "788108723d92cb318f597282a8ff40534b25119673b9a976c0baa61aa029f43d",
+          "source_citation_url": "https://doi.org/10.1038/nmeth.4154",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        },
+        {
+          "task_id": "SuppQA:59bf5188-9844-459c-94cf-89ed8cd3287f",
+          "source_task_record_sha256": "a565302b1f7b4e4d82e6ab4e17f0cc3dfe8882546d1e462b05946f1f6c2d193b",
+          "source_citation_url": "https://doi.org/10.1073/pnas.2405123121",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        },
+        {
+          "task_id": "SuppQA:ceeac89d-59c1-48a7-93db-46b045391906",
+          "source_task_record_sha256": "a2037b0f9e132ee88e48868dc2a24ea24442f94dac211a3aa1a4e9c951e41540",
+          "source_citation_url": "https://doi.org/10.1038/nature05453",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        },
+        {
+          "task_id": "SuppQA:8719a6b8-76e9-44ae-b26b-65821de0ac99",
+          "source_task_record_sha256": "53735eea15c2f23fac970799f0248db0a91ac569794b3cd2c2d46cdebdf8df0e",
+          "source_citation_url": "https://doi.org/10.1038/nature25164",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        }
+      ],
+      "required_stages": [
+        "Extract existing temperature, concentration and duration records with sample labels and step identity.",
+        "Distinguish per-pulse duration from elapsed experiment time and cumulative exposure, and report any unresolved abbreviation rather than inventing its expansion."
+      ],
+      "output_artifacts": [
+        "reported_conditions.tsv",
+        "timeline_accounting.tsv",
+        "evidence_locations.tsv"
+      ],
+      "independent_input_contract": "Independent benign study records and methods containing complete observed sample-condition and timing metadata.",
+      "oracle_contract": "Read the independently selected input files with pinned native parsers. Derive complete tables and requested calculations from source locations and declared rules; keep the field-location manifest private. Do not copy a precomputed answer table or substitute benchmark answers.",
+      "verifier_contract": "Check complete expected rows, identifiers, values and calculations with declared units/tolerances; validate evidence file hashes, page/table/row locations and source context. Exact literal field extraction may be graded; unrestricted scientific entailment is not assumed.",
+      "incorrect_output_controls": [
+        "Missing or duplicated evidence rows must fail.",
+        "A numerically correct value with a wrong sample/condition/source location must fail.",
+        "Changed units, denominator, sign, orientation or tie handling must fail when applicable.",
+        "Reordered equivalent source rows should preserve results; changed input values should change the corresponding oracle outputs."
+      ],
+      "source_adaptation_limit": "This is an audit of reported observations, with no protocol recommendation, optimization or reconstruction of restricted source contexts.",
+      "runtime_design": "Offline, rights-cleared and bounded study package; target at most 30 minutes. Measure native extraction/recomputation before assignment.",
+      "remaining_decisions": [
+        "Pin independent accession/article identity, license, lineage and input checksums.",
+        "Inspect full source endpoint context and resolve every inherited target requirement before crediting any mapping.",
+        "Select concrete parsers, numerical conventions, tolerances and biological sample scope; split the question if one coherent study cannot supply all required artifacts."
+      ],
+      "implementation_ready": false
+    },
+    {
+      "proposed_id": "labbench-supp-construct-provenance",
+      "benchmark": "LAB-Bench tool-enabled literature/database",
+      "scientific_question": "Which reported constructs carry measured labels, and how do source organizations contribute to the independent study\u2019s reagent inventory?",
+      "benchmark_targets": [
+        {
+          "task_id": "SuppQA:a1cf5586-4afc-48e6-a0d2-9554f9413983",
+          "source_task_record_sha256": "77c1311fa31f602ae580dba65d7b06d1310487dad2cb29223febef538cde04f5",
+          "source_citation_url": "https://doi.org/10.1093/nar/gkae111",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        },
+        {
+          "task_id": "SuppQA:30fce0db-9bb8-4a89-ae5c-78f665da41f6",
+          "source_task_record_sha256": "863ddaca420e180a41dccc993f1a626b840274764a9091b3d13e658ee891e1e6",
+          "source_citation_url": "https://doi.org/10.1038/s41586-023-05696-3",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        }
+      ],
+      "required_stages": [
+        "Resolve construct/label relationships and provenance organizations from the complete published inventory.",
+        "Count source contributions using a declared unit, preserve ties and distinguish supplied reagents from distinct organizations."
+      ],
+      "output_artifacts": [
+        "construct_labels.tsv",
+        "reagent_provenance.tsv",
+        "source_counts.tsv",
+        "evidence_locations.tsv"
+      ],
+      "independent_input_contract": "Independent benign construct/reagent inventory with documented measured labels and supplier provenance.",
+      "oracle_contract": "Read the independently selected input files with pinned native parsers. Derive complete tables and requested calculations from source locations and declared rules; keep the field-location manifest private. Do not copy a precomputed answer table or substitute benchmark answers.",
+      "verifier_contract": "Check complete expected rows, identifiers, values and calculations with declared units/tolerances; validate evidence file hashes, page/table/row locations and source context. Exact literal field extraction may be graded; unrestricted scientific entailment is not assumed.",
+      "incorrect_output_controls": [
+        "Missing or duplicated evidence rows must fail.",
+        "A numerically correct value with a wrong sample/condition/source location must fail.",
+        "Changed units, denominator, sign, orientation or tie handling must fail when applicable.",
+        "Reordered equivalent source rows should preserve results; changed input values should change the corresponding oracle outputs."
+      ],
+      "source_adaptation_limit": "A ranked organization count requires a full inventory and explicit counting unit; absence from a partial table is not a negative.",
+      "runtime_design": "Offline, rights-cleared and bounded study package; target at most 30 minutes. Measure native extraction/recomputation before assignment.",
+      "remaining_decisions": [
+        "Pin independent accession/article identity, license, lineage and input checksums.",
+        "Inspect full source endpoint context and resolve every inherited target requirement before crediting any mapping.",
+        "Select concrete parsers, numerical conventions, tolerances and biological sample scope; split the question if one coherent study cannot supply all required artifacts."
+      ],
+      "implementation_ready": false
+    },
+    {
+      "proposed_id": "labbench-supp-expression-evidence",
+      "benchmark": "LAB-Bench tool-enabled literature/database",
+      "scientific_question": "Which reported cell-type signatures and gene-expression contrasts are supported by complete tables from an independent study?",
+      "benchmark_targets": [
+        {
+          "task_id": "SuppQA:aa904a36-3656-45a8-a0d2-912c04dd2558",
+          "source_task_record_sha256": "042635abbf010752bd67b2e62b1eb353eb0c842c4986900dbef6a1d9a1685d54",
+          "source_citation_url": "https://doi.org/10.1038/s41586-021-04358-6",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        },
+        {
+          "task_id": "SuppQA:11c0a95f-70e6-4e5b-9ace-0cf6b97ad83b",
+          "source_task_record_sha256": "1c99783142cf1c39c873f23800174f2c29dd2f8acaac00310f1aa4a07cb4c04b",
+          "source_citation_url": "https://doi.org/10.1038/s41586-022-05280-1",
+          "inspection_tier": "question-stem-and-source-citation-reviewed"
+        }
+      ],
+      "required_stages": [
+        "Join cell-type and contrast identities, baseline conditions and all reported expression effects.",
+        "Preserve enrichment/signature definitions and distinguish raw fold change from log fold change; return both source-reported values and any separately labeled recomputation."
+      ],
+      "output_artifacts": [
+        "celltype_signature.tsv",
+        "gene_contrasts.tsv",
+        "expression_provenance.tsv",
+        "evidence_locations.tsv"
+      ],
+      "independent_input_contract": "Independent observed expression study with cell-type/signature and contrast tables, methods and sample metadata.",
+      "oracle_contract": "Read the independently selected input files with pinned native parsers. Derive complete tables and requested calculations from source locations and declared rules; keep the field-location manifest private. Do not copy a precomputed answer table or substitute benchmark answers.",
+      "verifier_contract": "Check complete expected rows, identifiers, values and calculations with declared units/tolerances; validate evidence file hashes, page/table/row locations and source context. Exact literal field extraction may be graded; unrestricted scientific entailment is not assumed.",
+      "incorrect_output_controls": [
+        "Missing or duplicated evidence rows must fail.",
+        "A numerically correct value with a wrong sample/condition/source location must fail.",
+        "Changed units, denominator, sign, orientation or tie handling must fail when applicable.",
+        "Reordered equivalent source rows should preserve results; changed input values should change the corresponding oracle outputs."
+      ],
+      "source_adaptation_limit": "Gene-set expression, differential expression and signature enrichment are distinct endpoints; the shared task is conditional on an independent study providing the required evidence.",
+      "runtime_design": "Offline, rights-cleared and bounded study package; target at most 30 minutes. Measure native extraction/recomputation before assignment.",
+      "remaining_decisions": [
+        "Pin independent accession/article identity, license, lineage and input checksums.",
+        "Inspect full source endpoint context and resolve every inherited target requirement before crediting any mapping.",
+        "Select concrete parsers, numerical conventions, tolerances and biological sample scope; split the question if one coherent study cannot supply all required artifacts."
+      ],
+      "implementation_ready": false
+    }
+  ],
   "family_contracts": [
     {
       "workflow_family": "gene-set-membership",
@@ -4580,413 +5470,164 @@
     },
     {
       "task_id": "SuppQA:1b0eaf02-0861-40b6-89bf-a267c9c8c206",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:a49b9aa0-8b29-47ba-a757-9f247b37b47a",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-endpoint-context-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "reason": "The reported allosome gap-spanning criterion needs its full definition and logical conditions before a deterministic acceptance rule can be chosen."
     },
     {
       "task_id": "SuppQA:b6b4077d-a0db-4d26-9b3c-57fc469ad431",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:58c7753e-549d-4fea-86b2-54fbdbf7ada9",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:7faf65d7-55c9-4586-9e1e-9d4e39e93601",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:70be3149-5beb-443f-bfe8-cf14da0dd59c",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:b5dbe6b5-95e5-4c1a-810f-8877c6d46c72",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:ea25f382-3885-4294-875e-10fccf6f4b3c",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-endpoint-context-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "reason": "The question requests a conclusion about UTR effects; choices, measured effect context and inferential target are missing from the inspected metadata."
     },
     {
       "task_id": "SuppQA:2af1880c-a4dc-4da2-b4d5-131ef96c6350",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:2a34cefb-d28e-426e-a925-829bda3435d8",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-endpoint-context-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "reason": "Sample-size determination may require interpreting study-design rationale; inspect the reported method and question choices before assigning an exact-output adaptation."
     },
     {
       "task_id": "SuppQA:72434cfd-5cda-48e3-942f-12c99104b8a1",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:a140f0c0-8b5c-4670-8716-22c93ad45c06",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-endpoint-context-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "reason": "The inspected citation/Sphere question is non-biological; retain as a domain-scope gap rather than credit it through a generic retrieval task."
     },
     {
       "task_id": "SuppQA:823bc7ee-a275-46a2-8143-7aaf057fe331",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:05e60207-57a7-4b6b-b294-354893a3d246",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:37730e76-f5dc-42be-91c1-3f69147b465a",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:3041bea7-5161-44e8-abcd-ebfb404a1553",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:d454257b-b65f-4ed8-9873-07d0d685fb40",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:de9956c2-4b42-4529-8926-48848c8237f6",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:311df379-df7a-4410-a32a-8bbb79376304",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:5a974da2-cca9-49e1-a421-e6d3ad9c17ee",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-endpoint-context-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "reason": "A chemical-synthesis reagent count needs source scope and constituent/mixture counting conventions; biological adaptation is not yet established."
     },
     {
       "task_id": "SuppQA:b3d8ddd1-4829-405c-b72b-f5dcf114636f",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:74884486-15bc-45de-9174-2efe35a2c8fc",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-endpoint-context-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "reason": "The conditions under which a statistical prior is discouraged require exact method assumptions; literal citation matching cannot establish the recommendation."
     },
     {
       "task_id": "SuppQA:27685d85-ec01-4ba0-a690-35a89b609105",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:0348e600-f5cc-4fa8-89eb-d2cb3ae18752",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-endpoint-context-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "reason": "Only a question stem and article citation about a viral tracing study were reviewed; independent benign context and complete reagent evidence remain unresolved."
     },
     {
       "task_id": "SuppQA:e77c9e8d-087c-4be1-90b5-987f36cbc27a",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:aa904a36-3656-45a8-a0d2-912c04dd2558",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:966e60e1-6b15-4105-b2a4-b1859e1963fc",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-endpoint-context-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "reason": "A cell-growth model assumption needs the actual equation and applicability conditions; a numeric simulation alone would not preserve this endpoint."
     },
     {
       "task_id": "SuppQA:c81b515b-c24d-4937-b972-67d89fc7a09f",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-endpoint-context-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "reason": "Guide-target sequence retrieval in an evolution context needs independent benign source selection and source-purpose review; no source sequence or protocol is reused."
     },
     {
       "task_id": "SuppQA:0284e566-0c84-4333-a44d-12bd6c4c9a9c",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:11c0a95f-70e6-4e5b-9ace-0cf6b97ad83b",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:8ba7a888-70c6-404e-949d-60e4145b8eb6",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:d540a38e-6247-4a19-8752-873b792ff3d4",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:38217b58-50a4-4376-b35a-78b8c5c1a980",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:3bee1e75-3b9c-4270-bb9e-e65b1a941b48",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-endpoint-context-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "reason": "The expected maternal/paternal detection-probability difference lacks its model, unit and conditioning information."
     },
     {
       "task_id": "SuppQA:02af18a7-aa18-4f4a-bc40-a8e81b4258dc",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:d57031ac-e7d7-4274-876b-36449ecdd640",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-endpoint-context-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "reason": "The lower attainable pH requires definition of the solution set and experimental context; do not infer a universal chemical limit."
     },
     {
       "task_id": "SuppQA:5dd6b784-487d-48bd-ac36-9653fc11c0ad",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:9379deb7-21f2-4263-86f8-2d15d1a82160",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:41478c97-f6f8-47f5-818b-1db407be9075",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:a5eff44a-ec71-44a8-bdb6-173fd9ea92ce",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:e3857371-2a36-4019-b23e-177b4b5a4be5",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:6b6dda99-3651-4bce-86c9-4fc2032479db",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:3417bcfa-c37a-4e25-8a0c-1fd963741eea",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:f13fbc77-553f-4a4c-b29b-ca178262eeef",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:93566dc3-5f5c-491e-b723-60712cca625d",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:e5ed958b-1cc9-4848-8e37-a895beb835e2",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:ebb6a0ef-5421-4392-8717-f574c9600842",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:59bf5188-9844-459c-94cf-89ed8cd3287f",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:c8e4f3d2-2fb3-428f-bb02-8593513efc54",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:ceeac89d-59c1-48a7-93db-46b045391906",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:8c2e99ce-7af0-4e73-a058-151135647076",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-endpoint-context-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "reason": "The surface-bump geometry question is not itself a biological workflow; retain a domain-scope gap."
     },
     {
       "task_id": "SuppQA:1026513d-a087-427b-ab16-8a7c199e039e",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:a8b1cd02-4bd9-43ad-927e-c2c4eb7c528b",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:97e98c7d-105b-4af5-99be-6e1fe4a2cce6",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:19b4836a-0635-4aad-9817-8934cbb7ca73",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-endpoint-context-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "reason": "The droplet-treatment question needs a biological-use rationale and independent observed context before inclusion."
     },
     {
       "task_id": "SuppQA:9b972351-d2f8-4491-8a7c-3fb5a3e429a9",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:dce3628e-905d-4b90-a6d0-877a2ccbbc33",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-endpoint-context-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "reason": "A glovebox-condition report requires chemical-study scope and independent input suitability review; no complete biological adaptation is selected."
     },
     {
       "task_id": "SuppQA:befeb56e-6f04-4be7-9304-4ede1bdd25bc",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:bd08e5ba-e26b-4258-b3a2-543c842d028a",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:c04cc31d-9aee-46bf-9628-e153c72a44e3",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-endpoint-context-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "reason": "A control label from an enteric-pathogen study requires independent benign source/context selection; no experimental adaptation is assigned."
     },
     {
       "task_id": "SuppQA:4f3bd821-52d6-4875-b8ec-d92ca0fe644f",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:8719a6b8-76e9-44ae-b26b-65821de0ac99",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:93099819-56be-40bf-b54d-427b663a2381",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-endpoint-context-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "reason": "The viral-vector oligo question requires independent benign context, sequence-purpose and source-lineage review before assigning a task."
     },
     {
       "task_id": "SuppQA:df1365b0-4731-4f40-8dd7-64f4793a1729",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:bbc4ff4f-89f6-4f27-99e1-f03482feeffb",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-endpoint-context-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "reason": "The microbial reporter induction question has no selected independent benign observed context; retain a context-review gap and no experimental recommendation."
     },
     {
       "task_id": "SuppQA:459ee10b-aa46-47ad-af55-8c0e5a0015ef",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:03f5a91c-f167-475e-8ccb-4c7561c767a9",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:4b3bbf7d-e352-4ff9-b79a-65d15566de13",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-endpoint-context-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "reason": "Reasons for changing culture medium require causal/interpretive evidence; exact reagent names do not establish the rationale."
     },
     {
       "task_id": "SuppQA:cdab2021-feed-497f-992a-a8f73df33957",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-endpoint-context-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "reason": "Highest resolution is underspecified across modalities; define spatial, molecular or cell-type resolution and the comparison set before ranking."
     },
     {
       "task_id": "SuppQA:bc806521-164f-4f66-90e7-9d28f5fc319e",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-endpoint-context-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "reason": "The viral-particle tracking buffer question needs independent benign context and a source-evidence boundary; no source operational conditions are reused."
     },
     {
       "task_id": "SuppQA:404f6ac4-0605-406b-b32e-0fc14d1600f4",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:cf4608f5-2241-4c3b-a85a-7d2cda3733ee",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:20c5295d-7cce-4a70-b950-640ea6e69806",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-endpoint-context-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "reason": "The chemical-density question lacks its component set, units and connection to a biological decision."
     },
     {
       "task_id": "SuppQA:181019ef-1151-4668-9178-13641d24bd85",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-endpoint-context-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "reason": "The reported synthesis-purification method needs a defined biological workflow and independent source suitability review."
     },
     {
       "task_id": "SuppQA:9dbf4365-801d-42f9-80a9-357b4d93c793",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-endpoint-context-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "reason": "The bacterial viability question needs independent benign context and exact candidate/evidence review before adaptation."
     },
     {
       "task_id": "SuppQA:ed0ad27f-c1ed-4796-a8f6-dd49c66b2515",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:a1cf5586-4afc-48e6-a0d2-9554f9413983",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:b226af16-8f63-4e2d-bf3c-c94a1cc2e32e",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:30fce0db-9bb8-4a89-ae5c-78f665da41f6",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:5d457a9d-4f9b-4ad9-aac3-dd15e60f00cd",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:10512e71-a619-42ab-8e1a-3b5b4decda5d",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
-    },
-    {
-      "task_id": "SuppQA:bbb9143b-6f7c-4960-bd44-ab8972a1da27",
-      "disposition": "individual-endpoint-candidates-and-evidence-unreviewed",
-      "prospective_full_coverage_credit": 0
+      "disposition": "question-stem-reviewed-endpoint-context-unresolved",
+      "prospective_full_coverage_credit": 0,
+      "reason": "Year multiplied by Warming could denote an interaction term or a table-derived quantity; the metric, candidates and model must be inspected before defining arithmetic."
     }
-  ]
+  ],
+  "supplement_review": {
+    "question_source_metadata_sha256": "d67fa60f5561083b0a0b99cef5ba9c100f76e0c90a2d04fb2567bcc546428749",
+    "question_stems_reviewed": 82,
+    "source_citations_reviewed": 82,
+    "source_supplements_retrieved": 0,
+    "answer_or_distractor_columns_read": false,
+    "proposed_cards": 16,
+    "provisional_target_records": 58,
+    "explicit_endpoint_gaps": 24,
+    "scope": "Independent observed-study audits; source-specific extraction/ranking/context still needs full evidence review. A field-location check alone does not establish arbitrary scientific entailment."
+  },
+  "question_defaults": {
+    "input_realism": "Supply complete relevant published tables, sample manifests and methods from independent observed studies, preserving native files and biological replication. Do not replace the study package with an invented answer-only table or copy the benchmark study.",
+    "scientific_scope": "These tasks audit reported study evidence. Additional raw-data analysis is a separately labeled cross-check and does not replace a question about what the study reported.",
+    "task_protocol": "Harbor only; offline by default; complete machine-readable artifacts and evidence locations; private input-reading native oracle and deterministic verifier.",
+    "readiness": "No input package or numerical acceptance contract is frozen. All questions are provisional and add no validated coverage."
+  }
 }
