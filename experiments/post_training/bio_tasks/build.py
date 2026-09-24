@@ -776,7 +776,7 @@ def build(
     for task in benchmark_registry["tasks"]:
         entries = [entry for recipe in task["recipes"] for entry in examples.get(recipe, ())]
         task["examples"] = [entry["task_id"] for entry in entries]
-        task["validation_evidence"] = [
+        task["example_validation_evidence"] = [
             {
                 "task_id": entry["task_id"],
                 "task_sha256": entry["task_sha256"],

@@ -825,5 +825,52 @@
       "candidate_download_status": "not downloaded or used in task inputs",
       "screened_at": "2026-09-24"
     }
-  ]
+  ],
+  "candidate_sources": {
+    "GSE81682": {
+      "status": "metadata-assessed; observations not downloaded or admitted",
+      "landing_page": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE81682",
+      "lineage": "GSE81682:Nestorowa-mouse-HSPC",
+      "observations": "Mouse hematopoietic stem/progenitor Smart-seq2 counts with index-sorting measurements and ERCC spike-ins.",
+      "source_scope": "GEO lists 3840 samples; the Bioconductor 3.19 workflow starts from 1920 cells and 46078 endogenous genes, and retains 1656 cells after its QC. These are different processing scopes, not interchangeable counts.",
+      "processed_source": "https://www.bioconductor.org/books/3.19/OSCA.workflows/nestorowa-mouse-hsc-smart-seq2.html",
+      "important_semantics": [
+        "The documented object has ERCC and FACS alternative experiments, cell metadata and a precomputed diffusion representation.",
+        "The documented workflow reports no mitochondrial transcripts; do not fabricate a mitochondrial QC signal.",
+        "Keep biological observations and index-sorting identities separate from precomputed analysis labels/embeddings.",
+        "Clustering and marker summaries do not create biological replicates for population-level inference."
+      ],
+      "download_candidate": "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE81nnn/GSE81682/suppl/GSE81682_HTSeq_counts.txt.gz",
+      "advertised_compressed_bytes": "28.8 MB (GEO display; exact object size not yet verified)",
+      "benchmark_screening": "No exact GSE81682/Nestorowa mention in the committed permitted task metadata at dc72d7832c; incomplete source-lineage evidence, not certified independence.",
+      "remaining_checks": [
+        "Retrieve bounded original metadata and reconcile raw versus processed cell identities.",
+        "Verify redistribution terms, checksums, annotation versions and exact benchmark input-lineage exclusions.",
+        "Retain real counts/spike-ins/FACS values and evaluate connected offline workflows on reserved remote CPUs."
+      ],
+      "preparation_evidence": {
+        "repository": "LTLA/scRNAseq",
+        "revision": "c47ea394f4bbfe35f58909a91cffa617c072b552",
+        "dataset": "nestorowa-hsc-2016",
+        "dataset_version": "2024-04-18",
+        "files": [
+          {
+            "path": "scripts/nestorowa-hsc-2016/2023-12-19.Rmd",
+            "sha256": "1fd6ad50dcdac85fd7519712bc5d4b90a56f9ace74fdd8284821e0b5d69284f3"
+          },
+          {
+            "path": "scripts/nestorowa-hsc-2016/2024-04-18.Rmd",
+            "sha256": "dca99174854bdddccfabbb720bfcb1ccb62782d4224b442f9ad08761a2d16770"
+          }
+        ],
+        "semantics": [
+          "GEO counts are imported sparsely; HTSeq __ rows become cell-level mapping metrics; ERCC rows become a separate assay.",
+          "Original author website metadata is matched by cell identity; missing FACS observations remain missing. Gate assignments are inferred from cell-name prefixes by the package maintainer.",
+          "The 2024-04-18 revision changes the FACS container class; its preparation script states that observations are unchanged."
+        ],
+        "reference_genome": "GRCm38 (preparation metadata; exact gene annotation release still unverified)",
+        "retrieval": "scRNAseq::fetchDataset(\"nestorowa-hsc-2016\", \"2024-04-18\"); run on reserved CPUs and freeze retrieved file hashes before recipe admission"
+      }
+    }
+  }
 }

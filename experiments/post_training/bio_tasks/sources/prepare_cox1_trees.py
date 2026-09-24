@@ -84,12 +84,28 @@ def prepare(proteins: Path, output: Path) -> None:
             command,
             output,
             "fasttree.nwk" if method == "fasttree" else method + ".stdout",
-            timeout=900 if method == "iqtree" else 300,
+            timeout={"iqtree": 900, "fasttree": 60, "raxml": 600}[method],
         )
     shutil.copyfile(output / "iqtree.treefile", output / "iqtree.nwk")
     shutil.copyfile(output / "RAxML_bestTree.cox1", output / "raxml.nwk")
-    taxa = sorted(sequences)
-    trees = {method: Phylo.read(output / f"{method}.nwk", "newick") for method in methods}
+    write_reference(proteins, output)
+
+
+def write_reference(proteins: Path, output: Path) -> None:
+    """Measure complete native outputs independently of the task oracle."""
+    records = json.loads(gzip.decompress(proteins.read_bytes()))["proteins"]
+    representatives = {}
+    for key, record in sorted(records.items()):
+        representatives.setdefault(record["sequence"], key)
+    aligned = {record.id: str(record.seq).upper() for record in SeqIO.parse(output / "alignment.fa", "fasta")}
+    if {key: sequence.replace("-", "") for key, sequence in aligned.items()} != {
+        key: sequence for sequence, key in representatives.items()
+    }:
+        raise ValueError("Reference alignment changed observed proteins")
+    if len({len(sequence) for sequence in aligned.values()}) != 1:
+        raise ValueError("Ragged reference alignment")
+    taxa = sorted(aligned)
+    trees = {method: Phylo.read(output / f"{method}.nwk", "newick") for method in ("iqtree", "fasttree", "raxml")}
     splits = {}
     summaries = {}
     for method, tree in trees.items():
@@ -128,7 +144,7 @@ def prepare(proteins: Path, output: Path) -> None:
         "source_accessions": len(records),
         "identical_sequence_policy": "Keep lexicographically first accession per unchanged amino-acid sequence",
         "alignment_columns": len(next(iter(aligned.values()))),
-        "trees": {method: (output / f"{method}.nwk").read_text() for method in methods},
+        "trees": {method: (output / f"{method}.nwk").read_text() for method in trees},
         "summaries": summaries,
         "distances": distances,
         "comparisons": comparisons,
@@ -139,6 +155,7 @@ def prepare(proteins: Path, output: Path) -> None:
             "have different optimization procedures. Do not compare raw likelihoods across these runs. "
             "These are single-gene estimates, without a validated species-tree interpretation."
         ),
+        "query": {"seed": SEED},
     }
     (output / "reference.json").write_text(json.dumps(reference, indent=2) + "\n")
 

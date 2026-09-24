@@ -304,8 +304,12 @@ cannot establish whether each fold was excluded during fitting.
 
 For BixBench,
 shared workflow-family stages are distinguished from individual question endpoints;
-this inventory does not add execution coverage. The inspection browser binds mappings
-to generated examples and their local reference results. These timings are solver-check runtimes, not teacher latency measurements.
+this inventory does not add execution coverage. Four RNA-seq component mappings now
+link the executed DESeq2/GO workflows and their Harbor artifact checks; ontology
+simplification, endpoint-specific designs and biological source independence remain
+unresolved. The inspection browser retains those validation references and records
+generated-example checks separately in `example_validation_evidence`. These timings
+are solver-check runtimes, not teacher latency measurements.
 
 Twenty-four recipes supply unchanged biological observations or declared observed subsets:
 

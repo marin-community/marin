@@ -311,7 +311,8 @@
       "recipes": [
         "real-rnaseq-size-factors",
         "real-rnaseq-normalized-contrast",
-        "differential-expression-bh"
+        "differential-expression-bh",
+        "real-rnaseq-go-enrichment"
       ],
       "required_stages": [
         "sample metadata join",
@@ -321,9 +322,8 @@
         "ontology simplification"
       ],
       "remaining_gaps": [
-        "Fit the differential expression model; descriptive fold changes are insufficient",
-        "Test GO terms and redundancy reduction with independent annotation snapshot",
-        "Fit replicate-aware count models; freeze the annotation universe and ontology-simplification method. Normalization and supplied p-values do not cover this workflow."
+        "Ontology redundancy reduction and clusterProfiler-specific behavior remain uncovered.",
+        "Benchmark-specific contrasts, endpoint rules and source-lineage independence require review; the GSE60450 workflow validates transferable operations only."
       ],
       "required_formats": [
         "count matrix",
@@ -335,11 +335,23 @@
         "clusterProfiler"
       ],
       "independent_data_sources": [
-        "GSE60450"
+        "GSE60450",
+        "GO:mouse-3.22.0"
       ],
-      "validation_evidence": [],
+      "validation_evidence": [
+        "native_validation_runs/e39ec1c86f62.json",
+        "container_validation.json: /exedev/bio-harbor-rnaseq-haswell-20260924-032150"
+      ],
       "runtime_seconds": null,
-      "workflow_family": "bulk-rnaseq-go-enrichment"
+      "workflow_family": "bulk-rnaseq-go-enrichment",
+      "mapped_stages": [
+        "sample identity and count QC",
+        "replicate-aware negative-binomial estimation",
+        "directional contrast and BH multiple testing",
+        "tested and annotated gene universe",
+        "full GO over-representation table"
+      ],
+      "validation_scope": "Native input-reading oracle; full QC and gene tables and GO table; positive and changed-intermediate Harbor controls passed. This evidence covers the mapped operations on GSE60450, not the original benchmark task."
     },
     {
       "task_id": "bix-1-q2",
@@ -354,7 +366,8 @@
       "recipes": [
         "real-rnaseq-size-factors",
         "real-rnaseq-normalized-contrast",
-        "differential-expression-bh"
+        "differential-expression-bh",
+        "real-rnaseq-go-enrichment"
       ],
       "required_stages": [
         "sample metadata join",
@@ -364,9 +377,8 @@
         "ontology simplification"
       ],
       "remaining_gaps": [
-        "Fit the differential expression model; descriptive fold changes are insufficient",
-        "Test GO terms and redundancy reduction with independent annotation snapshot",
-        "Fit replicate-aware count models; freeze the annotation universe and ontology-simplification method. Normalization and supplied p-values do not cover this workflow."
+        "Ontology redundancy reduction and clusterProfiler-specific behavior remain uncovered.",
+        "Benchmark-specific contrasts, endpoint rules and source-lineage independence require review; the GSE60450 workflow validates transferable operations only."
       ],
       "required_formats": [
         "count matrix",
@@ -378,11 +390,23 @@
         "clusterProfiler"
       ],
       "independent_data_sources": [
-        "GSE60450"
+        "GSE60450",
+        "GO:mouse-3.22.0"
       ],
-      "validation_evidence": [],
+      "validation_evidence": [
+        "native_validation_runs/e39ec1c86f62.json",
+        "container_validation.json: /exedev/bio-harbor-rnaseq-haswell-20260924-032150"
+      ],
       "runtime_seconds": null,
-      "workflow_family": "bulk-rnaseq-go-enrichment"
+      "workflow_family": "bulk-rnaseq-go-enrichment",
+      "mapped_stages": [
+        "sample identity and count QC",
+        "replicate-aware negative-binomial estimation",
+        "directional contrast and BH multiple testing",
+        "tested and annotated gene universe",
+        "full GO over-representation table"
+      ],
+      "validation_scope": "Native input-reading oracle; full QC and gene tables and GO table; positive and changed-intermediate Harbor controls passed. This evidence covers the mapped operations on GSE60450, not the original benchmark task."
     },
     {
       "task_id": "bix-10-q1",

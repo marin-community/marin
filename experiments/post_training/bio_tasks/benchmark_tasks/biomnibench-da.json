@@ -584,7 +584,8 @@
       "recipes": [
         "real-rnaseq-library-qc",
         "real-rnaseq-size-factors",
-        "real-rnaseq-normalized-contrast"
+        "real-rnaseq-normalized-contrast",
+        "real-rnaseq-differential-expression"
       ],
       "required_stages": [
         "join tissue/diagnosis metadata",
@@ -594,10 +595,8 @@
         "rank effects"
       ],
       "remaining_gaps": [
-        "Benchmark-specific design and statistical model",
-        "Executable interpretation contract; no LLM judge",
-        "Fit replicated differential expression with relevant covariates; normalization and descriptive contrast alone are insufficient.",
-        "Validate the connected workflow and native output artifacts on independent real biological data."
+        "Diagnosis/treatment design, covariate handling and endpoint-specific ranking remain benchmark-specific gaps.",
+        "Review biological source independence and the requested scientific interpretation; no model judge is used."
       ],
       "required_formats": [
         "count matrix",
@@ -609,9 +608,18 @@
       "independent_data_sources": [
         "GSE60450"
       ],
-      "validation_evidence": [],
+      "validation_evidence": [
+        "native_validation_runs/e39ec1c86f62.json",
+        "container_validation.json: /exedev/bio-harbor-rnaseq-haswell-20260924-032150"
+      ],
       "runtime_seconds": null,
-      "workflow_family": "bulk-differential-expression"
+      "workflow_family": "bulk-differential-expression",
+      "mapped_stages": [
+        "sample identity and count QC",
+        "replicate-aware negative-binomial estimation",
+        "directional contrast and BH multiple testing"
+      ],
+      "validation_scope": "Native input-reading oracle; full QC and gene tables; positive and changed-intermediate Harbor controls passed. This evidence covers the mapped operations on GSE60450, not the original benchmark task."
     },
     {
       "task_id": "da-15-2",
@@ -925,7 +933,8 @@
       "recipes": [
         "real-rnaseq-library-qc",
         "real-rnaseq-size-factors",
-        "real-rnaseq-normalized-contrast"
+        "real-rnaseq-normalized-contrast",
+        "real-rnaseq-differential-expression"
       ],
       "required_stages": [
         "match treatment samples",
@@ -935,10 +944,8 @@
         "rank downregulated genes"
       ],
       "remaining_gaps": [
-        "Benchmark-specific design and statistical model",
-        "Executable interpretation contract; no LLM judge",
-        "Fit the full differential model and retain effect direction; descriptive fold change is insufficient.",
-        "Validate the connected workflow and native output artifacts on independent real biological data."
+        "Diagnosis/treatment design, covariate handling and endpoint-specific ranking remain benchmark-specific gaps.",
+        "Review biological source independence and the requested scientific interpretation; no model judge is used."
       ],
       "required_formats": [
         "count matrix",
@@ -950,9 +957,18 @@
       "independent_data_sources": [
         "GSE60450"
       ],
-      "validation_evidence": [],
+      "validation_evidence": [
+        "native_validation_runs/e39ec1c86f62.json",
+        "container_validation.json: /exedev/bio-harbor-rnaseq-haswell-20260924-032150"
+      ],
       "runtime_seconds": null,
-      "workflow_family": "bulk-differential-expression"
+      "workflow_family": "bulk-differential-expression",
+      "mapped_stages": [
+        "sample identity and count QC",
+        "replicate-aware negative-binomial estimation",
+        "directional contrast and BH multiple testing"
+      ],
+      "validation_scope": "Native input-reading oracle; full QC and gene tables; positive and changed-intermediate Harbor controls passed. This evidence covers the mapped operations on GSE60450, not the original benchmark task."
     },
     {
       "task_id": "da-19-3",

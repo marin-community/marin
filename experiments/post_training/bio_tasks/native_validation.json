@@ -1255,6 +1255,30 @@
       "archive_bytes": 86603,
       "archive_sha256": "1457498d358e60f172d2ba742a7dfa4591265c8114bf6af8f2e31feeb23e6bf8",
       "decision": "Keep a representative per identical protein sequence with a complete accession map. Permit up to 900 seconds for IQ-TREE within the 30-minute task limit; other native checks retain the 300-second cap."
+    },
+    {
+      "checked_at": "2026-09-24",
+      "job_id": "/exedev/bio-phylogeny-unique-20260924-042915",
+      "source_revision": "dc72d7832c09ce1ebcd946c36991dd2e6a392711",
+      "status": "failed-command-timeout",
+      "data_source": "UniProt:metazoan-cox1-20260924",
+      "input_sequences": 94,
+      "unique_sequences": 89,
+      "alignment_columns": 558,
+      "completed_commands": {
+        "mafft": 13.933027352002682,
+        "iqtree3": 510.6470403790008,
+        "FastTree": 3.9195237099920632
+      },
+      "raxml_timeout_seconds": 300,
+      "raxml_progress": "Search likelihood stabilized near -14402.509 by 234 seconds and was still searching at 280 seconds; no completed RAxML tree or workflow validation claimed.",
+      "raxml_version": "Conda package 8.2.13; executable banner 8.2.12",
+      "placement": "existing reserved TRC worker 28, us-central2",
+      "environment_lock": "sources/phylogeny-preparation.lock.json",
+      "archive_uri": "gs://marin-us-central2/tmp/ttl=7d/iris/task-outputs/exedev/bio-phylogeny-unique-20260924-042915/0/00bfb09496425a36/outputs.tar.zst",
+      "archive_bytes": 97995,
+      "archive_sha256": "9934e072a7d25b03ad831c349d53bf40264be6d533d3a877f13e738bcdf22b14",
+      "decision": "Retain completed IQ-TREE, FastTree and MAFFT artifacts with hashes. Complete RAxML under a 600-second cap, then rerun the complete input-reading oracle with a 1,700-second workflow cap and unchanged grading tolerances."
     }
   ]
 }

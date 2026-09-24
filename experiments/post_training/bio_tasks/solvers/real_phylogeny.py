@@ -50,7 +50,13 @@ def solve_phylogeny(inputs: Path, output: Path) -> list[dict]:
     for method, command in commands.items():
         filename = "fasttree.nwk" if method == "fasttree" else method + ".stdout"
         with (output / filename).open("wb") as stdout, (output / (method + ".stderr")).open("wb") as stderr:
-            subprocess.run(command, check=True, stdout=stdout, stderr=stderr, timeout=900 if method == "iqtree" else 300)
+            subprocess.run(
+                command,
+                check=True,
+                stdout=stdout,
+                stderr=stderr,
+                timeout={"iqtree": 900, "fasttree": 60, "raxml": 600}[method],
+            )
     shutil.copyfile(output / "iqtree.treefile", output / "iqtree.nwk")
     shutil.copyfile(output / "RAxML_bestTree.cox1", output / "raxml.nwk")
     trees = {method: weighted_splits(newick((output / f"{method}.nwk").read_text())) for method in commands}
