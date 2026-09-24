@@ -80,7 +80,9 @@ Benchmark answers and biological fixtures are excluded from training authoring.
 
 The [ScholarQA-Bio inventory](scholarqabench-bio.json) enumerates 1,451 public question
 IDs and text hashes without copying prompts or inspiring papers. Shared literature
-retrieval/synthesis stages are inspected; individual endpoints remain unreviewed.
+retrieval/synthesis stages and the first 400 question stems are inspected; 1,051
+stems remain unreviewed. Potential quantitative components are recorded separately
+from the unresolved complete synthesis endpoints.
 Its model-based citation attribution is not used as a reward. A deterministic
 extraction or retrieval component cannot claim full open-ended synthesis coverage.
 

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T17:50:12.615871+00:00",
+  "updated_at": "2026-09-24T17:56:02.652292+00:00",
   "scope": "Full question-proposal portfolio for the 32 currently inventoried provisional-ID agentic releases. This planning index resolves every question card and records conditional consolidation; it creates no training task or validated coverage. Nine source leads without inventories remain outside the enumerated denominator.",
   "counts": {
     "source_releases": 32,
@@ -21,7 +21,7 @@
     "Conditional consolidation is a proposed scientific task, not a proved equivalence. If compatible independent inputs, methods and <=30-minute runtime do not exist, split it back into coherent questions and preserve uncovered source IDs.",
     "Do not turn registry configurations, repeated assays, source protocol variants or known aliases into automatic independent workflow credit.",
     "Scientific realism governs task boundaries. One task may use several native tools and produce many intermediate artifacts when they answer one question; unrelated estimands stay separate.",
-    "ScholarQA-Bio contributes 1,451 enumerated question identities with unreviewed endpoint dispositions. These have no question-card assignments; source citation attribution uses a learned model, and deterministic numerical extraction does not cover unrestricted synthesis.",
+    "ScholarQA-Bio contributes 1,451 identities: 400 stems reviewed and 1,051 unreviewed; all retain synthesis-contract gaps. These have no question-card assignments; source citation attribution uses a learned model, and deterministic numerical extraction does not cover unrestricted synthesis.",
     "LAB-Bench contributes 801 scoped literature/database identities and nine shared family contracts. Supplementary questions have 58 provisional design assignments and 24 explicit gaps; 520 database schemas share seven existing question cards, while 199 reviewed literature stems retain evidence/acceptance gaps. Fifty Biomni DbQA stems overlap, with twenty ambiguous source matches; no additional aliases are credited."
   ],
   "source_question_files": [
@@ -91,7 +91,7 @@
     },
     {
       "path": "workflow_designs/scholarqabench-bio.json",
-      "sha256": "0f1e4c959b41b5a94a7a028e6fb90ae94597ade8fead448741a023027b43c46e"
+      "sha256": "f129001f9757f7f6a3c8f70d98ec177ffd2d8ed489fe97944b04cc06b32720ce"
     },
     {
       "path": "workflow_designs/bioagent.json",
