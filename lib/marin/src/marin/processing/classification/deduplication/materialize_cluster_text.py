@@ -28,8 +28,6 @@ from zephyr.worker_context import zephyr_worker_ctx
 from zephyr.writers import write_parquet_file
 
 from marin.datakit.copartitioned import CopartitionedSource, build_copartitioned_shards
-from marin.datakit.normalize import NormalizedData
-from marin.datakit.source_key import datakit_source_key
 from marin.execution.artifact import read_artifact, read_record
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.cluster_text import (
@@ -357,7 +355,6 @@ def materialize_cluster_text(
 def cluster_text_step(
     *,
     name: str,
-    normalized_steps: Sequence[StepSpec],
     candidates: StepSpec,
     plan: StepSpec,
     params: ClusterTextParams = ClusterTextParams(),
@@ -368,18 +365,17 @@ def cluster_text_step(
     reduce_task_resources: ResourceConfig | None = None,
     max_shard_failures: int = DEFAULT_MAX_SHARD_FAILURES,
 ) -> StepSpec:
-    """Create a text shuffle with normalized, candidate, and planner dependencies."""
+    """Create a text shuffle with candidate and planner dependencies."""
 
     def build(output_path: str) -> ClusterTextData:
-        normalized = [read_artifact(step.output_path, NormalizedData) for step in normalized_steps]
+        prefix = marin_prefix()
+        candidate_artifact = read_artifact(candidates.output_path, FuzzyDupsAttrData)
         return materialize_cluster_text(
-            prefix=marin_prefix(),
+            prefix=prefix,
             candidates=candidates.output_path,
             normalized_sources=[
-                CopartitionedSource(
-                    source_key=datakit_source_key(source.main_output_dir), input_dir=source.main_output_dir
-                )
-                for source in normalized
+                CopartitionedSource(source_key=key, input_dir=resolve_data_path(prefix, key))
+                for key in sorted(candidate_artifact.sources)
             ],
             plan=read_artifact(plan.output_path, LargeClusterPlan),
             output_path=output_path,
@@ -394,7 +390,7 @@ def cluster_text_step(
 
     return StepSpec(
         name=name,
-        deps=[*normalized_steps, candidates, plan],
+        deps=[candidates, plan],
         hash_attrs={"version": 1, "params": params.model_dump(mode="json")},
         fn=build,
     )

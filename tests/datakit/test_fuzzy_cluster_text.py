@@ -374,7 +374,6 @@ def test_cluster_steps_build_from_dependencies_and_persist_grouped_text(tmp_path
     )
     materialized = cluster_text_step(
         name="text",
-        normalized_steps=[normalized],
         candidates=candidate,
         plan=plan,
         params=ClusterTextParams(max_cluster_size=2, output_shards=1, groups_per_shard=1),
