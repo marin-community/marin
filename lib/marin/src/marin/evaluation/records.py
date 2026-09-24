@@ -486,7 +486,7 @@ class EvalRunRecord(BaseModel):
     serving: ServingParams | None = None
     """The model-serving and generation settings the run evaluated under; ``None`` when not captured."""
     inference_metrics: InferenceMetrics | None = None
-    """Cumulative vLLM counters measured over this evaluation's execution window."""
+    """Inference work and rates from vLLM counter deltas over this evaluation's window."""
 
 
 def record_path(prefix: str, run_id: str) -> str:
