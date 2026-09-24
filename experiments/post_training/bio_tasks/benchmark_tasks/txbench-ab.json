@@ -1,0 +1,260 @@
+{
+  "benchmark": "TxBench-Ab",
+  "source_revision": "3e9a40b2bad520b1a62ff21c308b57e3c8fbe508",
+  "scope": "All 6 public task definitions in the pinned release; 100 advertised full-suite tasks. Agentic provisional ID.",
+  "assessment_scope": "Every public question and metadata record manually assessed. Input schemas, biological fixtures, execution and actual scorer behavior remain uninspected. Scorer type names are metadata only. Expected-answer configuration was omitted from the saved metadata projection and was not read for authoring.",
+  "inventory_completeness": {
+    "advertised_total": 100,
+    "public_manifest_count": 6,
+    "public_eval_file_count": 6,
+    "readme_claimed_examples": 7,
+    "discrepancy": "README says seven examples; manifest and nontruncated tree agree on the recorded count. No IDs invented for the unavailable full-suite remainder."
+  },
+  "license_and_contamination": "Root Apache-2.0 license; public manifest separately excludes benchmark data from training. Inputs, graders and ground truth are withheld.",
+  "source_files": [
+    {
+      "path": "LICENSE",
+      "url": "https://raw.githubusercontent.com/latchbio/txbench-antibody-discovery/3e9a40b2bad520b1a62ff21c308b57e3c8fbe508/LICENSE",
+      "bytes": 9073,
+      "sha256": "440f5cbd29c18377ba71b960247e584dfc3065054dc6a6774aa1fdb63f23c8ed"
+    },
+    {
+      "path": "README.md",
+      "url": "https://raw.githubusercontent.com/latchbio/txbench-antibody-discovery/3e9a40b2bad520b1a62ff21c308b57e3c8fbe508/README.md",
+      "bytes": 694,
+      "sha256": "4c724790df9c4cfd21c672a0213268b94ff24f48fee9d5d79fe72ab74e61317e"
+    },
+    {
+      "path": "evals/manifest.json",
+      "url": "https://raw.githubusercontent.com/latchbio/txbench-antibody-discovery/3e9a40b2bad520b1a62ff21c308b57e3c8fbe508/evals/manifest.json",
+      "bytes": 2288,
+      "sha256": "dd68a28f078ea556bfefe2b10a996c4987446e0a4ef172bbc89f80cc8701ad8a"
+    }
+  ],
+  "task_defaults": {
+    "status": "unmapped",
+    "training_mapping_allowed": true,
+    "assessment": "public-prompt-pattern-assessed; inputs and executable scoring uninspected",
+    "recipes": [],
+    "independent_data_sources": [],
+    "validation_evidence": [],
+    "runtime_seconds": null,
+    "remaining_gaps": [
+      "Select independent observed biological data and check source lineage and reuse terms; benchmark prompts, answers, trajectories and fixtures are excluded from the training corpus.",
+      "Specify quantitative intermediate artifacts, full output populations and decision criteria that can be verified without an LLM judge.",
+      "Implement and run a connected private oracle with negative controls and an offline task budget of at most 30 minutes."
+    ]
+  },
+  "workflow_patterns": {
+    "sequence-model-domain-shift": [
+      "mlabaffinity_s7_antibody_display_sorting_0066"
+    ],
+    "classifier-annotation-reliability": [
+      "tcellengagerengineering_s6_imaging_flow_cytometry_0100"
+    ],
+    "biodistribution-label-validity": [
+      "cd98hccrossspeciesengineering_s8_pk_0035"
+    ],
+    "compartment-delivery-evidence": [
+      "cd98hctessiershuttle_s8_tissue_biodistribution_imaging_0084"
+    ],
+    "subcellular-delivery-validation": [
+      "adc_doxlinker_nuclear_signal_nocall"
+    ],
+    "longitudinal-readout-validity": [
+      "denton2022_s6_dose_selection_readout_choice"
+    ]
+  },
+  "tasks": [
+    {
+      "task_id": "mlabaffinity_s7_antibody_display_sorting_0066",
+      "workflow_family": "sequence-model-domain-shift",
+      "workflow_pattern": "Audit representation coverage and predictive evidence at previously unvaried sequence positions",
+      "required_stages": [
+        "compare library and held-out sequences with the common background",
+        "identify varied and incidental positions and reconstruct encoding",
+        "fit the stated classification models using only the training library",
+        "evaluate both measured properties on the precisely identified novel-position cohort"
+      ],
+      "required_formats": [
+        "CSV",
+        "Python encoder",
+        "JSON answer"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "Novel amino-acid positions and novel combinations at known positions are distinct shifts. Preserve the exact evaluation population; define significance tests and encoding behavior without using held-out labels for fitting."
+      ],
+      "source_metadata_url": "https://github.com/latchbio/txbench-antibody-discovery/blob/3e9a40b2bad520b1a62ff21c308b57e3c8fbe508/evals/mlabaffinity_s7_antibody_display_sorting_0066/eval.json",
+      "source_metadata_sha256": "46f2d23a3e675af527b613d6fecd9dcd089bdb5fa86388efac8ad98733334a0e",
+      "source_metadata_bytes": 4578,
+      "source_metadata": {
+        "roadmap_category": "D4",
+        "discovery_competency": "Binder generation and primary hit selection",
+        "decision_type": "Candidate ranking, selection, and triage",
+        "assay_modality": "Sorted antibody display library with sequence-based (LDA) property models",
+        "data_source": "Real",
+        "grader_type": "all_of"
+      },
+      "source_grader_type": "all_of"
+    },
+    {
+      "task_id": "tcellengagerengineering_s6_imaging_flow_cytometry_0100",
+      "workflow_family": "classifier-annotation-reliability",
+      "workflow_pattern": "Compare classifier agreement and multi-rater reliability across distinct annotation panels",
+      "required_stages": [
+        "reconcile image identities, panel membership and independent rater labels",
+        "compute appropriate agreement baselines for each available panel",
+        "separate training-condition annotation reliability from new-condition validation",
+        "report which generalization claims are supported"
+      ],
+      "required_formats": [
+        "CSV",
+        "JSON answer"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "The second panel has no model predictions, and same-condition reliability cannot directly quantify a new-stimulus performance drop. Keep images, raters and biological conditions distinct."
+      ],
+      "source_metadata_url": "https://github.com/latchbio/txbench-antibody-discovery/blob/3e9a40b2bad520b1a62ff21c308b57e3c8fbe508/evals/tcellengagerengineering_s6_imaging_flow_cytometry_0100/eval.json",
+      "source_metadata_sha256": "80cf2accf89531a3a1646089932d8d7bc1ba8b91182d8462cf3e04f9b907041c",
+      "source_metadata_bytes": 3699,
+      "source_metadata": {
+        "roadmap_category": "D8",
+        "discovery_competency": "Cellular pharmacology and mechanism of action",
+        "decision_type": "Mechanistic inference",
+        "assay_modality": "Imaging flow cytometry with a synapse-classification model and inter-rater reliability panels",
+        "data_source": "Real",
+        "grader_type": "all_of"
+      },
+      "source_grader_type": "all_of"
+    },
+    {
+      "task_id": "cd98hccrossspeciesengineering_s8_pk_0035",
+      "workflow_family": "biodistribution-label-validity",
+      "workflow_pattern": "Summarize organ exposure while assessing what a radiolabel can establish about persistence",
+      "required_stages": [
+        "join animal, candidate, organ and sampling-time identities",
+        "calculate observed organ/time summaries with replicate counts",
+        "assess label chemistry and limits of intact-drug inference",
+        "separate observed persistence from supported dosing claims"
+      ],
+      "required_formats": [
+        "radiolabel biodistribution table (encoding uninspected)",
+        "JSON answer"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "Radiolabel signal and intact biologic concentration are different quantities. Replicate variation and label retention bias are separate limits; these descriptive data do not independently validate a dosing interval."
+      ],
+      "source_metadata_url": "https://github.com/latchbio/txbench-antibody-discovery/blob/3e9a40b2bad520b1a62ff21c308b57e3c8fbe508/evals/cd98hccrossspeciesengineering_s8_pk_0035/eval.json",
+      "source_metadata_sha256": "b35149fbf00b69fa95484864d980c2041a0bab43288d2a8ed5159472ad0ab9ad",
+      "source_metadata_bytes": 4419,
+      "source_metadata": {
+        "roadmap_category": "D10",
+        "discovery_competency": "Discovery-stage translational de-risking",
+        "decision_type": "Integrated discovery gate",
+        "assay_modality": "125I biodistribution time-course (%ID/g) across organs",
+        "data_source": "Real",
+        "grader_type": "all_of"
+      },
+      "source_grader_type": "all_of"
+    },
+    {
+      "task_id": "cd98hctessiershuttle_s8_tissue_biodistribution_imaging_0084",
+      "workflow_family": "compartment-delivery-evidence",
+      "workflow_pattern": "Reconcile concentration, tissue fractionation and microscopy for delivery assessment",
+      "required_stages": [
+        "align candidate identities, timepoints and measurement methods",
+        "compute the specified concentration comparison",
+        "distinguish vascular signal from parenchymal localization",
+        "apply an explicit hierarchy of evidence for delivery"
+      ],
+      "required_formats": [
+        "concentration and fractionation tables",
+        "fluorescence microscopy (encodings uninspected)",
+        "JSON answer"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "Whole-organ signal does not establish delivery to the desired compartment. Validate fractionation purity and imaging localization; scalar concentration ratios alone do not check the decision workflow."
+      ],
+      "source_metadata_url": "https://github.com/latchbio/txbench-antibody-discovery/blob/3e9a40b2bad520b1a62ff21c308b57e3c8fbe508/evals/cd98hctessiershuttle_s8_tissue_biodistribution_imaging_0084/eval.json",
+      "source_metadata_sha256": "12f3f23c971180777557ed5955ef19e56342d24224dab90e0a9b8c650748a46a",
+      "source_metadata_bytes": 2572,
+      "source_metadata": {
+        "roadmap_category": "D10",
+        "discovery_competency": "Discovery-stage translational de-risking",
+        "decision_type": "Comparative assessment",
+        "assay_modality": "Whole-brain concentration, capillary-depletion fractionation, and fluorescence microscopy",
+        "data_source": "Real",
+        "grader_type": "all_of"
+      },
+      "source_grader_type": "all_of"
+    },
+    {
+      "task_id": "adc_doxlinker_nuclear_signal_nocall",
+      "workflow_family": "subcellular-delivery-validation",
+      "workflow_pattern": "Compare payload localization with carrier uptake before interpreting delivery",
+      "required_stages": [
+        "join carrier, linker, cell and time identities",
+        "calculate nuclear and cytoplasmic payload endpoints",
+        "compare payload localization with matched carrier-uptake measurements",
+        "report the delivery conclusion under a defined compartment rule"
+      ],
+      "required_formats": [
+        "per-cell intensity table",
+        "live-cell microscopy movies (encodings uninspected)",
+        "JSON answer"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "Total fluorescence, nuclear fraction and uptake correlation are different endpoints. Use matched units and explicit image-analysis/decision contracts; intensity alone does not establish effective delivery."
+      ],
+      "source_metadata_url": "https://github.com/latchbio/txbench-antibody-discovery/blob/3e9a40b2bad520b1a62ff21c308b57e3c8fbe508/evals/adc_doxlinker_nuclear_signal_nocall/eval.json",
+      "source_metadata_sha256": "e53b1e02a0af060a433ab6c55fbbe4da1c61b5da19a2159c17b0d2156449e5fd",
+      "source_metadata_bytes": 2107,
+      "source_metadata": {
+        "roadmap_category": "D8",
+        "discovery_competency": "Cellular pharmacology and mechanism of action",
+        "decision_type": "Diagnosis and troubleshooting",
+        "assay_modality": "Per-cell immunofluorescence (nuclear/cytoplasmic payload) with live-cell internalization movies",
+        "data_source": "Real",
+        "grader_type": "numeric_tolerance"
+      },
+      "source_grader_type": "numeric_tolerance"
+    },
+    {
+      "task_id": "denton2022_s6_dose_selection_readout_choice",
+      "workflow_family": "longitudinal-readout-validity",
+      "workflow_pattern": "Reconcile posted longitudinal outcomes with a fitted population model to assess readout timing",
+      "required_stages": [
+        "parse arm-by-visit outcome records and fitted model parameters",
+        "distinguish target, efficacy and safety readouts",
+        "compute observed arm comparisons and lineage time-scale ratios",
+        "apply explicit criteria for readout suitability and timing"
+      ],
+      "required_formats": [
+        "JSON",
+        "NONMEM-style .mod control stream",
+        "JSON answer"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "The released prompt requests free-text reasoning and several decisions without exposing the scorer. Keep observed readouts distinct from model-implied dynamics; predefined criteria are needed for a judge-free adaptation."
+      ],
+      "source_metadata_url": "https://github.com/latchbio/txbench-antibody-discovery/blob/3e9a40b2bad520b1a62ff21c308b57e3c8fbe508/evals/denton2022_s6_dose_selection_readout_choice/eval.json",
+      "source_metadata_sha256": "0b67f1d0bc362f3f4697c5766e62b2f89d3546363865063c10c55360cee31013",
+      "source_metadata_bytes": 4885,
+      "source_metadata": {
+        "roadmap_category": "D3",
+        "discovery_competency": "Assay and screening-funnel design",
+        "decision_type": "Experimental design",
+        "assay_modality": "Posted repeat-dose study results and a population haematopoiesis model",
+        "data_source": "Real",
+        "grader_type": "all_of"
+      },
+      "source_grader_type": "all_of"
+    }
+  ]
+}

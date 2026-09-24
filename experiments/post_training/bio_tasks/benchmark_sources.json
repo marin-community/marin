@@ -4,7 +4,7 @@
   "retrieved_at": "2026-09-24",
   "scope": "Agentic (Harbor) tab only. Benchmark/protocol rows are not independent datasets or task counts. Shared questions and parent subsets must be deduplicated before coverage reporting.",
   "policy": "Preserve every OOD assignment in the agentic tab: Terminal-Bench-Science/full and lite, GeneBench/original and Pro, BioMysteryBench and SciCode. All other listed agentic sources are provisionally ID. Borrow workflow ideas; use independent biological inputs and references. Do not use OOD formulations or derived copies for authoring.",
-  "task_coverage": "benchmark_coverage.json indexes 1,769 task/protocol/definition records across 23 ID releases, with overlaps and source-specific review limits. 46 have component mappings, 1,722 are unmapped and one is excluded. No full workflow is validated. PromptBio includes all 244 public agent-facing definitions and 316 required-output declarations; biological inputs and source evaluators remain uninspected. Other releases include partial examples, planning contexts and registry definitions. These are not unique independent workflows. Remaining eligible sources are not fully inventoried. BioMysteryBench retains 90 identifiers only as OOD. BioXArena adds 76 reconciled task identities with catalog/scorer endpoint review; full prompts and data remain uninspected.",
+  "task_coverage": "benchmark_coverage.json indexes 1,791 task/protocol/definition records across 26 ID releases, with overlaps and source-specific review limits. 46 have component mappings, 1,744 are unmapped and one is excluded. No full workflow is validated. PromptBio includes all 244 public agent-facing definitions and 316 required-output declarations; biological inputs and source evaluators remain uninspected. Other releases include partial examples, planning contexts and registry definitions. These are not unique independent workflows. Remaining eligible sources are not fully inventoried. BioMysteryBench retains 90 identifiers only as OOD. BioXArena adds 76 reconciled task identities with catalog/scorer endpoint review; full prompts and data remain uninspected. TxBench public subsets add 12 PP, six antibody and four oligonucleotide task definitions; manifest/file counts differ from all three READMEs. Full suites remain unavailable.",
   "sources": [
     {
       "sheet": "Agentic (Harbor)",
@@ -605,12 +605,22 @@
       "distribution": "ID",
       "assignment": "2026-09-24: preserve sheet OOD; remaining sources provisionally ID",
       "scientific_scope": "100 assay-grounded preclinical pharmacology decisions.",
-      "grading": "Released Latch deterministic graders, including numeric, label, ranking and composite checks.",
+      "grading": "Public manifest names all_of and numeric_tolerance grader types; eval JSON contains grader configuration, omitted from pattern inspection. Executable grader behavior not inspected.",
       "scoring_access": "Public subset",
       "source_url": "https://latch.bio/txbench-pp",
       "data_url": "https://github.com/latchbio/txbench-pp/tree/a4e0913d76c3dbc433ecf39903afbe7711a6a807/evals",
-      "inspection": "sheet metadata reviewed; source release and task-level inventory require verification",
-      "training_mapping_allowed": true
+      "inspection": "All 12 public prompts and metadata assessed at a4e0913d76c3dbc433ecf39903afbe7711a6a807; manifest and tree agree. Full suite of 100, input schemas and scorer behavior remain unavailable or uninspected.",
+      "training_mapping_allowed": true,
+      "task_inventory": "benchmark_tasks/txbench-pp.json",
+      "release_evidence": {
+        "revision": "a4e0913d76c3dbc433ecf39903afbe7711a6a807",
+        "checked_at": "2026-09-24",
+        "public_task_count": 12,
+        "advertised_total": 100,
+        "manifest_sha256": "28081065385323396aed5f94fa19a6cbb327985ea64b15f5f2cbadad476bc75a",
+        "readme_count_conflict": true
+      },
+      "authoring_assessment": "Use only abstract workflow ideas on independently sourced real observations; no benchmark questions, answers, trajectories or experimental data enter training. No root license file in the pinned tree; public metadata is paraphrased for coverage research. This is not permission to redistribute experimental data."
     },
     {
       "sheet": "Agentic (Harbor)",
@@ -625,8 +635,18 @@
       "scoring_access": "Scoring assets missing",
       "source_url": "https://latch.bio/txbench-ab",
       "data_url": "https://github.com/latchbio/txbench-antibody-discovery/tree/3e9a40b2bad520b1a62ff21c308b57e3c8fbe508/evals",
-      "inspection": "sheet metadata reviewed; source release and task-level inventory require verification",
-      "training_mapping_allowed": true
+      "inspection": "All 6 public prompts and metadata assessed at 3e9a40b2bad520b1a62ff21c308b57e3c8fbe508; manifest and tree agree. Full suite of 100, input schemas and scorer behavior remain unavailable or uninspected.",
+      "training_mapping_allowed": true,
+      "task_inventory": "benchmark_tasks/txbench-ab.json",
+      "release_evidence": {
+        "revision": "3e9a40b2bad520b1a62ff21c308b57e3c8fbe508",
+        "checked_at": "2026-09-24",
+        "public_task_count": 6,
+        "advertised_total": 100,
+        "manifest_sha256": "dd68a28f078ea556bfefe2b10a996c4987446e0a4ef172bbc89f80cc8701ad8a",
+        "readme_count_conflict": true
+      },
+      "authoring_assessment": "Use only abstract workflow ideas on independently sourced real observations; no benchmark questions, answers, trajectories or experimental data enter training. Root Apache-2.0 license; public manifest separately excludes benchmark data from training. Inputs, graders and ground truth are withheld."
     },
     {
       "sheet": "Agentic (Harbor)",
@@ -641,8 +661,18 @@
       "scoring_access": "Scoring assets missing",
       "source_url": "https://blog.latch.bio/p/an-agent-benchmark-for-therapeutic",
       "data_url": "https://github.com/latchbio/txbench-oligo-discovery/tree/2ca404140b322f96713f140b275e99a02a038222/evals",
-      "inspection": "sheet metadata reviewed; source release and task-level inventory require verification",
-      "training_mapping_allowed": true
+      "inspection": "All 4 public prompts and metadata assessed at 2ca404140b322f96713f140b275e99a02a038222; manifest and tree agree. Full suite of 113, input schemas and scorer behavior remain unavailable or uninspected.",
+      "training_mapping_allowed": true,
+      "task_inventory": "benchmark_tasks/txbench-od.json",
+      "release_evidence": {
+        "revision": "2ca404140b322f96713f140b275e99a02a038222",
+        "checked_at": "2026-09-24",
+        "public_task_count": 4,
+        "advertised_total": 113,
+        "manifest_sha256": "a61ee7587681622e6f4bb6951d28f4f90dec7b631831856afde18206dca71340",
+        "readme_count_conflict": true
+      },
+      "authoring_assessment": "Use only abstract workflow ideas on independently sourced real observations; no benchmark questions, answers, trajectories or experimental data enter training. Custom research/evaluation-purpose notice; source-publication licenses govern experimental data. Public manifest excludes benchmark data from training. No prompts, trajectories or observations are vendored."
     },
     {
       "sheet": "Agentic (Harbor)",

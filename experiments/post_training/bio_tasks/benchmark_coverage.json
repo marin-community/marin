@@ -331,6 +331,45 @@
       "source_inventory_name": "BioXArena",
       "task_inventory_status": "all-76-identities-catalog-objectives-and-scorers-assessed-full-prompts-uninspected",
       "data_revision": "a7a42ca128ee4387308f0bd1cf3cada8c363ace3"
+    },
+    "TxBench-PP": {
+      "revision": "a4e0913d76c3dbc433ecf39903afbe7711a6a807",
+      "source_url": "https://github.com/latchbio/txbench-pp/tree/a4e0913d76c3dbc433ecf39903afbe7711a6a807/evals",
+      "metadata_sha256": "28081065385323396aed5f94fa19a6cbb327985ea64b15f5f2cbadad476bc75a",
+      "inventory_count": 12,
+      "advertised_total": 100,
+      "public_inventory_count": 12,
+      "training_mapping_allowed": true,
+      "distribution": "ID",
+      "tasks_file": "benchmark_tasks/txbench-pp.json",
+      "source_inventory_name": "TxBench-PP \u2014 preclinical pharmacology",
+      "task_inventory_status": "public-subset-patterns-assessed; full suite unavailable"
+    },
+    "TxBench-Ab": {
+      "revision": "3e9a40b2bad520b1a62ff21c308b57e3c8fbe508",
+      "source_url": "https://github.com/latchbio/txbench-antibody-discovery/tree/3e9a40b2bad520b1a62ff21c308b57e3c8fbe508/evals",
+      "metadata_sha256": "dd68a28f078ea556bfefe2b10a996c4987446e0a4ef172bbc89f80cc8701ad8a",
+      "inventory_count": 6,
+      "advertised_total": 100,
+      "public_inventory_count": 6,
+      "training_mapping_allowed": true,
+      "distribution": "ID",
+      "tasks_file": "benchmark_tasks/txbench-ab.json",
+      "source_inventory_name": "TxBench-Ab \u2014 antibody discovery",
+      "task_inventory_status": "public-subset-patterns-assessed; full suite unavailable"
+    },
+    "TxBench-OD": {
+      "revision": "2ca404140b322f96713f140b275e99a02a038222",
+      "source_url": "https://github.com/latchbio/txbench-oligo-discovery/tree/2ca404140b322f96713f140b275e99a02a038222/evals",
+      "metadata_sha256": "a61ee7587681622e6f4bb6951d28f4f90dec7b631831856afde18206dca71340",
+      "inventory_count": 4,
+      "advertised_total": 113,
+      "public_inventory_count": 4,
+      "training_mapping_allowed": true,
+      "distribution": "ID",
+      "tasks_file": "benchmark_tasks/txbench-od.json",
+      "source_inventory_name": "TxBench-OD \u2014 oligonucleotide discovery",
+      "task_inventory_status": "public-subset-patterns-assessed; full suite unavailable"
     }
   },
   "assessment_policy": "ID workflow prerequisites are manually inferred from permitted task descriptions. Shared family stages may exceed an individual endpoint; assess that endpoint before claiming coverage. Benchmark answers and biological fixtures are excluded from authoring."

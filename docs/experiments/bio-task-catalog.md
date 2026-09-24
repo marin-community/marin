@@ -274,9 +274,12 @@ benchmark answers and biological fixtures are excluded from training authoring.
 | [BAISBench](../../experiments/post_training/bio_tasks/benchmark_tasks/baisbench.json) | 193 discovery questions across 41 studies; 15 annotation dataset identities | — |
 | [PromptBio-Bench](../../experiments/post_training/bio_tasks/benchmark_tasks/promptbio-bench.json) | All 244 task definitions; 27 workflow families and 316 required-output declarations | — |
 | [BioXArena](../../experiments/post_training/bio_tasks/benchmark_tasks/bioxarena.json) | All 76 task IDs, catalog objectives and scorers; full per-task prompts and data uninspected | — |
+| [TxBench-PP](../../experiments/post_training/bio_tasks/benchmark_tasks/txbench-pp.json) | All 12 public prompts; input schemas and grader behavior uninspected | 100 |
+| [TxBench-Ab](../../experiments/post_training/bio_tasks/benchmark_tasks/txbench-ab.json) | All six public prompts; inputs, ground truth and graders withheld | 100 |
+| [TxBench-OD](../../experiments/post_training/bio_tasks/benchmark_tasks/txbench-od.json) | All four public prompts; inputs, ground truth and graders withheld | 113 |
 
-Of these 1,769 ID task/protocol/definition records, 46 have manually assessed component mappings,
-1,722 are unmapped and one is excluded from authoring. None is marked workflow-validated. Other eligible sources
+Of these 1,791 ID task/protocol/definition records, 46 have manually assessed component mappings,
+1,744 are unmapped and one is excluded from authoring. None is marked workflow-validated. Other eligible sources
 still need task-level inspection. The 90
 [BioMysteryBench identifiers](../../experiments/post_training/bio_tasks/benchmark_tasks/biomysterybench.json)
 are tracked separately as OOD, without workflow patterns or training mappings.
@@ -286,6 +289,16 @@ for 18 original BixBench endpoints and five overlapping Verified-50 protocols.
 These 23 mappings share one biological input. Cross-gene and biological-group
 aggregation, native PhyKIT agreement and benchmark-lineage screening remain
 pending; method replicates do not substitute for gene or biological replicates.
+
+The three TxBench public manifests and nontruncated repository trees agree on
+12 preclinical, six antibody and four oligonucleotide examples, despite each README
+claiming seven. Every public prompt has an assessed workflow pattern; the full
+100/100/113-task suites are not enumerated. Grader type names do not establish
+executable scoring behavior. The oligonucleotide PK answer schema omits several
+outputs requested in its narrative, and the liver-safety ranking scores only IDs.
+One preclinical multi-assay package is explicitly labeled synthetic. Fresh tasks
+need complete artifact contracts and independent observed inputs. Source prompts,
+answers, trajectories and biological fixtures remain outside training authoring.
 
 BioXArena's 76 task identities agree across source graders, four launch lists
 and the data-release manifest. Catalog objectives and executable scorer endpoints

@@ -1,0 +1,181 @@
+{
+  "benchmark": "TxBench-OD",
+  "source_revision": "2ca404140b322f96713f140b275e99a02a038222",
+  "scope": "All 4 public task definitions in the pinned release; 113 advertised full-suite tasks. Agentic provisional ID.",
+  "assessment_scope": "Every public question and metadata record manually assessed. Input schemas, biological fixtures, execution and actual scorer behavior remain uninspected. Scorer type names are metadata only. Expected-answer configuration was omitted from the saved metadata projection and was not read for authoring.",
+  "inventory_completeness": {
+    "advertised_total": 113,
+    "public_manifest_count": 4,
+    "public_eval_file_count": 4,
+    "readme_claimed_examples": 7,
+    "discrepancy": "README says seven examples; manifest and nontruncated tree agree on the recorded count. No IDs invented for the unavailable full-suite remainder."
+  },
+  "license_and_contamination": "Custom research/evaluation-purpose notice; source-publication licenses govern experimental data. Public manifest excludes benchmark data from training. No prompts, trajectories or observations are vendored.",
+  "source_files": [
+    {
+      "path": "LICENSE",
+      "url": "https://raw.githubusercontent.com/latchbio/txbench-oligo-discovery/2ca404140b322f96713f140b275e99a02a038222/LICENSE",
+      "bytes": 271,
+      "sha256": "50b0cebe913b20a035c7862c084d78868e2af5fcbdee78e87a2be1d5631b19a6"
+    },
+    {
+      "path": "README.md",
+      "url": "https://raw.githubusercontent.com/latchbio/txbench-oligo-discovery/2ca404140b322f96713f140b275e99a02a038222/README.md",
+      "bytes": 765,
+      "sha256": "5417dc6674201755829ce69c2a9e0e0f17453a2c45a5cc7dbfccfac96ed56cd9"
+    },
+    {
+      "path": "evals/manifest.json",
+      "url": "https://raw.githubusercontent.com/latchbio/txbench-oligo-discovery/2ca404140b322f96713f140b275e99a02a038222/evals/manifest.json",
+      "bytes": 1586,
+      "sha256": "a61ee7587681622e6f4bb6951d28f4f90dec7b631831856afde18206dca71340"
+    }
+  ],
+  "task_defaults": {
+    "status": "unmapped",
+    "training_mapping_allowed": true,
+    "assessment": "public-prompt-pattern-assessed; inputs and executable scoring uninspected",
+    "recipes": [],
+    "independent_data_sources": [],
+    "validation_evidence": [],
+    "runtime_seconds": null,
+    "remaining_gaps": [
+      "Select independent observed biological data and check source lineage and reuse terms; benchmark prompts, answers, trajectories and fixtures are excluded from the training corpus.",
+      "Specify quantitative intermediate artifacts, full output populations and decision criteria that can be verified without an LLM judge.",
+      "Implement and run a connected private oracle with negative controls and an offline task budget of at most 30 minutes."
+    ]
+  },
+  "workflow_patterns": {
+    "transcript-reduction-cohort": [
+      "meta_ev0570_depletion_depth_sets_the_loss"
+    ],
+    "informative-missingness-toxicity": [
+      "burdick2014_s8_aso_hepatotoxicity_sequence_screen_0007"
+    ],
+    "cross-study-safety-comparability": [
+      "eval_0012_s8_hepatic_biomarker_panel"
+    ],
+    "censored-pharmacokinetics": [
+      "eval_0056_prion_s8_pk"
+    ]
+  },
+  "tasks": [
+    {
+      "task_id": "meta_ev0570_depletion_depth_sets_the_loss",
+      "workflow_family": "transcript-reduction-cohort",
+      "workflow_pattern": "Estimate transcript reduction with program-specific controls and library accounting",
+      "required_stages": [
+        "inspect each study separately and resolve target and library identities",
+        "identify the appropriate control and normalization within each study",
+        "compute aligned target-loss estimates",
+        "report the exact libraries supporting each estimate"
+      ],
+      "required_formats": [
+        "sequencing assay packages (encodings uninspected)",
+        "JSON answer"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "Do not pool independent programs or assume libraries are independent biological replicates. Grade cohort membership, denominators, normalization and loss estimates together."
+      ],
+      "source_metadata_url": "https://github.com/latchbio/txbench-oligo-discovery/blob/2ca404140b322f96713f140b275e99a02a038222/evals/meta_ev0570_depletion_depth_sets_the_loss/eval.json",
+      "source_metadata_sha256": "afb58a720a00ca83082029180ddb7d16ab5081fd818f51b92882f938242d08eb",
+      "source_metadata_bytes": 1608,
+      "source_metadata": {
+        "pipeline_stage_label": "Potency & Efficacy",
+        "decision_structure_category": "Assess target pharmacology",
+        "assay_evidence_type": "Off-target & mechanism profiling",
+        "grader_type": "all_of"
+      },
+      "source_grader_type": "all_of"
+    },
+    {
+      "task_id": "burdick2014_s8_aso_hepatotoxicity_sequence_screen_0007",
+      "workflow_family": "informative-missingness-toxicity",
+      "workflow_pattern": "Audit missing chemistry values before summarizing lesion-associated measurements",
+      "required_stages": [
+        "join candidates, observations and study narrative",
+        "classify reasons for missing values under a prespecified rule",
+        "construct the lesion-associated analysis population",
+        "report the numeric summary and affected identifiers"
+      ],
+      "required_formats": [
+        "screen table and study narrative (encodings uninspected)",
+        "JSON answer"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "Missingness may depend on biological outcome. Do not invent measured values; specify how documented censoring, death or assay failure changes eligibility and summaries."
+      ],
+      "source_metadata_url": "https://github.com/latchbio/txbench-oligo-discovery/blob/2ca404140b322f96713f140b275e99a02a038222/evals/burdick2014_s8_aso_hepatotoxicity_sequence_screen_0007/eval.json",
+      "source_metadata_sha256": "ab3fec7f1d4c961aff892e271abe0bcf94911d0eee5c1f172d2756e48a032c60",
+      "source_metadata_bytes": 1593,
+      "source_metadata": {
+        "pipeline_stage_label": "Safety & Toxicity",
+        "decision_structure_category": "Assess safety",
+        "assay_evidence_type": "PK, biodistribution & toxicology",
+        "grader_type": "all_of"
+      },
+      "source_grader_type": "all_of"
+    },
+    {
+      "task_id": "eval_0012_s8_hepatic_biomarker_panel",
+      "workflow_family": "cross-study-safety-comparability",
+      "workflow_pattern": "Rank liver-safety observations within comparable study and dosing contexts",
+      "required_stages": [
+        "parse individual-animal measurements from group-level records",
+        "filter the defined species, route, dose and sample matrix",
+        "reconcile study, regimen and compound identity before ranking",
+        "export a distinct selection with its comparison population"
+      ],
+      "required_formats": [
+        "patent-derived nested clinical-chemistry table (encoding uninspected)",
+        "HELM annotations where present",
+        "JSON answer"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "The source states that only the selected IDs are scored; explanatory comparison and generalization claims are unchecked. Define pooling, repeated groups, missingness and tie rules and grade the underlying evidence."
+      ],
+      "source_metadata_url": "https://github.com/latchbio/txbench-oligo-discovery/blob/2ca404140b322f96713f140b275e99a02a038222/evals/eval_0012_s8_hepatic_biomarker_panel/eval.json",
+      "source_metadata_sha256": "3657b1ba3b49ffd94a3c037fdc07361465c6642eb10dece3e5bbbe32e7858cf8",
+      "source_metadata_bytes": 2376,
+      "source_metadata": {
+        "pipeline_stage_label": "Safety & Toxicity",
+        "decision_structure_category": "Assess safety",
+        "assay_evidence_type": "PK, biodistribution & toxicology",
+        "grader_type": "all_of"
+      },
+      "source_grader_type": "all_of"
+    },
+    {
+      "task_id": "eval_0056_prion_s8_pk",
+      "workflow_family": "censored-pharmacokinetics",
+      "workflow_pattern": "Estimate exposure from a concentration-time series with quantifiability limits",
+      "required_stages": [
+        "join animal, dose, sample time and assay qualifiers",
+        "distinguish quantifiable values from censored or excluded records",
+        "compute per-animal peak and windowed exposure before group summaries",
+        "assess terminal-phase identifiability and retain the exclusion ledger"
+      ],
+      "required_formats": [
+        "bioanalytical concentration-time table (encoding uninspected)",
+        "JSON answer"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "The narrative requests all groups, windowed exposure and exclusions, but the answer schema covers only a subset. A fresh contract must check all required artifacts and define censoring, integration and terminal-fit rules."
+      ],
+      "source_metadata_url": "https://github.com/latchbio/txbench-oligo-discovery/blob/2ca404140b322f96713f140b275e99a02a038222/evals/eval_0056_prion_s8_pk/eval.json",
+      "source_metadata_sha256": "6a4adfd0e6e383bae4835114362d32c3156b581767e1b732664300494b148e03",
+      "source_metadata_bytes": 2384,
+      "source_metadata": {
+        "pipeline_stage_label": "PK/PD & Biodistribution",
+        "decision_structure_category": "Characterize PK/PD",
+        "assay_evidence_type": "PK, biodistribution & toxicology",
+        "grader_type": "all_of"
+      },
+      "source_grader_type": "all_of"
+    }
+  ]
+}

@@ -1,0 +1,426 @@
+{
+  "benchmark": "TxBench-PP",
+  "source_revision": "a4e0913d76c3dbc433ecf39903afbe7711a6a807",
+  "scope": "All 12 public task definitions in the pinned release; 100 advertised full-suite tasks. Agentic provisional ID.",
+  "assessment_scope": "Every public question and metadata record manually assessed. Input schemas, biological fixtures, execution and actual scorer behavior remain uninspected. Scorer type names are metadata only. Expected-answer configuration was omitted from the saved metadata projection and was not read for authoring.",
+  "inventory_completeness": {
+    "advertised_total": 100,
+    "public_manifest_count": 12,
+    "public_eval_file_count": 12,
+    "readme_claimed_examples": 7,
+    "discrepancy": "README says seven examples; manifest and nontruncated tree agree on the recorded count. No IDs invented for the unavailable full-suite remainder."
+  },
+  "license_and_contamination": "No root license file in the pinned tree; public metadata is paraphrased for coverage research. This is not permission to redistribute experimental data.",
+  "source_files": [
+    {
+      "path": "README.md",
+      "url": "https://raw.githubusercontent.com/latchbio/txbench-pp/a4e0913d76c3dbc433ecf39903afbe7711a6a807/README.md",
+      "bytes": 461,
+      "sha256": "be6212e7f0f72bde8c373ee505a0af251d6f8f20103b7b6ea8ed6cb967aeaf10"
+    },
+    {
+      "path": "evals/manifest.json",
+      "url": "https://raw.githubusercontent.com/latchbio/txbench-pp/a4e0913d76c3dbc433ecf39903afbe7711a6a807/evals/manifest.json",
+      "bytes": 1971,
+      "sha256": "28081065385323396aed5f94fa19a6cbb327985ea64b15f5f2cbadad476bc75a"
+    }
+  ],
+  "task_defaults": {
+    "status": "unmapped",
+    "training_mapping_allowed": true,
+    "assessment": "public-prompt-pattern-assessed; inputs and executable scoring uninspected",
+    "recipes": [],
+    "independent_data_sources": [],
+    "validation_evidence": [],
+    "runtime_seconds": null,
+    "remaining_gaps": [
+      "Select independent observed biological data and check source lineage and reuse terms; benchmark prompts, answers, trajectories and fixtures are excluded from the training corpus.",
+      "Specify quantitative intermediate artifacts, full output populations and decision criteria that can be verified without an LLM judge.",
+      "Implement and run a connected private oracle with negative controls and an offline task budget of at most 30 minutes."
+    ]
+  },
+  "workflow_patterns": {
+    "multi-assay-mechanism": [
+      "HAI2027_MECH01_supported_mechanism_chain"
+    ],
+    "pharmacogenomic-confounding": [
+      "PRISM_S4_10_mechanism_family_mining"
+    ],
+    "screen-hit-selection": [
+      "PRISM_V10_C_primary_hit_triage"
+    ],
+    "cross-modality-safety": [
+      "de_10_cross_modality_herg_convergence"
+    ],
+    "patient-aware-target-expression": [
+      "lee2024_RNA1_raw_scrna_target_specificity"
+    ],
+    "calcium-response-interpretation": [
+      "lee2024_SRC2_calcium_response_mode"
+    ],
+    "dependency-mechanism-sign": [
+      "DMA_02_mechanism_sign"
+    ],
+    "screen-position-artifact": [
+      "sp_01_plate_well_position_confounder"
+    ],
+    "target-engagement-controls": [
+      "CTRL01_no_cc1_gate_for_crizotinib_hits"
+    ],
+    "paired-activity-safety-imaging": [
+      "H2_toxfree_advance_image"
+    ],
+    "organoid-response-imaging": [
+      "txbx_org_organoid_doseresponse_resistant_fraction"
+    ],
+    "multi-assay-advancement": [
+      "txbx_org_program_ti_exposure_gonogo"
+    ]
+  },
+  "tasks": [
+    {
+      "task_id": "HAI2027_MECH01_supported_mechanism_chain",
+      "workflow_family": "multi-assay-mechanism",
+      "workflow_pattern": "Reconcile intervention assays into an evidence-supported mechanism ordering",
+      "required_stages": [
+        "join assay, treatment and readout identities",
+        "compare interventions and controls across assays",
+        "distinguish supported mechanism links from alternative explanations",
+        "export an ordered mechanism and unsupported alternatives"
+      ],
+      "required_formats": [
+        "assay bundle (file encodings uninspected)",
+        "JSON answer"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "A deterministic label grader does not establish causality. An independent task needs explicit evidence-to-claim rules and checks on the quantitative assay artifacts."
+      ],
+      "source_metadata_url": "https://github.com/latchbio/txbench-pp/blob/a4e0913d76c3dbc433ecf39903afbe7711a6a807/evals/HAI2027_MECH01_supported_mechanism_chain/eval.json",
+      "source_metadata_sha256": "2a91a28f6dae8a0ac9a665845a50665b2669a4ac41e52eb33e3e8cf43c05fe5a",
+      "source_metadata_bytes": 15855,
+      "source_metadata": {
+        "tx_stage": "S9_translational_efficacy",
+        "kit": "xenograft",
+        "task": "mechanism_of_action"
+      },
+      "source_grader_type": "all_of"
+    },
+    {
+      "task_id": "PRISM_S4_10_mechanism_family_mining",
+      "workflow_family": "pharmacogenomic-confounding",
+      "workflow_pattern": "Test a compound-response biomarker while controlling lineage and broad activity",
+      "required_stages": [
+        "join compounds, molecular features, cell lines and dose-response outcomes",
+        "apply the specified chemical and indication population",
+        "estimate response associations and adjust for lineage",
+        "calculate a broad-activity negative control"
+      ],
+      "required_formats": [
+        "compound, cell-line and response tables (encodings uninspected)",
+        "JSON answer"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "Preserve the direction of response AUC; predefine the association statistic, covariates, missingness and multiple-testing policy. An adjusted association alone is not causal evidence."
+      ],
+      "source_metadata_url": "https://github.com/latchbio/txbench-pp/blob/a4e0913d76c3dbc433ecf39903afbe7711a6a807/evals/PRISM_S4_10_mechanism_family_mining/eval.json",
+      "source_metadata_sha256": "3c5d835cd8e4018f4ea623925d71e0af411f969aec1b33216423f384cfd2e7a1",
+      "source_metadata_bytes": 18537,
+      "source_metadata": {
+        "tx_stage": "S3_drug_response_pharmacogenomics",
+        "kit": "prism",
+        "task": "biomarker_discovery",
+        "timeout_s": 1200
+      },
+      "source_grader_type": "all_of"
+    },
+    {
+      "task_id": "PRISM_V10_C_primary_hit_triage",
+      "workflow_family": "screen-hit-selection",
+      "workflow_pattern": "Select selective screening hits with usable coverage and limited broad toxicity",
+      "required_stages": [
+        "identify the common screening dose and eligible compounds",
+        "measure activity, panel coverage and broad toxicity",
+        "apply an explicit multi-criterion ranking",
+        "export distinct compound identifiers and selection count"
+      ],
+      "required_formats": [
+        "pooled viability and compound tables (encodings uninspected)",
+        "JSON answer"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "The public question leaves parts of the ranking rule implicit. A judge-free adaptation needs an explicit rule, tie policy and compound-level evidence table."
+      ],
+      "source_metadata_url": "https://github.com/latchbio/txbench-pp/blob/a4e0913d76c3dbc433ecf39903afbe7711a6a807/evals/PRISM_V10_C_primary_hit_triage/eval.json",
+      "source_metadata_sha256": "a4aa37e14ae07905765f6357a6bd2e66b4c6a27a1bbe64fee0e57a53d422789a",
+      "source_metadata_bytes": 5880,
+      "source_metadata": {
+        "tx_stage": "S2_screening_hit_confirmation",
+        "kit": "prism",
+        "task": "hit_prioritization"
+      },
+      "source_grader_type": "all_of"
+    },
+    {
+      "task_id": "de_10_cross_modality_herg_convergence",
+      "workflow_family": "cross-modality-safety",
+      "workflow_pattern": "Compare target-activity associations with chemical-substructure safety signals",
+      "required_stages": [
+        "join compound identities, concern labels and target mappings",
+        "aggregate concentration-specific target predictions",
+        "match SMARTS and compute supported-rule enrichment",
+        "compare ranked representations with bounded mechanistic conclusions"
+      ],
+      "required_formats": [
+        "SMARTS",
+        "compound and target tables (encodings uninspected)",
+        "JSON answer"
+      ],
+      "required_tools": [
+        "RDKit"
+      ],
+      "scientific_decisions": [
+        "Predicted target activity is model-derived evidence, not an observed binding assay. Define the effect-size statistic and chemical exclusions; convergent association does not establish human causation."
+      ],
+      "source_metadata_url": "https://github.com/latchbio/txbench-pp/blob/a4e0913d76c3dbc433ecf39903afbe7711a6a807/evals/de_10_cross_modality_herg_convergence/eval.json",
+      "source_metadata_sha256": "cdda50962717b367c500d52d0cba8a3332aee2548a9b8459677eaebd66ef975c",
+      "source_metadata_bytes": 18941,
+      "source_metadata": {
+        "tx_stage": "S8_developability_safety",
+        "kit": "target_activity_panel",
+        "task": "safety_assessment"
+      },
+      "source_grader_type": "all_of"
+    },
+    {
+      "task_id": "lee2024_RNA1_raw_scrna_target_specificity",
+      "workflow_family": "patient-aware-target-expression",
+      "workflow_pattern": "Evaluate target expression prevalence and compartment specificity across patients",
+      "required_stages": [
+        "join raw expression, cell compartments, patients and target identifiers",
+        "measure within-compartment expression prevalence",
+        "aggregate specificity using patient-aware comparisons",
+        "report ranked targets with population sizes"
+      ],
+      "required_formats": [
+        "raw single-cell counts and metadata (encodings uninspected)",
+        "JSON answer"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "Cells are nested within patients. Enrichment and absolute prevalence answer different questions; an adaptation needs a defined specificity score and zero-count behavior."
+      ],
+      "source_metadata_url": "https://github.com/latchbio/txbench-pp/blob/a4e0913d76c3dbc433ecf39903afbe7711a6a807/evals/lee2024_RNA1_raw_scrna_target_specificity/eval.json",
+      "source_metadata_sha256": "12c82f4a02ebd26efe772b3645afec19861147c6e840694afc3a8824770557c9",
+      "source_metadata_bytes": 9842,
+      "source_metadata": {
+        "tx_stage": "S1_disease_model",
+        "kit": "chromium",
+        "task": "target_assessment"
+      },
+      "source_grader_type": "all_of"
+    },
+    {
+      "task_id": "lee2024_SRC2_calcium_response_mode",
+      "workflow_family": "calcium-response-interpretation",
+      "workflow_pattern": "Reconcile calcium-response perturbations and oscillation changes",
+      "required_stages": [
+        "identify intervention, control and assay conditions",
+        "summarize response and oscillating-cell fractions",
+        "compare perturbations that distinguish response modes",
+        "export the supported response category and direction"
+      ],
+      "required_formats": [
+        "calcium-imaging source tables (encodings uninspected)",
+        "JSON answer"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "Mean amplitude and fraction of oscillating cells are distinct endpoints. State mechanistic decision rules and preserve replicate units; do not infer an unmeasured pathway from a category name."
+      ],
+      "source_metadata_url": "https://github.com/latchbio/txbench-pp/blob/a4e0913d76c3dbc433ecf39903afbe7711a6a807/evals/lee2024_SRC2_calcium_response_mode/eval.json",
+      "source_metadata_sha256": "307cd86425c1234022768c47fdb823d47c812e33a41db8e1dca36d2658159f65",
+      "source_metadata_bytes": 5696,
+      "source_metadata": {
+        "tx_stage": "S6_moa_pharmacodynamics",
+        "kit": "calcium_imaging",
+        "task": "phenotype_classification"
+      },
+      "source_grader_type": "all_of"
+    },
+    {
+      "task_id": "DMA_02_mechanism_sign",
+      "workflow_family": "dependency-mechanism-sign",
+      "workflow_pattern": "Classify replicated dependency associations using effect direction and driver role",
+      "required_stages": [
+        "join dependency effects, alteration indicators, lineage and driver roles",
+        "verify marker-positive effect directions within relevant populations",
+        "reconcile gene-level evidence across associations",
+        "export disjoint mechanism groups"
+      ],
+      "required_formats": [
+        "dependency, mutation, copy-number and annotation tables (encodings uninspected)",
+        "JSON answer"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "Define how mixed evidence selects one gene-level class. Dependency sign and oncogene/tumor-suppressor annotation do not by themselves prove a mechanistic interaction."
+      ],
+      "source_metadata_url": "https://github.com/latchbio/txbench-pp/blob/a4e0913d76c3dbc433ecf39903afbe7711a6a807/evals/DMA_02_mechanism_sign/eval.json",
+      "source_metadata_sha256": "71cd7bd4f709e59a2133f63ebe45cf7182b3115498e54e7b7b6753a893f72d6c",
+      "source_metadata_bytes": 14165,
+      "source_metadata": {
+        "tx_stage": "S5_causal_target_validation",
+        "kit": "crispr",
+        "task": "mechanism_of_action"
+      },
+      "source_grader_type": "all_of"
+    },
+    {
+      "task_id": "sp_01_plate_well_position_confounder",
+      "workflow_family": "screen-position-artifact",
+      "workflow_pattern": "Estimate a plate-position effect against a matched permutation null",
+      "required_stages": [
+        "join morphological profiles with compounds, plates and well coordinates",
+        "define eligible treatment-profile pairs and compute correlations",
+        "permute positions within a prespecified exchangeable design",
+        "subtract the matched null and report its uncertainty"
+      ],
+      "required_formats": [
+        "morphological feature matrix and plate metadata (encodings uninspected)",
+        "tag-delimited scalar"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "Compound and plate identities affect exchangeability; do not treat all well pairs as independent. Fix permutation count/seed or use exact expectations and grade complete summaries."
+      ],
+      "source_metadata_url": "https://github.com/latchbio/txbench-pp/blob/a4e0913d76c3dbc433ecf39903afbe7711a6a807/evals/sp_01_plate_well_position_confounder/eval.json",
+      "source_metadata_sha256": "abbeb244c6dcf607c28cde47c3ed9a505b1776dba33fc02bf41a3c01ef98c49c",
+      "source_metadata_bytes": 7371,
+      "source_metadata": {
+        "tx_stage": "S2_screening_hit_confirmation",
+        "kit": "cell_painting",
+        "task": "qc"
+      },
+      "source_grader_type": "numeric_tolerance"
+    },
+    {
+      "task_id": "CTRL01_no_cc1_gate_for_crizotinib_hits",
+      "workflow_family": "target-engagement-controls",
+      "workflow_pattern": "Compute target engagement while distinguishing separate control purposes",
+      "required_stages": [
+        "parse engagement measurements with consistent concentration units",
+        "derive occupancy under an explicit dose-response model",
+        "apply the stated response threshold",
+        "assess the separate control without silently redefining the target population"
+      ],
+      "required_formats": [
+        "NanoBRET assay tables (encodings uninspected)",
+        "JSON answer"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "The response model, assay validity rules and role of each control must be explicit. A general control outcome is not automatically an exclusion criterion for another treatment."
+      ],
+      "source_metadata_url": "https://github.com/latchbio/txbench-pp/blob/a4e0913d76c3dbc433ecf39903afbe7711a6a807/evals/CTRL01_no_cc1_gate_for_crizotinib_hits/eval.json",
+      "source_metadata_sha256": "01e8a6ed69fad2c1284a8a57e1d98db6e7f3d1f4d6bbad31965777b6a8a40a26",
+      "source_metadata_bytes": 8762,
+      "source_metadata": {
+        "tx_stage": "S7_compound_target_engagement",
+        "kit": "nanobret",
+        "task": "target_engagement",
+        "timeout_s": 900
+      },
+      "source_grader_type": "numeric_tolerance"
+    },
+    {
+      "task_id": "H2_toxfree_advance_image",
+      "workflow_family": "paired-activity-safety-imaging",
+      "workflow_pattern": "Combine tumor activity and healthy-context safety in a matched imaging assay",
+      "required_stages": [
+        "identify treatment, tissue context and imaging channels",
+        "quantify the relevant activity and injury phenotypes",
+        "compare matched controls within each context",
+        "apply a joint advancement rule"
+      ],
+      "required_formats": [
+        "multiplex immunofluorescence images (encoding uninspected)",
+        "JSON answer"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "Image-level choice labels need independently checkable segmentation and quantitative phenotype references. One favorable panel does not establish both activity and safety."
+      ],
+      "source_metadata_url": "https://github.com/latchbio/txbench-pp/blob/a4e0913d76c3dbc433ecf39903afbe7711a6a807/evals/H2_toxfree_advance_image/eval.json",
+      "source_metadata_sha256": "12de7b8ccbdada47a7ebfb95c74367003c92e4ff96fd7acbf312aac9e9f4ba2d",
+      "source_metadata_bytes": 8585,
+      "source_metadata": {
+        "tx_stage": "S8_developability_safety",
+        "kit": "immunofluorescence",
+        "task": "program_decision"
+      },
+      "source_grader_type": "numeric_tolerance"
+    },
+    {
+      "task_id": "txbx_org_organoid_doseresponse_resistant_fraction",
+      "workflow_family": "organoid-response-imaging",
+      "workflow_pattern": "Measure organoid response relative to vehicle and residual viable population",
+      "required_stages": [
+        "identify vehicle replicates and ordered dose images",
+        "quantify viable organoid response with a defined image contract",
+        "normalize to the vehicle reference",
+        "report the first threshold crossing and residual high-dose response"
+      ],
+      "required_formats": [
+        "brightfield image montage (encoding uninspected)",
+        "JSON answer"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "A discrete dose index is not a fitted concentration IC50. Specify viability measurement, normalization and uncertainty; a visually persistent object alone is not proven viable resistance."
+      ],
+      "source_metadata_url": "https://github.com/latchbio/txbench-pp/blob/a4e0913d76c3dbc433ecf39903afbe7711a6a807/evals/txbx_org_organoid_doseresponse_resistant_fraction/eval.json",
+      "source_metadata_sha256": "acf457d64b1fbe6596bf895d3ec3c25833e69e88feeb376492dc768303996a79",
+      "source_metadata_bytes": 6813,
+      "source_metadata": {
+        "tx_stage": "S9_translational_efficacy",
+        "kit": "brightfield_microscopy",
+        "task": "image_analysis"
+      },
+      "source_grader_type": "numeric_tolerance"
+    },
+    {
+      "task_id": "txbx_org_program_ti_exposure_gonogo",
+      "workflow_family": "multi-assay-advancement",
+      "workflow_pattern": "Integrate efficacy, mechanism images, safety and free exposure into a program decision",
+      "required_stages": [
+        "join compound identities across all four assays",
+        "quantify screen response and mechanism phenotype",
+        "calculate safety and unbound exposure margins in consistent units",
+        "apply a prespecified joint decision and retain the no-candidate outcome"
+      ],
+      "required_formats": [
+        "CSV",
+        "PNG",
+        "JSON answer"
+      ],
+      "required_tools": [],
+      "scientific_decisions": [
+        "The source marks this package synthetic_biology_calibrated. Do not copy its observations into the real-data release; use independent observed assays and make exposure/mechanism rules executable."
+      ],
+      "source_metadata_url": "https://github.com/latchbio/txbench-pp/blob/a4e0913d76c3dbc433ecf39903afbe7711a6a807/evals/txbx_org_program_ti_exposure_gonogo/eval.json",
+      "source_metadata_sha256": "ba4709ceeb3ab64592cc95325251f62916cbbb12e3b9591604c148b5da9b0823",
+      "source_metadata_bytes": 8546,
+      "source_metadata": {
+        "tx_stage": "S9_translational_efficacy",
+        "kit": "drug_combination_screen",
+        "task": "program_decision",
+        "data_provenance": "synthetic_biology_calibrated"
+      },
+      "source_grader_type": "numeric_tolerance",
+      "source_input_origin": "synthetic_biology_calibrated; metadata claim, inputs not retrieved"
+    }
+  ]
+}
