@@ -19,6 +19,7 @@ Run (H100, cw-us-east-02a)::
 
 import contextlib
 import functools
+import math
 import os
 import statistics
 import sys
@@ -178,16 +179,17 @@ def _time_fn(fn, args, iters=20, warmup=5):
     return statistics.median(times), min(times)
 
 
-def _cost_flops(fn, args):
-    try:
-        compiled = jax.jit(fn).lower(*args).compile()
-        ca = compiled.cost_analysis()
-        if isinstance(ca, (list, tuple)):
-            ca = ca[0]
-        return float(ca.get("flops", 0.0))
-    except Exception as e:
-        print(f"  (cost_analysis failed: {e})")
-        return 0.0
+def _analytic_matmul_flops(g_batch, length, c, d, mode):
+    """Analytic matmul FLOPs for chunk_kda (cost_analysis undercounts scan bodies).
+
+    Per (batch, chunk) instance: 10*C^2*d + 6*C*d^2 [intra-chunk + state GEMMs] plus
+    the Neumann inverse (4*C^3 per doubling step). Backward ~= 2x forward for GEMMs.
+    """
+    iters = max(0, math.ceil(math.log2(c)) - 1)
+    per_instance = 10 * c * c * d + 6 * c * d * d + 4 * c * c * c * iters
+    n = length // c
+    fwd = g_batch * n * per_instance
+    return fwd * (3.0 if mode == "fwd_bwd" else 1.0)
 
 
 RESULTS: list[str] = []
@@ -205,19 +207,21 @@ def _run_variant(name, kernel, args, chunk_size, peak, mode, precision=None):
     raw = fwd_out if mode == "fwd" else grad_out
     with jax.default_matmul_precision(precision) if precision else _nullctx():
         fn = jax.jit(raw)
-        flops = _cost_flops(raw, args)
         med, _best = _time_fn(fn, args)
     b, h, length = args[0].shape[0], args[0].shape[1], args[0].shape[2]
+    d = args[0].shape[3]
     tokens = b * h * length
-    tflops = flops / med / 1e12 if flops else 0.0
-    mfu = 100.0 * tflops / peak if flops else 0.0
+    flops = _analytic_matmul_flops(b * h, length, chunk_size, d, mode)
+    tflops = flops / med / 1e12
+    mfu = 100.0 * tflops / peak
     line = (
         f"L={length:<6d} {name:22s} C={chunk_size:<4d} {mode:8s} "
         f"med={med*1e3:8.3f}ms tok/s={tokens/med/1e6:8.2f}M "
-        f"flops={flops/1e9:9.2f}G {tflops:7.1f}TF/s MFU={mfu:5.1f}%(vs{peak:.0f})"
+        f"gemmTF/s={tflops:6.1f} MFU={mfu:5.1f}%(vs{peak:.0f})"
     )
     RESULTS.append(line)
     print(line, flush=True)
+    jax.clear_caches()
     return med, tflops, mfu
 
 
@@ -232,22 +236,23 @@ def main():
     )
     print(RESULTS[-1], flush=True)
 
-    b = int(os.environ.get("KDA_B", "8"))
+    b = int(os.environ.get("KDA_B", "4"))
     h = int(os.environ.get("KDA_H", "8"))
     dk = int(os.environ.get("KDA_DK", "128"))
     dv = int(os.environ.get("KDA_DV", "128"))
     lengths = [int(x) for x in os.environ.get("KDA_LENS", "8192").split(",")]
-    chunks = [int(x) for x in os.environ.get("KDA_CHUNKS", "32,64,128").split(",")]
 
     for length in lengths:
         args = _make_inputs(b, h, length, dk, dv)
         for mode in ("fwd", "fwd_bwd"):
-            for c in chunks:
-                _try("fp32,default", chunk_kda, args, c, _H100_FP32_PEAK, mode)
-            # true fp32 (no TF32) reference at C=64 to expose whether default uses TF32
+            # Essential comparison first (so a later OOM still leaves it captured):
+            # current default vs true-fp32 vs bf16 intra-chunk, all at C=64.
+            _try("fp32,default", chunk_kda, args, 64, _H100_FP32_PEAK, mode)
             _try("fp32,highest", chunk_kda, args, 64, _H100_FP32_PEAK, mode, precision="highest")
-            # bf16 intra-chunk matmul prototype (fp32 state kept)
-            for c in [cc for cc in chunks if cc in (64, 128)]:
+            _try("bf16-mm", _chunk_kda_matmul_dtype, args, 64, _H100_BF16_PEAK, mode)
+            # Chunk-size sweep for both precisions.
+            for c in (32, 128, 256):
+                _try("fp32,default", chunk_kda, args, c, _H100_FP32_PEAK, mode)
                 _try("bf16-mm", _chunk_kda_matmul_dtype, args, c, _H100_BF16_PEAK, mode)
 
     marker = "###KDA_RESULTS###"
