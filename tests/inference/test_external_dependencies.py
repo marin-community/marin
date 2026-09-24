@@ -150,6 +150,20 @@ def test_stage_gpu_candidate_rejects_a_promoted_release(tmp_path, monkeypatch):
     assert pin.read_text() == 'release_tag = "keep-me"\n'
 
 
+def test_stage_gpu_candidate_rejects_a_source_that_is_not_main_next(tmp_path, monkeypatch):
+    update_external = _update_external()
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(_staged_candidate_manifest()))
+    monkeypatch.setattr(
+        update_external.subprocess,
+        "run",
+        lambda args, **kwargs: update_external.subprocess.CompletedProcess(args, 0, stdout=f"{'c' * 40}\n", stderr=""),
+    )
+
+    with pytest.raises(ValueError, match="is not the current main-next tip"):
+        update_external.stage_gpu_candidate(manifest_path)
+
+
 def test_promote_gpu_release_keeps_the_pin_when_the_rendered_wheel_fails_validation(tmp_path, monkeypatch):
     # A manifest can clear the render-time status/repository gate yet still carry a wheel
     # invariant (here a malformed SHA-256) that only the loader rejects. The existing pin

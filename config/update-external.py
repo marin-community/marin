@@ -600,6 +600,15 @@ def promote_gpu_release(manifest_path: Path) -> None:
 def stage_gpu_candidate(manifest_path: Path) -> None:
     manifest = json.loads(manifest_path.read_text())
     rendered = render_gpu_release_toml(manifest, staged_candidate=True)
+    source_commit = manifest["source"]["fork_commit"]
+    staging_tip = subprocess.run(
+        ["gh", "api", f"repos/{GPU_RELEASE_REPOSITORY}/git/ref/heads/main-next", "--jq", ".object.sha"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    if source_commit != staging_tip:
+        raise ValueError(f"staged candidate source {source_commit} is not the current main-next tip {staging_tip}")
     _install_gpu_manifest(manifest_path, manifest, rendered, kind="staged candidate")
 
 
