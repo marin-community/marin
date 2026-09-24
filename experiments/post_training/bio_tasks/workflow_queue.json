@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T18:59:49.713370+00:00",
+  "updated_at": "2026-09-24T19:09:48.406698+00:00",
   "basis_revision": "c3a42fa5cf",
   "scope": "Provisional ID agentic benchmarks only. This queue selects new authoring work; it does not change benchmark coverage states.",
   "selection_policy": {
@@ -1234,7 +1234,8 @@
         "work": "For prioritized question groups, specify independent observed input accessions and study structure, exact formats and artifacts, required native methods and deterministic acceptance before implementation assignment. Unsupported free-form objectives and inaccessible sources remain explicit."
       }
     ],
-    "task_protocol": "Harbor only; see workflow_portfolio.json assignment_contract.execution_protocol."
+    "task_protocol": "Harbor only; see workflow_portfolio.json assignment_contract.execution_protocol.",
+    "scoring_scope": "Prioritize realistic tasks whose scientific outputs have direct executable checks. Defer subjective interpretation, visual quality or other endpoints without a defensible deterministic reward; retain exact source IDs and the uncovered endpoint. Do not introduce an LLM judge, contrived proxy or special protocol merely to increase coverage, and do not let these endpoints block independently ready tasks."
   },
   "portfolio_plan": "workflow_plan.json",
   "authoring_phase": "question-portfolio-planning",
@@ -1249,7 +1250,7 @@
     "excluded_records": 1,
     "validated_new_mappings": 0,
     "portfolio_file": "workflow_portfolio.json",
-    "portfolio_sha256": "b388aff0ffb9a26e2509c181523711023a656bda9b35e4ff3b3ed4b6d740b518",
+    "portfolio_sha256": "55ca389f5ffb438fb0095afabca382e74d181f03276cd3c12e041305dd616e3e",
     "limit": "All 30 original cross-card combinations have scientific planning dispositions; 25 remain conditional. Complete input and acceptance contracts, individual-card review and inaccessible-source dispositions are still required. No implementation is selected and validated coverage is unchanged.",
     "question_records_with_gap_dispositions": 1674,
     "system_records_with_endpoint_gap_dispositions": 350

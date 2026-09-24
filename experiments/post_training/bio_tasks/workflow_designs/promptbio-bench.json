@@ -763,16 +763,35 @@
         "Sample QC, filtered counts, design and contrast matrices, complete effect/uncertainty tables, all tested pathways, set membership and sensitivity comparisons"
       ],
       "verifier_design": [
-        "Native DESeq2/edgeR reference plus independent contrast, multiplicity and set checks; retain every gene and pathway, including undefined estimates; test interaction directly."
+        "Follow the shared contract: named DESeq2/apeglm fit, independent count/contrast/set checks, separate native ORA and permutation-GSEA multiplicity, complete statuses and numerical plotting tables. Deferred visual endpoints do not block authoring; edgeR cannot replace a named DESeq2 endpoint."
       ],
       "connected_workflow_rationale": "Use the same independent observed study and retain each listed endpoint as an intermediate or final artifact. Source-specific methods, parameter choices, cohorts and output contracts remain separate when they differ. Split this proposal if one coherent study cannot support all endpoints.",
       "remaining_decisions": [
-        "Choose independent observed inputs with enough biological replication and native-format detail; exclude source benchmark studies and fixtures.",
-        "Freeze every source-specific threshold, feature universe, model and output schema before claiming endpoint equivalence.",
-        "Measure the complete offline analysis against the 30-minute budget without discarding biological sample structure."
+        "Clear independent count/annotation source lineage and rights, with appropriate species and tissue for each literal endpoint.",
+        "Acquire the necessary GO graph and named GO/KEGG snapshots; the existing mouse BP membership alone is insufficient.",
+        "Build and verify the pinned full native environment, including DOSE hypothesis-universe behavior and GSEA ranking/score semantics.",
+        "Calibrate numerical tolerances from native checks; implement the private oracle and verifier for the selected numerical endpoints with incorrect-output cases. Display parameters and deferred visual endpoints do not block assignment.",
+        "Demonstrate complete offline Harbor runtime <=30 minutes; the existing unshrunken DESeq2 run is not evidence for this combined task."
       ],
       "status": "question-portfolio-proposal-no-coverage-credit",
-      "input_contract_limit": "The routed workstream supplies an input search boundary. Preserve every exact source stage and native format in source_endpoint_patterns; input manifest and final schema still need endpoint-specific design."
+      "input_contract_limit": "The current GSE60450 candidate supports explicitly adapted mouse developmental analysis only. Human ASXL1/fibroblast contexts and named human/reference-year libraries retain their exact independent-input requirements.",
+      "contract_reference": "workflow_designs/bixbench.json:expression_enrichment_contract",
+      "source_endpoint_evidence": [
+        {
+          "benchmark": "PromptBio-Bench",
+          "task_id": "a-2-8",
+          "source_metadata_sha256": "788a0a77e07c41adfa6251c5fcf720f82304e89a315b8bf16ed6449a1d573442",
+          "source_task_record_sha256": "22de484bc84eef3e9b3fd16bbdb22b8c069c2eed2df916e4c83bddfbe126613d",
+          "inspection": "Complete pinned task question and output declaration rechecked; no source biological inputs or answers read."
+        },
+        {
+          "benchmark": "PromptBio-Bench",
+          "task_id": "a-11-4",
+          "source_metadata_sha256": "4e12e29e7511e6548e98b76349b3529344766dc26c851e3023be12a39b63f86b",
+          "source_task_record_sha256": "15db249ffd6a8e95c051c2532bedb98aa9bbf02348865998244f83ee4713d18f",
+          "inspection": "Complete pinned task question and output declaration rechecked; no source biological inputs or answers read."
+        }
+      ]
     },
     {
       "proposed_id": "promptbio-design-selected-gene-set-analysis",
@@ -838,16 +857,45 @@
         "Sample QC, filtered counts, design and contrast matrices, complete effect/uncertainty tables, all tested pathways, set membership and sensitivity comparisons"
       ],
       "verifier_design": [
-        "Native DESeq2/edgeR reference plus independent contrast, multiplicity and set checks; retain every gene and pathway, including undefined estimates; test interaction directly."
+        "Follow the shared contract: named DESeq2/apeglm fit, independent count/contrast/set checks, separate native ORA and permutation-GSEA multiplicity, complete statuses and numerical plotting tables. Deferred visual endpoints do not block authoring; edgeR cannot replace a named DESeq2 endpoint."
       ],
       "connected_workflow_rationale": "Compare selected-list GO/KEGG enrichment using explicitly defined annotation universes and complete term outputs. Gene-set overlap against an oncogene catalogue is a separate question.",
       "remaining_decisions": [
-        "Choose independent observed inputs with enough biological replication and native-format detail; exclude source benchmark studies and fixtures.",
-        "Freeze every source-specific threshold, feature universe, model and output schema before claiming endpoint equivalence.",
-        "Measure the complete offline analysis against the 30-minute budget without discarding biological sample structure."
+        "Clear independent count/annotation source lineage and rights, with appropriate species and tissue for each literal endpoint.",
+        "Acquire the necessary GO graph and named GO/KEGG snapshots; the existing mouse BP membership alone is insufficient.",
+        "Build and verify the pinned full native environment, including DOSE hypothesis-universe behavior and GSEA ranking/score semantics.",
+        "Calibrate numerical tolerances from native checks; implement the private oracle and verifier for the selected numerical endpoints with incorrect-output cases. Display parameters and deferred visual endpoints do not block assignment.",
+        "Demonstrate complete offline Harbor runtime <=30 minutes; the existing unshrunken DESeq2 run is not evidence for this combined task."
       ],
       "status": "question-portfolio-proposal-no-coverage-credit",
-      "input_contract_limit": "The routed workstream supplies an input search boundary. Preserve every exact source stage and native format in source_endpoint_patterns; input manifest and final schema still need endpoint-specific design."
+      "input_contract_limit": "The current GSE60450 candidate supports explicitly adapted mouse developmental analysis only. Human ASXL1/fibroblast contexts and named human/reference-year libraries retain their exact independent-input requirements.",
+      "contract_reference": "workflow_designs/bixbench.json:expression_enrichment_contract",
+      "source_endpoint_evidence": [
+        {
+          "benchmark": "PromptBio-Bench",
+          "task_id": "a-2-9",
+          "source_metadata_sha256": "da44daed328307fe96c410ca8d2dd2a0ef0143bbf25898f5ab511fe131c01a25",
+          "source_task_record_sha256": "b78ff59efd7942b193045bc81b130d5c0d6c27bbb4322b15949df3716cae1e49",
+          "inspection": "Complete pinned task question and output declaration rechecked; no source biological inputs or answers read."
+        },
+        {
+          "benchmark": "PromptBio-Bench",
+          "task_id": "a-11-6",
+          "source_metadata_sha256": "8735f320409f228d5ecddfda1a7c62621624891d44dcc52a1173c556854dd749",
+          "source_task_record_sha256": "5ac1bc83831c5251677ea4a2014a1731fd280823b695f0f685568919d5af977b",
+          "inspection": "Complete pinned task question and output declaration rechecked; no source biological inputs or answers read."
+        },
+        {
+          "benchmark": "PromptBio-Bench",
+          "task_id": "a-11-10",
+          "source_metadata_sha256": "2b700f9a93e2de430070e996915fe20ac49546f9c4b294d80170443c984cc22d",
+          "source_task_record_sha256": "a5627b81b469631e5ebc170584949e2cb1f0486e853c8a2738f708c62d66bd34",
+          "inspection": "Complete pinned task question and output declaration rechecked; no source biological inputs or answers read."
+        }
+      ],
+      "judge_free_endpoint_dispositions": {
+        "a-11-6": "Prioritize complete ORA and top-term tables; arbitrary rendered-plot correctness is outside the initial scoring contract. No full source mapping claimed."
+      }
     },
     {
       "proposed_id": "promptbio-design-oncogene-set-overlap",
@@ -1192,17 +1240,48 @@
         "Sample QC, filtered counts, design and contrast matrices, complete effect/uncertainty tables, all tested pathways, set membership and sensitivity comparisons"
       ],
       "verifier_design": [
-        "Native DESeq2/edgeR reference plus independent contrast, multiplicity and set checks; retain every gene and pathway, including undefined estimates; test interaction directly."
+        "Follow the shared contract: named DESeq2/apeglm fit, independent count/contrast/set checks, separate native ORA and permutation-GSEA multiplicity, complete statuses and numerical plotting tables. Deferred visual endpoints do not block authoring; edgeR cannot replace a named DESeq2 endpoint."
       ],
       "connected_workflow_rationale": "One coherent observed study and estimand; alternative methods are bounded comparisons, with full outputs for each named method. Distinct source parameters remain explicit.",
       "remaining_decisions": [
-        "Choose independent observed inputs with enough biological replication and native-format detail; exclude source benchmark studies and fixtures.",
-        "Freeze every source-specific threshold, feature universe, model and output schema before claiming endpoint equivalence.",
-        "Measure the complete offline analysis against the 30-minute budget without discarding biological sample structure."
+        "Clear independent count/annotation source lineage and rights, with appropriate species and tissue for each literal endpoint.",
+        "Acquire the necessary GO graph and named GO/KEGG snapshots; the existing mouse BP membership alone is insufficient.",
+        "Build and verify the pinned full native environment, including DOSE hypothesis-universe behavior and GSEA ranking/score semantics.",
+        "Calibrate numerical tolerances from native checks; implement the private oracle and verifier for the selected numerical endpoints with incorrect-output cases. Display parameters and deferred visual endpoints do not block assignment.",
+        "Demonstrate complete offline Harbor runtime <=30 minutes; the existing unshrunken DESeq2 run is not evidence for this combined task."
       ],
       "status": "question-portfolio-proposal-no-coverage-credit",
-      "input_contract_limit": "The routed workstream supplies an input search boundary. Preserve every exact source stage and native format in source_endpoint_patterns; input manifest and final schema still need endpoint-specific design.",
-      "refines_prior_question_id": "promptbio-design-bulk-contrasts"
+      "input_contract_limit": "The current GSE60450 candidate supports explicitly adapted mouse developmental analysis only. Human ASXL1/fibroblast contexts and named human/reference-year libraries retain their exact independent-input requirements.",
+      "refines_prior_question_id": "promptbio-design-bulk-contrasts",
+      "contract_reference": "workflow_designs/bixbench.json:expression_enrichment_contract",
+      "source_endpoint_evidence": [
+        {
+          "benchmark": "PromptBio-Bench",
+          "task_id": "a-3-4",
+          "source_metadata_sha256": "c15c6b4c725418c844d5908f30bcc43572e7d6ef89acb2e5661801982c58a53b",
+          "source_task_record_sha256": "a020b5c67d01ea2019cca62f7fa4adb9899fb84fa6fceb21f75a252b211797a4",
+          "inspection": "Complete pinned task question and output declaration rechecked; no source biological inputs or answers read."
+        },
+        {
+          "benchmark": "PromptBio-Bench",
+          "task_id": "b-3-8",
+          "source_metadata_sha256": "123c4eeac2f6a1aaa14d8d098c1b4d5f4080485866c8e2ad8929d3b4595d5335",
+          "source_task_record_sha256": "ee29ee649884a2a67bef2ad91ea26b2466af21382b821c55c6c1b31899fc9bed",
+          "inspection": "Complete pinned task question and output declaration rechecked; no source biological inputs or answers read."
+        },
+        {
+          "benchmark": "PromptBio-Bench",
+          "task_id": "b-3-15",
+          "source_metadata_sha256": "628f9293fd8cfd8ff4cd1cca6f6ec338cf8556af330ce61160991a3e8de20376",
+          "source_task_record_sha256": "be639b9ae53a90d0851314e9c6516136a16e794425042bb9c35f348cc322fe63",
+          "inspection": "Complete pinned task question and output declaration rechecked; no source biological inputs or answers read."
+        }
+      ],
+      "judge_free_endpoint_dispositions": {
+        "a-3-4": "Prioritize complete DESeq2 artifacts; figure quality is not a release gate. Retain a component-only source mapping until the complete plot endpoint is verified.",
+        "b-3-8": "Defer the visual endpoint from scoring. Reuse exact numerical selection/highlight/label tables as analysis components, without claiming a correct rendered volcano plot.",
+        "b-3-15": "Defer the visual endpoint from scoring. Reuse exact top-gene selection/order/sign tables as analysis components, without claiming a correct rendered lollipop chart."
+      }
     },
     {
       "proposed_id": "promptbio-design-bulk-graded-expression",

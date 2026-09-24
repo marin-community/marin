@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T18:59:49.713370+00:00",
+  "updated_at": "2026-09-24T19:09:48.406698+00:00",
   "basis_revision": "952929c306",
   "scope": "Agentic provisional-ID benchmarks only; preserve all existing OOD exclusions. Plan the broad task set before further recipe implementation.",
   "authoring_unit": "One coherent observed-data task per recipe by default. Proposed questions are separate task designs, not repeated instances. They may be split or merged after endpoint and runtime checks.",
@@ -13323,7 +13323,8 @@
     "No LLM judge. Exact computations, tolerances, graph/subspace invariants, observed labels and held-out metrics require explicit per-task acceptance rules.",
     "Do not automatically equate assay/protocol definitions, paper-level insights, or shared tool names with distinct completed workflows.",
     "Keep generic method cards connected to a biological question. Open-ended planning or evidence judgments stay unresolved where an executable contract cannot preserve their scientific meaning.",
-    "Use one bounded worker; lead owns scientific design, independent-data suitability, ranking and coverage promotion."
+    "Use one bounded worker; lead owns scientific design, independent-data suitability, ranking and coverage promotion.",
+    "Prioritize realistic tasks whose scientific outputs have direct executable checks. Defer subjective interpretation, visual quality or other endpoints without a defensible deterministic reward; retain exact source IDs and the uncovered endpoint. Do not introduce an LLM judge, contrived proxy or special protocol merely to increase coverage, and do not let these endpoints block independently ready tasks."
   ],
   "target_group_defaults": {
     "endpoint_assignment_status": "requires-task-specific-contract-review",
@@ -13340,7 +13341,7 @@
     },
     {
       "path": "workflow_designs/bixbench.json",
-      "sha256": "84e81a1859c7cb91df4c71951083ce5e0cb198a99c3ff3e08ac84c496f6c5732",
+      "sha256": "f603e09eb0e8f249169d8a4d01011ccd07a442b7ff1028e9c41111ff01b8abea",
       "benchmark_id": "BixBench",
       "reviewed_question_ids": 205,
       "proposed_designs": 27,
@@ -13407,7 +13408,7 @@
     },
     {
       "path": "workflow_designs/promptbio-bench.json",
-      "sha256": "6c9a07307aa8ea3619772a640c4a8dc37d4fc0b0ed20963e33eeafbcbd81a6cd",
+      "sha256": "62f2ad31f005735b2b0096f69eda2768cd2e0e7e34c560e8d06d777e2add6418",
       "benchmark_id": "PromptBio-Bench",
       "inventory_records_assigned": 244,
       "proposed_question_cards": 101,
@@ -13515,7 +13516,7 @@
   "authoring_phase": "question-portfolio-planning",
   "portfolio_index": {
     "path": "workflow_portfolio.json",
-    "sha256": "b388aff0ffb9a26e2509c181523711023a656bda9b35e4ff3b3ed4b6d740b518",
+    "sha256": "55ca389f5ffb438fb0095afabca382e74d181f03276cd3c12e041305dd616e3e",
     "counts": {
       "source_releases": 32,
       "inventory_records": 5133,

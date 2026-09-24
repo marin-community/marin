@@ -1724,14 +1724,80 @@
         "go.tsv: term, gene_universe, overlap, p, q, representative_term",
         "members.tsv: term, gene, direction, eligibility"
       ],
-      "method_and_decision_parameters_to_freeze": "Full-rank design, reference condition, apeglm coefficient, raw versus adjusted significance masks per endpoint, tested background versus all annotated genes, GO version, simplify semantic measure/cutoff/representative rule, ties and rounding.",
+      "method_and_decision_parameters_to_freeze": "The shared expression_enrichment_contract specifies named model/masks, distinct ORA backgrounds, native simplification and complete artifacts. Annotation acquisition, installed source checks, numerical tolerances and runtime remain unresolved.",
       "deterministic_verifier_design_and_negative_controls": "Run native DESeq2/clusterProfiler oracle and independently check contrast direction, complete gene/term universes, memberships and multiplicity. Mutate a contrast sign, universe size or simplified representative and require failure.",
       "unresolved_data_and_runtime_requirements": "Need independent raw counts and sufficiently replicated condition design; annotation snapshot must be license-compatible offline and complete enough for semantic reduction; runtime unmeasured.",
-      "endpoint_adaptation_limits": "The source mixes p and padj criteria and calls a term result a threshold. Keep each explicit mask distinct. Specific genes/terms may be absent or nonsignificant in independent observations; do not select data to force their published answer.",
+      "endpoint_adaptation_limits": "Current mouse developmental counts cannot establish human ASXL1 effects or fibroblast-specific enrichment. The contract retains exact masks and lookup semantics, with explicit absent/removed statuses. Tissue-specific endpoints need separate observed contrasts. No full-group coverage is claimed.",
       "benchmark_study_exclusion_identifiers": [
         "https://doi.org/10.1172/jci.insight.167744"
       ],
-      "status": "proposed-design-only-no-coverage-credit"
+      "status": "proposed-design-only-no-coverage-credit",
+      "contract_reference": "expression_enrichment_contract in this file",
+      "endpoint_contracts": [
+        {
+          "task_id": "bix-1-q1",
+          "source_question_sha256": "dc49b18260599c65bf828c8a28b3c90cba458d3586f599f76b0879120c38f82f",
+          "view": "go_adjusted_tested",
+          "operation": "Adjusted p of the declared T-cell-activation term after simplify; round to four decimals only if that exact term survives.",
+          "source_or_adaptation_limit": "Source term label must resolve to a stable GO ID before authoring; do not select observations to force enrichment."
+        },
+        {
+          "task_id": "bix-1-q2",
+          "source_question_sha256": "8c08e45f02e6a9cc50f831e12b32afddce9402f9f66677e2f0cc371eba696f47",
+          "view": "go_raw_genome",
+          "operation": "Adjusted p of the declared neutrophil-activation term after simplify using the raw-p-selected list and genome annotation background.",
+          "source_or_adaptation_limit": "The question calls a result a threshold. Treat it as a term result and preserve this interpretation explicitly."
+        },
+        {
+          "task_id": "bix-5-q1",
+          "source_question_sha256": "2bf46de8ad2a4a236c5cafb38dc9f3d387dcafd5802cb996db071dab683032e8",
+          "view": "go_adjusted_tested",
+          "operation": "Smallest native adjusted p among the declared significant GO BP terms, tie by term ID.",
+          "source_or_adaptation_limit": "The source does not specify enough pipeline details or whether simplify applies; this authored view requires an adaptation label."
+        },
+        {
+          "task_id": "bix-5-q4",
+          "source_question_sha256": "3c71c34f973850bbae49d5abdba387e34a385eea883c8a75b276a3c4f970e22e",
+          "view": "fibroblast_specific_go",
+          "operation": "Most-enriched GO process from the independent fibroblast-specific contrast, with the same explicit ranking rule.",
+          "source_or_adaptation_limit": "Cannot inherit the luminal or whole-blood contrast. Remains an input/context gap for the current candidate."
+        },
+        {
+          "task_id": "bix-49-q1",
+          "source_question_sha256": "97ebf3049a5cda3d9123f02cadc03e7a27eb166e94049b1e2b552173961784ab",
+          "view": "gene_results",
+          "operation": "Maximum shrunken LFC among raw-p-significant genes with positive shrunken LFC, round to two decimals.",
+          "source_or_adaptation_limit": "Empty selection has a status, not zero; do not replace p<0.05 with padj<0.05."
+        },
+        {
+          "task_id": "bix-49-q2",
+          "source_question_sha256": "2b018ef66139e6e2bad807b039a10cd463be4d53717cb1c41feb09208e04900f",
+          "view": "gene_results",
+          "operation": "Original Wald padj for the declared named gene after the same fit and apeglm workflow.",
+          "source_or_adaptation_limit": "Shrinkage does not replace padj; GRIK5 absence or ambiguous mapping must be explicit."
+        },
+        {
+          "task_id": "bix-49-q3",
+          "source_question_sha256": "b7a01d67cb54cdca62c30a0f9aa37bb803c9dd5019dfbef80056d51089b623b1",
+          "view": "gene_results",
+          "operation": "Count adjusted-significant genes with positive finite shrunken LFC.",
+          "source_or_adaptation_limit": "Count genes once, not transcript mappings."
+        },
+        {
+          "task_id": "bix-49-q4",
+          "source_question_sha256": "c0611885b2926b5fe167f566d5b0bb5b5aacc79ba1af449d5042c52b2919ee80",
+          "view": "gene_results",
+          "operation": "Count all adjusted-significant genes, preserving both effect directions.",
+          "source_or_adaptation_limit": "Do not require an additional absolute LFC cutoff."
+        },
+        {
+          "task_id": "bix-49-q5",
+          "source_question_sha256": "9af0e2eded98daf4a87b8e3d900903a2a75aed3dfa8a83d97d5596482dfca9a6",
+          "view": "gene_results",
+          "operation": "Shrunken LFC for the declared named gene, rounded to two decimals.",
+          "source_or_adaptation_limit": "Return a status when absent/unestimable; do not use unshrunken LFC."
+        }
+      ]
     },
     {
       "proposed_id": "bix-design-ordinal-clinical-risk",
@@ -3398,5 +3464,203 @@
       ],
       "validated_new_mappings": 0
     }
+  },
+  "expression_enrichment_contract": {
+    "status": "endpoint-and-acceptance-design; input-and-combined-runtime-unresolved",
+    "execution": "Harbor only, offline. One coherent count analysis may supply several downstream artifacts, but every source-specific mask, universe, tissue and annotation release retains a separate identity.",
+    "native_source_review": {
+      "package_index": "https://bioconductor.org/packages/3.22/bioc/src/contrib/PACKAGES.gz",
+      "package_index_sha256": "e0e325fefde2b1617e9e3cb212d0e2131c2e6870ddff50dde96d2623f60a733c",
+      "candidate_native_versions": [
+        {
+          "Package": "apeglm",
+          "Version": "1.32.0",
+          "MD5sum": "844f77046de2ac9d9e92d6ae42a8189e",
+          "License": "GPL-2"
+        },
+        {
+          "Package": "clusterProfiler",
+          "Version": "4.18.4",
+          "MD5sum": "4b661ca540c7df9fc1ab0ff65364cfa7",
+          "License": "Artistic-2.0"
+        },
+        {
+          "Package": "DESeq2",
+          "Version": "1.50.2",
+          "MD5sum": "25808f3c95fae4e5a1e0baa8e8035e6e",
+          "License": "LGPL (>= 3)"
+        },
+        {
+          "Package": "DOSE",
+          "Version": "4.4.0",
+          "MD5sum": "fd97f21bbbce18162934eb4b2023892b",
+          "License": "Artistic-2.0"
+        },
+        {
+          "Package": "GOSemSim",
+          "Version": "2.36.0",
+          "MD5sum": "3d050b825e7c1de00cafe96c99f523d3",
+          "License": "Artistic-2.0"
+        }
+      ],
+      "existing_runtime": "R 4.5.3 / DESeq2 1.50.2 have prior execution evidence; the combined apeglm/clusterProfiler/GSEA environment has not been built or run.",
+      "clusterprofiler_archive": {
+        "url": "https://bioconductor.org/packages/3.22/bioc/src/contrib/clusterProfiler_4.18.4.tar.gz",
+        "provider_md5": "4b661ca540c7df9fc1ab0ff65364cfa7",
+        "download_bytes": 376699,
+        "provider_md5_verified": true,
+        "reviewed_files": [
+          {
+            "path": "R/simplify.R",
+            "sha256": "57e62ba2e804cf1327b313d48c8bce404eececd40afbca1e6ac13afbd4c9d886"
+          },
+          {
+            "path": "R/enrichGO.R",
+            "sha256": "f39a9ab03c318c25951956c31845f9b1191c35bd037bfd57b791156fc6083015"
+          }
+        ]
+      },
+      "other_sources": [
+        {
+          "url": "https://bioconductor.org/packages/release/bioc/vignettes/DESeq2/inst/doc/DESeq2.html",
+          "use": "Coefficient shrinkage, raw and adjusted tests, independent filtering and count-model prerequisites."
+        },
+        {
+          "url": "https://gseapy.readthedocs.io/en/latest/_modules/gseapy/stats.html",
+          "use": "Local enrichment uses Haldane-Anscombe corrected odds ratios and skips zero-overlap sets."
+        },
+        {
+          "url": "https://gseapy.readthedocs.io/en/latest/_modules/gseapy/enrichr.html",
+          "use": "Local combined score and BH adjustment differ from an unspecified remote Enrichr implementation."
+        },
+        {
+          "url": "https://gseapy.readthedocs.io/en/latest/run.html",
+          "use": "Prerank parameters and output columns."
+        }
+      ],
+      "gseapy_version": "1.3.0",
+      "gseapy_release_metadata_sha256": "5362d8cd94609c80854941e747b6ecfa3b843666aa9e27b9bb808f8d1a67b503",
+      "remaining_source_check": "DOSE 4.4.0 metadata is pinned, but its archive failed the bounded-download checksum check and was not accepted; a subsequent metadata request timed out and the attempted GitHub release branch did not resolve. Verify the installed source and native tested-set denominator before execution claims."
+    },
+    "input_scope": {
+      "candidate": "workflow_designs/source_collections.json:existing-mammary-observed-counts",
+      "count_boundary": "All 27,179 observed count rows and original 12 library columns are public input. Select the six luminal libraries by the verified sample join; retain the three-stage design and all excluded-gene rows.",
+      "model": "~stage; virgin reference; 2 dL versus virgin coefficient; pregnancy libraries participate in estimation. No invented pairing or donor covariate. Count filter is rowSum across these six libraries >=10.",
+      "species_limit": "GSE60450 is mouse developmental biology. It cannot implement the literal human KEGG_2021_Human endpoint or an ASXL1 human case/control effect. Mouse GO and developmental contrasts are explicitly labelled adaptations, not complete coverage of the 17-record group.",
+      "tissue_limit": "A fibroblast-specific endpoint cannot inherit a whole-blood or luminal result. A combined task requiring distinct tissue effects needs independent observations and a separate fit/contrast ID for each tissue; otherwise split the affected endpoint.",
+      "annotation_requirements": [
+        "Pin species, stable gene IDs, mapping release, ontology graph and relation types, term memberships and annotation evidence. Preserve one-to-many/obsolete/unmapped records without multiplying count rows.",
+        "A literal human KEGG_2021_Human task needs independently observed human gene data and a legitimately acquired, hash-pinned copy of that reference release. A current KEGG query, mouse library or orthology-converted list is a declared adaptation.",
+        "GO_Biological_Process_2021 is a named reference requirement for a-2-8. The current mouse GO BP asset does not establish that exact library, species compatibility or semantic graph."
+      ]
+    },
+    "count_model": {
+      "versions": "Use DESeq2 1.50.2 and candidate apeglm 1.32.0 in a fully locked environment; preserve all transitive package versions before native execution.",
+      "fit": "DESeq(test=Wald,fitType=parametric,sfType=ratio,betaPrior=FALSE,minReplicatesForReplace=Inf,parallel=FALSE). Require a full-rank design and verify the actual dispersion fit type; no silent fallback.",
+      "results": "Select the named 2 dL versus virgin coefficient; results(alpha=0.05,pAdjustMethod=BH,independentFiltering=TRUE,cooksCutoff=TRUE,parallel=FALSE). This differs from the existing unfiltered/no-Cooks reference and requires a new native reference.",
+      "shrinkage": "lfcShrink(type=apeglm,coef=the same named coefficient,res=the declared Wald result,apeMethod=nbinomCR). Preserve raw and shrunken LFC/SE separately. Raw p, adjusted p and Wald statistic retain their original fit identity; do not recompute significance from posterior LFC alone.",
+      "masks": {
+        "raw_significant": "finite pvalue <0.05",
+        "adjusted_significant": "finite padj <0.05",
+        "raw_significant_up": "raw_significant and finite shrunken_log2FC >0",
+        "adjusted_significant_up": "adjusted_significant and finite shrunken_log2FC >0",
+        "volcano_highlight": "finite padj <0.05 and abs(raw_log2FC)>1"
+      },
+      "missingness": "Retain every input gene with statuses including prefilter_excluded, fit_failure, cooks_outlier, independently_filtered and finite. A gene can have finite p and NA padj; it must not silently enter the adjusted-significant list. Export baseMean, raw LFC/SE, Wald statistic, p, padj, shrunken LFC/SE, Cook values, eligibility and the independent-filter threshold."
+    },
+    "ora": {
+      "library": "Use pinned clusterProfiler enrichGO with OrgDb/keyType appropriate to the supplied species and IDs; ont=BP,pAdjustMethod=BH,minGSSize=10,maxGSSize=500,readable=FALSE,pvalueCutoff=1,qvalueCutoff=1. Preserve the raw native result slot before deriving display/significance views; do not rely on a filtered data-frame conversion.",
+      "views": [
+        {
+          "id": "go_adjusted_tested",
+          "selection": "adjusted_significant genes",
+          "background": "all count-eligible genes with finite Wald p, intersected with the BP annotation universe"
+        },
+        {
+          "id": "go_raw_genome",
+          "selection": "raw_significant genes",
+          "background": "all genes in the independently acquired declared reference annotation, intersected with BP membership; include genes not tested in the expression model as the source-requested sensitivity background"
+        }
+      ],
+      "universe_accounting": "Export the requested and effective native universe, selected mapped IDs, every candidate term size and overlap. Do not replace the genome background with only tested genes for the explicit all-gene endpoint. Explain that this background answers a different question.",
+      "statistics": "For each eligible term report N=background size, K=term genes in background, n=selected genes in background and k=overlap; audit the hypergeometric upper tail P[X>=k]. Preserve native p.adjust and the exact set of hypotheses over which it was computed.",
+      "complete_outputs": "A complete membership/status table includes zero-overlap and size-excluded sets even if the native package omits them. Such rows retain native_not_returned or size_excluded; do not silently append p=1 rows and change the native BH denominator. A separately named all-eligible BH sensitivity analysis may be supplied but cannot replace native results.",
+      "semantic_simplification": "For each view simplify the native BP results passing padj<0.05, with cutoff=0.7,by=p.adjust,select_fun=min,measure=Wang and a pinned species-compatible semData. Preserve native term order, the full similarity matrix and a before/after retained-ID table.",
+      "semantic_ties": "The inspected clusterProfiler 4.18.4 source resolves equal selected values using the greatest number of ontology ancestors, then the first tied entry. It loops through local similarity neighborhoods and unions removals; this is not connected-component clustering or a guarantee of one surviving representative per removed term. Do not invent a one-to-one representative map."
+    },
+    "kegg": {
+      "source_endpoints": [
+        "a-2-9",
+        "a-11-10"
+      ],
+      "requirement": "Use an independently acquired frozen human KEGG_2021_Human library to share these two endpoints, with an explicit human gene universe and gene-list provenance. This input is unresolved; no mouse substitution.",
+      "native_candidate": "GSEApy 1.3.0 local enrichment on a frozen GMT and explicit background set; never a live API call during solving. Retain full eligible-set membership/status accounting.",
+      "score_semantics": "The reviewed local implementation uses a 0.5 Haldane-Anscombe correction in each 2x2 cell for Odds Ratio and -ln(p)*Odds Ratio for Combined Score; it BH-adjusts the returned nonzero-overlap sets. It is not automatically equivalent to remote Enrichr scores. Verify the pinned installed implementation before freezing acceptance.",
+      "undefined": "If p underflows to zero, do not emit an unlabelled infinite combined score. Retain a numeric-status field and an independently checked log-tail or declared display policy. This corner case requires resolution against the native implementation before assignment."
+    },
+    "gsea": {
+      "native_candidate": "GSEApy 1.3.0 prerank; independently acquired GO BP GMT compatible with rank identifiers. Do not substitute ORA or a different named library without an adaptation record.",
+      "ranking": "Every count-eligible, mapped gene with a finite unshrunken signed Wald statistic. One stable ID per gene; descending statistic with lexicographic stable-ID tie break recorded before native ranking. No significant-gene prefilter. Preserve source IDs through symbol mappings and resolve duplicates before ranking.",
+      "parameters": {
+        "min_size": 15,
+        "max_size": 500,
+        "weight": 1,
+        "permutation_num": 1000,
+        "seed": 42,
+        "threads": 1
+      },
+      "scope": "Size limits apply after intersecting gene sets with the ranked universe. Keep every excluded set with its reason and retain all eligible ES, NES, nominal p, permutation FDR and leading-edge membership. Verify tie-order preservation in the pinned native implementation.",
+      "multiplicity": "Keep native permutation FDR separate from BH-adjusted nominal p. Derive it over the whole declared library, not a top-k subset.",
+      "top10": "For a-2-8 choose terms with finite native FDR<0.05; sort by FDR ascending, abs(NES) descending, then term ID. Report up to ten with an explicit fewer-than-ten status. The source leaves significance cutoff and tie rule unspecified; these are authored choices.",
+      "top5": "For a-11-4 sort all eligible terms by abs(NES) descending then term ID, independent of significance; report up to five. Do not reuse the significant-only top-ten view."
+    },
+    "plots": {
+      "a-3-4": "raw_log2FC versus -log10(padj); highlight adjusted_significant.",
+      "b-3-8": "raw_log2FC versus -log10(raw p); red iff abs(raw_log2FC)>1 AND padj<0.05. Annotate the five lowest finite raw p values, tie by stable ID; most-significant ordering is an authored disambiguation.",
+      "b-3-15": "Select up to 20 genes with finite padj<0.05, lowest padj then stable ID; order selected genes by raw_log2FC ascending then stable ID. Red positive, blue negative, grey exact zero; horizontal stems from zero and a vertical zero reference. The significance threshold is an authored choice; the source only specifies selection by padj.",
+      "a-11-6": "Top ten native significant GO terms by padj then term ID from the declared adjusted-tested ORA view; plot padj on x, term labels on y. Do not substitute -log10(padj) on this specified axis.",
+      "render_contract": "Keep plots as inspectable supporting artifacts and grade complete numerical plotting tables where useful. Do not require a special canonical renderer or image-comparison pipeline solely to claim visual benchmark coverage. Arbitrary image/style correctness remains ungraded; retain that mapping gap and proceed with independently verifiable biological outputs.",
+      "numeric_edges": "No p-value clipping in statistical tables. Exclude NA p values from the relevant axis and report counts; explicitly flag zero/underflow values and cap display at a declared floor before rendering. Freeze that floor, and verify plotted axis values against it.",
+      "artifact_names": "Use separate filenames for adjusted-p and raw-p volcano plots so the two source artifacts named volcano_plot.png cannot overwrite each other.",
+      "source_scoring_dispositions": {
+        "a-3-4": "Prioritize complete DESeq2 artifacts; figure quality is not a release gate. Retain a component-only source mapping until the complete plot endpoint is verified.",
+        "a-11-6": "Prioritize complete ORA and top-term tables; arbitrary rendered-plot correctness is outside the initial scoring contract. No full source mapping claimed.",
+        "b-3-8": "Defer the visual endpoint from scoring. Reuse exact numerical selection/highlight/label tables as analysis components, without claiming a correct rendered volcano plot.",
+        "b-3-15": "Defer the visual endpoint from scoring. Reuse exact top-gene selection/order/sign tables as analysis components, without claiming a correct rendered lollipop chart."
+      }
+    },
+    "complete_artifacts": [
+      "sample join/filter/design tables; size factors, dispersion diagnostics and coefficient identity",
+      "all input genes with raw/shrunken statistics and statuses; identifier mapping and independent-filter metadata",
+      "requested/effective backgrounds and exact selected IDs for each ORA view",
+      "all term memberships and eligibility, native ORA values and native testing denominator",
+      "semantic similarity matrix, neighborhood tie decisions and retained/removal identities for each ORA view",
+      "complete ranked list, all GSEA sets/results, permutation settings and leading edges",
+      "separate top-ten-significant and top-five-absolute-NES tables",
+      "complete numerical plotting tables; supporting plots are inspectable but their visual quality is not part of the reward",
+      "per-endpoint lookup table with fit/view/library IDs, complete denominators and absent/filtered/removed status"
+    ],
+    "acceptance": {
+      "numerical": "Private native reference reads public counts, metadata and annotation snapshots. Independently validate sample/contrast direction, integer counts, ID cardinality, mask membership, hypergeometric cells, BH denominator and rank/set construction. Numeric model/GSEA tolerances remain to be calibrated using pinned native repeatability; identities, counts, thresholds and statuses are exact.",
+      "named_lookups": "Resolve named terms by stable ontology IDs, never substring matches. A term removed by simplify is removed, not its representative value. A missing or untestable named gene has an explicit status, not a fabricated zero. Independent-study named queries must be declared before outcomes are known.",
+      "incorrect_output_checks": [
+        "Pass shrunken LFC to the raw-significance rule or substitute raw p for padj.",
+        "Drop independently filtered genes or silently shrink the requested genome background.",
+        "Use ORA BH q-values as GSEA permutation FDR.",
+        "Take the five largest significant NES terms rather than the five largest absolute NES terms.",
+        "Replace Wang simplification with transitive connected components or invent a representative for every removed term.",
+        "Use a mouse or current KEGG library for KEGG_2021_Human.",
+        "Use the wrong p-value axis, selected genes, sign colours or labels in the machine-readable plot table."
+      ]
+    },
+    "remaining_before_assignment": [
+      "Clear independent count/annotation source lineage and rights, with appropriate species and tissue for each literal endpoint.",
+      "Acquire the necessary GO graph and named GO/KEGG snapshots; the existing mouse BP membership alone is insufficient.",
+      "Build and verify the pinned full native environment, including DOSE hypothesis-universe behavior and GSEA ranking/score semantics.",
+      "Calibrate numerical tolerances from native checks; implement the private oracle and verifier for the selected numerical endpoints with incorrect-output cases. Display parameters and deferred visual endpoints do not block assignment.",
+      "Demonstrate complete offline Harbor runtime <=30 minutes; the existing unshrunken DESeq2 run is not evidence for this combined task."
+    ],
+    "validated_new_mappings": 0,
+    "scoring_scope": "Prioritize deterministic scientific outputs. Keep subjective interpretation and unsupported visual endpoints as deferred/component-only source dispositions; do not add an LLM judge or an artificial task protocol to clear them."
   }
 }

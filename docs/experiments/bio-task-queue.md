@@ -24,6 +24,12 @@ All authored tasks use **Harbor** for terminal-based solving and deterministic
 artifact grading. Notebook-based benchmarks supply scientific questions only;
 there is no notebook execution or submission protocol to implement.
 
+Prioritize realistic scientific outputs with direct executable checks. Defer endpoints
+without defensible deterministic scoring, including subjective interpretation or
+visual quality. Keep their source IDs and uncovered scope explicit; they do not
+block independently ready tasks. Numerical components alone do not earn full
+coverage of a source question that also requires an ungraded result.
+
 **Current phase: question planning and consolidation before further implementation.**
 The portfolio records a 20-item review order and an implementation assignment
 contract. No task or implementation worker is selected. Freeze independent observed
@@ -84,6 +90,22 @@ abundances are not converted into artificial read counts, a nonsignificant diffe
 does not establish equivalence, and static variant counts do not establish mutation
 accumulation rates. Such corrected adaptations need endpoint review before any
 coverage credit. The designs retain source-study exclusions and question hashes.
+
+The count/enrichment proposal now specifies nine BixBench and eight PromptBio
+endpoints against their source questions. It retains separate raw-p and adjusted-p
+gene masks, tested-gene and genome-wide ORA backgrounds, native GO simplification,
+and permutation-based GSEA results. Significant-only top-ten sets differ from the
+top five by absolute NES. Raw-p and adjusted-p volcano plots also have separate
+numerical tables. Grade those tables and keep figures inspectable; visual endpoints
+remain deferred without requiring a special image-comparison pipeline.
+
+The current mouse candidate cannot satisfy the named human KEGG release or a
+fibroblast-specific contrast. Those inputs remain explicit requirements of the
+conditional group. The inspected clusterProfiler source also shows that semantic
+term removal is not connected-component clustering and does not guarantee a single
+surviving representative for every removed term. Native similarity neighborhoods,
+tie decisions and retained term IDs must be preserved. The full environment and
+annotation snapshots still need validation before assignment.
 
 The connected ortholog proposal specifies all 47 source endpoints individually:
 within-locus tip/pair summaries, across-locus reductions, ordered rank tests,
