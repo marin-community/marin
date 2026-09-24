@@ -655,7 +655,6 @@ class KubernetesProviderConfig(_Config):
     cache_max_age: DurationField | None = None  # enables cache reclamation
     controller_address: str = ""  # injected into task pods
     kueue: KueueConfig = Field(default_factory=KueueConfig)
-    preempt_namespaces: list[str] = Field(default_factory=list)
     priority_classes: dict[str, str] = Field(default_factory=dict)  # band -> PriorityClass
 
     @field_validator("cache_max_age")

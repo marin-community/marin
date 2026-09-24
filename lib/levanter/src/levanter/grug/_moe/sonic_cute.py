@@ -22,7 +22,7 @@ import jax.numpy as jnp
 import numpy as np
 from haliax.jax_utils import tree_checkpoint_name
 from haliax.nn.ragged_dot import ragged_dot
-from jaxtyping import Array, Float, Int
+from jaxtyping import Array, Bool, Float, Int
 
 from levanter.grug._moe.common import (
     _CHECKPOINT_DISPATCH_INPUT,
@@ -76,23 +76,27 @@ def _expert_mlp(x_dispatch, w13_il, moe_w2, group_sizes, cu):
     over — that leaks under shard_map; not nondiff_argnums — that rejects tracers).
     """
     _gu, h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu, return_preact=True)
-    return quack_grouped_gemm(h, moe_w2, cu, b_major="n")
+    y = quack_grouped_gemm(h, moe_w2, cu, b_major="n")
+    return _zero_inactive_grouped_rows(y, cu)
 
 
 def _expert_mlp_fwd(x_dispatch, w13_il, moe_w2, group_sizes, cu):
     gu, h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu, return_preact=True)
     y = quack_grouped_gemm(h, moe_w2, cu, b_major="n")
-    return y, (x_dispatch, w13_il, moe_w2, gu, h, group_sizes, cu)
+    return _zero_inactive_grouped_rows(y, cu), (x_dispatch, w13_il, moe_w2, gu, h, group_sizes, cu)
 
 
 def _expert_mlp_bwd(res, dy):
     x_dispatch, w13_il, moe_w2, gu, h, group_sizes, cu = res
+    # `dy` needs no tail mask: both consumers are bounded by `cu` (varlen-m GEMM, ragged_dot
+    # weight-grad), and the combine transpose already zeroes rows past cu[-1] via w_dispatch == 0.
     # down backward: dh via QuACK (transposed contraction), dw2 via XLA weight-grad
     dh = quack_grouped_gemm(dy, moe_w2, cu, b_major="k")
     (dw2,) = jax.vjp(lambda w: ragged_dot(h, w, group_sizes), moe_w2)[1](dy)
     d_gu = _swiglu_gate_up_backward(gu, dh)
     # gate/up backward: dx via QuACK, dw13 via XLA weight-grad
     dx = quack_grouped_gemm(d_gu, w13_il, cu, b_major="k")
+    dx = _zero_inactive_grouped_rows(dx, cu)
     (dw13_il,) = jax.vjp(lambda w: ragged_dot(x_dispatch, w, group_sizes), w13_il)[1](d_gu)
     # int-typed routing args get float0 zero cotangents
     gs_ct = np.zeros(group_sizes.shape, dtype=jax.dtypes.float0)
@@ -151,13 +155,14 @@ def _moe_mlp_local_sonic_cute(
     x: Float[Array, "T H"],
     selected_experts: Int[Array, "T K"],
     combine_weights: Float[Array, "T K"],
+    token_valid: Bool[Array, "T"],
     moe_w13: Float[Array, "E H I2"],
     moe_w2: Float[Array, "E I H"],
     *,
     num_experts: int,
 ) -> tuple[Float[Array, "T H"], Int[Array, ""]]:
     x_dispatch, w_dispatch, token_dispatch, group_sizes = _prepare_moe_dispatch(
-        x, selected_experts, combine_weights, num_experts=num_experts
+        x, selected_experts, combine_weights, token_valid, num_experts=num_experts
     )
     x_dispatch = tree_checkpoint_name(x_dispatch, _CHECKPOINT_DISPATCH_INPUT)
     moe_dim = moe_w2.shape[1]
@@ -178,6 +183,7 @@ def _moe_mlp_local_sonic_cute_chunked(
     x: Float[Array, "T H"],
     selected_experts: Int[Array, "T K"],
     combine_weights: Float[Array, "T K"],
+    token_valid: Bool[Array, "T"],
     moe_w13_local: Float[Array, "E Hlocal I2"],
     moe_w2_local: Float[Array, "E I Hlocal"],
     *,
@@ -212,7 +218,7 @@ def _moe_mlp_local_sonic_cute_chunked(
         raise ValueError(f"chunk_sizes={chunk_sizes} must sum to num_experts={num_experts}")
 
     x_dispatch, w_dispatch, token_dispatch, group_sizes = _prepare_moe_dispatch(
-        x, selected_experts, combine_weights, num_experts=num_experts
+        x, selected_experts, combine_weights, token_valid, num_experts=num_experts
     )
     x_dispatch = tree_checkpoint_name(x_dispatch, _CHECKPOINT_DISPATCH_INPUT)
     moe_dim = moe_w2_local.shape[1]
@@ -224,9 +230,11 @@ def _moe_mlp_local_sonic_cute_chunked(
     bounds = [0]
     for size in chunk_sizes:
         bounds.append(bounds[-1] + size)
-    caps = [total_assignments * size // num_experts for size in chunk_sizes]
-    max_cap = max(caps)
+    physical_caps = [total_assignments * size // num_experts for size in chunk_sizes]
+    max_cap = max(physical_caps)
     cu = jnp.concatenate([jnp.zeros((1,), jnp.int32), jnp.cumsum(group_sizes).astype(jnp.int32)])
+    valid_assignments = cu[-1]
+    logical_caps = [valid_assignments * size // num_experts for size in chunk_sizes]
 
     # Pad the sorted buffers by the LARGEST chunk capacity so every chunk's
     # ``dynamic_slice(start=cu[lo], size=cap)`` never clamps its start index (which would silently
@@ -237,7 +245,7 @@ def _moe_mlp_local_sonic_cute_chunked(
     token_pad = jnp.pad(token_dispatch, (0, max_cap))
 
     out = jnp.zeros_like(x)
-    for c, cap in enumerate(caps):
+    for c, (cap, logical_cap) in enumerate(zip(physical_caps, logical_caps, strict=True)):
         lo = bounds[c]
         hi = bounds[c + 1]
         with jax.named_scope("gather_chunk"):
@@ -252,15 +260,17 @@ def _moe_mlp_local_sonic_cute_chunked(
         token_seg = jax.lax.dynamic_slice(token_pad, (start,), (cap,))
         w_seg = jax.lax.dynamic_slice(w_pad, (start,), (cap,))
 
-        # Real assignments for this chunk occupy segment rows [0, count); the rest are padding or
-        # rows belonging to later chunks. Mask their combine weight to zero.
+        # Only the logical accepted prefix is active. Later rows may be overflow assignments,
+        # physical padding, or assignments for later chunks.
         count = cu[hi] - start
-        valid = jnp.arange(cap, dtype=jnp.int32) < jnp.minimum(count, cap)
+        active_rows = jnp.minimum(count, logical_cap)
+        valid = jnp.arange(cap, dtype=jnp.int32) < active_rows
+        x_seg = jnp.where(valid[:, None], x_seg, jnp.zeros_like(x_seg))
         w_seg = jnp.where(valid, w_seg, jnp.zeros_like(w_seg))
 
         # Segment-relative group boundaries. Fold the leftover capacity into the last expert so the
         # kernel writes every row (no ungrouped garbage); those extra rows are weight-masked above.
-        raw = jnp.clip(cu[lo : hi + 1] - start, 0, cap)
+        raw = jnp.clip(cu[lo : hi + 1] - start, 0, active_rows)
         group_sizes_c = jnp.diff(raw)
         group_sizes_c = group_sizes_c.at[-1].add(cap - raw[-1])
         cu_c = jnp.concatenate([jnp.zeros((1,), jnp.int32), jnp.cumsum(group_sizes_c).astype(jnp.int32)])
@@ -271,4 +281,4 @@ def _moe_mlp_local_sonic_cute_chunked(
             )
         with jax.named_scope("scatter_chunk"):
             out = out.at[token_seg].add(out_dispatch * w_seg[:, None], mode="drop")
-    return out, _chunk_capacity_drops(cu, bounds, caps)
+    return out, _chunk_capacity_drops(cu, bounds, logical_caps)

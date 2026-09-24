@@ -1,11 +1,20 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import AppHeader from './components/AppHeader.vue'
 import ChatView from './components/ChatView.vue'
 import CompletionView from './components/CompletionView.vue'
 import HistoryPanel from './components/HistoryPanel.vue'
 import SamplingControls from './components/SamplingControls.vue'
 import { useServing } from './composables/useServing'
+import { createChatShare, fetchChatShare } from './lib/api'
+import { ThinkingMode } from './lib/chat_template'
+import {
+  conversationFromSharedChat,
+  isSharedChatHash,
+  sharedChatIdFromHash,
+  sharedChatSnapshot,
+  sharedChatUrl,
+} from './lib/shared_chat'
 import { loadConversations, loadParams, newId, saveConversations, saveParams } from './lib/storage'
 import type { Conversation } from './lib/types'
 
@@ -15,7 +24,15 @@ const params = reactive(loadParams())
 watch(params, () => saveParams(params))
 
 const conversations = ref<Conversation[]>(loadConversations())
+const initialHash = window.location.hash
+const sharedHashPresent = isSharedChatHash(initialHash)
+const sharedChatId = sharedChatIdFromHash(initialHash)
 const active = ref<Conversation>(freshConversation())
+if (sharedHashPresent) {
+  const cleanUrl = new URL(window.location.href)
+  cleanUrl.hash = ''
+  window.history.replaceState(null, '', cleanUrl.toString())
+}
 
 const sorted = computed(() => [...conversations.value].sort((a, b) => b.updatedAt - a.updatedAt))
 
@@ -24,6 +41,36 @@ const userPickedMode = ref(false)
 const showParams = ref(false)
 // Below the md breakpoint the history panel is an overlay drawer.
 const showHistory = ref(false)
+const shareState = ref<'idle' | 'copied' | 'failed'>('idle')
+const shareImportFailed = ref(false)
+const shareLabel = computed(() => {
+  if (shareState.value === 'copied') return 'Link copied'
+  if (shareState.value === 'failed') return 'Copy failed'
+  return 'Share chat'
+})
+watch(
+  () => [active.value.id, active.value.updatedAt],
+  () => {
+    shareState.value = 'idle'
+    shareImportFailed.value = false
+  },
+)
+onMounted(async () => {
+  if (!sharedHashPresent) return
+  if (!sharedChatId) {
+    shareImportFailed.value = true
+    return
+  }
+  try {
+    const snapshot = await fetchChatShare(sharedChatId)
+    const imported = conversationFromSharedChat(snapshot, newId(), Date.now(), ThinkingMode.TemplateDefault)
+    if (!imported) throw new Error('Invalid shared chat snapshot')
+    active.value = imported
+    persist()
+  } catch {
+    shareImportFailed.value = true
+  }
+})
 
 // Base checkpoints without a chat template start in completion mode.
 watch(info, (loaded) => {
@@ -35,12 +82,26 @@ function pickMode(picked: 'chat' | 'completion') {
   userPickedMode.value = true
 }
 
+async function shareConversation() {
+  try {
+    const shareId = await createChatShare(sharedChatSnapshot(active.value))
+    await navigator.clipboard.writeText(sharedChatUrl(window.location.href, shareId))
+    shareState.value = 'copied'
+  } catch {
+    shareState.value = 'failed'
+  }
+}
+
 function freshConversation(): Conversation {
   return {
     id: newId(),
     title: '',
     model: model.value,
     system: '',
+    pythonTools: '',
+    shellWorkspace: null,
+    thinkingMode: ThinkingMode.TemplateDefault,
+    customInstructions: '',
     createdAt: Date.now(),
     updatedAt: Date.now(),
     messages: [],
@@ -49,9 +110,10 @@ function freshConversation(): Conversation {
 
 function persist() {
   const current = active.value
-  if (!current.messages.length) return
+  const alreadySaved = conversations.value.some((conversation) => conversation.id === current.id)
+  if (!current.messages.length && !current.pythonTools.trim() && !current.shellWorkspace && !alreadySaved) return
   if (!current.model) current.model = model.value
-  if (!conversations.value.some((c) => c.id === current.id)) conversations.value.push(current)
+  if (!alreadySaved) conversations.value.push(current)
   saveConversations(conversations.value)
 }
 
@@ -119,7 +181,24 @@ function clearHistory() {
           >
             {{ tab }}
           </button>
-          <label class="ml-auto flex items-center gap-2 whitespace-nowrap text-xs font-medium text-text-secondary">
+          <div class="ml-auto"></div>
+          <button
+            v-if="mode === 'chat'"
+            class="flex items-center gap-1.5 whitespace-nowrap rounded-lg px-2 py-1 text-xs text-text-muted transition-colors hover:text-text-secondary disabled:cursor-not-allowed disabled:opacity-40"
+            :class="{ 'text-accent': shareState === 'copied', 'text-status-danger': shareState === 'failed' }"
+            :disabled="!active.messages.length"
+            title="Copy a short link containing user and assistant messages; hidden prompts and tool details are excluded"
+            @click="shareConversation"
+          >
+            <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="18" cy="5" r="3" />
+              <circle cx="6" cy="12" r="3" />
+              <circle cx="18" cy="19" r="3" />
+              <path d="m8.6 10.5 6.8-4M8.6 13.5l6.8 4" />
+            </svg>
+            <span class="hidden sm:inline">{{ shareLabel }}</span>
+          </button>
+          <label class="flex items-center gap-2 whitespace-nowrap text-xs font-medium text-text-secondary">
             Max tokens
             <input
               v-model.number="params.maxTokens"
@@ -134,7 +213,7 @@ function clearHistory() {
           <button
             class="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs transition-colors"
             :class="showParams ? 'bg-surface-sunken text-text' : 'text-text-muted hover:text-text-secondary'"
-            title="More sampling parameters"
+            title="More options"
             @click="showParams = !showParams"
           >
             <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -143,13 +222,28 @@ function clearHistory() {
             <span class="hidden sm:inline">Temperature {{ params.temperature }}</span>
           </button>
         </div>
-        <SamplingControls v-if="showParams" :params="params" v-model:system="active.system" :show-system="mode === 'chat'" />
+        <SamplingControls
+          v-if="showParams"
+          :params="params"
+          v-model:system="active.system"
+          v-model:thinking-mode="active.thinkingMode"
+          v-model:custom-instructions="active.customInstructions"
+          :show-chat-controls="mode === 'chat'"
+        />
+        <div
+          v-if="shareImportFailed"
+          role="alert"
+          class="border-b border-status-danger/40 bg-status-danger/10 px-4 py-2 text-center text-xs text-status-danger"
+        >
+          Could not import the shared chat. The link is invalid or was truncated.
+        </div>
         <ChatView
           v-if="mode === 'chat'"
           :conversation="active"
           :params="params"
           :model="model"
           :has-chat-template="info ? info.has_chat_template : true"
+          :chat-template-protocol="info?.chat_template_protocol ?? null"
           :streaming="info ? info.streaming : true"
           @persist="persist"
         />

@@ -10,19 +10,31 @@ const props = defineProps<{
   streaming: boolean
 }>()
 
-const rendered = computed(() => renderMarkdown(props.message.content))
-const thinkingActive = computed(() => props.streaming && !props.message.content)
+const rendered = computed(() =>
+  props.message.role === 'assistant' ? renderMarkdown(props.message.content) : '',
+)
+const thinkingActive = computed(
+  () => props.message.role === 'assistant' && props.streaming && !props.message.content,
+)
 const empty = computed(
-  () => !props.streaming && !props.message.content && !props.message.thinking && !props.message.error,
+  () =>
+    props.message.role === 'assistant' &&
+    !props.streaming &&
+    !props.message.content &&
+    !props.message.thinking &&
+    !props.message.toolCalls?.length &&
+    !props.message.error,
 )
 
 const copied = ref(false)
 
 async function copy() {
+  if (props.message.role !== 'assistant') return
   await navigator.clipboard.writeText(props.message.content)
   copied.value = true
   setTimeout(() => (copied.value = false), 1200)
 }
+
 </script>
 
 <template>
@@ -34,6 +46,17 @@ async function copy() {
     </div>
   </div>
 
+  <div v-else-if="message.role === 'tool'" class="flex justify-start">
+    <details class="max-w-[92%] rounded-lg border border-surface-border bg-surface-sunken px-3 py-2 text-xs">
+      <summary class="cursor-pointer font-mono text-text-secondary">
+        {{ message.name }} result
+      </summary>
+      <pre class="mt-2 overflow-x-auto whitespace-pre-wrap break-words text-text-muted">{{
+        JSON.stringify(message.result, null, 2)
+      }}</pre>
+    </details>
+  </div>
+
   <div v-else class="group flex justify-start">
     <div class="min-w-0 max-w-[92%]">
       <ThinkingBlock
@@ -43,6 +66,18 @@ async function copy() {
         :seconds="message.thinkingSeconds"
       />
       <div v-if="message.content" class="markdown-body text-[0.925rem] leading-relaxed" v-html="rendered"></div>
+      <div v-if="message.toolCalls?.length" class="mt-2 space-y-1.5">
+        <details
+          v-for="call in message.toolCalls"
+          :key="call.id"
+          class="rounded-lg border border-surface-border bg-surface-sunken px-3 py-2 text-xs"
+        >
+          <summary class="cursor-pointer font-mono text-text-secondary">{{ call.name }}</summary>
+          <pre class="mt-2 overflow-x-auto whitespace-pre-wrap break-words text-text-muted">{{
+            JSON.stringify(call.arguments, null, 2)
+          }}</pre>
+        </details>
+      </div>
       <div v-if="streaming && !message.content && !message.thinking" class="flex gap-1 py-2">
         <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-text-muted"></span>
         <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-text-muted [animation-delay:150ms]"></span>

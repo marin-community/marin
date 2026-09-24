@@ -95,7 +95,6 @@ def default_setup_script(
         ]
         if part
     )
-
     lines = [
         "set -e",
         'cd "$IRIS_WORKDIR"',
