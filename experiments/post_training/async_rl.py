@@ -51,11 +51,12 @@ from marin.rl.skyrl import (
     SkyRLRuntimeProfile,
     SkyRLSpec,
     SkyRLTopology,
+    _role_plan_config_values,
     skyrl_step,
 )
 from rigging.provenance import username_segment
 
-from experiments.evaluation.pipeline import EvaluationResult, eval_step
+from experiments.evaluation.pipeline import EvaluationResult
 from experiments.post_training.curriculum_rl.launch import (
     ARMS,
     GPU_VARIANT,
@@ -76,7 +77,7 @@ from experiments.post_training.curriculum_rl.pool import (
     VALIDATION_FILENAME,
     pool_step,
 )
-from experiments.post_training.skyrl_evaluation import resolve_skyrl_model
+from experiments.post_training.skyrl_evaluation import skyrl_eval_step
 
 EXPERIMENT_NAME = "async-rl"
 WANDB_PROJECT = f"marin-{EXPERIMENT_NAME}"
@@ -281,29 +282,9 @@ def parse_setting(text: str) -> Setting:
     return Setting(key.lstrip("+"), yaml.safe_load(value), key.startswith("+"))
 
 
-# Keys the typed role plan owns. They change through the recipe only.
-TOPOLOGY_OWNED_SETTINGS = frozenset(
-    {
-        "trainer.placement.colocate_all",
-        "trainer.placement.colocate_policy_ref",
-        "trainer.placement.policy_num_nodes",
-        "trainer.placement.policy_num_gpus_per_node",
-        "trainer.placement.ref_num_nodes",
-        "trainer.placement.ref_num_gpus_per_node",
-        "generator.run_engines_locally",
-        "generator.num_inference_engines",
-        "generator.inference_engine_tensor_parallel_size",
-        "generator.inference_engine_pipeline_parallel_size",
-        "generator.inference_engine_data_parallel_size",
-        "generator.inference_engine_expert_parallel_size",
-        "trainer.train_batch_size",
-        "trainer.policy_mini_batch_size",
-        "trainer.micro_train_batch_size_per_gpu",
-        "generator.n_samples_per_prompt",
-        "trainer.resume_mode",
-        "trainer.max_ckpts_to_keep",
-    }
-)
+# Keys that cannot change through --set because typed run inputs own them.
+ROLE_PLAN_SETTINGS = frozenset(_role_plan_config_values(SNOWBALL_RECIPE.role_plan))
+RETENTION_SETTINGS = frozenset({"trainer.resume_mode", "trainer.max_ckpts_to_keep"})
 # Keys MarinSkyRL derives from context_budget and rejects as direct YAML.
 DERIVED_CONTEXT_SETTINGS = frozenset(
     {
@@ -323,8 +304,12 @@ def apply_setting(config: dict, setting: Setting) -> None:
     key, value, allows_new_key = setting
     if key == "entrypoint":
         raise click.BadParameter("this launcher is the fully asynchronous loop; entrypoint cannot change")
-    if key in TOPOLOGY_OWNED_SETTINGS:
-        raise click.BadParameter(f"{key!r} is written from the topology after the config; change the recipe instead")
+    if key in ROLE_PLAN_SETTINGS:
+        raise click.BadParameter(f"{key!r} is fixed by the role plan; change SNOWBALL_RECIPE instead")
+    if key == "generator.run_engines_locally":
+        raise click.BadParameter("SkyRL artifact runs always use local engines")
+    if key in RETENTION_SETTINGS:
+        raise click.BadParameter(f"{key!r} is fixed by the retention policy; change RETENTION instead")
     if key in DERIVED_CONTEXT_SETTINGS:
         raise click.BadParameter(f"MarinSkyRL derives {key!r} from context_budget; set context_budget instead")
     if key in EVAL_DERIVED_SETTINGS:
@@ -603,12 +588,11 @@ def build_run(policy: PolicySpec, preset: AsyncPreset, version: str | None, sett
     evaluation_base_name = f"evals/{evaluation_model_name}/{preset.evals}"
     evaluation_version = version or resolve_version(evaluation_base_name, None)
     evaluation_model = evaluation_model_config(policy, served, evaluation_model_name)
-    evaluation = eval_step(
+    evaluation = skyrl_eval_step(
+        rl,
         evaluation_model,
         preset.evals,
         version=evaluation_version,
-        deps=(rl,),
-        resolve_model=lambda ctx: resolve_skyrl_model(ctx, rl, evaluation_model),
         accelerator=f"{GPU_VARIANT}x{policy.serve_gpus}",
         submission_cluster=policy.cluster,
         federated_cluster=policy.cluster,
@@ -617,7 +601,7 @@ def build_run(policy: PolicySpec, preset: AsyncPreset, version: str | None, sett
 
 
 @click.command(help=__doc__)
-@click.option("--preset", type=click.Choice(sorted(PRESETS)), default="smoke", show_default=True)
+@click.option("--preset", type=click.Choice(sorted(PRESETS)), default=SMOKE_PRESET.label, show_default=True)
 @click.option(
     "--set",
     "settings",

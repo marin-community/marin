@@ -56,7 +56,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import username_segment
 
 from experiments.evaluation.models import SNOWBALL_SFT_EXPORT_URI, SNOWBALL_VLLM_ARGS
-from experiments.evaluation.pipeline import EvaluationResult, eval_step
+from experiments.evaluation.pipeline import EvaluationResult
 from experiments.post_training.curriculum_rl.pool import (
     MAX_PROMPT_TOKENS,
     QWEN3_MODEL,
@@ -65,7 +65,7 @@ from experiments.post_training.curriculum_rl.pool import (
     VALIDATION_FILENAME,
     pool_step,
 )
-from experiments.post_training.skyrl_evaluation import SKYRL_POLICY_LOCATION, resolve_skyrl_model
+from experiments.post_training.skyrl_evaluation import SKYRL_POLICY_LOCATION, skyrl_eval_step
 
 logger = logging.getLogger(__name__)
 
@@ -709,12 +709,11 @@ def build_arm(
     evaluation_base_name = f"evals/{evaluation_model_name}/{preset.evals}"
     evaluation_version = version or resolve_version(evaluation_base_name, None)
     evaluation_model = evaluation_model_config(policy, preset, evaluation_model_name)
-    evaluation = eval_step(
+    evaluation = skyrl_eval_step(
+        rl,
         evaluation_model,
         preset.evals,
         version=evaluation_version,
-        deps=(rl,),
-        resolve_model=lambda ctx: resolve_skyrl_model(ctx, rl, evaluation_model),
         accelerator=f"{GPU_VARIANT}x{policy.serve_gpus}",
         submission_cluster=policy.cluster,
         federated_cluster=policy.cluster,

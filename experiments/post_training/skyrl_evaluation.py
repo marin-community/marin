@@ -9,6 +9,8 @@ from marin.evaluation.model_config import ModelConfig
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
 from marin.rl.skyrl import SkyRLModel
 
+from experiments.evaluation.pipeline import EvaluationResult, eval_step
+
 SKYRL_POLICY_LOCATION = "<skyrl-policy>"
 
 
@@ -28,4 +30,27 @@ def resolve_skyrl_model(ctx: StepContext, source: ArtifactStep[SkyRLModel], mode
         identity=artifact_identity(source),
         tokenizer=terminal.tokenizer_uri,
         tokenizer_revision=terminal.tokenizer_revision,
+    )
+
+
+def skyrl_eval_step(
+    source: ArtifactStep[SkyRLModel],
+    model: ModelConfig,
+    evals: str,
+    *,
+    version: str,
+    accelerator: str | None,
+    submission_cluster: str,
+    federated_cluster: str | None,
+) -> ArtifactStep[EvaluationResult]:
+    """Build an evaluation that resolves a completed SkyRL policy export."""
+    return eval_step(
+        model,
+        evals,
+        version=version,
+        deps=(source,),
+        resolve_model=lambda ctx: resolve_skyrl_model(ctx, source, model),
+        accelerator=accelerator,
+        submission_cluster=submission_cluster,
+        federated_cluster=federated_cluster,
     )

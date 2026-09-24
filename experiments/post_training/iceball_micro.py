@@ -66,8 +66,8 @@ from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from zephyr.writers import write_parquet_file
 
-from experiments.evaluation.pipeline import EvaluationResult, eval_step
-from experiments.post_training.skyrl_evaluation import SKYRL_POLICY_LOCATION, resolve_skyrl_model
+from experiments.evaluation.pipeline import EvaluationResult
+from experiments.post_training.skyrl_evaluation import SKYRL_POLICY_LOCATION, skyrl_eval_step
 from experiments.sft.launcher import DatasetSpec, LevanterCheckpointModel, SFTSpec, resources_from_accelerator, sft_step
 
 logger = logging.getLogger(__name__)
@@ -470,12 +470,11 @@ def build_workflow(*, version: str | None = None) -> IceballMicroWorkflow:
         ),
         generation=GenerationConfig(max_gen_toks=256),
     )
-    evaluation = eval_step(
+    evaluation = skyrl_eval_step(
+        rl,
         evaluation_model,
         ICEBALL_EVALS,
         version=evaluation_version,
-        deps=(rl,),
-        resolve_model=lambda ctx: resolve_skyrl_model(ctx, rl, evaluation_model),
         accelerator=ICEBALL_EVAL_ACCELERATOR,
         submission_cluster=ICEBALL_CLUSTER,
         federated_cluster=ICEBALL_CLUSTER,
