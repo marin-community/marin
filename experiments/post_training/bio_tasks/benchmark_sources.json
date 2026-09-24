@@ -351,8 +351,9 @@
       "scoring_access": "Task-dependent access",
       "source_url": "https://github.com/science-machine/biomlbench/tree/673f3d8d3462fc6cdcbbd9695fba612b9332ca65",
       "data_url": "https://github.com/science-machine/biomlbench/blob/673f3d8d3462fc6cdcbbd9695fba612b9332ca65/biomlbench/grade.py",
-      "inspection": "sheet metadata reviewed; source release and task-level inventory require verification",
-      "training_mapping_allowed": true
+      "inspection": "Pinned registry/configurations inspected: 406 folder definitions, 24 selected by the v0.1a experiment list. Five single-cell and shared assay cross-validation protocols assessed; individual assay interpretation and remaining patterns need review. Thirty configured-ID duplicates and one invalid YAML file are explicit.",
+      "training_mapping_allowed": true,
+      "task_inventory": "benchmark_tasks/biomlbench.json"
     },
     {
       "sheet": "Agentic (Harbor)",

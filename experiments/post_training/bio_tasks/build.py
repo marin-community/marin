@@ -589,7 +589,10 @@ def build(
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(content)
         benchmark_task_hashes[relative] = hashlib.sha256(content).hexdigest()
-        benchmark_registry["tasks"].extend({"benchmark": name, **task} for task in part["tasks"])
+        patterns = part.get("patterns", {})
+        for task in part["tasks"]:
+            pattern = patterns[task["workflow_family"]] if patterns else {}
+            benchmark_registry["tasks"].append({"benchmark": name, **part.get("task_defaults", {}), **pattern, **task})
     for task in benchmark_registry["tasks"]:
         benchmark = benchmark_registry["benchmarks"][task["benchmark"]]
         if benchmark["distribution"] not in {"ID", "OOD"}:

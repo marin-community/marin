@@ -6,9 +6,9 @@
     {
       "task_id": "bix-12-q2",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "workflow_family": "phylogenetic-parsimony-informative",
       "required_stages": [
@@ -53,8 +53,8 @@
     {
       "task_id": "bix-11-q1",
       "source_tags": [
-        "['Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "workflow_family": "phylogenetic-treeness",
       "required_stages": [
@@ -100,9 +100,9 @@
     {
       "task_id": "bix-35-q1",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "workflow_family": "phylogenetic-gene",
       "required_stages": [
@@ -198,9 +198,9 @@
     {
       "task_id": "bix-28-q3",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "workflow_family": "phylogenetic-long-branch",
       "required_stages": [
@@ -246,9 +246,9 @@
     {
       "task_id": "bix-34-q2",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "workflow_family": "phylogenetic-patristic",
       "required_stages": [
@@ -476,10 +476,10 @@
     {
       "task_id": "bix-61-q5",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'SNP Analysis'",
-        "'Genomics'",
-        "'Antimicrobial Resistance']"
+        "Whole Genome Sequencing (WGS)",
+        "SNP Analysis",
+        "Genomics",
+        "Antimicrobial Resistance"
       ],
       "workflow_family": "bacterial-read-to-variant-workflow",
       "required_stages": [
@@ -716,9 +716,9 @@
     {
       "task_id": "bix-12-q5",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "workflow_family": "phylogenetic-parsimony-informative",
       "required_stages": [
@@ -951,9 +951,9 @@
     {
       "task_id": "bix-35-q2",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "workflow_family": "phylogenetic-gene",
       "required_stages": [
@@ -999,9 +999,9 @@
     {
       "task_id": "bix-34-q5",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "workflow_family": "phylogenetic-patristic",
       "required_stages": [
@@ -1183,9 +1183,9 @@
     {
       "task_id": "bix-55-q1",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "workflow_family": "ortholog-discovery",
       "required_stages": [
@@ -1332,9 +1332,9 @@
     {
       "task_id": "bix-12-q4",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "workflow_family": "phylogenetic-parsimony-informative",
       "required_stages": [
@@ -1652,9 +1652,9 @@
     {
       "task_id": "bix-12-q6",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "workflow_family": "phylogenetic-parsimony-informative",
       "required_stages": [
@@ -1893,9 +1893,9 @@
     {
       "task_id": "bix-38-q1",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "workflow_family": "phylogenetic-tree",
       "required_stages": [
@@ -1940,9 +1940,9 @@
     {
       "task_id": "bix-45-q1",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics"
       ],
       "workflow_family": "phylogenetic-relative",
       "required_stages": [
@@ -2030,8 +2030,8 @@
     {
       "task_id": "bix-11-q2",
       "source_tags": [
-        "['Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "workflow_family": "phylogenetic-treeness",
       "required_stages": [
@@ -2168,10 +2168,10 @@
     {
       "task_id": "bix-61-q2",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'SNP Analysis'",
-        "'Genomics'",
-        "'Antimicrobial Resistance']"
+        "Whole Genome Sequencing (WGS)",
+        "SNP Analysis",
+        "Genomics",
+        "Antimicrobial Resistance"
       ],
       "workflow_family": "bacterial-read-to-variant-workflow",
       "required_stages": [

@@ -234,9 +234,10 @@ benchmark answers and biological fixtures are excluded from training authoring.
 | [SpatialBench-Long](../../experiments/post_training/bio_tasks/benchmark_tasks/spatialbench-long.json) | 4 | Unverified |
 | [BixBench-Verified-50](../../experiments/post_training/bio_tasks/benchmark_tasks/bixbench-verified-50.json) | 50 (all overlap original IDs) | — |
 | [CellBench](../../experiments/post_training/bio_tasks/benchmark_tasks/cellbench.json) | 50 analysis-planning contexts | — |
+| [BioML-bench](../../experiments/post_training/bio_tasks/benchmark_tasks/biomlbench.json) | 406 registry definitions; 24 selected by the released experiment | — |
 
-Of these 815 ID task/protocol records, 23 have manually assessed component mappings and
-792 are unmapped. None is marked workflow-validated. Other eligible sources
+Of these 1,221 ID task/protocol/definition records, 23 have manually assessed component mappings and
+1,198 are unmapped. None is marked workflow-validated. Other eligible sources
 still need task-level inspection. The 90
 [BioMysteryBench identifiers](../../experiments/post_training/bio_tasks/benchmark_tasks/biomysterybench.json)
 are tracked separately as OOD, without workflow patterns or training mappings.
@@ -288,8 +289,20 @@ independent observed study and a quantitative endpoint. The pinned agent runner
 also references three CSV files absent from the release; source execution was not
 attempted.
 
-All 815 ID records have assessed workflow prerequisites or source planning
-requirements, with the distinction explicit. For BixBench,
+The first 815 ID records have assessed workflow prerequisites or source planning
+requirements, with the distinction explicit. BioML-bench adds all 406 registry
+folder definitions from its pinned alpha release; its experiment list selects 24.
+Among 405 parseable configurations, 30 configured IDs occur twice; one further
+configuration has invalid YAML. Folder IDs, configured IDs, shared assay lineage,
+release selection and configuration defects remain separate fields. Five single-cell
+protocols and two shared assay cross-validation protocols have been assessed;
+individual assay interpretation and the remaining configuration-derived patterns
+need review. The spatial-gene protocol uses simulated observations; the communication
+protocol uses activity proxies. Neither supplies real training inputs or a biological
+ground truth by itself. Public assay labels also mean that a prediction-file score
+cannot establish whether each fold was excluded during fitting.
+
+For BixBench,
 shared workflow-family stages are distinguished from individual question endpoints;
 this inventory does not add execution coverage. The inspection browser binds mappings
 to generated examples and their local reference results. These timings are solver-check runtimes, not teacher latency measurements.

@@ -263,6 +263,18 @@
       "tasks_file": "benchmark_tasks/cellbench.json",
       "source_inventory_name": "CellBench (CellVoyager)",
       "task_inventory_status": "public-context-and-protocol-assessed"
+    },
+    "BioML-bench": {
+      "revision": "673f3d8d3462fc6cdcbbd9695fba612b9332ca65",
+      "source_url": "https://github.com/science-machine/biomlbench/tree/673f3d8d3462fc6cdcbbd9695fba612b9332ca65",
+      "inventory_count": 406,
+      "public_inventory_count": 406,
+      "selected_experiment_count": 24,
+      "training_mapping_allowed": true,
+      "distribution": "ID",
+      "tasks_file": "benchmark_tasks/biomlbench.json",
+      "source_inventory_name": "BioML-bench",
+      "task_inventory_status": "definitions-inventoried; five single-cell and shared assay cross-validation protocols assessed; individual details pending"
     }
   },
   "assessment_policy": "ID workflow prerequisites are manually inferred from permitted task descriptions. Shared family stages may exceed an individual endpoint; assess that endpoint before claiming coverage. Benchmark answers and biological fixtures are excluded from authoring."

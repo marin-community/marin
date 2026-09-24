@@ -579,8 +579,8 @@
     {
       "task_id": "bix-11-q1",
       "source_tags": [
-        "['Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -610,8 +610,8 @@
     {
       "task_id": "bix-11-q2",
       "source_tags": [
-        "['Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -641,8 +641,8 @@
     {
       "task_id": "bix-11-q3",
       "source_tags": [
-        "['Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -672,8 +672,8 @@
     {
       "task_id": "bix-11-q4",
       "source_tags": [
-        "['Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -703,8 +703,8 @@
     {
       "task_id": "bix-11-q5",
       "source_tags": [
-        "['Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -734,8 +734,8 @@
     {
       "task_id": "bix-11-q6",
       "source_tags": [
-        "['Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -765,9 +765,9 @@
     {
       "task_id": "bix-12-q2",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -797,9 +797,9 @@
     {
       "task_id": "bix-12-q3",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -829,9 +829,9 @@
     {
       "task_id": "bix-12-q4",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -861,9 +861,9 @@
     {
       "task_id": "bix-12-q5",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -893,9 +893,9 @@
     {
       "task_id": "bix-12-q6",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -1795,8 +1795,8 @@
     {
       "task_id": "bix-21-q2",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -2087,9 +2087,9 @@
     {
       "task_id": "bix-25-q1",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -2120,9 +2120,9 @@
     {
       "task_id": "bix-25-q4",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -2348,9 +2348,9 @@
     {
       "task_id": "bix-28-q1",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -2380,9 +2380,9 @@
     {
       "task_id": "bix-28-q2",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -2412,9 +2412,9 @@
     {
       "task_id": "bix-28-q3",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -2444,9 +2444,9 @@
     {
       "task_id": "bix-28-q4",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -2476,9 +2476,9 @@
     {
       "task_id": "bix-28-q5",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -2508,9 +2508,9 @@
     {
       "task_id": "bix-28-q6",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -3229,9 +3229,9 @@
     {
       "task_id": "bix-34-q1",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -3261,9 +3261,9 @@
     {
       "task_id": "bix-34-q2",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -3293,9 +3293,9 @@
     {
       "task_id": "bix-34-q3",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -3325,9 +3325,9 @@
     {
       "task_id": "bix-34-q4",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -3357,9 +3357,9 @@
     {
       "task_id": "bix-34-q5",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -3389,9 +3389,9 @@
     {
       "task_id": "bix-34-q6",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -3421,9 +3421,9 @@
     {
       "task_id": "bix-35-q1",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -3454,9 +3454,9 @@
     {
       "task_id": "bix-35-q2",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -3487,9 +3487,9 @@
     {
       "task_id": "bix-35-q3",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -3520,9 +3520,9 @@
     {
       "task_id": "bix-35-q4",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -3797,9 +3797,9 @@
     {
       "task_id": "bix-38-q1",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -3829,9 +3829,9 @@
     {
       "task_id": "bix-38-q2",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -3861,9 +3861,9 @@
     {
       "task_id": "bix-38-q3",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -3893,9 +3893,9 @@
     {
       "task_id": "bix-38-q5",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -3925,9 +3925,9 @@
     {
       "task_id": "bix-38-q6",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -3987,9 +3987,9 @@
     {
       "task_id": "bix-4-q1",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -4019,9 +4019,9 @@
     {
       "task_id": "bix-4-q2",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -4051,9 +4051,9 @@
     {
       "task_id": "bix-4-q3",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -4083,9 +4083,9 @@
     {
       "task_id": "bix-4-q4",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -4115,9 +4115,9 @@
     {
       "task_id": "bix-4-q5",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -4147,9 +4147,9 @@
     {
       "task_id": "bix-4-q6",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -4179,9 +4179,9 @@
     {
       "task_id": "bix-4-q7",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -4560,9 +4560,9 @@
     {
       "task_id": "bix-45-q1",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -4592,9 +4592,9 @@
     {
       "task_id": "bix-45-q2",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -4624,9 +4624,9 @@
     {
       "task_id": "bix-45-q5",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -4656,9 +4656,9 @@
     {
       "task_id": "bix-45-q6",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -5793,9 +5793,9 @@
     {
       "task_id": "bix-55-q1",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -5826,9 +5826,9 @@
     {
       "task_id": "bix-56-q1",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'Genomics'",
-        "'Phylogenetics and Evolutionary Analysis']"
+        "Whole Genome Sequencing (WGS)",
+        "Genomics",
+        "Phylogenetics and Evolutionary Analysis"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -5856,8 +5856,8 @@
     {
       "task_id": "bix-57-q1",
       "source_tags": [
-        "['Phylogenetics and Evolutionary Analysis'",
-        "'Genomics']"
+        "Phylogenetics and Evolutionary Analysis",
+        "Genomics"
       ],
       "status": "component-only",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -5893,8 +5893,8 @@
     {
       "task_id": "bix-58-q1",
       "source_tags": [
-        "['Phylogenetics and Evolutionary Analysis'",
-        "'Genomics']"
+        "Phylogenetics and Evolutionary Analysis",
+        "Genomics"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -6110,8 +6110,8 @@
     {
       "task_id": "bix-60-q1",
       "source_tags": [
-        "['Phylogenetics and Evolutionary Analysis'",
-        "'Genomics']"
+        "Phylogenetics and Evolutionary Analysis",
+        "Genomics"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -6141,10 +6141,10 @@
     {
       "task_id": "bix-61-q1",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'SNP Analysis'",
-        "'Genomics'",
-        "'Antimicrobial Resistance']"
+        "Whole Genome Sequencing (WGS)",
+        "SNP Analysis",
+        "Genomics",
+        "Antimicrobial Resistance"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -6177,10 +6177,10 @@
     {
       "task_id": "bix-61-q2",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'SNP Analysis'",
-        "'Genomics'",
-        "'Antimicrobial Resistance']"
+        "Whole Genome Sequencing (WGS)",
+        "SNP Analysis",
+        "Genomics",
+        "Antimicrobial Resistance"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -6215,10 +6215,10 @@
     {
       "task_id": "bix-61-q3",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'SNP Analysis'",
-        "'Genomics'",
-        "'Antimicrobial Resistance']"
+        "Whole Genome Sequencing (WGS)",
+        "SNP Analysis",
+        "Genomics",
+        "Antimicrobial Resistance"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -6254,10 +6254,10 @@
     {
       "task_id": "bix-61-q4",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'SNP Analysis'",
-        "'Genomics'",
-        "'Antimicrobial Resistance']"
+        "Whole Genome Sequencing (WGS)",
+        "SNP Analysis",
+        "Genomics",
+        "Antimicrobial Resistance"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -6293,10 +6293,10 @@
     {
       "task_id": "bix-61-q5",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'SNP Analysis'",
-        "'Genomics'",
-        "'Antimicrobial Resistance']"
+        "Whole Genome Sequencing (WGS)",
+        "SNP Analysis",
+        "Genomics",
+        "Antimicrobial Resistance"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
@@ -6333,10 +6333,10 @@
     {
       "task_id": "bix-61-q6",
       "source_tags": [
-        "['Whole Genome Sequencing (WGS)'",
-        "'SNP Analysis'",
-        "'Genomics'",
-        "'Antimicrobial Resistance']"
+        "Whole Genome Sequencing (WGS)",
+        "SNP Analysis",
+        "Genomics",
+        "Antimicrobial Resistance"
       ],
       "status": "unmapped",
       "assessment": "Workflow-family prerequisites assessed; individual endpoints may use a subset.",
