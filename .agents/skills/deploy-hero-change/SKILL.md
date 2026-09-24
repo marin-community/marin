@@ -18,7 +18,7 @@ Record the following with the user before changing the live run:
   request one from the old run's `training-control` endpoint with the
   `request-permanent-checkpoint` header value. Only a run whose code includes
   that action can take the request; otherwise schedule the cutover shortly after
-  a scheduled permanent checkpoint. Do not hand off from an hourly checkpoint:
+  a scheduled permanent checkpoint. Do not hand off from a temporary checkpoint:
   it expires three days after it is written.
 - A new run ID and checkpoint tree, the unchanged W&B entity/project, and the
   verified parent history boundary. Follow the
@@ -66,13 +66,14 @@ Verify:
   the old revision and run ID as `IRIS_USER=marin`. Verify its intended resume
   checkpoint first. Never create another W&B fork for rollback.
 - Object-storage headroom, checked again right before requesting the handoff.
-  Hourly checkpoints are written to `hero-checkpoints` in US-EAST-08A (100 TiB
-  quota); permanent checkpoints go to `marin-us-east-02a` in US-EAST-02A, whose
-  quota all Marin work shares. At quota CoreWeave suspends writes for the whole
-  zone, and the hero's next save hangs without an error (#8506, 2026-09-23).
+  Temporary checkpoints, which the hero writes hourly, go to `hero-checkpoints`
+  in US-EAST-08A (100 TiB quota); permanent checkpoints go to
+  `marin-us-east-02a` in US-EAST-02A, whose quota all Marin work shares. At
+  quota CoreWeave suspends writes for the whole zone, and the hero's next save
+  hangs without an error (#8506, 2026-09-23).
   Require five checkpoints of free space in 08A (about 21 TB at 4.29 TB each):
-  the old run's newest hourly checkpoint, a restore-smoke copy, the child's
-  hourly checkpoint plus the next one being written (the older is pruned only
+  the old run's newest temporary checkpoint, a restore-smoke copy, the child's
+  temporary checkpoint plus the next one being written (the older is pruned only
   after the newer commits), and one spare. Require two checkpoints plus a day of
   recent growth in 02A for the handoff and the child's next permanent
   checkpoint. Read usage and quota from the Finelog `storage.usage` namespace;
@@ -117,7 +118,7 @@ a newer child checkpoint; neither substitutes for a successful trial.
 
 Go: leave the child running, publish the comparison and coverage gaps, update the
 status issue and downstream reporting, and resume ordinary recovery policy.
-The old run's leftover hourly checkpoints expire on their own within three
+The old run's leftover temporary checkpoints expire on their own within three
 days, or 14 if its launcher predates the three-day TTL. Delete any restore-smoke
 copy once it has served its purpose, deleting `metadata.json` first so a partial
 directory never looks complete.

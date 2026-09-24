@@ -60,7 +60,7 @@ Record the old run's exact launch SHA and command for rollback.
 The handoff must be a complete permanent checkpoint: the newest scheduled one, or one requested from the old
 run's `training-control` endpoint with the `request-permanent-checkpoint` header value (see
 [Train an LM](../../../docs/tutorials/train-an-lm.md)). Permanent checkpoints are written to the run's
-output root and never pruned. Rolling resume checkpoints expire three days after they are written, so
+output root and never pruned. Temporary checkpoints expire three days after they are written, so
 those a replaced run leaves behind clear themselves.
 
 Both commands below require `WANDB_API_KEY`, an authenticated GitHub CLI (`gh`),
