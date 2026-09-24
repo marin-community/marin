@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T18:52:02.997737+00:00",
+  "updated_at": "2026-09-24T18:59:49.713370+00:00",
   "scope": "Full question-proposal portfolio for the 32 currently inventoried provisional-ID agentic releases. This planning index resolves every question card and records conditional consolidation; it creates no training task or validated coverage. Nine source leads without inventories remain outside the enumerated denominator.",
   "counts": {
     "source_releases": 32,
@@ -31,7 +31,7 @@
     },
     {
       "path": "workflow_designs/bixbench.json",
-      "sha256": "1c1f6d202d81e21930ee267359a60b051b618e88a285e0678154c15404530543"
+      "sha256": "84e81a1859c7cb91df4c71951083ce5e0cb198a99c3ff3e08ac84c496f6c5732"
     },
     {
       "path": "workflow_designs/compbiobench.json",
@@ -124,8 +124,8 @@
         "complete_artifacts": "Locus/taxon manifest; every alignment metric, branch metric, tip score and pairwise distance; complete paired and unpaired comparisons.",
         "deterministic_acceptance": "Native PhyKIT reference plus independent branch/path sums and site counts; explicit SD, quantile, root, gap and zero-denominator rules.",
         "required_incorrect_output_checks": "Drop one low-signal locus; swap tree/alignment identities; corrupt one patristic distance.",
-        "unresolved_before_assignment": "Input lineage clearance, actual metric definitions and tolerances; measure full native run.",
-        "status": "planning-contract-not-executed"
+        "unresolved_before_assignment": "47 metric/aggregation contracts are specified in workflow_designs/bixbench.json:ortholog_signal_contract. Exact candidate rights/lineage, native alignment verification and full Harbor validation remain; the >70% gap maximum requires a verified nonempty observed subset.",
+        "status": "metric-and-aggregation-specification-reviewed; complete-task-not-executed"
       }
     },
     {

@@ -85,6 +85,17 @@ does not establish equivalence, and static variant counts do not establish mutat
 accumulation rates. Such corrected adaptations need endpoint review before any
 coverage credit. The designs retain source-study exclusions and question hashes.
 
+The connected ortholog proposal specifies all 47 source endpoints individually:
+within-locus tip/pair summaries, across-locus reductions, ordered rank tests,
+paired differences and ratios, strict thresholds, and the separate five-tree panel.
+The shared contract fixes protein missing-symbol handling, RCV normalization,
+origin-constrained saturation regression and undefined-result statuses. All 11
+reviewed PhyKIT source files match the pinned Git revision and downloaded wheel.
+Native and self-excluded long-branch scores remain separate; unrounded computation,
+midpoint rooting, sample variance and replacement clades are declared adaptations.
+The 30-locus candidate still needs rights and study-lineage clearance, native
+alignment checks and complete Harbor validation. No coverage is added.
+
 The [CompBioBench endpoint designs](../../experiments/post_training/bio_tasks/workflow_designs/compbiobench.json)
 assign all 100 questions to 84 proposals, including supporting components for two
 software-only endpoints and a subjective shape question. Six explicitly simulated
