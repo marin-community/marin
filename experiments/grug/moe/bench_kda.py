@@ -29,6 +29,7 @@ import time
 import jax
 import jax.numpy as jnp
 import numpy as np
+from jax import lax
 
 from experiments.grug.moe.kda import chunk_kda, recurrent_kda
 from experiments.grug.moe.kda_pallas import kda as pallas_kda
@@ -111,6 +112,90 @@ def _nullctx():
     yield
 
 
+def _staged_forward(q, k, v, g, beta, c, upto, mm_dtype=jnp.bfloat16):
+    """Replicates chunk_kda's parallel forward up to a named stage and returns a
+    scalar of that stage's outputs, for cumulative-prefix wall-time attribution.
+    Stages: 'prep' (intra-chunk GEMMs incl Neumann) -> 'mc' (M/C build) ->
+    'scan' (associative_scan combine) -> 'out' (output GEMMs = full fwd)."""
+    from experiments.grug.moe.kda import _DEFLATE_EXP_CAP, _prepare_qk, _unit_lower_triangular_inverse  # noqa: PLC0415
+
+    def mm(spec, a, b):
+        return jnp.einsum(spec, a.astype(mm_dtype), b.astype(mm_dtype)).astype(jnp.float32)
+
+    q, k = _prepare_qk(q, k, True)
+    v, g, beta = v.astype(jnp.float32), g.astype(jnp.float32), beta.astype(jnp.float32)
+    lead = q.shape[:-2]
+    length = q.shape[-2]
+    dk, dv = q.shape[-1], v.shape[-1]
+    n = length // c
+
+    def tc(x):
+        return x.reshape(*lead, n, c, x.shape[-1])
+
+    qc, kc, vc, gc = tc(q), tc(k), tc(v), tc(g)
+    bc = beta.reshape(*lead, n, c)
+    g_cum = jnp.cumsum(gc, axis=-2)
+    exp_g = jnp.exp(g_cum)
+    exp_ng = jnp.exp(jnp.minimum(-g_cum, _DEFLATE_EXP_CAP))
+    v_beta, k_beta = vc * bc[..., None], kc * bc[..., None]
+    k_deflate = kc * exp_ng
+    a_raw = -mm("...rd,...id->...ri", k_beta * exp_g, k_deflate)
+    a_raw = jnp.where(jnp.tril(jnp.ones((c, c), bool), -1), a_raw, 0.0)
+    t_mat = _unit_lower_triangular_inverse(a_raw.reshape(-1, c, c), c, matmul_dtype=mm_dtype).reshape(*lead, n, c, c)
+    v_pseudo = mm("...rj,...jd->...rd", t_mat, v_beta)
+    k_cumdecay = mm("...rj,...jd->...rd", t_mat, k_beta * exp_g)
+    q_inflate = qc * exp_g
+    if upto == "prep":
+        return sum(jnp.sum(x) for x in (v_pseudo, k_cumdecay, q_inflate, k_deflate, g_cum))
+
+    g_tail = g_cum[..., -1, :]
+    decay_tail = jnp.exp(g_tail)
+    decay_weights = jnp.exp(g_tail[..., None, :] - g_cum)
+    kw = kc * decay_weights
+    eye_dk = jnp.eye(dk, dtype=jnp.float32)
+    m_mat = decay_tail[..., :, None] * eye_dk - jnp.einsum("...rd,...re->...de", kw, k_cumdecay)
+    c_mat = jnp.einsum("...rd,...rm->...dm", kw, v_pseudo)
+    if upto == "mc":
+        return jnp.sum(m_mat) + jnp.sum(c_mat)
+
+    def combine(left, right):
+        m_l, c_l = left
+        m_r, c_r = right
+        return (jnp.einsum("...ij,...jk->...ik", m_r, m_l), jnp.einsum("...ij,...jm->...im", m_r, c_l) + c_r)
+
+    _, s_incl = lax.associative_scan(combine, (m_mat, c_mat), axis=-3)
+    if upto == "scan":
+        return jnp.sum(s_incl)
+
+    s_init = jnp.zeros((*lead, 1, dk, dv), jnp.float32)
+    s_prev = jnp.concatenate([s_init, s_incl[..., :-1, :, :]], axis=-3)
+    attn = mm("...rd,...jd->...rj", q_inflate, k_deflate)
+    attn = jnp.where(jnp.triu(jnp.ones((c, c), bool), 1), 0.0, attn)
+    v_new = v_pseudo - jnp.einsum("...rd,...dm->...rm", k_cumdecay, s_prev)
+    out = jnp.einsum("...rd,...dm->...rm", q_inflate, s_prev) + mm("...rj,...jm->...rm", attn, v_new)
+    return jnp.sum(out)
+
+
+def _attrib(b, h, length, dk, dv, c):
+    """Cumulative-prefix wall-time attribution of the parallel forward (fwd & fwd+bwd)."""
+    args = _make_inputs(b, h, length, dk, dv)
+    stages = ["prep", "mc", "scan", "out"]
+    for mode in ("fwd", "fwd_bwd"):
+        prev = 0.0
+        for st in stages:
+            fn = functools.partial(_staged_forward, c=c, upto=st)
+            if mode == "fwd":
+                timed = jax.jit(lambda *a, _f=fn: _f(*a))
+            else:
+                timed = jax.jit(jax.grad(lambda *a, _f=fn: _f(*a), argnums=(0, 1, 2, 3, 4)))
+            med, _ = _time_fn(timed, args)
+            RESULTS.append(
+                f"[attrib C={c} {mode}] upto={st:5s} cumul={med*1e3:7.3f}ms  marginal={max(med*1e3-prev,0):7.3f}ms"
+            )
+            print(RESULTS[-1], flush=True)
+            prev = med * 1e3
+
+
 def _decompose(b, h, length, dk, dv, c):
     """Attribute the fwd cost of the bf16 kernel across its components (all bf16).
 
@@ -164,6 +249,25 @@ def main():
     dk = int(os.environ.get("KDA_DK", "128"))
     dv = int(os.environ.get("KDA_DV", "128"))
     lengths = [int(x) for x in os.environ.get("KDA_LENS", "8192").split(",")]
+
+    if os.environ.get("KDA_ATTRIB") == "1":
+        c = int(os.environ.get("KDA_C", "128"))
+        # sanity: staged forward == chunk_kda parallel bf16
+        sq, sk, sv, sg, sb = _make_inputs(2, 2, 512, dk, dv, seed=1)
+        s_out = float(_staged_forward(sq, sk, sv, sg, sb, c=64, upto="out"))
+        ref = float(jnp.sum(chunk_kda(sq, sk, sv, sg, sb, chunk_size=64, matmul_dtype=jnp.bfloat16)[0]))
+        RESULTS.append(
+            f"attrib sanity: staged={s_out:.4f} chunk_kda={ref:.4f} rel={abs(s_out - ref) / (abs(ref) + 1e-6):.2e}"
+        )
+        print(RESULTS[-1], flush=True)
+        _attrib(b, h, lengths[0], dk, dv, c)
+        marker = "###KDA_RESULTS###"
+        print("\n" + marker, flush=True)
+        for ln in RESULTS:
+            print(ln, flush=True)
+        print(marker, flush=True)
+        sys.stdout.flush()
+        sys.exit(3)
 
     if os.environ.get("KDA_PALLAS") == "1":
         # (B,H,L,D) for chunk_kda; (B,T,H,D) for the Pallas kernel -- same data.
