@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T20:36:42.222266+00:00",
+  "updated_at": "2026-09-24T20:53:17.512864+00:00",
   "scope": "Full question-proposal portfolio for the 32 currently inventoried provisional-ID agentic releases. This planning index resolves every question card and records conditional consolidation; it creates no training task or validated coverage. Nine source leads without inventories remain outside the enumerated denominator.",
   "counts": {
     "source_releases": 32,
@@ -31,7 +31,7 @@
     },
     {
       "path": "workflow_designs/bixbench.json",
-      "sha256": "765d8200a07ec7cc624f4732642a845efd33f40400cfa5e899f4a3ccd51c7601"
+      "sha256": "624f21caeb5b953a3ea9f2cb3d655d4c8d6ac96aed24afae300f79850ddee20d"
     },
     {
       "path": "workflow_designs/compbiobench.json",
@@ -55,7 +55,7 @@
     },
     {
       "path": "workflow_designs/promptbio-bench.json",
-      "sha256": "62f2ad31f005735b2b0096f69eda2768cd2e0e7e34c560e8d06d777e2add6418"
+      "sha256": "c303a8c424a726dd644538caba61bea5c6676f7ad1e57b2f6d6a54c33f62ddcc"
     },
     {
       "path": "workflow_designs/bixbench3.json",
@@ -192,7 +192,7 @@
         "promptbio-design-ranked-gene-set-analysis"
       ],
       "consolidation": "conditional-combined-question",
-      "condition_for_one_task": "Preserve all endpoint-specific fits, masks, ORA universes, GSEA and semantic-reduction rules. Literal human/reference-year libraries require matching independent inputs; fibroblast-specific enrichment requires its own observed tissue contrast. Split incompatible species/tissue or library requirements instead of inheriting one generic result.",
+      "condition_for_one_task": "Preserve endpoint-specific fits, masks, ORA universes, GSEA and native semantic reduction. Biological-context adaptations are allowed with explicit source-to-authored mappings; split only when the required scientific decisions, methods or outputs cannot be supported by one coherent task.",
       "benchmark_record_scope": {
         "BixBench": 9,
         "PromptBio-Bench": 8
@@ -206,7 +206,7 @@
         "complete_artifacts": "Complete gene effects before/after shrinkage; eligible universe and identifier map; GO/KEGG memberships; every ORA/GSEA result and semantic-reduction map; numeric plot data.",
         "deterministic_acceptance": "Native DESeq2 and pinned enrichment methods; independent contrast, overlap, ranking, FDR and universe checks. Freeze ontology release, tie handling, set sizes and undefined-result rules.",
         "required_incorrect_output_checks": "Use significant genes as the enrichment background; reverse rank direction; substitute ORA for GSEA; omit nonsignificant sets.",
-        "unresolved_before_assignment": "See workflow_designs/bixbench.json:expression_enrichment_contract. Native DOSE source semantics and the GO.db graph are audited. Bundled GOSemSim graph reconciliation, full gene universe, human KEGG, fibroblast context, source lineage and the combined native environment remain unresolved. Deferred visual endpoints do not block ready numerical tasks.",
+        "unresolved_before_assignment": "See the shared expression_enrichment_contract. Finish native graph/input reconciliation, compatible KEGG acquisition where required, lineage review and full numerical/Harbor validation. Explicit biological-context adaptations and deferred visual endpoints do not block independently ready numerical workflows.",
         "status": "17-source-endpoints-reviewed; complete-input-and-runtime-contract-unresolved"
       },
       "source_input_review": {
@@ -225,7 +225,8 @@
           "PromptBio-Bench/b-3-15"
         ],
         "count_policy": "All source IDs remain inventoried; deferred/partial endpoints add no full-mapping credit."
-      }
+      },
+      "workflow_adaptation_policy": "benchmark_coverage.json:workflow_adaptation_policy"
     },
     {
       "proposed_task_id": "single-cell-qc-representation",
@@ -10625,7 +10626,8 @@
       "Exact benchmark task IDs and completed stages; parent reviews equivalence before coverage changes."
     ],
     "execution_protocol": "Harbor is the sole execution and evaluation protocol for authored tasks: terminal-based solving, pinned task environments, private executable oracles and deterministic artifact verifiers. Notebook-based source benchmarks inform scientific endpoints only; no notebook runner, submission protocol or protocol-parity requirement.",
-    "scoring_scope": "Prioritize realistic tasks whose scientific outputs have direct executable checks. Defer subjective interpretation, visual quality or other endpoints without a defensible deterministic reward; retain exact source IDs and the uncovered endpoint. Do not introduce an LLM judge, contrived proxy or special protocol merely to increase coverage, and do not let these endpoints block independently ready tasks."
+    "scoring_scope": "Prioritize realistic tasks whose scientific outputs have direct executable checks. Defer subjective interpretation, visual quality or other endpoints without a defensible deterministic reward; retain exact source IDs and the uncovered endpoint. Do not introduce an LLM judge, contrived proxy or special protocol merely to increase coverage, and do not let these endpoints block independently ready tasks.",
+    "workflow_adaptation_policy": "benchmark_coverage.json:workflow_adaptation_policy"
   },
   "question_assignment_counts_by_release": {
     "BAISBench": 208,
@@ -10855,7 +10857,7 @@
   },
   "source_collection_plan": {
     "path": "workflow_designs/source_collections.json",
-    "sha256": "502863048c2dcb0164995e4304c5cd26352aae71de0559e3adf6af0bfc45ca51",
+    "sha256": "186603cac4c2b386fdaadbcce6b53df6b35f0cb976cf1d04d69c240b45e24a9b",
     "candidate_collections": 7,
     "new_biological_payloads_downloaded": 4,
     "cleared_for_training": 0,

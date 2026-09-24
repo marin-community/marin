@@ -1727,7 +1727,7 @@
       "method_and_decision_parameters_to_freeze": "The shared expression_enrichment_contract specifies named model/masks, distinct ORA backgrounds, native simplification and complete artifacts. Annotation acquisition, installed source checks, numerical tolerances and runtime remain unresolved.",
       "deterministic_verifier_design_and_negative_controls": "Run native DESeq2/clusterProfiler oracle and independently check contrast direction, complete gene/term universes, memberships and multiplicity. Mutate a contrast sign, universe size or simplified representative and require failure.",
       "unresolved_data_and_runtime_requirements": "Need independent raw counts and sufficiently replicated condition design; annotation snapshot must be license-compatible offline and complete enough for semantic reduction; runtime unmeasured.",
-      "endpoint_adaptation_limits": "Current mouse developmental counts cannot establish human ASXL1 effects or fibroblast-specific enrichment. The contract retains exact masks and lookup semantics, with explicit absent/removed statuses. Tissue-specific endpoints need separate observed contrasts. No full-group coverage is claimed.",
+      "endpoint_adaptation_limits": "The mouse developmental context is eligible for workflow-equivalent coverage under the explicit adaptation policy. Preserve all methods, masks, population-selection decisions and lookup semantics, with source-to-authored gene/term identities specified before outcomes are examined. Multi-population requirements still need the corresponding fits; no actual human ASXL1 finding is claimed.",
       "benchmark_study_exclusion_identifiers": [
         "https://doi.org/10.1172/jci.insight.167744"
       ],
@@ -1760,7 +1760,7 @@
           "source_question_sha256": "3c71c34f973850bbae49d5abdba387e34a385eea883c8a75b276a3c4f970e22e",
           "view": "fibroblast_specific_go",
           "operation": "Most-enriched GO process from the independent fibroblast-specific contrast, with the same explicit ranking rule.",
-          "source_or_adaptation_limit": "Cannot inherit the luminal or whole-blood contrast. Remains an input/context gap for the current candidate."
+          "source_or_adaptation_limit": "The fibroblast label may map to a declared independently observed population; preserve population selection, contrast and enrichment ranking. Record that the source fibroblast finding is not reproduced."
         },
         {
           "task_id": "bix-49-q1",
@@ -1797,7 +1797,8 @@
           "operation": "Shrunken LFC for the declared named gene, rounded to two decimals.",
           "source_or_adaptation_limit": "Return a status when absent/unestimable; do not use unshrunken LFC."
         }
-      ]
+      ],
+      "workflow_adaptation_policy": "benchmark_coverage.json:workflow_adaptation_policy"
     },
     {
       "proposed_id": "bix-design-ordinal-clinical-risk",
@@ -3605,18 +3606,42 @@
           "sha256": "5ef5cec39e053f6dd7f9a62772c4ab8267e02b04bf376ca8ec89ec8f8f58b040",
           "contents_inspected": false
         }
+      },
+      "gseapy_ranking_source": {
+        "url": "https://files.pythonhosted.org/packages/29/d0/5430ceec2657b95f5c00e7a359caefaab44c531c207fd095a90c0757cf48/gseapy-1.3.0.tar.gz",
+        "bytes": 163682,
+        "sha256": "bc5daa80376751c42c0beb5cfbb42131ad2de3c9426f97a415df37d713ceaae3",
+        "files": [
+          {
+            "path": "gseapy-1.3.0/gseapy/algorithm.py",
+            "sha256": "d39c2449c30e07e98591a2788dd72fe3e0c737faebd4d9673feda68d39253602"
+          },
+          {
+            "path": "gseapy-1.3.0/gseapy/base.py",
+            "sha256": "bcc301ec9103f235ddb2ecc82a0ce0f1c92f6e745aacd1f8a2682fb494b9372a"
+          },
+          {
+            "path": "gseapy-1.3.0/gseapy/gsea.py",
+            "sha256": "82cf59f13cac2ed9de175ea2eb96d751391bcf034ee16a9b1db5ffa8a09bf57e"
+          },
+          {
+            "path": "gseapy-1.3.0/gseapy/stats.py",
+            "sha256": "a1060e80978bdfaa05c232055c29e1ad200928a945f3d794bdd55537b06033ef"
+          }
+        ],
+        "source_findings": "Prerank._load_ranking only re-sorts when ascending is not None. Duplicate IDs are otherwise renamed and infinities filled; reject them before the call. Explicit method=permutation selects prerank_rs rather than the new multilevel path. Native execution still pending."
       }
     },
     "input_scope": {
       "candidate": "workflow_designs/source_collections.json:existing-mammary-observed-counts",
       "count_boundary": "All 27,179 observed count rows and original 12 library columns are public input. Select the six luminal libraries by the verified sample join; retain the three-stage design and all excluded-gene rows.",
       "model": "~stage; virgin reference; 2 dL versus virgin coefficient; pregnancy libraries participate in estimation. No invented pairing or donor covariate. Count filter is rowSum across these six libraries >=10.",
-      "species_limit": "GSE60450 is mouse developmental biology. It cannot implement the literal human KEGG_2021_Human endpoint or an ASXL1 human case/control effect. Mouse GO and developmental contrasts are explicitly labelled adaptations, not complete coverage of the 17-record group.",
-      "tissue_limit": "A fibroblast-specific endpoint cannot inherit a whole-blood or luminal result. A combined task requiring distinct tissue effects needs independent observations and a separate fit/contrast ID for each tissue; otherwise split the affected endpoint.",
+      "species_limit": "GSE60450 supports a workflow-equivalent mouse developmental adaptation of human disease differential expression. Preserve methods, decisions and output semantics, and record the original/authored contexts. It cannot support a claim about actual human ASXL1 biology.",
+      "tissue_limit": "A source tissue label may be adapted to an independently observed population. Preserve any required population-selection decision or multi-tissue contrast structure; do not replace multiple required fits with one result.",
       "annotation_requirements": [
         "Pin species, stable gene IDs, mapping release, ontology graph and relation types, term memberships and annotation evidence. Preserve one-to-many/obsolete/unmapped records without multiplying count rows.",
-        "A literal human KEGG_2021_Human task needs independently observed human gene data and a legitimately acquired, hash-pinned copy of that reference release. A current KEGG query, mouse library or orthology-converted list is a declared adaptation.",
-        "GO_Biological_Process_2021 is a named reference requirement for a-2-8. The current mouse GO BP asset does not establish that exact library, species compatibility or semantic graph."
+        "A literal KEGG_2021_Human result requires that exact species/release. A workflow-level species adaptation may use an independently acquired compatible frozen KEGG library with an explicit substitution record and matching enrichment methods, background rules and output semantics. A GO analysis cannot stand in for KEGG enrichment.",
+        "For a-2-8 retain the provided-library GSEA operation, size limits and complete/top-significant outputs. Record any species/reference-release adaptation from GO_Biological_Process_2021 explicitly; use a frozen compatible GMT and preserve its identity in every result."
       ],
       "annotation_source_review": "workflow_designs/source_collections.json:existing-mammary-observed-counts.annotation_source_review"
     },
@@ -3665,21 +3690,23 @@
         "a-2-9",
         "a-11-10"
       ],
-      "requirement": "Use an independently acquired frozen human KEGG_2021_Human library to share these two endpoints, with an explicit human gene universe and gene-list provenance. This input is unresolved; no mouse substitution.",
+      "requirement": "Acquire a frozen, legitimately redistributable KEGG library compatible with the authored observations and gene universe. Record any species/release adaptation from KEGG_2021_Human; an undeclared substitution or different enrichment method cannot receive coverage.",
       "native_candidate": "GSEApy 1.3.0 local enrichment on a frozen GMT and explicit background set; never a live API call during solving. Retain full eligible-set membership/status accounting.",
       "score_semantics": "The reviewed local implementation uses a 0.5 Haldane-Anscombe correction in each 2x2 cell for Odds Ratio and -ln(p)*Odds Ratio for Combined Score; it BH-adjusts the returned nonzero-overlap sets. It is not automatically equivalent to remote Enrichr scores. Verify the pinned installed implementation before freezing acceptance.",
       "undefined": "If p underflows to zero, do not emit an unlabelled infinite combined score. Retain a numeric-status field and an independently checked log-tail or declared display policy. This corner case requires resolution against the native implementation before assignment."
     },
     "gsea": {
       "native_candidate": "GSEApy 1.3.0 prerank; independently acquired GO BP GMT compatible with rank identifiers. Do not substitute ORA or a different named library without an adaptation record.",
-      "ranking": "Every count-eligible, mapped gene with a finite unshrunken signed Wald statistic. One stable ID per gene; descending statistic with lexicographic stable-ID tie break recorded before native ranking. No significant-gene prefilter. Preserve source IDs through symbol mappings and resolve duplicates before ranking.",
+      "ranking": "Every count-eligible, mapped gene with a finite unshrunken signed Wald statistic. One stable ID per gene; descending statistic with lexicographic stable-ID tie break recorded before native ranking. No significant-gene prefilter. Preserve source IDs through symbol mappings and resolve duplicates before ranking. Pass ascending=None to preserve the predeclared order and assert that the native ranking IDs and values match it. Reject duplicate IDs and nonfinite statistics before the call so GSEApy does not rename genes or fill infinities.",
       "parameters": {
         "min_size": 15,
         "max_size": 500,
         "weight": 1,
         "permutation_num": 1000,
         "seed": 42,
-        "threads": 1
+        "threads": 1,
+        "ascending": null,
+        "method": "permutation"
       },
       "scope": "Size limits apply after intersecting gene sets with the ranked universe. Keep every excluded set with its reason and retain all eligible ES, NES, nominal p, permutation FDR and leading-edge membership. Verify tie-order preservation in the pinned native implementation.",
       "multiplicity": "Keep native permutation FDR separate from BH-adjusted nominal p. Derive it over the whole declared library, not a top-k subset.",
@@ -3721,7 +3748,7 @@
         "Use ORA BH q-values as GSEA permutation FDR.",
         "Take the five largest significant NES terms rather than the five largest absolute NES terms.",
         "Replace Wang simplification with transitive connected components or invent a representative for every removed term.",
-        "Use a mouse or current KEGG library for KEGG_2021_Human.",
+        "Use a different species or release than the declared authored KEGG library, or substitute GO enrichment for KEGG.",
         "Use the wrong p-value axis, selected genes, sign colours or labels in the machine-readable plot table.",
         "Pass annotated selected genes outside the declared universe to DOSE without pre-intersection, changing its draw count n.",
         "Include zero-overlap terms in the native BH family or substitute Storey qvalue for BH p.adjust.",
@@ -3729,13 +3756,14 @@
       ]
     },
     "remaining_before_assignment": [
-      "Clear independent count/annotation source lineage and rights, with appropriate species and tissue for each literal endpoint.",
-      "Inspect and reconcile the pinned GOSemSim bundled graph with eligible terms; export the full OrgDb universe on suitable storage. Acquire the named GO/KEGG snapshots for literal source endpoints. The GO.db 3.22.0 graph is already audited against all existing mouse memberships.",
+      "Clear independent observed input lineage/rights and record source-to-authored biological context adaptations. Preserve each selected endpoint's methods, decisions and output semantics; the original disease/tissue label is not required.",
+      "Inspect and reconcile the pinned GOSemSim bundled graph with eligible terms; export the full OrgDb universe. Acquire compatible frozen GO/KEGG inputs for the selected methods, with explicit species/release adaptations. The GO.db 3.22.0 graph is audited against existing mouse memberships.",
       "Build and verify the pinned full native environment, including the now source-reviewed DOSE pre-intersection/testing-family rules, bundled Wang graph behavior and GSEA ranking/score semantics.",
       "Calibrate numerical tolerances from native checks; implement the private oracle and verifier for the selected numerical endpoints with incorrect-output cases. Display parameters and deferred visual endpoints do not block assignment.",
       "Demonstrate complete offline Harbor runtime <=30 minutes; the existing unshrunken DESeq2 run is not evidence for this combined task."
     ],
     "validated_new_mappings": 0,
-    "scoring_scope": "Prioritize deterministic scientific outputs. Keep subjective interpretation and unsupported visual endpoints as deferred/component-only source dispositions; do not add an LLM judge or an artificial task protocol to clear them."
+    "scoring_scope": "Prioritize deterministic scientific outputs. Keep subjective interpretation and unsupported visual endpoints as deferred/component-only source dispositions; do not add an LLM judge or an artificial task protocol to clear them.",
+    "workflow_adaptation_policy": "benchmark_coverage.json:workflow_adaptation_policy"
   }
 }

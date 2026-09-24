@@ -5,7 +5,7 @@
     "unmapped": "Identifier and permitted metadata recorded; no assessed recipe coverage",
     "component-only": "At least one manually matched operation; required workflow gaps remain",
     "composed-unvalidated": "Connected workflow authored; execution evidence pending",
-    "workflow-validated": "Connected workflow and final artifacts validated on independent biological data",
+    "workflow-validated": "Connected workflow and complete final artifacts validated on independent biological data; explicit biological-context adaptations are allowed when methods, decisions and output semantics match.",
     "restricted/excluded": "Task formulation excluded from training authoring; evaluation remains separate"
   },
   "benchmarks": {
@@ -450,5 +450,16 @@
       "task_inventory_status": "all scoped IDs/hashes; 520 database schemas routed to seven existing cards; 82 supplementary stems/citations yield 58 targets and 24 gaps; 199 literature stems reviewed; source evidence and acceptance unresolved"
     }
   },
-  "assessment_policy": "ID workflow prerequisites are manually inferred from permitted task descriptions. Shared family stages may exceed an individual endpoint; assess that endpoint before claiming coverage. Benchmark answers and biological fixtures are excluded from authoring."
+  "assessment_policy": "ID workflow prerequisites are manually inferred from permitted task descriptions. Shared family stages may exceed an individual endpoint; assess that endpoint before claiming coverage. Benchmark answers and biological fixtures are excluded from authoring.",
+  "workflow_adaptation_policy": {
+    "unit": "Workflow coverage: a fully validated task on a different real biological context may cover an ID endpoint when its methods, scientific decisions and complete outputs match.",
+    "required_evidence": [
+      "Exact source benchmark/task IDs and stage-to-artifact mapping.",
+      "Original and authored biological contexts, independent input lineage and explicit context adaptations.",
+      "Preserved methods, decisions, statistical units and output semantics; explain context-appropriate input/reference substitutions.",
+      "Passing private native oracle, independent artifact checks and incorrect-output checks through Harbor."
+    ],
+    "limits": "A change of biological context alone is not a coverage gap. Missing operations, changed methods, invalid statistical assumptions, unsupported interpretations or unverified outputs remain gaps. Do not claim reproduction of the source study or its answers.",
+    "counting": "Apply after per-endpoint validation; the policy change alone promotes no mapping or count. Preserve OOD exclusions and source-ID deduplication rules."
+  }
 }

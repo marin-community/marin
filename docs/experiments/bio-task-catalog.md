@@ -223,7 +223,14 @@ supplies imaging operations. Distinguish measuring supplied masks from segmentin
 
 ## ID workflow coverage and input realism
 
-The 142 recipes include twenty-seven using real observations and 115 simulated component
+Fully validated workflows on different real biological contexts count toward ID
+workflow coverage when their methods, scientific decisions and complete outputs
+match. Record the original and authored contexts and every adaptation alongside
+the source task IDs. A changed species, tissue or disease label alone is not a gap;
+missing operations, invalid assumptions or unverified outputs remain gaps. This
+measures workflow coverage and does not claim reproduction of benchmark answers.
+
+The 145 recipes include thirty using real observations and 115 simulated component
 controls. They do **not** establish coverage of complete ID benchmark workflows. Repository count, format count, and successful
 package checks measure different things from workflow coverage. The following
 assessment uses public benchmark descriptions and the program's prior source

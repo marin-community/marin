@@ -767,14 +767,14 @@
       ],
       "connected_workflow_rationale": "Use the same independent observed study and retain each listed endpoint as an intermediate or final artifact. Source-specific methods, parameter choices, cohorts and output contracts remain separate when they differ. Split this proposal if one coherent study cannot support all endpoints.",
       "remaining_decisions": [
-        "Clear independent count/annotation source lineage and rights, with appropriate species and tissue for each literal endpoint.",
-        "Acquire the necessary GO graph and named GO/KEGG snapshots; the existing mouse BP membership alone is insufficient.",
-        "Build and verify the pinned full native environment, including DOSE hypothesis-universe behavior and GSEA ranking/score semantics.",
+        "Clear independent observed input lineage/rights and record source-to-authored biological context adaptations. Preserve each selected endpoint's methods, decisions and output semantics; the original disease/tissue label is not required.",
+        "Inspect and reconcile the pinned GOSemSim bundled graph with eligible terms; export the full OrgDb universe. Acquire compatible frozen GO/KEGG inputs for the selected methods, with explicit species/release adaptations. The GO.db 3.22.0 graph is audited against existing mouse memberships.",
+        "Build and verify the pinned full native environment, including the now source-reviewed DOSE pre-intersection/testing-family rules, bundled Wang graph behavior and GSEA ranking/score semantics.",
         "Calibrate numerical tolerances from native checks; implement the private oracle and verifier for the selected numerical endpoints with incorrect-output cases. Display parameters and deferred visual endpoints do not block assignment.",
         "Demonstrate complete offline Harbor runtime <=30 minutes; the existing unshrunken DESeq2 run is not evidence for this combined task."
       ],
       "status": "question-portfolio-proposal-no-coverage-credit",
-      "input_contract_limit": "The current GSE60450 candidate supports explicitly adapted mouse developmental analysis only. Human ASXL1/fibroblast contexts and named human/reference-year libraries retain their exact independent-input requirements.",
+      "input_contract_limit": "Observed mouse developmental data may cover matching ID workflows through explicit biological-context adaptations. Preserve methods, decisions and complete outputs; record source-to-authored species, tissue and reference identities. Do not claim the original human disease findings.",
       "contract_reference": "workflow_designs/bixbench.json:expression_enrichment_contract",
       "source_endpoint_evidence": [
         {
@@ -791,7 +791,8 @@
           "source_task_record_sha256": "15db249ffd6a8e95c051c2532bedb98aa9bbf02348865998244f83ee4713d18f",
           "inspection": "Complete pinned task question and output declaration rechecked; no source biological inputs or answers read."
         }
-      ]
+      ],
+      "workflow_adaptation_policy": "benchmark_coverage.json:workflow_adaptation_policy"
     },
     {
       "proposed_id": "promptbio-design-selected-gene-set-analysis",
@@ -861,14 +862,14 @@
       ],
       "connected_workflow_rationale": "Compare selected-list GO/KEGG enrichment using explicitly defined annotation universes and complete term outputs. Gene-set overlap against an oncogene catalogue is a separate question.",
       "remaining_decisions": [
-        "Clear independent count/annotation source lineage and rights, with appropriate species and tissue for each literal endpoint.",
-        "Acquire the necessary GO graph and named GO/KEGG snapshots; the existing mouse BP membership alone is insufficient.",
-        "Build and verify the pinned full native environment, including DOSE hypothesis-universe behavior and GSEA ranking/score semantics.",
+        "Clear independent observed input lineage/rights and record source-to-authored biological context adaptations. Preserve each selected endpoint's methods, decisions and output semantics; the original disease/tissue label is not required.",
+        "Inspect and reconcile the pinned GOSemSim bundled graph with eligible terms; export the full OrgDb universe. Acquire compatible frozen GO/KEGG inputs for the selected methods, with explicit species/release adaptations. The GO.db 3.22.0 graph is audited against existing mouse memberships.",
+        "Build and verify the pinned full native environment, including the now source-reviewed DOSE pre-intersection/testing-family rules, bundled Wang graph behavior and GSEA ranking/score semantics.",
         "Calibrate numerical tolerances from native checks; implement the private oracle and verifier for the selected numerical endpoints with incorrect-output cases. Display parameters and deferred visual endpoints do not block assignment.",
         "Demonstrate complete offline Harbor runtime <=30 minutes; the existing unshrunken DESeq2 run is not evidence for this combined task."
       ],
       "status": "question-portfolio-proposal-no-coverage-credit",
-      "input_contract_limit": "The current GSE60450 candidate supports explicitly adapted mouse developmental analysis only. Human ASXL1/fibroblast contexts and named human/reference-year libraries retain their exact independent-input requirements.",
+      "input_contract_limit": "Observed mouse developmental data may cover matching ID workflows through explicit biological-context adaptations. Preserve methods, decisions and complete outputs; record source-to-authored species, tissue and reference identities. Do not claim the original human disease findings.",
       "contract_reference": "workflow_designs/bixbench.json:expression_enrichment_contract",
       "source_endpoint_evidence": [
         {
@@ -895,7 +896,8 @@
       ],
       "judge_free_endpoint_dispositions": {
         "a-11-6": "Prioritize complete ORA and top-term tables; arbitrary rendered-plot correctness is outside the initial scoring contract. No full source mapping claimed."
-      }
+      },
+      "workflow_adaptation_policy": "benchmark_coverage.json:workflow_adaptation_policy"
     },
     {
       "proposed_id": "promptbio-design-oncogene-set-overlap",
@@ -1244,14 +1246,14 @@
       ],
       "connected_workflow_rationale": "One coherent observed study and estimand; alternative methods are bounded comparisons, with full outputs for each named method. Distinct source parameters remain explicit.",
       "remaining_decisions": [
-        "Clear independent count/annotation source lineage and rights, with appropriate species and tissue for each literal endpoint.",
-        "Acquire the necessary GO graph and named GO/KEGG snapshots; the existing mouse BP membership alone is insufficient.",
-        "Build and verify the pinned full native environment, including DOSE hypothesis-universe behavior and GSEA ranking/score semantics.",
+        "Clear independent observed input lineage/rights and record source-to-authored biological context adaptations. Preserve each selected endpoint's methods, decisions and output semantics; the original disease/tissue label is not required.",
+        "Inspect and reconcile the pinned GOSemSim bundled graph with eligible terms; export the full OrgDb universe. Acquire compatible frozen GO/KEGG inputs for the selected methods, with explicit species/release adaptations. The GO.db 3.22.0 graph is audited against existing mouse memberships.",
+        "Build and verify the pinned full native environment, including the now source-reviewed DOSE pre-intersection/testing-family rules, bundled Wang graph behavior and GSEA ranking/score semantics.",
         "Calibrate numerical tolerances from native checks; implement the private oracle and verifier for the selected numerical endpoints with incorrect-output cases. Display parameters and deferred visual endpoints do not block assignment.",
         "Demonstrate complete offline Harbor runtime <=30 minutes; the existing unshrunken DESeq2 run is not evidence for this combined task."
       ],
       "status": "question-portfolio-proposal-no-coverage-credit",
-      "input_contract_limit": "The current GSE60450 candidate supports explicitly adapted mouse developmental analysis only. Human ASXL1/fibroblast contexts and named human/reference-year libraries retain their exact independent-input requirements.",
+      "input_contract_limit": "Observed mouse developmental data may cover matching ID workflows through explicit biological-context adaptations. Preserve methods, decisions and complete outputs; record source-to-authored species, tissue and reference identities. Do not claim the original human disease findings.",
       "refines_prior_question_id": "promptbio-design-bulk-contrasts",
       "contract_reference": "workflow_designs/bixbench.json:expression_enrichment_contract",
       "source_endpoint_evidence": [
@@ -1281,7 +1283,8 @@
         "a-3-4": "Prioritize complete DESeq2 artifacts; figure quality is not a release gate. Retain a component-only source mapping until the complete plot endpoint is verified.",
         "b-3-8": "Defer the visual endpoint from scoring. Reuse exact numerical selection/highlight/label tables as analysis components, without claiming a correct rendered volcano plot.",
         "b-3-15": "Defer the visual endpoint from scoring. Reuse exact top-gene selection/order/sign tables as analysis components, without claiming a correct rendered lollipop chart."
-      }
+      },
+      "workflow_adaptation_policy": "benchmark_coverage.json:workflow_adaptation_policy"
     },
     {
       "proposed_id": "promptbio-design-bulk-graded-expression",

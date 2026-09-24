@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "reviewed_at": "2026-09-24T20:36:04.606278+00:00",
+  "reviewed_at": "2026-09-24T20:53:17.512864+00:00",
   "scope": "Observed-assay and curated-reference input planning. Inspected a Lawlor cell-annotation CSV, existing mammary counts/sample metadata, and MANE 1.4 GTF/summary with assembly aliases. No new task is implemented or candidate cleared for training export. The pinned GO.db reference graph was also audited against the existing mouse membership asset.",
   "policy": {
     "reuse_unit": "Share acquisition, identity reconciliation and native environment preparation across compatible questions. Each task still answers one coherent question and retains its own complete private oracle/verifier contract.",
@@ -8,7 +8,8 @@
     "single_split": "The corpus has one train split. Held-out subjects, cells or observations inside a predictive task are part of its scientific evaluation protocol, with evaluation labels private to the verifier.",
     "no_automatic_coverage": "A source's availability or a question's eligibility does not establish benchmark endpoint equivalence. Preserve benchmark biological-context and method departures explicitly.",
     "lineage_screen": "Check accessions, DOI, project IDs, originating cohorts and known mirrors against all permitted ID-source metadata before authoring. Absence of an identifier match is only a preliminary screen. Uninspected/gated source fixtures prevent a universal nonoverlap claim. Do not deanonymize OOD inputs.",
-    "metadata_only": "Inspected primary manifests, one Lawlor cell-annotation CSV, existing vendored GSE60450 counts/GEO metadata and provider sample sheets, plus MANE reference GTF/transcript summary and an assembly report. No new expression/protein matrix, raw read, genomic FASTA, image or benchmark answer was fetched in this source review. A GO.db reference database was downloaded and source-audited; the full mouse OrgDb extraction failed for local disk space and its partial files were removed."
+    "metadata_only": "Inspected primary manifests, one Lawlor cell-annotation CSV, existing vendored GSE60450 counts/GEO metadata and provider sample sheets, plus MANE reference GTF/transcript summary and an assembly report. No new expression/protein matrix, raw read, genomic FASTA, image or benchmark answer was fetched in this source review. A GO.db reference database was downloaded and source-audited; the full mouse OrgDb extraction failed for local disk space and its partial files were removed.",
+    "workflow_adaptation_policy": "benchmark_coverage.json:workflow_adaptation_policy"
   },
   "collections": [
     {
@@ -622,7 +623,7 @@
       ],
       "proposed_input_boundary": "Keep all 27,179 observed Entrez gene rows, exon lengths, twelve count columns and GEO sample metadata as input. Select one population and a declared developmental contrast for a coherent task; retain its six libraries across three stages for estimation. Derive eligibility by the declared count filter and keep excluded genes with reasons. Join sample identities by full supplementary filename, never metadata row order.",
       "scientific_limits": [
-        "Wild-type female FVB/N mouse mammary populations across virgin, pregnancy and lactation stages do not establish disease case/control or genetic-perturbation effects. Any such benchmark mapping remains a biological-context adaptation.",
+        "Wild-type female FVB/N mouse developmental data support workflow-level adaptations of disease case/control analyses when the methods, decisions and complete outputs match. Record the changed biological context; do not claim ASXL1 mutation effects or reproduction of a human disease study.",
         "There are two libraries per population and developmental stage. Replicate numbers do not establish donor pairing across stages or basal/luminal populations; do not invent a donor block or treat the stages as repeated measures.",
         "Inspected metadata provides no documented failed replicate. Removing one sample leaves only one in that stage, so this source is rejected for the proposed evidence-backed replicate-QC exclusion question.",
         "Bulk sorted populations do not exercise single-cell preprocessing or pseudobulk aggregation. The Liu PyDESeq2 task is an explicit count-model adaptation.",
@@ -735,7 +736,7 @@
           "native_contract": "Run pinned DESeq2 with an explicit coefficient for apeglm shrinkage. Report both unshrunken Wald statistics and shrunken effects without silently changing p-values. Run the specified clusterProfiler enrichment/semantic methods and a pinned GSEA method against frozen offline annotations; existing unshrunken references cannot stand in for these runs.",
           "set_contract": "ORA background is the eligible, tested and identifier-mapped population, explicitly intersected with the declared annotation domain. Preserve excluded/unmapped IDs. GSEA uses every eligible finite signed Wald statistic, with deterministic tie ordering, duplicate-ID resolution, set-size bounds and a frozen random seed when applicable. Test all eligible sets and state each multiplicity family.",
           "complete_artifacts": "Counts/metadata join and filter decisions; design and coefficient; all gene statistics and shrinkage results; identifier map; complete term memberships, universe, ORA and GSEA outputs including nonsignificant/undefined rows; native semantic neighborhoods and retained/removal IDs; numeric plot tables and optional supporting plots.",
-          "source_endpoint_limits": "GSE60450 is a mouse developmental candidate, not human ASXL1 disease or fibroblast data. It cannot satisfy KEGG_2021_Human or establish equivalence to GO_Biological_Process_2021. The 17-record group remains conditional on compatible species/tissue and reference releases; no orthology conversion or live replacement library can silently clear it. PromptBio b-10-8 stays separate. Raw-p/adjusted-p plots, significant-only/top-absolute-NES tables and ORA backgrounds must remain distinct.",
+          "source_endpoint_limits": "The mouse developmental workflow is eligible for workflow-equivalent coverage with explicit source-to-authored context mappings. Human ASXL1 and fibroblast findings are not reproduced. Named method, mask, ranking, background and output requirements remain binding; species-compatible reference substitutions must be declared and reviewed. Unsupported visual endpoints remain gaps.",
           "deterministic_rejection_cases": [
             "shuffle sample labels without changing counts",
             "reverse the contrast or ranking sign",
@@ -745,12 +746,13 @@
             "change a semantic representative",
             "substitute raw p for adjusted p in a required plot"
           ],
-          "unresolved_inputs": "Reconcile the checksum-pinned GOSemSim bundled relation table with the eligible GO terms; obtain the full genome-wide gene universe from the pinned OrgDb on suitable storage; acquire licensed/versioned human KEGG and named GO snapshots for literal endpoints; complete expanded source-cohort lineage. The existing GO.db graph now matches every term and label in the observed-gene membership asset.",
+          "unresolved_inputs": "Reconcile the pinned native semantic graph, obtain the full annotation universe, acquire compatible frozen pathway inputs and complete source-cohort lineage. Record species/reference-release adaptations explicitly; the original human labels are not an input gate.",
           "runtime_requirement": "Measure the complete offline Harbor oracle and verifier within the 30-minute target. No inference from the existing unshrunken fit runtime.",
           "status": "candidate-input-contract; full-group-coverage-unsupported",
           "validated_mappings_added": 0,
           "acceptance_contract_reference": "workflow_designs/bixbench.json:expression_enrichment_contract",
-          "visual_scoring_scope": "Grade the numerical biological and plot-data outputs; defer subjective or unsupported figure scoring, preserve component-only mappings, and do not delay viable numerical tasks."
+          "visual_scoring_scope": "Grade the numerical biological and plot-data outputs; defer subjective or unsupported figure scoring, preserve component-only mappings, and do not delay viable numerical tasks.",
+          "workflow_adaptation_policy": "benchmark_coverage.json:workflow_adaptation_policy"
         },
         {
           "question_id": "portfolio-liu-single-cell-count-model-differential-expression",

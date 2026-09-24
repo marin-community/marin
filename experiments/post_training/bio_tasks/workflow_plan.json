@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T20:36:42.222266+00:00",
+  "updated_at": "2026-09-24T20:53:17.512864+00:00",
   "basis_revision": "952929c306",
   "scope": "Agentic provisional-ID benchmarks only; preserve all existing OOD exclusions. The broad question portfolio is complete with explicit limits. Prepare selected input and acceptance contracts before further recipe implementation.",
   "authoring_unit": "One coherent observed-data task per recipe by default. Proposed questions are separate task designs, not repeated instances. They may be split or merged after endpoint and runtime checks.",
@@ -9,7 +9,7 @@
   "source_inventory_files": [
     {
       "path": "experiments/post_training/bio_tasks/benchmark_coverage.json",
-      "sha256": "dcb367aa386ba158fcda6e98f844e491b988a58a5955ccba534a2a2e1b8b01f4"
+      "sha256": "9d42181c9d83dd65bf146570ad1155dc1cbbd1781d63b1e9623514cbbebd146c"
     },
     {
       "path": "experiments/post_training/bio_tasks/benchmark_sources.json",
@@ -13331,7 +13331,8 @@
     "Do not automatically equate assay/protocol definitions, paper-level insights, or shared tool names with distinct completed workflows.",
     "Keep generic method cards connected to a biological question. Open-ended planning or evidence judgments stay unresolved where an executable contract cannot preserve their scientific meaning.",
     "Use one bounded worker; lead owns scientific design, independent-data suitability, ranking and coverage promotion.",
-    "Prioritize realistic tasks whose scientific outputs have direct executable checks. Defer subjective interpretation, visual quality or other endpoints without a defensible deterministic reward; retain exact source IDs and the uncovered endpoint. Do not introduce an LLM judge, contrived proxy or special protocol merely to increase coverage, and do not let these endpoints block independently ready tasks."
+    "Prioritize realistic tasks whose scientific outputs have direct executable checks. Defer subjective interpretation, visual quality or other endpoints without a defensible deterministic reward; retain exact source IDs and the uncovered endpoint. Do not introduce an LLM judge, contrived proxy or special protocol merely to increase coverage, and do not let these endpoints block independently ready tasks.",
+    "Count fully validated workflow-equivalent biological-context adaptations under benchmark_coverage.json:workflow_adaptation_policy. Different species, tissue or disease context alone does not prevent coverage; methods, decisions, statistical units and complete outputs must still match."
   ],
   "target_group_defaults": {
     "endpoint_assignment_status": "requires-task-specific-contract-review",
@@ -13348,7 +13349,7 @@
     },
     {
       "path": "workflow_designs/bixbench.json",
-      "sha256": "765d8200a07ec7cc624f4732642a845efd33f40400cfa5e899f4a3ccd51c7601",
+      "sha256": "624f21caeb5b953a3ea9f2cb3d655d4c8d6ac96aed24afae300f79850ddee20d",
       "benchmark_id": "BixBench",
       "reviewed_question_ids": 205,
       "proposed_designs": 27,
@@ -13415,7 +13416,7 @@
     },
     {
       "path": "workflow_designs/promptbio-bench.json",
-      "sha256": "62f2ad31f005735b2b0096f69eda2768cd2e0e7e34c560e8d06d777e2add6418",
+      "sha256": "c303a8c424a726dd644538caba61bea5c6676f7ad1e57b2f6d6a54c33f62ddcc",
       "benchmark_id": "PromptBio-Bench",
       "inventory_records_assigned": 244,
       "proposed_question_cards": 101,
@@ -13523,7 +13524,7 @@
   "authoring_phase": "task-contract-preparation",
   "portfolio_index": {
     "path": "workflow_portfolio.json",
-    "sha256": "cc58e82eabbc120db067e587e632f2d9bcc78c0513db00348de69127a05c570d",
+    "sha256": "52076934708d4f9ca2d7c6cd41421c7bf43329b709eb9c19bdb64393373e5f81",
     "counts": {
       "source_releases": 32,
       "inventory_records": 5133,

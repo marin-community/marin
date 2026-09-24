@@ -13,6 +13,13 @@ also describe output artifacts, scientific decisions and overlap with other
 releases. A workflow-family pattern can include more stages than one question
 requires; inspect the endpoint before assigning coverage.
 
+Fully validated workflows on different real biological contexts count toward ID
+workflow coverage when their methods, scientific decisions and complete outputs
+match. Record the original and authored contexts and every adaptation alongside
+the source task IDs. A changed species, tissue or disease label alone is not a gap;
+missing operations, invalid assumptions or unverified outputs remain gaps. This
+measures workflow coverage and does not claim reproduction of benchmark answers.
+
 Use missing ID task stages and scientific decisions to prioritize new recipes.
 Complete benchmark workflows take priority over increasing repository coverage.
 Record the native packages and formats required by each workflow as supporting

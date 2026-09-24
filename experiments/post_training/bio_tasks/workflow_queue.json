@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-09-24T20:36:42.222266+00:00",
+  "updated_at": "2026-09-24T20:53:17.512864+00:00",
   "basis_revision": "c3a42fa5cf",
   "scope": "Provisional ID agentic benchmarks only. This queue selects new authoring work; it does not change benchmark coverage states.",
   "selection_policy": {
@@ -20,7 +20,8 @@
     ],
     "secondary": "Repository and format coverage support the chosen ID workflows; adding a repo alone earns no priority credit.",
     "refresh": "After every completed or rejected candidate, recompute its remaining target set from benchmark inventories, remove newly covered shared targets from later candidates, reassess blockers and choose again. Record evidence before promoting any benchmark mapping.",
-    "scope_limit": "Ranks compare the currently assessed candidate set, not all possible workflows in all releases. Source-review backlog entries remain explicit and can change the ranking."
+    "scope_limit": "Ranks compare the currently assessed candidate set, not all possible workflows in all releases. Source-review backlog entries remain explicit and can change the ranking.",
+    "workflow_adaptation_policy": "benchmark_coverage.json:workflow_adaptation_policy"
   },
   "selected_candidate": null,
   "selection_reason": "The broad question portfolio and consolidation pass are complete with explicit limits. No new implementation packet is ready. Prepare the prioritized task inputs and acceptance contracts; existing conditional gains are not a global ranking or validated coverage.",
@@ -1250,7 +1251,7 @@
     "excluded_records": 1,
     "validated_new_mappings": 0,
     "portfolio_file": "workflow_portfolio.json",
-    "portfolio_sha256": "cc58e82eabbc120db067e587e632f2d9bcc78c0513db00348de69127a05c570d",
+    "portfolio_sha256": "52076934708d4f9ca2d7c6cd41421c7bf43329b709eb9c19bdb64393373e5f81",
     "limit": "Broad question planning and all 30 original consolidation reviews are complete with explicit source/endpoint dispositions; 25 combinations remain conditional. Resolve selected-task input, method and acceptance gaps before implementation, and source-specific evidence gaps before coverage claims. No implementation is selected and validated coverage is unchanged.",
     "question_records_with_gap_dispositions": 1674,
     "system_records_with_endpoint_gap_dispositions": 350
@@ -1258,14 +1259,14 @@
   "next_preparation": {
     "proposed_task_id": "count-contrast-enrichment",
     "status": "input-and-acceptance-preparation; not-implementation-assigned",
-    "selection_basis": "Next feasible preparation among the leading reviewed workflows: existing observed counts and sample identities are verified, and the GO graph plus native enrichment source have bounded source audits. The 17-record conditional group is a scope inventory, not predicted validated gain; mouse developmental data cannot clear its literal human, fibroblast or reference-year endpoints.",
+    "selection_basis": "The observed mouse counts, sample identities and source-audited GO/native methods support preparation of an explicitly adapted expression/enrichment workflow. Biological-context differences alone do not block workflow coverage. The 17-record conditional group remains an endpoint inventory, not validated gain; complete methods and outputs still require checks.",
     "source_designs": [
       "workflow_designs/bixbench.json",
       "workflow_designs/promptbio-bench.json",
       "workflow_designs/source_collections.json"
     ],
     "required_decisions": [
-      "Review which exact source endpoints the independent mouse workflow can support; split incompatible human/tissue/reference requirements and preserve all deferred IDs.",
+      "Map every selected source endpoint to the authored biological context and complete method/decision/output artifacts. Apply the workflow-adaptation policy; split genuinely incompatible operations or statistical requirements rather than requiring the original disease or tissue labels.",
       "Complete input lineage screening and pin the compatible annotation inputs, including native bundled semantic graph and full OrgDb gene universe where required.",
       "Verify the complete native count, shrinkage, ORA, semantic and ranked enrichment runtime on suitable remote storage; preserve native denominator and graph conventions.",
       "Freeze exact schemas, numerical tolerances and independent incorrect-output checks for the selected coherent task; keep unsupported visual interpretation ungraded."

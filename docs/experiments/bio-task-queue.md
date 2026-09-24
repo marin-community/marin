@@ -30,6 +30,13 @@ visual quality. Keep their source IDs and uncovered scope explicit; they do not
 block independently ready tasks. Numerical components alone do not earn full
 coverage of a source question that also requires an ungraded result.
 
+Fully validated workflows on different real biological contexts count toward ID
+workflow coverage when their methods, scientific decisions and complete outputs
+match. Record the original and authored contexts and every adaptation alongside
+the source task IDs. A changed species, tissue or disease label alone is not a gap;
+missing operations, invalid assumptions or unverified outputs remain gaps. This
+measures workflow coverage and does not claim reproduction of benchmark answers.
+
 **Current phase: prepare selected task contracts.** The broad question portfolio
 and consolidation pass are complete with explicit source and endpoint gaps. All
 5,133 inventoried records have one primary disposition, and all 702 cards have a
@@ -120,9 +127,10 @@ top five by absolute NES. Raw-p and adjusted-p volcano plots also have separate
 numerical tables. Grade those tables and keep figures inspectable; visual endpoints
 remain deferred without requiring a special image-comparison pipeline.
 
-The current mouse candidate cannot satisfy the named human KEGG release or a
-fibroblast-specific contrast. Those inputs remain explicit requirements of the
-conditional group. The inspected clusterProfiler source also shows that semantic
+The mouse developmental candidate may cover workflow-equivalent disease or
+tissue-specific endpoints with explicit context adaptations. Preserve population
+selection, methods and outputs; declare compatible species/reference substitutions.
+It does not reproduce the original human findings. The inspected clusterProfiler source also shows that semantic
 term removal is not connected-component clustering and does not guarantee a single
 surviving representative for every removed term. Native similarity neighborhoods,
 tie decisions and retained term IDs must be preserved.
